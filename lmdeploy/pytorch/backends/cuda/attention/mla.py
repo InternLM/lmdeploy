@@ -201,66 +201,98 @@ class NSAIndicesUpdater:
     """
 
     def __init__(self):
-        self._update_decode_func = None
-        self._update_decode_strided_func = None
+        self._update_decode_single_func = None
+        self._update_decode_multi_func = None
+        self._update_decode_strided_single_func = None
+        self._update_decode_strided_multi_func = None
         self._update_prefill_func = None
 
-    def _update_decode_impl(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor, max_q_seqlen: int,
-                            block_size: int) -> torch.Tensor:
-        """Update for decode impl."""
+    def _update_decode_single_impl(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor,
+                                   block_size: int) -> torch.Tensor:
+        """Update indices for single-token decode."""
         batch_size = block_offsets.size(0)
         block_ids = nsa_indices // block_size
         block_ids = block_ids.clamp_min(0)
-        # MTP flattens the query dimension, so repeat each request's block table.
-        if block_ids.size(0) != batch_size:
-            block_offsets = torch.repeat_interleave(block_offsets,
-                                                    max_q_seqlen,
-                                                    dim=0,
-                                                    output_size=block_ids.size(0))
         block_ids = block_offsets.gather(1, block_ids)
         block_remain = nsa_indices % block_size
         ret = block_ids * block_size + block_remain
         ret[nsa_indices < 0] = -1
-        return ret.unflatten(0, (batch_size, max_q_seqlen))
+        return ret.unflatten(0, (batch_size, 1))
+
+    def _update_decode_multi_impl(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor,
+                                  block_size: int) -> torch.Tensor:
+        """Update indices for flattened multi-token decode."""
+        batch_size = block_offsets.size(0)
+        query_len = nsa_indices.size(0) // batch_size
+        block_offsets = block_offsets[:, None, :].expand(-1, query_len, -1).flatten(0, 1)
+        block_ids = nsa_indices // block_size
+        block_ids = block_ids.clamp_min(0)
+        block_ids = block_offsets.gather(1, block_ids)
+        block_remain = nsa_indices % block_size
+        ret = block_ids * block_size + block_remain
+        ret[nsa_indices < 0] = -1
+        return ret.unflatten(0, (batch_size, query_len))
 
     def update_decode(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor, max_q_seqlen: int,
                       block_size: int) -> torch.Tensor:
         """Update for decode."""
-        if self._update_decode_func is None:
-            self._update_decode_func = _try_dynamic_compile(self._update_decode_impl, nsa_indices, block_offsets,
-                                                            max_q_seqlen, block_size)
+        if max_q_seqlen == 1:
+            if self._update_decode_single_func is None:
+                self._update_decode_single_func = _try_dynamic_compile(self._update_decode_single_impl, nsa_indices,
+                                                                       block_offsets, block_size)
+            return self._update_decode_single_func(nsa_indices, block_offsets, block_size)
 
-        return self._update_decode_func(nsa_indices, block_offsets, max_q_seqlen, block_size)
+        if self._update_decode_multi_func is None:
+            self._update_decode_multi_func = _try_dynamic_compile(self._update_decode_multi_impl, nsa_indices,
+                                                                  block_offsets, block_size)
+        return self._update_decode_multi_func(nsa_indices, block_offsets, block_size)
 
-    def _update_decode_strided_impl(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor, max_q_seqlen: int,
-                                    block_size: int, block_stride: int, token_stride: int,
-                                    index_stride: int) -> torch.Tensor:
-        """Map logical decode indices to an aligned strided cache view."""
+    def _update_decode_strided_single_impl(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor,
+                                           block_size: int, block_stride: int, token_stride: int,
+                                           index_stride: int) -> torch.Tensor:
+        """Map single-token decode indices to a strided cache view."""
         batch_size = block_offsets.size(0)
         block_ids = nsa_indices // block_size
         block_ids = block_ids.clamp_min(0)
-        if block_ids.size(0) != batch_size:
-            block_offsets = torch.repeat_interleave(block_offsets,
-                                                    max_q_seqlen,
-                                                    dim=0,
-                                                    output_size=block_ids.size(0))
         block_ids = block_offsets.gather(1, block_ids)
         block_remain = nsa_indices % block_size
         ret = (block_ids * block_stride + block_remain * token_stride) // index_stride
         ret[nsa_indices < 0] = -1
-        return ret.unflatten(0, (batch_size, max_q_seqlen))
+        return ret.unflatten(0, (batch_size, 1))
+
+    def _update_decode_strided_multi_impl(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor,
+                                          block_size: int, block_stride: int, token_stride: int,
+                                          index_stride: int) -> torch.Tensor:
+        """Map flattened multi-token decode indices to a strided cache view."""
+        batch_size = block_offsets.size(0)
+        query_len = nsa_indices.size(0) // batch_size
+        block_offsets = block_offsets[:, None, :].expand(-1, query_len, -1).flatten(0, 1)
+        block_ids = nsa_indices // block_size
+        block_ids = block_ids.clamp_min(0)
+        block_ids = block_offsets.gather(1, block_ids)
+        block_remain = nsa_indices % block_size
+        ret = (block_ids * block_stride + block_remain * token_stride) // index_stride
+        ret[nsa_indices < 0] = -1
+        return ret.unflatten(0, (batch_size, query_len))
 
     def update_decode_strided(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor, max_q_seqlen: int,
                               block_size: int, block_stride: int, token_stride: int,
                               index_stride: int) -> torch.Tensor:
         """Update decode indices for strided cache storage."""
-        if self._update_decode_strided_func is None:
-            self._update_decode_strided_func = _try_dynamic_compile(self._update_decode_strided_impl, nsa_indices,
-                                                                    block_offsets, max_q_seqlen, block_size,
-                                                                    block_stride, token_stride, index_stride)
+        if max_q_seqlen == 1:
+            if self._update_decode_strided_single_func is None:
+                self._update_decode_strided_single_func = _try_dynamic_compile(
+                    self._update_decode_strided_single_impl, nsa_indices, block_offsets, block_size, block_stride,
+                    token_stride, index_stride)
+            return self._update_decode_strided_single_func(nsa_indices, block_offsets, block_size, block_stride,
+                                                           token_stride, index_stride)
 
-        return self._update_decode_strided_func(nsa_indices, block_offsets, max_q_seqlen, block_size, block_stride,
-                                                token_stride, index_stride)
+        if self._update_decode_strided_multi_func is None:
+            self._update_decode_strided_multi_func = _try_dynamic_compile(self._update_decode_strided_multi_impl,
+                                                                          nsa_indices, block_offsets, block_size,
+                                                                          block_stride, token_stride, index_stride)
+        return self._update_decode_strided_multi_func(nsa_indices, block_offsets, block_size, block_stride,
+                                                      token_stride, index_stride)
 
     def _update_prefill_impl(self, nsa_indices: torch.Tensor, q_seqlens: torch.Tensor, cu_seqlens_k: torch.Tensor):
         """Update for prefill impl."""

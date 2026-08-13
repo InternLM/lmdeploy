@@ -14,7 +14,7 @@ def test_nsa_decode_indices_update_repeats_block_table_for_spec_decode():
     nsa_indices = torch.tensor([[0, 17, -1], [32, 1, 16], [0, 33, 47], [32, 1, 16]])
     block_offsets = torch.tensor([[100, 101, 102], [200, 201, 202]])
 
-    output = updater._update_decode_impl(nsa_indices, block_offsets, max_q_seqlen=2, block_size=16)
+    output = updater._update_decode_multi_impl(nsa_indices, block_offsets, block_size=16)
 
     expected = torch.tensor([[[1600, 1617, -1], [1632, 1601, 1616]],
                              [[3200, 3233, 3247], [3232, 3201, 3216]]])
@@ -26,7 +26,7 @@ def test_nsa_decode_indices_update_keeps_single_token_shape():
     nsa_indices = torch.tensor([[0, 17], [32, -1]])
     block_offsets = torch.tensor([[100, 101, 102], [200, 201, 202]])
 
-    output = updater._update_decode_impl(nsa_indices, block_offsets, max_q_seqlen=1, block_size=16)
+    output = updater._update_decode_single_impl(nsa_indices, block_offsets, block_size=16)
 
     expected = torch.tensor([[[1600, 1617]], [[3232, -1]]])
     assert torch.equal(output, expected)
@@ -35,7 +35,7 @@ def test_nsa_decode_indices_update_keeps_single_token_shape():
 def test_bf16_sparse_decode_uses_strided_cache_view():
     impl = object.__new__(FlashMLAImpl)
     impl.nsa_updater = NSAIndicesUpdater()
-    impl.nsa_updater._update_decode_strided_func = impl.nsa_updater._update_decode_strided_impl
+    impl.nsa_updater._update_decode_strided_multi_func = impl.nsa_updater._update_decode_strided_multi_impl
     impl._flash_mla_sparse = Mock(return_value=torch.empty(4, 64, 512, dtype=torch.bfloat16))
 
     query = torch.empty(4, 64, 576, dtype=torch.bfloat16)
@@ -67,7 +67,7 @@ def test_bf16_sparse_decode_strided_cache_matches_contiguous_cache():
     impl.scale = 576**-0.5
     impl.flash_mla_sparse_fwd = None
     impl.nsa_updater = NSAIndicesUpdater()
-    impl.nsa_updater._update_decode_strided_func = impl.nsa_updater._update_decode_strided_impl
+    impl.nsa_updater._update_decode_strided_multi_func = impl.nsa_updater._update_decode_strided_multi_impl
 
     batch_size = 2
     query_len = 2
@@ -87,7 +87,7 @@ def test_bf16_sparse_decode_strided_cache_matches_contiguous_cache():
     output = impl._decode_bf16_sparse_flash_mla(query, k_cache, nsa_indices, metadata)
 
     contiguous_k = k_cache.flatten(0, 1)
-    contiguous_indices = impl.nsa_updater._update_decode_impl(nsa_indices, block_offsets, query_len, block_size)
+    contiguous_indices = impl.nsa_updater._update_decode_multi_impl(nsa_indices, block_offsets, block_size)
     contiguous_indices = contiguous_indices.flatten(0, 1)[:, None]
     expected = impl._flash_mla_sparse(query, contiguous_k, contiguous_indices)
     torch.testing.assert_close(output, expected)
