@@ -594,6 +594,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
       Deprecated: Use max_completion_tokens instead.
     - **repetition_penalty** (float): The parameter for repetition penalty.
       1.0 means no penalty
+    - **frequency_penalty** (float): Additive penalty in ``[-2, 2]`` based
+      on a token's frequency in the generated text. ``0`` means no penalty.
     - **stop** (str | list[str] | None): To stop generating further
       tokens. Only accept stop words that's encoded to one token idex.
     - **response_format** (dict | None): To generate response according to given
@@ -645,7 +647,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     Currently we do not support the following features:
 
     - **presence_penalty** (replaced with repetition_penalty)
-    - **frequency_penalty** (replaced with repetition_penalty)
     """
     check_response = await node_manager.check_request_model(request.model)
     if check_response is not None:
@@ -762,6 +763,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     - **stream**: whether to stream the results or not. Default to false.
     - **repetition_penalty** (float): The parameter for repetition penalty.
       1.0 means no penalty
+    - **frequency_penalty** (float): Additive penalty in ``[-2, 2]`` based
+      on a token's frequency in the generated text. ``0`` means no penalty.
     - **user** (str): A unique identifier representing your end-user.
     - **stop** (str | list[str] | None): To stop generating further
       tokens. Only accept stop words that's encoded to one token idex.
@@ -778,7 +781,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
     - **logprobs** (not supported yet)
     - **presence_penalty** (replaced with repetition_penalty)
-    - **frequency_penalty** (replaced with repetition_penalty)
     """
     check_response = await node_manager.check_request_model(request.model)
     if check_response is not None:

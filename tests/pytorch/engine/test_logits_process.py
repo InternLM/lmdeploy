@@ -106,6 +106,31 @@ def test_processrepetition_penalty():
     torch.testing.assert_close(out, gt)
 
 
+def test_process_frequency_penalty_counts_only_generated_tokens():
+    from lmdeploy.pytorch.engine.logits_process import _process_frequency_penalty_
+
+    scores = torch.tensor([
+        [0.0, 1.0, 2.0, 3.0],
+        [4.0, 5.0, 6.0, 7.0],
+    ])
+    input_ids = torch.tensor([
+        [0, 1, 1, 3],
+        [2, 2, 2, 0],
+    ])
+    generated_mask = torch.tensor([
+        [True, True, True, True],
+        [True, True, True, False],
+    ])
+    penalties = torch.tensor([0.5, -0.25])
+    expected = torch.tensor([
+        [-0.5, 0.0, 2.0, 2.5],
+        [4.0, 5.0, 6.75, 7.0],
+    ])
+
+    out = _process_frequency_penalty_(scores, input_ids, generated_mask, penalties)
+    torch.testing.assert_close(out, expected)
+
+
 def test_filter_topk_sorted():
     from lmdeploy.pytorch.engine.logits_process import _filter_topk_sorted_
 

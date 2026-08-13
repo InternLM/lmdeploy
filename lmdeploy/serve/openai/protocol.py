@@ -199,7 +199,7 @@ class ChatCompletionRequest(BaseModel):
     stream: bool | None = False
     stream_options: StreamOptions | None = Field(default=None, examples=[None])
     presence_penalty: float | None = 0.0
-    frequency_penalty: float | None = 0.0
+    frequency_penalty: float | None = Field(default=0.0, ge=-2, le=2)
     user: str | None = None
     reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None
     response_format: ResponseFormat | None = Field(default=None, examples=[None])
@@ -404,7 +404,7 @@ class CompletionRequest(BaseModel):
     top_p: float | None = None
     echo: bool | None = False
     presence_penalty: float | None = 0.0
-    frequency_penalty: float | None = 0.0
+    frequency_penalty: float | None = Field(default=0.0, ge=-2, le=2)
     user: str | None = None
     # additional argument of lmdeploy
     repetition_penalty: float | None = None

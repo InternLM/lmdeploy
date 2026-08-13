@@ -65,6 +65,18 @@ def _process_repetition_penalty_(scores: torch.Tensor, input_ids: torch.Tensor, 
     return scores
 
 
+def _process_frequency_penalty_(scores: torch.Tensor,
+                                input_ids: torch.Tensor,
+                                generated_mask: torch.Tensor,
+                                penalty: torch.Tensor):
+    """Apply an additive penalty for every generated token occurrence."""
+    generated_ids = input_ids.where(generated_mask, 0)
+    penalty = penalty.to(scores.dtype)
+    penalty_values = torch.where(generated_mask, -penalty[:, None], 0.0)
+    scores.scatter_add_(1, generated_ids, penalty_values)
+    return scores
+
+
 def _filter_topk_sorted_(scores: torch.Tensor, topk: torch.LongTensor, filter_value: float = -float('inf')):
     """Filter topk on sorted scores."""
     filter_value = -float('inf')
@@ -237,6 +249,8 @@ class SamplingInputsDelta:
     num_ignore_eos: torch.Tensor = None
     random_offsets: torch.Tensor = None
     all_ids: None | torch.Tensor = None
+    all_ids_mask: None | torch.Tensor = None
+    frequency_penalty: None | torch.Tensor = None
 
 
 @dataclass
@@ -247,6 +261,7 @@ class SamplingInputs:
     stop_words: torch.LongTensor = None
     stop_mask: torch.BoolTensor = None
     repetition_penalty: torch.Tensor = None
+    frequency_penalty: torch.Tensor | None = None
     top_k: torch.LongTensor = None
     top_p: torch.Tensor = None
     min_p: torch.Tensor = None
@@ -258,6 +273,7 @@ class SamplingInputs:
     logits_processors: list[list[LogitsProcessor]] = None
     max_num_logprobs: None | int = None
     all_ids: None | torch.Tensor = None
+    all_ids_mask: None | torch.Tensor = None  # generated-token positions
     num_ignore_eos: torch.Tensor = None
     batch_size: int = 0
     session_ctx: None | list[dict[str, Any]] = None
@@ -425,6 +441,12 @@ class FusedLogitsProcessor:
         if repetition_penalty is not None:
             generated_ids = sampling_inputs.generated_ids
             scores = _process_repetition_penalty_(scores, generated_ids, repetition_penalty)
+
+        frequency_penalty = sampling_inputs.frequency_penalty
+        if frequency_penalty is not None:
+            generated_mask = sampling_inputs.all_ids_mask
+            assert all_ids is not None and generated_mask is not None
+            scores = _process_frequency_penalty_(scores, all_ids, generated_mask, frequency_penalty)
 
         if sampling_inputs.max_repetition_ngram_size > 0:
             generated_ids = sampling_inputs.generated_ids

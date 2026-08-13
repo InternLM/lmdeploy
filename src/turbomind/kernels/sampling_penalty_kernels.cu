@@ -196,6 +196,47 @@ void ApplyRepetitionPenalty(Tensor&               logits,
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
+__global__ void FrequencyPenaltyKernel(float*            logits,
+                                       const float*      penalties,
+                                       const int* const* token_ids_ptrs,
+                                       const int*        prompt_lengths,
+                                       const int*        sequence_length,
+                                       int               vocab_size)
+{
+    const int bi = blockIdx.x;
+
+    logits += bi * (int64_t)vocab_size;
+    const int*  token_ids = token_ids_ptrs[bi];
+    const int   seq_len   = sequence_length[bi];
+    const float delta     = -penalties[bi];
+
+    // Multiple occurrences of a token must each contribute to its penalty.
+    for (int ti = prompt_lengths[bi] + threadIdx.x; ti < seq_len; ti += blockDim.x) {
+        const int token_id = token_ids[ti];
+        if ((unsigned)token_id < (unsigned)vocab_size) {
+            atomicAdd(logits + token_id, delta);
+        }
+    }
+}
+
+void ApplyFrequencyPenalty(Tensor&               logits,
+                           const Buffer_<float>& penalties,
+                           const Buffer_<int*>&  token_ids_ptrs,
+                           const Buffer_<int>&   prompt_lengths,
+                           const Buffer_<int>&   sequence_length,
+                           cudaStream_t          stream)
+{
+    TM_CHECK_EQ(logits.ndim(), 2);
+    const auto [bsz, vocab_size] = logits.shapes(0, 1);
+    FrequencyPenaltyKernel<<<bsz, 256, 0, stream>>>(logits.data<float>(),
+                                                    penalties.data(),
+                                                    token_ids_ptrs.data(),
+                                                    prompt_lengths.data(),
+                                                    sequence_length.data(),
+                                                    vocab_size);
+    TM_CUDA_CHECK(cudaGetLastError());
+}
+
 template<typename T>
 __global__ void batchApplyMinLengthPenalty(T* __restrict__ logits,
                                            const int* __restrict__ min_lengths,

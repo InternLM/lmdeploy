@@ -87,6 +87,8 @@ def register(router: APIRouter, server_context) -> None:
           set stream: true.
         - **repetition_penalty** (float): The parameter for repetition penalty.
           1.0 means no penalty
+        - **frequency_penalty** (float): Additive penalty in ``[-2, 2]`` based
+          on a token's frequency in the generated text. ``0`` means no penalty.
         - **user** (str): A unique identifier representing your end-user.
         - **stop** (str | list[str] | None): To stop generating further
           tokens. Only accept stop words that's encoded to one token idex.
@@ -115,7 +117,6 @@ def register(router: APIRouter, server_context) -> None:
 
         - **logprobs** (not supported yet)
         - **presence_penalty** (replaced with repetition_penalty)
-        - **frequency_penalty** (replaced with repetition_penalty)
         """
         error_check_ret = validate_request(request, server_context,
                                            check_request)

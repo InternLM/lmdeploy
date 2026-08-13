@@ -34,6 +34,8 @@ struct LogitsProcessor::Data {
     Data(int max_batch_size, DeviceType device)
     {
         repetition_penalty_buf = {max_batch_size, device};
+        frequency_penalty_buf  = {max_batch_size, device};
+        prompt_lengths_buf     = {max_batch_size, device};
         min_lengths_buf        = {max_batch_size, device};
         temperature_buf        = {max_batch_size, device};
         bad_words_buf          = {max_batch_size * 2 * kMaxStopBadWordsLen, device};
@@ -41,6 +43,8 @@ struct LogitsProcessor::Data {
     }
 
     Buffer_<float> repetition_penalty_buf;
+    Buffer_<float> frequency_penalty_buf;
+    Buffer_<int>   prompt_lengths_buf;
     Buffer_<int>   min_lengths_buf;
     Buffer_<float> temperature_buf;
     Buffer_<int>   bad_words_buf;
@@ -50,6 +54,7 @@ struct LogitsProcessor::Data {
     Tensor_<int> end_ids_ten;
 
     bool has_repetition_penalty{};
+    bool has_frequency_penalty{};
     bool has_bad_words_penalty{};
     bool has_min_length_penalty{};
     bool has_temperature_penalty{};
@@ -66,7 +71,7 @@ LogitsProcessor::LogitsProcessor(const BaseGenerationParam& base, int phases): B
 void LogitsProcessor::Forward(int phase, TensorMap& env)
 {
     TM_FUNCTION_SCOPE();
-    // apply repetition penalty -> ban bad words -> min length penalty -> temperature penalty
+    // apply repetition penalty -> frequency penalty -> ban bad words -> min length penalty -> temperature penalty
     // the order is same with transformerss
     TM_LOG_DEBUG("{} start", __PRETTY_FUNCTION__);
 
@@ -83,6 +88,12 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
     // repetition penalty
     if (d.has_repetition_penalty) {
         ApplyRepetitionPenalty(logits, d.repetition_penalty_buf, token_ids_ptrs, sequence_length, stream);
+    }
+
+    // frequency penalty
+    if (d.has_frequency_penalty) {
+        ApplyFrequencyPenalty(
+            logits, d.frequency_penalty_buf, token_ids_ptrs, d.prompt_lengths_buf, sequence_length, stream);
     }
 
     // ban bad words
@@ -131,12 +142,15 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
     const int bsz = rs.size();
 
     auto& repetition_penalty = buf_->repetition_penalty_buf;
+    auto& frequency_penalty  = buf_->frequency_penalty_buf;
+    auto& prompt_lengths     = buf_->prompt_lengths_buf;
     auto& temperature        = buf_->temperature_buf;
     auto& min_lengths        = buf_->min_lengths_buf;
 
     d.has_temperature_penalty = {};
     d.has_min_length_penalty  = {};
     d.has_repetition_penalty  = {};
+    d.has_frequency_penalty   = {};
     d.has_bad_words_penalty   = {};
 
     for (int i = 0; i < bsz; ++i) {
@@ -146,6 +160,13 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
         repetition_penalty[i] = g.repetition_penalty;
         if (repetition_penalty[i] != 1.f) {
             d.has_repetition_penalty = true;
+        }
+
+        // frequency_penalty
+        frequency_penalty[i] = g.frequency_penalty;
+        prompt_lengths[i]    = rs[i]->prompt_len;
+        if (frequency_penalty[i] != 0.f) {
+            d.has_frequency_penalty = true;
         }
 
         // temperature
@@ -167,6 +188,11 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
 
     if (d.has_repetition_penalty) {
         copy(repetition_penalty, bsz, d.repetition_penalty_buf);
+    }
+
+    if (d.has_frequency_penalty) {
+        copy(frequency_penalty, bsz, d.frequency_penalty_buf);
+        copy(prompt_lengths, bsz, d.prompt_lengths_buf);
     }
 
     if (d.has_min_length_penalty) {

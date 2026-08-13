@@ -34,6 +34,10 @@ def step_sampling_delta(sampling_delta: SamplingInputsDelta,
     all_ids = sampling_delta.all_ids
     if all_ids is not None:
         sampling_delta.all_ids = torch.cat([all_ids, next_token_ids[:, None]], 1)
+        all_ids_mask = sampling_delta.all_ids_mask
+        assert all_ids_mask is not None
+        next_mask = torch.ones_like(next_token_ids[:, None], dtype=torch.bool)
+        sampling_delta.all_ids_mask = torch.cat([all_ids_mask, next_mask], 1)
     return sampling_delta
 
 
@@ -46,11 +50,14 @@ def merge_sampling_delta(
     num_ignore_eos = torch.cat([sampling_delta.num_ignore_eos, other.num_ignore_eos], 0)
     random_offsets = torch.cat([sampling_delta.random_offsets, other.random_offsets], 0)
 
-    batch_size = num_ignore_eos.size(0)
+    batch_size0 = sampling_delta.num_ignore_eos.size(0)
+    batch_size1 = other.num_ignore_eos.size(0)
+    batch_size = batch_size0 + batch_size1
     all_ids0 = sampling_delta.all_ids
     all_ids1 = other.all_ids
     if all_ids0 is None and all_ids1 is None:
         all_ids = None
+        all_ids_mask = None
     else:
         max_len0 = 0 if all_ids0 is None else all_ids0.size(1)
         max_len1 = 0 if all_ids1 is None else all_ids1.size(1)
@@ -59,17 +66,37 @@ def merge_sampling_delta(
                              pad_token_id,
                              dtype=torch.int64,
                              device=num_ignore_eos.device)
+        all_ids_mask = torch.zeros((batch_size, max_len), dtype=torch.bool, device=num_ignore_eos.device)
         if all_ids0 is not None:
             bs0 = all_ids0.size(0)
             all_ids[:bs0, :max_len0] = all_ids0
+            assert sampling_delta.all_ids_mask is not None
+            all_ids_mask[:bs0, :max_len0] = sampling_delta.all_ids_mask
         if all_ids1 is not None:
             bs1 = all_ids1.size(0)
             all_ids[-bs1:, :max_len1] = all_ids1
+            assert other.all_ids_mask is not None
+            all_ids_mask[-bs1:, :max_len1] = other.all_ids_mask
+
+    frequency_penalty0 = sampling_delta.frequency_penalty
+    frequency_penalty1 = other.frequency_penalty
+    if frequency_penalty0 is None and frequency_penalty1 is None:
+        frequency_penalty = None
+    else:
+        reference = frequency_penalty0 if frequency_penalty0 is not None else frequency_penalty1
+        assert reference is not None
+        if frequency_penalty0 is None:
+            frequency_penalty0 = reference.new_zeros((batch_size0, ))
+        if frequency_penalty1 is None:
+            frequency_penalty1 = reference.new_zeros((batch_size1, ))
+        frequency_penalty = torch.cat([frequency_penalty0, frequency_penalty1], 0)
 
     return SamplingInputsDelta(
         num_ignore_eos=num_ignore_eos,
         random_offsets=random_offsets,
         all_ids=all_ids,
+        all_ids_mask=all_ids_mask,
+        frequency_penalty=frequency_penalty,
     )
 
 
@@ -87,10 +114,18 @@ def reindex_sampling_delta(
     all_ids = sampling_delta.all_ids
     if all_ids is not None:
         all_ids = all_ids[indices]
+    all_ids_mask = sampling_delta.all_ids_mask
+    if all_ids_mask is not None:
+        all_ids_mask = all_ids_mask[indices]
+    frequency_penalty = sampling_delta.frequency_penalty
+    if frequency_penalty is not None:
+        frequency_penalty = frequency_penalty[indices]
     return SamplingInputsDelta(
         num_ignore_eos=num_ignore_eos,
         random_offsets=random_offsets,
         all_ids=all_ids,
+        all_ids_mask=all_ids_mask,
+        frequency_penalty=frequency_penalty,
     )
 
 

@@ -829,6 +829,7 @@ class TurboMindInstance:
         if not cfg.ignore_eos and cfg.stop_token_ids:
             c.stop_ids = _construct_stop_or_bad_words(cfg.stop_token_ids)
         c.repetition_penalty = cfg.repetition_penalty
+        c.frequency_penalty = cfg.frequency_penalty
         if cfg.min_new_tokens:
             c.min_new_tokens = cfg.min_new_tokens
         output_type = dict(all=1, generation=2)

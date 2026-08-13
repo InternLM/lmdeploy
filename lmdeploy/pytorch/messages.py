@@ -63,6 +63,7 @@ class SamplingParam:
     min_p: float = 0.0
     temperature: float = 0.8
     repetition_penalty: float = 1.0
+    frequency_penalty: float = 0.0
     ignore_eos: bool = False
     random_seed: int = None
     stop_words: list[int] = field(default_factory=list)
@@ -97,6 +98,7 @@ class SamplingParam:
         min_p = gen_config.min_p
         temperature = gen_config.temperature
         repetition_penalty = gen_config.repetition_penalty
+        frequency_penalty = gen_config.frequency_penalty
         max_new_tokens = gen_config.max_new_tokens
         response_format = gen_config.response_format
 
@@ -161,6 +163,7 @@ class SamplingParam:
             min_p=min_p,
             temperature=temperature,
             repetition_penalty=repetition_penalty,
+            frequency_penalty=frequency_penalty,
             ignore_eos=gen_config.ignore_eos,
             random_seed=random_seed,
             stop_words=stop_words,

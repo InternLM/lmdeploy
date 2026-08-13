@@ -22,6 +22,9 @@ class DLLMSamplingStrategy(ARSamplingStrategy):
     def make_sampling_inputs(self, seqs: SeqList) -> SamplingInputs:
         """Create sampling inputs from the sequences."""
         out = super().make_sampling_inputs(seqs)
+        if out.frequency_penalty is not None:
+            raise ValueError('frequency_penalty is not supported by diffusion models')
+
         dllm_block_length = self.dllm_block_length
 
         # repeat tensor
@@ -38,6 +41,7 @@ class DLLMSamplingStrategy(ARSamplingStrategy):
             'random_seeds',
             'random_offsets',
             'all_ids',
+            'all_ids_mask',
             'num_ignore_eos',
             'repetition_ngram_size',
             'repetition_ngram_threshold',

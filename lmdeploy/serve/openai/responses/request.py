@@ -64,7 +64,6 @@ def warn_ignored_request_fields(request: ResponsesRequest) -> None:
             'top_logprobs',
             'user',
             'presence_penalty',
-            'frequency_penalty',
     ):
         if getattr(request, field_name) is not None:
             ignored_fields.append(field_name)

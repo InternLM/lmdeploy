@@ -57,6 +57,10 @@ class GenerationConfig:
         repetition_penalty: Penalty to prevent the model from
             generating repeated words or phrases. A value larger than
             1 discourages repetition
+        frequency_penalty: Additive penalty based on how often a token has
+            appeared in the generated text. Must be between -2 and 2. Positive
+            values discourage repetition; negative values encourage it.
+            Only autoregressive models are supported.
         ignore_eos: Indicator to ignore the eos_token_id or not
         random_seed: Seed used when sampling a token
         stop_words: Words that stop generating further tokens
@@ -120,6 +124,7 @@ class GenerationConfig:
     min_p: float = 0.0
     temperature: float = 0.8
     repetition_penalty: float = 1.0
+    frequency_penalty: float = 0.0
     ignore_eos: bool = False
     random_seed: int = None
     stop_words: list[str] = None
@@ -198,6 +203,8 @@ class GenerationConfig:
         assert self.top_p >= 0 and self.top_p <= 1  # [0, 1]
         assert self.top_k >= 0, 'top_k can not be a negative integer'
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
+        assert -2 <= self.frequency_penalty <= 2, \
+            f'frequency_penalty should be in range [-2, 2], but found {self.frequency_penalty}'
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
         if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:

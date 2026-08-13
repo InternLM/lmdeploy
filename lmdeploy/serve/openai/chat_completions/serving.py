@@ -66,6 +66,8 @@ def register(router: APIRouter, server_context) -> None:
           Deprecated: Use max_completion_tokens instead.
         - **repetition_penalty** (float): The parameter for repetition penalty.
           1.0 means no penalty
+        - **frequency_penalty** (float): Additive penalty in ``[-2, 2]`` based
+          on a token's frequency in the generated text. ``0`` means no penalty.
         - **stop** (str | list[str] | None): To stop generating further
           tokens. Only accept stop words that's encoded to one token idex.
         - **response_format** (dict | None): To generate response according to given
@@ -123,7 +125,6 @@ def register(router: APIRouter, server_context) -> None:
         Currently we do not support the following features:
 
         - **presence_penalty** (replaced with repetition_penalty)
-        - **frequency_penalty** (replaced with repetition_penalty)
         """
         error_check_ret = validate_request(request, server_context,
                                            check_request)

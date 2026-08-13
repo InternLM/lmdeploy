@@ -42,6 +42,7 @@ struct GenerationConfig {
     float temperature = 1.f;
 
     float repetition_penalty = 1.f;
+    float frequency_penalty  = 0.f;
 
     uint64_t random_seed = 0;
 
@@ -282,6 +283,7 @@ void serdes(Archive& ar, GenerationConfig& g)
     ar & g.min_p;
     ar & g.temperature;
     ar & g.repetition_penalty;
+    ar & g.frequency_penalty;
     ar & g.random_seed;
     ar & g.output_logprobs;
     ar & g.return_ppl;

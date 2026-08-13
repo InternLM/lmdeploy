@@ -13,19 +13,23 @@ SeqList = list[SchedulerSequence]
 
 
 def _gather_all_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs):
-    """Gather history."""
-    if not any(sampling_inputs.logits_processors):
-        return None
+    """Gather full history and mark generated-token positions."""
+    if sampling_inputs.frequency_penalty is None and not any(sampling_inputs.logits_processors):
+        return None, None
     batch = len(seqs)
     max_len = max(seq.num_valid_ids for seq in seqs)
     output = torch.full((batch, max_len), pad_id, dtype=torch.int64)
+    valid_mask = torch.zeros((batch, max_len), dtype=torch.bool)
     for idx, seq in enumerate(seqs):
         h_len = seq.num_valid_ids
         if h_len == 0:
             continue
         h_ids = torch.from_numpy(seq.valid_ids)
         output[idx, -h_len:] = h_ids
-    return output
+        generated_len = seq.num_new_tokens
+        if generated_len:
+            valid_mask[idx, -generated_len:] = True
+    return output, valid_mask
 
 
 def _gather_generated_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs) -> np.ndarray | None:
@@ -64,6 +68,7 @@ class ARSamplingStrategy(SamplingStrategy):
         batch_size = len(seqs)
         temperature = [None] * batch_size
         repetition_penalty = [None] * batch_size
+        frequency_penalties = [0.0] * batch_size
         top_k = [None] * batch_size
         top_p = [None] * batch_size
         min_p = [None] * batch_size
@@ -85,6 +90,7 @@ class ARSamplingStrategy(SamplingStrategy):
                 param = seq.sampling_param
                 temperature[idx] = param.temperature
                 repetition_penalty[idx] = param.repetition_penalty
+                frequency_penalties[idx] = param.frequency_penalty
                 top_k[idx] = max(0, param.top_k)
                 top_p[idx] = param.top_p
                 min_p[idx] = param.min_p
@@ -149,6 +155,12 @@ class ARSamplingStrategy(SamplingStrategy):
         else:
             repetition_penalty = torch.tensor(repetition_penalty)
 
+        frequency_penalty: torch.Tensor | None
+        if all(fp == 0.0 for fp in frequency_penalties):
+            frequency_penalty = None
+        else:
+            frequency_penalty = torch.tensor(frequency_penalties)
+
         temperature = torch.tensor(temperature)
         if (temperature == 1.0).all():
             # skip temperature processing if all temperature are 1.0
@@ -202,6 +214,7 @@ class ARSamplingStrategy(SamplingStrategy):
             stop_words=stop_words,
             stop_mask=stop_mask,
             repetition_penalty=repetition_penalty,
+            frequency_penalty=frequency_penalty,
             top_k=top_k,
             top_p=top_p,
             min_p=min_p,
@@ -221,7 +234,7 @@ class ARSamplingStrategy(SamplingStrategy):
         )
 
         pad_token_id = self.pad_token_id
-        sampling_input.all_ids = _gather_all_ids(pad_token_id, seqs, sampling_input)
+        sampling_input.all_ids, sampling_input.all_ids_mask = _gather_all_ids(pad_token_id, seqs, sampling_input)
         sampling_input.generated_ids_cpu = _gather_generated_ids(pad_token_id, seqs, sampling_input)
         sampling_input.num_ignore_eos = _get_num_ignore_eos(seqs)
         return sampling_input

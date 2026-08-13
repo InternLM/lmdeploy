@@ -171,6 +171,10 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         all_ids = sampling_inputs.all_ids
         if all_ids is not None:
             sampling_inputs.all_ids = torch.cat([all_ids, next_token_ids[:, None]], 1)
+            all_ids_mask = sampling_inputs.all_ids_mask
+            assert all_ids_mask is not None
+            next_mask = torch.ones_like(next_token_ids[:, None], dtype=torch.bool)
+            sampling_inputs.all_ids_mask = torch.cat([all_ids_mask, next_mask], 1)
 
         return sampling_inputs
 

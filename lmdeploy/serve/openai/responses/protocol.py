@@ -78,7 +78,7 @@ class ResponsesRequest(BaseModel):
 
     # LMDeploy-compatible generation extensions.
     presence_penalty: float | None = None
-    frequency_penalty: float | None = None
+    frequency_penalty: float | None = Field(default=None, ge=-2, le=2)
     repetition_penalty: float | None = None
     top_k: int | None = None
     stop: str | list[str] | None = None

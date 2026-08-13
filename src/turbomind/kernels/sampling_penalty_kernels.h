@@ -29,6 +29,13 @@ void ApplyRepetitionPenalty(Tensor&               logits,
                             const Buffer_<int>&   sequence_length,
                             cudaStream_t          stream);
 
+void ApplyFrequencyPenalty(Tensor&               logits,
+                           const Buffer_<float>& penalties,
+                           const Buffer_<int*>&  token_ids_ptrs,
+                           const Buffer_<int>&   prompt_lengths,
+                           const Buffer_<int>&   sequence_length,
+                           cudaStream_t          stream);
+
 template<typename T>
 void invokeBatchApplyTemperaturePenalty_v2(T*           logits,
                                            const T*     bias,
