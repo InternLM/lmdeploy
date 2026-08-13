@@ -387,8 +387,7 @@ class BlockTrie:
 
         recompute_blocks = max(0, seq.prefix_cache.recompute_overlap.recompute_blocks)
         overlap_end_step = -1
-        max_step = ((seq.num_valid_ids - 1) // self.block_size) * self.block_size
-        max_step = seq.clamp_prefix_cache_match_step(max_step)
+        max_step = seq.get_prefix_cache_max_candidate_step()
         candidate_steps = self._checkpoint_index.candidate_steps(seq.adapter_name, initial_step, max_step)
         for step in candidate_steps:
             if seq.clamp_prefix_cache_match_step(step) != step:

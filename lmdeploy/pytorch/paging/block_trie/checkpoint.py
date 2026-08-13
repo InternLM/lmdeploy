@@ -191,7 +191,7 @@ class StateCheckpointIndex:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_INDEX_ENTRY,
                                                reason='checkpoint adapter differs from lookup adapter')
 
-        max_step = ((seq.num_valid_ids - 1) // self.block_size) * self.block_size
+        max_step = seq.get_prefix_cache_max_candidate_step()
         if step > max_step:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.REQUEST_MISMATCH,
                                                reason='checkpoint is longer than this request')

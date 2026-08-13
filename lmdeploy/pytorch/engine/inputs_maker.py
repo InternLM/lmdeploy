@@ -82,6 +82,43 @@ def _compact_state_prefix_cache_save_offsets(messages: list['SchedulerSequence']
     return tuple(src_offsets), tuple(dst_offsets)
 
 
+def _build_logits_indices(messages: list['SchedulerSequence'], query_lengths: list[int]):
+    """Build ordered source-hidden indices and per-sequence output rows.
+
+    Non-final long-prefill chunks still project their final source row, but
+    that row is emitted by the next chunk through ModelAgent's
+    ``_prev_chunk_last_logit`` carry.
+    """
+    if not any(msg.logprob_start_pos >= 0 for msg in messages):
+        return None, None
+
+    indices = []
+    row_counts = []
+    base = 0
+    for msg, query_len in zip(messages, query_lengths, strict=True):
+        chunk_start = int(msg.num_history_ids)
+        chunk_end = chunk_start + int(query_len)
+        logprob_start = int(msg.logprob_start_pos)
+        input_end = int(msg.input_end_pos)
+
+        range_start = max(chunk_start, logprob_start) if logprob_start >= 0 else chunk_end
+        range_end = min(chunk_end, input_end - 1)
+        num_projected_rows = max(0, range_end - range_start)
+        indices.extend(range(base + range_start - chunk_start, base + range_end - chunk_start))
+
+        has_prev_chunk_logit = (logprob_start >= 0 and int(msg.input_start_pos) < chunk_start
+                                and logprob_start < chunk_start and chunk_start < input_end)
+        stash_current_last_logit = (range_end == chunk_end and num_projected_rows > 0
+                                    and chunk_end < input_end)
+        if stash_current_last_logit:
+            assert len(messages) == 1, 'long-prefill cross-chunk logit carry requires a single request'
+        row_counts.append(num_projected_rows + int(has_prev_chunk_logit) - int(stash_current_last_logit))
+        base += int(query_len)
+
+    return (torch.tensor(indices, dtype=torch.long),
+            torch.tensor(row_counts, dtype=torch.long))
+
+
 @dataclass
 class InputsMakerConfig:
     """Input maker config.
@@ -882,6 +919,10 @@ class InputsMakerAsync:
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
         )
+        if is_prefill:
+            logits_indices, seq_logit_length = _build_logits_indices(messages, [len(ids) for ids in token_ids])
+            model_inputs.logits_indices = logits_indices
+            model_inputs.seq_logit_length = seq_logit_length
 
         # adapters
         self._set_adapter_ids(model_inputs, messages)
@@ -963,6 +1004,9 @@ class InputsMakerAsync:
             model_metas=model_metas,
             is_chunk=True,
         )
+        logits_indices, seq_logit_length = _build_logits_indices([seq], [chunk_size])
+        model_inputs.logits_indices = logits_indices
+        model_inputs.seq_logit_length = seq_logit_length
 
         # adapters
         self._set_adapter_ids(model_inputs, [seq])
@@ -1124,7 +1168,9 @@ class InputsMakerAsync:
         if is_decoding:
             self.running_seqs = running
         else:
-            self.running_seqs += running
+            for seq in running:
+                if seq.sampling_param.max_new_tokens > 0:
+                    self.running_seqs.append(seq)
 
     def deactivate_evict_seqs(self):
         """Deactivate and evict seqs."""
