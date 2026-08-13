@@ -294,13 +294,14 @@ def test_to_openai_messages_puts_assistant_tool_result_into_content():
     }]
 
 
-def test_to_openai_messages_maps_thinking_block_to_reasoning_content():
+def test_to_openai_messages_maps_signed_thinking_block_to_reasoning_content():
     request = _make_request(
         messages=[{
             'role': 'assistant',
             'content': [{
                 'type': 'thinking',
                 'thinking': 'internal chain',
+                'signature': 'lmdeploy-local',
             }],
         }])
     messages = to_openai_messages(request)
