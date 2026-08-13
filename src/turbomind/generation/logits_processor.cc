@@ -72,7 +72,7 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
 {
     TM_FUNCTION_SCOPE();
     // apply repetition penalty -> frequency penalty -> ban bad words -> min length penalty -> temperature penalty
-    // the order is same with transformerss
+    // follow the same processing order as Transformers
     TM_LOG_DEBUG("{} start", __PRETTY_FUNCTION__);
 
     Tensor_<float>      logits          = env.at("logits");
