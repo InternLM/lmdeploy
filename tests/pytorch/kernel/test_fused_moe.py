@@ -235,9 +235,7 @@ def test_compact_blocked_fp8_down_dispatch_rejects_small_local_experts(monkeypat
 @pytest.mark.parametrize(('num_routes', 'num_experts', 'expected'), [
     (2048, 2048, True),
     (2049, 2048, False),
-    (4096, 256, True),
-    (4096, 257, False),
-    (4097, 256, False),
+    (4096, 256, False),
     (2048, 2049, False),
 ])
 def test_single_cta_sorted_idx_policy(num_routes, num_experts, expected):
@@ -247,9 +245,9 @@ def test_single_cta_sorted_idx_policy(num_routes, num_experts, expected):
 
 
 @pytest.mark.parametrize(('num_routes', 'num_experts', 'expected'), [
-    (4096, 2048, True),
-    (4097, 2048, False),
-    (4096, 2049, False),
+    (2048, 2048, True),
+    (2049, 2048, False),
+    (2048, 2049, False),
 ])
 def test_single_cta_sorted_idx_blocks_policy(num_routes, num_experts, expected):
     from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _should_use_single_cta_sorted_idx_blocks
@@ -280,7 +278,7 @@ def test_sorted_idx_dispatch_uses_route_prepare_policy(monkeypatch):
     monkeypatch.setattr(moe_module, '_supports_single_cta_route_prepare', lambda *_: True)
 
     assert moe_module._get_sorted_idx(topk_ids, 512) is single_cta
-    large_topk_ids = torch.zeros((1, 4097), dtype=torch.int64)
+    large_topk_ids = torch.zeros((1, 2049), dtype=torch.int64)
     assert moe_module._get_sorted_idx(large_topk_ids, 512) is parallel
     monkeypatch.setattr(moe_module, '_supports_single_cta_route_prepare', lambda *_: False)
     assert moe_module._get_sorted_idx(topk_ids, 512) is parallel
@@ -316,6 +314,53 @@ def _make_route_ids(num_tokens, topk, num_experts, routing):
     return logits.topk(topk, dim=-1).indices
 
 
+def _assert_sorted_idx_metadata(topk_ids, num_experts, metadata):
+    sorted_idx, exp_start, exp_end = metadata[:3]
+    assert sorted_idx.dtype == torch.int32
+    assert exp_start.dtype == torch.int32
+    assert exp_end.dtype == torch.int32
+
+    counts = torch.bincount(topk_ids.flatten(), minlength=num_experts).to(torch.int32)
+    expected_exp_end = counts.cumsum(0, dtype=torch.int32)
+    torch.testing.assert_close(exp_start, expected_exp_end - counts)
+    torch.testing.assert_close(exp_end, expected_exp_end)
+    routes = torch.arange(topk_ids.numel(), device='cuda', dtype=torch.int32)
+    torch.testing.assert_close(torch.sort(sorted_idx).values, routes)
+    expected_experts = torch.repeat_interleave(torch.arange(num_experts, device='cuda'), counts.to(torch.int64))
+    torch.testing.assert_close(topk_ids.flatten()[sorted_idx.to(torch.int64)], expected_experts)
+
+
+def _assert_sorted_idx_block_metadata(topk_ids,
+                                      num_experts,
+                                      block_m,
+                                      metadata,
+                                      local_num_experts=None,
+                                      expert_offset=0):
+    if local_num_experts is None:
+        local_num_experts = num_experts
+    _assert_sorted_idx_metadata(topk_ids, num_experts, metadata)
+    sorted_idx, exp_start, _, block_end, block_expert_ids, block_offsets = metadata
+    assert block_end.dtype == torch.int32
+    assert block_expert_ids.dtype == torch.int32
+    assert block_offsets.dtype == torch.int32
+
+    counts = torch.bincount(topk_ids.flatten(), minlength=num_experts).to(torch.int32)
+    local_counts = counts[expert_offset:expert_offset + local_num_experts]
+    block_counts = (local_counts + block_m - 1) // block_m
+    torch.testing.assert_close(block_end, block_counts.cumsum(0, dtype=torch.int32))
+    num_blocks = int(block_end[-1])
+    expected_block_experts = torch.repeat_interleave(
+        torch.arange(local_num_experts, device='cuda', dtype=torch.int32), block_counts.to(torch.int64))
+    block_start = block_end - block_counts
+    block_rank = torch.arange(num_blocks, device='cuda', dtype=torch.int32)
+    block_rank -= torch.repeat_interleave(block_start, block_counts.to(torch.int64))
+    local_exp_start = exp_start[expert_offset:expert_offset + local_num_experts]
+    expected_block_offsets = torch.repeat_interleave(local_exp_start,
+                                                     block_counts.to(torch.int64)) + block_rank * block_m
+    torch.testing.assert_close(block_expert_ids[:num_blocks], expected_block_experts)
+    torch.testing.assert_close(block_offsets[:num_blocks], expected_block_offsets)
+
+
 @pytest.mark.parametrize(('num_tokens', 'num_experts', 'routing'), [
     (96, 256, 'balanced'),
     (96, 256, 'random'),
@@ -330,16 +375,8 @@ def test_single_cta_sorted_idx(num_tokens, num_experts, routing):
 
     torch.manual_seed(13)
     topk_ids = _make_route_ids(num_tokens, 8, num_experts, routing)
-    sorted_idx, exp_start, exp_end = _get_sorted_idx_single_cta(topk_ids, num_experts)
-    counts = torch.bincount(topk_ids.flatten(), minlength=num_experts).to(torch.int32)
-    expected_exp_end = counts.cumsum(0, dtype=torch.int32)
-
-    torch.testing.assert_close(exp_start, expected_exp_end - counts)
-    torch.testing.assert_close(exp_end, expected_exp_end)
-    routes = torch.arange(topk_ids.numel(), device='cuda', dtype=torch.int32)
-    torch.testing.assert_close(torch.sort(sorted_idx).values, routes)
-    expected_experts = torch.repeat_interleave(torch.arange(num_experts, device='cuda'), counts.to(torch.int64))
-    torch.testing.assert_close(topk_ids.flatten()[sorted_idx.to(torch.int64)], expected_experts)
+    metadata = _get_sorted_idx_single_cta(topk_ids, num_experts)
+    _assert_sorted_idx_metadata(topk_ids, num_experts, metadata)
 
 
 @pytest.mark.parametrize(('num_tokens', 'num_experts', 'routing'), [
@@ -357,32 +394,38 @@ def test_single_cta_sorted_idx_blocks(num_tokens, num_experts, routing):
     block_m = 16
     topk_ids = _make_route_ids(num_tokens, 8, num_experts, routing)
     metadata = _get_sorted_idx_blocks_single_cta(topk_ids, num_experts, block_m)
-    sorted_idx, exp_start, exp_end, block_end, block_expert_ids, block_offsets = metadata
-    counts = torch.bincount(topk_ids.flatten(), minlength=num_experts).to(torch.int32)
-    block_counts = (counts + block_m - 1) // block_m
-    expected_exp_end = counts.cumsum(0, dtype=torch.int32)
-
-    torch.testing.assert_close(exp_start, expected_exp_end - counts)
-    torch.testing.assert_close(exp_end, expected_exp_end)
-    torch.testing.assert_close(block_end, block_counts.cumsum(0, dtype=torch.int32))
-    num_blocks = int(block_end[-1])
-    expected_block_experts = torch.repeat_interleave(torch.arange(num_experts, device='cuda', dtype=torch.int32),
-                                                     block_counts.to(torch.int64))
-    block_start = block_end - block_counts
-    block_rank = torch.arange(num_blocks, device='cuda', dtype=torch.int32)
-    block_rank -= torch.repeat_interleave(block_start, block_counts.to(torch.int64))
-    expected_block_offsets = torch.repeat_interleave(exp_start, block_counts.to(torch.int64)) + block_rank * block_m
-    torch.testing.assert_close(block_expert_ids[:num_blocks], expected_block_experts)
-    torch.testing.assert_close(block_offsets[:num_blocks], expected_block_offsets)
-    sorted_experts = topk_ids.flatten()[sorted_idx.to(torch.int64)]
-    expected_sorted_experts = torch.repeat_interleave(torch.arange(num_experts, device='cuda'),
-                                                     counts.to(torch.int64))
-    torch.testing.assert_close(sorted_experts, expected_sorted_experts)
-    torch.testing.assert_close(sorted_experts[block_offsets[:num_blocks].to(torch.int64)],
-                               expected_block_experts.to(sorted_experts.dtype))
+    _assert_sorted_idx_block_metadata(topk_ids, num_experts, block_m, metadata)
+    block_expert_ids, block_offsets = metadata[-2:]
     expected_capacity = min(topk_ids.numel(), (topk_ids.numel() + block_m - 1) // block_m + num_experts)
     assert block_expert_ids.numel() == expected_capacity
     assert block_offsets.numel() == expected_capacity
+
+
+@pytest.mark.parametrize(('num_tokens', 'num_experts'), [(1023, 257), (1024, 2048)])
+def test_parallel_sorted_idx(num_tokens, num_experts):
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _get_sorted_idx_triton
+
+    torch.manual_seed(13)
+    topk_ids = _make_route_ids(num_tokens, 8, num_experts, 'random')
+    metadata = _get_sorted_idx_triton(topk_ids, num_experts)
+    _assert_sorted_idx_metadata(topk_ids, num_experts, metadata)
+
+
+@pytest.mark.parametrize(('num_experts', 'local_num_experts', 'expert_offset'), [
+    (257, 257, 0),
+    (2048, 257, 511),
+])
+def test_parallel_sorted_idx_blocks(num_experts, local_num_experts, expert_offset):
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _get_sorted_idx_blocks_parallel
+
+    torch.manual_seed(13)
+    block_m = 64
+    topk_ids = _make_route_ids(1023, 8, num_experts, 'random')
+    metadata = _get_sorted_idx_blocks_parallel(topk_ids, num_experts, local_num_experts, expert_offset, block_m)
+    _assert_sorted_idx_block_metadata(topk_ids, num_experts, block_m, metadata, local_num_experts, expert_offset)
+    expected_capacity = (topk_ids.numel() + block_m - 1) // block_m + local_num_experts
+    assert metadata[-2].numel() == expected_capacity
+    assert metadata[-1].numel() == expected_capacity
 
 
 def test_single_cta_sorted_idx_rejects_too_many_experts():
