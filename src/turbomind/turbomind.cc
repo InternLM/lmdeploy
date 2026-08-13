@@ -242,9 +242,11 @@ void TurboMind::Impl::CreateContext(int index)
 
         c.d_tp_group = 0;
         c.d_cp_group = 0;
+        c.d_dp_group = 0;
 
         if (p.attn_dp_size > 1) {  // has attn_dp
             c.d_tp_group   = c.d_comm->Split(tp_color, 0, 0);
+            c.d_dp_group   = c.d_comm->Split(dp_color, 0, 0);
             p.attn_dp_rank = c.h_dp_group->rank();
         }
 

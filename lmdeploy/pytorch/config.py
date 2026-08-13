@@ -339,6 +339,26 @@ def _patch_quantization_config(hf_config: Any, model_format: str = None):
 
 
 @dataclass
+class MemDecodeConfig:
+    """Configuration for MemDecode auxiliary memory model and fusion."""
+
+    memory_model_path: str
+    memory_model_config: 'ModelConfig'
+    lambda_value: float = 1.0
+    adaptive_router: bool = True
+    router_path: str | None = None
+    lambda_base_only_threshold: float = -1.0
+
+    def __post_init__(self):
+        self.lambda_value = float(self.lambda_value)
+        self.lambda_base_only_threshold = float(self.lambda_base_only_threshold)
+        if not 0.0 <= self.lambda_value <= 1.0:
+            raise ValueError(f'lambda_value must be in [0, 1], got {self.lambda_value}')
+        if self.adaptive_router and self.router_path is None:
+            raise ValueError('router_path is required when adaptive_router is enabled.')
+
+
+@dataclass
 class BlockCacheSpec:
     """Spec for a named block-scoped cache (e.g. compressed KV)."""
     name: str
@@ -383,7 +403,7 @@ class ModelConfig:
 
     # flash mla
     use_flash_mla: bool = False
-    use_mla_fp8_cache: bool = False
+    mla_kv_cache_dtype: str | None = None
     mla_index_topk: int | None = None
 
     # dllm
@@ -423,6 +443,11 @@ class ModelConfig:
 
     # update cache config
     update_cache_config_func: Any = None
+
+    @property
+    def use_mla_fp8_cache(self):
+        """Whether MLA uses the DeepSeek-V3.2 FP8 cache layout."""
+        return self.mla_kv_cache_dtype == 'fp8_ds_mla'
 
     def get_head_size(self):
         """Get head size."""
@@ -606,6 +631,7 @@ class MiscConfig:
     dllm_config: DLLMConfig = None
     enable_return_routed_experts: bool = False
     enable_chunked_prefill: bool = False
+    memdecode_config: MemDecodeConfig = None
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):

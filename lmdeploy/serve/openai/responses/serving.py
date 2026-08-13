@@ -35,7 +35,7 @@ class OpenAIServingResponses:
 
     def _get_model_list(self) -> list[str]:
         model_names = [self.server_context.async_engine.model_name]
-        cfg = self.server_context.async_engine.backend_config
+        cfg = self.server_context.engine_config
         model_names += getattr(cfg, 'adapters', None) or []
         return model_names
 
@@ -117,7 +117,7 @@ class OpenAIServingResponses:
 
         session, result_generator = self._generate(model_name, parsed_request, gen_config)
         created_time = int(time.time())
-        session_mgr = self.server_context.async_engine.session_mgr
+        session_mgr = self.server_context.session_manager
 
         if request.stream:
             stream_generator = stream_response(
@@ -165,6 +165,7 @@ class OpenAIServingResponses:
             tool_calls=tool_calls,
             input_tokens=final_res.input_token_len,
             output_tokens=final_res.generate_token_len,
+            reasoning_tokens=response_parser.reasoning_tokens or 0,
             finish_reason=final_res.finish_reason,
         )
         return response.model_dump(exclude_none=True)

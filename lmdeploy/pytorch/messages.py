@@ -2,7 +2,7 @@
 import enum
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -11,6 +11,18 @@ from torch import Tensor
 from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs, make_multimodal_content_hash
+
+# Re-export prefix-cache state types from their state-only owner.
+from lmdeploy.pytorch.prefix_cache_state import (  # noqa: F401
+    MultimodalSpan,
+    PrefixCacheBlockExtraIdentity,
+    PrefixCacheExtraIdentity,
+    PrefixCacheState,
+    PrefixRecomputeOverlap,
+    StateCheckpointProducerPin,
+    StateCheckpointRestore,
+    StateCheckpointSaveReservation,
+)
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
 
@@ -41,84 +53,6 @@ class InputEmbeddings:
             self.start += offset
             self.end += offset
         return self
-
-
-@dataclass(frozen=True)
-class PrefixCacheMeta:
-    """Multimodal span identity used by prefix-cache block keys.
-
-    Placeholder token ids alone are not enough for VLM prefix caching: two
-    requests can contain the same image placeholder tokens backed by different
-    image/video content.  The trie key therefore includes every overlapping
-    span's modality and stable content hash.
-    """
-
-    start: int
-    end: int
-    modality: str
-    content_hash: str
-
-
-PrefixCacheExtraHash: TypeAlias = tuple[int, int, str, str]
-PrefixCacheExtraHashes: TypeAlias = tuple[PrefixCacheExtraHash, ...]
-PrefixCacheBlockExtraHashes: TypeAlias = dict[int, PrefixCacheExtraHashes]
-
-
-@dataclass
-class PrefixCacheState:
-    """Per-sequence prefix-cache bookkeeping.
-
-    ``metas`` and ``block_extra_hashes`` are persistent request metadata used
-    when constructing multimodal-aware trie keys.  The restore/save fields are
-    transient scheduler state for SSM checkpoints: a matched frozen state is
-    pinned before forward, and pending save slots are published only after the
-    model has copied runtime state into them.  ``last_shared_node`` is the
-    deepest trie node already shared by this sequence; ``BlockTrie.match()``
-    writes it and ``BlockTrie.allocate()`` continues inserting new full blocks
-    from it.  ``match_start_step`` remembers the sequence step before a
-    tentative prefix-cache match so long-context chunking can distinguish
-    current-turn cached multimodal spans from older session history.
-    ``match_recompute_blocks`` keeps a small full-block overlap out of prefix
-    reuse for strategies that need target hidden-state bridge data.
-    ``private_recompute_*_step`` marks trie-known blocks that were deliberately
-    dropped from a match and therefore must stay writable/private during the
-    next allocation instead of being deduplicated back to shared trie blocks.
-    ``suppress_match_stats`` is set while replaying work after recompute
-    eviction; cache reuse may still happen, but it should not affect the public
-    prefix-cache hit-rate metric.
-    """
-
-    # Persistent request metadata used to build multimodal-aware trie keys.
-    metas: list[PrefixCacheMeta] = field(default_factory=list)
-    block_extra_hashes: PrefixCacheBlockExtraHashes = field(default_factory=dict, repr=False)
-    num_indexed_metas: int = 0
-
-    # Trie cursor for the deepest prefix block already shared by this sequence.
-    last_shared_node: Any = field(default=None, repr=False)
-
-    # SSM checkpoint restore state pinned by a prefix hit before forward.
-    restore_state: int = -1
-    restore_state_acquired: bool = False
-    restore_node: Any = field(default=None, repr=False)
-
-    # SSM checkpoint save state staged until model forward publishes it.
-    save_state: int = -1
-    save_step: int = 0
-    save_is_decode: bool = False
-    save_node: Any = field(default=None, repr=False)
-    save_state_acquired: bool = False
-    save_acquired_state: int = -1
-    save_acquired_node: Any = field(default=None, repr=False)
-
-    # Latest decode checkpoint node owned by this sequence.
-    decode_state_node: Any = field(default=None, repr=False)
-
-    # Tentative match state used for chunking, MTP overlap, and metrics.
-    match_start_step: int = -1
-    match_recompute_blocks: int = 0
-    private_recompute_start_step: int = -1
-    private_recompute_end_step: int = -1
-    suppress_match_stats: bool = False
 
 
 @dataclass
@@ -934,7 +868,7 @@ class SchedulerSequence:
             return self.history_multimodals.get_datas(match_start, self.num_all_ids)
         return input_multimodals
 
-    def get_prefix_cache_extra_hashes(self, start: int, end: int) -> PrefixCacheExtraHashes:
+    def get_prefix_cache_extra_identity(self, start: int, end: int) -> PrefixCacheExtraIdentity:
         """Get canonical multimodal identity entries for a token range.
 
         The common caller asks for a full block, but partial ranges are used when verifying sparse SSM checkpoint
@@ -942,25 +876,25 @@ class SchedulerSequence:
         multimodal placeholders content-aware.
         """
         prefix_cache = self.prefix_cache
-        if len(prefix_cache.metas) == 0:
+        if len(prefix_cache.multimodal_spans) == 0:
             return ()
 
-        if prefix_cache.num_indexed_metas != len(prefix_cache.metas):
-            self._index_prefix_cache_metas()
-        start_block = start // self.block_size
-        end_block = (max(start, end - 1)) // self.block_size
-        if start_block == end_block:
-            extras = prefix_cache.block_extra_hashes.get(start_block, ())
+        if prefix_cache.num_indexed_spans != len(prefix_cache.multimodal_spans):
+            self._index_prefix_cache_spans()
+        start_block_idx = start // self.block_size
+        end_block_idx = (max(start, end - 1)) // self.block_size
+        if start_block_idx == end_block_idx:
+            extras = prefix_cache.block_extra_identity.get(start_block_idx, ())
             if start % self.block_size == 0 and end - start == self.block_size:
                 # Full-block lookup is the hot path; the indexed tuple already
                 # contains exactly the spans that overlap this block.
                 return extras
-            return tuple(extra for extra in extras if extra[0] < end and start < extra[1])
+            return tuple(extra for extra in extras if extra.start < end and start < extra.end)
 
         extras = []
-        for block_id in range(start_block, end_block + 1):
-            extras.extend(prefix_cache.block_extra_hashes.get(block_id, ()))
-        extras = [extra for extra in set(extras) if extra[0] < end and start < extra[1]]
+        for block_idx in range(start_block_idx, end_block_idx + 1):
+            extras.extend(prefix_cache.block_extra_identity.get(block_idx, ()))
+        extras = [extra for extra in set(extras) if extra.start < end and start < extra.end]
         return tuple(sorted(extras))
 
     def clamp_prefix_cache_match_step(self, step: int):
@@ -974,7 +908,7 @@ class SchedulerSequence:
         if step <= 0:
             return step
 
-        spans = [(meta.start, meta.end) for meta in self.prefix_cache.metas]
+        spans = [(span.start, span.end) for span in self.prefix_cache.multimodal_spans]
         spans.extend((emb.start, emb.end) for emb in self.history_embeddings.embeddings)
         if len(spans) == 0:
             return (step // self.block_size) * self.block_size
@@ -991,11 +925,17 @@ class SchedulerSequence:
             clamped = next_step
         return clamped
 
+    def is_prefix_cache_boundary_safe(self, step: int):
+        """Check that an exact cache boundary is outside multimodal spans."""
+        if any(span.start < step < span.end for span in self.prefix_cache.multimodal_spans):
+            return False
+        return not any(emb.start < step < emb.end for emb in self.history_embeddings.embeddings)
+
     def get_prefix_cache_max_match_step(self):
         """Get the deepest prefix step allowed for a cache hit."""
         block_size = self.block_size
         max_step = ((self.num_valid_ids - 1) // block_size) * block_size
-        recompute_blocks = max(0, self.prefix_cache.match_recompute_blocks)
+        recompute_blocks = max(0, self.prefix_cache.recompute_overlap.recompute_blocks)
         if recompute_blocks > 0:
             max_step = max(0, max_step - recompute_blocks * block_size)
         return self.clamp_prefix_cache_match_step(max_step)
@@ -1023,10 +963,10 @@ class SchedulerSequence:
             return
         multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
         if self.session.scheduler.cache_config.enable_prefix_caching:
-            self._update_prefix_cache_metas(multimodals)
+            self._update_prefix_cache_spans(multimodals)
         self.history_multimodals.add_inputs(multimodals)
 
-    def _update_prefix_cache_metas(self, multimodals: MultiModalInputs):
+    def _update_prefix_cache_spans(self, multimodals: MultiModalInputs):
         """Record multimodal span identities for future trie keying."""
         for modal_datas in multimodals.values():
             for modal_data in modal_datas:
@@ -1040,13 +980,13 @@ class SchedulerSequence:
                     # defensive correctness if a processor omits it.
                     content_hash = make_multimodal_content_hash(modal_data.data, modal_data.meta,
                                                                 modal_data.mrope_pos_ids)
-                self.prefix_cache.metas.append(
-                    PrefixCacheMeta(start=modal_data.start,
-                                    end=modal_data.end,
-                                    modality=str(modality),
-                                    content_hash=str(content_hash)))
+                self.prefix_cache.multimodal_spans.append(
+                    MultimodalSpan(start=modal_data.start,
+                                   end=modal_data.end,
+                                   modality=str(modality),
+                                   content_hash=str(content_hash)))
 
-    def _index_prefix_cache_metas(self):
+    def _index_prefix_cache_spans(self):
         """Build the lazy block -> multimodal identity index.
 
         The trie asks for block keys many times during match/allocation, so we pay the span-to-block indexing cost once
@@ -1054,21 +994,20 @@ class SchedulerSequence:
         """
         prefix_cache = self.prefix_cache
         block_size = self.block_size
-        new_metas = prefix_cache.metas[prefix_cache.num_indexed_metas:]
-        if len(new_metas) == 0:
+        new_spans = prefix_cache.multimodal_spans[prefix_cache.num_indexed_spans:]
+        if len(new_spans) == 0:
             return
 
-        for meta in new_metas:
-            if meta.end <= meta.start:
+        for span in new_spans:
+            if span.end <= span.start:
                 continue
-            extra = (meta.start, meta.end, meta.modality, meta.content_hash)
-            start_block = meta.start // block_size
-            end_block = (meta.end - 1) // block_size
-            for block_id in range(start_block, end_block + 1):
-                extras = list(prefix_cache.block_extra_hashes.get(block_id, ()))
-                extras.append(extra)
-                prefix_cache.block_extra_hashes[block_id] = tuple(sorted(extras))
-        prefix_cache.num_indexed_metas = len(prefix_cache.metas)
+            start_block_idx = span.start // block_size
+            end_block_idx = (span.end - 1) // block_size
+            for block_idx in range(start_block_idx, end_block_idx + 1):
+                extras = list(prefix_cache.block_extra_identity.get(block_idx, ()))
+                extras.append(span)
+                prefix_cache.block_extra_identity[block_idx] = tuple(sorted(extras))
+        prefix_cache.num_indexed_spans = len(prefix_cache.multimodal_spans)
 
     def _update_mrope_pos_ids(self):
         """Update mrope pos ids."""

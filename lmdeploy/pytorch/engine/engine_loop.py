@@ -406,12 +406,6 @@ class EngineLoop:
         self.scheduler.collect_migration_done()
         return await self.inputs_maker.send_next_inputs()
 
-    @staticmethod
-    def _has_state_checkpoint_save(model_inputs: 'ModelInputs | None', delta: 'ModelInputsDelta | None'):
-        """Check whether the current forward reserved SSM checkpoints."""
-        return ((model_inputs is not None and model_inputs.state_prefix_cache_save_offsets is not None)
-                or (delta is not None and delta.state_prefix_cache_save_offsets is not None))
-
     async def _prefetch_next_inputs(self):
         """Collect migration completions before prefetching the next batch."""
         if self._sleep_requested:
@@ -419,19 +413,16 @@ class EngineLoop:
         self.scheduler.collect_migration_done()
         return await self.inputs_maker.prefetch_next_inputs()
 
-    def _publish_forward_prefix_cache(self, running: 'SeqList', has_state_checkpoint_save: bool):
+    def _publish_forward_checkpoints(self, running: 'SeqList', has_state_checkpoint_save: bool):
         """Publish per-forward prefix-cache ownership before prefetching."""
-        if not self.scheduler.block_trie.enable:
-            return
+        state_checkpoints = self.scheduler.block_trie.state_checkpoints
         if has_state_checkpoint_save:
-            self.scheduler.block_trie.commit_state_checkpoints(running, acquire_save_ref=True)
-        self.scheduler.block_trie.release_state_checkpoint_restores(running)
+            state_checkpoints.publish_saves(running, pin_saves=True)
+        state_checkpoints.unpin_restores(running)
 
-    def _release_forward_prefix_cache_saves(self, running: 'SeqList'):
-        """Release producer refs after the forward output/event boundary."""
-        if not self.scheduler.block_trie.enable:
-            return
-        self.scheduler.block_trie.release_state_checkpoint_saves(running)
+    def _release_forward_save_pins(self, running: 'SeqList'):
+        """Unpin producers after the forward output/event boundary."""
+        self.scheduler.block_trie.state_checkpoints.unpin_saves(running)
 
     def _finish_forward_output(self,
                                out: 'BatchedOutputs | None',
@@ -452,17 +443,19 @@ class EngineLoop:
         """Get outputs and prefetch."""
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
+        cache_inputs = forward_inputs['cache_inputs']
         self.inputs_maker.update_running_seqs(running, model_inputs)
-        has_state_checkpoint_save = self._has_state_checkpoint_save(model_inputs, delta)
+        has_state_checkpoint_save = (cache_inputs is not None
+                                     and cache_inputs.state_save_plan is not None)
 
         # ModelAgent executes queued forwards in send order.  Once the current
         # input is queued, matched checkpoints can be published before waiting
-        # for GPU output; save checkpoints keep a producer ref until the output
+        # for GPU output; save checkpoints keep a producer pin until the output
         # event boundary so prefetch cannot evict/reuse their destination slots.
-        self._publish_forward_prefix_cache(running, has_state_checkpoint_save)
+        self._publish_forward_checkpoints(running, has_state_checkpoint_save)
         forward_inputs, next_running = await self._prefetch_next_inputs()
         out = await self.executor.get_output_async()
-        self._release_forward_prefix_cache_saves(running)
+        self._release_forward_save_pins(running)
         self._finish_forward_output(out, running, model_inputs, delta)
         # out might come from shared memory, need to explicitly delete to release memory in time
         del out

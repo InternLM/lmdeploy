@@ -123,11 +123,15 @@ public:
                const MatrixLayout& Cdesc,
                void*               D,
                const MatrixLayout& Ddesc,
+               void*               W,
+               const MatrixLayout& Wdesc,
                int                 swizzle,
                int                 splits,
                Workspace&          workspace,
                cudaStream_t        stream) override
     {
+        (void)W;
+        (void)Wdesc;
         MatrixLayout Adesc = _Adesc;
 
         const int m = Ddesc.rows;

@@ -25,18 +25,22 @@
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/multimodal_input.h"
 #include "src/turbomind/kernels/copy/copy.h"
+#include "src/turbomind/kernels/norm/norm.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/ffn_weight.h"
+#include "src/turbomind/models/internvit/internvit_block_weight.h"
+#include "src/turbomind/models/internvit/internvit_input.h"
+#include "src/turbomind/models/internvit/internvit_weight.h"
 #include "src/turbomind/models/layer_norm_weight.h"
 #include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/norm_weight.h"
-#include "src/turbomind/models/qwen3_5vit/qwen3_5vit_block_weight.h"
-#include "src/turbomind/models/qwen3_5vit/qwen3_5vit_input.h"
-#include "src/turbomind/models/qwen3_5vit/qwen3_5vit_weight.h"
+#include "src/turbomind/models/qwenvit/qwenvit_block_weight.h"
+#include "src/turbomind/models/qwenvit/qwenvit_input.h"
+#include "src/turbomind/models/qwenvit/qwenvit_weight.h"
 #include "src/turbomind/models/vision_model_weight.h"
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/turbomind.h"
@@ -49,6 +53,10 @@ using namespace pybind11::literals;
 
 namespace turbomind::linear_attn::delta_rule {
 void bind_delta_rule(pybind11::module_& m);
+}
+
+namespace turbomind::python_linear {
+void bind_linear(pybind11::module_& m);
 }
 
 using ft::core::Tensor;
@@ -143,6 +151,11 @@ DLManagedTensor* TritonTensorToDLManagedTensor(Tensor& tensor)
         case data_type_v<turbomind::bfloat16_t>:
             data_type.code = DLDataTypeCode::kDLBfloat;
             data_type.bits = 16;
+            break;
+        case data_type_v<turbomind::fp8_e4m3_t>:
+            // Export as opaque uint8; consumers reinterpret (torch float8 via uint8 view).
+            data_type.code = DLDataTypeCode::kDLUInt;
+            data_type.bits = 8;
             break;
         default:
             break;
@@ -403,14 +416,20 @@ void bind_struct(py::module_& m, const char* name)
     T::for_each([&](const char* fname, auto member_ptr) { cls.def_readwrite(fname, member_ptr); });
 }
 
+namespace turbomind {
+void bind_moe_gate_v2(pybind11::module_& m);
+}
+
 PYBIND11_MODULE(_turbomind, m)
 {
     py::module_ multimodal = m.def_submodule("multimodal");
 
-    using MMInput      = ft::multimodal::Input;
-    using MMModality   = ft::multimodal::Modality;
-    using QwenVitItem  = ft::multimodal::Qwen3_5VitItem;
-    using QwenVitInput = ft::multimodal::Qwen3_5VitInput;
+    using MMInput        = ft::multimodal::Input;
+    using MMModality     = ft::multimodal::Modality;
+    using InternVitItem  = ft::multimodal::InternVitItem;
+    using InternVitInput = ft::multimodal::InternVitInput;
+    using QwenVitItem    = ft::multimodal::QwenVitItem;
+    using QwenVitInput   = ft::multimodal::QwenVitInput;
     py::class_<MMInput, std::shared_ptr<MMInput>>(multimodal, "Input");
     py::enum_<MMModality>(multimodal, "Modality")
         .value("IMAGE", MMModality::kImage)
@@ -429,7 +448,7 @@ PYBIND11_MODULE(_turbomind, m)
             return fp;  // empty sentinel
         }
         if (len != 32) {
-            throw std::invalid_argument("Qwen3_5VitItem.fingerprint must be 0 or 32 bytes (SHA-256)");
+            throw std::invalid_argument("fingerprint must be 0 or 32 bytes (SHA-256)");
         }
         std::memcpy(fp.words.data(), buf, 32);
         return fp;
@@ -437,7 +456,7 @@ PYBIND11_MODULE(_turbomind, m)
     auto fp_to_bytes = [](const ft::Fingerprint& fp) -> py::bytes {
         return py::bytes(reinterpret_cast<const char*>(fp.words.data()), 32);
     };
-    py::class_<QwenVitItem>(multimodal, "Qwen3_5VitItem")
+    py::class_<QwenVitItem>(multimodal, "QwenVitItem")
         .def(py::init<>())
         .def(py::init([fp_from_bytes](MMModality              modality,
                                       std::shared_ptr<Tensor> data,
@@ -465,27 +484,56 @@ PYBIND11_MODULE(_turbomind, m)
             "fingerprint",
             [fp_to_bytes](const QwenVitItem& self) { return fp_to_bytes(self.fingerprint); },
             [fp_from_bytes](QwenVitItem& self, py::bytes b) { self.fingerprint = fp_from_bytes(b); });
-    py::class_<QwenVitInput, MMInput, std::shared_ptr<QwenVitInput>>(multimodal, "Qwen3_5VitInput")
+    py::class_<QwenVitInput, MMInput, std::shared_ptr<QwenVitInput>>(multimodal, "QwenVitInput")
         .def(py::init<>())
         .def(py::init<std::vector<QwenVitItem>>(), "items"_a)
         .def_readwrite("items", &QwenVitInput::items);
+    py::class_<InternVitItem>(multimodal, "InternVitItem")
+        .def(py::init<>())
+        .def(py::init([fp_from_bytes](MMModality              modality,
+                                      std::shared_ptr<Tensor> data,
+                                      int                     token_begin,
+                                      int                     token_end,
+                                      py::bytes               fingerprint) {
+                 return InternVitItem{modality, *data, token_begin, token_end, fp_from_bytes(fingerprint)};
+             }),
+             "modality"_a,
+             "data"_a,
+             "token_begin"_a,
+             "token_end"_a,
+             "fingerprint"_a = py::bytes())
+        .def_readwrite("modality", &InternVitItem::modality)
+        .def_property(
+            "data",
+            [](const InternVitItem& self) { return std::make_shared<Tensor>(self.data); },
+            [](InternVitItem& self, std::shared_ptr<Tensor> data) { self.data = *data; })
+        .def_readwrite("token_begin", &InternVitItem::token_begin)
+        .def_readwrite("token_end", &InternVitItem::token_end)
+        .def_property(
+            "fingerprint",
+            [fp_to_bytes](const InternVitItem& self) { return fp_to_bytes(self.fingerprint); },
+            [fp_from_bytes](InternVitItem& self, py::bytes b) { self.fingerprint = fp_from_bytes(b); });
+    py::class_<InternVitInput, MMInput, std::shared_ptr<InternVitInput>>(multimodal, "InternVitInput")
+        .def(py::init<>())
+        .def(py::init<std::vector<InternVitItem>>(), "items"_a)
+        .def_readwrite("items", &InternVitInput::items);
 
     py::class_<ft::RequestMetrics, std::shared_ptr<ft::RequestMetrics>>(m, "RequestMetrics")
         .def(py::init())
         .def_property_readonly("enqueue_time",
                                [](ft::RequestMetrics& m) { return m.enqueue_time.load(std::memory_order_relaxed); })
         .def_property_readonly("scheduled_time",
-                               [](ft::RequestMetrics& m) { return m.scheduled_time.load(std::memory_order_relaxed); });
+                               [](ft::RequestMetrics& m) { return m.scheduled_time.load(std::memory_order_relaxed); })
+        .def_property_readonly("cached_tokens",
+                               [](ft::RequestMetrics& m) { return m.cached_tokens.load(std::memory_order_relaxed); });
 
     py::class_<ft::ScheduleMetrics, std::shared_ptr<ft::ScheduleMetrics>>(m, "ScheduleMetrics")
         .def(py::init())
         .def_readonly("total_seqs", &ft::ScheduleMetrics::total_seqs)
         .def_readonly("active_seqs", &ft::ScheduleMetrics::active_seqs)
         .def_readonly("waiting_seqs", &ft::ScheduleMetrics::waiting_seqs)
-        .def_readonly("total_blocks", &ft::ScheduleMetrics::total_blocks)
-        .def_readonly("active_blocks", &ft::ScheduleMetrics::active_blocks)
-        .def_readonly("cached_blocks", &ft::ScheduleMetrics::cached_blocks)
-        .def_readonly("free_blocks", &ft::ScheduleMetrics::free_blocks)
+        .def_readonly("cache_usage", &ft::ScheduleMetrics::cache_usage)
+        .def_readonly("prefix_cache_hit_rate", &ft::ScheduleMetrics::prefix_cache_hit_rate)
         .def_readonly("scheduler_tick", &ft::ScheduleMetrics::scheduler_tick);
 
     py::class_<ft::SessionParam>(m, "SessionParam")
@@ -530,9 +578,9 @@ PYBIND11_MODULE(_turbomind, m)
     py::class_<ft::AtomicRequestState, std::shared_ptr<ft::AtomicRequestState>>(m, "AtomicRequestState")
         .def("consume", [](ft::AtomicRequestState& s) { return s.exchange(nullptr); });
 
-    // data type
     {
         using namespace turbomind;
+        // data type
         py::enum_<ft::DataType>(m, "DataType")
             .value("TYPE_INVALID", kNull)
             .value("TYPE_BOOL", kBool)
@@ -557,19 +605,25 @@ PYBIND11_MODULE(_turbomind, m)
             .value("MEMORY_CPU", ft::DeviceType::kCPU)
             .value("MEMORY_CPU_PINNED", ft::DeviceType::kCPUpinned)
             .value("MEMORY_GPU", ft::DeviceType::kDEVICE);
+
+        // norm type
+        py::enum_<ft::NormType>(m, "NormType")
+            .value("NONE", ft::NormType::kNone)
+            .value("LAYER_NORM", ft::NormType::kLayerNorm)
+            .value("RMS_NORM", ft::NormType::kRMSNorm);
     }
 
     // DataFormat descriptors
     py::class_<turbomind::QuantParamDesc>(m, "QuantParamDesc")
-        .def_readonly("dtype", &turbomind::QuantParamDesc::dtype)
-        .def_readonly("transposed", &turbomind::QuantParamDesc::transposed)
+        .def_readwrite("dtype", &turbomind::QuantParamDesc::dtype)
+        .def_readwrite("transposed", &turbomind::QuantParamDesc::transposed)
         .def("present", &turbomind::QuantParamDesc::present);
 
     py::class_<turbomind::DataFormat>(m, "DataFormat")
-        .def_readonly("dtype", &turbomind::DataFormat::dtype)
-        .def_readonly("block_sizes", &turbomind::DataFormat::block_sizes)
-        .def_readonly("scales", &turbomind::DataFormat::scales)
-        .def_readonly("zeros", &turbomind::DataFormat::zeros)
+        .def_readwrite("dtype", &turbomind::DataFormat::dtype)
+        .def_readwrite("block_sizes", &turbomind::DataFormat::block_sizes)
+        .def_readwrite("scales", &turbomind::DataFormat::scales)
+        .def_readwrite("zeros", &turbomind::DataFormat::zeros)
         .def("is_quantized", &turbomind::DataFormat::is_quantized)
         .def("rank", &turbomind::DataFormat::rank);
 
@@ -598,8 +652,10 @@ PYBIND11_MODULE(_turbomind, m)
     bind_config<turbomind::core::DecoderLayerConfig>(m, "DecoderLayerConfig");
     bind_config<turbomind::core::ModelWeightConfig>(m, "ModelWeightConfig");
     bind_config<turbomind::core::LayerNormConfig>(m, "LayerNormConfig");
-    bind_config<turbomind::core::Qwen3_5VitConfig>(m, "Qwen3_5VitConfig");
-    bind_config<turbomind::core::Qwen3_5VitBlockConfig>(m, "Qwen3_5VitBlockConfig");
+    bind_config<turbomind::core::QwenVitConfig>(m, "QwenVitConfig");
+    bind_config<turbomind::core::QwenVitBlockConfig>(m, "QwenVitBlockConfig");
+    bind_config<turbomind::core::InternVitConfig>(m, "InternVitConfig");
+    bind_config<turbomind::core::InternVitBlockConfig>(m, "InternVitBlockConfig");
 
     // tensor
     py::class_<Tensor, std::shared_ptr<Tensor>>(m, "Tensor")
@@ -641,10 +697,12 @@ PYBIND11_MODULE(_turbomind, m)
                 });
             },
             "stream"_a = 0)
-        .def("__dlpack_device__", [](const Tensor& self) {
-            auto device = getDLDevice(self);
-            return std::tuple<int, int>(int(device.device_type), device.device_id);
-        });
+        .def("__dlpack_device__",
+             [](const Tensor& self) {
+                 auto device = getDLDevice(self);
+                 return std::tuple<int, int>(int(device.device_type), device.device_id);
+             })
+        .def("t", [](const Tensor& self) { return std::make_shared<Tensor>(self.t()); });
     m.def(
         "from_dlpack",
         [](py::object obj) {
@@ -735,18 +793,35 @@ PYBIND11_MODULE(_turbomind, m)
             "grammar"_a);
 
     // Python context manager wrapper for ContextGuard.
-    // Stores copies of Stream + Allocator; constructs the real guard
+    // Stores copies of Stream + Allocator(s); constructs the real guard
     // in-place on __enter__ and destroys it on __exit__.
     struct PyContextGuard {
         ft::core::Stream                        stream;
-        ft::core::Allocator                     alloc;
+        ft::core::Allocator                     host;
+        ft::core::Allocator                     device;
+        bool                                    has_device{false};
         std::unique_ptr<ft::core::ContextGuard> guard;
 
-        PyContextGuard(ft::core::Stream s, ft::core::Allocator a): stream(std::move(s)), alloc(std::move(a)) {}
+        // existing TurboMind path: stream + single allocator
+        PyContextGuard(ft::core::Stream s, ft::core::Allocator a):
+            stream(std::move(s)), host(std::move(a)), device{}, has_device(false)
+        {
+        }
+
+        // harness / standalone path: stream + host + device (test_gemm_v2 shape)
+        PyContextGuard(ft::core::Stream s, ft::core::Allocator h, ft::core::Allocator d):
+            stream(std::move(s)), host(std::move(h)), device(std::move(d)), has_device(true)
+        {
+        }
 
         void enter()
         {
-            guard = std::make_unique<ft::core::ContextGuard>(stream, alloc);
+            if (has_device) {
+                guard = std::make_unique<ft::core::ContextGuard>(stream, host, device);
+            }
+            else {
+                guard = std::make_unique<ft::core::ContextGuard>(stream, host);
+            }
         }
         void exit()
         {
@@ -760,7 +835,22 @@ PYBIND11_MODULE(_turbomind, m)
                  g.enter();
                  return g;
              })
-        .def("__exit__", [](PyContextGuard& g, py::object, py::object, py::object) { g.exit(); });
+        .def("__exit__", [](PyContextGuard& g, py::object, py::object, py::object) { g.exit(); })
+        .def_property_readonly(
+            "stream_ptr",
+            [](const PyContextGuard& g) { return reinterpret_cast<std::uintptr_t>(g.stream.handle()); },
+            "Underlying cudaStream_t as an integer (for torch.cuda.ExternalStream).");
+
+    m.def(
+        "create_device_context",
+        []() {
+            auto stream = ft::core::Stream::create();
+            return std::make_unique<PyContextGuard>(
+                stream, ft::core::Allocator{ft::kCPU}, ft::core::Allocator{stream, false});
+        },
+        "Create a ContextGuard with stream + host + device allocators.\n\n"
+        "Objects that use core::Context::stream() in their constructor or destructor "
+        "(notably LlamaLinear) must be destroyed before this context exits.");
 
     // Param — lightweight handle to a Module parameter slot
     py::class_<ft::core::Param>(m, "Param")
@@ -772,6 +862,8 @@ PYBIND11_MODULE(_turbomind, m)
             "shape"_a,
             "dtype"_a)
         .def("get", [](ft::core::Param& p) { return std::make_shared<Tensor>(p.get()); })
+        .def(
+            "set", [](ft::core::Param& p, std::shared_ptr<Tensor> t) { p.set(t ? *t : Tensor{}); }, "tensor"_a)
         .def("__bool__", [](ft::core::Param& p) { return static_cast<bool>(p); });
 
     // Module class — navigation and allocation interface
@@ -819,7 +911,15 @@ PYBIND11_MODULE(_turbomind, m)
             },
             py::return_value_policy::reference,
             "name"_a,
-            "child"_a);
+            "child"_a)
+        // Wire a meta-MoE layer weight to its shared routed pack (non-owning)
+        .def(
+            "set_meta_pack",
+            [](ft::core::Module& m, ft::core::Module* pack) {
+                auto& moe = dynamic_cast<ft::MoeWeight&>(m);
+                moe.set_meta_pack(dynamic_cast<ft::MoeWeight*>(pack));
+            },
+            "pack"_a);
 
     // Standalone module creation (no parent needed)
     m.def(
@@ -831,8 +931,7 @@ PYBIND11_MODULE(_turbomind, m)
         py::return_value_policy::reference,
         "config"_a);
 
-    // LinearWeight — specific interface for weight loading
-    py::class_<turbomind::LinearWeight, ft::core::Module>(m, "LinearWeight");
+    // LinearWeight is fully bound in bind_linear() (after Module is registered).
 
     // transformer model
     using ft::TurboMind;
@@ -900,4 +999,6 @@ PYBIND11_MODULE(_turbomind, m)
         .def("model_tp_rank", &TurboMind::GetModelTpRank, "index"_a);
 
     turbomind::linear_attn::delta_rule::bind_delta_rule(m);
+    turbomind::python_linear::bind_linear(m);
+    turbomind::bind_moe_gate_v2(m);
 }

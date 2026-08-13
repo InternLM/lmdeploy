@@ -148,7 +148,11 @@ async def stream_response(result_generator,
         final_res = res
         delta = res.response or ''
         delta_token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
-        stream_deltas = response_parser.stream_chunk(delta, delta_token_ids)
+        stream_deltas = response_parser.stream_chunk(
+            delta,
+            delta_token_ids,
+            final=res.finish_reason is not None,
+        )
 
         for delta_message, tool_emitted in stream_deltas:
             content_delta = getattr(delta_message, 'content', None) or ''
@@ -227,6 +231,7 @@ async def stream_response(result_generator,
         tool_calls=tool_calls,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        reasoning_tokens=response_parser.reasoning_tokens or 0,
         finish_reason=finish_reason,
         message_id=message_id,
     )

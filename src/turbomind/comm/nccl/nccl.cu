@@ -358,6 +358,7 @@ public:
                                       const void*  bias,
                                       const void*  weights,
                                       float        eps,
+                                      bool         zero_centered,
                                       int          dim,
                                       int          token_num,
                                       DataType     dtype,
@@ -375,6 +376,7 @@ public:
                                                     dim,
                                                     count,
                                                     eps,
+                                                    zero_centered,
                                                     stream));
         };
 
@@ -400,6 +402,7 @@ public:
                                         const void*  bias,
                                         const void*  weights,
                                         float        eps,
+                                        bool         zero_centered,
                                         int          dim,
                                         DataType     type,
                                         int          group0,
@@ -460,8 +463,16 @@ public:
 
         if (auto& [offset, first, num] = tasks[global_rank_]; num > 0) {
             char* buff = (char*)hidden + elem_size * (offset + first) * dim;
-            TM_SCOPE_CALL(invokeResidualBiasRMSNorm(
-                buff, (char*)residual + elem_size * first * dim, weights, bias, type, dim, num, eps, stream));
+            TM_SCOPE_CALL(invokeResidualBiasRMSNorm(buff,
+                                                    (char*)residual + elem_size * first * dim,
+                                                    weights,
+                                                    bias,
+                                                    type,
+                                                    dim,
+                                                    num,
+                                                    eps,
+                                                    zero_centered,
+                                                    stream));
         }
 
         // group1: all-gather

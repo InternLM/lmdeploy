@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 RoutedExperts = list[list[list[int]]] | str | None
 MessageStopReason = Literal['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'parse_error']
+LOCAL_THINKING_SIGNATURE = 'lmdeploy-local'
 
 
 class AnthropicError(BaseModel):
@@ -156,6 +157,7 @@ class MessageThinkingBlock(BaseModel):
 
     type: Literal['thinking'] = 'thinking'
     thinking: str
+    signature: str = LOCAL_THINKING_SIGNATURE
 
 
 class MessageToolUseBlock(BaseModel):

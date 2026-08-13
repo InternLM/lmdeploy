@@ -191,6 +191,7 @@ bool test_moe_gate(int                     tokens,  //
     universal_vector<int>    f2E(experts_per_token * tokens);
     universal_vector<int>    en2f(experts_per_token * tokens);
     universal_vector<float>  scales(experts_per_token * tokens);
+    universal_vector<int8_t> token_mask(tokens, 1);  // all tokens valid
     // universal_vector<int2>  coords(max_coords);
     // thrust::fill(coords.begin(), coords.end(), int2{-1, 0});
 
@@ -229,6 +230,7 @@ bool test_moe_gate(int                     tokens,  //
                          masks.data().get(),
                          accum.data().get(),
                          logits.data().get(),
+                         (const bool*)token_mask.data().get(),
                          tokens,
                          tokens_padded,
                          expert_num,

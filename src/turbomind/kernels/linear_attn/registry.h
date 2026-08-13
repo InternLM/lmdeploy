@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include <cuda_runtime.h>
@@ -27,7 +28,7 @@ class GdrKernelRegistry {
 public:
     GdrKernelRegistry();
 
-    const GdrKernel*          Find(const Operation&, const PlanningContext&) const;
+    const GdrKernel*          Find(const Operation&, const PlanningContext&, std::string_view architecture) const;
     static GdrKernelRegistry& instance();
 
 private:

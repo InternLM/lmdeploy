@@ -15,7 +15,8 @@ fi
 GDRCOPY_VERSION=2.5.1
 DEEP_EP_VERSION=9af0e0d  # v1.2.1
 DEEP_GEMM_VERSION=88965b0
-FLASH_MLA_VERSION=1408756  # no release, pick the latest commit
+FLASH_MLA_VERSION=9241ae3
+FAST_HADAMARD_TRANSFORM_VERSION=v1.1.0.post2
 
 # DeepEP
 if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
@@ -33,10 +34,20 @@ pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/d
 # sm100 compilation for Flash MLA requires NVCC 12.9 or higher
 FLASH_MLA_DISABLE_SM100=1 pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/FlashMLA.git@${FLASH_MLA_VERSION}"
 
-# flash_attn_3 (prebuilt wheels; CUDA + torch must match this image)
-TORCH_VER=$(python3 -c "import torch; print(''.join(torch.__version__.split('+')[0].split('.')))")
-FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/${CUDA_VERSION_SHORT}_torch${TORCH_VER}"
-pip download --no-deps -d /wheels "flash_attn_3" --find-links "${FA3_WHEELS_URL}"
+# fast_hadamard_transform
+pip wheel -v --no-build-isolation --no-deps -w /wheels \
+    "git+https://github.com/Dao-AILab/fast-hadamard-transform.git@${FAST_HADAMARD_TRANSFORM_VERSION}"
+
+# flash_attn_3 (official, LibTorch ABI-stable wheels for torch >= 2.9).
+# Select the FA3 channel matching the PyTorch binary. CUDA 13 FA3 wheels are
+# published in the cu130 channel.
+FA3_CUDA_VERSION="${PYTORCH_CUDA_VERSION:-${CUDA_VERSION_SHORT}}"
+if [[ "${FA3_CUDA_VERSION}" == cu13* ]]; then
+    FA3_CUDA_VERSION=cu130
+fi
+pip download --no-deps --only-binary=:all: -d /wheels \
+    "flash-attn-3==3.0.0" \
+    --index-url "https://download.pytorch.org/whl/${FA3_CUDA_VERSION}"
 
 # GDRCopy debs
 apt-get update -y \

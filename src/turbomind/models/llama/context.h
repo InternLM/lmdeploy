@@ -26,6 +26,7 @@ struct Communicators {
     comm::DeviceComm d_comm;
     int              d_tp_group;
     int              d_cp_group;
+    int              d_dp_group;
     int              d_mlp_group;
 };
 

@@ -1,0 +1,298 @@
+models:
+  - name: llama2_7b
+    max_tp: 2
+    max_ep: 1
+    weights:
+      - {name: gate_up, kind: dense, output_dim: 22016, input_dim: 4096, tp_axis: output}
+      - {name: down, kind: dense, output_dim: 4096, input_dim: 11008, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 12288, input_dim: 4096, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 4096, input_dim: 4096, tp_axis: input}
+  - name: llama3_8b
+    max_tp: 2
+    max_ep: 1
+    weights:
+      - {name: gate_up, kind: dense, output_dim: 28672, input_dim: 4096, tp_axis: output}
+      - {name: down, kind: dense, output_dim: 4096, input_dim: 14336, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 6144, input_dim: 4096, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 4096, input_dim: 4096, tp_axis: input}
+  - name: internlm2_20b
+    max_tp: 4
+    max_ep: 1
+    weights:
+      - {name: gate_up, kind: dense, output_dim: 32768, input_dim: 6144, tp_axis: output}
+      - {name: down, kind: dense, output_dim: 6144, input_dim: 16384, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 8192, input_dim: 6144, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 6144, input_dim: 6144, tp_axis: input}
+  - name: glm4_9b
+    max_tp: 2
+    max_ep: 1
+    weights:
+      - {name: gate_up, kind: dense, output_dim: 27392, input_dim: 4096, tp_axis: output}
+      - {name: down, kind: dense, output_dim: 4096, input_dim: 13696, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 4608, input_dim: 4096, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 4096, input_dim: 4096, tp_axis: input}
+  - name: qwen2_7b
+    max_tp: 2
+    max_ep: 1
+    weights:
+      - {name: gate_up, kind: dense, output_dim: 37888, input_dim: 3584, tp_axis: output}
+      - {name: down, kind: dense, output_dim: 3584, input_dim: 18944, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 4608, input_dim: 3584, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 3584, input_dim: 3584, tp_axis: input}
+  - name: yi_34b
+    max_tp: 4
+    max_ep: 1
+    weights:
+      - {name: gate_up, kind: dense, output_dim: 40960, input_dim: 7168, tp_axis: output}
+      - {name: down, kind: dense, output_dim: 7168, input_dim: 20480, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 9216, input_dim: 7168, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 7168, input_dim: 7168, tp_axis: input}
+  - name: llama_70b
+    max_tp: 8
+    max_ep: 1
+    weights:
+      - {name: gate_up, kind: dense, output_dim: 57344, input_dim: 8192, tp_axis: output}
+      - {name: down, kind: dense, output_dim: 8192, input_dim: 28672, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 10240, input_dim: 8192, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 8192, input_dim: 8192, tp_axis: input}
+  - name: qwen2_72b
+    max_tp: 8
+    max_ep: 1
+    weights:
+      - {name: gate_up, kind: dense, output_dim: 59392, input_dim: 8192, tp_axis: output}
+      - {name: down, kind: dense, output_dim: 8192, input_dim: 29696, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 10240, input_dim: 8192, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 8192, input_dim: 8192, tp_axis: input}
+  - name: mixtral_8x7b
+    max_tp: 4
+    max_ep: 4
+    moe:
+      expert_num: 8
+      experts_per_token: 2
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 28672, input_dim: 4096}
+      - {name: down, kind: moe_down, output_dim: 4096, input_dim: 14336}
+      - {name: qkv, kind: dense, output_dim: 6144, input_dim: 4096, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 4096, input_dim: 4096, tp_axis: input}
+  - name: mixtral_8x22b
+    max_tp: 8
+    max_ep: 4
+    moe:
+      expert_num: 8
+      experts_per_token: 2
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 32768, input_dim: 6144}
+      - {name: down, kind: moe_down, output_dim: 6144, input_dim: 16384}
+  - name: deepseek_v2
+    max_tp: 4
+    max_ep: 20
+    moe:
+      expert_num: 160
+      experts_per_token: 6
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 3072, input_dim: 5120}
+      - {name: down, kind: moe_down, output_dim: 5120, input_dim: 1536}
+  - name: deepseek_v2_lite
+    max_tp: 2
+    max_ep: 8
+    moe:
+      expert_num: 64
+      experts_per_token: 6
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 3072, input_dim: 2048}
+      - {name: down, kind: moe_down, output_dim: 2048, input_dim: 1536}
+  - name: qwen2_a14b
+    max_tp: 4
+    max_ep: 8
+    moe:
+      expert_num: 64
+      experts_per_token: 8
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 5120, input_dim: 3840}
+      - {name: down, kind: moe_down, output_dim: 3840, input_dim: 2560}
+  - name: phi35_moe
+    max_tp: 4
+    max_ep: 8
+    moe:
+      expert_num: 16
+      experts_per_token: 2
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 12800, input_dim: 4096}
+      - {name: down, kind: moe_down, output_dim: 4096, input_dim: 6400}
+  - name: qwen3_30b_a3b
+    max_tp: 4
+    max_ep: 16
+    moe:
+      expert_num: 128
+      experts_per_token: 8
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 1536, input_dim: 2048}
+      - {name: down, kind: moe_down, output_dim: 2048, input_dim: 768}
+      - {name: qkv, kind: dense, output_dim: 5120, input_dim: 2048, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 2048, input_dim: 4096, tp_axis: input}
+  - name: qwen3_235b_a22b
+    max_tp: 8
+    max_ep: 16
+    moe:
+      expert_num: 128
+      experts_per_token: 8
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 3072, input_dim: 4096}
+      - {name: down, kind: moe_down, output_dim: 4096, input_dim: 1536}
+      - {name: qkv, kind: dense, output_dim: 9216, input_dim: 4096, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 4096, input_dim: 8192, tp_axis: input}
+  - name: qwen35_4b
+    max_tp: 2
+    max_ep: 1
+    weights:
+      - {name: gate_up, kind: dense, output_dim: 18432, input_dim: 2560, tp_axis: output}
+      - {name: down, kind: dense, output_dim: 2560, input_dim: 9216, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 10240, input_dim: 2560, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 2560, input_dim: 4096, tp_axis: input}
+      - {name: lin_in_proj_all, kind: dense, output_dim: 12352, input_dim: 2560, tp_axis: output}
+      - {name: lin_o, kind: dense, output_dim: 2560, input_dim: 4096, tp_axis: input}
+  - name: qwen35_9b
+    max_tp: 2
+    max_ep: 1
+    weights:
+      - {name: gate_up, kind: dense, output_dim: 24576, input_dim: 4096, tp_axis: output}
+      - {name: down, kind: dense, output_dim: 4096, input_dim: 12288, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 10240, input_dim: 4096, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 4096, input_dim: 4096, tp_axis: input}
+      - {name: lin_in_proj_all, kind: dense, output_dim: 12352, input_dim: 4096, tp_axis: output}
+      - {name: lin_o, kind: dense, output_dim: 4096, input_dim: 4096, tp_axis: input}
+  - name: qwen35_27b
+    max_tp: 4
+    max_ep: 1
+    weights:
+      - {name: gate_up, kind: dense, output_dim: 34816, input_dim: 5120, tp_axis: output}
+      - {name: down, kind: dense, output_dim: 5120, input_dim: 17408, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 14336, input_dim: 5120, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 5120, input_dim: 6144, tp_axis: input}
+      - {name: lin_in_proj_all, kind: dense, output_dim: 16480, input_dim: 5120, tp_axis: output}
+      - {name: lin_o, kind: dense, output_dim: 5120, input_dim: 6144, tp_axis: input}
+  - name: qwen35_35b_a3b
+    max_tp: 4
+    max_ep: 32
+    moe:
+      expert_num: 256
+      experts_per_token: 8
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 1024, input_dim: 2048}
+      - {name: down, kind: moe_down, output_dim: 2048, input_dim: 512}
+      - {name: shared_gate_up, kind: dense, output_dim: 1024, input_dim: 2048, tp_axis: output}
+      - {name: shared_down, kind: dense, output_dim: 2048, input_dim: 512, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 9216, input_dim: 2048, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 2048, input_dim: 4096, tp_axis: input}
+      - {name: lin_in_proj_all, kind: dense, output_dim: 12352, input_dim: 2048, tp_axis: output}
+      - {name: lin_o, kind: dense, output_dim: 2048, input_dim: 4096, tp_axis: input}
+  - name: qwen35_122b_a10b
+    max_tp: 8
+    max_ep: 32
+    moe:
+      expert_num: 256
+      experts_per_token: 8
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 2048, input_dim: 3072}
+      - {name: down, kind: moe_down, output_dim: 3072, input_dim: 1024}
+      - {name: shared_gate_up, kind: dense, output_dim: 2048, input_dim: 3072, tp_axis: output}
+      - {name: shared_down, kind: dense, output_dim: 3072, input_dim: 1024, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 17408, input_dim: 3072, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 3072, input_dim: 8192, tp_axis: input}
+      - {name: lin_in_proj_all, kind: dense, output_dim: 20608, input_dim: 3072, tp_axis: output}
+      - {name: lin_o, kind: dense, output_dim: 3072, input_dim: 8192, tp_axis: input}
+  - name: qwen35_397b_a17b
+    max_tp: 8
+    max_ep: 32
+    moe:
+      expert_num: 512
+      experts_per_token: 10
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 2048, input_dim: 4096}
+      - {name: down, kind: moe_down, output_dim: 4096, input_dim: 1024}
+      - {name: shared_gate_up, kind: dense, output_dim: 2048, input_dim: 4096, tp_axis: output}
+      - {name: shared_down, kind: dense, output_dim: 4096, input_dim: 1024, tp_axis: input}
+      - {name: qkv, kind: dense, output_dim: 17408, input_dim: 4096, tp_axis: output}
+      - {name: o, kind: dense, output_dim: 4096, input_dim: 8192, tp_axis: input}
+      - {name: lin_in_proj_all, kind: dense, output_dim: 20608, input_dim: 4096, tp_axis: output}
+      - {name: lin_o, kind: dense, output_dim: 4096, input_dim: 8192, tp_axis: input}
+  - name: glm52
+    max_tp: 8
+    max_ep: 32
+    moe:
+      expert_num: 256
+      experts_per_token: 8
+    weights:
+      - {name: dense_gate_up, kind: dense, output_dim: 24576, input_dim: 6144, tp_axis: output}
+      - {name: dense_down, kind: dense, output_dim: 6144, input_dim: 12288, tp_axis: input}
+      - {name: gate_up, kind: moe_gate_up, output_dim: 4096, input_dim: 6144}
+      - {name: down, kind: moe_down, output_dim: 6144, input_dim: 2048}
+      - {name: shared_gate_up, kind: dense, output_dim: 4096, input_dim: 6144, tp_axis: output}
+      - {name: shared_down, kind: dense, output_dim: 6144, input_dim: 2048, tp_axis: input}
+      - {name: mla_q_a, kind: replicated, output_dim: 2048, input_dim: 6144}
+      - {name: mla_q_b, kind: dense, output_dim: 36864, input_dim: 2048, tp_axis: output}
+      - {name: mla_kv_a, kind: replicated, output_dim: 576, input_dim: 6144}
+      - {name: mla_o, kind: dense, output_dim: 6144, input_dim: 36864, tp_axis: input}
+      - {name: index_q, kind: replicated, output_dim: 4096, input_dim: 2048}
+      - {name: index_k, kind: replicated, output_dim: 128, input_dim: 6144}
+      - {name: index_weight, kind: replicated, output_dim: 32, input_dim: 6144}
+  - name: kimi_k25
+    max_tp: 8
+    max_ep: 48
+    moe:
+      expert_num: 384
+      experts_per_token: 8
+    weights:
+      - {name: dense_gate_up, kind: dense, output_dim: 36864, input_dim: 7168, tp_axis: output}
+      - {name: dense_down, kind: dense, output_dim: 7168, input_dim: 18432, tp_axis: input}
+      - {name: gate_up, kind: moe_gate_up, output_dim: 4096, input_dim: 7168}
+      - {name: down, kind: moe_down, output_dim: 7168, input_dim: 2048}
+      - {name: shared_gate_up, kind: dense, output_dim: 4096, input_dim: 7168, tp_axis: output}
+      - {name: shared_down, kind: dense, output_dim: 7168, input_dim: 2048, tp_axis: input}
+      - {name: mla_q_a, kind: replicated, output_dim: 1536, input_dim: 7168}
+      - {name: mla_q_b, kind: dense, output_dim: 36864, input_dim: 1536, tp_axis: output}
+      - {name: mla_kv_a, kind: replicated, output_dim: 576, input_dim: 7168}
+      - {name: mla_o, kind: dense, output_dim: 7168, input_dim: 36864, tp_axis: input}
+  - name: deepseek_v4_pro
+    max_tp: 8
+    max_ep: 64
+    moe:
+      expert_num: 384
+      experts_per_token: 6
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 6144, input_dim: 7168}
+      - {name: down, kind: moe_down, output_dim: 7168, input_dim: 3072}
+      - {name: shared_gate_up, kind: dense, output_dim: 6144, input_dim: 7168, tp_axis: output}
+      - {name: shared_down, kind: dense, output_dim: 7168, input_dim: 3072, tp_axis: input}
+      - {name: attn_q_a, kind: replicated, output_dim: 1536, input_dim: 7168}
+      - {name: attn_q_b, kind: dense, output_dim: 65536, input_dim: 1536, tp_axis: output}
+      - {name: attn_kv, kind: replicated, output_dim: 512, input_dim: 7168}
+      - {name: attn_o_b, kind: dense, output_dim: 7168, input_dim: 16384, tp_axis: input}
+      - {name: index_q, kind: dense, output_dim: 8192, input_dim: 1536, tp_axis: output}
+      - {name: index_weight, kind: dense, output_dim: 64, input_dim: 7168, tp_axis: output}
+  - name: deepseek_v4_flash
+    max_tp: 8
+    max_ep: 32
+    moe:
+      expert_num: 256
+      experts_per_token: 6
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 4096, input_dim: 4096}
+      - {name: down, kind: moe_down, output_dim: 4096, input_dim: 2048}
+      - {name: shared_gate_up, kind: dense, output_dim: 4096, input_dim: 4096, tp_axis: output}
+      - {name: shared_down, kind: dense, output_dim: 4096, input_dim: 2048, tp_axis: input}
+      - {name: attn_q_a, kind: replicated, output_dim: 1024, input_dim: 4096}
+      - {name: attn_q_b, kind: dense, output_dim: 32768, input_dim: 1024, tp_axis: output}
+      - {name: attn_kv, kind: replicated, output_dim: 512, input_dim: 4096}
+      - {name: attn_o_b, kind: dense, output_dim: 4096, input_dim: 8192, tp_axis: input}
+      - {name: index_q, kind: dense, output_dim: 8192, input_dim: 1024, tp_axis: output}
+      - {name: index_weight, kind: dense, output_dim: 64, input_dim: 4096, tp_axis: output}
+  - name: qwen3x_35b_a3b
+    max_tp: 4
+    max_ep: 320
+    moe:
+      expert_num: 2560
+      experts_per_token: 8
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 1024, input_dim: 2048}
+      - {name: down, kind: moe_down, output_dim: 2048, input_dim: 512}

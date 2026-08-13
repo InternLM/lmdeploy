@@ -274,7 +274,8 @@ class ArgumentHelper:
                                    type=_parse,
                                    default=default,
                                    help='KV cache quant policy: none/int4/int8/fp8/fp8_e5m2/'
-                                   'turbo_quant (or 0/4/8/16/17/42). fp8 defaults to fp8_e4m3.')
+                                   'turbo_quant (or 0/4/8/16/17/42). For DSA models, fp8 uses the '
+                                   'fp8_ds_mla layout.')
 
     @staticmethod
     def rope_scaling_factor(parser):
@@ -801,7 +802,7 @@ class ArgumentHelper:
         spec_group.add_argument('--speculative-algorithm',
                                 type=str,
                                 default=None,
-                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'qwen3_5_mtp'],
+                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'hy3_mtp', 'qwen3_5_mtp'],
                                 help='The speculative algorithm to use. `None` means speculative decoding is disabled')
 
         spec_group.add_argument('--speculative-draft-model',

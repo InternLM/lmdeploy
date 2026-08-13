@@ -82,53 +82,6 @@ def test_idle_async_close_removes_session_and_allows_reuse():
     asyncio.run(_run_idle_async_close_removes_session_and_allows_reuse())
 
 
-async def _run_api_wrapper_cleanup_after_cancel():
-    from lmdeploy.serve.openai.api_server import VariableInterface, _with_request_cleanup
-
-    session_mgr = SessionManager()
-    session = session_mgr.get(260606)
-    closed = asyncio.Event()
-    never = asyncio.Event()
-
-    class _FakeAsyncEngine:
-        pass
-
-    async def result_generator():
-        try:
-            yield 'engine'
-            await never.wait()
-        finally:
-            closed.set()
-
-    async def response_generator():
-        async for item in result:
-            yield item
-
-    result = result_generator()
-
-    origin_async_engine = VariableInterface.async_engine
-    VariableInterface.async_engine = _FakeAsyncEngine()
-    VariableInterface.async_engine.session_mgr = session_mgr
-    try:
-        wrapped = _with_request_cleanup(response_generator(), [result], [session])
-        assert await wrapped.__anext__() == 'engine'
-
-        next_task = asyncio.create_task(wrapped.__anext__())
-        await asyncio.sleep(0)
-        next_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await next_task
-
-        await asyncio.wait_for(closed.wait(), timeout=1)
-        assert session_mgr.sessions == {}
-    finally:
-        VariableInterface.async_engine = origin_async_engine
-
-
-def test_api_wrapper_cleanup_runs_after_cancel():
-    asyncio.run(_run_api_wrapper_cleanup_after_cancel())
-
-
 async def _run_request_cleanup_removes_unstarted_generator_session():
     from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 

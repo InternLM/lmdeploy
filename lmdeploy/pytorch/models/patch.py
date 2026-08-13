@@ -220,9 +220,19 @@ def build_model_from_hf_config(model_config: PretrainedConfig,
 @torch.inference_mode()
 def build_patched_model(config: ModelConfig, device: torch.device = None, build_model_ctx: 'BuildModelContext' = None):
     """Build patched model."""
+    from lmdeploy.pytorch.backends import get_backend
+
     model_config = config.hf_config
     dtype = config.dtype
-    return build_model_from_hf_config(model_config, dtype=dtype, device=device, build_model_ctx=build_model_ctx)
+    ctx_mgr = StepContextManager(build_model_ctx)
+    with get_backend().model_build_context(ctx_mgr):
+        return build_model_from_hf_config(
+            model_config,
+            dtype=dtype,
+            device=device,
+            ctx_mgr=ctx_mgr,
+            build_model_ctx=build_model_ctx,
+        )
 
 
 @torch.inference_mode()
