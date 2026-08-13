@@ -1,16 +1,16 @@
-# HF model id: Qwen/Qwen3.5-122B-A10B
+# HF model id: internlm/Intern-S2-Preview-397B-FP8
 
 h:
 - model_type:
   - chat
   - vl
   engine_config:
-    tp: 4
+    dp: 4
+    ep: 8
+    extra:
+      max-batch-size: 256
+      cache-max-entry-count: 0.7
   backends:
-  - name: turbomind
-    communicators:
-    - nccl
-    - cuda-ipc
   - name: pytorch
     communicators:
     - nccl
@@ -19,43 +19,23 @@ h:
   - evaluate
   - func
   - longtext_benchmark
+  - longtext_evaluate
   - mllm_evaluate
-  - quantization
   interface:
     pytorch:
     - suites:
       - base
       - logprob
-      - experts
       - toolcall
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
-        enable-return-routed-experts: true
-        tool-call-parser: qwen3coder
+        tool-call-parser: interns2-preview
         reasoning-parser: default
     - suites:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
-        enable-return-routed-experts: true
-    turbomind:
-    - suites:
-      - base
-      - logprob
-      - toolcall
-      - reasoning
-      extra:
-        logprobs-mode: raw_logprobs
-        tool-call-parser: qwen3coder
-        reasoning-parser: default
-    - suites:
-      - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
-  quantization:
-    turbomind:
-    - awq
   gen_config:
     temperature: 1.0
     top-k: 20

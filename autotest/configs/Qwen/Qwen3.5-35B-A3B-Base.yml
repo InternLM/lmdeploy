@@ -3,7 +3,7 @@
 a100:
 - model_type: base
   engine_config:
-    tp: 1
+    tp: 2
   backends:
   - name: turbomind
     communicators:
@@ -13,6 +13,38 @@ a100:
     - nccl
   test_coverage:
   - func
+  interface:
+    pytorch:
+      suites:
+      - base
+    turbomind:
+      suites:
+      - base
+  quantization:
+    turbomind:
+    - kvint8
+    pytorch:
+    - kvint8
+h:
+- model_type: base
+  engine_config:
+    tp: 2
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  interface:
+    pytorch:
+      suites:
+      - base
+    turbomind:
+      suites:
+      - base
   quantization:
     turbomind:
     - kvint8

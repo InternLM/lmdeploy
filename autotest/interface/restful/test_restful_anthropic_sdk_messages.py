@@ -72,6 +72,7 @@ async def _sdk_stream_events_and_final() -> tuple[list, object | None]:
 
 
 @pytest.mark.order(8)
+@pytest.mark.anthropic
 @pytest.mark.flaky(reruns=2)
 @pytest.mark.parametrize('backend', BACKEND_LIST)
 @pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
