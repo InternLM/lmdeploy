@@ -285,7 +285,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
                 initial_state=init_state,
                 output_final_state=output_final_state,
                 cu_seqlens=cu_seqlens,
-                state_v_first=transpose_state_layout,
+                transpose_state_layout=transpose_state_layout,
             )
             chunk_states = None
         else:

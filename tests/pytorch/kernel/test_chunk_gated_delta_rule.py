@@ -355,7 +355,7 @@ def test_cuda_backend_dispatches_to_fla_without_chunk_metadata():
     assert calls[0][0] == 'fla'
     assert 'chunk_indices' not in calls[0][1]
     assert 'chunk_offsets' not in calls[0][1]
-    assert calls[0][1]['state_v_first'] is True
+    assert calls[0][1]['transpose_state_layout'] is True
     torch.testing.assert_close(state_bank[1], expected_state[0])
 
 
@@ -499,6 +499,75 @@ def test_cuda_backend_updates_only_selected_state_rows():
         atol=0,
         rtol=0,
     )
+
+
+@pytest.mark.skipif(not _cuda_available(), reason='CUDA is not available')
+def test_cuda_backend_fla_and_local_branches_match():
+    """The FLA and local chunk branches must compute the same result.
+
+    Both branches run the same chunked gated-delta math; the only intended
+    difference is that the local branch (explicit ``chunk_indices``) additionally
+    returns per-chunk-boundary states. This guards the FLA fallback path end to
+    end on real CUDA rather than only its routing.
+    """
+    pytest.importorskip('tilelang')
+    from lmdeploy.pytorch.backends.cuda.gated_delta_rule import CudaGatedDeltaRuleImpl, has_fla
+
+    if not has_fla():
+        pytest.skip('FLA chunk implementation is not available')
+
+    torch.manual_seed(9)
+    lengths = [63, 65]
+    total_length = sum(lengths)
+    q, k, v, g, beta, _ = _make_inputs(total_length)
+    cu_seqlens = torch.tensor([0, 63, 128], device='cuda', dtype=torch.int32)
+    chunk_indices = prepare_chunk_indices(cu_seqlens, 64)
+    chunk_offsets = prepare_chunk_offsets(cu_seqlens, 64)
+    state_indices = torch.tensor([3, 1], device='cuda', dtype=torch.int64)
+    state_bank = torch.randn(5, v.shape[2], v.shape[3], q.shape[3], device='cuda', dtype=torch.bfloat16)
+
+    impl = CudaGatedDeltaRuleImpl()
+
+    # FLA branch: no precomputed chunk metadata.
+    fla_bank = state_bank.clone()
+    fla_out, fla_returned, fla_chunk_states = impl.chunk_gated_delta_rule(
+        q,
+        k,
+        v,
+        g=g,
+        beta=beta,
+        initial_state=fla_bank,
+        state_indices=state_indices,
+        cu_seqlens=cu_seqlens,
+        output_final_state=True,
+        transpose_state_layout=True,
+    )
+
+    # Local branch: explicit chunk metadata.
+    local_bank = state_bank.clone()
+    local_out, local_returned, local_chunk_states = impl.chunk_gated_delta_rule(
+        q,
+        k,
+        v,
+        g=g,
+        beta=beta,
+        initial_state=local_bank,
+        state_indices=state_indices,
+        cu_seqlens=cu_seqlens,
+        chunk_indices=chunk_indices,
+        chunk_offsets=chunk_offsets,
+        output_final_state=True,
+        transpose_state_layout=True,
+    )
+
+    # Only the local branch exposes per-chunk-boundary states.
+    assert fla_chunk_states is None
+    assert local_chunk_states is not None
+    assert local_chunk_states.shape == (1, len(chunk_indices), v.shape[2], v.shape[3], q.shape[3])
+
+    # Both branches must produce the same attention output and terminal states.
+    torch.testing.assert_close(fla_out.float(), local_out.float(), atol=2e-2, rtol=2e-2)
+    torch.testing.assert_close(fla_returned.float(), local_returned.float(), atol=2e-2, rtol=2e-2)
 
 
 @pytest.mark.skipif(not _cuda_available(), reason='CUDA is not available')
