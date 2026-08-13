@@ -922,6 +922,10 @@ class Scheduler:
         """Get block tables for the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]
 
+    def resolve_gpu_block_offsets(self, logical_block_ids):
+        """Resolve paging-owned logical ids for a forward cache-copy plan."""
+        return self.block_manager.resolve_gpu_block_offsets(logical_block_ids)
+
     def evict_seqs(self, running: SeqList):
         """Evict running sequences."""
         for seq in running:

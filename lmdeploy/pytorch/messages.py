@@ -925,6 +925,12 @@ class SchedulerSequence:
             clamped = next_step
         return clamped
 
+    def is_prefix_cache_boundary_safe(self, step: int):
+        """Check that an exact cache boundary is outside multimodal spans."""
+        if any(span.start < step < span.end for span in self.prefix_cache.multimodal_spans):
+            return False
+        return not any(emb.start < step < emb.end for emb in self.history_embeddings.embeddings)
+
     def get_prefix_cache_max_match_step(self):
         """Get the deepest prefix step allowed for a cache hit."""
         block_size = self.block_size
