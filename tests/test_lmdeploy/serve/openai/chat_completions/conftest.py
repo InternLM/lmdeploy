@@ -64,6 +64,7 @@ class PassthroughResponseParser:
         self.request = request
         self.tool_parser = None
         self._chunks = []
+        self.reasoning_tokens = 0
 
     def stream_chunk(self, delta_text, delta_token_ids, **kwargs):
         if not delta_text:
