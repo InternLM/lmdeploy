@@ -18,10 +18,10 @@ from lmdeploy.pytorch.backends.moe import FusedMoEBlockedF8Builder, FusedMoEBloc
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.envs import blocked_fp8_moe_backend
 from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul_masked_post_quant_fwd
-from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import per_token_group_quant_fp8, quant_fp8
-from lmdeploy.pytorch.kernels.cuda.fused_moe import _renormalize
-from lmdeploy.pytorch.kernels.cuda.fused_moe_ep_fp8 import fused_moe_v3_fp8
+from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import fused_moe_blocked_fp8
+from lmdeploy.pytorch.kernels.cuda.moe.ep_fp8 import fused_moe_v3_fp8
+from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _renormalize
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
@@ -41,7 +41,7 @@ def _has_gluon_moe() -> bool:
     if not _has_gluon():
         return False
     try:
-        from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import (  # noqa: F401
+        from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8_gluon import (  # noqa: F401
             fused_moe_blocked_fp8,
         )
     except (AttributeError, ImportError):
@@ -388,7 +388,7 @@ class GluonFusedMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                  block_size: int = 128,
                  out_dtype: torch.dtype = torch.bfloat16):
         super().__init__(top_k, num_experts, renormalize, block_size, out_dtype)
-        from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import fused_moe_blocked_fp8
+        from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8_gluon import fused_moe_blocked_fp8
 
         self._fused_moe_blocked_fp8 = fused_moe_blocked_fp8
 
@@ -535,7 +535,7 @@ class CudaFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
         if provider == 'auto':
             use_gluon = False
             if supports_gluon:
-                from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import (
+                from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8_gluon import (
                     _has_gluon_moe_schedule_family,
                 )
                 use_gluon = _has_gluon_moe_schedule_family(num_experts, num_experts, hidden_dim, ffn_dim, top_k)

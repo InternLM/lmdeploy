@@ -17,15 +17,15 @@ from triton.experimental.gluon.language.nvidia.hopper import (
 )
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 
-from .activation import silu_and_mul
-from .blocked_fp8_fused_moe import (
+from ..activation import silu_and_mul
+from ..blocked_fp8_gemm_gluon import pick_wgmma_layout
+from ..blocked_gemm_fp8 import quant_fp8
+from .blocked_fp8 import (
     fused_moe_blocked_fp8 as triton_fused_moe_blocked_fp8,
 )
-from .blocked_fp8_fused_moe import (
+from .blocked_fp8 import (
     fused_moe_blocked_fp8_compact_kernel_launcher,
 )
-from .blocked_fp8_gemm_gluon import pick_wgmma_layout
-from .blocked_gemm_fp8 import quant_fp8
 from .fused_moe import _get_sorted_idx_blocks, _make_intermediate, _renormalize, moe_reduce
 
 SCALE_BLOCK_K = 128

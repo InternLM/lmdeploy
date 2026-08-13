@@ -6,8 +6,8 @@ import torch
 import triton
 import triton.language as tl
 
-from .activation import silu_and_mul
-from .blocked_gemm_fp8 import quant_fp8
+from ..activation import silu_and_mul
+from ..blocked_gemm_fp8 import quant_fp8
 from .fused_moe import _get_sorted_idx, _get_sorted_idx_blocks, _make_intermediate, _renormalize, moe_reduce
 
 

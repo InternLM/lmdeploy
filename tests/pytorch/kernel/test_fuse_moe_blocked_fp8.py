@@ -170,7 +170,7 @@ class TestFusedMoEFP8KernelLauncher:
 
     @pytest.fixture
     def gt(self, A, B, bias, top_k, sorted_idx, exp_start, exp_end, M):
-        from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe_kernel_launcher
+        from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import fused_moe_kernel_launcher
         N = B.size(1)
         C = B.new_empty(M * top_k, N)
         fused_moe_kernel_launcher(
@@ -189,7 +189,7 @@ class TestFusedMoEFP8KernelLauncher:
 
     @torch.inference_mode()
     def test_launcher(self, A_quant, A_scale, B, B_quant, B_scale, bias, sorted_idx, exp_start, exp_end, top_k, M, gt):
-        from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8_kernel_launcher
+        from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import fused_moe_blocked_fp8_kernel_launcher
         N = B.size(1)
         C = B.new_empty(M * top_k, N)
         fused_moe_blocked_fp8_kernel_launcher(
@@ -331,14 +331,14 @@ class TestFusedMoeBlockedFP8:
 
     @pytest.fixture
     def gt(self, hidden_states, w1, w2, topk_weights, topk_idx, top_k, renormalize):
-        from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe
+        from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import fused_moe
         output = fused_moe(hidden_states, w1, w2, topk_weights, topk_idx, topk=top_k, renormalize=renormalize)
         yield output
 
     @torch.inference_mode()
     def test_fused_moe(self, states_quanted, states_scale, w1_quant, w1_scale, w2_quant, w2_scale, topk_weights,
                        topk_idx, top_k, renormalize, gt):
-        from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
+        from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import fused_moe_blocked_fp8
         output = fused_moe_blocked_fp8(states_quanted,
                                        states_scale,
                                        w1_quant,
@@ -361,11 +361,11 @@ class TestFusedMoeBlockedFP8:
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 @torch.inference_mode()
 def test_fused_moe_blocked_fp8_compact_down_matches_fused_moe_with_local_experts():
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import (
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import (
         _should_use_compact_blocked_fp8_moe_down,
         fused_moe_blocked_fp8,
     )
-    from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import fused_moe
 
     torch.manual_seed(0)
     device = torch.device('cuda')
@@ -449,11 +449,11 @@ def test_fused_moe_blocked_fp8_compact_down_matches_fused_moe_with_local_experts
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 @torch.inference_mode()
 def test_fused_moe_blocked_fp8_compact_both_matches_fused_moe():
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import (
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import (
         _should_use_compact_blocked_fp8_moe_both_by_shape,
         fused_moe_blocked_fp8,
     )
-    from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import fused_moe
 
     torch.manual_seed(0)
     device = torch.device('cuda')
@@ -463,7 +463,7 @@ def test_fused_moe_blocked_fp8_compact_both_matches_fused_moe():
 
     seq_len = 128
     in_size = 128
-    hidden_size = 512
+    hidden_size = 1024
     out_size = 128
     num_experts = 256
     top_k = 8

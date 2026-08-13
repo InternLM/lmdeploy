@@ -170,7 +170,7 @@ class TestFusedMoEV4FP4KernelLauncher:
 
     @pytest.fixture
     def gt(self, A, B, bias, top_k, sorted_idx, exp_start, exp_end, M):
-        from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe_kernel_launcher
+        from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import fused_moe_kernel_launcher
         N = B.size(1)
         C = B.new_empty(M * top_k, N)
         fused_moe_kernel_launcher(
@@ -188,7 +188,7 @@ class TestFusedMoEV4FP4KernelLauncher:
 
     @torch.inference_mode()
     def test_launcher(self, A_quant, A_scale, B_packed, B_scale, bias, sorted_idx, exp_start, exp_end, top_k, M, gt):
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_fused_moe import fused_moe_v4_fp4_kernel_launcher
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_fp4 import fused_moe_v4_fp4_kernel_launcher
         N = B_packed.size(1)
         C = gt.new_empty(M * top_k, N)
         fused_moe_v4_fp4_kernel_launcher(
@@ -325,14 +325,14 @@ class TestFusedMoeV4FP4:
 
     @pytest.fixture
     def gt(self, hidden_states, w1, w2, topk_weights, topk_idx, top_k, renormalize):
-        from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe
+        from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import fused_moe
         output = fused_moe(hidden_states, w1, w2, topk_weights, topk_idx, topk=top_k, renormalize=renormalize)
         yield output
 
     @torch.inference_mode()
     def test_fused_moe(self, states_quanted, states_scale, w1_packed, w1_scale, w2_packed, w2_scale, topk_weights,
                        topk_idx, top_k, renormalize, gt):
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_fused_moe import fused_moe_v4_fp4
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_fp4 import fused_moe_v4_fp4
         output = fused_moe_v4_fp4(states_quanted,
                                   states_scale,
                                   w1_packed,

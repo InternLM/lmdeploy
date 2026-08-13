@@ -82,12 +82,12 @@ def _reference(
 def test_blocked_fp8_fused_moe_gluon(reindex_a, reindex_c, block_m, block_n,
                                      with_bias, num_stages, num_k_blocks,
                                      num_tokens, top_k, num_local_experts, n):
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import (
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8_gluon import (
         STANDARD_WGMMA_BLOCK_M,
         TRANSPOSED_WGMMA_BLOCK_M,
         fused_moe_blocked_fp8_kernel_launcher,
     )
-    from lmdeploy.pytorch.kernels.cuda.fused_moe import _get_sorted_idx_blocks
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _get_sorted_idx_blocks
 
     torch.manual_seed(7)
     assert block_m in (TRANSPOSED_WGMMA_BLOCK_M, STANDARD_WGMMA_BLOCK_M)
@@ -176,7 +176,7 @@ def test_blocked_fp8_fused_moe_gluon(reindex_a, reindex_c, block_m, block_n,
 
 
 def test_blocked_fp8_fused_moe_gluon_selects_pipeline_from_workload():
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import _select_transposed_pipeline_stages
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8_gluon import _select_transposed_pipeline_stages
 
     assert _select_transposed_pipeline_stages(m=8, k=6144) == 3
     assert _select_transposed_pipeline_stages(m=32, k=6144) == 3
@@ -191,7 +191,7 @@ def test_blocked_fp8_fused_moe_gluon_selects_pipeline_from_workload():
 
 
 def test_blocked_fp8_fused_moe_gluon_rejects_wrong_scale_block():
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import (
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8_gluon import (
         fused_moe_blocked_fp8_kernel_launcher,
     )
 
@@ -217,8 +217,8 @@ def test_blocked_fp8_fused_moe_gluon_rejects_wrong_scale_block():
 
 
 def test_blocked_fp8_fused_moe_gluon_has_baseline_api():
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8 as baseline
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import fused_moe_blocked_fp8 as candidate
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import fused_moe_blocked_fp8 as baseline
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8_gluon import fused_moe_blocked_fp8 as candidate
 
     def contract(fn):
         return [(parameter.name, parameter.kind, parameter.default)
@@ -234,8 +234,8 @@ def test_blocked_fp8_fused_moe_gluon_has_baseline_api():
 @pytest.mark.parametrize('custom_act', (False, True))
 def test_blocked_fp8_fused_moe_gluon_complete_api_matches_baseline(
         monkeypatch, schedule, custom_act):
-    from lmdeploy.pytorch.kernels.cuda import blocked_fp8_fused_moe_gluon as candidate_module
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8 as baseline
+    from lmdeploy.pytorch.kernels.cuda.moe import blocked_fp8_gluon as candidate_module
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import fused_moe_blocked_fp8 as baseline
 
     monkeypatch.setattr(candidate_module, '_select_gluon_moe_schedule',
                         lambda *args: schedule)
@@ -312,7 +312,7 @@ def test_blocked_fp8_fused_moe_gluon_complete_api_matches_baseline(
 def test_blocked_fp8_fused_moe_gluon_selects_schedule_from_launch_features(
         num_tokens, num_experts, topk, hidden_features,
         intermediate_features, expected):
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe_gluon import _select_gluon_moe_schedule
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8_gluon import _select_gluon_moe_schedule
 
     gate_features = 2 * intermediate_features
     input = torch.empty((num_tokens, hidden_features), device='meta')
@@ -324,7 +324,7 @@ def test_blocked_fp8_fused_moe_gluon_selects_schedule_from_launch_features(
 
 
 def test_blocked_fp8_fused_moe_gluon_falls_back(monkeypatch):
-    from lmdeploy.pytorch.kernels.cuda import blocked_fp8_fused_moe_gluon as candidate_module
+    from lmdeploy.pytorch.kernels.cuda.moe import blocked_fp8_gluon as candidate_module
 
     sentinel = object()
     monkeypatch.setattr(candidate_module, '_supports_gluon_moe_contract', lambda *args: False)

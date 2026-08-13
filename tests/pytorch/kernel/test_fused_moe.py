@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 @pytest.mark.parametrize(('num_routes', 'block_m'), [(640, 16), (512 * 24, 32), (512 * 40, 64)])
 def test_origin_blocked_fp8_small_m_configs_use_average_routes(num_routes, block_m):
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _origin_blocked_fp8_moe_configs
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import _origin_blocked_fp8_moe_configs
 
     gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=64,
                                                                num_routes=num_routes,
@@ -16,7 +16,7 @@ def test_origin_blocked_fp8_small_m_configs_use_average_routes(num_routes, block
 
 
 def test_origin_blocked_fp8_large_m_uses_bm64_down_config():
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _origin_blocked_fp8_moe_configs
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import _origin_blocked_fp8_moe_configs
 
     gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=65,
                                                                num_routes=650,
@@ -27,7 +27,7 @@ def test_origin_blocked_fp8_large_m_uses_bm64_down_config():
 
 
 def test_origin_blocked_fp8_large_m_high_avg_routes_uses_default_down_config():
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _origin_blocked_fp8_moe_configs
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import _origin_blocked_fp8_moe_configs
 
     gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=2048,
                                                                num_routes=512 * 40,
@@ -39,7 +39,7 @@ def test_origin_blocked_fp8_large_m_high_avg_routes_uses_default_down_config():
 
 
 def test_origin_blocked_fp8_uses_average_routes_for_256_experts():
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _origin_blocked_fp8_moe_configs
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import _origin_blocked_fp8_moe_configs
 
     gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=64,
                                                                num_routes=256 * 2,
@@ -50,7 +50,7 @@ def test_origin_blocked_fp8_uses_average_routes_for_256_experts():
 
 
 def test_origin_blocked_fp8_large_m_uses_average_routes_for_256_experts():
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _origin_blocked_fp8_moe_configs
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import _origin_blocked_fp8_moe_configs
 
     gate_config, down_config = _origin_blocked_fp8_moe_configs(num_tokens=512,
                                                                num_routes=256 * 16,
@@ -63,7 +63,7 @@ def test_origin_blocked_fp8_large_m_uses_average_routes_for_256_experts():
 @pytest.mark.parametrize(('num_routes', 'block_m'), [(640, 64), (512 * 40, 64), (512 * 64, 128),
                                                      (512 * 160, 128)])
 def test_compact_blocked_fp8_configs_use_average_routes(num_routes, block_m):
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _compact_blocked_fp8_moe_config
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import _compact_blocked_fp8_moe_config
 
     assert _compact_blocked_fp8_moe_config(num_routes, num_experts=512) == dict(block_m=block_m,
                                                                                 block_n=128,
@@ -79,7 +79,7 @@ def test_compact_blocked_fp8_configs_use_average_routes(num_routes, block_m):
     (256 * 4, 4096, 64, 128),
 ])
 def test_compact_blocked_fp8_both_configs(num_routes, gate_out_features, block_m, block_n):
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _compact_blocked_fp8_moe_both_config
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import _compact_blocked_fp8_moe_both_config
 
     assert _compact_blocked_fp8_moe_both_config(num_routes, 256, gate_out_features) == dict(
         block_m=block_m, block_n=block_n, num_warps=4, num_stages=3)
@@ -109,7 +109,7 @@ def test_compact_blocked_fp8_both_configs(num_routes, gate_out_features, block_m
 ])
 def test_compact_blocked_fp8_both_policy_uses_launch_features(num_routes, num_experts, local_experts, gate_features,
                                                              input_features, expected):
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import (
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import (
         _should_use_compact_blocked_fp8_moe_both_by_shape,
     )
 
@@ -124,7 +124,7 @@ def test_compact_blocked_fp8_both_policy_uses_launch_features(num_routes, num_ex
     (8192, 512 * 160, 512 * 64 * 32, 512 * 2 * 32),
 ])
 def test_blocked_fp8_moe_cta_estimates(num_tokens, num_routes, origin_ctas, compact_ctas):
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import _blocked_fp8_moe_cta_estimates
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import _blocked_fp8_moe_cta_estimates
 
     assert _blocked_fp8_moe_cta_estimates(num_tokens,
                                           num_routes,
@@ -147,7 +147,7 @@ def test_blocked_fp8_moe_cta_estimates(num_tokens, num_routes, origin_ctas, comp
 ])
 def test_compact_blocked_fp8_down_policy_is_prefill_and_cta_gated(num_tokens, num_routes, num_experts, local_experts,
                                                                   out_features, expected):
-    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import (
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import (
         _should_use_compact_blocked_fp8_moe_down_by_shape,
     )
 
@@ -162,7 +162,7 @@ def test_compact_moe_dispatch_prefers_many_local_experts(monkeypatch):
     scheduling."""
     import importlib
 
-    fused_moe_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.fused_moe')
+    fused_moe_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.moe.fused_moe')
     monkeypatch.setattr(fused_moe_module, '_supports_compact_moe', lambda *args: True)
 
     hidden_states = torch.empty(1, 4)
@@ -178,7 +178,7 @@ def test_compact_moe_dispatch_keeps_dense_route_fallback(monkeypatch):
     counts."""
     import importlib
 
-    fused_moe_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.fused_moe')
+    fused_moe_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.moe.fused_moe')
     monkeypatch.setattr(fused_moe_module, '_supports_compact_moe', lambda *args: True)
 
     hidden_states = torch.empty(1, 4)
@@ -197,7 +197,7 @@ def test_compact_blocked_fp8_down_dispatch_prefers_wasteful_large_experts(monkey
     enough CTAs are saved."""
     import importlib
 
-    blocked_fp8_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe')
+    blocked_fp8_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8')
     monkeypatch.setattr(blocked_fp8_module, '_supports_compact_blocked_fp8_moe', lambda *args: True)
 
     input_quant = torch.empty(512, 4, dtype=torch.float8_e4m3fn)
@@ -217,7 +217,7 @@ def test_compact_blocked_fp8_down_dispatch_rejects_small_local_experts(monkeypat
     counts."""
     import importlib
 
-    blocked_fp8_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe')
+    blocked_fp8_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8')
     monkeypatch.setattr(blocked_fp8_module, '_supports_compact_blocked_fp8_moe', lambda *args: True)
 
     input_quant = torch.empty(2048, 4, dtype=torch.float8_e4m3fn)
@@ -240,7 +240,7 @@ def test_compact_blocked_fp8_down_dispatch_rejects_small_local_experts(monkeypat
     (512, 2048, False),
 ])
 def test_single_cta_sorted_idx_policy(num_routes, num_experts, expected):
-    from lmdeploy.pytorch.kernels.cuda.fused_moe import _should_use_single_cta_sorted_idx
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _should_use_single_cta_sorted_idx
 
     assert _should_use_single_cta_sorted_idx(num_routes, num_experts) is expected
 
@@ -251,7 +251,7 @@ def test_single_cta_sorted_idx_policy(num_routes, num_experts, expected):
     (1024, 2049, False),
 ])
 def test_single_cta_sorted_idx_blocks_policy(num_routes, num_experts, expected):
-    from lmdeploy.pytorch.kernels.cuda.fused_moe import _should_use_single_cta_sorted_idx_blocks
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _should_use_single_cta_sorted_idx_blocks
 
     assert _should_use_single_cta_sorted_idx_blocks(num_routes, num_experts) is expected
 
@@ -259,7 +259,7 @@ def test_single_cta_sorted_idx_blocks_policy(num_routes, num_experts, expected):
 def test_sorted_idx_dispatch_uses_route_prepare_policy(monkeypatch):
     import importlib
 
-    moe_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.fused_moe')
+    moe_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.moe.fused_moe')
     topk_ids = torch.zeros((128, 8), dtype=torch.int64)
     single_cta = object()
     parallel = object()
@@ -277,7 +277,7 @@ def test_sorted_idx_dispatch_uses_route_prepare_policy(monkeypatch):
 def test_sorted_idx_blocks_dispatch_requires_full_expert_range(monkeypatch):
     import importlib
 
-    moe_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.fused_moe')
+    moe_module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.moe.fused_moe')
     topk_ids = torch.zeros((128, 8), dtype=torch.int64)
     single_cta = object()
     parallel = object()
@@ -313,7 +313,7 @@ def _make_route_ids(num_tokens, topk, num_experts, routing):
     (2048, 'random'),
 ])
 def test_single_cta_sorted_idx(num_experts, routing):
-    from lmdeploy.pytorch.kernels.cuda.fused_moe import _get_sorted_idx_single_cta
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _get_sorted_idx_single_cta
 
     torch.manual_seed(13)
     topk_ids = _make_route_ids(96, 8, num_experts, routing)
@@ -337,7 +337,7 @@ def test_single_cta_sorted_idx(num_experts, routing):
     (2048, 'random'),
 ])
 def test_single_cta_sorted_idx_blocks(num_experts, routing):
-    from lmdeploy.pytorch.kernels.cuda.fused_moe import _get_sorted_idx_blocks_single_cta
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _get_sorted_idx_blocks_single_cta
 
     torch.manual_seed(13)
     block_m = 16
@@ -365,7 +365,7 @@ def test_single_cta_sorted_idx_blocks(num_experts, routing):
 
 
 def test_single_cta_sorted_idx_rejects_too_many_experts():
-    from lmdeploy.pytorch.kernels.cuda.fused_moe import (
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import (
         _get_sorted_idx_blocks_single_cta,
         _get_sorted_idx_single_cta,
     )
@@ -479,7 +479,7 @@ class TestFusedMoEKernelLauncher:
 
     @torch.inference_mode()
     def test_launcher(self, A, B, bias, sorted_idx, exp_start, exp_end, top_k, M, gt):
-        from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe_kernel_launcher
+        from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import fused_moe_kernel_launcher
         N = B.size(1)
         C = B.new_empty(M * top_k, N)
 
@@ -593,7 +593,7 @@ class TestFusedMoe:
 
     @torch.inference_mode()
     def test_fused_moe(self, hidden_states, w1, w2, topk_weights, topk_idx, top_k, renormalize, gt):
-        from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe
+        from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import fused_moe
         output = fused_moe(hidden_states, w1, w2, topk_weights, topk_idx, topk=top_k, renormalize=renormalize)
         torch.testing.assert_close(output, gt, atol=1e-3, rtol=1e-3)
 
@@ -627,7 +627,7 @@ class TestFusedMoeW8A8(TestFusedMoe):
 
     @torch.inference_mode()
     def test_fused_moe(self, quant_states, quant_w1, quant_w2, topk_weights, topk_idx, top_k, renormalize, gt):
-        from lmdeploy.pytorch.kernels.cuda.w8a8_fused_moe import fused_moe_w8a8
+        from lmdeploy.pytorch.kernels.cuda.moe.w8a8 import fused_moe_w8a8
         state_i8, state_scale = quant_states
         w1_i8, w1_scale = quant_w1
         w2_i8, w2_scale = quant_w2
@@ -696,7 +696,7 @@ class TestFusedMoeBlockedFP8Compact:
 
     @torch.inference_mode()
     def test_compact_matches_regular(self, monkeypatch, quant_states, quant_w1, quant_w2, topk_weights, topk_idx):
-        from lmdeploy.pytorch.kernels.cuda import blocked_fp8_fused_moe as moe_mod
+        from lmdeploy.pytorch.kernels.cuda.moe import blocked_fp8 as moe_mod
         state_fp8, state_scale = quant_states
         w1_fp8, w1_scale = quant_w1
         w2_fp8, w2_scale = quant_w2
