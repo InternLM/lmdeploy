@@ -3,13 +3,56 @@
 import hashlib
 import secrets
 from collections.abc import Awaitable, Callable
-from http import HTTPStatus
 
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.datastructures import URL, Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
+
+
+def protocol_error_response(path: str, error: RequestError) -> JSONResponse:
+    """Render shared middleware errors in the route's native protocol."""
+    if path.startswith('/v1/messages'):
+        if error.code is ErrorCode.UNAUTHORIZED:
+            error_type = 'authentication_error'
+        elif error.code is ErrorCode.MODEL_NOT_FOUND:
+            error_type = 'not_found_error'
+        elif error.code is ErrorCode.ENGINE_UNAVAILABLE:
+            error_type = 'overloaded_error'
+        elif error.code is ErrorCode.INTERNAL_ERROR:
+            error_type = 'api_error'
+        else:
+            error_type = 'invalid_request_error'
+        content = {
+            'type': 'error',
+            'error': {
+                'type': error_type,
+                'message': error.message,
+            },
+        }
+    else:
+        is_responses = path.startswith('/v1/responses')
+        if error.code is ErrorCode.UNAUTHORIZED:
+            error_type = 'authentication_error'
+        elif error.code is ErrorCode.MODEL_NOT_FOUND:
+            error_type = 'not_found_error'
+        elif error.code in (ErrorCode.ENGINE_UNAVAILABLE,
+                            ErrorCode.INTERNAL_ERROR):
+            error_type = 'server_error'
+        else:
+            error_type = 'invalid_request_error'
+        error_content = {
+            'message': error.message,
+            'type': error_type,
+            'code': error.status_code,
+            'param': None,
+            'object': 'error',
+        }
+        content = {'error': error_content} if is_responses else error_content
+    return JSONResponse(content=content, status_code=error.status_code)
 
 
 def validate_json_request(raw_request: Request):
@@ -36,6 +79,7 @@ class EngineSleepingMiddleware:
         ('POST', '/v1/chat/completions'),
         ('POST', '/v1/completions'),
         ('POST', '/v1/responses'),
+        ('POST', '/v1/messages'),
         ('POST', '/generate'),
     })
 
@@ -59,14 +103,13 @@ class EngineSleepingMiddleware:
             url_path = URL(scope=scope).path.removeprefix(root_path)
             key = (scope['method'], url_path)
             if key in self.protected_routes and self.is_sleeping():
-                response = JSONResponse(
-                    content={
-                        'error': (
-                            'Engine is sleeping; call POST /wakeup before inference '
-                            '(e.g. tags=weights&tags=kv_cache).'
-                        ),
-                    },
-                    status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+                response = protocol_error_response(
+                    url_path,
+                    RequestError(
+                        ErrorCode.ENGINE_UNAVAILABLE,
+                        'Engine is sleeping; call POST /wakeup before inference '
+                        '(e.g. tags=weights&tags=kv_cache).',
+                    ),
                 )
                 return response(scope, receive, send)
         return self.app(scope, receive, send)
@@ -123,6 +166,7 @@ class AuthenticationMiddleware:
         url_path = URL(scope=scope).path.removeprefix(root_path)
         headers = Headers(scope=scope)
         if not any(url_path.startswith(path) for path in self.skip_prefixes) and not self.verify_token(headers):
-            response = JSONResponse(content={'error': 'Unauthorized'}, status_code=401)
+            response = protocol_error_response(
+                url_path, RequestError(ErrorCode.UNAUTHORIZED))
             return response(scope, receive, send)
         return self.app(scope, receive, send)

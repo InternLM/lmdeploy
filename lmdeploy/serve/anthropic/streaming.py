@@ -8,15 +8,18 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any
 
+from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.protocol import DeltaMessage
 
 from .adapter import map_finish_reason
+from .errors import anthropic_error_from_request
 from .protocol import (
     LOCAL_THINKING_SIGNATURE,
     AnthropicStreamEvent,
     ContentBlockDeltaEvent,
     ContentBlockStartEvent,
     ContentBlockStopEvent,
+    ErrorEvent,
     InputJsonDelta,
     MessageDelta,
     MessageDeltaEvent,
@@ -42,6 +45,14 @@ def _format_sse(data: AnthropicStreamEvent) -> str:
         if payload.get(key) is None:
             payload.pop(key, None)
     return f'event: {data.type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n'
+
+
+async def _results_or_error(result_generator):
+    try:
+        async for result in result_generator:
+            yield result
+    except RequestError as error:
+        yield error
 
 
 @dataclass
@@ -184,11 +195,16 @@ async def stream_messages_response(result_generator,
     # Anthropic's message_start event carries usage while its content is
     # still empty. Buffer one backend result to populate usage, then stream
     # that same result through the normal content-block path below.
-    result_iter = result_generator.__aiter__()
+    result_iter = _results_or_error(result_generator).__aiter__()
     try:
         first_res = await anext(result_iter)
     except StopAsyncIteration:
         first_res = None
+
+    if isinstance(first_res, RequestError):
+        yield _format_sse(
+            ErrorEvent(error=anthropic_error_from_request(first_res)))
+        return
 
     start_usage = MessageUsage(
         input_tokens=0 if first_res is None else first_res.input_token_len,
@@ -214,6 +230,12 @@ async def stream_messages_response(result_generator,
             yield res
 
     async for res in _results():
+        if isinstance(res, RequestError):
+            for event in _close_current_block(block_state):
+                yield event
+            yield _format_sse(
+                ErrorEvent(error=anthropic_error_from_request(res)))
+            return
         final_res = res
         text = res.response or ''
         delta_token_ids = res.token_ids if res.token_ids is not None else []

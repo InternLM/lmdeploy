@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from lmdeploy.serve.anthropic.protocol import MessagesRequest
 from lmdeploy.serve.anthropic.router import create_anthropic_router
 from lmdeploy.serve.anthropic.streaming import stream_messages_response
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
 
 ANTHROPIC_HEADERS = {'anthropic-version': '2023-06-01'}
@@ -85,10 +86,15 @@ class _FakeEngine:
                                              enable_return_routed_experts=enable_return_routed_experts)
         self.tokenizer = _FakeTokenizer()
         self.chat_template = _FakeChatTemplate()
+        self.preprocess_calls = []
         self.generate_calls = []
 
-    def generate(self, *args, **kwargs):
-        self.generate_calls.append((args, kwargs))
+    async def preprocess(self, *args, **kwargs):
+        self.preprocess_calls.append((args, kwargs))
+        return SimpleNamespace(args=args, kwargs=kwargs)
+
+    def generate(self, request, **kwargs):
+        self.generate_calls.append((request, kwargs))
 
         async def _gen():
             yield SimpleNamespace(
@@ -361,6 +367,27 @@ def _collect_stream_response_payloads(result_generator, response_parser, **kwarg
     return _sse_payloads('\n'.join(asyncio.run(_collect_events())))
 
 
+def test_stream_messages_runtime_exception_emits_error_event():
+
+    async def _result_generator():
+        if False:
+            yield None
+        raise RequestError(ErrorCode.INTERNAL_ERROR)
+
+    payloads = _collect_stream_response_payloads(
+        _result_generator(),
+        _BasicParser(SimpleNamespace()),
+    )
+
+    assert payloads == [{
+        'type': 'error',
+        'error': {
+            'type': 'api_error',
+            'message': 'An internal server error occurred.',
+        },
+    }]
+
+
 def test_messages_return_routed_experts_requires_engine_flag():
     client = _make_client(server_context=_FakeServerContext(enable_return_routed_experts=False))
     response = _post_messages(client, return_routed_experts=True)
@@ -400,7 +427,7 @@ def test_messages_beta_accepts_system_role_message():
     )
 
     assert response.status_code == 200
-    args, _kwargs = context.async_engine.generate_calls[-1]
+    args, _kwargs = context.async_engine.preprocess_calls[-1]
     assert args[0] == [
         {
             'role': 'user',
@@ -754,7 +781,7 @@ def test_messages_image_data_preserves_input_ids_in_multimodal_content():
         image_data='https://example.com/img.png',
     )
     assert response.status_code == 200
-    args, kwargs = context.async_engine.generate_calls[-1]
+    args, kwargs = context.async_engine.preprocess_calls[-1]
     messages_arg = args[0]
     assert messages_arg[0]['content'][0] == {'type': 'text', 'text': [1, 2, 3]}
     assert kwargs['input_ids'] is None

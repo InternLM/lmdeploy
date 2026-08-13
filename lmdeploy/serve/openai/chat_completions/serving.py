@@ -8,10 +8,11 @@ from contextlib import aclosing
 from http import HTTPStatus
 
 import shortuuid
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
+from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config, validate_request
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
@@ -24,7 +25,12 @@ from lmdeploy.serve.openai.protocol import (
     DeltaMessage,
     UsageInfo,
 )
-from lmdeploy.serve.openai.utils import create_error_response, maybe_filter_parallel_tool_calls
+from lmdeploy.serve.openai.utils import (
+    create_error_response,
+    create_request_error_response,
+    maybe_filter_parallel_tool_calls,
+    request_error_payload,
+)
 from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger
@@ -129,8 +135,6 @@ def register(router: APIRouter, server_context) -> None:
                                            check_request)
         if error_check_ret is not None:
             return error_check_ret
-        session = server_context.create_session(request.session_id)
-
         # Resolve input: messages has priority over input_ids/image_data
         messages_empty = (request.messages is None or request.messages == ''
                           or (isinstance(request.messages, list)
@@ -194,8 +198,7 @@ def register(router: APIRouter, server_context) -> None:
         try:
             response_parser = parser_cls(request)
         except ValueError as e:
-            raise HTTPException(status_code=HTTPStatus.BAD_REQUEST,
-                                detail=str(e))
+            return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
         # request is normalized and may be adjusted by the parser
         # (e.g. GPT-OSS clears response_format and injects the schema into messages)
         request = response_parser.request
@@ -228,19 +231,25 @@ def register(router: APIRouter, server_context) -> None:
                     '`enable_thinking` in `chat_template_kwargs` will override the value in request.'
                 )
 
+        session = server_context.create_session(request.session_id)
+        try:
+            preprocessed = await server_context.async_engine.preprocess(
+                request.messages,
+                session,
+                gen_config=gen_config,
+                tools=request.tools,
+                reasoning_effort=request.reasoning_effort,
+                do_preprocess=do_preprocess,
+                adapter_name=adapter_name,
+                chat_template_kwargs=chat_template_kwargs or None,
+                input_ids=resolved_input_ids,
+                media_io_kwargs=request.media_io_kwargs,
+                mm_processor_kwargs=request.mm_processor_kwargs)
+        except RequestError as error:
+            return create_request_error_response(error)
         result_generator = server_context.async_engine.generate(
-            request.messages,
-            session,
-            gen_config=gen_config,
-            tools=request.tools,
-            reasoning_effort=request.reasoning_effort,
-            stream_response=True,  # always use stream to enable batching
-            do_preprocess=do_preprocess,
-            adapter_name=adapter_name,
-            chat_template_kwargs=chat_template_kwargs or None,
-            input_ids=resolved_input_ids,
-            media_io_kwargs=request.media_io_kwargs,
-            mm_processor_kwargs=request.mm_processor_kwargs)
+            preprocessed,
+            stream_response=True)  # always use stream to enable batching
         include_usage = bool(request.stream_options
                              and request.stream_options.include_usage)
 
@@ -284,7 +293,7 @@ def register(router: APIRouter, server_context) -> None:
             )
             return response.model_dump_json(exclude_none=True)
 
-        async def completion_stream_generator() -> AsyncGenerator[str, None]:
+        async def _completion_stream_generator() -> AsyncGenerator[str, None]:
             streaming_tools = False
             final_usage = None
             async for res in result_generator:
@@ -364,6 +373,14 @@ def register(router: APIRouter, server_context) -> None:
                 yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
             yield 'data: [DONE]\n\n'
 
+        async def completion_stream_generator() -> AsyncGenerator[str, None]:
+            try:
+                async for chunk in _completion_stream_generator():
+                    yield chunk
+            except RequestError as error:
+                yield f'data: {json.dumps({"error": request_error_payload(error)})}\n\n'
+                yield 'data: [DONE]\n\n'
+
         # Streaming response
         if request.stream:
             stream_generator = with_request_cleanup(
@@ -379,23 +396,26 @@ def register(router: APIRouter, server_context) -> None:
         text = ''
         cache_block_ids = []
         remote_token_ids = []
-        async with aclosing(
-                with_request_cleanup(
-                    result_generator, [result_generator], [session],
-                    server_context.session_manager)) as generator:
-            async for res in generator:
-                if await raw_request.is_disconnected():
-                    # Abort the request if the client disconnects.
-                    await session.async_abort()
-                    return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-                final_res = res
-                text += res.response
-                if res.token_ids:
-                    final_token_ids.extend(res.token_ids)
-                if res.logprobs:
-                    final_logprobs.extend(res.logprobs)
-                cache_block_ids.append(res.cache_block_ids)
-                remote_token_ids.append(res.token_ids)
+        try:
+            async with aclosing(
+                    with_request_cleanup(
+                        result_generator, [result_generator], [session],
+                        server_context.session_manager)) as generator:
+                async for res in generator:
+                    if await raw_request.is_disconnected():
+                        # Abort the request if the client disconnects.
+                        await session.async_abort()
+                        return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                    final_res = res
+                    text += res.response
+                    if res.token_ids:
+                        final_token_ids.extend(res.token_ids)
+                    if res.logprobs:
+                        final_logprobs.extend(res.logprobs)
+                    cache_block_ids.append(res.cache_block_ids)
+                    remote_token_ids.append(res.token_ids)
+        except RequestError as error:
+            return create_request_error_response(error)
 
         tool_calls = None
         reasoning_content = None

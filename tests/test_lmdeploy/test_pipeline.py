@@ -1,11 +1,14 @@
 import gc
+from types import SimpleNamespace
 
 import pytest
 import torch
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.messages import Response
-from lmdeploy.pipeline import Pipeline
+from lmdeploy.pipeline import Pipeline, _EventLoopThread
+from lmdeploy.serve.core.async_engine import GenOut
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.managers.session_manager import Session
 from lmdeploy.serve.processors import MultimodalProcessor
 
@@ -73,6 +76,42 @@ def test_chat_clears_response_before_streaming_and_records_history():
         ('My favorite color is blue.', 'blue'),
         ('What is my favorite color?', 'blue'),
     ]
+
+
+def test_pipeline_batch_keeps_siblings_when_preprocess_fails():
+
+    class _AsyncEngine:
+
+        async def preprocess(self, messages, **kwargs):
+            if messages == 'bad':
+                raise RequestError(ErrorCode.PREPROCESS_FAILED)
+            return SimpleNamespace(
+                inputs={'input_ids': [1]}, input_token_len=1, text=messages)
+
+        async def generate(self, request, stream_response=True):
+            yield GenOut(request.text, 1, 1, 'stop', [2])
+
+    pipe = Pipeline.__new__(Pipeline)
+    pipe.async_engine = _AsyncEngine()
+    pipe.backend_config = SimpleNamespace(max_batch_size=3)
+    pipe.limiter = None
+    loop_thread = _EventLoopThread()
+    try:
+        requests = iter([
+            {'messages': 'first'},
+            {'messages': 'bad'},
+            {'messages': 'third'},
+        ])
+        responses = list(
+            pipe._infer(requests, multiplex=True, loop=loop_thread.loop))
+    finally:
+        loop_thread.close()
+
+    responses_by_index = {response.index: response for response in responses}
+    assert responses_by_index[0].text == 'first'
+    assert responses_by_index[1].finish_reason == 'error'
+    assert responses_by_index[1].error_code == 'preprocess_failed'
+    assert responses_by_index[2].text == 'third'
 
 
 @pytest.mark.parametrize('backend', ['pytorch', 'turbomind'], scope='class')
@@ -324,10 +363,12 @@ class TestBackendInference:
         assert responses[0].generate_token_len <= responses[1].generate_token_len + 10
 
     def test_infer_zero_tokens(self, pipe):
-        """Test infer with max_new_tokens=0 to end generation immediately
-        without producing tokens."""
+        """Test that max_new_tokens=0 produces a standard request error."""
         gen_config = GenerationConfig(max_new_tokens=0)
         prompt = 'This prompt should not generate any response'
         response = pipe.infer(prompt, gen_config=gen_config, enable_thinking=False)
         assert isinstance(response, Response)
+        assert response.finish_reason == 'error'
         assert response.generate_token_len == 0
+        assert response.error_code == ErrorCode.INVALID_REQUEST.value
+        assert response.error_message == 'max_new_tokens must be at least 1, got 0.'
