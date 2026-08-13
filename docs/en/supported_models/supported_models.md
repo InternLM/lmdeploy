@@ -68,7 +68,8 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |           Intern-S1            |      241B       | MLLM |    Yes    |   Yes   |   Yes   | Yes  |   -   |
 |         Intern-S1-mini         |      8.3B       | MLLM |    Yes    |   Yes   |   Yes   | Yes  |   -   |
 |         Intern-S1-Pro          |       1TB       | MLLM |    Yes    |    -    |    -    |  -   |  No   |
-|       Intern-S2-Preview        |     35B-A3B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
+|       Intern-S2-Preview        |  35B-A3B, 397B  | MLLM |    Yes    |   No    |   No    |  No  |  No   |
+|        Intern-S2-Mobius        |       35B       | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |            ChatGLM2            |       6B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |               YI               |    6B - 34B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            Mistral             |       7B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
@@ -89,6 +90,8 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |         DeepSeek-V2.5          |      236B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |          DeepSeek-V3           |      685B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |         DeepSeek-V3.2          |      685B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+|          DeepSeek-V4           |   284B, 1.6T    | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+|              Hy3               |    295B-A21B    | LLM  |    Yes    |   No    |   No    | Yes  |  No   |
 |          DeepSeek-VL2          |    3B - 27B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |            MiniCPM3            |       4B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |         MiniCPM-V-2_6          |       8B        | LLM  |    Yes    |   No    |   No    |  No  |  Yes  |
@@ -120,6 +123,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |              SDAR              |    1.7B-30B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |         GLM-4.7-Flash          |       30B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |             GLM-5              |      754B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+|            GLM-5.2             |      754B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 
 ```{note}
 * [1] PyTorch engine removes the support of original llava models after v0.6.4. Please use their corresponding transformers models instead, which can be found in https://huggingface.co/llava-hf

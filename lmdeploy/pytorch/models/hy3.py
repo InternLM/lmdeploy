@@ -318,7 +318,7 @@ class Hy3DecoderLayer(nn.Module):
             prefix=add_prefix('self_attn', prefix),
         )
 
-        # Hy3 的第 0 层是 Dense，后续层是 MoE。
+        # The first Hy3 layer is dense; subsequent layers are MoE.
         if layer_idx < config.first_k_dense_replace:
             self.mlp = Hy3MLP(
                 config,
@@ -481,7 +481,6 @@ class Hy3Model(nn.Module):
             position_ids,
         )
 
-        # LMDeploy RoPE 的第 0 维是 batch 维。
         cos, sin = cos[0], sin[0]
         rotary_pos_emb = (cos, sin)
 
