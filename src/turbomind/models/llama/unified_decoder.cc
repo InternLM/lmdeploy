@@ -74,7 +74,7 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
     }
 
     if (!moe_weights.empty()) {
-        moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(engine, ctx);
+        moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(engine, ctx, moe_weights.front());
     }
 
     if (!ffn_weights.empty()) {

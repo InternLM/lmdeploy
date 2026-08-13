@@ -61,7 +61,7 @@ Tensor_<float> MoeFfnLayerImpl::Gate(const Tensor& input, const LinearWeight& ga
 
 class MoeFfnDefaultImpl final: public MoeFfnLayerImpl {
 public:
-    MoeFfnDefaultImpl(const EngineParam& engine, const Context& ctx);
+    MoeFfnDefaultImpl(const EngineParam& engine, const Context& ctx, const MoeWeight& weights);
 
     void Forward(MoeFfnLayer::ForwardParam& p) override;
 
@@ -70,15 +70,13 @@ public:
     Tensor GetShardFfnInput(Tensor& global_hidden_states, const std::vector<int>& local_token_nums) override;
 
 private:
-    void Init(MoeFfnLayer::ForwardParam& p);
+    void Init(const MoeWeight& weights);
 
     const int tp_size_;
     const int ep_size_;
     const int ep_rank_;
     const int max_token_num_;
     int&      is_warm_up_;
-
-    bool initialized_ = false;
 
     Buffer_<int> h_offsets_;
 
@@ -101,7 +99,7 @@ private:
     bool   clear_pending_ = false;
 };
 
-MoeFfnDefaultImpl::MoeFfnDefaultImpl(const EngineParam& engine, const Context& ctx):
+MoeFfnDefaultImpl::MoeFfnDefaultImpl(const EngineParam& engine, const Context& ctx, const MoeWeight& weights):
     MoeFfnLayerImpl(ctx),
     tp_size_(engine.mlp_tp_size),
     ep_size_(engine.ep_size),
@@ -114,13 +112,14 @@ MoeFfnDefaultImpl::MoeFfnDefaultImpl(const EngineParam& engine, const Context& c
         clear_ready_event_ = Event::create();
         clear_done_event_  = Event::create();
     }
+    Init(weights);
 }
 
-void MoeFfnDefaultImpl::Init(MoeFfnLayer::ForwardParam& p)
+void MoeFfnDefaultImpl::Init(const MoeWeight& weights)
 {
-    const int expert_num        = p.weights->num_experts();
-    const int local_expert_num  = p.weights->num_local_experts();
-    const int experts_per_token = p.weights->experts_per_token;
+    const int expert_num        = weights.num_experts();
+    const int local_expert_num  = weights.num_local_experts();
+    const int experts_per_token = weights.experts_per_token;
 
     h_offsets_ = {local_expert_num + 1, kCPU};
 
@@ -133,16 +132,11 @@ void MoeFfnDefaultImpl::Init(MoeFfnLayer::ForwardParam& p)
     scales_  = {experts_per_token * max_token_num_, kDEVICE};
     offsets_ = {local_expert_num + 1, kDEVICE};
     accum_   = {expert_num * kMoeGateMaxTiles, kDEVICE};
-
-    initialized_ = true;
 }
 
 void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
 {
     TM_FUNCTION_SCOPE();
-    if (!initialized_) {
-        Init(p);
-    }
 
     const int   tokens = p.input.shape(0);
     const auto& moe    = *p.weights;
@@ -354,11 +348,11 @@ Tensor MoeFfnDefaultImpl::GetShardFfnInput(Tensor& global_hidden_states, const s
     return global_hidden_states.slice(local_token_begin, local_token_num);
 }
 
-#ifdef BUILD_MULTI_GPU
+#ifdef USE_NCCL
 
 class MoeFfnA2AImpl final: public MoeFfnLayerImpl {
 public:
-    MoeFfnA2AImpl(const EngineParam& engine, const Context& ctx);
+    MoeFfnA2AImpl(const EngineParam& engine, const Context& ctx, const MoeWeight& weights);
 
     void Forward(MoeFfnLayer::ForwardParam& p) override;
 
@@ -367,7 +361,9 @@ public:
     Tensor GetShardFfnInput(Tensor& global_hidden_states, const std::vector<int>& local_token_nums) override;
 
 private:
-    void Init(MoeFfnLayer::ForwardParam& p);
+    void Init(const MoeWeight& weights);
+
+    void CompileKernels(const MoeWeight& weights);
 
     MoeA2AInputPartition GetInputPartition(const Tensor&           global_hidden_states,
                                            const std::vector<int>& local_token_nums) const;
@@ -378,8 +374,6 @@ private:
     const int max_token_num_;
     const int max_token_per_rank_num_;
     int&      is_warm_up_;
-
-    bool initialized_ = false;
 
     Buffer_<int>   f2n_;
     Buffer_<int>   f2E_;
@@ -403,7 +397,7 @@ private:
     std::unique_ptr<comm::TokenDispatcher> dispatcher_;
 };
 
-MoeFfnA2AImpl::MoeFfnA2AImpl(const EngineParam& engine, const Context& ctx):
+MoeFfnA2AImpl::MoeFfnA2AImpl(const EngineParam& engine, const Context& ctx, const MoeWeight& weights):
     MoeFfnLayerImpl(ctx),
     ep_size_(engine.ep_size),
     ep_rank_(engine.ep_rank),
@@ -418,6 +412,9 @@ MoeFfnA2AImpl::MoeFfnA2AImpl(const EngineParam& engine, const Context& ctx):
     scales_copy_stream_      = Stream::create();
     scales_copy_ready_event_ = Event::create();
     scales_copy_done_event_  = Event::create();
+
+    Init(weights);
+    CompileKernels(weights);
 }
 
 MoeA2AInputPartition MoeFfnA2AImpl::GetInputPartition(const Tensor&           global_hidden_states,
@@ -426,32 +423,51 @@ MoeA2AInputPartition MoeFfnA2AImpl::GetInputPartition(const Tensor&           gl
     return GetMoeA2AInputPartition(local_token_nums, ep_size_, ep_rank_, mlp_tp_size_);
 }
 
-void MoeFfnA2AImpl::Init(MoeFfnLayer::ForwardParam& p)
+void MoeFfnA2AImpl::Init(const MoeWeight& weights)
 {
-    topk_weights_ = {max_token_per_rank_num_ * p.weights->experts_per_token, kDEVICE};
-    topk_indices_ = {max_token_per_rank_num_ * p.weights->experts_per_token, kDEVICE};
+    const int experts_per_token = weights.experts_per_token;
 
-    f2n_    = {p.weights->experts_per_token * max_token_num_, kDEVICE};
-    f2E_    = {p.weights->experts_per_token * max_token_num_, kDEVICE};
-    en2f_   = {p.weights->experts_per_token * max_token_num_, kDEVICE};
-    scales_ = {p.weights->experts_per_token * max_token_num_, kDEVICE};
+    topk_weights_ = {max_token_per_rank_num_ * experts_per_token, kDEVICE};
+    topk_indices_ = {max_token_per_rank_num_ * experts_per_token, kDEVICE};
+
+    f2n_    = {experts_per_token * max_token_num_, kDEVICE};
+    f2E_    = {experts_per_token * max_token_num_, kDEVICE};
+    en2f_   = {experts_per_token * max_token_num_, kDEVICE};
+    scales_ = {experts_per_token * max_token_num_, kDEVICE};
 
     dispatcher_->Init(max_token_per_rank_num_,
-                      p.input.shape(1),
-                      p.weights->experts_per_token,
-                      p.weights->num_local_experts(),
+                      TM_CHECK_NOTNULL(weights.block())->hidden_dim,
+                      experts_per_token,
+                      weights.num_local_experts(),
                       false /* use_fp8_dispatch */);
+}
 
-    initialized_ = true;
+void MoeFfnA2AImpl::CompileKernels(const MoeWeight& weights)
+{
+    TM_CUDA_CHECK(cudaMemsetAsync(
+        topk_indices_.data(), -1, sizeof(int) * topk_indices_.size(), core::Context::stream().handle()));
+
+    std::vector<int> tokens;
+    for (int i = 1; i < max_token_per_rank_num_; i *= 2) {
+        tokens.push_back(i);
+    }
+    tokens.push_back(max_token_per_rank_num_);
+
+    for (const auto& token_num : tokens) {
+        TM_LOG_INFO("Compiling a2a kernels for token_num = {}", token_num);
+        Tensor input        = {{token_num, weights.block()->hidden_dim}, kBfloat16, kDEVICE};
+        Tensor topk_indices = {topk_indices_, {token_num, weights.experts_per_token}};
+        Tensor topk_weights = {topk_weights_, {token_num, weights.experts_per_token}};
+        Tensor scales_t, out_moe;
+        dispatcher_->Dispatch(
+            input, topk_indices, topk_weights, token_num, output_, scales_t, f2n_, f2E_, en2f_, offsets_);
+        dispatcher_->Combine(output_, out_moe);
+    }
 }
 
 void MoeFfnA2AImpl::Forward(MoeFfnLayer::ForwardParam& p)
 {
     TM_FUNCTION_SCOPE();
-
-    if (!initialized_) {
-        Init(p);
-    }
 
     partition_ = GetInputPartition(p.input, p.local_token_num);
     TM_CHECK_LE(partition_.max_tokens_per_rank, max_token_per_rank_num_);
@@ -621,16 +637,18 @@ Tensor MoeFfnA2AImpl::GetShardFfnInput(Tensor& global_hidden_states, const std::
 
 #endif
 
-MoeFfnLayer::MoeFfnLayer(const EngineParam& engine, const Context& ctx)
+MoeFfnLayer::MoeFfnLayer(const EngineParam& engine, const Context& ctx, const MoeWeight* weights)
 {
+    const auto& moe = *TM_CHECK_NOTNULL(weights);
+
 #ifdef BUILD_MULTI_GPU
     if (engine.ep_size > 1 && engine.moe_a2a_backend == "deepep") {
-        impl_ = std::make_unique<MoeFfnA2AImpl>(engine, ctx);
+        impl_ = std::make_unique<MoeFfnA2AImpl>(engine, ctx, moe);
         return;
     }
 #endif
     if (engine.ep_size == 1 || engine.moe_a2a_backend == "default") {
-        impl_ = std::make_unique<MoeFfnDefaultImpl>(engine, ctx);
+        impl_ = std::make_unique<MoeFfnDefaultImpl>(engine, ctx, moe);
         return;
     }
 

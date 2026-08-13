@@ -15,7 +15,7 @@ class MoeFfnLayerImpl;
 
 class MoeFfnLayer {
 public:
-    MoeFfnLayer(const EngineParam& engine, const Context& ctx);
+    MoeFfnLayer(const EngineParam& engine, const Context& ctx, const MoeWeight* weights);
 
     ~MoeFfnLayer();
 
