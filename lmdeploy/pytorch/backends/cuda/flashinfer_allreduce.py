@@ -50,7 +50,7 @@ _ONE_SHOT_MAX_SIZE = {
 
 
 class FlashInferAllReduce:
-    """FlashInfer fused all-reduce and RMSNorm for one distributed group."""
+    """FlashInfer all-reduce operations for one distributed group."""
 
     def __init__(self, group: dist.ProcessGroup):
         self.group = group
@@ -112,6 +112,25 @@ class FlashInferAllReduce:
             f'FlashInfer all-reduce workspace initialized: rank={rank}, world_size={self._world_size}, '
             f'max_token_num={max_token_num}, hidden_dim={hidden_dim}')
         return self._workspace
+
+    def all_reduce_(self, input: torch.Tensor) -> bool:
+        """All-reduce ``input`` in place, returning whether it was handled."""
+        if (input.dim() != 2 or not input.is_contiguous()
+                or input.nbytes > self._max_size
+                or input.size(0) > _MAX_TOKEN_NUM
+                or not self.supports(input.dtype)):
+            return False
+
+        output = self._comm.allreduce_fusion(
+            input=input,
+            workspace=self._get_workspace(input),
+            pattern=self._comm.AllReduceFusionPattern.kAllReduce,
+            launch_with_pdl=True,
+            trigger_completion_at_end=True,
+            use_oneshot=input.nbytes <= self._one_shot_max_size,
+        )
+        input.copy_(output)
+        return True
 
     def fused_allreduce_rmsnorm(self,
                                 input: torch.Tensor,

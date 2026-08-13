@@ -39,7 +39,10 @@ class CudaCommunicator:
         )
 
     def all_reduce_(self, input: torch.Tensor):
-        """Select symmetric-memory all-reduce or fall back to NCCL."""
+        """Dispatch all-reduce through FlashInfer, symmetric memory, or
+        NCCL."""
+        if self._flashinfer is not None and self._flashinfer.all_reduce_(input):
+            return
         if self._symm_mem is not None and self._symm_mem.all_reduce_(input):
             return
         dist.all_reduce(input, group=self.gpu_group)
@@ -52,9 +55,17 @@ class CudaCommunicator:
             self._symm_mem.close()
 
 
+def should_try_symm_mem(dist_config) -> bool:
+    """Whether this configuration is a symmetric-memory candidate."""
+    return (_envs.allreduce_use_symm_mem and dist_config.dp == 1
+            and dist_config.ep == 1 and dist_config.attn_tp > 1
+            and not dist_config.enable_microbatch)
+
+
 def build_cuda_communicator(cpu_group: dist.ProcessGroup, gpu_group: dist.ProcessGroup, dist_config):
     """Build the optional CUDA communicator for a TP group."""
-    enabled = _envs.allreduce_use_flashinfer or _envs.allreduce_use_symm_mem
-    if not enabled or dist_config.dp != 1 or dist_config.ep != 1 or dist_config.enable_microbatch:
+    compatible = dist_config.dp == 1 and dist_config.ep == 1 and not dist_config.enable_microbatch
+    enabled = _envs.allreduce_use_flashinfer or should_try_symm_mem(dist_config)
+    if not compatible or not enabled:
         return None
     return CudaCommunicator(cpu_group=cpu_group, gpu_group=gpu_group)
