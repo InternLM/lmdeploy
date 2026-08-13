@@ -797,12 +797,15 @@ def get_interface_matrix(
     Each row: model, model_path, tp, backend, suites, case_info, extra,
     generate_marker. ``extra`` is CLI text from the same ``extra`` dict shape
     used by tools (``get_cli_str``).
+
+    Dedup key includes parallel layout so the same model/backend can appear
+    once per ``engine_config`` (e.g. tp16 vs dp/ep16).
     """
     config = get_config()
     matrix_env = env_key or _model_matrix_env_key(config)
     backend_filter = get_interface_backend_list(backends)
     rows: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, tuple[tuple[str, int], ...]]] = set()
 
     for model_id, entry in _iter_per_model_entries(matrix_env, deps_profile=deps_profile):
         iface_map = _normalize_interface_map(entry.get(INTERFACE_KEY))
@@ -811,6 +814,7 @@ def get_interface_matrix(
         profiles = _normalize_profiles(entry.get('model_type', 'chat'))
         layout = _parallel_layout(_entry_engine_config(entry))
         tp = int(layout.get('tp', 1))
+        layout_key = tuple(sorted((k, int(layout[k])) for k in PARALLEL_LAYOUT_KEYS if k in layout))
         model_name = model_id.split('/')[-1]
 
         target_backends: list[str]
@@ -825,9 +829,8 @@ def get_interface_matrix(
             suites = list(iface_cfg.get('suites') or [])
             if not launch_profiles:
                 continue
-            key = (model_id, backend)
+            key = (model_id, backend, layout_key)
             if key in seen:
-                # Prefer the first yaml row that declares interface for this pair.
                 continue
             seen.add(key)
             case_info: list[str] = []
@@ -854,7 +857,7 @@ def get_interface_matrix(
                 'generate_marker': derive_generate_marker(suites, backend),
             })
 
-    rows.sort(key=lambda r: (r['model_path'], r['backend']))
+    rows.sort(key=lambda r: (r['model_path'], r['backend'], r['tp']))
     return rows
 
 
