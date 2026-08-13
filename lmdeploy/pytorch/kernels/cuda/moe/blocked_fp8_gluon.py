@@ -40,6 +40,7 @@ TRANSPOSED_THREE_STAGE_MAX_M = 32
 TRANSPOSED_TWO_STAGE_MAX_M = 128
 _TRANSPOSED_WGMMA_BOTH = 'transposed_wgmma_both'
 _STANDARD_WGMMA_GATE_TRITON_DOWN = 'standard_wgmma_gate_triton_down'
+_STANDARD_WGMMA_BOTH_TWO_K_BLOCK_DOWN = 'standard_wgmma_both_two_k_block_down'
 
 
 def _select_transposed_pipeline_stages(m: int, k: int) -> int:
@@ -531,6 +532,76 @@ def _fused_moe_blocked_fp8_standard_wgmma_kernel(
             block_scale = next_block_scale
 
         mbarrier.invalidate(stage_b_ready)
+    elif num_k_blocks == 2 and NUM_PIPELINE_STAGES == 2:
+        # A two-block reduction is too short for the refill pipeline below.
+        # Keep both B blocks resident, overlap their TMA prologue with A0, then
+        # prepare A1 and both block scales while WGMMA0 is in flight.
+        for k_block in gl.static_range(0, 2):
+            stage_b_ready = b_ready.index(k_block)
+            stage_b = b_smem.index(k_block)
+            mbarrier.expect(stage_b_ready, b_desc.block_type.nbytes)
+            tma.async_copy_global_to_shared(
+                b_desc,
+                [b_row, k_block * BLOCK_K],
+                stage_b_ready,
+                stage_b,
+            )
+
+        a_ptrs_0 = (a_ptr + load_a_row[:, None] * stride_am +
+                    load_k[None, :] * stride_ak)
+        a_0 = gl.load(a_ptrs_0,
+                      mask=load_mask_m[:, None],
+                      other=0.0)
+        a_smem.index(0).store(a_0)
+        gl.barrier()
+        mbarrier.wait(b_ready.index(0), phase=0)
+
+        accumulator_token = warpgroup_mma(
+            a_smem.index(0),
+            b_smem.index(0).permute((1, 0)),
+            accumulator,
+            is_async=True,
+            use_acc=True,
+        )
+
+        b_scale_base = (b_scale_ptr + local_expert_i64 * stride_bse +
+                        (n_block_id * BLOCK_N // SCALE_N) * stride_bsn)
+        block_scale_0 = gl.load(a_scale_ptr + a_scale_m * stride_asm,
+                                mask=mask_m,
+                                other=1.0)
+        block_scale_0 *= gl.load(b_scale_base)
+        block_scale_1 = gl.load(a_scale_ptr + a_scale_m * stride_asm +
+                                stride_ask,
+                                mask=mask_m,
+                                other=1.0)
+        block_scale_1 *= gl.load(b_scale_base + stride_bsk)
+        normalized_scale_1 = gl.maximum(block_scale_1, 1e-12)
+
+        a_ptrs_1 = (a_ptr + load_a_row[:, None] * stride_am +
+                    (BLOCK_K + load_k[None, :]) * stride_ak)
+        a_1 = gl.load(a_ptrs_1,
+                      mask=load_mask_m[:, None],
+                      other=0.0)
+        a_smem.index(1).store(a_1)
+        gl.barrier()
+
+        accumulator = warpgroup_mma_wait(num_outstanding=0,
+                                         deps=(accumulator_token, ))
+        accumulator *= (block_scale_0 / normalized_scale_1)[:, None]
+        mbarrier.wait(b_ready.index(1), phase=0)
+        accumulator_token = warpgroup_mma(
+            a_smem.index(1),
+            b_smem.index(1).permute((1, 0)),
+            accumulator,
+            is_async=True,
+            use_acc=True,
+        )
+        accumulator = warpgroup_mma_wait(num_outstanding=0,
+                                         deps=(accumulator_token, ))
+        accumulator *= normalized_scale_1[:, None]
+
+        for final_stage in gl.static_range(0, NUM_PIPELINE_STAGES):
+            mbarrier.invalidate(b_ready.index(final_stage))
     else:
         # One B stage starts free. The initialized WGMMA token makes block zero
         # follow the same promote/refill/issue sequence as every later block.
@@ -801,14 +872,21 @@ def _has_gluon_moe_schedule_family(num_experts: int,
                                    intermediate_features: int,
                                    topk: int) -> bool:
     """Whether static GEMM features can enter a measured Gluon region."""
-    if (num_local_experts != num_experts or not 256 <= num_experts <= 384
+    if (num_local_experts != num_experts or not 256 <= num_experts <= 512
             or not 0 < topk <= num_experts):
         return False
     k_blocks = hidden_features // SCALE_BLOCK_K
     down_k_blocks = intermediate_features // SCALE_BLOCK_K
-    transposed_family = 8 <= k_blocks <= 24 and down_k_blocks == 4
-    standard_family = k_blocks >= 48 and 1 <= down_k_blocks <= 4
-    return transposed_family or standard_family
+    existing_expert_family = num_experts <= 384
+    transposed_family = (existing_expert_family
+                         and 8 <= k_blocks <= 24
+                         and down_k_blocks == 4)
+    standard_gate_family = (existing_expert_family and k_blocks >= 48
+                            and 1 <= down_k_blocks <= 4)
+    two_k_block_down_family = (32 <= k_blocks <= 48
+                               and down_k_blocks == 2)
+    return (transposed_family or standard_gate_family
+            or two_k_block_down_family)
 
 
 def _select_gluon_moe_schedule(input: torch.Tensor, w1: torch.Tensor,
@@ -830,10 +908,16 @@ def _select_gluon_moe_schedule(input: torch.Tensor, w1: torch.Tensor,
     num_routes = topk_ids.numel()
     k_blocks = hidden_features // SCALE_BLOCK_K
     down_k_blocks = intermediate_features // SCALE_BLOCK_K
-    if (2 * local_experts <= num_routes <= 4 * local_experts
+    if (10 * local_experts <= num_routes <= 24 * local_experts
+            and w1.size(1) == 512 and w2.size(1) == hidden_features
+            and 32 <= k_blocks <= 48 and down_k_blocks == 2):
+        return _STANDARD_WGMMA_BOTH_TWO_K_BLOCK_DOWN
+    if (local_experts <= 384
+            and 2 * local_experts <= num_routes <= 4 * local_experts
             and 8 <= k_blocks <= 24 and down_k_blocks == 4):
         return _TRANSPOSED_WGMMA_BOTH
-    if (48 * local_experts <= num_routes <= 64 * local_experts
+    if (local_experts <= 384
+            and 48 * local_experts <= num_routes <= 64 * local_experts
             and k_blocks >= 48 and 1 <= down_k_blocks <= 4):
         return _STANDARD_WGMMA_GATE_TRITON_DOWN
     return None
@@ -865,6 +949,10 @@ def _run_gluon_moe(input: torch.Tensor,
         gate_block_m = STANDARD_WGMMA_BLOCK_M
         down_launcher = fused_moe_blocked_fp8_compact_kernel_launcher
         down_options = dict(num_warps=4, num_stages=3)
+    elif schedule == _STANDARD_WGMMA_BOTH_TWO_K_BLOCK_DOWN:
+        gate_block_m = STANDARD_WGMMA_BLOCK_M
+        down_launcher = fused_moe_blocked_fp8_kernel_launcher
+        down_options = dict(num_stages=2)
     else:
         raise ValueError(f'Unsupported Gluon MoE schedule: {schedule}')
 

@@ -73,8 +73,11 @@ def _reference(
     [
         (True, False, 8, 64, False, 1, 3, 13, 2, 2, 128),
         (True, False, 8, 128, True, None, 9, 13, 2, 2, 128),
+        (False, True, 8, 128, False, 2, 2, 13, 2, 2, 128),
         (False, True, 8, 128, True, 2, 5, 13, 2, 2, 128),
         (True, False, 64, 128, True, 1, 9, 65, 1, 1, 256),
+        (False, True, 64, 128, True, 2, 2, 197, 2, 3, 256),
+        (True, False, 64, 128, False, 3, 2, 65, 1, 1, 128),
         (True, False, 64, 128, False, 2, 5, 65, 1, 1, 128),
         (False, True, 64, 128, False, 3, 9, 65, 1, 1, 128),
     ],
@@ -123,6 +126,11 @@ def test_blocked_fp8_fused_moe_gluon(reindex_a, reindex_c, block_m, block_n,
         # Exercise the rescaled accumulator across zero-scale K blocks.
         a_scale[0, 2] = 0
         b_scale[0, 0, 4] = 0
+    elif (block_m == STANDARD_WGMMA_BLOCK_M and num_stages == 2
+          and num_k_blocks == 2):
+        # Exercise the two-block normalized accumulator at zero scale.
+        a_scale[0, 1] = 0
+        b_scale[0, 0, 1] = 0
     bias = torch.randn(
         (num_local_experts,
          n), device='cuda', dtype=torch.bfloat16) if with_bias else None
@@ -230,7 +238,8 @@ def test_blocked_fp8_fused_moe_gluon_has_baseline_api():
 @torch.inference_mode()
 @pytest.mark.parametrize('schedule',
                          ('transposed_wgmma_both',
-                          'standard_wgmma_gate_triton_down'))
+                          'standard_wgmma_gate_triton_down',
+                          'standard_wgmma_both_two_k_block_down'))
 @pytest.mark.parametrize('custom_act', (False, True))
 def test_blocked_fp8_fused_moe_gluon_complete_api_matches_baseline(
         monkeypatch, schedule, custom_act):
@@ -242,7 +251,7 @@ def test_blocked_fp8_fused_moe_gluon_complete_api_matches_baseline(
 
     torch.manual_seed(11)
     num_tokens, num_experts, topk = 13, 4, 2
-    hidden_features, gate_features, intermediate_features = 384, 256, 128
+    hidden_features, gate_features, intermediate_features = 384, 512, 256
     input = (torch.randn((num_tokens, hidden_features), device='cuda') * 0.25).to(FP8_DTYPE)
     input_scale = torch.rand((num_tokens, hidden_features // SCALE_BLOCK), device='cuda') + 0.5
     w1 = (torch.randn((num_experts, gate_features, hidden_features), device='cuda') * 0.25).to(FP8_DTYPE)
@@ -321,6 +330,48 @@ def test_blocked_fp8_fused_moe_gluon_selects_schedule_from_launch_features(
     topk_ids = torch.empty((num_tokens, topk), device='meta', dtype=torch.int64)
 
     assert _select_gluon_moe_schedule(input, w1, w2, topk_ids, num_experts) == expected
+
+
+@pytest.mark.parametrize(
+    ('num_tokens', 'num_experts', 'topk', 'hidden_features',
+     'gate_features', 'intermediate_features', 'output_features', 'expected'),
+    [
+        (319, 256, 8, 6144, 512, 256, 6144, None),
+        (320, 256, 8, 6144, 512, 256, 6144,
+         'standard_wgmma_both_two_k_block_down'),
+        (768, 256, 8, 6144, 512, 256, 6144,
+         'standard_wgmma_both_two_k_block_down'),
+        (769, 256, 8, 6144, 512, 256, 6144, None),
+        (512, 384, 8, 6144, 512, 256, 6144,
+         'standard_wgmma_both_two_k_block_down'),
+        (512, 512, 10, 4096, 512, 256, 4096,
+         'standard_wgmma_both_two_k_block_down'),
+        (1024, 512, 10, 4096, 512, 256, 4096,
+         'standard_wgmma_both_two_k_block_down'),
+        (256, 512, 10, 4096, 512, 256, 4096, None),
+        (512, 256, 8, 2048, 512, 256, 2048, None),
+        (512, 512, 10, 4096, 1024, 256, 4096, None),
+        (512, 512, 10, 4096, 512, 256, 2048, None),
+        (3072, 512, 8, 6144, 512, 256, 6144, None),
+        (512, 768, 10, 4096, 512, 256, 4096, None),
+    ],
+)
+def test_blocked_fp8_fused_moe_gluon_selects_two_k_block_down_schedule(
+        num_tokens, num_experts, topk, hidden_features, gate_features,
+        intermediate_features, output_features, expected):
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8_gluon import _select_gluon_moe_schedule
+
+    input = torch.empty((num_tokens, hidden_features), device='meta')
+    w1 = torch.empty((num_experts, gate_features, hidden_features),
+                     device='meta')
+    w2 = torch.empty((num_experts, output_features, intermediate_features),
+                     device='meta')
+    topk_ids = torch.empty((num_tokens, topk),
+                           device='meta',
+                           dtype=torch.int64)
+
+    assert _select_gluon_moe_schedule(input, w1, w2, topk_ids,
+                                      num_experts) == expected
 
 
 def test_blocked_fp8_fused_moe_gluon_falls_back(monkeypatch):
