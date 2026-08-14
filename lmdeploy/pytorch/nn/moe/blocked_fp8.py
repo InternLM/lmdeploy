@@ -173,8 +173,6 @@ class FusedMoEBlockedF8(FusedMoEBase):
 
         dist_ctx = get_dist_manager().current_context()
         self.ep_size, rank = get_ep_world_rank()
-        if self.ep_size == 1:
-            hidden_dim, ffn_dim = self._update_args(hidden_dim, ffn_dim, align=self.block_size)
         impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEBlockedF8)
         deep_ep_max_tokens_per_rank = get_build_model_context().deep_ep_max_tokens_per_rank
         self.impl = impl_builder.build(top_k,
@@ -188,14 +186,14 @@ class FusedMoEBlockedF8(FusedMoEBase):
                                        fp8_dtype=fp8_dtype,
                                        num_max_dispatch_tokens_per_rank=deep_ep_max_tokens_per_rank,
                                        layer_idx=layer_idx,
-                                       custom_gateup_act=act_func is not None,
-                                       ffn_dim=ffn_dim)
+                                       custom_gateup_act=act_func is not None)
         self.impl.set_scale_fmt(scale_fmt)
 
         if self.ep_size > 1:
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)
             num_experts = len(expert_list)
         else:
+            hidden_dim, ffn_dim = self._update_args(hidden_dim, ffn_dim, align=self.block_size)
             expert_list = None
         self.expert_list = expert_list
 

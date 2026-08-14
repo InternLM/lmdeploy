@@ -224,7 +224,6 @@ class FusedMoEBlockedF8Builder(ABC):
               fp8_dtype: torch.dtype = torch.float8_e4m3fn,
               num_max_dispatch_tokens_per_rank: int = 128,
               layer_idx: int = 0,
-              custom_gateup_act: bool = False,
-              ffn_dim: int | None = None):
+              custom_gateup_act: bool = False):
         """Build from mlp."""
         raise NotImplementedError
