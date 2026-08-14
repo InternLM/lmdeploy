@@ -412,6 +412,8 @@ MoeFfnA2AImpl::MoeFfnA2AImpl(const EngineParam& engine, const Context& ctx, cons
                             * cdiv(engine.max_forward_token_num, engine.attn_tp_size * engine.attn_cp_size)),
     is_warm_up_(*ctx.is_warm_up)
 {
+    TM_CHECK(engine.data_type == kBfloat16)
+        << "engine.data_type only support bfloat16 for now, got " << engine.data_type;
     dispatcher_ = std::make_unique<comm::TokenDispatcher>(ctx.comm.h_ep_group);
 
     scales_copy_stream_      = Stream::create();
@@ -562,13 +564,21 @@ void MoeFfnA2AImpl::Forward(MoeFfnLayer::ForwardParam& p)
 
     if (block.w1w3) {
         Tensor inter;
-        TM_SCOPE_CALL(linear_.Forward(output_, *block.w1w3, indices, offsets, inter));
-
-        if (!block.is_fused_silu) {
-            TM_SCOPE_CALL(Activation(inter, block.w1w3->bias, f2E_, block.act_type, num_valid_tokens, st));
+        Tensor inter_scales;
+        Tensor unused_in_scales;
+        if (block.is_fused_silu && block.w1w3->output_dtype() == kFloat8_e4m3) {
+            TM_SCOPE_CALL(
+                linear_.Forward(output_, unused_in_scales, *block.w1w3, indices, offsets, inter, inter_scales));
+            TM_SCOPE_CALL(linear_.Forward(
+                inter.slice({0, 0}, {-1, inter_size}), inter_scales, *block.w2, {}, offsets, temp_, unused_in_scales));
         }
-
-        TM_SCOPE_CALL(linear_.Forward(inter.slice({0, 0}, {-1, inter_size}), *block.w2, {}, offsets, temp_));
+        else {
+            TM_SCOPE_CALL(linear_.Forward(output_, *block.w1w3, indices, offsets, inter));
+            if (!block.is_fused_silu) {
+                TM_SCOPE_CALL(Activation(inter, block.w1w3->bias, f2E_, block.act_type, num_valid_tokens, st));
+            }
+            TM_SCOPE_CALL(linear_.Forward(inter.slice({0, 0}, {-1, inter_size}), *block.w2, {}, offsets, temp_));
+        }
     }
     else {
         // Separate w1/w3 path
