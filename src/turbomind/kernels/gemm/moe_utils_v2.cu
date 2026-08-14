@@ -348,10 +348,11 @@ template<int  max_expert_num,
          int  block_dim,
          int  access_size,
          bool fuse_mask_clear,
+         bool is_routing,
          class Mask>
-__global__ void MoeGateKernel_v8(float*       scales,      // [e,n]
-                                 Mask*        masks,       // [E,n], padded
-                                 int*         accum,       // [E,tiles]
+__global__ void MoeGateKernel_v8(float*       scales,      // routing: [e,n], direct: [n,e]
+                                 Mask*        masks,       // routing: [E,n] int8, padded, direct: [n,e] int32
+                                 int*         accum,       // routing: [E,tiles], direct: nullptr
                                  const float* logits,      // [n,E]
                                  const bool*  token_mask,  // [n]; invalid tokens route nowhere
                                  int          log_tile,
@@ -474,6 +475,30 @@ __global__ void MoeGateKernel_v8(float*       scales,      // [e,n]
     int idx{};
     WarpScan{temp_storage[bti]}.ExclusiveSum(count, idx);
 
+    if constexpr (!is_routing) {
+        const int end = idx + count;
+        if (ti < token_num) {
+            if (token_mask[ti]) {
+                PRAGMA_UNROLL
+                for (int i = 0; i < items_per_thread; ++i) {
+                    if (mask.test(i)) {
+                        const int dst = ti * top_k + idx;
+                        masks[dst]    = ei * items_per_thread + i;
+                        scales[dst]   = data[i] * sum_prob * routed_scale;
+                        ++idx;
+                    }
+                }
+            }
+            // Preserve MoeA2AGate's handling of unselectable logits and overwrite
+            // every output slot for masked tokens with skip sentinels.
+            for (; idx < end; ++idx) {
+                const int dst = ti * top_k + idx;
+                masks[dst]    = -1;
+                scales[dst]   = 0.f;
+            }
+        }
+        return;
+    }
     PRAGMA_UNROLL
     for (int i = 0; i < items_per_thread; ++i) {
         if (mask.test(i)) {
@@ -556,6 +581,175 @@ __global__ void MoeGateKernel_v8(float*       scales,      // [e,n]
 template<int N>
 inline constexpr std::integral_constant<int, N> _Int{};
 
+void launchMoeGate_V8(float*       scales,
+                      void*        masks,
+                      bool         is_routing,
+                      int*         accum,
+                      const float* logits,
+                      const bool*  token_mask,
+                      int          log_tile,
+                      int          tiles,
+                      int          tokens,
+                      int          tokens_padded,
+                      int          experts,
+                      int          experts_per_token,
+                      bool         softmax,
+                      bool         norm_topk,
+                      float        routed_scale,
+                      cudaStream_t st)
+{
+    TM_CHECK(token_mask);
+
+    auto invoke = [&](auto max_expert_num,  //
+                      auto top_k,
+                      auto items_per_thread,
+                      auto vec_size,
+                      auto fuse_mask_clear,
+                      auto routing) {
+        constexpr bool kIsRouting = decltype(routing)::value;
+        using Mask                = std::conditional_t<kIsRouting, int8_t, int>;
+
+        constexpr int thrs_per_tok   = max_expert_num.value / items_per_thread.value;
+        constexpr int threads        = 256;
+        constexpr int tokens_per_cta = threads / thrs_per_tok;
+        // Fuse mask clear for E<=512 (launch tax). Keep host memset for E=2560
+        // where E*tok/CTA stores regress large-token cases.
+        constexpr bool kFuseMaskClear = fuse_mask_clear.value != 0;
+        const int      blocks         = ceil_div(kFuseMaskClear ? tokens_padded : tokens, tokens_per_cta);
+
+        auto* kernel = MoeGateKernel_v8<max_expert_num.value,
+                                        top_k.value,
+                                        items_per_thread.value,
+                                        threads,
+                                        vec_size.value,
+                                        kFuseMaskClear,
+                                        kIsRouting,
+                                        Mask>;
+
+        if constexpr (kIsRouting && !kFuseMaskClear) {
+            cudaMemsetAsync(masks, -1, sizeof(Mask) * experts * tokens_padded, st);
+        }
+
+        kernel<<<blocks, threads, 0, st>>>(scales,
+                                           static_cast<Mask*>(masks),
+                                           accum,
+                                           logits,
+                                           token_mask,
+                                           log_tile,
+                                           tiles,
+                                           tokens,
+                                           tokens_padded,
+                                           experts,
+                                           experts_per_token,
+                                           softmax,
+                                           norm_topk,
+                                           routed_scale);
+        return true;
+    };
+
+    auto dispatch = [&](auto routing) {
+        // fuse_mask_clear=_Int<1> for E<=512; _Int<0> keeps host memset for E=2560.
+        if (experts <= 8) {
+            if (experts_per_token <= 2) {
+                return invoke(_Int<8>, _Int<2>, _Int<8>, _Int<4>, _Int<1>, routing);
+            }
+            else {
+                return invoke(_Int<8>, _Int<8>, _Int<8>, _Int<4>, _Int<1>, routing);
+            }
+        }
+        else if (experts <= 64) {
+            if (experts_per_token <= 4) {
+                return invoke(_Int<64>, _Int<4>, _Int<16>, _Int<4>, _Int<1>, routing);
+            }
+            else if (experts_per_token <= 8) {
+                return invoke(_Int<64>, _Int<8>, _Int<16>, _Int<4>, _Int<1>, routing);
+            }
+        }
+        else if (experts <= 128) {
+            if (experts_per_token <= 8) {
+                return invoke(_Int<128>, _Int<8>, _Int<16>, _Int<4>, _Int<1>, routing);
+            }
+        }
+        else if (experts <= 160) {
+            if (experts_per_token <= 8) {
+                return invoke(_Int<160>, _Int<8>, _Int<10>, _Int<2>, _Int<1>, routing);
+            }
+        }
+        else if (experts <= 256) {
+            if (experts_per_token <= 8) {
+                return invoke(_Int<256>, _Int<8>, _Int<16>, _Int<4>, _Int<1>, routing);
+            }
+        }
+        else if (experts <= 512) {
+            if (experts_per_token <= 10) {
+                return invoke(_Int<512>, _Int<10>, _Int<16>, _Int<4>, _Int<1>, routing);
+            }
+        }
+        else if (experts <= 2560) {
+            if (experts_per_token <= 8) {
+                // ~20KB smem (2-row hist); static smem fits H200 default carveout.
+                return invoke(_Int<2560>, _Int<8>, _Int<80>, _Int<4>, _Int<0>, routing);
+            }
+        }
+        return false;
+    };
+
+    auto dispatch_mode = [&] {
+        if (is_routing) {
+            return dispatch(std::true_type{});
+        }
+        else {
+            return dispatch(std::false_type{});
+        }
+    };
+
+    if (!softmax && norm_topk) {
+        // norm top-k is part of softmax impl
+        TM_LOG_FATAL("unsupported moe config: softmax={} norm_topk={}", softmax, norm_topk);
+    }
+
+    const bool success = dispatch_mode();
+    TM_CHECK(success) << "unsupported moe config: expert_num=" << experts << ", top_k=" << experts_per_token
+                      << ", softmax=" << softmax << ", norm_topk=" << norm_topk;
+
+    TM_CUDA_CHECK(cudaGetLastError());
+}
+
+void invokeMoeGateTopK(float*       topk_weights,
+                       int*         topk_indices,
+                       const float* logits,
+                       const bool*  token_mask,
+                       int          tokens,
+                       int          experts,
+                       int          experts_per_token,
+                       bool         softmax,
+                       bool         norm_topk,
+                       float        routed_scale,
+                       cudaStream_t st)
+{
+    TM_CHECK_GE(tokens, 0);
+    if (tokens == 0) {
+        return;
+    }
+
+    launchMoeGate_V8(topk_weights,
+                     topk_indices,
+                     false,
+                     nullptr,
+                     logits,
+                     token_mask,
+                     0,
+                     0,
+                     tokens,
+                     tokens,
+                     experts,
+                     experts_per_token,
+                     softmax,
+                     norm_topk,
+                     routed_scale,
+                     st);
+}
+
 void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
                       int*         f2E,            // [e*n] -> local E
                       int*         en2f,           // [e,n] -> n*e
@@ -586,100 +780,22 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
     }
     const int tiles = ceil_div(tokens_padded, 1 << log_tile);
 
-    auto invoke = [&](auto max_expert_num, auto top_k, auto items_per_thread, auto vec_size, auto fuse_mask_clear) {
-        constexpr int thrs_per_tok   = max_expert_num.value / items_per_thread.value;
-        constexpr int threads        = 256;
-        constexpr int tokens_per_cta = threads / thrs_per_tok;
-        // Fuse mask clear for E<=512 (launch tax). Keep host memset for E=2560
-        // where E*tok/CTA stores regress large-token cases.
-        constexpr bool kFuseMaskClear = fuse_mask_clear.value != 0;
-        const int      blocks         = ceil_div(kFuseMaskClear ? tokens_padded : tokens, tokens_per_cta);
-
-        auto* kernel = MoeGateKernel_v8<max_expert_num.value,
-                                        top_k.value,
-                                        items_per_thread.value,
-                                        threads,
-                                        vec_size.value,
-                                        kFuseMaskClear,
-                                        int8_t>;
-
-        if constexpr (!kFuseMaskClear) {
-            cudaMemsetAsync(masks, -1, sizeof(int8_t) * experts * tokens_padded, st);
-        }
-
-        kernel<<<blocks, threads, 0, st>>>(scales,
-                                           (int8_t*)masks,
-                                           accum,
-                                           logits,
-                                           token_mask,
-                                           log_tile,
-                                           tiles,
-                                           tokens,
-                                           tokens_padded,
-                                           experts,
-                                           experts_per_token,
-                                           softmax,
-                                           norm_topk,
-                                           routed_scale);
-        return true;
-    };
-
-    if (!softmax && norm_topk) {
-        // norm top-k is part of softmax impl
-        TM_LOG_FATAL("unsupported moe config: softmax={} norm_topk={}", softmax, norm_topk);
-    }
-
-    auto dispatch = [&] {
-        // fuse_mask_clear=_Int<1> for E<=512; _Int<0> keeps host memset for E=2560.
-        if (experts <= 8) {
-            if (experts_per_token <= 2) {
-                return invoke(_Int<8>, _Int<2>, _Int<8>, _Int<4>, _Int<1>);
-            }
-            else {
-                return invoke(_Int<8>, _Int<8>, _Int<8>, _Int<4>, _Int<1>);
-            }
-        }
-        else if (experts <= 64) {
-            if (experts_per_token <= 4) {
-                return invoke(_Int<64>, _Int<4>, _Int<16>, _Int<4>, _Int<1>);
-            }
-            else if (experts_per_token <= 8) {
-                return invoke(_Int<64>, _Int<8>, _Int<16>, _Int<4>, _Int<1>);
-            }
-        }
-        else if (experts <= 128) {
-            if (experts_per_token <= 8) {
-                return invoke(_Int<128>, _Int<8>, _Int<16>, _Int<4>, _Int<1>);
-            }
-        }
-        else if (experts <= 160) {
-            if (experts_per_token <= 8) {
-                return invoke(_Int<160>, _Int<8>, _Int<10>, _Int<2>, _Int<1>);
-            }
-        }
-        else if (experts <= 256) {
-            if (experts_per_token <= 8) {
-                return invoke(_Int<256>, _Int<8>, _Int<16>, _Int<4>, _Int<1>);
-            }
-        }
-        else if (experts <= 512) {
-            if (experts_per_token <= 10) {
-                return invoke(_Int<512>, _Int<10>, _Int<16>, _Int<4>, _Int<1>);
-            }
-        }
-        else if (experts <= 2560) {
-            if (experts_per_token <= 8) {
-                // ~20KB smem (2-row hist); static smem fits H200 default carveout.
-                return invoke(_Int<2560>, _Int<8>, _Int<80>, _Int<4>, _Int<0>);
-            }
-        }
-        return false;
-    };
-
-    auto success = dispatch();
-
-    TM_CHECK(success) << "unsupported moe config: expert_num=" << experts << ", top_k=" << experts_per_token
-                      << ", softmax=" << softmax << ", norm_topk=" << norm_topk;
+    launchMoeGate_V8(scales,
+                     masks,
+                     true,
+                     accum,
+                     logits,
+                     token_mask,
+                     log_tile,
+                     tiles,
+                     tokens,
+                     tokens_padded,
+                     experts,
+                     experts_per_token,
+                     softmax,
+                     norm_topk,
+                     routed_scale,
+                     st);
 
     launchMoeScan_V2(f2n,
                      f2E,

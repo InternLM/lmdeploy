@@ -479,6 +479,8 @@ void MoeFfnA2AImpl::Forward(MoeFfnLayer::ForwardParam& p)
     partition_ = GetInputPartition(p.input, p.local_token_num);
     TM_CHECK_LE(partition_.max_tokens_per_rank, max_token_per_rank_num_);
     input_ = p.input.slice(partition_.begin, partition_.size);
+    // slice token mask for current rank
+    const bool* token_mask = TM_CHECK_NOTNULL(p.token_mask) + partition_.begin;
     // deepep jit treat the max_tokens_per_rank parameter as template parameter, round it to the nearest power of two to
     // reduce the number of functions that need to be compiled.
     max_token_num_per_rank_ = std::min(CeilPowerOfTwo(partition_.max_tokens_per_rank), max_token_per_rank_num_);
@@ -529,16 +531,17 @@ void MoeFfnA2AImpl::Forward(MoeFfnLayer::ForwardParam& p)
             softmax = false;
         }
 
-        TM_SCOPE_CALL(invokeMoeA2AGate(topk_weights_.data(),
-                                       topk_indices_.data(),
-                                       logits.data_or((float*)nullptr),
-                                       token_num,
-                                       expert_num,
-                                       experts_per_token,
-                                       softmax,
-                                       moe.norm_topk_prob,
-                                       moe.routed_scale,
-                                       st));
+        TM_SCOPE_CALL(invokeMoeGateTopK(topk_weights_.data(),
+                                        topk_indices_.data(),
+                                        logits.data_or((float*)nullptr),
+                                        token_mask,
+                                        token_num,
+                                        expert_num,
+                                        experts_per_token,
+                                        softmax,
+                                        moe.norm_topk_prob,
+                                        moe.routed_scale,
+                                        st));
     }
 
     Tensor topk_indices = {topk_indices_, {token_num, experts_per_token}};

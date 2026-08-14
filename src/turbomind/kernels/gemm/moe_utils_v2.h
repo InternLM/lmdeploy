@@ -14,6 +14,27 @@ namespace turbomind {
 constexpr int kMoeGateMaxTiles = 16;
 constexpr int kMoeGateVecSize  = 4;
 
+// Select top-k experts and write token-major outputs for communication backends.
+//
+// logits:        [tokens, experts]
+// token_mask:    [tokens]; invalid tokens route nowhere
+// topk_weights:  [tokens, exp_per_tok]
+// topk_indices:  [tokens, exp_per_tok], global expert ids
+//
+// The selected experts are written in ascending expert-id order. Each weight
+// remains paired with the index at the same position.
+void invokeMoeGateTopK(float*       topk_weights,
+                       int*         topk_indices,
+                       const float* logits,
+                       const bool*  token_mask,
+                       int          tokens,
+                       int          experts,
+                       int          exp_per_tok,
+                       bool         softmax,
+                       bool         norm_topk,
+                       float        routed_scale,
+                       cudaStream_t st);
+
 void invokeMoeGate_V2(int*         f2n,
                       int*         f2E,
                       int*         en2f,

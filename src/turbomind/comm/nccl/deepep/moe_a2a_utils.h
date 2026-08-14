@@ -21,25 +21,6 @@ MoeA2AInputPartition GetMoeA2AInputPartition(const std::vector<int>& local_token
 
 int CeilPowerOfTwo(int x);
 
-// Select experts for DeepEP dispatch.
-//
-// logits:         [tokens, experts], float32
-// topk_weights:   [tokens, experts_per_token], float32
-// topk_indices:   [tokens, experts_per_token], int32 global expert ids
-//
-// The output order within a token is unspecified. Each weight remains paired
-// with the index at the same position.
-void invokeMoeA2AGate(float*       topk_weights,
-                      int*         topk_indices,
-                      const float* logits,
-                      int          tokens,
-                      int          experts,
-                      int          experts_per_token,
-                      bool         softmax,
-                      bool         norm_topk,
-                      float        routed_scale,
-                      cudaStream_t stream);
-
 // noaux_tc routing
 //
 // scores = sigmoid(logits) or softmax(logits)
