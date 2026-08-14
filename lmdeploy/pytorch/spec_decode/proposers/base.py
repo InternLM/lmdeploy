@@ -101,7 +101,7 @@ class BaseSpecProposer:
         raise NotImplementedError()
 
     @record_function('draft_model_forward')
-    def _forward(self, model_inputs: ModelInputs, cache_engine: CacheEngine = None):
+    def _forward(self, model_inputs: ModelInputs, cache_engine: CacheEngine):
         """Forward."""
         return draft_model_forward(
             self.model,

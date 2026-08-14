@@ -202,6 +202,7 @@ class SpecModelAgent(BaseSpecModelAgent):
     def set_model_config(self, model_config: ModelConfig):
         """Set model config."""
         self.model_config = model_config
+        self.specdecode_config.model_config = model_config
         if model_config is not None:
             # make dummy meta
             self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)

@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from lmdeploy.pytorch import envs as _envs
+
 from .deepseek_v2 import DeepseekV2ModelConfigBuilder
 
 
@@ -8,11 +10,11 @@ def _check_env_v32(device: str = 'cuda'):
     if device != 'cuda':
         return
 
-    # check cuda
-    try:
-        import fast_hadamard_transform  # noqa: F401
-    except ImportError:
-        raise ImportError('Deepseek V3.2 requires <fast_hadamard_transform>.')
+    if _envs.disable_dsa_indexer_fusion:
+        try:
+            import fast_hadamard_transform  # noqa: F401
+        except ImportError:
+            raise ImportError('Deepseek V3.2 requires <fast_hadamard_transform> when indexer fusion is disabled.')
 
     try:
         import flash_mla  # noqa: F401
