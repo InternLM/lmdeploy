@@ -674,6 +674,68 @@ def test_chunk_conv_states_matches_gather(conv_kernel_size):
 
 
 @pytest.mark.skipif(not _cuda_available(), reason='CUDA is not available')
+@pytest.mark.parametrize('boundary_chunk', [0, 1, 2])
+@pytest.mark.parametrize('conv_kernel_size', [4, 7])
+def test_chunk_conv_states_restore_and_run_suffix_reaches_full(boundary_chunk, conv_kernel_size):
+    """Conv half of the Marconi restore invariant.
+
+    ``chunk_conv_states[:, c]`` stores the ``W`` raw conv-input tokens at
+    ``[boundary_c - W, boundary_c - 1]``. Seeding a causal conv from its last
+    ``W - 1`` tokens (the conv state) and running the suffix ``x[boundary:]``
+    must reproduce the full conv output over that suffix. This is the conv
+    counterpart to ``test_chunk_states_restore_and_run_suffix_reaches_final_state``
+    and, unlike ``test_chunk_conv_states_matches_gather``, uses an independent
+    ``F.conv1d`` reference (not a gather derived from ``chunk_indices``), so a
+    chunk-index offset cannot be masked by both sides agreeing.
+    """
+    torch.manual_seed(11)
+    W = conv_kernel_size
+    length, dim = 200, 48
+    # channel-last x, matching CausalConv1dFunc usage
+    x = torch.randn(1, length, dim, device='cuda', dtype=torch.bfloat16)
+    conv_states = chunk_conv_states(x, W)
+
+    num_chunks = conv_states.shape[1]
+    c = min(boundary_chunk, num_chunks - 1)
+    boundary = c * 64
+    suffix_len = length - boundary
+    if suffix_len <= 0:
+        pytest.skip('suffix is empty for this boundary')
+
+    # Full conv reference (channel-first F.conv1d), independent of chunk_indices.
+    # Seed with W-1 zeros so the full output starts at position 0 (matching the
+    # suffix run, which always seeds from a boundary state); a plain conv1d would
+    # drop the first W-1 positions and not align with the suffix slice.
+    weight = torch.randn(dim, W, device='cuda', dtype=torch.bfloat16)
+    bias = torch.randn(dim, device='cuda', dtype=torch.bfloat16)
+    x_cf = x.transpose(1, 2)  # [1, dim, length]
+    zero_seed = torch.zeros(1, dim, W - 1, device='cuda', dtype=torch.bfloat16)
+    out_full = torch.nn.functional.conv1d(
+        torch.cat([zero_seed, x_cf], dim=-1).float(),
+        weight.float().unsqueeze(1), bias.float(), padding=0, groups=dim)
+    out_full = out_full[..., :length].to(torch.bfloat16)  # [1, dim, length]
+
+    # Suffix conv: prepend the W-1 saved tokens as the initial state.
+    # conv_states[0, c] is [dim, W]; columns [1:W] are the W-1 most-recent
+    # tokens immediately preceding the boundary -> the conv initial state.
+    init = conv_states[0, c, :, 1:W].clone()  # [dim, W-1]
+    x_suffix = x_cf[:, :, boundary:]           # [1, dim, suffix_len]
+    x_seed = torch.cat([init.unsqueeze(0), x_suffix], dim=-1)  # [1, dim, W-1 + suffix]
+    out_suffix = torch.nn.functional.conv1d(
+        x_seed.float(), weight.float().unsqueeze(1), bias.float(), padding=0, groups=dim)
+    out_suffix = out_suffix[..., :suffix_len].to(torch.bfloat16)  # [1, dim, suffix_len]
+
+    torch.testing.assert_close(out_suffix, out_full[:, :, boundary:boundary + suffix_len],
+                               atol=0, rtol=0)
+
+    # Boundary 0 of a fresh sequence: all W positions precede bos=0, so the
+    # saved state is all zero and seeding from it is a no-op (== no init).
+    if c == 0:
+        torch.testing.assert_close(conv_states[0, 0], torch.zeros_like(conv_states[0, 0]),
+                                   atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not _cuda_available(), reason='CUDA is not available')
 def test_chunk_conv_states_dense_and_contiguous_view():
     """Dense (no cu_seqlens) path and a non-contiguous view input both work."""
     torch.manual_seed(8)
