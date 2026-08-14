@@ -19,7 +19,7 @@ def _build_draft_dist_ctx(dist_ctx: DistContext, specdecode_config: SpecDecodeCo
         return None
 
     draft_dist_config = specdecode_config.dist_config
-    if draft_dist_config == dist_ctx.dist_config:
+    if specdecode_config.method in ('qwen3_5_mtp', 'hy3_mtp') or draft_dist_config == dist_ctx.dist_config:
         return dist_ctx
 
     return DistContext.build(rank=dist_ctx.rank, dist_config=draft_dist_config)

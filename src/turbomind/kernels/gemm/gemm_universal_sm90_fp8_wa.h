@@ -425,6 +425,7 @@ struct GemmUniversalSm90_Fp8Wa {
                     int       m_own[kSlots];
                     int       kk_own[kSlots];
                     bool      pred_row[kSlots];
+                    bool      in_rng_slot[kSlots];
                     const Tu* src_u_base;
                     int       m_u;
                     bool      pred_u;
@@ -442,6 +443,7 @@ struct GemmUniversalSm90_Fp8Wa {
                         m_own[t]          = m;
                         kk_own[t]         = kk;
                         pred_row[t]       = row_ok;
+                        in_rng_slot[t]    = in_vec;
                         src_data_vec_[t]  = act_gmem + (int64_t)token * ldA + kk;
                     }
 
@@ -482,6 +484,13 @@ struct GemmUniversalSm90_Fp8Wa {
 
                             PRAGMA_UNROLL
                             for (int t = 0; t < kSlots; ++t) {
+                                // TILE_M=8: nvec=64 < WARPGROUP_SIZE → idle producers must skip
+                                // ZFILL (pred=false still zeros dst — see sm90_bf16).
+                                if constexpr ((nvec % WARPGROUP_SIZE) != 0) {
+                                    if (!in_rng_slot[t]) {
+                                        continue;
+                                    }
+                                }
                                 const bool pred = pred_row[t] && (coord_k + kk_own[t]) < K;
                                 auto*      dst  = &sB(m_own[t], kk_own[t]);
                                 cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<uint4>::copy(
@@ -899,7 +908,7 @@ struct GemmUniversalSm90_Fp8Wa {
                                 const int batch0   = wg_idx_m * WG_TILE_M;
                                 Tw*       W        = reinterpret_cast<Tw*>(param_W.ptr);
                                 const int ldW      = param_W.stride;
-                                int       row_end  = 0x7fffffff;
+                                int       row_end  = sched.gemm_shape().x;
                                 int       row_base = tile->offset_m + batch0;
                                 if constexpr (is_grouped_gemm) {
                                     row_base += tile->m0;
@@ -984,7 +993,7 @@ struct GemmUniversalSm90_Fp8Wa {
                                 const int n_group = tile->offset_n / TILE_N;
                                 Tw*       W       = reinterpret_cast<Tw*>(param_W.ptr);
                                 const int ldW     = param_W.stride;
-                                int       row_end = 0x7fffffff;
+                                int       row_end = sched.gemm_shape().x;
                                 int       row_g   = tile->offset_m + row;
                                 if constexpr (is_grouped_gemm) {
                                     row_g += tile->m0;

@@ -20,6 +20,7 @@ def test_responses_non_stream_response_shape():
         text='Hello world!',
         input_tokens=8,
         output_tokens=2,
+        reasoning_tokens=0,
         finish_reason='stop',
     ).model_dump(exclude_none=True)
 
@@ -43,6 +44,7 @@ def test_responses_length_finish_reason_sets_incomplete_details():
         text='partial',
         input_tokens=8,
         output_tokens=2,
+        reasoning_tokens=0,
         finish_reason='length',
     ).model_dump(exclude_none=True)
 
@@ -61,6 +63,7 @@ def test_responses_error_finish_reasons_do_not_complete_successfully():
         text='',
         input_tokens=8,
         output_tokens=0,
+        reasoning_tokens=0,
         finish_reason='error',
     ).model_dump(exclude_none=True)
     abort_response = make_response(
@@ -70,6 +73,7 @@ def test_responses_error_finish_reasons_do_not_complete_successfully():
         text='',
         input_tokens=8,
         output_tokens=0,
+        reasoning_tokens=0,
         finish_reason='abort',
     ).model_dump(exclude_none=True)
 
@@ -99,6 +103,7 @@ def test_responses_tool_call_response_shape():
         ],
         input_tokens=8,
         output_tokens=2,
+        reasoning_tokens=0,
         finish_reason='tool_calls',
     ).model_dump(exclude_none=True)
 
@@ -137,6 +142,7 @@ def test_responses_parallel_tool_calls_false_keeps_first_tool_call():
         ],
         input_tokens=8,
         output_tokens=2,
+        reasoning_tokens=0,
         finish_reason='tool_calls',
     ).model_dump(exclude_none=True)
 
@@ -169,6 +175,7 @@ def test_responses_parallel_tool_calls_none_keeps_all_tool_calls():
         ],
         input_tokens=8,
         output_tokens=2,
+        reasoning_tokens=0,
         finish_reason='tool_calls',
     )
     response = response_model.model_dump(exclude_none=True)
@@ -195,6 +202,7 @@ def test_responses_tool_call_response_accepts_no_visible_text():
         ],
         input_tokens=8,
         output_tokens=2,
+        reasoning_tokens=0,
         finish_reason='tool_calls',
     ).model_dump(exclude_none=True)
 

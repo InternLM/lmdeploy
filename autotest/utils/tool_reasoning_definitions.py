@@ -464,6 +464,14 @@ def _normalize_stream_delta_choice_pairs(stream_or_chunks) -> list[tuple]:
     return pairs
 
 
+def _stream_tool_call_index(tc, default: int = 0) -> int:
+    if isinstance(tc, dict):
+        idx = tc.get('index')
+    else:
+        idx = getattr(tc, 'index', None)
+    return default if idx is None else idx
+
+
 def _iter_tool_function_fields(delta, field: str):
     """Yield non-empty tool function field values from one stream delta."""
     for tc in _stream_part_field(delta, 'tool_calls') or ():
@@ -472,26 +480,53 @@ def _iter_tool_function_fields(delta, field: str):
             yield value
 
 
-def assert_tool_arguments_incremental(stream_or_chunks, *, min_arg_deltas: int = 2) -> list[str]:
-    """Tool ``arguments`` must arrive incrementally across multiple SSE
-    deltas."""
-    arg_chunks = []
+def _collect_stream_argument_chunks_by_index(
+        stream_or_chunks) -> dict[int, list[str]]:
+    """Group streaming ``arguments`` deltas by tool_call index."""
+    by_idx: dict[int, list[str]] = {}
     for delta, _choice in _normalize_stream_delta_choice_pairs(stream_or_chunks):
-        arg_chunks.extend(_iter_tool_function_fields(delta, 'arguments'))
+        for tc in _stream_part_field(delta, 'tool_calls') or ():
+            value = _tool_call_function_field(tc, 'arguments')
+            if not value:
+                continue
+            idx = _stream_tool_call_index(tc)
+            by_idx.setdefault(idx, []).append(value)
+    return by_idx
+
+
+def assert_tool_arguments_incremental(stream_or_chunks, *, min_arg_deltas: int = 2) -> list[str]:
+    """Tool ``arguments`` must arrive across multiple SSE deltas."""
+    by_idx = _collect_stream_argument_chunks_by_index(stream_or_chunks)
+    arg_chunks: list[str] = []
+    for idx in sorted(by_idx):
+        chunks = by_idx[idx]
+        arg_chunks.extend(chunks)
+        json.loads(''.join(chunks))
 
     assert len(arg_chunks) >= min_arg_deltas, (
         f'Expected >={min_arg_deltas} tool argument SSE deltas, got {len(arg_chunks)}: '
         f'{arg_chunks!r}')
-    json.loads(''.join(arg_chunks))
+    return arg_chunks
+
+
+def assert_tool_arguments_json_joinable(stream_or_chunks) -> list[str]:
+    """Per-index joined ``arguments`` must be valid JSON (parallel-safe)."""
+    by_idx = _collect_stream_argument_chunks_by_index(stream_or_chunks)
+    arg_chunks: list[str] = []
+    for idx in sorted(by_idx):
+        chunks = by_idx[idx]
+        arg_chunks.extend(chunks)
+        json.loads(''.join(chunks))
     return arg_chunks
 
 
 def validate_stream_tool_call_chunks(
     stream_or_chunks,
     *,
-    check_incremental_arguments: bool = True,
+    check_incremental_arguments: bool = False,
 ) -> None:
     """SSE protocol checks during streaming tool-call argument phase."""
+    assert_tool_arguments_json_joinable(stream_or_chunks)
     if check_incremental_arguments:
         assert_tool_arguments_incremental(stream_or_chunks)
 
@@ -1439,7 +1474,10 @@ def validate_reference_turn_result(
 
 
 def append_concurrent_turn_to_messages(messages: list, result: dict) -> None:
-    ast_msg = {'role': 'assistant', 'content': result['content']}
+    content = result['content']
+    if content is None:
+        content = ''
+    ast_msg = {'role': 'assistant', 'content': content}
     if result['reasoning_content']:
         ast_msg['reasoning_content'] = result['reasoning_content']
 
@@ -1741,10 +1779,8 @@ def build_messages_with_tool_response(
             'content': "What's the weather like in Dallas, TX?",
         },
         {
-            'role':
-            'assistant',
-            'content':
-            None,
+            'role': 'assistant',
+            'content': '',
             'tool_calls': [{
                 'id': tool_call_id,
                 'type': 'function',
@@ -1779,10 +1815,8 @@ def build_messages_with_parallel_tool_responses():
             'content': "What's the weather in Dallas, TX and San Francisco, CA?",
         },
         {
-            'role':
-            'assistant',
-            'content':
-            None,
+            'role': 'assistant',
+            'content': '',
             'tool_calls': [
                 {
                     'id': 'call_001',

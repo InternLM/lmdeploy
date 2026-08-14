@@ -7,7 +7,7 @@ nodes.
 
 Prefix caching is an end-to-end protocol rather than an isolated trie lookup.
 The scheduler performs tentative matching and resource admission, the input
-maker describes state copies, the model agent queues those copies on the
+maker describes checkpoint copies, the model agent queues those copies on the
 forward stream, and the engine loop publishes or unpins checkpoints at safe
 asynchronous boundaries.
 
@@ -31,18 +31,18 @@ writes tentative state directly to `SchedulerSequence`.
 
 ## Ownership Map
 
-| Component                  | Owns                                                                                                         | Does not own                                |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------- |
-| `BlockTrie`                | Adapter roots, block identity, match/application policy, routed-expert replay, prefix-cache statistics       | Scheduler admission, concrete cache tensors |
-| `Node`                     | One trie edge, one trie-owned KV block reference, parent/children topology, optional state-checkpoint record | State-slot allocation policy                |
-| `KVBlockLifecycle`         | KV reference transactions, leaf-candidate bookkeeping, KV leaf eviction                                      | Token or multimodal identity                |
-| `StateCheckpointIndex`     | Sparse checkpoint candidates and exact host verification                                                     | State slots or trie topology                |
-| `StateCheckpointLifecycle` | State-slot reservation, publication, pins, state-only eviction, stale cleanup                                | KV references or scheduler policy           |
-| `StateManager`             | Runtime and checkpoint state slots                                                                           | Prefix identity                             |
-| `Scheduler`                | Tentative-match admission, rollback, and sequence resource allocation                                        | Exact matching and device copies            |
-| `InputsMakerAsync`         | Compact host source/destination copy plans for one forward                                                   | Concrete state-cache storage                |
-| `ModelAgent`               | Stream-ordered restore and save copies around model forward                                                  | Checkpoint publication and eviction         |
-| `EngineLoop`               | Publication and pin release at asynchronous forward boundaries                                               | Prefix identity                             |
+| Component                  | Owns                                                                                                         | Does not own                                  |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| `BlockTrie`                | Adapter roots, block identity, match/application policy, routed-expert replay, prefix-cache statistics       | Scheduler admission, concrete cache tensors   |
+| `Node`                     | One trie edge, one trie-owned KV block reference, parent/children topology, optional cache-checkpoint record | Checkpoint allocation policy                  |
+| `KVBlockLifecycle`         | KV reference transactions, leaf-candidate bookkeeping, KV leaf eviction                                      | Token or multimodal identity                  |
+| `StateCheckpointIndex`     | Sparse checkpoint candidates and exact host verification                                                     | State slots or trie topology                  |
+| `StateCheckpointLifecycle` | State slot and frozen-tail reservation, publication, pins, release, checkpoint eviction, stale cleanup       | Normal trie KV references or scheduler policy |
+| `StateManager`             | Runtime and checkpoint state slots                                                                           | Prefix identity                               |
+| `Scheduler`                | Tentative-match admission, rollback, and sequence resource allocation                                        | Exact matching and device copies              |
+| `InputsMakerAsync`         | Compact host KV/state source-destination plans for one forward                                               | Concrete cache storage                        |
+| `ModelAgent`               | Stream-ordered restore and save copies around model forward                                                  | Checkpoint publication and eviction           |
+| `EngineLoop`               | Publication and pin release at asynchronous forward boundaries                                               | Prefix identity                               |
 
 `BlockTrie` is the composition root for the lower-level trie collaborators. The
 dependencies point downward: lower modules do not hold a `Scheduler` or general
@@ -223,6 +223,12 @@ the canonical logical KV path at publication. This makes lookup independent of
 later sequence mutation and avoids a Python ancestor walk on every hit, at the
 cost of metadata proportional to the saved prefix length.
 
+For `step = q * block_size + r`, the checkpoint stays on the full-block anchor
+at `q * block_size`. When `r > 0`, it owns one frozen logical KV block and
+indexes the exact tail token and multimodal identity from that final partial
+range. Matching attaches only the `q` canonical trie blocks; the frozen tail is
+copied into a request-owned private block before forward.
+
 ## SSM Checkpoint Lifecycle
 
 A node checkpoint has three ownership states. Its record always owns a state
@@ -270,7 +276,8 @@ forward output/event boundary
 
 Publication is transactional. It revalidates node attachment, slot ownership,
 save step, and producer identity before adding exact metadata to the sparse
-index. An abandoned or invalid reservation releases its state slot.
+index. An abandoned or invalid reservation releases both its state slot and
+optional frozen block.
 
 ### Restore path
 
@@ -318,8 +325,11 @@ Keep these rules:
 
 ## Eviction
 
-KV and state pressure are related but independently accounted:
+KV and state pressure share the checkpoint lifecycle but remain explicitly
+accounted:
 
+- `StateCheckpointLifecycle.evict_frozen_checkpoints()` releases published,
+  unpinned partial checkpoints before normal trie KV eviction.
 - `KVBlockLifecycle.evict()` removes attached leaf nodes whose KV reference
   count proves that no sequence still shares them. Removing a KV leaf also
   releases its unpinned state checkpoint.
@@ -342,6 +352,8 @@ state that may contain stale entries.
 - A hash match is never sufficient without exact identity verification.
 - SSM reuse requires both the canonical KV path and an exact published state
   checkpoint.
+- A partial checkpoint's frozen block and its consumer destination are distinct
+  from trie-owned blocks and remain private while forward writes them.
 - Trie nodes attach once, and eviction detaches leaves only; attached ancestor
   paths never change.
 - Pinned checkpoints, their frozen blocks, and shared trie KV nodes are not
@@ -356,18 +368,18 @@ state that may contain stale entries.
 
 ## Where to Make Changes
 
-| Change                                                  | Primary owner                                              |
-| ------------------------------------------------------- | ---------------------------------------------------------- |
-| Token, adapter, or multimodal identity                  | `trie.py`                                                  |
-| Monotonic trie attachment or leaf detachment            | `node.py`                                                  |
-| Sparse checkpoint keys or exact verification            | `checkpoint.py`                                            |
-| State reservation, publication, pins, or state eviction | `checkpoint_lifecycle.py`                                  |
-| KV references, leaf bookkeeping, or KV eviction         | `kv_lifecycle.py`                                          |
-| Admission order or tentative-match rollback             | `../scheduler.py`                                          |
-| Per-sequence prefix-cache protocol state                | `../../prefix_cache_state.py`                              |
-| Host restore/save copy plans                            | `../../engine/inputs_maker.py` and `../../model_inputs.py` |
-| Stream ordering around model execution                  | `../../engine/model_agent/agent.py`                        |
-| Publication and unpin timing                            | `../../engine/engine_loop.py`                              |
+| Change                                                 | Primary owner                                                     |
+| ------------------------------------------------------ | ----------------------------------------------------------------- |
+| Token, adapter, or multimodal identity                 | `trie.py`                                                         |
+| Monotonic trie attachment or leaf detachment           | `node.py`                                                         |
+| Sparse checkpoint keys or exact verification           | `checkpoint.py`                                                   |
+| Checkpoint reservation, publication, pins, or eviction | `checkpoint_lifecycle.py`                                         |
+| KV references, leaf bookkeeping, or KV eviction        | `kv_lifecycle.py`                                                 |
+| Admission order or tentative-match rollback            | `../scheduler.py`                                                 |
+| Per-sequence prefix-cache protocol state               | `../../prefix_cache_state.py`                                     |
+| Host restore/save copy plans                           | `../../engine/inputs_maker.py` and `../../engine/cache_inputs.py` |
+| Stream ordering around model execution                 | `../../engine/model_agent/agent.py`                               |
+| Publication and unpin timing                           | `../../engine/engine_loop.py`                                     |
 
 Avoid moving behavior merely to shorten a file. Split only when one component
 can own a mutable resource and its invariants without a reverse dependency on

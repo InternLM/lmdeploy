@@ -260,11 +260,12 @@ def test_spec_agent_reset_runtime_state_discards_chunk_carry():
         ], id='dummy-forward'),
     ],
 )
-def test_model_forward_orders_checkpoint_copies(monkeypatch, is_dummy, expected_events):
+def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dummy, expected_events):
     from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
     from lmdeploy.pytorch.engine.model_agent import agent as agent_module
 
     events = []
+    copy_calls = []
     restore_plan = torch.tensor([[1], [2]])
     save_plan = torch.tensor([[3], [4]])
 
@@ -301,6 +302,7 @@ def test_model_forward_orders_checkpoint_copies(monkeypatch, is_dummy, expected_
         block_caches = {}
 
         def copy_logical_blocks(self, plan):
+            copy_calls.append(('kv', plan))
             events.append('kv_restore' if plan is restore_plan else 'kv_save')
 
     class _StateCacheEngine:
@@ -308,9 +310,14 @@ def test_model_forward_orders_checkpoint_copies(monkeypatch, is_dummy, expected_
         named_state_caches = {}
 
         def copy_slots(self, src, dst):
+            copy_calls.append(('state', src, dst))
             events.append('state_restore' if src == (5, ) else 'state_save')
 
-    inputs = SimpleNamespace(is_dummy=is_dummy, seq_length=torch.tensor([1]))
+    inputs = SimpleNamespace(
+        is_dummy=is_dummy,
+        state_offsets=None,
+        seq_length=torch.tensor([1]),
+    )
     cache_inputs = CacheCheckpointInputs(
         kv_restore_plan=restore_plan,
         kv_save_plan=save_plan,
@@ -329,6 +336,50 @@ def test_model_forward_orders_checkpoint_copies(monkeypatch, is_dummy, expected_
                                cache_inputs=cache_inputs)
 
     assert events == expected_events
+    if is_dummy:
+        assert copy_calls == []
+    else:
+        assert copy_calls[0][0] == 'kv'
+        assert copy_calls[0][1] is restore_plan
+        assert copy_calls[1] == ('state', (5, ), (6, ))
+        assert copy_calls[2][0] == 'kv'
+        assert copy_calls[2][1] is save_plan
+        assert copy_calls[3] == ('state', (7, ), (8, ))
+
+
+def test_inputs_preprocess_transfers_cache_inputs_and_keeps_host_ref(monkeypatch, event_loop):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    calls = []
+    device_cache_inputs = object()
+
+    class _HostCacheInputs:
+
+        def to_device(self, device, non_blocking=False):
+            calls.append((device, non_blocking))
+            return device_cache_inputs
+
+    class _Event:
+
+        def record(self):
+            calls.append('record')
+
+    model_agent = _make_agent_with_queues()
+    model_agent.out_stream = object()
+    host_cache_inputs = _HostCacheInputs()
+    monkeypatch.setattr(agent_module.torch.cuda, 'stream', lambda stream: nullcontext())
+    monkeypatch.setattr(agent_module.torch.cuda, 'Event', _Event)
+
+    task = event_loop.create_task(model_agent._async_loop_inputs_preprocess())
+    model_agent._pre_in_que.put_nowait({'cache_inputs': host_cache_inputs})
+    forward_inputs = event_loop.run_until_complete(asyncio.wait_for(model_agent._in_que.get(), timeout=1))
+    task.cancel()
+    event_loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
+
+    transfer = forward_inputs.pop(agent_module._H2D_TRANSFER_KEY)
+    assert calls == [('cuda', True), 'record']
+    assert forward_inputs['cache_inputs'] is device_cache_inputs
+    assert transfer.refs['cache_inputs'] is host_cache_inputs
 
 
 def test_record_forward_input_stream_uses_payload_protocol():
@@ -504,6 +555,36 @@ def test_record_forward_input_stream_defers_origin_stream_reuse():
     forward_stream.synchronize()
     h2d_stream.synchronize()
     assert torch.all(observed == 7)
+
+
+def test_async_model_forward_preserves_cache_inputs_through_forward_impl():
+    from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    model_inputs = SimpleNamespace()
+    cache_inputs = CacheCheckpointInputs(kv_restore_plan=torch.tensor([[1], [2]]))
+    hidden_states = torch.ones(1, 1, 2)
+    seen = []
+
+    class _SpecAgent:
+
+        def update_main_model_outputs(self, output, inputs):
+            assert inputs is model_inputs
+            return output['hidden_states'], output
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.memdecode_agent = None
+    agent.spec_agent = _SpecAgent()
+    agent._forward_impl = lambda inputs, cache_inputs=None: (
+        seen.append((inputs, cache_inputs)) or {
+            'hidden_states': hidden_states
+        })
+    agent.get_logits = lambda hidden: hidden
+
+    output = asyncio.run(agent._async_model_forward(model_inputs, return_logits=True, cache_inputs=cache_inputs))
+
+    assert seen == [(model_inputs, cache_inputs)]
+    assert output['logits'] is hidden_states
 
 
 class TestDrainQueues:

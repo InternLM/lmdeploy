@@ -492,6 +492,7 @@ def test_single_forward_multimodal_long_context_stays_normal_prefill_for_spec_de
                                    is_first_chunk=False,
                                    is_last_chunk=False,
                                    is_chunk_multimodal=False)
+    cache_inputs = CacheCheckpointInputs(state_save_plan=((1, ), (2, )))
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
     maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
     maker.spec_decoding = True
@@ -504,11 +505,13 @@ def test_single_forward_multimodal_long_context_stays_normal_prefill_for_spec_de
     maker.to_evict_seqs = []
     maker._decode_count = 0
     maker.create_model_inputs = lambda seqs, is_prefill: model_inputs
+    maker._prepare_prefill_cache_inputs = lambda seqs, save_steps=None: cache_inputs
     maker.create_model_inputs_delta_valid_only = lambda: (None, [], [])
 
     forward_inputs = maker._make_forward_inputs(prefill=True)
 
     assert forward_inputs['inputs'] is model_inputs
+    assert forward_inputs['cache_inputs'] is cache_inputs
     assert not model_inputs.is_chunk
     assert not model_inputs.is_first_chunk
     assert not model_inputs.is_last_chunk
@@ -561,6 +564,7 @@ def test_prefix_resumed_long_context_suffix_starts_new_chunk_chain():
                                    is_first_chunk=False,
                                    is_last_chunk=False,
                                    is_chunk_multimodal=False)
+    cache_inputs = CacheCheckpointInputs(state_save_plan=((1, ), (2, )))
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
     maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
     maker.spec_decoding = False
@@ -580,15 +584,24 @@ def test_prefix_resumed_long_context_suffix_starts_new_chunk_chain():
         captured['multimodals'] = multimodals
         return model_inputs
 
+    def _prepare_prefill_cache_inputs(seqs, save_steps=None):
+        captured['cache_seqs'] = seqs
+        captured['save_steps'] = save_steps
+        return cache_inputs
+
     maker.create_model_inputs_long_context = _create_model_inputs_long_context
+    maker._prepare_prefill_cache_inputs = _prepare_prefill_cache_inputs
 
     forward_inputs = maker._make_forward_inputs(prefill=True)
 
     assert forward_inputs['inputs'] is model_inputs
+    assert forward_inputs['cache_inputs'] is cache_inputs
     assert captured == {
         'seq': seq,
         'chunk_size': 512,
         'multimodals': None,
+        'cache_seqs': [seq],
+        'save_steps': (1536, ),
     }
     assert model_inputs.is_first_chunk
     assert not model_inputs.is_last_chunk
@@ -641,9 +654,11 @@ def test_long_context_chunk_defers_to_decode_after_chunk_forward():
     long_seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
     decode_seq = _DummySeq(history_ids=0, token_ids=1, all_multimodals={}, input_multimodals={})
     delta = SimpleNamespace(is_decoding=True)
+    cache_inputs = CacheCheckpointInputs(state_save_plan=((1, ), (2, )))
     maker = _make_policy_maker(long_seq, decode_seq)
     maker._last_forward_kind = 'long_context_chunk'
     maker.create_model_inputs_delta = lambda: (delta, [decode_seq], [])
+    maker._make_decode_cache_inputs = lambda running, delta: cache_inputs
     maker.create_model_inputs_long_context = lambda *args, **kwargs: (_ for _ in ()).throw(
         AssertionError('long chunk should wait behind decode'))
 
@@ -651,6 +666,7 @@ def test_long_context_chunk_defers_to_decode_after_chunk_forward():
 
     assert forward_inputs['inputs'] is None
     assert forward_inputs['delta'] is delta
+    assert forward_inputs['cache_inputs'] is cache_inputs
     assert maker.to_evict_seqs == []
 
 
@@ -1243,6 +1259,7 @@ def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans():
 
 def test_prepare_prefill_cache_inputs_uses_explicit_chunk_end_step():
     seq = _state_seq(4, 11)
+    seq.num_history_ids = 128
     reserve_steps = []
 
     class _StateCheckpoints:
@@ -1308,6 +1325,15 @@ def test_prepare_prefill_cache_inputs_groups_partial_kv_restore_and_save_plans()
     assert np.array_equal(scheduler.calls[1], np.array([20, 80, 21, 81]))
 
 
+def test_prepare_prefill_cache_inputs_rejects_mismatched_save_steps():
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(is_ssm=True)
+    maker.cache_config = SimpleNamespace(enable_prefix_caching=True)
+
+    with pytest.raises(ValueError, match='one entry per prefill sequence'):
+        maker._prepare_prefill_cache_inputs([_state_seq(4, 11)], save_steps=())
+
+
 def test_make_decode_cache_inputs_compacts_valid_state_saves():
     valid_seqs = [_state_seq(4), _state_seq(5)]
 
@@ -1323,11 +1349,41 @@ def test_make_decode_cache_inputs_compacts_valid_state_saves():
                                          prefix_cache_decode_state_interval=16)
     maker.scheduler = SimpleNamespace(block_trie=SimpleNamespace(state_checkpoints=_StateCheckpoints()))
     maker.spec_decoding = False
+    delta = SimpleNamespace(max_q_seqlen=1)
 
-    cache_inputs = maker._make_decode_cache_inputs(valid_seqs, SimpleNamespace(max_q_seqlen=1))
+    cache_inputs = maker._make_decode_cache_inputs(valid_seqs, delta)
 
     assert cache_inputs.state_restore_plan is None
     assert cache_inputs.state_save_plan == ((4, ), (31, ))
+
+
+@pytest.mark.parametrize(
+    ('is_ssm', 'enabled', 'interval', 'spec_decoding', 'max_q_seqlen'),
+    [
+        (False, True, 16, False, 1),
+        (True, False, 16, False, 1),
+        (True, True, 0, False, 1),
+        (True, True, 16, True, 1),
+        (True, True, 16, False, 2),
+    ],
+)
+def test_make_decode_cache_inputs_respects_feature_gates(is_ssm, enabled, interval, spec_decoding,
+                                                         max_q_seqlen):
+
+    class _StateCheckpoints:
+
+        def reserve_decode_save(self, seq, interval):
+            raise AssertionError('disabled decode checkpoint path must not reserve state')
+
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(is_ssm=is_ssm)
+    maker.cache_config = SimpleNamespace(enable_prefix_caching=enabled,
+                                         prefix_cache_decode_state_interval=interval)
+    maker.scheduler = SimpleNamespace(block_trie=SimpleNamespace(state_checkpoints=_StateCheckpoints()))
+    maker.spec_decoding = spec_decoding
+    delta = SimpleNamespace(max_q_seqlen=max_q_seqlen)
+
+    assert maker._make_decode_cache_inputs([_state_seq(4)], delta) is None
 
 
 @pytest.mark.parametrize('max_q_seqlen', [1, 4])  # standard decode, then spec/MTP
