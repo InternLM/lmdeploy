@@ -282,14 +282,20 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         self._step_meta_group: int | None = None
         register_step_metadata_impl(self)
 
-    def get_block_cache_request(self, geometry: BlockCacheGeometry, head_dim: int) -> BlockCacheRequest:
+    def get_block_cache_requests(self, geometry: BlockCacheGeometry,
+                                 head_dim: int) -> tuple[BlockCacheRequest, ...]:
         """Request one DeepGEMM-compatible packed cache row per indexer."""
-        return BlockCacheRequest(
+        if geometry.logical_block_size != geometry.kernel_block_size:
+            raise ValueError(
+                'DSA indexer cache requires equal logical and kernel block sizes, '
+                f'got {geometry.logical_block_size} and {geometry.kernel_block_size}.')
+        request = BlockCacheRequest(
             name=DSA_INDEXER_K_CACHE_NAME,
             shape=dsa_packed_indexer_k_cache_shape(geometry.kernel_block_size, head_dim),
             dtype=torch.uint8,
             per_row_contiguous=True,
         )
+        return (request, )
 
     def get_step_metadata_provider(self):
         """Describe metadata required by the selected DSA indexer."""

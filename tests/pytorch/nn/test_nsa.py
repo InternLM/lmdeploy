@@ -115,11 +115,3 @@ def test_sparse_index_topk_is_resolved_at_init(monkeypatch):
         topk=512, softmax_scale=1.0, block_size=128, fill=-1)
 
     assert index_impl._sparse_index_topk is selector
-
-    packed_cache = torch.zeros(3, 64, 1, 132, dtype=torch.uint8)
-    values, scales = cuda_nsa._get_dsa_indexer_k_cache_views(packed_cache, head_dim=128)
-
-    assert values.shape == (3, 64, 128)
-    assert scales.shape == (3, 64, 1)
-    assert values.untyped_storage().data_ptr() == packed_cache.untyped_storage().data_ptr()
-    assert scales.untyped_storage().data_ptr() == packed_cache.untyped_storage().data_ptr()

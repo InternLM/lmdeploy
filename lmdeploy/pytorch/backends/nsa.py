@@ -85,8 +85,9 @@ def should_skip_nsa_indexer(model_metas) -> bool:
 class BaseNSAIndexFP8(ABC):
 
     @abstractmethod
-    def get_block_cache_request(self, geometry: BlockCacheGeometry, head_dim: int) -> BlockCacheRequest:
-        """Describe the selected implementation's indexer-K cache."""
+    def get_block_cache_requests(self, geometry: BlockCacheGeometry,
+                                 head_dim: int) -> tuple[BlockCacheRequest, ...]:
+        """Describe the selected implementation's indexer-K caches."""
         raise NotImplementedError('Not implemented.')
 
     @abstractmethod

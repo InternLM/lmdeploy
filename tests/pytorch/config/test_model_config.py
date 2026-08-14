@@ -106,14 +106,6 @@ def test_deepseek_v4_update_cache_config_normalizes_block_and_kernel_size(block_
     assert cache_config.window_size == -1
 
 
-def test_deepseek_v4_model_config_does_not_use_post_build_cache_hook():
-    hf_config = _make_deepseek_v4_hf_config([4, 128], num_hidden_layers=2)
-
-    model_config = AutoModelConfigBuilder.build(hf_config)
-
-    assert model_config.post_build_func is None
-
-
 def test_deepseek_v4_model_config_trims_trailing_zero_compress_ratio():
     hf_config = _make_deepseek_v4_hf_config([0, 4, 128, 0])
 

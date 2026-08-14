@@ -20,8 +20,8 @@ class IndexerTopKFP8(nn.Module):
 
     def get_block_cache_requests(self, context: BlockCacheRequestContext):
         """Return the selected implementation's cache requirements."""
-        request = self.index_impl.get_block_cache_request(context.geometry, self.head_dim)
-        return (request, )
+        return self.index_impl.get_block_cache_requests(context.geometry,
+                                                        self.head_dim)
 
     def bind_block_cache(self, binding: BlockCacheBinding):
         """Retain the logical cache binding assigned to this indexer."""
