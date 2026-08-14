@@ -60,6 +60,71 @@ def _get_sorted_idx(topk_idx: torch.Tensor, num_experts: int):
     return sorted_ids, exp_tok_cnt
 
 
+@pytest.mark.parametrize(('block_m', 'block_n', 'expected_block_n', 'transpose_mma'), [
+    (16, 64, 128, True),
+    (32, 128, 128, True),
+    (64, 128, 128, False),
+])
+def test_compact_blocked_fp8_gate_config(block_m, block_n, expected_block_n, transpose_mma):
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import _compact_blocked_fp8_moe_gate_config
+
+    compact_config = dict(block_m=block_m, block_n=block_n, num_warps=4, num_stages=3)
+    gate_config = _compact_blocked_fp8_moe_gate_config(compact_config)
+
+    assert gate_config['block_n'] == expected_block_n
+    assert gate_config.get('transpose_mma', False) is transpose_mma
+
+
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
+@torch.inference_mode()
+def test_fused_moe_blocked_fp8_compact_transposed_mma_matches_normal():
+    from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import (
+        fused_moe_blocked_fp8_compact_kernel_launcher,
+    )
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _get_sorted_idx_blocks
+
+    torch.manual_seed(0)
+    device = torch.device('cuda')
+    quant_dtype = torch.float8_e4m3fn
+    tokens, top_k = 13, 3
+    num_experts, in_features, out_features = 8, 256, 128
+    block_m, block_n = 16, 128
+
+    _, a, a_scale = _make_A(tokens, in_features, 128, quant_dtype, device)
+    _, b, b_scale, bias = _make_B(num_experts, in_features, out_features, 128, quant_dtype, device)
+    topk_ids = torch.randint(0, num_experts, (tokens, top_k), device=device)
+    sorted_idx, _, exp_end, block_end, block_expert_ids, block_offsets = _get_sorted_idx_blocks(
+        topk_ids, num_experts, num_experts, 0, block_m)
+    outputs = [
+        torch.full((tokens * top_k, out_features), torch.nan, dtype=torch.bfloat16, device=device)
+        for _ in range(2)
+    ]
+
+    common = dict(
+        A=a,
+        A_scale=a_scale,
+        B=b,
+        B_scale=b_scale,
+        sorted_idx=sorted_idx,
+        exp_end=exp_end,
+        block_end=block_end,
+        block_expert_ids=block_expert_ids,
+        block_offsets=block_offsets,
+        bias=bias,
+        top_k=top_k,
+        reindex_a=True,
+        reindex_c=False,
+        block_m=block_m,
+        block_n=block_n,
+    )
+    fused_moe_blocked_fp8_compact_kernel_launcher(C=outputs[0], transpose_mma=False, **common)
+    fused_moe_blocked_fp8_compact_kernel_launcher(C=outputs[1], transpose_mma=True, **common)
+
+    assert torch.isfinite(outputs[0]).all()
+    assert torch.isfinite(outputs[1]).all()
+    torch.testing.assert_close(outputs[1], outputs[0], rtol=0.03, atol=0.03)
+
+
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 class TestFusedMoEFP8KernelLauncher:
 

@@ -288,6 +288,7 @@ def fused_moe_blocked_fp8_compact_kernel(
     num_local_experts: tl.constexpr,
     reindex_a: tl.constexpr,
     reindex_c: tl.constexpr,
+    TRANSPOSE_MMA: tl.constexpr,
 ):
     """Compact routed-block MoE kernel for blocked FP8 weights."""
     block_id = tl.program_id(0)
@@ -315,14 +316,21 @@ def fused_moe_blocked_fp8_compact_kernel(
 
     local_exp = local_exp.to(tl.int64)
     exp_off = stride_be * local_exp
-    a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    if TRANSPOSE_MMA:
+        a_ptrs = A + (offs_k[:, None] * stride_ak + offs_am[None, :] * stride_am)
+        b_ptrs = B + exp_off + (offs_bn[:, None] * stride_bn + offs_k[None, :] * stride_bk)
+    else:
+        a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+        b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     offs_bsn = pid_n * BLOCK_SIZE_N // group_bn
     as_ptrs = A_scale + offs_am * stride_asm
     bs_ptrs = B_scale + stride_bse * local_exp + offs_bsn * stride_bsn
 
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    if TRANSPOSE_MMA:
+        accumulator = tl.zeros((BLOCK_SIZE_N, BLOCK_SIZE_M), dtype=tl.float32)
+    else:
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
     a_scale = tl.load(as_ptrs, mask=mask_sid, other=1.0)
     b_scale = tl.load(bs_ptrs)
@@ -344,11 +352,20 @@ def fused_moe_blocked_fp8_compact_kernel(
         a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid & (k_start < K), other=1.0)
         b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
 
-        a = tl.load(a_ptrs, mask=mask_sid[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K), other=0.0)
-        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
-
-        accumulator = tl.dot(a, b, acc=accumulator)
-        accumulator *= acc_ratio[:, None]
+        if TRANSPOSE_MMA:
+            a = tl.load(a_ptrs,
+                        mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K) & mask_sid[None, :],
+                        other=0.0)
+            b = tl.load(b_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+            accumulator = tl.dot(b, a, acc=accumulator)
+            accumulator *= acc_ratio[None, :]
+        else:
+            a = tl.load(a_ptrs,
+                        mask=mask_sid[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K),
+                        other=0.0)
+            b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+            accumulator = tl.dot(a, b, acc=accumulator)
+            accumulator *= acc_ratio[:, None]
 
         new_acc_scale = tl.maximum(a_scale * b_scale, 1e-12)
         acc_ratio = acc_scale / new_acc_scale
@@ -357,6 +374,8 @@ def fused_moe_blocked_fp8_compact_kernel(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
+    if TRANSPOSE_MMA:
+        accumulator = tl.trans(accumulator, (1, 0))
     c = accumulator * (acc_ratio * acc_scale)[:, None]
 
     if bias is not None:
@@ -394,6 +413,7 @@ def fused_moe_blocked_fp8_compact_kernel_launcher(
     block_n: int = 128,
     num_warps: int = 4,
     num_stages: int = 3,
+    transpose_mma: bool = False,
 ):
     """Launch compact routed-block MoE kernel for blocked FP8 weights."""
     E, N, K = B.shape
@@ -454,6 +474,7 @@ def fused_moe_blocked_fp8_compact_kernel_launcher(
         num_local_experts=E,
         reindex_a=reindex_a,
         reindex_c=reindex_c,
+        TRANSPOSE_MMA=transpose_mma,
         BLOCK_SIZE_M=block_m,
         BLOCK_SIZE_N=block_n,
         BLOCK_SIZE_K=group_bk,
@@ -514,6 +535,13 @@ def _compact_blocked_fp8_moe_both_config(num_routes: int, num_experts: int, gate
     else:
         block_m, block_n = 16, 64
     return dict(block_m=block_m, block_n=block_n, num_warps=4, num_stages=3)
+
+
+def _compact_blocked_fp8_moe_gate_config(compact_config: dict):
+    """Specialize a shared compact config for the gate/up projection."""
+    if compact_config['block_m'] > 32:
+        return compact_config
+    return dict(compact_config, block_n=128, transpose_mma=True)
 
 
 def _blocked_fp8_moe_cta_estimates(num_tokens: int, num_routes: int, num_experts: int, local_experts: int,
@@ -699,6 +727,7 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
     intermediate_cache1 = _make_intermediate((M, topk, N), dtype=out_dtype, device=device, zeros=not full_exp)
     # gate and up
     if use_compact_both:
+        gate_compact_moe_cfg = _compact_blocked_fp8_moe_gate_config(compact_moe_cfg)
         fused_moe_blocked_fp8_compact_kernel_launcher(
             input,
             input_scale,
@@ -715,7 +744,7 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
             expert_offset=expert_offset,
             reindex_a=True,
             reindex_c=False,
-            **compact_moe_cfg,
+            **gate_compact_moe_cfg,
         )
     else:
         fused_moe_blocked_fp8_kernel_launcher(
