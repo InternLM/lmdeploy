@@ -504,7 +504,7 @@ def _compact_blocked_fp8_moe_config(num_routes: int, num_experts: int):
 
 
 def _compact_blocked_fp8_moe_both_config(num_routes: int, num_experts: int, gate_out_features: int):
-    """Choose compact configs measured for both GLM-5.2 projections."""
+    """Choose one compact config for both MoE projections."""
     avg_routes = triton.cdiv(num_routes, num_experts)
     # Lower TP degrees have wider local projections and favor the larger M tile.
     if gate_out_features > 512 or avg_routes > 16:
@@ -597,29 +597,38 @@ def _should_use_compact_blocked_fp8_moe_down_by_shape(num_tokens: int, num_route
     return origin_ctas >= min_cta_ratio * compact_ctas
 
 
-def _should_use_compact_blocked_fp8_moe_both_by_shape(num_routes: int, num_experts: int, local_experts: int,
-                                                      gate_out_features: int,
-                                                      input_features: int):
-    """Use compact scheduling in measured broad-routing feature regions."""
+def _select_compact_blocked_fp8_moe_both_config(num_tokens: int, num_routes: int, num_experts: int,
+                                                local_experts: int, gate_out_features: int, input_features: int):
+    """Select compact scheduling in measured broad-routing feature regions."""
     avg_routes = triton.cdiv(num_routes, num_experts)
     if local_experts != num_experts or local_experts < 256:
-        return False
+        return None
     n_tiles = gate_out_features // 128
     k_blocks = input_features // 128
     if n_tiles >= 8:
         max_avg_routes = 64 if k_blocks <= 24 else 48
-        return 2 <= avg_routes <= max_avg_routes
-    if n_tiles != 4:
-        return False
-    if k_blocks <= 24:
-        return 40 <= avg_routes <= 64
-    if k_blocks == 32:
+        use_compact = 2 <= avg_routes <= max_avg_routes
+    elif n_tiles != 4:
+        use_compact = False
+    elif k_blocks <= 24:
+        # The origin gate/up schedule switches from BM64 to BM128 above 64
+        # tokens. A compact BM64 schedule avoids that cliff and remains robust
+        # when routes are concentrated on a small expert subset.
+        if num_tokens > 64 and 2 <= avg_routes <= 64:
+            return dict(block_m=64, block_n=128, num_warps=4, num_stages=3)
+        use_compact = False
+    elif k_blocks == 32:
         # At E=512 the origin gate wins in the middle density band, while
         # compact gate/up wins again once the routed activation exceeds cache.
-        return avg_routes <= 64 or 140 <= avg_routes <= 160
-    if k_blocks >= 48:
-        return 2 <= avg_routes <= 48
-    return False
+        use_compact = avg_routes <= 64 or 140 <= avg_routes <= 160
+    elif k_blocks >= 48:
+        use_compact = 2 <= avg_routes <= 48
+    else:
+        use_compact = False
+
+    if not use_compact:
+        return None
+    return _compact_blocked_fp8_moe_both_config(num_routes, num_experts, gate_out_features)
 
 
 def _should_use_compact_blocked_fp8_moe_down(input: torch.Tensor, input_scale: torch.Tensor, w1: torch.Tensor,
@@ -665,14 +674,15 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
     gate_moe_cfg, down_moe_cfg = _origin_blocked_fp8_moe_configs(M, topk_ids.numel(), num_experts, E)
     supports_compact = _supports_compact_blocked_fp8_moe(input, input_scale, w1, w1_scale, w2, w2_scale, topk_ids,
                                                          num_experts, expert_offset)
-    use_compact_both = supports_compact and _should_use_compact_blocked_fp8_moe_both_by_shape(
-        topk_ids.numel(), num_experts, E, w1.size(1), w1.size(2))
+    compact_moe_cfg = None
+    if supports_compact:
+        compact_moe_cfg = _select_compact_blocked_fp8_moe_both_config(M, topk_ids.numel(), num_experts, E,
+                                                                      w1.size(1), w1.size(2))
+    use_compact_both = compact_moe_cfg is not None
     use_compact_down = (not use_compact_both and supports_compact
                         and _should_use_compact_blocked_fp8_moe_down_by_shape(M, topk_ids.numel(), num_experts, E,
                                                                             w2.size(1)))
-    if use_compact_both:
-        compact_moe_cfg = _compact_blocked_fp8_moe_both_config(topk_ids.numel(), num_experts, w1.size(1))
-    elif use_compact_down:
+    if use_compact_down:
         compact_moe_cfg = _compact_blocked_fp8_moe_config(topk_ids.numel(), num_experts)
 
     if use_compact_both or use_compact_down:

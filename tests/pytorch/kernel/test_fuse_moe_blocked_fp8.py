@@ -450,7 +450,7 @@ def test_fused_moe_blocked_fp8_compact_down_matches_fused_moe_with_local_experts
 @torch.inference_mode()
 def test_fused_moe_blocked_fp8_compact_both_matches_fused_moe():
     from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import (
-        _should_use_compact_blocked_fp8_moe_both_by_shape,
+        _select_compact_blocked_fp8_moe_both_config,
         fused_moe_blocked_fp8,
     )
     from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import fused_moe
@@ -491,8 +491,8 @@ def test_fused_moe_blocked_fp8_compact_both_matches_fused_moe():
     routing_weights = torch.softmax(router_logits, dim=-1, dtype=torch.float32)
     topk_weights, topk_ids = torch.topk(routing_weights, top_k, dim=-1)
 
-    assert _should_use_compact_blocked_fp8_moe_both_by_shape(topk_ids.numel(), num_experts, num_experts, hidden_size,
-                                                             in_size)
+    assert _select_compact_blocked_fp8_moe_both_config(seq_len, topk_ids.numel(), num_experts, num_experts,
+                                                       hidden_size, in_size) is not None
 
     gt = fused_moe(hidden_states.to(dtype),
                    w1.to(dtype),

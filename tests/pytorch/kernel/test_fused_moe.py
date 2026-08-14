@@ -85,36 +85,41 @@ def test_compact_blocked_fp8_both_configs(num_routes, gate_out_features, block_m
         block_m=block_m, block_n=block_n, num_warps=4, num_stages=3)
 
 
-@pytest.mark.parametrize(('num_routes', 'num_experts', 'local_experts', 'gate_features', 'input_features',
-                          'expected'), [
-    (256, 256, 256, 512, 6144, False),
-    (256 * 2, 256, 256, 512, 6144, True),
-    (256 * 48, 256, 256, 512, 6144, True),
-    (256 * 64, 256, 256, 512, 6144, False),
-    (256 * 16, 256, 256, 512, 2048, False),
-    (256 * 40, 256, 256, 512, 2048, True),
-    (256 * 64, 256, 256, 512, 2048, True),
-    (256 * 64, 256, 256, 1024, 2048, True),
-    (256 * 16, 256, 256, 256, 2048, False),
-    (384 * 3, 384, 384, 1024, 2048, True),
-    (512, 512, 512, 512, 4096, True),
-    (512 * 60, 512, 512, 512, 4096, True),
-    (512 * 70, 512, 512, 512, 4096, False),
-    (512 * 120, 512, 512, 512, 4096, False),
-    (512 * 140, 512, 512, 512, 4096, True),
-    (512 * 160, 512, 512, 512, 4096, True),
-    (512 * 161, 512, 512, 512, 4096, False),
-    (128 * 3, 128, 128, 1024, 2048, False),
-    (256 * 3, 512, 256, 1024, 2048, False),
+@pytest.mark.parametrize(('num_tokens', 'num_routes', 'num_experts', 'local_experts', 'gate_features',
+                          'input_features', 'expected_tile'), [
+    (32, 256, 256, 256, 512, 6144, None),
+    (64, 256 * 2, 256, 256, 512, 6144, (16, 64)),
+    (1536, 256 * 48, 256, 256, 512, 6144, (64, 128)),
+    (2048, 256 * 64, 256, 256, 512, 6144, None),
+    (64, 256 * 2, 256, 256, 512, 2048, None),
+    (65, 65 * 8, 256, 256, 512, 2048, (64, 128)),
+    (1280, 256 * 40, 256, 256, 512, 2048, (64, 128)),
+    (2048, 256 * 64, 256, 256, 512, 2048, (64, 128)),
+    (2080, 256 * 65, 256, 256, 512, 2048, None),
+    (2048, 256 * 64, 256, 256, 1024, 2048, (64, 128)),
+    (512, 256 * 16, 256, 256, 256, 2048, None),
+    (144, 384 * 3, 384, 384, 1024, 2048, (64, 128)),
+    (64, 512, 512, 512, 512, 4096, (16, 64)),
+    (3840, 512 * 60, 512, 512, 512, 4096, (64, 128)),
+    (4480, 512 * 70, 512, 512, 512, 4096, None),
+    (7680, 512 * 120, 512, 512, 512, 4096, None),
+    (8960, 512 * 140, 512, 512, 512, 4096, (64, 128)),
+    (10240, 512 * 160, 512, 512, 512, 4096, (64, 128)),
+    (10304, 512 * 161, 512, 512, 512, 4096, None),
+    (48, 128 * 3, 128, 128, 1024, 2048, None),
+    (96, 256 * 3, 512, 256, 1024, 2048, None),
 ])
-def test_compact_blocked_fp8_both_policy_uses_launch_features(num_routes, num_experts, local_experts, gate_features,
-                                                             input_features, expected):
+def test_compact_blocked_fp8_both_strategy_uses_launch_features(num_tokens, num_routes, num_experts, local_experts,
+                                                               gate_features, input_features, expected_tile):
     from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import (
-        _should_use_compact_blocked_fp8_moe_both_by_shape,
+        _select_compact_blocked_fp8_moe_both_config,
     )
 
-    assert _should_use_compact_blocked_fp8_moe_both_by_shape(
-        num_routes, num_experts, local_experts, gate_features, input_features) is expected
+    expected = None
+    if expected_tile is not None:
+        expected = dict(block_m=expected_tile[0], block_n=expected_tile[1], num_warps=4, num_stages=3)
+    assert _select_compact_blocked_fp8_moe_both_config(
+        num_tokens, num_routes, num_experts, local_experts, gate_features, input_features) == expected
 
 
 @pytest.mark.parametrize(('num_tokens', 'num_routes', 'origin_ctas', 'compact_ctas'), [
