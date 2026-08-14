@@ -153,13 +153,21 @@ def _cached_tokens(usage: dict) -> int:
 
 
 def _aggregate_usage(usages: list[dict]) -> UsageInfo:
-    """Count the shared prompt once and sum completion tokens by choice."""
+    """Count shared prompt usage once and sum per-choice completion usage."""
     first_usage = usages[0]
+    completion_details = [
+        usage.get('completion_tokens_details') for usage in usages
+    ]
+    reasoning_tokens = None
+    if all(details is not None for details in completion_details):
+        reasoning_tokens = sum(
+            details['reasoning_tokens'] for details in completion_details)
     return UsageInfo.build(
         prompt_tokens=first_usage.get('prompt_tokens', 0),
         completion_tokens=sum(
             usage.get('completion_tokens') or 0 for usage in usages),
         cached_tokens=_cached_tokens(first_usage),
+        reasoning_tokens=reasoning_tokens,
     )
 
 
