@@ -17,6 +17,7 @@ class NSAIndexMeta:
     indexer_kv_seqlens: Tensor = None
     max_q_seqlen: int = None
     max_kv_seqlen: int = None
+    kv_flatten_size: int = None
     block_size: int = None
     is_decoding: bool = False
     score_meta: object = None
@@ -48,7 +49,9 @@ def build_nsa_index_meta(*, num_tokens: int, is_decoding: bool,
     is_decoding = is_decoding or num_tokens == batch_size
     max_q_seqlen = num_tokens // batch_size if is_decoding else num_tokens
     max_kv_seqlen = (block_size * num_gpu_blocks
-                     if is_decoding else sequence_metadata.kv_flatten_size)
+                     if is_decoding else sequence_metadata.max_kv_seqlen)
+    kv_flatten_size = (None if is_decoding else
+                       sequence_metadata.kv_flatten_size)
     return NSAIndexMeta(
         cu_seqlen_q=sequence_metadata.cu_seqlens_q,
         q_seqlens=q_seqlens,
@@ -60,6 +63,7 @@ def build_nsa_index_meta(*, num_tokens: int, is_decoding: bool,
             sequence_metadata.cu_seqlens_q),
         max_q_seqlen=max_q_seqlen,
         max_kv_seqlen=max_kv_seqlen,
+        kv_flatten_size=kv_flatten_size,
         block_size=block_size,
         is_decoding=is_decoding,
     )

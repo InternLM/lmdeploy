@@ -38,6 +38,7 @@ def test_indexer_meta_preserves_decoding_query_width(query_width):
     meta = _build_indexer_meta(q_seqlens, q_seqlens, is_decoding=True)
 
     assert meta.max_q_seqlen == query_width
+    assert meta.kv_flatten_size is None
     assert meta.max_kv_seqlen == 64 * 16
 
 
@@ -50,6 +51,8 @@ def test_indexer_meta_builds_causal_rows():
 
     expected = torch.tensor([4, 5, 6, 7, 8], dtype=torch.int32)
     assert torch.equal(meta.indexer_kv_seqlens, expected)
+    assert meta.kv_flatten_size == 13
+    assert meta.max_kv_seqlen == 8
 
 
 @pytest.mark.skipif(
@@ -85,6 +88,7 @@ def test_deepgemm_prefill_scores_match_triton():
     deepgemm_scores = impl._compute_scores(q, q_s, packed_cache, meta)
     meta.score_meta = None
     triton_scores = impl._compute_scores(q, q_s, packed_cache, meta)
+    assert deepgemm_scores.shape == triton_scores.shape == (5, 8)
     for row, row_len in enumerate(meta.indexer_kv_seqlens.tolist()):
         torch.testing.assert_close(
             deepgemm_scores[row, :row_len],

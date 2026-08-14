@@ -140,7 +140,7 @@ def _build_deep_gemm_score_meta(
         return _DeepGemmContiguousScoreMeta(
             k_starts=k_starts,
             k_ends=k_starts + meta.indexer_kv_seqlens,
-            max_kv_seqlen=meta.block_offset.size(1) * meta.block_size,
+            max_kv_seqlen=meta.max_kv_seqlen,
         )
 
     # DeepGEMM expects context lengths in [batch, next_n] layout.
@@ -305,7 +305,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                 meta.cu_seqlen_k,
                 meta.k_seqlens,
                 meta.block_offset,
-                out_size=meta.max_kv_seqlen,
+                out_size=meta.kv_flatten_size,
             )
             return _get_deep_gemm().fp8_fp4_mqa_logits(
                 q=(q, None),
