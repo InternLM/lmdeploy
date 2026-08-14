@@ -255,6 +255,7 @@ void invokeMoeA2AGate(float*       topk_weights,
                                              softmax,
                                              norm_topk,
                                              routed_scale);
+        TM_CUDA_CHECK(cudaGetLastError());
         return true;
     };
 
@@ -286,7 +287,6 @@ void invokeMoeA2AGate(float*       topk_weights,
     }
 
     TM_CHECK(success) << "unsupported A2A gate config: expert_num=" << experts << ", top_k=" << experts_per_token;
-    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int expert_num, int top_k, int items_per_thread, int block_dim, int access_size>
@@ -485,6 +485,7 @@ void invokeMoeA2AGate_NoAuxTC(float*       topk_weights,
         MoeA2AGateNoAuxTCKernel<expert_num.value, top_k.value, items_per_thread.value, threads, access_size.value>
             <<<blocks, threads, 0, stream>>>(
                 topk_weights, topk_indices, logits, correction_bias, tokens, norm_topk, routed_scale, use_sigmoid);
+        TM_CUDA_CHECK(cudaGetLastError());
         return true;
     };
 
@@ -497,7 +498,6 @@ void invokeMoeA2AGate_NoAuxTC(float*       topk_weights,
     }
 
     TM_CHECK(success) << "unsupported A2A gate config: expert_num=" << experts << ", top_k=" << experts_per_token;
-    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 __global__ void MoeA2AMappingKernel(int*       f2n,
@@ -660,10 +660,10 @@ void invokeMoeA2ASharedCombine(core::Tensor&       output,
         constexpr int block_dim = 256;
         MoeA2ASharedCombineKernel<T, vec_size><<<tokens, block_dim, 0, stream>>>(
             output.data<T>(), routed.data<T>(), shared_scales, hidden_dim, shared_scale);
+        TM_CUDA_CHECK(cudaGetLastError());
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(output.dtype(), invoke);
-    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 }  // namespace turbomind

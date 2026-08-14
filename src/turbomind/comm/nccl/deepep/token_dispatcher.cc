@@ -1,6 +1,7 @@
 #include "src/turbomind/comm/nccl/deepep/token_dispatcher.h"
 #include "src/turbomind/comm/nccl/deepep/moe_a2a_utils.h"
 #include "src/turbomind/comm/nccl/deepep/symm_ctx.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 #include <nccl.h>
 
@@ -337,6 +338,7 @@ void TokenDispatcherImpl::Dispatch(Tensor&       x,
                     false /* cached_mode*/,
                     false /* do_cpu_sync*/,
                     core::Context::stream().handle());
+    TM_CUDA_CHECK(cudaGetLastError());
 
     int num_recv_tokens = num_max_tokens_per_rank * nccl_context_->num_ranks_;  // worst case
     launch_dispatch_copy_epilogue(buffer_,
@@ -370,6 +372,7 @@ void TokenDispatcherImpl::Dispatch(Tensor&       x,
                                   false /* cached_mode */,
                                   false /* do_zero_padding */,
                                   core::Context::stream().handle());
+    TM_CUDA_CHECK(cudaGetLastError());
 
     // The unaligned per-expert counts are no longer needed by non-expanded Combine.
     // Consume them as reverse atomic cursors so mapping needs no extra workspace.
@@ -425,6 +428,8 @@ void TokenDispatcherImpl::Combine(Tensor& x, Tensor& out_x)
                                               false /* use_expanded_layout */,
                                               true /* allow_multiple_reduction */,
                                               core::Context::stream().handle());
+    TM_CUDA_CHECK(cudaGetLastError());
+
     launch_combine_reduce_epilogue(recv_x_.raw_data(),
                                    nullptr /* combined_topk_weights */,
                                    topk_idx_.data(),
@@ -445,6 +450,7 @@ void TokenDispatcherImpl::Combine(Tensor& x, Tensor& out_x)
                                    false /* use_expanded_layout */,
                                    true /* allow_multiple_reduction */,
                                    core::Context::stream().handle());
+    TM_CUDA_CHECK(cudaGetLastError());
 
     out_x = {recv_x_.raw_data(), {num_combined_tokens, hidden}, kBfloat16, kDEVICE};
 

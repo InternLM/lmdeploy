@@ -11,7 +11,7 @@
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 
-#ifdef BUILD_MULTI_GPU  // not defined for windows
+#ifdef USE_NCCL
 #include "src/turbomind/comm/nccl/deepep/moe_a2a_utils.h"
 #include "src/turbomind/comm/nccl/deepep/token_dispatcher.h"
 #endif
@@ -53,8 +53,7 @@ Tensor_<float> MoeFfnLayerImpl::Gate(const Tensor& input, const LinearWeight& ga
     TM_CHECK_EQ(input.shape(1), gate.input_dim);
     Tensor_<float> logits{{input.shape(0), gate.output_dim}, kDEVICE};
     TM_SCOPE_CALL(linear_.Forward(input, gate, logits));
-    ApplyBias(logits, gate.bias, core::Context::stream().handle());
-    TM_CUDA_CHECK(cudaGetLastError());
+    TM_SCOPE_CALL(ApplyBias(logits, gate.bias, core::Context::stream().handle()));
     return logits;
 }
 
@@ -171,26 +170,26 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
         if (moe.score_correction_bias) {
             correction_bias = moe.score_correction_bias.size() > 0 ? moe.score_correction_bias.data<float>() : nullptr;
         }
-        invokeMoeGate_NoAuxTC(f2n_.data(),
-                              f2E_.data(),
-                              en2f_.data(),
-                              offsets_.data(),
-                              scales_.data(),
-                              masks_.data(),
-                              accum_.data(),
-                              logits.data(),
-                              p.token_mask,
-                              correction_bias,
-                              tokens,
-                              padded,
-                              expert_num,
-                              experts_per_token,
-                              expert_offset,
-                              local_expert_num,
-                              p.weights->norm_topk_prob,
-                              p.weights->routed_scale,
-                              p.weights->scoring_func == "sigmoid",
-                              st);
+        TM_SCOPE_CALL(invokeMoeGate_NoAuxTC(f2n_.data(),
+                                            f2E_.data(),
+                                            en2f_.data(),
+                                            offsets_.data(),
+                                            scales_.data(),
+                                            masks_.data(),
+                                            accum_.data(),
+                                            logits.data(),
+                                            p.token_mask,
+                                            correction_bias,
+                                            tokens,
+                                            padded,
+                                            expert_num,
+                                            experts_per_token,
+                                            expert_offset,
+                                            local_expert_num,
+                                            p.weights->norm_topk_prob,
+                                            p.weights->routed_scale,
+                                            p.weights->scoring_func == "sigmoid",
+                                            st));
     }
     else {
         // V2: accum must be cleared by caller; masks cleared internally
@@ -198,33 +197,31 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
 
         bool softmax = true;
         if (p.weights->topk_method == "group_limited_greedy") {
-            invokeMoeSoftmaxMaskTopKGroups(
-                logits.data(), tokens, expert_num, expert_num / p.weights->n_group, p.weights->topk_group, st);
-            TM_CUDA_CHECK(cudaGetLastError());
+            TM_SCOPE_CALL(invokeMoeSoftmaxMaskTopKGroups(
+                logits.data(), tokens, expert_num, expert_num / p.weights->n_group, p.weights->topk_group, st));
             softmax = false;
         }
 
-        invokeMoeGate_V2(f2n_.data(),
-                         f2E_.data(),
-                         en2f_.data(),
-                         offsets_.data(),
-                         scales_.data(),
-                         masks_.data(),
-                         accum_.data(),
-                         logits.data(),
-                         p.token_mask,
-                         tokens,
-                         padded,
-                         expert_num,
-                         experts_per_token,
-                         expert_offset,
-                         local_expert_num,
-                         softmax,
-                         p.weights->norm_topk_prob,
-                         p.weights->routed_scale,
-                         st);
+        TM_SCOPE_CALL(invokeMoeGate_V2(f2n_.data(),
+                                       f2E_.data(),
+                                       en2f_.data(),
+                                       offsets_.data(),
+                                       scales_.data(),
+                                       masks_.data(),
+                                       accum_.data(),
+                                       logits.data(),
+                                       p.token_mask,
+                                       tokens,
+                                       padded,
+                                       expert_num,
+                                       experts_per_token,
+                                       expert_offset,
+                                       local_expert_num,
+                                       softmax,
+                                       p.weights->norm_topk_prob,
+                                       p.weights->routed_scale,
+                                       st));
     }
-    TM_CUDA_CHECK(cudaGetLastError());
 
     if (is_warm_up_) {
         std::mt19937     g;
@@ -271,8 +268,7 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
             TM_SCOPE_CALL(linear_.Forward(p.input, *block.w1w3, indices, offsets, inter));
 
             if (!block.is_fused_silu) {
-                Activation(inter, block.w1w3->bias, f2E_, block.act_type, num_valid_tokens, st);
-                TM_CUDA_CHECK(cudaGetLastError());
+                TM_SCOPE_CALL(Activation(inter, block.w1w3->bias, f2E_, block.act_type, num_valid_tokens, st));
             }
 
             TM_SCOPE_CALL(linear_.Forward(inter.slice({0, 0}, {-1, inter_size}), *block.w2, {}, offsets, temp_));
@@ -286,8 +282,7 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
         Tensor up;
         TM_SCOPE_CALL(linear_.Forward(p.input, *block.w3, indices, offsets, up));
 
-        Activation(gating, up, block.act_type, num_valid_tokens, st);
-        TM_CUDA_CHECK(cudaGetLastError());
+        TM_SCOPE_CALL(Activation(gating, up, block.act_type, num_valid_tokens, st));
 
         TM_SCOPE_CALL(linear_.Forward(gating, *block.w2, {}, offsets, temp_));
     }
@@ -307,18 +302,17 @@ void MoeFfnDefaultImpl::Combine(MoeFfnLayer::ForwardParam& p)
         clear_pending_ = false;
     }
 
-    invokeMoeCombine(p.output,
-                     temp_,
-                     TM_CHECK_NOTNULL(moe.block())->w2->bias,
-                     scales_.data(),
-                     en2f_.data(),
-                     f2E_.data(),
-                     shared_scales_.data_or((float*)nullptr),
-                     moe.experts_per_token,
-                     1.f / tp_size_,
-                     p.scale,
-                     core::Context::stream().handle());
-    TM_CUDA_CHECK(cudaGetLastError());
+    TM_SCOPE_CALL(invokeMoeCombine(p.output,
+                                   temp_,
+                                   TM_CHECK_NOTNULL(moe.block())->w2->bias,
+                                   scales_.data(),
+                                   en2f_.data(),
+                                   f2E_.data(),
+                                   shared_scales_.data_or((float*)nullptr),
+                                   moe.experts_per_token,
+                                   1.f / tp_size_,
+                                   p.scale,
+                                   core::Context::stream().handle()));
 
     temp_          = {};
     shared_scales_ = {};
@@ -470,9 +464,9 @@ void MoeFfnA2AImpl::CompileKernels(const MoeWeight& weights)
         Tensor topk_indices = {topk_indices_, {token_num, weights.experts_per_token}};
         Tensor topk_weights = {topk_weights_, {token_num, weights.experts_per_token}};
         Tensor scales_t, out_moe;
-        dispatcher_->Dispatch(
-            input, topk_indices, topk_weights, token_num, output_, scales_t, f2n_, f2E_, en2f_, offsets_);
-        dispatcher_->Combine(output_, out_moe);
+        TM_SCOPE_CALL(dispatcher_->Dispatch(
+            input, topk_indices, topk_weights, token_num, output_, scales_t, f2n_, f2E_, en2f_, offsets_));
+        TM_SCOPE_CALL(dispatcher_->Combine(output_, out_moe));
     }
 }
 
@@ -511,48 +505,45 @@ void MoeFfnA2AImpl::Forward(MoeFfnLayer::ForwardParam& p)
             correction_bias = moe.score_correction_bias.data<float>();
         }
 
-        invokeMoeA2AGate_NoAuxTC(topk_weights_.data(),
-                                 topk_indices_.data(),
-                                 logits.data_or((float*)nullptr),
-                                 correction_bias,
-                                 token_num,
-                                 expert_num,
-                                 experts_per_token,
-                                 moe.norm_topk_prob,
-                                 moe.routed_scale,
-                                 moe.scoring_func == "sigmoid",
-                                 st);
+        TM_SCOPE_CALL(invokeMoeA2AGate_NoAuxTC(topk_weights_.data(),
+                                               topk_indices_.data(),
+                                               logits.data_or((float*)nullptr),
+                                               correction_bias,
+                                               token_num,
+                                               expert_num,
+                                               experts_per_token,
+                                               moe.norm_topk_prob,
+                                               moe.routed_scale,
+                                               moe.scoring_func == "sigmoid",
+                                               st));
     }
     else {
         bool softmax = true;
         if (p.weights->topk_method == "group_limited_greedy") {
             if (token_num) {
-                invokeMoeSoftmaxMaskTopKGroups(
-                    logits.data(), token_num, expert_num, expert_num / p.weights->n_group, p.weights->topk_group, st);
-                TM_CUDA_CHECK(cudaGetLastError());
+                TM_SCOPE_CALL(invokeMoeSoftmaxMaskTopKGroups(
+                    logits.data(), token_num, expert_num, expert_num / p.weights->n_group, p.weights->topk_group, st));
             }
             softmax = false;
         }
 
-        invokeMoeA2AGate(topk_weights_.data(),
-                         topk_indices_.data(),
-                         logits.data_or((float*)nullptr),
-                         token_num,
-                         expert_num,
-                         experts_per_token,
-                         softmax,
-                         moe.norm_topk_prob,
-                         moe.routed_scale,
-                         st);
+        TM_SCOPE_CALL(invokeMoeA2AGate(topk_weights_.data(),
+                                       topk_indices_.data(),
+                                       logits.data_or((float*)nullptr),
+                                       token_num,
+                                       expert_num,
+                                       experts_per_token,
+                                       softmax,
+                                       moe.norm_topk_prob,
+                                       moe.routed_scale,
+                                       st));
     }
-    TM_CUDA_CHECK(cudaGetLastError());
 
     Tensor topk_indices = {topk_indices_, {token_num, experts_per_token}};
     Tensor topk_weights = {topk_weights_, {token_num, experts_per_token}};
     Tensor scales_t;
-    dispatcher_->Dispatch(
-        input_, topk_indices, topk_weights, max_token_num_per_rank_, output_, scales_t, f2n_, f2E_, en2f_, offsets_);
-    TM_CUDA_CHECK(cudaGetLastError());
+    TM_SCOPE_CALL(dispatcher_->Dispatch(
+        input_, topk_indices, topk_weights, max_token_num_per_rank_, output_, scales_t, f2n_, f2E_, en2f_, offsets_));
 
     // transpose scales to [experts_per_token, token_num] for later combine
     Tensor scales_src = scales_t.t();
@@ -574,8 +565,7 @@ void MoeFfnA2AImpl::Forward(MoeFfnLayer::ForwardParam& p)
         TM_SCOPE_CALL(linear_.Forward(output_, *block.w1w3, indices, offsets, inter));
 
         if (!block.is_fused_silu) {
-            Activation(inter, block.w1w3->bias, f2E_, block.act_type, num_valid_tokens, st);
-            TM_CUDA_CHECK(cudaGetLastError());
+            TM_SCOPE_CALL(Activation(inter, block.w1w3->bias, f2E_, block.act_type, num_valid_tokens, st));
         }
 
         TM_SCOPE_CALL(linear_.Forward(inter.slice({0, 0}, {-1, inter_size}), *block.w2, {}, offsets, temp_));
@@ -588,8 +578,7 @@ void MoeFfnA2AImpl::Forward(MoeFfnLayer::ForwardParam& p)
         Tensor up;
         TM_SCOPE_CALL(linear_.Forward(output_, *block.w3, indices, offsets, up));
 
-        Activation(gating, up, block.act_type, num_valid_tokens, st);
-        TM_CUDA_CHECK(cudaGetLastError());
+        TM_SCOPE_CALL(Activation(gating, up, block.act_type, num_valid_tokens, st));
 
         TM_SCOPE_CALL(linear_.Forward(gating, *block.w2, {}, offsets, temp_));
     }
@@ -607,25 +596,23 @@ void MoeFfnA2AImpl::Combine(MoeFfnLayer::ForwardParam& p)
     auto&       stream = core::Context::stream();
 
     stream.Wait(scales_copy_done_event_);
-    invokeMoeCombine(output_,
-                     temp_,
-                     block.w2->bias,
-                     scales_.data(),
-                     en2f_.data(),
-                     f2E_.data(),
-                     nullptr,
-                     moe.experts_per_token,
-                     1.f / mlp_tp_size_,
-                     0.f,
-                     stream.handle());
-    TM_CUDA_CHECK(cudaGetLastError());
+    TM_SCOPE_CALL(invokeMoeCombine(output_,
+                                   temp_,
+                                   block.w2->bias,
+                                   scales_.data(),
+                                   en2f_.data(),
+                                   f2E_.data(),
+                                   nullptr,
+                                   moe.experts_per_token,
+                                   1.f / mlp_tp_size_,
+                                   0.f,
+                                   stream.handle()));
 
     Tensor out_moe;
-    dispatcher_->Combine(output_, out_moe);
-    TM_CUDA_CHECK(cudaGetLastError());
+    TM_SCOPE_CALL(dispatcher_->Combine(output_, out_moe));
 
-    invokeMoeA2ASharedCombine(input_, out_moe, shared_scales_.data_or((float*)nullptr), p.scale, stream.handle());
-    TM_CUDA_CHECK(cudaGetLastError());
+    TM_SCOPE_CALL(
+        invokeMoeA2ASharedCombine(input_, out_moe, shared_scales_.data_or((float*)nullptr), p.scale, stream.handle()));
 
     input_         = {};
     output_        = {};
