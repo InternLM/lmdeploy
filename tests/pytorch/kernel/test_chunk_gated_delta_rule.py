@@ -571,6 +571,56 @@ def test_cuda_backend_fla_and_local_branches_match():
 
 
 @pytest.mark.skipif(not _cuda_available(), reason='CUDA is not available')
+@pytest.mark.parametrize('boundary_chunk', [0, 1, 2])
+def test_chunk_states_restore_and_run_suffix_reaches_final_state(boundary_chunk):
+    """Per-chunk-boundary states support Marconi-style prefix restoration.
+
+    ``chunk_states[:, c]`` is the recurrent state at the *start* of chunk ``c``
+    (after consuming the first ``c * 64`` tokens). Restoring from that state and
+    running the remaining suffix must reproduce both the attention output over the
+    suffix and the terminal ``final_state`` of the full run. This is the invariant
+    that lets a prefix-cache checkpoint stored at a chunk boundary be reused as
+    the starting state for any longer prompt sharing that prefix.
+
+    Because ``chunk_states[:, -1]`` is the state at the *start* of the last chunk
+    rather than after it, it is generally **not** equal to ``final_state``; the
+    constructive suffix check below is the stronger guarantee.
+    """
+    torch.manual_seed(10)
+    length = 200
+    q, k, v, g, beta, initial_state = _make_inputs(length)
+    scale = q.shape[-1]**-0.5
+
+    out_full, final_state, chunk_states = chunk_gated_delta_rule(
+        q, k, v, g, beta, scale=scale, initial_state=initial_state, output_final_state=True)
+
+    num_chunks = chunk_states.shape[1]
+    # The last boundary's start-state covers the prefix up to (num_chunks-1)*64,
+    # not the terminal state after the full sequence, so it must differ from it.
+    assert not torch.allclose(chunk_states[:, -1].float(), final_state.float())
+
+    c = min(boundary_chunk, num_chunks - 1)
+    boundary = c * 64
+    suffix_len = length - boundary
+    if suffix_len <= 0:
+        pytest.skip('suffix is empty for this boundary')
+
+    out_suffix, final_state_suffix, _ = chunk_gated_delta_rule(
+        q[:, boundary:],
+        k[:, boundary:],
+        v[:, boundary:],
+        g[:, boundary:],
+        beta[:, boundary:],
+        scale=scale,
+        initial_state=chunk_states[:, c],
+        output_final_state=True,
+    )
+
+    torch.testing.assert_close(final_state_suffix.float(), final_state.float(), atol=2e-2, rtol=2e-2)
+    torch.testing.assert_close(out_suffix.float(), out_full[:, boundary:].float(), atol=2e-2, rtol=2e-2)
+
+
+@pytest.mark.skipif(not _cuda_available(), reason='CUDA is not available')
 @pytest.mark.parametrize('conv_kernel_size', [4, 7])
 def test_chunk_conv_states_matches_gather(conv_kernel_size):
     """Conv state at every chunk boundary must equal the raw-token gather.
