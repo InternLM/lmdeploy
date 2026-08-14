@@ -12,8 +12,19 @@ from .awq import AwqLinear, MergedAwqLinear, QKVAwqLinear
 from .blocked_fp8 import BlockedF8Linear, MergedBlockedF8Linear, QKVBlockedF8Linear
 from .default import BaseLinear, MergedBaseLinear, QKVBaseLinear
 from .lora import LoRA  # noqa: F401
+from .static_fp8 import (
+    MergedStaticF8Linear,
+    QKVStaticF8Linear,
+    StaticF8Linear,
+)
 from .w8a8 import MergedW8A8Linear, QKVW8A8Linear, W8A8Linear
 
+
+def _is_static_per_tensor_fp8(quant_config):
+    return (
+        quant_config.activation_scheme == 'static'
+        and quant_config.weight_block_size is None
+    )
 
 def build_linear(
     in_features: int,
@@ -82,6 +93,20 @@ def build_linear(
                           quant_dtype=quant_config.quant_dtype,
                           layer_type=layer_type)
     elif quant_method == 'fp8':
+        if _is_static_per_tensor_fp8(quant_config):
+            return StaticF8Linear(
+                in_features,
+                out_features,
+                bias=bias,
+                fp8_dtype=quant_config.quant_dtype,
+                dtype=dtype,
+                device=device,
+                colwise=colwise,
+                is_tp=is_tp,
+                all_reduce=all_reduce,
+                dp_gather=dp_gather,
+                layer_type=layer_type,
+            )
         return BlockedF8Linear(
             in_features,
             out_features,
@@ -238,6 +263,19 @@ def build_merged_colwise_linear(
                                 quant_dtype=quant_config.quant_dtype,
                                 layer_type=layer_type)
     elif quant_method == 'fp8':
+        if _is_static_per_tensor_fp8(quant_config):
+            return MergedStaticF8Linear(
+                in_features=in_features,
+                all_out_features=all_out_features,
+                bias=bias,
+                fp8_dtype=quant_config.quant_dtype,
+                dtype=dtype,
+                device=device,
+                is_tp=is_tp,
+                out_names=out_names,
+                dp_gather=dp_gather,
+                layer_type=layer_type,
+            )
         return MergedBlockedF8Linear(
             in_features=in_features,
             all_out_features=all_out_features,
@@ -314,6 +352,21 @@ def build_qkv_proj(in_features: int,
                              num_replicate_kv_heads=num_replicate_kv_heads,
                              quant_dtype=quant_config.quant_dtype)
     if quant_method == 'fp8':
+        if _is_static_per_tensor_fp8(quant_config):
+            return QKVStaticF8Linear(
+                in_features=in_features,
+                num_q_heads=num_q_heads,
+                num_kv_heads=num_kv_heads,
+                head_size=head_size,
+                head_size_v=head_size_v,
+                bias=bias,
+                fp8_dtype=quant_config.quant_dtype,
+                dtype=dtype,
+                device=device,
+                is_tp=is_tp,
+                num_replicate_kv_heads=num_replicate_kv_heads,
+            )
+
         return QKVBlockedF8Linear(in_features=in_features,
                                   num_q_heads=num_q_heads,
                                   num_kv_heads=num_kv_heads,

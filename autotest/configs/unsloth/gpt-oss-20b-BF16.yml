@@ -1,0 +1,27 @@
+# HF model id: unsloth/gpt-oss-20b-BF16
+
+h:
+- model_type: chat
+  engine_config:
+    tp: 2
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  interface:
+    pytorch:
+      suites:
+      - reasoning
+      extra:
+        reasoning-parser: gpt-oss
+    turbomind:
+      suites:
+      - reasoning
+      extra:
+        reasoning-parser: gpt-oss

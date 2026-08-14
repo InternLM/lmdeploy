@@ -165,6 +165,7 @@ class OpenAIServingResponses:
             tool_calls=tool_calls,
             input_tokens=final_res.input_token_len,
             output_tokens=final_res.generate_token_len,
+            reasoning_tokens=response_parser.reasoning_tokens or 0,
             finish_reason=final_res.finish_reason,
         )
         return response.model_dump(exclude_none=True)

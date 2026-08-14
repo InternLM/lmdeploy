@@ -29,7 +29,9 @@ class OpType(Enum):
     SoftmaxTopK = auto()
     FusedMoE = auto()
     FusedMoEW8A8 = auto()
+    FusedMoEStaticF8 = auto()
     LinearBlockedF8 = auto()
+    LinearStaticF8 = auto()
     FusedMoEBlockedF8 = auto()
     FusedMoEV4FP4 = auto()
     NSAIndexFP8 = auto()
@@ -38,6 +40,7 @@ class OpType(Enum):
     V4Compressor = auto()
     HcPrePost = auto()
     Embedding = auto()
+    CacheBlockCopy = auto()
 
     # MoE router
     RouterNoauxTC = auto()

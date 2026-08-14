@@ -103,6 +103,7 @@ class TestGptOssResponseParser:
         assert delta is not None
         assert delta.content == 'Result: sunny'
         assert delta.reasoning_content == 'Need tool. '
+        assert parser.reasoning_tokens == 1
         assert tool_emitted is True
         assert delta.tool_calls is not None
         assert len(delta.tool_calls) == 5
@@ -196,6 +197,7 @@ class TestGptOssResponseParser:
         content, tool_calls, reasoning = parser.parse_complete(text='', token_ids=[1, 2, 3, 4, 5, 6, 7, 8])
         assert content == 'Result: sunny'
         assert reasoning == 'Need tool. '
+        assert parser.reasoning_tokens == 1
         assert tool_calls is not None
         assert [call.function.name for call in tool_calls] == ['get_weather', 'get_time']
         assert [call.function.arguments for call in tool_calls] == ['{"location":"Beijing"}', '{"tz":"UTC"}']
@@ -273,6 +275,7 @@ class TestGptOssResponseParser:
         assert delta is not None
         assert delta.content is None
         assert delta.reasoning_content == 'think more'
+        assert parser.reasoning_tokens == 2
         assert delta.tool_calls is None
         assert tool_emitted is False
 

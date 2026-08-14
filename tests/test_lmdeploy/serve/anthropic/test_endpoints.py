@@ -430,7 +430,11 @@ def test_messages_non_stream_with_reasoning_and_tool_use_blocks():
     assert response.status_code == 200
     data = response.json()
     assert data['stop_reason'] == 'tool_use'
-    assert data['content'][0] == {'type': 'thinking', 'thinking': 'internal reasoning'}
+    assert data['content'][0] == {
+        'type': 'thinking',
+        'thinking': 'internal reasoning',
+        'signature': 'lmdeploy-local',
+    }
     assert data['content'][1] == {'type': 'text', 'text': 'visible text'}
     assert data['content'][2]['type'] == 'tool_use'
     assert data['content'][2]['name'] == 'search'
@@ -468,9 +472,40 @@ def test_messages_streaming_usage_matches_anthropic_event_spec():
 def test_messages_streaming_with_reasoning_and_tool_use_events():
     client = _make_client(response_parser_cls=_ToolAndReasoningParser)
     status_code, body = _stream_messages_body(client, tools=[SEARCH_TOOL], return_token_ids=True)
+    payloads = _sse_payloads(body)
+    thinking_events = [payload for payload in payloads if payload.get('index') == 0]
 
     assert status_code == 200
-    assert '"type": "thinking_delta"' in body
+    assert thinking_events == [
+        {
+            'type': 'content_block_start',
+            'index': 0,
+            'content_block': {
+                'type': 'thinking',
+                'thinking': '',
+            },
+        },
+        {
+            'type': 'content_block_delta',
+            'index': 0,
+            'delta': {
+                'type': 'thinking_delta',
+                'thinking': 'internal reasoning',
+            },
+        },
+        {
+            'type': 'content_block_delta',
+            'index': 0,
+            'delta': {
+                'type': 'signature_delta',
+                'signature': 'lmdeploy-local',
+            },
+        },
+        {
+            'type': 'content_block_stop',
+            'index': 0,
+        },
+    ]
     assert '"type": "input_json_delta"' in body
     assert '"type": "tool_use"' in body
     assert '"output_ids": [102]' in body

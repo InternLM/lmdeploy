@@ -1,4 +1,5 @@
 # HF model id: Qwen/Qwen3-0.6B
+
 a100:
 - model_type: chat
   engine_config:
@@ -32,6 +33,21 @@ h:
   test_coverage:
   - func
   - quantization
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+    turbomind:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - awq

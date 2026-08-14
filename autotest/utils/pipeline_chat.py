@@ -51,6 +51,11 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
     with assume:
         assert result, stderr
 
+    # Subprocess already failed: skip caseresult parse (would raise IndexError).
+    if not result:
+        allure.attach.file(pipeline_log, name=pipeline_log, attachment_type=allure.attachment_type.TEXT)
+        return
+
     with open(pipeline_log, encoding='utf-8') as file:
         output_text = file.read()
 
@@ -68,8 +73,11 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
 
                 for prompt_detail in case_info:
                     prompt = list(prompt_detail.keys())[0]
-                    case_result, reason = assert_result(get_response_from_output_by_prompt(output_text, case, prompt),
-                                                        prompt_detail.values(), model_path)
+                    response = get_response_from_output_by_prompt(output_text, case, prompt)
+                    if response is None:
+                        case_result, reason = False, f'missing caseresult for {case}/{prompt}'
+                    else:
+                        case_result, reason = assert_result(response, prompt_detail.values(), model_path)
                     if not case_result:
                         print(f'{case} result: {case_result}, reason: {reason} \n')
                     file.writelines(f'{case} result: {case_result}, reason: {reason} \n')
@@ -111,49 +119,54 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
     with assume:
         assert result, stderr
 
+    # Subprocess already failed: skip caseresult parse (would raise IndexError).
+    if not result:
+        allure.attach.file(pipeline_log, name=pipeline_log, attachment_type=allure.attachment_type.TEXT)
+        return
+
     with open(pipeline_log, encoding='utf-8') as file:
         output_text = file.read()
 
     with open(pipeline_log, 'a') as file:
         with allure.step('single1 pic'):
             response = get_response_from_output(output_text, 'single1')
-            case_result = any(word in response.lower() for word in ['tiger', '虎'])
+            case_result = bool(response) and any(word in response.lower() for word in ['tiger', '虎'])
             file.writelines(f'single1 pic result: {case_result} reason: simple example tiger should in {response} \n')
             with assume:
                 assert case_result, f'reason: simple example tiger should in {response}'
         with allure.step('single2 pic'):
             response = get_response_from_output(output_text, 'single2')
-            case_result = any(word in response.lower() for word in ['tiger', '虎'])
+            case_result = bool(response) and any(word in response.lower() for word in ['tiger', '虎'])
             file.writelines(f'single2 pic result: {case_result} reason: simple example tiger should in {response} \n')
             with assume:
                 assert case_result, f'reason: simple example tiger should in {response}'
         with allure.step('multi-imagese'):
             response = get_response_from_output(output_text, 'multi-imagese')
-            case_result = any(word in response.lower() for word in ['tiger', '虎', '滑雪', 'ski'])
+            case_result = bool(response) and any(word in response.lower() for word in ['tiger', '虎', '滑雪', 'ski'])
             file.writelines(f'multi-imagese pic result: {case_result} reason: tiger or ski should in {response} \n')
             with assume:
                 assert case_result, f'reason: Multi-images example: tiger or ski should in {response}'
         with allure.step('batch-example1'):
             response = get_response_from_output(output_text, 'batch-example1')
-            case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
+            case_result = bool(response) and any(word in response.lower() for word in ['滑雪', 'ski'])
             file.writelines(f'batch-example1 pic result: {case_result} reason: ski should in {response} \n')
             with assume:
                 assert case_result, f'reason: batch-example1: ski should in {response}'
         with allure.step('batch-example2'):
             response = get_response_from_output(output_text, 'batch-example2')
-            case_result = any(word in response.lower() for word in ['tiger', '虎'])
+            case_result = bool(response) and any(word in response.lower() for word in ['tiger', '虎'])
             file.writelines(f'batch-example2 pic result: {case_result} reason: tiger should in {response} \n')
             with assume:
                 assert case_result, f'reason: batch-example1: tiger should in {response}'
         with allure.step('multi-turn1'):
             response = get_response_from_output(output_text, 'multi-turn1')
-            case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
+            case_result = bool(response) and any(word in response.lower() for word in ['滑雪', 'ski'])
             file.writelines(f'multi-turn1 pic result: {case_result} reason:  ski should in {response} \n')
             with assume:
                 assert case_result, f'reason: batch-example1: ski should in {response}'
         with allure.step('multi-turn2'):
             response = get_response_from_output(output_text, 'multi-turn2')
-            case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
+            case_result = bool(response) and any(word in response.lower() for word in ['滑雪', 'ski'])
             file.writelines(f'multi-turn2 pic result: {case_result} reason: ski should in {response} \n')
             with assume:
                 assert case_result, f'reason: batch-example1: ski should in {response}'
@@ -173,12 +186,26 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
 
 
 def get_response_from_output(output_text, case):
-    return output_text.split(f'[caseresult {case} start]')[1].split(f'[caseresult {case} end]')[0]
+    """Extract ``[caseresult ...]`` block; return empty string if missing."""
+    start = f'[caseresult {case} start]'
+    end = f'[caseresult {case} end]'
+    if start not in output_text or end not in output_text:
+        return ''
+    return output_text.split(start)[1].split(end)[0]
 
 
 def get_response_from_output_by_prompt(output_text, case, prompt):
-    output_list = output_text.split(f'[caseresult {case} start]')[1].split(f'[caseresult {case} end]')[0]
-    output_dict = json.loads(output_list.rstrip())
+    """Extract response for prompt; return None if caseresult block is
+    missing."""
+    start = f'[caseresult {case} start]'
+    end = f'[caseresult {case} end]'
+    if start not in output_text or end not in output_text:
+        return None
+    output_list = output_text.split(start)[1].split(end)[0]
+    try:
+        output_dict = json.loads(output_list.rstrip())
+    except json.JSONDecodeError:
+        return None
     for output in output_dict:
         if output.get('prompt') == prompt:
             return output.get('response')
