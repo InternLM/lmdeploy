@@ -60,16 +60,17 @@ def _get_sorted_idx(topk_idx: torch.Tensor, num_experts: int):
     return sorted_ids, exp_tok_cnt
 
 
-@pytest.mark.parametrize(('block_m', 'block_n', 'expected_block_n', 'transpose_mma'), [
-    (16, 64, 128, True),
-    (32, 128, 128, True),
-    (64, 128, 128, False),
+@pytest.mark.parametrize(('block_m', 'block_n', 'input_features', 'expected_block_n', 'transpose_mma'), [
+    (16, 64, 1024, 64, False),
+    (16, 64, 2048, 128, True),
+    (32, 128, 4096, 128, True),
+    (64, 128, 6144, 128, False),
 ])
-def test_compact_blocked_fp8_gate_config(block_m, block_n, expected_block_n, transpose_mma):
+def test_compact_blocked_fp8_gate_config(block_m, block_n, input_features, expected_block_n, transpose_mma):
     from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import _compact_blocked_fp8_moe_gate_config
 
     compact_config = dict(block_m=block_m, block_n=block_n, num_warps=4, num_stages=3)
-    gate_config = _compact_blocked_fp8_moe_gate_config(compact_config)
+    gate_config = _compact_blocked_fp8_moe_gate_config(compact_config, input_features)
 
     assert gate_config['block_n'] == expected_block_n
     assert gate_config.get('transpose_mma', False) is transpose_mma

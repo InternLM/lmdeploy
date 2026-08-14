@@ -537,9 +537,9 @@ def _compact_blocked_fp8_moe_both_config(num_routes: int, num_experts: int, gate
     return dict(block_m=block_m, block_n=block_n, num_warps=4, num_stages=3)
 
 
-def _compact_blocked_fp8_moe_gate_config(compact_config: dict):
-    """Specialize a shared compact config for the gate/up projection."""
-    if compact_config['block_m'] > 32:
+def _compact_blocked_fp8_moe_gate_config(compact_config: dict, input_features: int):
+    """Use transposed MMA for measured small-M, long-K gate tiles."""
+    if compact_config['block_m'] > 32 or input_features < 2048:
         return compact_config
     return dict(compact_config, block_n=128, transpose_mma=True)
 
@@ -727,7 +727,7 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
     intermediate_cache1 = _make_intermediate((M, topk, N), dtype=out_dtype, device=device, zeros=not full_exp)
     # gate and up
     if use_compact_both:
-        gate_compact_moe_cfg = _compact_blocked_fp8_moe_gate_config(compact_moe_cfg)
+        gate_compact_moe_cfg = _compact_blocked_fp8_moe_gate_config(compact_moe_cfg, w1.size(2))
         fused_moe_blocked_fp8_compact_kernel_launcher(
             input,
             input_scale,
