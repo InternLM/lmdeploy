@@ -11,6 +11,13 @@ from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 
 from .protocol import AnthropicError, AnthropicErrorResponse
 
+_ERROR_TYPE_BY_CODE = {
+    ErrorCode.UNAUTHORIZED: 'authentication_error',
+    ErrorCode.MODEL_NOT_FOUND: 'not_found_error',
+    ErrorCode.ENGINE_UNAVAILABLE: 'overloaded_error',
+    ErrorCode.INTERNAL_ERROR: 'api_error',
+}
+
 
 def create_error_response(status: HTTPStatus, message: str, error_type: str = 'invalid_request_error') -> JSONResponse:
     """Create Anthropic-style error response."""
@@ -21,16 +28,7 @@ def create_error_response(status: HTTPStatus, message: str, error_type: str = 'i
 
 def anthropic_error_from_request(error: RequestError) -> AnthropicError:
     """Map a shared request error to Anthropic's error taxonomy."""
-    if error.code is ErrorCode.UNAUTHORIZED:
-        error_type = 'authentication_error'
-    elif error.code is ErrorCode.MODEL_NOT_FOUND:
-        error_type = 'not_found_error'
-    elif error.code is ErrorCode.ENGINE_UNAVAILABLE:
-        error_type = 'overloaded_error'
-    elif error.code is ErrorCode.INTERNAL_ERROR:
-        error_type = 'api_error'
-    else:
-        error_type = 'invalid_request_error'
+    error_type = _ERROR_TYPE_BY_CODE.get(error.code, 'invalid_request_error')
     return AnthropicError(type=error_type, message=error.message)
 
 

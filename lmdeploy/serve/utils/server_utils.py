@@ -16,43 +16,13 @@ from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 def protocol_error_response(path: str, error: RequestError) -> JSONResponse:
     """Render shared middleware errors in the route's native protocol."""
     if path.startswith('/v1/messages'):
-        if error.code is ErrorCode.UNAUTHORIZED:
-            error_type = 'authentication_error'
-        elif error.code is ErrorCode.MODEL_NOT_FOUND:
-            error_type = 'not_found_error'
-        elif error.code is ErrorCode.ENGINE_UNAVAILABLE:
-            error_type = 'overloaded_error'
-        elif error.code is ErrorCode.INTERNAL_ERROR:
-            error_type = 'api_error'
-        else:
-            error_type = 'invalid_request_error'
-        content = {
-            'type': 'error',
-            'error': {
-                'type': error_type,
-                'message': error.message,
-            },
-        }
-    else:
-        is_responses = path.startswith('/v1/responses')
-        if error.code is ErrorCode.UNAUTHORIZED:
-            error_type = 'authentication_error'
-        elif error.code is ErrorCode.MODEL_NOT_FOUND:
-            error_type = 'not_found_error'
-        elif error.code in (ErrorCode.ENGINE_UNAVAILABLE,
-                            ErrorCode.INTERNAL_ERROR):
-            error_type = 'server_error'
-        else:
-            error_type = 'invalid_request_error'
-        error_content = {
-            'message': error.message,
-            'type': error_type,
-            'code': error.status_code,
-            'param': None,
-            'object': 'error',
-        }
-        content = {'error': error_content} if is_responses else error_content
-    return JSONResponse(content=content, status_code=error.status_code)
+        from lmdeploy.serve.anthropic.errors import create_request_error_response
+        return create_request_error_response(error)
+    if path.startswith('/v1/responses'):
+        from lmdeploy.serve.openai.responses.request import request_error_response
+        return request_error_response(error)
+    from lmdeploy.serve.openai.errors import create_request_error_response
+    return create_request_error_response(error)
 
 
 def validate_json_request(raw_request: Request):

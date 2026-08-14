@@ -14,6 +14,11 @@ from fastapi.responses import StreamingResponse
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config, validate_request
+from lmdeploy.serve.openai.errors import (
+    create_error_response,
+    create_request_error_response,
+    request_error_payload,
+)
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -25,12 +30,7 @@ from lmdeploy.serve.openai.protocol import (
     DeltaMessage,
     UsageInfo,
 )
-from lmdeploy.serve.openai.utils import (
-    create_error_response,
-    create_request_error_response,
-    maybe_filter_parallel_tool_calls,
-    request_error_payload,
-)
+from lmdeploy.serve.openai.utils import maybe_filter_parallel_tool_calls
 from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger

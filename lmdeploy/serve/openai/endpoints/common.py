@@ -5,7 +5,8 @@ from http import HTTPStatus
 
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.generation_config import build_generation_config
-from lmdeploy.serve.openai.utils import create_error_response, get_model_list
+from lmdeploy.serve.openai.errors import create_error_response
+from lmdeploy.serve.openai.utils import get_model_list
 
 
 def build_serving_generation_config(request, server_context,

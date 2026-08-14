@@ -10,15 +10,15 @@ from fastapi.responses import StreamingResponse
 
 from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config, validate_request
+from lmdeploy.serve.openai.errors import (
+    create_error_response,
+    create_request_error_response,
+    request_error_payload,
+)
 from lmdeploy.serve.openai.protocol import (
     GenerateReqInput,
     GenerateReqMetaOutput,
     GenerateReqOutput,
-)
-from lmdeploy.serve.openai.utils import (
-    create_error_response,
-    create_request_error_response,
-    request_error_payload,
 )
 from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
