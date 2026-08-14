@@ -590,7 +590,7 @@ class Response:
     text: str
     generate_token_len: int
     input_token_len: int
-    finish_reason: Literal['stop', 'length'] | None = None
+    finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
     token_ids: list[int] = field(default_factory=list)
     logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
@@ -598,6 +598,8 @@ class Response:
     index: int = 0
     routed_experts: Any = None
     cached_tokens: int = 0
+    error_code: str | None = None
+    error_message: str | None = None
 
     def __str__(self):
         return f'text={self.text}\n{self._format_none_text_fields()}'
@@ -653,6 +655,8 @@ class Response:
             self.logprobs = self.logprobs or []
             self.logprobs += other.logprobs
         self.routed_experts = other.routed_experts
+        self.error_code = other.error_code
+        self.error_message = other.error_message
         return self
 
 

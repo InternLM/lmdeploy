@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall
 from lmdeploy.serve.openai.responses import ResponsesRequest
 from lmdeploy.serve.openai.responses.streaming import stream_response
@@ -131,6 +132,34 @@ def test_responses_streaming_error_finish_reason_emits_failed_event(
     assert payloads[-1]['type'] == 'response.failed'
     assert payloads[-1]['response']['status'] == 'failed'
     assert payloads[-1]['response']['error']['code'] == 'server_error'
+
+
+def test_responses_streaming_exception_emits_failed_event(
+        sse_payloads, passthrough_response_parser_cls):
+    request = ResponsesRequest(model='fake-model', input='Hi', stream=True)
+
+    async def _result_generator():
+        if False:
+            yield None
+        raise RequestError(ErrorCode.INTERNAL_ERROR)
+
+    async def _collect_events():
+        return [
+            event async for event in stream_response(
+                _result_generator(),
+                request=request,
+                model_name='fake-model',
+                created_time=123,
+                response_parser=passthrough_response_parser_cls(request),
+            )
+        ]
+
+    payloads = sse_payloads(asyncio.run(_collect_events()))
+    assert payloads[-1]['type'] == 'response.failed'
+    assert payloads[-1]['response']['error'] == {
+        'code': 'server_error',
+        'message': 'An internal server error occurred.',
+    }
 
 
 def test_responses_streaming_empty_output_announces_message_item(

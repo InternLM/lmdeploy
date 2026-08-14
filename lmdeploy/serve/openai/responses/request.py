@@ -9,6 +9,7 @@ from typing import Any, Literal
 from fastapi.responses import JSONResponse
 
 from lmdeploy.messages import GenerationConfig
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.core.generation_config import build_generation_config
 from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
 from lmdeploy.serve.openai.responses.protocol import ResponsesRequest
@@ -17,16 +18,40 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
-def error_response(status: HTTPStatus, message: str, *, param: str | None = None) -> JSONResponse:
+def error_response(status: HTTPStatus | int,
+                   message: str,
+                   *,
+                   param: str | None = None,
+                   error_code: ErrorCode | None = None) -> JSONResponse:
+    status_value = status.value if isinstance(status, HTTPStatus) else status
+    if error_code is None:
+        if status_value == HTTPStatus.NOT_FOUND:
+            error_code = ErrorCode.MODEL_NOT_FOUND
+        elif status_value >= HTTPStatus.INTERNAL_SERVER_ERROR:
+            error_code = ErrorCode.INTERNAL_ERROR
+        else:
+            error_code = ErrorCode.INVALID_REQUEST
+    error_type = ('not_found_error' if error_code is ErrorCode.MODEL_NOT_FOUND
+                  else 'server_error' if error_code in {
+                      ErrorCode.ENGINE_UNAVAILABLE,
+                      ErrorCode.INTERNAL_ERROR,
+                  } else 'invalid_request_error')
     payload = {
         'error': {
             'message': message,
-            'type': 'invalid_request_error',
+            'type': error_type,
             'param': param,
-            'code': status.value,
+            'code': status_value,
         }
     }
-    return JSONResponse(payload, status_code=status.value)
+    return JSONResponse(payload, status_code=status_value)
+
+
+def request_error_response(error: RequestError, *, param: str | None = None) -> JSONResponse:
+    return error_response(error.status_code,
+                          error.message,
+                          param=param,
+                          error_code=error.code)
 
 
 def validate_text_v1_request(request: ResponsesRequest) -> JSONResponse | None:
