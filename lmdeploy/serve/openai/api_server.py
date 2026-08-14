@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -149,17 +148,13 @@ def register_to_proxy(context: ServerContext):
 async def validation_exception_handler(request: Request,
                                        exc: RequestValidationError):
     """Handler for RequestValidationError."""
-    errors = jsonable_encoder(exc.errors())
-    first_error = errors[0] if errors else None
-    if isinstance(first_error, dict):
-        location = '.'.join(str(part) for part in first_error.get('loc', ())
-                            if part != 'body')
-        detail = first_error.get('msg', 'Invalid request body.')
-        message = f'{location}: {detail}' if location else detail
-    elif first_error:
-        message = str(first_error)
-    else:
-        message = 'Invalid request body.'
+    first_error = next(iter(exc.errors()), {})
+    if not isinstance(first_error, dict):
+        first_error = {'msg': str(first_error)}
+    location = '.'.join(str(part) for part in first_error.get('loc', ())
+                        if part != 'body')
+    detail = first_error.get('msg', 'Invalid request body.')
+    message = f'{location}: {detail}' if location else detail
     error = RequestError(ErrorCode.INVALID_REQUEST, message)
     return protocol_error_response(request.url.path, error)
 
