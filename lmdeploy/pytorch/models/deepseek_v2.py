@@ -18,6 +18,7 @@ from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
     Attention,
     ParallelEmbedding,
+    ParallelLMHead,
     RMSNorm,
     RopeType,
     SiluAndMul,
@@ -30,7 +31,6 @@ from lmdeploy.pytorch.nn.linear import (
     build_down_linear,
     build_gateup_linear,
     build_o_proj,
-    build_rowwise_linear,
 )
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
@@ -1137,11 +1137,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         self.ctx_mgr = ctx_mgr
         self.model = DeepseekV2Model(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = ParallelLMHead(config.vocab_size,
+                                      config.hidden_size,
+                                      bias=False,
+                                      dtype=dtype,
+                                      device=device)
+        if config.tie_word_embeddings:
+            self.lm_head.tie_weights(self.model.get_input_embeddings())
         self._load_buffers = dict()
 
     def forward(

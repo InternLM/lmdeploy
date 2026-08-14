@@ -1,0 +1,30 @@
+# HF model id: Qwen/Qwen3-8B-FP8
+
+h:
+- model_type: chat
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  interface:
+    pytorch:
+      suites:
+      - toolcall
+      - reasoning
+      extra:
+        tool-call-parser: qwen3
+        reasoning-parser: qwen-qwq
+    turbomind:
+      suites:
+      - toolcall
+      - reasoning
+      extra:
+        tool-call-parser: qwen3
+        reasoning-parser: qwen-qwq

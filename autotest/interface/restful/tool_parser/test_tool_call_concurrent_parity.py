@@ -60,6 +60,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
 
         asyncio.run(_run())
 
+    @pytest.mark.experts
     def test_input_ids_path_streaming(self, backend, model_case):
         """``input_ids`` + empty ``messages`` in request payload."""
         messages = []
@@ -79,6 +80,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
             **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
         )
 
+    @pytest.mark.experts
     def test_messages_path_streaming_with_done_and_tokens(self, backend, model_case):
         """Standard messages path still requires ``[DONE]`` + token fields."""
         messages = []
@@ -99,6 +101,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
         except RoutedExpertsNotSupported as exc:
             pytest.skip(str(exc))
 
+    @pytest.mark.experts
     def test_parser_drop_via_decoded_output_ids(self, backend, model_case):
         """Per-turn validation including ``decoded_str`` parser-drop check."""
         messages = []
@@ -117,6 +120,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
             **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
         )
 
+    @pytest.mark.experts
     def test_multi_turn_input_ids_with_tool_name_in_history(self, backend, model_case):
         """3-turn loop via ``input_ids``; tool messages include ``name``
         field."""
@@ -149,9 +153,13 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
 
 
 @_apply_marks_stress
+@pytest.mark.experts
 class TestToolCallConcurrentStress(_ToolCallTestBase):
     """High concurrency stress (default 50 workers; override via
-    TOOL_CALL_CONCURRENCY)."""
+    TOOL_CALL_CONCURRENCY).
+
+    Marked ``experts``: stress path uses encode/input_ids + token returns.
+    """
 
     def test_concurrent_multi_turn_workers(self, backend, model_case):
         """N workers × 3 turns over the ``input_ids`` streaming path."""

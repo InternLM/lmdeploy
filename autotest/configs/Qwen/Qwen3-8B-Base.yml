@@ -3,7 +3,7 @@
 a100:
 - model_type: base
   engine_config:
-    tp: 1
+    tp: 2
   backends:
   - name: turbomind
     communicators:
@@ -14,6 +14,13 @@ a100:
   test_coverage:
   - func
   - quantization
+  interface:
+    pytorch:
+      suites:
+      - base
+    turbomind:
+      suites:
+      - base
   quantization:
     turbomind:
     - awq
@@ -34,6 +41,13 @@ h:
   test_coverage:
   - func
   - quantization
+  interface:
+    pytorch:
+      suites:
+      - base
+    turbomind:
+      suites:
+      - base
   quantization:
     turbomind:
     - awq

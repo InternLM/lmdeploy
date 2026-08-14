@@ -123,3 +123,33 @@ def test_prepare_dsa_indexer_k_cache_matches_prepared_k_fill(q_seqlens, kv_seqle
 
     assert torch.equal(cache_fused, cache_ref)
     assert torch.equal(scale_fused, scale_ref)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+                    reason='requires device with cc>=9.0')
+def test_flatten_dsa_indexer_k_cache_follows_page_table():
+    from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import flatten_dsa_indexer_k_cache
+
+    block_size = 4
+    head_dim = 128
+    kv_seqlens = torch.tensor([5, 3], device='cuda', dtype=torch.int32)
+    cu_seqlen_k = torch.tensor([0, 5, 8], device='cuda', dtype=torch.int32)
+    block_offsets = torch.tensor([[2, 0], [3, 1]], device='cuda', dtype=torch.int32)
+    k_cache = (torch.arange(4 * block_size * head_dim, device='cuda') % 400)
+    k_cache = k_cache.reshape(4, block_size, head_dim).to(torch.float8_e4m3fn)
+    k_s_cache = torch.arange(4 * block_size,
+                             device='cuda', dtype=torch.float32).reshape(4, block_size)
+
+    k_out, k_s_out = flatten_dsa_indexer_k_cache(
+        k_cache,
+        k_s_cache,
+        cu_seqlen_k,
+        kv_seqlens,
+        block_offsets,
+        out_size=8,
+    )
+    k_ref = torch.cat([k_cache[2], k_cache[0, :1], k_cache[3, :3]])
+    k_s_ref = torch.cat([k_s_cache[2], k_s_cache[0, :1], k_s_cache[3, :3]])
+
+    assert torch.equal(k_out, k_ref)
+    assert torch.equal(k_s_out, k_s_ref)

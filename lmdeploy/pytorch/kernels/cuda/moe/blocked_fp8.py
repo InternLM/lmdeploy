@@ -532,6 +532,8 @@ def _compact_blocked_fp8_moe_both_config(num_routes: int, num_experts: int, gate
         block_m, block_n = 64, 128
     elif avg_routes > 8:
         block_m, block_n = 32, 128
+    elif avg_routes == 3:
+        block_m, block_n = 16, 128
     else:
         block_m, block_n = 16, 64
     return dict(block_m=block_m, block_n=block_n, num_warps=4, num_stages=3)

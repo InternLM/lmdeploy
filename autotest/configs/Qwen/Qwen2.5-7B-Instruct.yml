@@ -47,3 +47,28 @@ a100:
     - awq
     pytorch:
     - awq
+
+h:
+- model_type: chat
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  interface:
+    pytorch:
+      suites:
+      - toolcall
+      extra:
+        tool-call-parser: qwen2d5
+    turbomind:
+      suites:
+      - toolcall
+      extra:
+        tool-call-parser: qwen2d5
