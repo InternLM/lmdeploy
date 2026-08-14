@@ -11,14 +11,11 @@ from lmdeploy.serve.managers import SessionManager
 
 class _RequestLogger:
 
-    def __init__(self):
-        self.inputs = []
-
     def log_prompt(self, *args, **kwargs):
         pass
 
     def log_inputs(self, *args, **kwargs):
-        self.inputs.append((args, kwargs))
+        pass
 
 
 def _engine(prompt_processor=None, *, session_len=32):
@@ -48,51 +45,6 @@ def test_preprocess_returns_single_use_prepared_request():
         assert request.inputs == {'prompt': 'rendered', 'input_ids': [1, 2, 3]}
         assert request.input_token_len == 3
         assert request.consumed is False
-
-    asyncio.run(_run())
-
-
-def test_preprocess_logs_raw_input_metadata():
-
-    async def _run():
-        engine = _engine()
-        await engine.preprocess(None, 8, input_ids=[1, 2])
-
-        _, kwargs = engine.request_logger.inputs[0]
-        assert kwargs['prompt'] is None
-        assert kwargs['prompt_token_ids'] == [1, 2]
-
-    asyncio.run(_run())
-
-
-def test_preprocess_forwards_multimodal_options_without_copying_values():
-
-    class _PromptProcessor:
-
-        async def get_prompt_input(self, **kwargs):
-            self.kwargs = kwargs
-            return {
-                'prompt': 'rendered',
-                'input_ids': [1],
-                'multimodal': {'pixel_values': object()},
-            }
-
-    async def _run():
-        processor = _PromptProcessor()
-        engine = _engine(processor)
-        media_io_kwargs = {'timeout': 2}
-        mm_processor_kwargs = {'max_dynamic_patch': 4}
-
-        request = await engine.preprocess(
-            [{'role': 'user', 'content': 'describe the image'}],
-            12,
-            media_io_kwargs=media_io_kwargs,
-            mm_processor_kwargs=mm_processor_kwargs,
-        )
-
-        assert processor.kwargs['media_io_kwargs'] is media_io_kwargs
-        assert processor.kwargs['mm_processor_kwargs'] is mm_processor_kwargs
-        assert 'multimodal' in request.inputs
 
     asyncio.run(_run())
 

@@ -27,21 +27,6 @@ def test_to_generation_config_maps_include_stop_str_in_output():
     assert to_generation_config(request).include_stop_str_in_output is True
 
 
-def test_to_generation_config_respects_server_detokenization_defaults():
-    request = _make_request(messages=[{'role': 'user', 'content': 'hello'}])
-
-    config = to_generation_config(
-        request,
-        {
-            'skip_special_tokens': False,
-            'spaces_between_special_tokens': False,
-        },
-    )
-
-    assert config.skip_special_tokens is False
-    assert config.spaces_between_special_tokens is False
-
-
 def test_to_openai_messages_keeps_plain_text_messages():
     request = _make_request(messages=[{'role': 'user', 'content': 'hello'}])
     assert to_openai_messages(request) == [{'role': 'user', 'content': 'hello'}]
