@@ -31,6 +31,7 @@ jobs:
           python .github/scripts/check_lmdeploy.py check_module_init lmdeploy
       - name: Check doc link
         run: |
+          python .github/scripts/test_doc_link_checker.py
           python .github/scripts/doc_link_checker.py --target README_zh-CN.md
           python .github/scripts/doc_link_checker.py --target README.md
       - name: Check docstring coverage
