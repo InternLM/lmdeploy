@@ -532,17 +532,17 @@ void MoeFfnA2AImpl::Forward(MoeFfnLayer::ForwardParam& p)
             softmax = false;
         }
 
-        TM_SCOPE_CALL(invokeMoeGateTopK(topk_weights_.data(),
-                                        topk_indices_.data(),
-                                        logits.data_or((float*)nullptr),
-                                        token_mask,
-                                        token_num,
-                                        expert_num,
-                                        experts_per_token,
-                                        softmax,
-                                        moe.norm_topk_prob,
-                                        moe.routed_scale,
-                                        st));
+        TM_SCOPE_CALL(invokeMoeGate_V2(topk_weights_.data(),
+                                       topk_indices_.data(),
+                                       logits.data_or((float*)nullptr),
+                                       token_mask,
+                                       token_num,
+                                       expert_num,
+                                       experts_per_token,
+                                       softmax,
+                                       moe.norm_topk_prob,
+                                       moe.routed_scale,
+                                       st));
     }
 
     Tensor topk_indices = {topk_indices_, {token_num, experts_per_token}};

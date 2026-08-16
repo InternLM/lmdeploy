@@ -714,7 +714,7 @@ void launchMoeGate_V8(float*       scales,
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
-void invokeMoeGateTopK(float*       topk_weights,
+void invokeMoeGate_V2(float*       topk_weights,
                        int*         topk_indices,
                        const float* logits,
                        const bool*  token_mask,

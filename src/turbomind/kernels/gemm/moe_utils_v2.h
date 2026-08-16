@@ -23,17 +23,17 @@ constexpr int kMoeGateVecSize  = 4;
 //
 // The selected experts are written in ascending expert-id order. Each weight
 // remains paired with the index at the same position.
-void invokeMoeGateTopK(float*       topk_weights,
-                       int*         topk_indices,
-                       const float* logits,
-                       const bool*  token_mask,
-                       int          tokens,
-                       int          experts,
-                       int          exp_per_tok,
-                       bool         softmax,
-                       bool         norm_topk,
-                       float        routed_scale,
-                       cudaStream_t st);
+void invokeMoeGate_V2(float*       topk_weights,
+                      int*         topk_indices,
+                      const float* logits,
+                      const bool*  token_mask,
+                      int          tokens,
+                      int          experts,
+                      int          exp_per_tok,
+                      bool         softmax,
+                      bool         norm_topk,
+                      float        routed_scale,
+                      cudaStream_t st);
 
 void invokeMoeGate_V2(int*         f2n,
                       int*         f2E,
