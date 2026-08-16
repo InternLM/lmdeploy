@@ -396,6 +396,41 @@ def test_sequence_values_are_flattened_to_rows(tmp_path):
     worker.shutdown()
 
 
+def test_lookup_server_starts_after_registration_only_on_global_rank_zero(tmp_path):
+    rank_zero_worker, _ = make_worker(tmp_path, global_rank=0, tp_rank=0, tp_size=2)
+    rank_one_worker, _ = make_worker(tmp_path, global_rank=1, tp_rank=1, tp_size=2)
+
+    assert rank_zero_worker.lookup_server is None
+    assert rank_one_worker.lookup_server is None
+
+    rank_zero_worker.register_kv_caches({'row': FakeTensor(0x1000)})
+    rank_one_worker.register_kv_caches({'row': FakeTensor(0x2000)})
+
+    assert rank_zero_worker.lookup_server is not None
+    assert rank_zero_worker.lookup_server.thread.is_alive()
+    assert rank_one_worker.lookup_server is None
+
+    rank_zero_worker.shutdown()
+    rank_one_worker.shutdown()
+
+
+def test_lookup_server_start_failure_rolls_back_registration(tmp_path, monkeypatch):
+    worker, store = make_worker(tmp_path)
+
+    def fail_to_start(*args, **kwargs):
+        raise RuntimeError('lookup bind failed')
+
+    monkeypatch.setattr(worker_module, 'LookupKeyServer', fail_to_start)
+    with pytest.raises(RuntimeError, match='lookup bind failed'):
+        worker.register_kv_caches({'row': FakeTensor(0x1000)})
+
+    assert store.register_calls == [(0x1000, 4096)]
+    assert store.close_calls == 1
+    assert worker.store is None
+    assert worker.lookup_server is None
+    assert worker._registered_regions is None
+
+
 def test_equivalent_registration_is_noop_but_different_mapping_fails(tmp_path):
     worker, store = make_worker(tmp_path)
     rows = {

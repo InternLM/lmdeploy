@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from .data import MooncakeStoreConnectorMetadata
+from .worker import LookupKeyClient
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.config import CacheConfig
@@ -25,13 +26,15 @@ class MooncakeStoreScheduler:
         self._cache_config = cache_config
         self._kv_transfer_config = kv_transfer_config
         self.kv_role = kv_transfer_config.kv_role
+        self.lookup_async = True
+        self.client: LookupKeyClient | None = LookupKeyClient(cache_config)
 
     def get_num_new_matched_tokens(
         self,
         request: SchedulerSequence,
         num_computed_tokens: int,
     ) -> tuple[int | None, bool]:
-        """Return no external hit until lookup support is implemented."""
+        """Return no external hit until the load path can consume it."""
         return 0, False
 
     def update_state_after_alloc(
@@ -61,8 +64,15 @@ class MooncakeStoreScheduler:
         block_ids: Sequence[int],
     ) -> tuple[bool, dict[str, Any] | None]:
         """Do not take ownership of finished request blocks yet."""
+        request_id = getattr(request, 'seq_id', None)
+        if self.client is not None and request_id is not None:
+            self.client.discard(request_id)
         return False, None
 
     def shutdown(self) -> None:
-        """Release scheduler resources once lookup support owns any."""
+        """Cancel pending lookups and release the scheduler client."""
+        client = self.client
+        self.client = None
+        if client is not None:
+            client.close()
         return None

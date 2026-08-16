@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -17,6 +17,34 @@ DEFAULT_LOCAL_BUFFER_SIZE = 4 * 1024 * 1024 * 1024
 MOONCAKE_CONFIG_PATH_ENV = 'MOONCAKE_CONFIG_PATH'
 
 MooncakeMode = Literal['embedded']
+
+
+class BlobBlockHashes(Sequence[bytes]):
+    """Lazy fixed-width hash view over one ZMQ payload frame."""
+
+    def __init__(self, blob: memoryview, hash_len: int) -> None:
+        if hash_len < 0:
+            raise ValueError('hash_len must be non-negative')
+        if hash_len == 0 and len(blob) != 0:
+            raise ValueError('a non-empty hash payload requires hash_len greater than 0')
+        if hash_len > 0 and len(blob) % hash_len != 0:
+            raise ValueError('hash payload length must be divisible by hash_len')
+        self._blob = blob
+        self._hash_len = hash_len
+        self._length = len(blob) // hash_len if hash_len else 0
+
+    def __len__(self) -> int:
+        return self._length
+
+    def __getitem__(self, index: int | slice) -> bytes | list[bytes]:
+        if isinstance(index, slice):
+            return [self[item] for item in range(*index.indices(self._length))]
+        if index < 0:
+            index += self._length
+        if index < 0 or index >= self._length:
+            raise IndexError(index)
+        offset = index * self._hash_len
+        return bytes(self._blob[offset:offset + self._hash_len])
 
 
 def _parse_size(value: Any) -> int:

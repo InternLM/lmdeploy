@@ -22,6 +22,7 @@ from lmdeploy.utils import get_logger, get_model
 
 from ..adapter.adapter import AdapterManager
 from ..config import CacheConfig, ModelConfig
+from ..kv_connector import KVConnectorRole, build_kv_connector, prepare_kv_connector_config
 from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
 from ..multimodal.data_type import ensure_multimodal_content_hashes
 from ..paging import Scheduler
@@ -136,6 +137,7 @@ class Engine(EngineBase):
         # build configs
         scheduler_config = ConfigBuilder.build_scheduler_config(engine_config)
         cache_config = ConfigBuilder.build_cache_config(engine_config)
+        prepare_kv_connector_config(cache_config)
         backend_config = ConfigBuilder.build_backend_config(engine_config)
         dist_config = ConfigBuilder.build_dist_config(engine_config)
         memdecode_config = ConfigBuilder.build_memdecode_config(model_path,
@@ -189,7 +191,22 @@ class Engine(EngineBase):
                                         cache_config=cache_config,
                                         seq_strategy=self.seq_strategy,
                                         sampling_strategy=self.sampling_strategy)
-        self.scheduler = Scheduler(scheduler_config, cache_config, seq_meta=self.seq_meta)
+        scheduler_connector = None
+        try:
+            scheduler_connector = build_kv_connector(KVConnectorRole.SCHEDULER, cache_config)
+            self.scheduler = Scheduler(
+                scheduler_config,
+                cache_config,
+                seq_meta=self.seq_meta,
+                kv_connector=scheduler_connector,
+            )
+        except Exception:
+            try:
+                if scheduler_connector is not None:
+                    scheduler_connector.shutdown()
+            finally:
+                self.executor.release()
+            raise
 
         # engine args
         self.model_path = model_path
@@ -505,7 +522,12 @@ class Engine(EngineBase):
         """Finally process for dist."""
         logger.info('Cleanup executor.')
         self.migration_event = None
-        self.executor.release()
+        try:
+            scheduler = getattr(self, 'scheduler', None)
+            if scheduler is not None:
+                scheduler.shutdown()
+        finally:
+            self.executor.release()
 
     def update_params(self, request: Any):
         """Update params."""

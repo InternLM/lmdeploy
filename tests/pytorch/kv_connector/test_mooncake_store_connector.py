@@ -121,6 +121,17 @@ def test_scheduler_empty_implementations_are_fail_closed(cache_config):
     assert connector.shutdown() is None
 
 
+def test_scheduler_discards_finished_request_lookup(cache_config):
+    scheduler = MooncakeStoreScheduler(cache_config)
+    assert scheduler.client is not None
+    scheduler.client.discard = MagicMock()
+    request = MagicMock(seq_id=17)
+
+    assert scheduler.request_finished(request, []) == (False, None)
+    scheduler.client.discard.assert_called_once_with(17)
+    scheduler.shutdown()
+
+
 def test_worker_unimplemented_hooks_are_safe_noops(cache_config):
     connector = MooncakeStoreConnector(KVConnectorRole.WORKER, cache_config)
     metadata = MooncakeStoreConnectorMetadata()

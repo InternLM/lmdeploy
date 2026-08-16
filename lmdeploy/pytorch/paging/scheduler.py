@@ -42,6 +42,7 @@ import time
 from collections import Counter, OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from torch.profiler import record_function
 
@@ -56,6 +57,9 @@ from .block_manager import build_block_manager
 from .block_trie import BlockTrie
 from .eviction_helper import build_eviction_helper
 from .state_manager import build_state_manager
+
+if TYPE_CHECKING:
+    from lmdeploy.pytorch.kv_connector.base import KVConnectorBase
 
 logger = get_logger('lmdeploy')
 
@@ -471,10 +475,12 @@ class Scheduler:
         scheduler_config: SchedulerConfig,
         cache_config: CacheConfig,
         seq_meta: SequenceMeta | None = None,
+        kv_connector: 'KVConnectorBase | None' = None,
     ) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.sessions: dict[int, SchedulerSession] = OrderedDict()
+        self.kv_connector = kv_connector
 
         # For Disaggregation
         self.locked_sessions: dict[int, SchedulerSession] = OrderedDict()
@@ -500,6 +506,13 @@ class Scheduler:
     def tick(self):
         """Mark one scheduler progress step (once per forward dispatch)."""
         self.scheduler_tick += 1
+
+    def shutdown(self) -> None:
+        """Release scheduler-side connector resources exactly once."""
+        connector = getattr(self, 'kv_connector', None)
+        self.kv_connector = None
+        if connector is not None:
+            connector.shutdown()
 
     def _ensure_runtime_state_available(self):
         """Make one state-cache slot available for an SSM runtime state.
