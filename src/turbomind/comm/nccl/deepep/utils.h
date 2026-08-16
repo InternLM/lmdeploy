@@ -5,6 +5,7 @@
 #include <nccl.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <dlfcn.h>
 #include <filesystem>
 #include <regex>

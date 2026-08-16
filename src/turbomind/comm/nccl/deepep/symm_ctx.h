@@ -1,3 +1,4 @@
+#pragma once
 
 #include "csrc/jit/no_ref.hpp"
 #include "csrc/kernels/backend/symmetric.hpp"
@@ -9,14 +10,19 @@
 #include <nccl_device.h>
 #include <nccl_device/core.h>
 
+#include <fmt/format.h>
+
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
-#define NCCLCHECK(e)                                                                                                   \
+#ifndef NCCL_CHECK
+#define NCCL_CHECK(e)                                                                                                  \
     if (auto ec = e; ec != ncclSuccess) {                                                                              \
         auto msg = fmt::format("NCCL error {}:{} '{}'", __FILE__, __LINE__, ncclGetErrorString(ec));                   \
         throw std::runtime_error(msg.c_str());                                                                         \
     }
+#endif
 
 using namespace deep_ep;
 using namespace deep_ep::elastic;

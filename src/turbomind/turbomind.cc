@@ -262,6 +262,9 @@ void TurboMind::Impl::CreateContext(int index)
         // Layout: (outer, ep, mlp_tp)
         c.d_mlp_group = 0;
         if (p.ep_size > 1) {
+            if (p.moe_a2a_backend == "auto") {
+                p.moe_a2a_backend = (p.nnodes > 1) ? "deepep" : "default";
+            }
             c.h_ep_group = c.h_comm->Split(p.mlp_tp_rank, 0);
             // For moe-args, we actually use `AllreduceResidualRMSnorm` to do the dispatch / combine
             // For moe-a2a, we omit the all-gather before dispatch and omit the all-reduce after combine.

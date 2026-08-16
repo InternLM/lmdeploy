@@ -715,16 +715,16 @@ void launchMoeGate_V8(float*       scales,
 }
 
 void invokeMoeGate_V2(float*       topk_weights,
-                       int*         topk_indices,
-                       const float* logits,
-                       const bool*  token_mask,
-                       int          tokens,
-                       int          experts,
-                       int          experts_per_token,
-                       bool         softmax,
-                       bool         norm_topk,
-                       float        routed_scale,
-                       cudaStream_t st)
+                      int*         topk_indices,
+                      const float* logits,
+                      const bool*  token_mask,
+                      int          tokens,
+                      int          experts,
+                      int          experts_per_token,
+                      bool         softmax,
+                      bool         norm_topk,
+                      float        routed_scale,
+                      cudaStream_t st)
 {
     TM_CHECK_GE(tokens, 0);
     if (tokens == 0) {
