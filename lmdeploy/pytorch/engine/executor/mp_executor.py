@@ -411,6 +411,14 @@ class MPExecutor(ExecutorBase):
         """Get output async."""
         return await self.remote_outs.get()
 
+    async def poll_kv_connector(self) -> set[int]:
+        """Poll and aggregate sticky connector completions from all workers."""
+        outputs = await self.collective_rpc_async(
+            'poll_kv_connector',
+            args=(self._kv_connector_poll_acknowledgements(), ),
+        )
+        return self._aggregate_kv_connector_outputs(outputs)
+
     def get_input_processor(self):
         """Get input processor."""
         return self.collective_rpc('get_input_processor', receiver_mask=1, return_mask=1)[0]

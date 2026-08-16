@@ -181,6 +181,13 @@ class WorkerWrapperBase:
         ret = self.pack_output(ret)
         return ret
 
+    def poll_kv_connector(
+        self,
+        acknowledged_sending: set[int] | None = None,
+    ) -> tuple[set[int] | None, set[int] | None]:
+        """Poll worker-local sticky connector completions."""
+        return self.model_agent.poll_kv_connector(acknowledged_sending)
+
     def release(self):
         """Stop engine loop."""
         self.model_agent.release()

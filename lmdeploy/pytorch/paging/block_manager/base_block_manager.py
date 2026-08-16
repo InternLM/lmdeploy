@@ -263,6 +263,31 @@ class BaseBlockManager:
             raise ValueError('logical_block_ids contains a block that is not GPU-resident.')
         return block_offsets
 
+    def pin_logical_blocks(self, logical_block_ids: np.ndarray):
+        """Pin allocated GPU blocks and return their physical offsets.
+
+        The extra allocator reference prevents request eviction from reusing
+        cache storage while an asynchronous consumer still reads it.
+        """
+        logical_block_ids = np.asarray(logical_block_ids, dtype=np.int64)
+        if logical_block_ids.ndim != 1:
+            raise ValueError('logical_block_ids must be one-dimensional')
+        block_offsets = self.resolve_gpu_block_offsets(logical_block_ids)
+        if len(logical_block_ids) > 0:
+            self.allocator.add_ref_count(logical_block_ids, 1)
+        return block_offsets
+
+    def release_pinned_logical_blocks(self, logical_block_ids: np.ndarray) -> None:
+        """Release references previously acquired by ``pin_logical_blocks``."""
+        logical_block_ids = np.asarray(logical_block_ids, dtype=np.int64)
+        if logical_block_ids.ndim != 1:
+            raise ValueError('logical_block_ids must be one-dimensional')
+        if len(logical_block_ids) == 0:
+            return
+        if np.any(self.allocator.get_ref_count(logical_block_ids) <= 0):
+            raise RuntimeError('cannot release an unallocated logical block pin')
+        self.allocator.free(logical_block_ids)
+
     def allocate(self, data: SchedulerSequence, prealloc_size: int = 0):
         """Allocate stuff."""
         return self.allocate_msg(data, prealloc_size)

@@ -831,7 +831,7 @@ class BaseModelAgent:
 
         return inputs, next_token_ids, extra_inputs, extra_outputs
 
-    async def _async_step(
+    async def _async_step_impl(
         self,
         inputs: ModelInputs,
         delta: ModelInputsDelta = None,
@@ -910,6 +910,8 @@ class BaseModelAgent:
             return_logits=return_logits or return_ce_loss,
             cache_inputs=cache_inputs,
         )
+
+        self._submit_kv_connector_save()
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output
@@ -993,6 +995,76 @@ class BaseModelAgent:
                 model_metas,
                 extra_outputs,
             )
+
+    async def _async_step(
+        self,
+        inputs: ModelInputs,
+        delta: ModelInputsDelta = None,
+        swap_in_map: dict = None,
+        swap_out_map: dict = None,
+        sampling_inputs: SamplingInputs = None,
+        stopping_criteria: StoppingCriteria = None,
+        return_logits: bool = False,
+        return_routed_experts: bool = False,
+        return_ce_loss: bool = False,
+        extra_inputs: ExtraInputs = None,
+        cache_inputs: CacheCheckpointInputs | None = None,
+        kv_connector_metadata: Any | None = None,
+    ):
+        """Run one model step with worker-local connector metadata bound."""
+        connector = getattr(self, 'kv_connector', None)
+        if connector is None or kv_connector_metadata is None:
+            return await self._async_step_impl(
+                inputs=inputs,
+                delta=delta,
+                swap_in_map=swap_in_map,
+                swap_out_map=swap_out_map,
+                sampling_inputs=sampling_inputs,
+                stopping_criteria=stopping_criteria,
+                return_logits=return_logits,
+                return_routed_experts=return_routed_experts,
+                return_ce_loss=return_ce_loss,
+                extra_inputs=extra_inputs,
+                cache_inputs=cache_inputs,
+            )
+
+        connector.bind_connector_metadata(kv_connector_metadata)
+        try:
+            connector.handle_preemptions(kv_connector_metadata)
+            return await self._async_step_impl(
+                inputs=inputs,
+                delta=delta,
+                swap_in_map=swap_in_map,
+                swap_out_map=swap_out_map,
+                sampling_inputs=sampling_inputs,
+                stopping_criteria=stopping_criteria,
+                return_logits=return_logits,
+                return_routed_experts=return_routed_experts,
+                return_ce_loss=return_ce_loss,
+                extra_inputs=extra_inputs,
+                cache_inputs=cache_inputs,
+            )
+        finally:
+            connector.clear_connector_metadata()
+
+    def poll_kv_connector(
+        self,
+        acknowledged_sending: set[int] | None = None,
+    ) -> tuple[set[int] | None, set[int] | None]:
+        """Poll transfer completion without waiting for model work."""
+        connector = getattr(self, 'kv_connector', None)
+        if connector is None:
+            return None, None
+        return connector.poll_finished(acknowledged_sending or set())
+
+    def _submit_kv_connector_save(self) -> None:
+        """Submit this step's save jobs after its KV writes are queued."""
+        connector = getattr(self, 'kv_connector', None)
+        if connector is None or not connector.has_pending_step_transfers():
+            return
+        ready_event = torch.cuda.Event()
+        ready_event.record(self.stream)
+        connector.submit_transfers(save_ready_event=ready_event)
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""
@@ -1264,6 +1336,11 @@ class BaseModelAgent:
                         global_rank=self.rank,
                         tp_rank=tp_rank,
                         tp_size=tp,
+                        kv_head_replica_num=getattr(
+                            self.model_config,
+                            'num_replicate_key_value_heads',
+                            1,
+                        ),
                     )
                     if self.kv_connector is not None:
                         self.kv_connector.register_kv_caches(self.cache_engine.connector_kv_caches)

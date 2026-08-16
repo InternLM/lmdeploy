@@ -52,6 +52,10 @@ class ExecutorBase:
         self.world_size = dist_config.world_size
         self.device_type = device_type
         self.specdecode_config = specdecode_config
+        # Worker completions are sticky until every TP rank has reported the
+        # same save id.  The ids emitted by one poll are acknowledged to all
+        # workers on the next poll.
+        self._kv_connector_acknowledged_sending: set[int] = set()
         self._maybe_disable_unsupported_prefix_caching(check_window=not self._has_cache_update_hook())
 
     def _has_cache_update_hook(self):
@@ -154,6 +158,38 @@ class ExecutorBase:
     async def get_output_async(self):
         """Get output async."""
         raise NotImplementedError('Not Implemented')
+
+    async def poll_kv_connector(self) -> set[int]:
+        """Poll TP-wide sticky KV-transfer completions without waiting for
+        I/O."""
+        raise NotImplementedError('Not Implemented')
+
+    def _kv_connector_poll_acknowledgements(self) -> set[int]:
+        """Return completions to acknowledge in the next worker poll."""
+        return set(getattr(self, '_kv_connector_acknowledged_sending', set()))
+
+    def _aggregate_kv_connector_outputs(self, outputs: list[Any]) -> set[int]:
+        """Return save ids reported complete by every local TP worker.
+
+        Each worker retains its local completion until it is acknowledged, so
+        taking the intersection remains correct when ranks finish on different
+        engine ticks.
+        """
+        if not outputs:
+            self._kv_connector_acknowledged_sending = set()
+            return set()
+
+        finished_per_rank: list[set[int]] = []
+        for output in outputs:
+            if output is None:
+                finished_per_rank.append(set())
+                continue
+            finished_sending, _ = output
+            finished_per_rank.append(set(finished_sending or ()))
+
+        finished = set.intersection(*finished_per_rank)
+        self._kv_connector_acknowledged_sending = finished
+        return finished
 
     """ PD Disaggregation API Begin """
 

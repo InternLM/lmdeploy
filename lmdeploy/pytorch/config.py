@@ -445,6 +445,12 @@ class ModelConfig:
     # update cache config
     update_cache_config_func: Any = None
 
+    # Number of contiguous TP ranks that own the same logical KV-head shard.
+    # Configuration builders populate this before num_key_value_heads is
+    # expanded to the TP size, so external KV connectors do not need to infer
+    # replication from cache tensor shapes.
+    num_replicate_key_value_heads: int = 1
+
     @property
     def use_mla_fp8_cache(self):
         """Whether MLA uses the DeepSeek-V3.2 FP8 cache layout."""

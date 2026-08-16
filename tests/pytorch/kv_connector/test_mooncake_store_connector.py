@@ -69,6 +69,7 @@ def test_connector_constructs_only_worker_delegate(cache_config):
         global_rank=7,
         tp_rank=3,
         tp_size=8,
+        kv_head_replica_num=4,
     )
 
     assert connector.connector_scheduler is None
@@ -77,7 +78,31 @@ def test_connector_constructs_only_worker_delegate(cache_config):
     assert connector.connector_worker.global_rank == 7
     assert connector.connector_worker.tp_rank == 3
     assert connector.connector_worker.tp_size == 8
+    assert connector.connector_worker.kv_head_replica_num == 4
+    assert connector.kv_head_replica_num == 4
     assert connector.kv_role == 'kv_both'
+
+
+@pytest.mark.parametrize(
+    ('replica_num', 'match'),
+    [
+        (0, 'positive integer'),
+        (True, 'positive integer'),
+        (3, 'must be divisible'),
+    ],
+)
+def test_connector_rejects_invalid_kv_head_replica_num(
+    cache_config,
+    replica_num,
+    match,
+):
+    with pytest.raises(ValueError, match=match):
+        MooncakeStoreConnector(
+            KVConnectorRole.WORKER,
+            cache_config,
+            tp_size=8,
+            kv_head_replica_num=replica_num,
+        )
 
 
 def test_connector_requires_enabled_kv_transfer_config():
@@ -138,6 +163,8 @@ def test_worker_unimplemented_hooks_are_safe_noops(cache_config):
     connector.bind_connector_metadata(metadata)
 
     assert connector.handle_preemptions(metadata) is None
+    assert not connector.has_pending_step_transfers()
+    assert connector.submit_transfers() is None
     assert connector.get_finished({1}) == (None, None)
     assert connector.get_block_ids_with_load_errors() == set()
     assert connector.shutdown() is None
@@ -191,7 +218,9 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
     metadata = MooncakeStoreConnectorMetadata()
     worker.register_kv_caches = MagicMock(return_value=None)
     worker.handle_preemptions = MagicMock(return_value=None)
-    worker.get_finished = MagicMock(return_value=({1}, {2}))
+    worker.has_pending_step_transfers = MagicMock(return_value=True)
+    worker.submit_transfers = MagicMock(return_value=None)
+    worker.poll_finished = MagicMock(return_value=({1}, {2}))
     worker.get_block_ids_with_load_errors = MagicMock(return_value={7, 8})
     worker.shutdown = MagicMock(return_value=None)
 
@@ -202,8 +231,27 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
     worker.handle_preemptions.assert_called_once_with(metadata)
 
     connector.bind_connector_metadata(metadata)
-    assert connector.get_finished({1, 3}) == ({1}, {2})
-    worker.get_finished.assert_called_once_with({1, 3}, metadata)
+    save_ready_event = object()
+    assert connector.has_pending_step_transfers()
+    worker.has_pending_step_transfers.assert_called_once_with(metadata)
+
+    assert connector.submit_transfers(save_ready_event=save_ready_event) is None
+    worker.submit_transfers.assert_called_once_with(
+        metadata,
+        save_ready_event=save_ready_event,
+    )
+
+    assert connector.poll_finished({9}) == ({1}, {2})
+    worker.poll_finished.assert_called_once_with({9})
+
+    worker.submit_transfers.reset_mock()
+    worker.poll_finished.reset_mock()
+    assert connector.get_finished({1, 3}, ready_event=save_ready_event) == ({1}, {2})
+    worker.submit_transfers.assert_called_once_with(
+        metadata,
+        save_ready_event=save_ready_event,
+    )
+    worker.poll_finished.assert_called_once_with(set())
 
     assert connector.get_block_ids_with_load_errors() == {7, 8}
     worker.get_block_ids_with_load_errors.assert_called_once_with()
@@ -215,6 +263,9 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
 def test_get_finished_requires_bound_metadata(cache_config):
     connector = MooncakeStoreConnector(KVConnectorRole.WORKER, cache_config)
 
+    assert not connector.has_pending_step_transfers()
+    with pytest.raises(AssertionError):
+        connector.submit_transfers()
     with pytest.raises(AssertionError):
         connector.get_finished(set())
 
@@ -227,6 +278,10 @@ def test_get_finished_rejects_other_connector_metadata(cache_config):
     connector = MooncakeStoreConnector(KVConnectorRole.WORKER, cache_config)
     connector.bind_connector_metadata(OtherConnectorMetadata())
 
+    with pytest.raises(TypeError):
+        connector.has_pending_step_transfers()
+    with pytest.raises(TypeError):
+        connector.submit_transfers()
     with pytest.raises(TypeError):
         connector.get_finished(set())
 

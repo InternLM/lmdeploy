@@ -14,7 +14,7 @@ from lmdeploy.pytorch.kv_connector.base import (
     RequestId,
 )
 
-from .data import MooncakeStoreConnectorMetadata
+from .data import MooncakeStoreConnectorMetadata, validate_kv_head_replica_num
 from .scheduler import MooncakeStoreScheduler
 from .worker import MooncakeStoreWorker
 
@@ -35,6 +35,7 @@ class MooncakeStoreConnector(KVConnectorBase):
         global_rank: int = 0,
         tp_rank: int = 0,
         tp_size: int = 1,
+        kv_head_replica_num: int = 1,
     ) -> None:
         super().__init__(role)
 
@@ -48,6 +49,8 @@ class MooncakeStoreConnector(KVConnectorBase):
         self._cache_config = cache_config
         self._kv_transfer_config = kv_transfer_config
         self.kv_role = kv_transfer_config.kv_role
+        self.kv_head_replica_num = validate_kv_head_replica_num(
+            kv_head_replica_num, tp_size)
 
         self.connector_scheduler: MooncakeStoreScheduler | None = None
         self.connector_worker: MooncakeStoreWorker | None = None
@@ -59,6 +62,7 @@ class MooncakeStoreConnector(KVConnectorBase):
                 global_rank=global_rank,
                 tp_rank=tp_rank,
                 tp_size=tp_size,
+                kv_head_replica_num=self.kv_head_replica_num,
             )
 
     def _require_scheduler(self) -> MooncakeStoreScheduler:
@@ -116,15 +120,40 @@ class MooncakeStoreConnector(KVConnectorBase):
             raise TypeError('connector_metadata must be a MooncakeStoreConnectorMetadata')
         return self._require_worker().handle_preemptions(connector_metadata)
 
-    def get_finished(
+    def _get_worker_step_metadata(
         self,
-        finished_req_ids: set[RequestId],
-    ) -> tuple[set[RequestId] | None, set[RequestId] | None]:
+    ) -> tuple[MooncakeStoreWorker, MooncakeStoreConnectorMetadata]:
         worker = self._require_worker()
         connector_metadata = self._get_connector_metadata()
         if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
             raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
-        return worker.get_finished(finished_req_ids, connector_metadata)
+        return worker, connector_metadata
+
+    def has_pending_step_transfers(self) -> bool:
+        worker = self._require_worker()
+        if not self.has_connector_metadata():
+            return False
+        connector_metadata = self._get_connector_metadata()
+        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
+            raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
+        return worker.has_pending_step_transfers(connector_metadata)
+
+    def submit_transfers(
+        self,
+        *,
+        save_ready_event: Any | None = None,
+    ) -> None:
+        worker, connector_metadata = self._get_worker_step_metadata()
+        return worker.submit_transfers(
+            connector_metadata,
+            save_ready_event=save_ready_event,
+        )
+
+    def poll_finished(
+        self,
+        acknowledged_sending: set[RequestId] | None = None,
+    ) -> tuple[set[RequestId] | None, set[RequestId] | None]:
+        return self._require_worker().poll_finished(acknowledged_sending or set())
 
     def get_block_ids_with_load_errors(self) -> set[int]:
         return self._require_worker().get_block_ids_with_load_errors()

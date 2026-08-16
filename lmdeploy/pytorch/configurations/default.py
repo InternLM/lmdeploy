@@ -42,4 +42,6 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
             v_head_dim=head_dim,
             vocab_size=hf_config.vocab_size,
             llm_config=hf_config,
+            num_replicate_key_value_heads=getattr(
+                hf_config, 'num_replicate_key_value_heads', 1),
         )

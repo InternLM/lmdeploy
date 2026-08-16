@@ -46,6 +46,36 @@ def test_prepare_kv_connector_config_generates_one_short_unique_path():
     assert second_path != first_path
 
 
+def test_prepare_kv_connector_config_adds_vllm_style_model_name(tmp_path):
+    cache_config = _make_mooncake_cache_config()
+    model_path = tmp_path / 'model-snapshot'
+    model_path.mkdir()
+
+    prepare_kv_connector_config(cache_config, model_path=str(model_path))
+
+    extra_config = cache_config.kv_transfer_config.kv_connector_extra_config
+    assert extra_config['model_name'] == model_path.name
+
+
+def test_prepare_kv_connector_config_preserves_explicit_model_name(tmp_path):
+    cache_config = _make_mooncake_cache_config()
+    cache_config.kv_transfer_config.kv_connector_extra_config['model_name'] = 'deployment-a'
+
+    prepare_kv_connector_config(cache_config, model_path=str(tmp_path))
+
+    assert cache_config.kv_transfer_config.kv_connector_extra_config['model_name'] == 'deployment-a'
+
+
+def test_prepare_kv_connector_config_accepts_legacy_model_namespace(tmp_path):
+    cache_config = _make_mooncake_cache_config()
+    extra_config = cache_config.kv_transfer_config.kv_connector_extra_config
+    extra_config['model_namespace'] = 'deployment-a'
+
+    prepare_kv_connector_config(cache_config, model_path=str(tmp_path))
+
+    assert extra_config['model_name'] == 'deployment-a'
+
+
 def test_runtime_lookup_path_does_not_mutate_reused_engine_config():
     engine_config = PytorchEngineConfig(
         max_batch_size=1,

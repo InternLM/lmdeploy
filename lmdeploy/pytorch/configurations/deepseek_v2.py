@@ -56,5 +56,7 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
             vocab_size=hf_config.vocab_size,
             use_flash_mla=hf_config.use_flash_mla,
             model_paradigm=model_paradigm,
+            num_replicate_key_value_heads=getattr(
+                hf_config, 'num_replicate_key_value_heads', 1),
         )
         return config

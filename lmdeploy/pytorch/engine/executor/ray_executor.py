@@ -525,6 +525,15 @@ class RayExecutor(ExecutorBase):
         ret = ret.to_tensor()
         return ret
 
+    async def poll_kv_connector(self) -> set[int]:
+        """Poll and aggregate sticky connector completions from every TP
+        worker."""
+        outputs = await self.collective_rpc_async(
+            'poll_kv_connector',
+            (self._kv_connector_poll_acknowledgements(), ),
+        )
+        return self._aggregate_kv_connector_outputs(outputs)
+
     @contextlib.contextmanager
     def remote_log(self, msg: str):
         """Send log for debugging.

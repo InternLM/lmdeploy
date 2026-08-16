@@ -111,6 +111,13 @@ class UniExecutor(ExecutorBase):
         assert dp_rank == 0
         return await self.model_agent.get_output_async()
 
+    async def poll_kv_connector(self) -> set[int]:
+        """Poll connector completion on the single model worker."""
+        output = self.model_agent.poll_kv_connector(
+            self._kv_connector_poll_acknowledgements(),
+        )
+        return self._aggregate_kv_connector_outputs([output])
+
     async def sleep(self, level: int = 1):
         """Sleep."""
         await self.model_agent.sleep(level)

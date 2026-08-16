@@ -62,6 +62,7 @@ def test_factory_forwards_worker_rank_context(monkeypatch):
         global_rank=7,
         tp_rank=3,
         tp_size=8,
+        kv_head_replica_num=4,
     )
 
     assert connector is result
@@ -71,6 +72,7 @@ def test_factory_forwards_worker_rank_context(monkeypatch):
         'global_rank': 7,
         'tp_rank': 3,
         'tp_size': 8,
+        'kv_head_replica_num': 4,
     }
 
 
@@ -80,7 +82,7 @@ def _bare_model_agent():
     agent = BaseModelAgent.__new__(BaseModelAgent)
     agent.all_context = nullcontext
     agent.cache_config = _enabled_config()
-    agent.model_config = object()
+    agent.model_config = SimpleNamespace(num_replicate_key_value_heads=4)
     agent.rank = 7
     agent.cache_stream = object()
     agent.dist_config = SimpleNamespace(attn_tp=8)
@@ -145,7 +147,12 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
     assert cache_call[2]['world_size'] == 8
     factory_call = events[3]
     assert factory_call[1] is KVConnectorRole.WORKER
-    assert factory_call[3] == {'global_rank': 7, 'tp_rank': 3, 'tp_size': 8}
+    assert factory_call[3] == {
+        'global_rank': 7,
+        'tp_rank': 3,
+        'tp_size': 8,
+        'kv_head_replica_num': 4,
+    }
     assert events[4] == ('register', row_mapping)
     assert agent.kv_connector is new_connector
     assert agent.cache_engine is cache_engine
@@ -314,3 +321,131 @@ def test_wakeup_rebuilds_connector_with_kv_cache():
 
     assert events == ['build-cache', 'warmup']
     assert agent.state.is_sleeping is False
+
+
+def test_async_step_binds_handles_and_clears_connector_metadata():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    events = []
+    metadata = object()
+
+    class _Connector:
+
+        def bind_connector_metadata(self, value):
+            events.append(('bind', value))
+
+        def handle_preemptions(self, value):
+            events.append(('preempt', value))
+
+        def clear_connector_metadata(self):
+            events.append('clear')
+
+    async def _async_step_impl(**kwargs):
+        events.append(('forward', kwargs['inputs']))
+        return 'result'
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.kv_connector = _Connector()
+    agent._async_step_impl = _async_step_impl
+
+    result = asyncio.run(agent._async_step(inputs='inputs', kv_connector_metadata=metadata))
+
+    assert result == 'result'
+    assert events == [
+        ('bind', metadata),
+        ('preempt', metadata),
+        ('forward', 'inputs'),
+        'clear',
+    ]
+
+
+def test_async_step_clears_connector_metadata_after_forward_error():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    events = []
+
+    class _Connector:
+
+        def bind_connector_metadata(self, value):
+            events.append('bind')
+
+        def handle_preemptions(self, value):
+            events.append('preempt')
+
+        def clear_connector_metadata(self):
+            events.append('clear')
+
+    async def _async_step_impl(**kwargs):
+        raise RuntimeError('forward failed')
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.kv_connector = _Connector()
+    agent._async_step_impl = _async_step_impl
+
+    with pytest.raises(RuntimeError, match='forward failed'):
+        asyncio.run(agent._async_step(inputs=object(), kv_connector_metadata=object()))
+
+    assert events == ['bind', 'preempt', 'clear']
+
+
+def test_submit_kv_connector_save_records_event_on_forward_stream(monkeypatch):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    events = []
+    stream = object()
+
+    class _Event:
+
+        def record(self, value):
+            events.append(('record', value))
+
+    class _Connector:
+
+        def has_pending_step_transfers(self):
+            return True
+
+        def submit_transfers(self, *, save_ready_event=None):
+            events.append(('submit', save_ready_event))
+
+        def poll_finished(self, acknowledged_sending):
+            events.append(('poll', acknowledged_sending))
+            return {3}, None
+
+    monkeypatch.setattr(agent_module.torch.cuda, 'Event', _Event)
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.stream = stream
+    agent.kv_connector = _Connector()
+
+    agent._submit_kv_connector_save()
+    assert agent.poll_kv_connector({1, 2}) == ({3}, None)
+
+    ready_event = events[1][1]
+    assert events == [
+        ('record', stream),
+        ('submit', ready_event),
+        ('poll', {1, 2}),
+    ]
+
+
+def test_submit_kv_connector_save_skips_event_without_pending_step_transfers(monkeypatch):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    class _Connector:
+
+        def has_pending_step_transfers(self):
+            return False
+
+        def submit_transfers(self, **kwargs):
+            raise AssertionError('empty step metadata must not submit transfers')
+
+    monkeypatch.setattr(
+        agent_module.torch.cuda,
+        'Event',
+        lambda: (_ for _ in ()).throw(AssertionError('empty decode metadata must not record an event')),
+    )
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.kv_connector = _Connector()
+
+    agent._submit_kv_connector_save()

@@ -42,8 +42,9 @@ import time
 from collections import Counter, OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+import numpy as np
 from torch.profiler import record_function
 
 from lmdeploy.messages import EventType, ScheduleMetrics
@@ -75,6 +76,20 @@ class SchedulerOutput:
     swap_in_map: MapType
     swap_out_map: MapType
     copy_map: MapType
+    connector_token_lens: tuple[int, ...] = ()
+    connector_block_ids: tuple[tuple[int, ...], ...] = ()
+    connector_logical_block_ids: tuple[tuple[int, ...], ...] = ()
+    connector_generations: tuple[int, ...] = ()
+    preempted_save_ids: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class _PendingKVSave:
+    """Scheduler-owned logical-block pins for one async save wave."""
+
+    req_id: int
+    generation: int
+    logical_block_ids: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -503,6 +518,13 @@ class Scheduler:
         self._long_prefill_policy = _envs.opt_ttft_policy
         self._long_prefill_aging_seconds_per_chunk = max(0.001, _envs.opt_ttft_aging_sec)
 
+        # Async connector saves own one reference to every logical block they
+        # read.  Request eviction can then release its reference immediately
+        # without allowing the physical cache rows to be reused before all TP
+        # workers finish the save wave.
+        self._kv_seq_generations: dict[int, int] = {}
+        self._pending_kv_saves: dict[int, _PendingKVSave] = {}
+
     def tick(self):
         """Mark one scheduler progress step (once per forward dispatch)."""
         self.scheduler_tick += 1
@@ -511,8 +533,215 @@ class Scheduler:
         """Release scheduler-side connector resources exactly once."""
         connector = getattr(self, 'kv_connector', None)
         self.kv_connector = None
+        try:
+            if connector is not None:
+                connector.shutdown()
+        finally:
+            self._release_all_kv_save_pins()
+
+    def mark_kv_connector_preempted(self, seq: SchedulerSequence) -> None:
+        """Start a new connector generation before a sequence recomputes.
+
+        A request ID survives recompute preemption in LMDeploy.  A generation
+        therefore distinguishes work submitted against the old block table
+        from work submitted after the request is allocated again.  Existing
+        jobs remain pinned until workers acknowledge their save IDs.
+        """
+        if self.kv_connector is None:
+            return
+
+        req_id = int(seq.seq_id)
+        old_generation = self._kv_seq_generations.get(req_id, 0)
+        self._kv_seq_generations[req_id] = old_generation + 1
+
+    def build_kv_connector_metadata(
+        self,
+        running: SeqList,
+        token_lens: tuple[int, ...] | None = None,
+    ) -> Any | None:
+        """Build and pin metadata for one executor dispatch.
+
+        ``token_lens`` is supplied only for prefill-like forwards.  Decode
+        still emits empty metadata so preemption notifications reach workers,
+        but it never creates save work: its token IDs can be one step stale due
+        to engine prefetching.
+        """
+        connector = self.kv_connector
+        if connector is None:
+            return None
+
+        if token_lens is None:
+            token_lens = ()
+        if len(token_lens) not in (0, len(running)):
+            raise ValueError('token_lens must be empty or contain one value per running sequence')
+
+        aligned_token_lens: list[int] = []
+        logical_block_ids: list[tuple[int, ...]] = []
+        physical_block_ids: list[tuple[int, ...]] = []
+        generations: list[int] = []
+        snapshots: dict[int, tuple[np.ndarray, tuple[int, ...], int]] = {}
+        block_size = self.cache_config.block_size
+
+        if token_lens:
+            for seq, token_len_value in zip(running, token_lens):
+                token_len = int(token_len_value)
+                if token_len < 0:
+                    raise ValueError('connector token length must be non-negative')
+                token_len = token_len // block_size * block_size
+                num_blocks = token_len // block_size
+
+                all_logical_ids = seq.logical_blocks.get_real_blocks()
+                if num_blocks > len(all_logical_ids):
+                    raise RuntimeError(
+                        f'request {seq.seq_id} has {len(all_logical_ids)} allocated blocks '
+                        f'but connector save needs {num_blocks}')
+                logical_ids = np.asarray(all_logical_ids[:num_blocks], dtype=np.int64).copy()
+                physical_ids = self.block_manager.resolve_gpu_block_offsets(logical_ids)
+                physical_tuple = tuple(int(block_id) for block_id in physical_ids)
+                logical_tuple = tuple(int(block_id) for block_id in logical_ids)
+                generation = self._kv_seq_generations.setdefault(int(seq.seq_id), 0)
+
+                aligned_token_lens.append(token_len)
+                logical_block_ids.append(logical_tuple)
+                physical_block_ids.append(physical_tuple)
+                generations.append(generation)
+                snapshots[int(seq.seq_id)] = (logical_ids, physical_tuple, generation)
+
+        scheduler_output = SchedulerOutput(
+            running=running,
+            swap_in_map={},
+            swap_out_map={},
+            copy_map={},
+            connector_token_lens=tuple(aligned_token_lens),
+            connector_block_ids=tuple(physical_block_ids),
+            connector_logical_block_ids=tuple(logical_block_ids),
+            connector_generations=tuple(generations),
+            # Pinned old-generation jobs always drain to completion.  Do not
+            # let a worker that has not enqueued the job yet interpret a
+            # preemption notice as permission to acknowledge it early.
+            preempted_save_ids=(),
+        )
+        metadata = connector.build_connector_meta(scheduler_output)
+        try:
+            self._pin_kv_connector_metadata(metadata, snapshots)
+        except BaseException:
+            self.rollback_kv_connector_metadata(metadata)
+            raise
+        return metadata
+
+    def _pin_kv_connector_metadata(
+        self,
+        metadata: Any,
+        snapshots: dict[int, tuple[np.ndarray, tuple[int, ...], int]],
+    ) -> None:
+        """Acquire one allocator reference for every metadata save wave."""
+        save_requests = getattr(metadata, 'save_requests', ())
+        pinned_save_ids: list[int] = []
+        try:
+            for save_request in save_requests:
+                save_id = int(save_request.save_id)
+                req_id = int(save_request.req_id)
+                generation = int(save_request.generation)
+                if save_id in self._pending_kv_saves:
+                    raise RuntimeError(f'duplicate connector save_id {save_id}')
+                if req_id not in snapshots:
+                    raise RuntimeError(f'connector metadata refers to unscheduled request {req_id}')
+
+                logical_ids, physical_ids, expected_generation = snapshots[req_id]
+                num_blocks = int(save_request.token_len) // self.cache_config.block_size
+                if int(save_request.token_len) % self.cache_config.block_size != 0:
+                    raise ValueError('connector save token_len must be block aligned')
+                if generation != expected_generation:
+                    raise RuntimeError(
+                        f'connector generation mismatch for request {req_id}: '
+                        f'{generation} != {expected_generation}')
+                if len(save_request.block_ids) != num_blocks or len(save_request.block_hashes) != num_blocks:
+                    raise ValueError('connector save block IDs and hashes must match token_len')
+
+                wave_logical_ids = logical_ids[:num_blocks].copy()
+                if tuple(int(block_id) for block_id in save_request.block_ids) != physical_ids[:num_blocks]:
+                    raise RuntimeError(f'connector physical block snapshot changed for request {req_id}')
+
+                self.block_manager.pin_logical_blocks(wave_logical_ids)
+                self._pending_kv_saves[save_id] = _PendingKVSave(
+                    req_id=req_id,
+                    generation=generation,
+                    logical_block_ids=wave_logical_ids,
+                )
+                pinned_save_ids.append(save_id)
+        except BaseException:
+            self._release_kv_save_pins(pinned_save_ids)
+            raise
+
+    @staticmethod
+    def _completed_kv_save_ids(connector_output: Any) -> set[int]:
+        """Normalize executor connector output to completed save IDs."""
+        if connector_output is None:
+            return set()
+        output = connector_output
+        if isinstance(output, dict):
+            output = output.get('completed_save_ids', output.get('finished_sending'))
+        elif hasattr(output, 'completed_save_ids'):
+            output = output.completed_save_ids
+        elif hasattr(output, 'finished_sending'):
+            output = output.finished_sending
+        elif isinstance(output, tuple) and len(output) == 2:
+            output = output[0]
+        if output is None:
+            return set()
+        if isinstance(output, (set, frozenset, list, tuple)):
+            return {int(save_id) for save_id in output}
+        return set()
+
+    def update_connector_output(self, connector_output: Any) -> None:
+        """Consume all-TP completions and release scheduler block pins."""
+        completed_save_ids = self._completed_kv_save_ids(connector_output)
+        connector = self.kv_connector
+        try:
+            if connector is not None:
+                connector.update_connector_output(connector_output)
+        finally:
+            self._release_kv_save_pins(completed_save_ids)
+
+    def rollback_kv_connector_metadata(self, metadata: Any | None) -> None:
+        """Undo pins and save bookkeeping after executor dispatch fails."""
+        if metadata is None:
+            return
+        save_ids = {
+            int(save_request.save_id)
+            for save_request in getattr(metadata, 'save_requests', ())
+        }
+        self._release_kv_save_pins(save_ids)
+        connector = self.kv_connector
+        if connector is not None and save_ids:
+            connector.update_connector_output({'rolled_back_save_ids': save_ids})
+
+    def _release_kv_save_pins(self, save_ids) -> None:
+        pending_saves = getattr(self, '_pending_kv_saves', {})
+        for save_id in save_ids:
+            save_id = int(save_id)
+            pending = pending_saves.pop(save_id, None)
+            if pending is not None:
+                self.block_manager.release_pinned_logical_blocks(pending.logical_block_ids)
+
+    def _release_all_kv_save_pins(self) -> None:
+        pending_saves = getattr(self, '_pending_kv_saves', {})
+        self._release_kv_save_pins(tuple(pending_saves))
+
+    def has_pending_kv_connector_work(self) -> bool:
+        """Return whether async connector work still owns cache blocks."""
+        return bool(getattr(self, '_pending_kv_saves', {}))
+
+    def request_kv_connector_finished(self, seq: SchedulerSequence) -> None:
+        """Notify the connector before a sequence's request ref is freed."""
+        connector = self.kv_connector
         if connector is not None:
-            connector.shutdown()
+            block_ids = tuple(
+                int(block_id)
+                for block_id in self.block_manager.get_block_table(seq)
+            )
+            connector.request_finished(seq, block_ids)
+        self._kv_seq_generations.pop(int(seq.seq_id), None)
 
     def _ensure_runtime_state_available(self):
         """Make one state-cache slot available for an SSM runtime state.
@@ -545,6 +774,7 @@ class Scheduler:
         if self.is_ssm:
             self.block_trie.state_checkpoints.unpin_restore(seq)
         if seq.num_blocks > 0 or seq.logical_state >= 0:
+            self.mark_kv_connector_preempted(seq)
             seq.state.free()
         elif seq.num_history_ids > 0:
             seq.set_step(0)
@@ -840,9 +1070,11 @@ class Scheduler:
                 if len(running) == 0:
                     break
                 seq_preempted = running.pop(-1)
+                self.mark_kv_connector_preempted(seq_preempted)
                 seq_preempted.state.evict()
 
             if self.block_manager.get_num_free_gpu_blocks() < num_required_blocks:
+                self.mark_kv_connector_preempted(seq)
                 seq.state.evict()
                 continue
 
@@ -895,6 +1127,7 @@ class Scheduler:
             # running to ready
             seq.state.deactivate()
             # ready to waiting
+            self.mark_kv_connector_preempted(seq)
             seq.state.evict()
             valid_mask[idx] = False
         valid_mask = list(reversed(valid_mask))
@@ -942,6 +1175,7 @@ class Scheduler:
     def evict_seqs(self, running: SeqList):
         """Evict running sequences."""
         for seq in running:
+            self.mark_kv_connector_preempted(seq)
             seq.state.evict()
 
     def activate_seqs(self, running: SeqList, filter_status: MessageStatus = MessageStatus.READY):

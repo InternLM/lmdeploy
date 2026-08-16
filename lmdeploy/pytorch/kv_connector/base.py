@@ -88,16 +88,57 @@ class KVConnectorBase(ABC):
         """Handle preempted requests before their GPU blocks are overwritten."""
         return None
 
+    def has_pending_step_transfers(self) -> bool:
+        """Return whether the bound metadata contains work to submit.
+
+        Connectors should override this when an empty metadata object is common
+        so callers can avoid creating an unnecessary device-readiness fence.
+        """
+        return self.has_connector_metadata()
+
+    def submit_transfers(
+        self,
+        *,
+        save_ready_event: Any | None = None,
+    ) -> None:
+        """Submit transfers described by the currently bound step metadata.
+
+        ``save_ready_event`` is a worker-local CUDA event recorded after the
+        model has queued the writes that produce this step's KV cache. It must
+        never be embedded in scheduler metadata because that metadata is
+        serialized for distributed workers.
+        """
+        return None
+
     def get_finished(
         self,
         finished_req_ids: set[RequestId],
+        *,
+        ready_event: Any | None = None,
     ) -> tuple[set[RequestId] | None, set[RequestId] | None]:
-        """Return requests whose asynchronous save/load has completed.
+        """Compatibility wrapper combining submission and completion polling.
 
-        The tuple order is ``(finished_sending, finished_receiving)``. A
-        request returned in ``finished_sending`` must have appeared in
-        ``finished_req_ids`` in this call or an earlier call. The receiving set
-        reports requests whose asynchronous external-cache load is complete.
+        ``finished_req_ids`` is retained for connectors ported from vLLM. New
+        LMDeploy integrations should submit via :meth:`submit_transfers` and
+        collect sticky completions via :meth:`poll_finished` instead. A
+        connector may use operation identifiers rather than user request
+        identifiers when one request has multiple concurrent transfer waves.
+        """
+        del finished_req_ids
+        self.submit_transfers(save_ready_event=ready_event)
+        return self.poll_finished()
+
+    def poll_finished(
+        self,
+        acknowledged_sending: set[RequestId] | None = None,
+    ) -> tuple[set[RequestId] | None, set[RequestId] | None]:
+        """Poll sticky transfer completions without executing a model step.
+
+        Distributed executors use this connector-only hook after the final
+        forward as well as between normal forwards.  Implementations should
+        retain local completions until they appear in
+        ``acknowledged_sending`` so completions from different tensor-parallel
+        ranks cannot be lost across polling rounds.
         """
         return None, None
 

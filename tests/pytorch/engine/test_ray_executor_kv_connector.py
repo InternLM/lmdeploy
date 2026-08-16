@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from unittest.mock import Mock
+import asyncio
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -104,3 +105,22 @@ def test_ray_executor_release_dp_workers_without_rpc(monkeypatch, ray_components
     executor.collective_rpc.assert_not_called()
     assert kill.call_args_list == [((worker, ), {}) for worker in executor.workers]
     assert executor.ray_ctx.shutdown_calls == 1
+
+
+def test_ray_executor_polls_all_tp_workers_with_sticky_ack(ray_components):
+    _, _, ray_executor_cls = ray_components
+    executor = _make_executor(ray_executor_cls, _make_cache_config())
+    executor._kv_connector_acknowledged_sending = {5}
+    executor.collective_rpc_async = AsyncMock(return_value=[
+        ({7, 8}, None),
+        ({8}, None),
+    ])
+
+    completed = asyncio.run(executor.poll_kv_connector())
+
+    assert completed == {8}
+    executor.collective_rpc_async.assert_awaited_once_with(
+        'poll_kv_connector',
+        ({5}, ),
+    )
+    assert executor._kv_connector_poll_acknowledgements() == {8}

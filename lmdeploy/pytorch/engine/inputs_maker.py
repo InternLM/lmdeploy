@@ -596,6 +596,19 @@ class _ForwardInputsTask:
     def _need_ce_loss(self):
         return any(seq.return_ce_loss for seq in self.result.running)
 
+    def _build_kv_connector_metadata(self):
+        """Build scheduler metadata after final prefill/chunk selection."""
+        build_metadata = getattr(self.scheduler, 'build_kv_connector_metadata', None)
+        if build_metadata is None:
+            return None
+
+        inputs = self.result.inputs
+        token_lens = None
+        if inputs is not None and not inputs.is_decoding:
+            ready_token_lens = inputs.history_lengths + inputs.seq_length
+            token_lens = tuple(int(token_len) for token_len in ready_token_lens.tolist())
+        return build_metadata(self.result.running, token_lens)
+
     def _build_payload(self):
         maker = self.maker
         result = self.result
@@ -604,6 +617,7 @@ class _ForwardInputsTask:
             stopping_criteria = maker.model_agent_strategy.make_stopping_criteria(result.running)
         else:
             stopping_criteria = None
+        kv_connector_metadata = self._build_kv_connector_metadata()
 
         return dict(
             running=result.running,
@@ -618,6 +632,7 @@ class _ForwardInputsTask:
             extra_inputs=result.extra_inputs,
             return_routed_experts=self._need_routed_experts(),
             return_ce_loss=self._need_ce_loss(),
+            kv_connector_metadata=kv_connector_metadata,
         )
 
 
@@ -1290,7 +1305,13 @@ class InputsMakerAsync:
             logger.debug(f'Sending forward inputs: {inputs.log_info()}')
             session_ids = [seq.session_id for seq in next_running]
             logger.debug(f'Forward session_ids: {session_ids}')
-        await self.executor.forward_async(forward_inputs)
+        try:
+            await self.executor.forward_async(forward_inputs)
+        except BaseException:
+            rollback_metadata = getattr(self.scheduler, 'rollback_kv_connector_metadata', None)
+            if rollback_metadata is not None:
+                rollback_metadata(forward_inputs.get('kv_connector_metadata'))
+            raise
         self._last_forward_kind = self._forward_kind(inputs, forward_inputs['delta'])
         self.scheduler.tick()
         self.forward_inputs = forward_inputs

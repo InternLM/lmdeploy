@@ -18,6 +18,12 @@ class LlavaHfModelConfigBuilder(AutoModelConfigBuilder):
         hidden_size = getattr(text_config, 'hidden_size', 4096)
         num_attention_heads = getattr(text_config, 'num_attention_heads', 32)
         num_key_value_heads = getattr(text_config, 'num_key_value_heads', 32)
+        tp = kwargs.get('tp', 1)
+        num_key_value_heads = cls.update_num_kv_heads(
+            text_config,
+            tp,
+            num_key_value_heads,
+        )
         num_hidden_layers = getattr(text_config, 'num_hidden_layers', 32)
         bos_token_id = getattr(text_config, 'bos_token_id', 1)
         eos_token_id = getattr(text_config, 'eos_token_id', 2)
@@ -33,4 +39,6 @@ class LlavaHfModelConfigBuilder(AutoModelConfigBuilder):
             head_dim=head_dim,
             vocab_size=text_config.vocab_size,
             hf_config=hf_config,
+            num_replicate_key_value_heads=getattr(
+                text_config, 'num_replicate_key_value_heads', 1),
         )

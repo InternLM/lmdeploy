@@ -421,6 +421,36 @@ def test_build_cache_config_carries_prefix_cache_state_budget():
     assert cache_config.prefix_cache_decode_state_interval == 128
 
 
+def test_kv_connector_completion_aggregation_is_tp_wide_and_sticky():
+    executor = object.__new__(ExecutorBase)
+    executor._kv_connector_acknowledged_sending = set()
+
+    # Rank 0 finishes both waves first. Only the wave also reported by rank 1
+    # may be exposed to the scheduler.
+    completed = executor._aggregate_kv_connector_outputs([
+        ({10, 11}, None),
+        ({10}, None),
+    ])
+
+    assert completed == {10}
+    assert executor._kv_connector_poll_acknowledgements() == {10}
+
+    # The previous global completion is acknowledged on this poll. Rank 0's
+    # sticky wave 11 remains visible until rank 1 catches up on a later tick.
+    completed = executor._aggregate_kv_connector_outputs([
+        ({11}, None),
+        (None, None),
+    ])
+    assert completed == set()
+    assert executor._kv_connector_poll_acknowledgements() == set()
+
+    completed = executor._aggregate_kv_connector_outputs([
+        ({11}, None),
+        ({11}, None),
+    ])
+    assert completed == {11}
+
+
 def test_engine_config_rejects_unaligned_prefix_cache_decode_state_interval():
     with pytest.raises(AssertionError):
         PytorchEngineConfig(max_batch_size=4, prefix_cache_decode_state_interval=96)

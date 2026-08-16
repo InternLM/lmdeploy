@@ -333,6 +333,9 @@ class SchedulerSession:
     def remove_sequence(self, seq: 'SchedulerSequence'):
         """Remove sequence."""
         assert seq.seq_id in self.sequences
+        request_finished = getattr(self.scheduler, 'request_kv_connector_finished', None)
+        if request_finished is not None:
+            request_finished(seq)
         seq.state.free()
         self.sequences.pop(seq.seq_id)
         self.seq_manager.remove_sequence(seq)
