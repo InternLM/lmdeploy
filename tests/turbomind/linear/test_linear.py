@@ -59,3 +59,35 @@ def test_fp8_weight_only_fallback():
         fx.check_tolerances(fx.compare())
     finally:
         fx.close()
+
+
+@tm_required
+def test_pre_sm90_fp8_uses_unfused_silu(monkeypatch):
+    import lmdeploy.turbomind.builders.ffn as ffn_builder
+    from lmdeploy.turbomind.linear import Linear
+    from lmdeploy.turbomind.weight_format import FP8Format
+
+    monkeypatch.setattr(ffn_builder, '_is_sm90', lambda: False)
+
+    weight_format = FP8Format()
+    w1 = Linear(
+        tensors={
+            'weight': torch.zeros((128, 256), dtype=torch.uint8),
+            'scales': torch.zeros((1, 2), dtype=torch.float32),
+        },
+        weight_format=weight_format,
+    )
+    w3 = Linear(
+        tensors={
+            'weight': torch.ones((128, 256), dtype=torch.uint8),
+            'scales': torch.ones((1, 2), dtype=torch.float32),
+        },
+        weight_format=weight_format,
+    )
+
+    fused, fused_silu = ffn_builder.fuse_w1w3(w1, w3, tp=1, act_type='silu')
+
+    assert fused is not None
+    assert not fused_silu
+    for kind in w1.tensors:
+        assert torch.equal(fused.tensors[kind], torch.cat([w1.tensors[kind], w3.tensors[kind]], dim=-1))
