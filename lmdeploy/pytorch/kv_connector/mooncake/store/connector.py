@@ -27,12 +27,23 @@ if TYPE_CHECKING:
 class MooncakeStoreConnector(KVConnectorBase):
     """Delegate connector calls to the component for this process role."""
 
-    def __init__(self, role: KVConnectorRole, cache_config: CacheConfig) -> None:
+    def __init__(
+        self,
+        role: KVConnectorRole,
+        cache_config: CacheConfig,
+        *,
+        global_rank: int = 0,
+        tp_rank: int = 0,
+        tp_size: int = 1,
+    ) -> None:
         super().__init__(role)
 
         kv_transfer_config = cache_config.kv_transfer_config
         if kv_transfer_config is None or not kv_transfer_config.is_kv_transfer_instance:
             raise ValueError('MooncakeStoreConnector requires an enabled kv_transfer_config')
+        if kv_transfer_config.kv_connector != 'MooncakeStoreConnector':
+            raise ValueError(
+                f'MooncakeStoreConnector cannot use kv_connector={kv_transfer_config.kv_connector!r}')
 
         self._cache_config = cache_config
         self._kv_transfer_config = kv_transfer_config
@@ -43,7 +54,12 @@ class MooncakeStoreConnector(KVConnectorBase):
         if role is KVConnectorRole.SCHEDULER:
             self.connector_scheduler = MooncakeStoreScheduler(cache_config)
         else:
-            self.connector_worker = MooncakeStoreWorker(cache_config)
+            self.connector_worker = MooncakeStoreWorker(
+                cache_config,
+                global_rank=global_rank,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+            )
 
     def _require_scheduler(self) -> MooncakeStoreScheduler:
         scheduler = self.connector_scheduler

@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import json
 import pickle
 from unittest.mock import MagicMock
 
@@ -7,14 +8,38 @@ import pytest
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.kv_connector import KVConnectorMetadata, KVConnectorRole
+from lmdeploy.pytorch.kv_connector.mooncake.store import worker as worker_module
 from lmdeploy.pytorch.kv_connector.mooncake.store.connector import MooncakeStoreConnector
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import MooncakeStoreConnectorMetadata
 from lmdeploy.pytorch.kv_connector.mooncake.store.scheduler import MooncakeStoreScheduler
 from lmdeploy.pytorch.kv_connector.mooncake.store.worker import MooncakeStoreWorker
 
 
+class _FakeStore:
+
+    def setup(self, *args):
+        return 0
+
+    def register_buffer(self, address, size):
+        return 0
+
+    def close(self):
+        return None
+
+
 @pytest.fixture
-def cache_config():
+def cache_config(tmp_path, monkeypatch):
+    config_path = tmp_path / 'mooncake.json'
+    config_path.write_text(
+        json.dumps({
+            'metadata_server': 'P2PHANDSHAKE',
+            'master_server_address': '127.0.0.1:50051',
+            'protocol': 'tcp',
+        }),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(worker_module, '_get_local_hostname', lambda: '127.0.0.1')
+    monkeypatch.setattr(worker_module, '_load_mooncake_store_factory', lambda: _FakeStore)
     return CacheConfig(
         max_batches=1,
         block_size=64,
@@ -23,6 +48,7 @@ def cache_config():
         kv_transfer_config=KVTransferConfig(
             kv_connector='MooncakeStoreConnector',
             kv_role='kv_both',
+            kv_connector_extra_config={'mooncake_config_path': str(config_path)},
         ),
     )
 
@@ -37,11 +63,20 @@ def test_connector_constructs_only_scheduler_delegate(cache_config):
 
 
 def test_connector_constructs_only_worker_delegate(cache_config):
-    connector = MooncakeStoreConnector(KVConnectorRole.WORKER, cache_config)
+    connector = MooncakeStoreConnector(
+        KVConnectorRole.WORKER,
+        cache_config,
+        global_rank=7,
+        tp_rank=3,
+        tp_size=8,
+    )
 
     assert connector.connector_scheduler is None
     assert isinstance(connector.connector_worker, MooncakeStoreWorker)
     assert connector.connector_worker._cache_config is cache_config
+    assert connector.connector_worker.global_rank == 7
+    assert connector.connector_worker.tp_rank == 3
+    assert connector.connector_worker.tp_size == 8
     assert connector.kv_role == 'kv_both'
 
 
@@ -54,6 +89,22 @@ def test_connector_requires_enabled_kv_transfer_config():
     )
 
     with pytest.raises(ValueError, match='enabled kv_transfer_config'):
+        MooncakeStoreConnector(KVConnectorRole.SCHEDULER, cache_config)
+
+
+def test_connector_rejects_a_different_connector_configuration():
+    cache_config = CacheConfig(
+        max_batches=1,
+        block_size=64,
+        num_cpu_blocks=0,
+        num_gpu_blocks=1,
+        kv_transfer_config=KVTransferConfig(
+            kv_connector='OtherConnector',
+            kv_role='kv_both',
+        ),
+    )
+
+    with pytest.raises(ValueError, match="kv_connector='OtherConnector'"):
         MooncakeStoreConnector(KVConnectorRole.SCHEDULER, cache_config)
 
 
@@ -70,12 +121,11 @@ def test_scheduler_empty_implementations_are_fail_closed(cache_config):
     assert connector.shutdown() is None
 
 
-def test_worker_empty_implementations_are_safe_noops(cache_config):
+def test_worker_unimplemented_hooks_are_safe_noops(cache_config):
     connector = MooncakeStoreConnector(KVConnectorRole.WORKER, cache_config)
     metadata = MooncakeStoreConnectorMetadata()
     connector.bind_connector_metadata(metadata)
 
-    assert connector.register_kv_caches({}) is None
     assert connector.handle_preemptions(metadata) is None
     assert connector.get_finished({1}) == (None, None)
     assert connector.get_block_ids_with_load_errors() == set()

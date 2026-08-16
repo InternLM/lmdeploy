@@ -1,5 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .connector import MooncakeStoreConnector
-from .data import MooncakeStoreConnectorMetadata
+from .data import MooncakeStoreConfig, MooncakeStoreConnectorMetadata, MooncakeStoreRegistration
 
-__all__ = ['MooncakeStoreConnector', 'MooncakeStoreConnectorMetadata']
+__all__ = [
+    'MooncakeStoreConfig',
+    'MooncakeStoreConnector',
+    'MooncakeStoreConnectorMetadata',
+    'MooncakeStoreRegistration',
+]

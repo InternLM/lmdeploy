@@ -26,6 +26,9 @@ from .dist_utils import find_available_port
 
 logger = get_logger('lmdeploy')
 
+_DEFAULT_WORKER_RELEASE_TIMEOUT = 5.0
+_KV_CONNECTOR_WORKER_RELEASE_TIMEOUT = 45.0
+
 
 def _get_master_addr():
     """Get master addr."""
@@ -195,6 +198,16 @@ class RayWorkerWrapper(WorkerWrapperBase):
 
 class RayExecutor(ExecutorBase):
     """Ray executor."""
+
+    @staticmethod
+    def _get_worker_release_timeout(cache_config: CacheConfig | None) -> float:
+        """Allow external buffer registrations to be released before killing
+        workers."""
+        if cache_config is not None:
+            transfer_config = cache_config.kv_transfer_config
+            if transfer_config is not None and transfer_config.is_kv_transfer_instance:
+                return _KV_CONNECTOR_WORKER_RELEASE_TIMEOUT
+        return _DEFAULT_WORKER_RELEASE_TIMEOUT
 
     def __init__(
         self,
@@ -451,14 +464,15 @@ class RayExecutor(ExecutorBase):
             ray.timeline(_envs.ray_timeline_output_path)
 
         if self.dp == 1:
+            release_timeout = self._get_worker_release_timeout(self.cache_config)
             try:
-                self.collective_rpc('release', timeout=5.0)
+                self.collective_rpc('release', timeout=release_timeout)
                 logger.debug('RayExecutor workers released.')
             except ray.exceptions.ActorDiedError:
                 logger.info('RayExecutor worker has been killed before finish release.')
                 [ray.kill(worker) for worker in self.workers]
             except ray.exceptions.GetTimeoutError:
-                logger.info('Ray release timeout, killing workers')
+                logger.info('Ray release timeout after %.1f seconds, killing workers.', release_timeout)
                 [ray.kill(worker) for worker in self.workers]
         else:
             [ray.kill(worker) for worker in self.workers]

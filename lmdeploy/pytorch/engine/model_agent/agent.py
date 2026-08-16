@@ -24,6 +24,7 @@ from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+from lmdeploy.pytorch.kv_connector import KVConnectorRole, build_kv_connector
 from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
@@ -348,6 +349,7 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         self.state_cache_engine = None
+        self.kv_connector = None
         self.profiler: AgentProfiler = None
         try:
             self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
@@ -1229,25 +1231,62 @@ class BaseModelAgent:
             if self.memdecode_agent is not None:
                 self.memdecode_agent.build_graph_runner()
 
+    def _shutdown_kv_connector(self):
+        """Shutdown the connector before releasing its registered caches."""
+        connector = getattr(self, 'kv_connector', None)
+        if connector is None:
+            return
+        connector.shutdown()
+        self.kv_connector = None
+
     def build_cache_engine(self):
         """Build cache engine."""
         with self.all_context():
+            self._shutdown_kv_connector()
             dist_ctx = get_dist_manager().current_context()
             dist_cfg = self.dist_config
             tp = dist_cfg.attn_tp
+            tp_rank = dist_ctx.attn_tp_group.rank
 
             self.cache_engine = CacheEngine(self.cache_config,
                                             self.model_config,
                                             rank=self.rank,
-                                            tp_rank=dist_ctx.attn_tp_group.rank,
+                                            tp_rank=tp_rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
             self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
 
-            self.spec_agent.build_cache_engine(self.cache_stream)
-            if self.memdecode_agent is not None:
-                self.memdecode_agent.set_cache_config(self.cache_config)
-                self.memdecode_agent.build_cache_engine(self.cache_stream)
+            try:
+                try:
+                    self.kv_connector = build_kv_connector(
+                        KVConnectorRole.WORKER,
+                        self.cache_config,
+                        global_rank=self.rank,
+                        tp_rank=tp_rank,
+                        tp_size=tp,
+                    )
+                    if self.kv_connector is not None:
+                        self.kv_connector.register_kv_caches(self.cache_engine.connector_kv_caches)
+                except Exception:
+                    logger.exception(
+                        'Failed to initialize KV connector: global_rank=%d tp_rank=%d tp_size=%d',
+                        self.rank,
+                        tp_rank,
+                        tp,
+                    )
+                    raise
+
+                self.spec_agent.build_cache_engine(self.cache_stream)
+                if self.memdecode_agent is not None:
+                    self.memdecode_agent.set_cache_config(self.cache_config)
+                    self.memdecode_agent.build_cache_engine(self.cache_stream)
+            except Exception:
+                try:
+                    self._shutdown_kv_connector()
+                finally:
+                    self.cache_engine = None
+                    self.state_cache_engine = None
+                raise
 
     def _forward_impl(self, inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None = None):
         output = model_forward(
@@ -1511,6 +1550,10 @@ class BaseModelAgent:
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
         device = 'cpu' if level == 1 else 'meta'
+        self._drain_queues()
+        torch.cuda.synchronize()
+        self._release_completed_h2d_transfers()
+        self._shutdown_kv_connector()
         self.cache_engine = None
         self.state_cache_engine = None
         self.reset_graph_runner()
@@ -1521,9 +1564,7 @@ class BaseModelAgent:
             self.spec_agent.cache_engine = None
             spec_model.to(device=device, non_blocking=True)
 
-        self._drain_queues()
         torch.cuda.synchronize()
-        self._release_completed_h2d_transfers()
         self.reset_runtime_state()
         # force clean _update_params_ipc tensor and event after all gpu jobs done
         self._update_params_ipc_tensor = None
@@ -1566,6 +1607,7 @@ class BaseModelAgent:
 
     def release(self):
         """release."""
+        self._shutdown_kv_connector()
         self.reset_graph_runner()
         if self.memdecode_agent is not None:
             self.memdecode_agent.release()
