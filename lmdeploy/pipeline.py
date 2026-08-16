@@ -18,6 +18,7 @@ from typing_extensions import deprecated
 from .archs import autoget_backend_config, get_task
 from .messages import GenerationConfig, PytorchEngineConfig, Response, SpeculativeConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
+from .serve.core.exceptions import ErrorCode, RequestError
 from .serve.processors import MultimodalProcessor
 from .utils import get_logger, get_model
 
@@ -329,9 +330,11 @@ class Pipeline:
     async def generate(self, *args, **kwargs):
         """Generate responses as an async generator.
 
-        This method delegates to async_engine.generate and forwards all yielded values.
+        This method preprocesses the input and forwards generated values.
         """
-        async for item in self.async_engine.generate(*args, **kwargs):
+        stream_response = kwargs.pop('stream_response', True)
+        request = await self.async_engine.preprocess(*args, **kwargs)
+        async for item in self.async_engine.generate(request, stream_response=stream_response):
             yield item
 
     @staticmethod
@@ -373,8 +376,7 @@ class Pipeline:
 
         for prompt, gen_cfg, session in zip(prompts, gen_configs, sessions):
             # Use session_id is for backward compatibility. We will remove it in the future.
-            # Since AsyncEngine.generate defines session_id in the argument lists, here we
-            # use session_id to pass the session to the AsyncEngine.generate. It's
+            # AsyncEngine.preprocess accepts session_id, so use that name to pass the session.
             yield dict(session_id=session, messages=prompt, gen_config=gen_cfg, **kwargs)
 
     def _get_limiter(self):
@@ -384,14 +386,43 @@ class Pipeline:
 
     def _infer(self, requests: Iterator[dict], multiplex: bool, pbar=None, loop=None) -> Iterator[Iterator[Response]]:
 
-        async def _sync_resp(g, que: Queue, idx: int, sem: asyncio.Semaphore):
-            async for out in g:
-                que.put(out.to_response(idx))
-            sem.release()
-            if not multiplex:
-                que.put(None)  # sentinel of inner generator
-            if pbar:
-                pbar.update(1)
+        async def _sync_resp(req: dict, que: Queue, idx: int, sem: asyncio.Semaphore):
+            input_token_len = 0
+            try:
+                req = dict(req)
+                stream_response = req.pop('stream_response', True)
+                request = await self.async_engine.preprocess(**req)
+                input_token_len = request.input_token_len
+                async for out in self.async_engine.generate(request, stream_response=stream_response):
+                    que.put(out.to_response(idx))
+            except RequestError as e:
+                que.put(
+                    Response(text='',
+                             generate_token_len=0,
+                             input_token_len=input_token_len,
+                             finish_reason='error',
+                             token_ids=[],
+                             index=idx,
+                             error_code=e.code.value,
+                             error_message=e.message))
+            except Exception:
+                logger.exception('Unexpected Pipeline inference error')
+                error = RequestError(ErrorCode.INTERNAL_ERROR)
+                que.put(
+                    Response(text='',
+                             generate_token_len=0,
+                             input_token_len=input_token_len,
+                             finish_reason='error',
+                             token_ids=[],
+                             index=idx,
+                             error_code=error.code.value,
+                             error_message=error.message))
+            finally:
+                sem.release()
+                if not multiplex:
+                    que.put(None)  # sentinel of inner generator
+                if pbar:
+                    pbar.update(1)
 
         que = Queue()
 
@@ -400,12 +431,11 @@ class Pipeline:
             tasks = []
             for idx, req in enumerate(requests):
                 await sem.acquire()
-                gen = self.async_engine.generate(**req)
                 dst = que if multiplex else Queue()
                 if not multiplex:
                     que.put(iter(dst.get, None))
                 # create a task to send the responses
-                task = asyncio.create_task(_sync_resp(gen, dst, idx, sem))
+                task = asyncio.create_task(_sync_resp(req, dst, idx, sem))
                 tasks.append(task)
             if not multiplex:  # sentinel of outer generator
                 que.put(None)

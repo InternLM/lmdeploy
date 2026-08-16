@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from lmdeploy.messages import GenerationConfig, Response
-from lmdeploy.serve.core.exceptions import SafeRunException
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError, SafeRunException
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -76,7 +76,9 @@ class Session:
     @asynccontextmanager
     async def request_handle(self):
         if self._handle is not None:
-            raise RuntimeError(f'Session {self.session_id} already has an inference instance.')
+            raise RequestError(
+                ErrorCode.REQUEST_CONFLICT,
+                f'Session {self.session_id} already has an active request.')
         logger.debug(f'[request_handle] session {self.session_id} acquiring an instance')
 
         hnd_pool = self._session_mgr().request_handle_pool

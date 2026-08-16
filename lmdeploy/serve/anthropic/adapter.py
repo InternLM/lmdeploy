@@ -353,8 +353,6 @@ def to_generation_config(
         max_new_tokens=request.max_tokens,
         stop_words=request.stop_sequences,
         include_stop_str_in_output=request.include_stop_str_in_output or False,
-        skip_special_tokens=True,
-        spaces_between_special_tokens=True,
         return_routed_experts=request.return_routed_experts or False,
         logprobs=1 if request.return_logprob else None,
     )

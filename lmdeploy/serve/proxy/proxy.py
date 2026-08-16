@@ -25,6 +25,7 @@ from lmdeploy.pytorch.disagg.config import DistServeRDMAConfig, EngineRole, RDMA
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.disagg.conn.proxy_conn import PDConnectionPool
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
+from lmdeploy.serve.openai.errors import create_error_response
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
     CompletionRequest,
@@ -32,7 +33,6 @@ from lmdeploy.serve.openai.protocol import (
     ModelList,
     ModelPermission,
 )
-from lmdeploy.serve.openai.utils import create_error_response
 from lmdeploy.serve.proxy.utils import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, RoutingStrategy, err_msg
 from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger

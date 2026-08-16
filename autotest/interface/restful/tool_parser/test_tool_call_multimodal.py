@@ -840,7 +840,11 @@ class TestToolCallMultimodalMixedMedia(_ToolCallTestBase):
 
 @_apply_marks_mm
 class TestToolCallMultimodalToolResultImage(_ToolCallTestBase):
-    """Tool message content may include image_url parts."""
+    """After a tool round-trip, follow-up user turn may include image_url.
+
+    OpenAI Chat Completions only allows ``text`` in ``role=tool`` content;
+    images belong on a subsequent ``user`` message (not inside tool).
+    """
 
     def test_tool_result_with_image_then_text_reply(self, backend, model_case):
         user_image = self._require_mm_image(MM_TEST_IMAGE_TIGER)
@@ -853,13 +857,18 @@ class TestToolCallMultimodalToolResultImage(_ToolCallTestBase):
             **self._parser_validation_kwargs([WEATHER_TOOL]),
         )
         self._append_assistant_and_tool_messages(messages, r)
-        messages[-1]['content'] = [
-            {'type': 'text', 'text': 'Weather icon attached.'},
-            {'type': 'image_url', 'image_url': {'url': tool_image}},
-        ]
+        # Tool result: text only (OpenAI-compatible).
+        messages[-1]['content'] = 'Weather icon attached.'
+        # Image on the next user turn, not inside the tool message.
         messages.append({
             'role': 'user',
-            'content': 'Describe the pose in the tool result image.',
+            'content': [
+                {
+                    'type': 'text',
+                    'text': 'Describe the pose in this image from the weather tool.',
+                },
+                {'type': 'image_url', 'image_url': {'url': tool_image}},
+            ],
         })
 
         client, model_name = self._get_client()

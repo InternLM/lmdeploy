@@ -9,13 +9,12 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import RMSNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
-from lmdeploy.pytorch.nn.nsa import update_nsa_indexer_kv_seqlens
 
 from .deepseek_mtp import DeepseekMTPModel, build_deepseek_rotary_embedding
+from .deepseek_v32 import _load_fused_indexer_weight, _load_fused_qkv_a_weight
 from .glm_moe_dsa import (
     DSATopKIndicesBuffer,
     GlmMoeDsaDecoderLayer,
-    _load_fused_indexer_weight,
 )
 
 
@@ -221,8 +220,6 @@ class GlmMoeDsaMTPModel(DeepseekMTPModel):
         skip_topk: bool = False,
         spec_step_idx: int = 0,
     ) -> torch.Tensor:
-        if not skip_topk:
-            update_nsa_indexer_kv_seqlens(input_ids.size(1), attn_metadata)
         return self.model(
             input_ids,
             position_ids,
@@ -259,6 +256,9 @@ class GlmMoeDsaMTPModel(DeepseekMTPModel):
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor,
                                params_dict: dict[str, nn.Parameter],
                                update_pe_mapping: list):
+        if _load_fused_qkv_a_weight(name, loaded_weight, params_dict,
+                                    self.config):
+            return
         if _load_fused_indexer_weight(name, loaded_weight, params_dict,
                                       self._load_buffers):
             return

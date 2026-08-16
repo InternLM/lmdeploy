@@ -17,6 +17,21 @@ a100:
   test_coverage:
   - func
   - mllm_evaluate
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+    turbomind:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   gen_config:
     repetition-penalty: 1.0
     top-p: 0.8
@@ -40,5 +55,20 @@ h:
     - nccl
   test_coverage:
   - func
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+    turbomind:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   deps:
     transformers: 5.6.0

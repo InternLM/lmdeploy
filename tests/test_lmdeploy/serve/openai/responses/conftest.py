@@ -18,11 +18,16 @@ class FakeAsyncEngine:
 
     def __init__(self):
         self.generate_kwargs = None
+        self.preprocess_kwargs = None
         self.prompt = None
         self.session_mgr = FakeSessionManager()
 
-    def generate(self, prompt, session, **kwargs):
+    async def preprocess(self, prompt, session, **kwargs):
         self.prompt = prompt
+        self.preprocess_kwargs = kwargs
+        return SimpleNamespace(prompt=prompt, session=session)
+
+    def generate(self, request, **kwargs):
         self.generate_kwargs = kwargs
 
         async def _generator():

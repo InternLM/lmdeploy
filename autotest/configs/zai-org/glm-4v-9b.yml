@@ -11,10 +11,8 @@ a100:
     - nccl
   test_coverage:
   - func
-  - quantization
   quantization:
     pytorch:
-    - awq
     - kvint4
     - kvint8
 h:

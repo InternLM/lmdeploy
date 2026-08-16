@@ -15,6 +15,57 @@ a100:
   test_coverage:
   - func
   - quantization
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+    turbomind:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+  quantization:
+    turbomind:
+    - awq
+    - kvint8
+    pytorch:
+    - kvint8
+h:
+- model_type: chat
+  engine_config:
+    tp: 2
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - quantization
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+    turbomind:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - awq
