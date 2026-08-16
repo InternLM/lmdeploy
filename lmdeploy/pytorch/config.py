@@ -6,7 +6,7 @@ from typing import Any
 
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, QuantPolicy
+from lmdeploy.messages import KVTransferConfig, PytorchEngineConfig, QuantPolicy
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
 from lmdeploy.utils import get_logger, is_bf16_supported
@@ -131,6 +131,7 @@ class CacheConfig:
     # For PD Disaggregation
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
+    kv_transfer_config: KVTransferConfig | None = None
 
     def __post_init__(self):
         """Post init."""
