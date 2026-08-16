@@ -21,34 +21,6 @@ MoeA2AInputPartition GetMoeA2AInputPartition(const std::vector<int>& local_token
 
 int CeilPowerOfTwo(int x);
 
-// noaux_tc routing
-//
-// scores = sigmoid(logits) or softmax(logits)
-// choice_scores = scores + correction_bias
-//
-// Experts are selected using choice_scores while the output weights are
-// gathered from scores, optionally normalized over the selected experts, and
-// finally multiplied by routed_scale.
-//
-// topk_weights:      [tokens, experts_per_token], float32, token-major
-// topk_indices:      [tokens, experts_per_token], int32 global expert ids
-// correction_bias:  [experts], float32, optional
-//
-// This interface performs global top-k selection (n_group == topk_group == 1).
-// The output order within a token is unspecified; weights and indices remain
-// paired at the same position.
-void invokeMoeA2AGate_NoAuxTC(float*       topk_weights,
-                              int*         topk_indices,
-                              const float* logits,
-                              const float* correction_bias,
-                              int          tokens,
-                              int          experts,
-                              int          experts_per_token,
-                              bool         norm_topk,
-                              float        routed_scale,
-                              bool         use_sigmoid,
-                              cudaStream_t stream);
-
 // Build the expert-major mappings consumed by the grouped MoE GEMMs.
 //
 // recv_topk_idx:      [recv_capacity, num_topk], token-major local expert ids; non-local entries are -1

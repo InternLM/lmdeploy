@@ -509,17 +509,18 @@ void MoeFfnA2AImpl::Forward(MoeFfnLayer::ForwardParam& p)
             correction_bias = moe.score_correction_bias.data<float>();
         }
 
-        TM_SCOPE_CALL(invokeMoeA2AGate_NoAuxTC(topk_weights_.data(),
-                                               topk_indices_.data(),
-                                               logits.data_or((float*)nullptr),
-                                               correction_bias,
-                                               token_num,
-                                               expert_num,
-                                               experts_per_token,
-                                               moe.norm_topk_prob,
-                                               moe.routed_scale,
-                                               moe.scoring_func == "sigmoid",
-                                               st));
+        TM_SCOPE_CALL(invokeMoeGate_NoAuxTC(topk_weights_.data(),
+                                            topk_indices_.data(),
+                                            logits.data_or((float*)nullptr),
+                                            token_mask,
+                                            correction_bias,
+                                            token_num,
+                                            expert_num,
+                                            experts_per_token,
+                                            moe.norm_topk_prob,
+                                            moe.routed_scale,
+                                            moe.scoring_func == "sigmoid",
+                                            st));
     }
     else {
         bool softmax = true;
