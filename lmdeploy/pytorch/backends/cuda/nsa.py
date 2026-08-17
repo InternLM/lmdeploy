@@ -21,7 +21,7 @@ from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import (
     prepare_dsa_indexer_q,
 )
 from lmdeploy.pytorch.kernels.cuda.fill_dsa_indexer_metadata import (
-    fill_dsa_indexer_graph_metadata,
+    fill_dsa_indexer_metadata,
 )
 from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
 from lmdeploy.utils import get_logger
@@ -193,14 +193,47 @@ class DSAIndexerMetaBuilder(
         if should_skip_nsa_indexer(step_context.model_metas):
             return None
         cache_config = step_context.cache_config
+        num_tokens = step_context.input_ids.size(1)
+        batch_size = sequence_metadata.q_seqlens.numel()
+        is_multi_token_decode = (step_context.is_decoding
+                                 and num_tokens != batch_size)
+        indexer_kv_seqlens = None
+        expanded_block_offsets = None
+        if is_multi_token_decode:
+            indexer_kv_seqlens = torch.empty(
+                num_tokens,
+                dtype=torch.int32,
+                device=sequence_metadata.q_seqlens.device,
+            )
+            if _get_deep_gemm() is not None:
+                expanded_block_offsets = torch.empty(
+                    num_tokens,
+                    sequence_metadata.block_offsets.size(1),
+                    dtype=torch.int32,
+                    device=sequence_metadata.block_offsets.device,
+                )
+            fill_dsa_indexer_metadata(
+                sequence_metadata.q_seqlens,
+                sequence_metadata.kv_seqlens,
+                sequence_metadata.cu_seqlens_q,
+                sequence_metadata.block_offsets,
+                indexer_kv_seqlens,
+                expanded_block_offsets,
+                num_tokens,
+                step_context.max_q_seqlen,
+            )
         meta = build_nsa_index_meta(
-            num_tokens=step_context.input_ids.size(1),
+            num_tokens=num_tokens,
             is_decoding=step_context.is_decoding,
             block_size=cache_config.block_size,
             num_gpu_blocks=cache_config.num_gpu_blocks,
             sequence_metadata=sequence_metadata,
+            indexer_kv_seqlens=indexer_kv_seqlens,
         )
-        meta.score_meta = _build_deep_gemm_score_meta(meta)
+        meta.score_meta = _build_deep_gemm_score_meta(
+            meta,
+            expanded_block_offsets=expanded_block_offsets,
+        )
         return meta
 
     def apply_legacy_metadata(self, attn_metadata,
@@ -256,13 +289,14 @@ class DSAIndexerMetaBuilder(
             max_kv_seqlen=graph_meta.num_blocks * graph_meta.block_size,
         )
         if graph_meta.decode_query_len > 1:
-            fill_dsa_indexer_graph_metadata(
+            fill_dsa_indexer_metadata(
                 sequence_metadata.q_seqlens,
                 sequence_metadata.kv_seqlens,
                 sequence_metadata.cu_seqlens_q,
                 sequence_metadata.block_offsets,
                 buffer.indexer_kv_seqlens,
                 buffer.expanded_block_offsets,
+                graph_meta.max_tokens,
                 graph_meta.decode_query_len,
             )
         meta = build_nsa_index_meta(

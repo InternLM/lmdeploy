@@ -12,6 +12,8 @@ def _fill_dsa_indexer_metadata_kernel(
     block_offsets,
     indexer_kv_seqlens,
     expanded_block_offsets,
+    batch_size,
+    num_tokens,
     q_stride,
     kv_stride,
     cu_q_stride,
@@ -19,16 +21,11 @@ def _fill_dsa_indexer_metadata_kernel(
     block_col_stride,
     expanded_row_stride,
     expanded_col_stride,
-    MAX_BATCHES: tl.constexpr,
-    MAX_TOKENS: tl.constexpr,
     MAX_QUERY_LEN: tl.constexpr,
     MAX_BLOCK_TABLE_LEN: tl.constexpr,
     TILE_SIZE: tl.constexpr,
     EXPAND_BLOCKS: tl.constexpr,
 ):
-    tl.static_assert(MAX_BATCHES > 0, 'MAX_BATCHES must be positive')
-    tl.static_assert(MAX_TOKENS == MAX_BATCHES * MAX_QUERY_LEN,
-                     'token capacity must match the graph query layout')
     tl.static_assert(MAX_QUERY_LEN > 1, 'MTP query length must exceed one')
     tl.static_assert(MAX_BLOCK_TABLE_LEN > 0,
                      'MAX_BLOCK_TABLE_LEN must be positive')
@@ -46,11 +43,13 @@ def _fill_dsa_indexer_metadata_kernel(
                      'q_seqlens exceeds graph query capacity')
     tl.device_assert(kv_len >= q_len,
                      'kv_seqlens must include all query tokens')
-    if batch_idx == MAX_BATCHES - 1:
+    tl.device_assert(q_start + q_len <= num_tokens,
+                     'query range exceeds token capacity')
+    if batch_idx == batch_size - 1:
         total_queries = tl.load(cu_seqlens_q +
-                                MAX_BATCHES * cu_q_stride)
-        tl.device_assert(total_queries == MAX_TOKENS,
-                         'q_seqlens do not fill the graph token capacity')
+                                batch_size * cu_q_stride)
+        tl.device_assert(total_queries == num_tokens,
+                         'q_seqlens do not sum to num_tokens')
 
     query_mask = offsets < q_len
     visible_kv_len = kv_len - q_len + offsets + 1
@@ -73,22 +72,23 @@ def _fill_dsa_indexer_metadata_kernel(
                  mask=block_mask)
 
 
-def fill_dsa_indexer_graph_metadata(
+def fill_dsa_indexer_metadata(
         q_seqlens: torch.Tensor,
         kv_seqlens: torch.Tensor,
         cu_seqlens_q: torch.Tensor,
         block_offsets: torch.Tensor,
         indexer_kv_seqlens: torch.Tensor,
         expanded_block_offsets: torch.Tensor | None,
+        num_tokens: int,
         max_query_len: int,
 ) -> None:
-    """Fill graph-stable multi-token DSA indexer metadata."""
-    max_batches, block_table_len = block_offsets.size()
+    """Fill multi-token DSA indexer metadata into caller-owned tensors."""
+    batch_size, block_table_len = block_offsets.size()
     expand_blocks = expanded_block_offsets is not None
     elements_per_batch = (max_query_len * block_table_len
                           if expand_blocks else max_query_len)
     tile_size = min(256, triton.next_power_of_2(elements_per_batch))
-    grid = (max_batches, triton.cdiv(elements_per_batch, tile_size))
+    grid = (batch_size, triton.cdiv(elements_per_batch, tile_size))
     if expanded_block_offsets is None:
         expanded_block_offsets = indexer_kv_seqlens
     _fill_dsa_indexer_metadata_kernel[grid](
@@ -98,6 +98,8 @@ def fill_dsa_indexer_graph_metadata(
         block_offsets,
         indexer_kv_seqlens,
         expanded_block_offsets,
+        batch_size,
+        num_tokens,
         q_seqlens.stride(0),
         kv_seqlens.stride(0),
         cu_seqlens_q.stride(0),
@@ -105,8 +107,6 @@ def fill_dsa_indexer_graph_metadata(
         block_offsets.stride(1),
         expanded_block_offsets.stride(0),
         expanded_block_offsets.stride(1) if expand_blocks else 0,
-        MAX_BATCHES=max_batches,
-        MAX_TOKENS=indexer_kv_seqlens.numel(),
         MAX_QUERY_LEN=max_query_len,
         MAX_BLOCK_TABLE_LEN=block_table_len,
         TILE_SIZE=tile_size,
