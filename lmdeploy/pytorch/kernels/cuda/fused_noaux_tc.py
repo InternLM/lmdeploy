@@ -4,6 +4,59 @@ import triton
 import triton.language as tl
 
 
+@triton.jit
+def _kimi_noaux_routing_kernel(
+    logits_ptr,
+    bias_ptr,
+    topk_weights_ptr,
+    topk_ids_ptr,
+    batch_size,
+    routed_scaling_factor,
+    logits_stride_0,
+    logits_stride_1,
+    bias_stride_0,
+    weights_stride_0,
+    weights_stride_1,
+    ids_stride_0,
+    ids_stride_1,
+    NUM_EXPERTS: tl.constexpr,
+    TOP_K: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Fused no-aux routing for Kimi K2.6's single expert group."""
+    pid = tl.program_id(0)
+    if pid >= batch_size:
+        return
+
+    expert_idx = tl.arange(0, BLOCK_SIZE)
+    expert_mask = expert_idx < NUM_EXPERTS
+    logits = tl.load(
+        logits_ptr + pid * logits_stride_0 + expert_idx * logits_stride_1,
+        mask=expert_mask,
+        other=0.0,
+    )
+    bias = tl.load(bias_ptr + expert_idx * bias_stride_0, mask=expert_mask, other=0.0)
+    scores = tl.sigmoid(logits)
+    scores_for_choice = tl.where(expert_mask, scores + bias, -float('inf'))
+
+    topk_slot = tl.arange(0, TOP_K)
+    selected_weights = tl.zeros((TOP_K, ), dtype=tl.float32)
+    selected_ids = tl.zeros((TOP_K, ), dtype=tl.int32)
+    for k in range(TOP_K):
+        expert_id = tl.argmax(scores_for_choice, axis=0)
+        weight = tl.sum(tl.where(expert_idx == expert_id, scores, 0.0), axis=0)
+        selected_weights = tl.where(topk_slot == k, weight, selected_weights)
+        selected_ids = tl.where(topk_slot == k, expert_id, selected_ids)
+        scores_for_choice = tl.where(expert_idx == expert_id, -float('inf'), scores_for_choice)
+
+    denominator = tl.sum(selected_weights, axis=0) + 1e-20
+    selected_weights = selected_weights / denominator * routed_scaling_factor
+    weights_offset = pid * weights_stride_0 + topk_slot * weights_stride_1
+    ids_offset = pid * ids_stride_0 + topk_slot * ids_stride_1
+    tl.store(topk_weights_ptr + weights_offset, selected_weights)
+    tl.store(topk_ids_ptr + ids_offset, selected_ids.to(tl.int64))
+
+
 @triton.autotune(
     configs=[
         triton.Config({}, num_warps=1, num_stages=1),
@@ -95,8 +148,43 @@ def fused_noaux_tc_routing(
     batch_size = logits.shape[0]
     group_size = num_experts // n_group
     assert num_experts % n_group == 0, 'num_experts must be divisible by n_group'
+    use_kimi_kernel = (
+        num_experts == 384
+        and n_group == 1
+        and topk_group == 1
+        and top_k == 8
+        and renormalize
+        and routed_scaling_factor == 2.827
+        and logits.dtype == torch.float32
+        and bias.dtype == torch.float32
+    )
     logits = logits.float().contiguous()
     bias = bias.float().contiguous()
+    if use_kimi_kernel:
+        topk_weights = torch.empty(batch_size, top_k, device=logits.device, dtype=torch.float32)
+        topk_ids = torch.empty(batch_size, top_k, device=logits.device, dtype=torch.int64)
+        _kimi_noaux_routing_kernel[(batch_size, )](
+            logits,
+            bias,
+            topk_weights,
+            topk_ids,
+            batch_size,
+            routed_scaling_factor,
+            logits_stride_0=logits.stride(0),
+            logits_stride_1=logits.stride(1),
+            bias_stride_0=bias.stride(0),
+            weights_stride_0=topk_weights.stride(0),
+            weights_stride_1=topk_weights.stride(1),
+            ids_stride_0=topk_ids.stride(0),
+            ids_stride_1=topk_ids.stride(1),
+            NUM_EXPERTS=384,
+            TOP_K=8,
+            BLOCK_SIZE=512,
+            num_warps=1,
+            num_stages=1,
+        )
+        return topk_weights, topk_ids
+
     topk_weight = torch.empty(batch_size, top_k, device=logits.device, dtype=torch.float32)
     topk_idx = torch.empty(batch_size, top_k, device=logits.device, dtype=torch.int64)
     block_size = num_experts

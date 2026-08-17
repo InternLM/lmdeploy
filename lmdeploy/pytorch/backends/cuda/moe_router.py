@@ -65,13 +65,23 @@ class TritonRouterNoauxTCImpl(DefaultRouterNoauxTCImpl):
         if self.n_routed_experts % 32 != 0:
             return False
 
-        if not is_power_of_two(self.n_routed_experts):
+        if self.n_routed_experts % self.n_group != 0:
             return False
 
         if not is_power_of_two(self.n_group):
             return False
 
-        return True
+        if is_power_of_two(self.n_routed_experts):
+            return True
+
+        return (
+            self.n_routed_experts == 384
+            and self.n_group == 1
+            and self.topk_group == 1
+            and self.top_k == 8
+            and self.renormalize
+            and self.routed_scaling_factor == 2.827
+        )
 
     def _forward_single_group_fused(
         self,
