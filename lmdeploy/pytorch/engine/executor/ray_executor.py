@@ -158,11 +158,13 @@ class RayWorkerWrapper(WorkerWrapperBase):
         torch.cuda.set_device(local_rank)
 
     def set_assigned_cuda_device(self):
-        """Select the CUDA device assigned to this Ray actor."""
+        """Select Ray's assigned GPU when it does not rewrite visibility."""
         gpu_ids = ray.get_runtime_context().get_accelerator_ids()['GPU']
         assert len(gpu_ids) == 1
         physical_device_id = str(gpu_ids[0])
         visible_devices = os.environ.get('CUDA_VISIBLE_DEVICES')
+        # Ray reports a physical ID; torch expects its local ordinal when the
+        # actor inherits a user-provided CUDA_VISIBLE_DEVICES subset.
         local_rank = (visible_devices.split(',').index(physical_device_id)
                       if visible_devices else int(physical_device_id))
         self.set_device(local_rank)
@@ -639,6 +641,8 @@ class RayExecutor(ExecutorBase):
                 runtime_env = dict()
                 runtime_env = _update_runtime_envs(runtime_env)
                 if self._use_symm_mem:
+                    # Symmetric-memory IPC needs peer TP GPUs to stay visible.
+                    # Keep the inherited visibility and bind each actor below.
                     runtime_env['env_vars']['RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES'] = '1'
                 if _envs.ray_nsys_enable:
                     runtime_env = _update_runtime_env_nsys(runtime_env)
@@ -667,6 +671,8 @@ class RayExecutor(ExecutorBase):
         if device_str == 'cuda':
             self.workers = self._sort_workers(driver_ip, self.workers)
             if self._use_symm_mem:
+                # Ray did not narrow CUDA visibility, so select each actor's
+                # placement-group assignment before distributed initialization.
                 ray.get([worker.set_assigned_cuda_device.remote() for worker in self.workers])
 
         elif device_str == 'ascend':
