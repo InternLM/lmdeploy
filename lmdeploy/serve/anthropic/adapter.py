@@ -345,6 +345,7 @@ def to_lmdeploy_messages(request: MessagesRequest | CountTokensRequest) -> list[
 def to_generation_config(
     request: MessagesRequest,
     default_gen_config: dict | None = None,
+    **kwargs: Any,
 ) -> GenerationConfig:
     """Map Anthropic messages request to LMDeploy generation config."""
     return build_generation_config(
@@ -355,6 +356,7 @@ def to_generation_config(
         include_stop_str_in_output=request.include_stop_str_in_output or False,
         return_routed_experts=request.return_routed_experts or False,
         logprobs=1 if request.return_logprob else None,
+        **kwargs,
     )
 
 
