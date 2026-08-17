@@ -235,10 +235,9 @@ class BaseBlockManager:
     def truncate(self, msg: SchedulerSequence, num_blocks: int) -> np.ndarray:
         """Release a logical-block suffix and return its former logical IDs.
 
-        Async KV loads use this to discard only their private remote suffix on
-        failure/cancellation while preserving a tentatively matched local L1
-        prefix.  Connector-owned pins, when present, keep the returned blocks
-        alive until late device writes have completed.
+        Async KV loads use this to discard only their private remote suffix on failure/cancellation while preserving a
+        tentatively matched local L1 prefix.  Connector-owned pins, when present, keep the returned blocks alive until
+        late device writes have completed.
         """
         num_blocks = int(num_blocks)
         logical_blocks = msg.logical_blocks
@@ -288,8 +287,8 @@ class BaseBlockManager:
     def pin_logical_blocks(self, logical_block_ids: np.ndarray):
         """Pin allocated GPU blocks and return their physical offsets.
 
-        The extra allocator reference prevents request eviction from reusing
-        cache storage while an asynchronous consumer still reads it.
+        The extra allocator reference prevents request eviction from reusing cache storage while an asynchronous
+        consumer still reads it.
         """
         logical_block_ids = np.asarray(logical_block_ids, dtype=np.int64)
         if logical_block_ids.ndim != 1:

@@ -123,7 +123,8 @@ def _load_mooncake_store_factory() -> StoreFactory:
 
 
 def _load_mooncake_replicate_config() -> Any:
-    """Construct the default replication policy only when the first put runs."""
+    """Construct the default replication policy only when the first put
+    runs."""
     try:
         from mooncake.store import ReplicateConfig
     except ImportError as e:
@@ -979,7 +980,8 @@ class MooncakeStoreWorker:
         load_id: int,
         failed_block_ids: set[int],
     ) -> None:
-        """Publish one sticky receive completion and any failed destinations."""
+        """Publish one sticky receive completion and any failed
+        destinations."""
         with self._completion_lock:
             was_inflight = load_id in self._inflight_load_ids
             self._inflight_load_ids.discard(load_id)
@@ -1260,7 +1262,8 @@ class MooncakeStoreWorker:
         return None
 
     def handle_preemptions(self, connector_metadata: MooncakeStoreConnectorMetadata) -> None:
-        """Finish unsubmitted preempted waves without cancelling GPU readers."""
+        """Finish unsubmitted preempted waves without cancelling GPU
+        readers."""
         with self._completion_lock:
             for save_id in connector_metadata.preempted_save_ids:
                 if (

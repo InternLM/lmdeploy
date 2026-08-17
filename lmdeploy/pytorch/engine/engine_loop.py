@@ -459,7 +459,8 @@ class EngineLoop:
         return checker is not None and checker()
 
     def _has_pending_kv_lookup_work(self) -> bool:
-        """Return whether scheduler-side asynchronous lookups need revisiting."""
+        """Return whether scheduler-side asynchronous lookups need
+        revisiting."""
         checker = getattr(self.scheduler, 'has_pending_kv_lookup_work', None)
         return checker is not None and checker()
 
@@ -513,13 +514,11 @@ class EngineLoop:
     ) -> tuple[None, None]:
         """Finish already-dispatched work before worker cache teardown.
 
-        Prefetch dispatches the next worker forward before the engine consumes
-        the current output.  Dropping that local bookkeeping during sleep can
-        therefore strand connector pins for metadata that a worker has already
-        received (or is about to receive). Drain that forward without
-        prefetching another one, then keep polling until all asynchronous loads
-        and saves release their scheduler-owned block references and their
-        final sticky-completion ACKs reach every worker.
+        Prefetch dispatches the next worker forward before the engine consumes the current output.  Dropping that local
+        bookkeeping during sleep can therefore strand connector pins for metadata that a worker has already received (or
+        is about to receive). Drain that forward without prefetching another one, then keep polling until all
+        asynchronous loads and saves release their scheduler-owned block references and their final sticky-completion
+        ACKs reach every worker.
         """
         if next_running is not None:
             assert forward_inputs is not None

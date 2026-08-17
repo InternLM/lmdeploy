@@ -94,7 +94,8 @@ class _PendingKVSave:
 
 @dataclass
 class _PendingKVLoad:
-    """Paging ownership retained until one async load reaches all-TP terminal."""
+    """Paging ownership retained until one async load reaches all-TP
+    terminal."""
 
     seq: SchedulerSequence
     req_id: int
@@ -848,9 +849,8 @@ class Scheduler:
     ) -> int:
         """Return headroom owed to other in-flight prefills.
 
-        Targets cover the entire remaining input, not merely the next chunk.
-        They shrink dynamically as blocks are allocated. Pending remote loads
-        are not registered until completion and are counted separately.
+        Targets cover the entire remaining input, not merely the next chunk. They shrink dynamically as blocks are
+        allocated. Pending remote loads are not registered until completion and are counted separately.
         """
         total = sum(
             max(0, int(target_blocks) - int(seq.num_blocks))
@@ -1026,10 +1026,9 @@ class Scheduler:
     def mark_kv_connector_preempted(self, seq: SchedulerSequence) -> None:
         """Start a new connector generation before a sequence recomputes.
 
-        A request ID survives recompute preemption in LMDeploy.  A generation
-        therefore distinguishes work submitted against the old block table
-        from work submitted after the request is allocated again.  Existing
-        jobs remain pinned until workers acknowledge their save IDs.
+        A request ID survives recompute preemption in LMDeploy.  A generation therefore distinguishes work submitted
+        against the old block table from work submitted after the request is allocated again.  Existing jobs remain
+        pinned until workers acknowledge their save IDs.
         """
         self._release_prefill_reservation(seq)
         if self.kv_connector is None:
@@ -1402,7 +1401,8 @@ class Scheduler:
         *,
         make_waiting: bool = True,
     ) -> None:
-        """Cancel scheduling ownership without racing an in-flight device write."""
+        """Cancel scheduling ownership without racing an in-flight device
+        write."""
         self._cancel_remote_kv_load(seq, make_waiting=make_waiting)
 
     def _cancel_remote_kv_load(

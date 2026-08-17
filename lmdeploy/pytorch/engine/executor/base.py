@@ -175,7 +175,8 @@ class ExecutorBase:
         return sending, recving
 
     def has_pending_kv_connector_ack(self) -> bool:
-        """Return whether workers still need the final sticky-completion ACK."""
+        """Return whether workers still need the final sticky-completion
+        ACK."""
         sending, recving = self._kv_connector_poll_acknowledgements()
         return bool(sending or recving)
 
@@ -232,11 +233,9 @@ class ExecutorBase:
     def _aggregate_kv_connector_outputs(self, outputs: list[Any]) -> KVConnectorOutput:
         """Return operation IDs terminal on every local TP worker.
 
-        Each worker retains its local completion until it is acknowledged, so
-        taking independent save/load intersections remains correct when ranks
-        finish on different engine ticks. A load fails globally if any rank
-        fails, but it is not published until every rank reaches a terminal
-        state.
+        Each worker retains its local completion until it is acknowledged, so taking independent save/load intersections
+        remains correct when ranks finish on different engine ticks. A load fails globally if any rank fails, but it is
+        not published until every rank reaches a terminal state.
         """
         if not outputs:
             self._kv_connector_acknowledged_sending = set()

@@ -1057,9 +1057,8 @@ class BaseModelAgent:
     ) -> KVConnectorOutput:
         """Submit connector-only loads and poll transfer completion.
 
-        Progress metadata follows the same bind/handle/clear lifecycle as a
-        normal model step, but intentionally submits no saves because there is
-        no preceding model forward from which to record a readiness event.
+        Progress metadata follows the same bind/handle/clear lifecycle as a normal model step, but intentionally submits
+        no saves because there is no preceding model forward from which to record a readiness event.
         """
         connector = getattr(self, 'kv_connector', None)
         if connector is None:
