@@ -186,6 +186,53 @@ class SpecModelAgent(BaseSpecModelAgent):
         sessions."""
         self._prev_chunk_last.clear()
 
+    @staticmethod
+    def _shift_packed_prefill_inputs(input_tensor: torch.Tensor,
+                                     seq_length: torch.Tensor,
+                                     next_token_ids: torch.Tensor,
+                                     replacement_indices: torch.Tensor | None =
+                                     None) -> torch.Tensor:
+        """Shift each packed request independently for EAGLE prefill.
+
+        Target states at token ``t`` are paired with the input for token
+        ``t + 1``. Packed requests must be shifted within their own boundaries.
+        During verification, ``replacement_indices`` identifies the row that
+        receives each request's replacement or bonus token.
+        """
+        if input_tensor.dim() not in (2, 3):
+            raise ValueError(
+                f'packed prefill shift expects [1, T] or [1, T, H], got '
+                f'{tuple(input_tensor.shape)}')
+        shifted = input_tensor.clone()
+        if replacement_indices is not None:
+            if replacement_indices.numel() != seq_length.numel():
+                raise ValueError(
+                    'replacement_indices must contain one entry per packed '
+                    'request')
+            replacement_indices = replacement_indices.tolist()
+        offset = 0
+        for batch_idx, length in enumerate(seq_length.tolist()):
+            length = int(length)
+            if length <= 0:
+                continue
+            end = offset + length
+            if length > 1:
+                shifted[:, offset:end - 1] = input_tensor[:, offset + 1:end]
+            write_index = end - 1
+            if replacement_indices is not None:
+                write_index = int(replacement_indices[batch_idx])
+                if write_index < offset or write_index >= end:
+                    raise ValueError(
+                        f'replacement index {write_index} is outside packed '
+                        f'request {batch_idx} range [{offset}, {end})')
+            shifted[:, write_index] = next_token_ids[batch_idx]
+            offset = end
+        if offset != input_tensor.shape[1]:
+            raise ValueError(
+                f'packed sequence lengths sum to {offset}, but input has '
+                f'{input_tensor.shape[1]} tokens')
+        return shifted
+
     @contextmanager
     def draft_context(self):
         """Draft-local dist context."""
@@ -268,16 +315,23 @@ class SpecModelAgent(BaseSpecModelAgent):
             # chunks. Keep pending chunk carry here; a new first chunk clears it
             # explicitly, and the final chunk consumes it.
             # Case A: non-chunked — shift left by 1, place next_token at end
-            input_ids = model_inputs.input_ids.clone()
-            input_ids[:, :-1] = model_inputs.input_ids[:, 1:]
-            input_ids[:, last_token_indices] = next_token_ids
+            input_ids = self._shift_packed_prefill_inputs(
+                model_inputs.input_ids,
+                model_inputs.seq_length,
+                next_token_ids,
+                replacement_indices=(
+                    last_token_indices if model_inputs.is_decoding else None),
+            )
 
             if target_inputs_embeds is not None:
-                input_embeds = target_inputs_embeds.clone()
-                input_embeds[:, :-1, :] = target_inputs_embeds[:, 1:, :]
-                next_token_embeds = self.proposer.embed_input_ids(next_token_ids)
-                input_embeds[:, last_token_indices, :] = next_token_embeds
-                target_inputs_embeds = input_embeds
+                target_inputs_embeds = self._shift_packed_prefill_inputs(
+                    target_inputs_embeds,
+                    model_inputs.seq_length,
+                    self.proposer.embed_input_ids(next_token_ids),
+                    replacement_indices=(
+                        last_token_indices
+                        if model_inputs.is_decoding else None),
+                )
 
         else:
             if model_inputs.is_first_chunk:
