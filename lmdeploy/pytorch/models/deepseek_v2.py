@@ -875,14 +875,6 @@ class DeepseekV2DecoderLayer(nn.Module):
         # build attention layer norm
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
-    def _input_norm(self, hidden_states: torch.Tensor, residual: torch.Tensor | None):
-        if residual is None:
-            return self.input_layernorm(hidden_states), hidden_states
-        return self.input_layernorm(hidden_states, residual)
-
-    def _post_attention_norm(self, hidden_states: torch.Tensor, residual: torch.Tensor):
-        return self.post_attention_layernorm(hidden_states, residual)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -892,7 +884,11 @@ class DeepseekV2DecoderLayer(nn.Module):
         attn_metadata: Any = None,
     ) -> tuple[torch.FloatTensor, torch.FloatTensor]:
 
-        hidden_states, residual = self._input_norm(hidden_states, residual)
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
         # Self Attention
         hidden_states = self.self_attn(
@@ -903,7 +899,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         )
 
         # Fully Connected
-        hidden_states, residual = self._post_attention_norm(hidden_states, residual)
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
 
         outputs = (hidden_states, residual)
@@ -920,7 +916,11 @@ class DeepseekV2DecoderLayer(nn.Module):
     ):
         """forward_yield."""
         is_decoding = attn_metadata.is_decoding
-        hidden_states, residual = self._input_norm(hidden_states, residual)
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
         # yield for attn0 and attn1
         yield
@@ -932,7 +932,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             attn_metadata=attn_metadata,
         )
 
-        hidden_states, residual = self._post_attention_norm(hidden_states, residual)
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
 
         # MOE
         batch_size, sequence_length, hidden_dim = hidden_states.shape
