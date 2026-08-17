@@ -15,6 +15,39 @@ fla = pytest.importorskip('fla.ops.gated_delta_rule')
 fla_chunk_gated_delta_rule = fla.chunk_gated_delta_rule
 
 
+def _fla_supports_native_gva() -> bool:
+    """Whether the installed FLA computes GVA (HV > H) natively without
+    expansion.
+
+    FLA < 0.5.0 has no native GVA: its chunk op requires ``v.shape[2] == q.shape[2]``
+    and silently drops the extra value heads otherwise. FLA >= 0.5.0 added native
+    GVA support (per-head key sharing via ``i_h // (HV // H)``).
+    """
+    try:
+        import fla
+
+        version = getattr(fla, '__version__', '0')
+        return tuple(int(p) for p in version.split('.')[:2]) >= (0, 5)
+    except Exception:
+        return False
+
+
+def _expand_gva(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+    """Replicate ``prepare_inputs``' GVA key-head expansion
+    (``repeat_interleave``).
+
+    Framework production always feeds q/k expanded to ``HV`` heads before the
+    kernel / FLA sees them (see ``gated_delta_preprocess``), so the op always
+    receives ``v.shape[2] == q.shape[2]``. Tests must do the same so that FLA
+    versions without native GVA (e.g. 0.4.2) compute a valid reference.
+    """
+    kv_ratio = v.shape[2] // q.shape[2]
+    if kv_ratio > 1:
+        q = q.repeat_interleave(kv_ratio, dim=-2)
+        k = k.repeat_interleave(kv_ratio, dim=-2)
+    return q, k
+
+
 @pytest.mark.parametrize(
     ('num_chunks', 'expected'),
     [(1, 4), (4, 4), (5, 16), (16, 16), (17, 64), (64, 64),
@@ -58,7 +91,9 @@ def _make_inputs(length, num_heads=4, num_value_heads=8, key_dim=64, value_dim=6
     return q, k, v, g, beta, state
 
 
-def _run_fla(q, k, v, g, beta, initial_state, cu_seqlens=None):
+def _run_fla(q, k, v, g, beta, initial_state, cu_seqlens=None, expand=True):
+    if expand:
+        q, k = _expand_gva(q, k, v)
     return fla_chunk_gated_delta_rule(
         q,
         k,
@@ -81,6 +116,10 @@ def test_chunk_gated_delta_rule_matches_fla(length, with_initial_state):
     torch.manual_seed(length)
     inputs = _make_inputs(length, initial_state=with_initial_state)
     q, k, v, g, beta, initial_state = inputs
+    # Feed the expanded (HV-head) q/k the production path uses, so both the local
+    # kernel and FLA receive v.shape[2] == q.shape[2] (required by FLA < 0.5).
+    q, k = _expand_gva(q, k, v)
+    inputs = (q, k, v, g, beta, initial_state)
 
     out, final_state, chunk_states = chunk_gated_delta_rule(
         *inputs[:5],
@@ -100,6 +139,36 @@ def test_chunk_gated_delta_rule_matches_fla(length, with_initial_state):
         atol=0,
         rtol=0,
     )
+
+
+@pytest.mark.skipif(not _cuda_available(), reason='CUDA is not available')
+@pytest.mark.skipif(not _fla_supports_native_gva(), reason='native GVA (unexpanded HV>H) requires FLA>=0.5.0')
+@pytest.mark.parametrize('length', [64, 200])
+def test_chunk_gated_delta_rule_native_gva_unexpanded_matches_fla(length):
+    """Cover the kernel's native-GVA branch (unexpanded q/k, HV > H).
+
+    Production always feeds q/k expanded to HV heads, so the kernel's
+    ``i_h // (HV // H)`` key-sharing mapping runs on the degenerate identity
+    path there. This case feeds the *unexpanded* H-headed q/k with HV-headed v
+    so the mapping branch is actually exercised. Only FLA >= 0.5.0 computes a
+    correct reference for this input shape (it has native GVA), so the case is
+    skipped on older FLA.
+    """
+    torch.manual_seed(length)
+    inputs = _make_inputs(length)
+    q, k, v, g, beta, initial_state = inputs
+
+    out, final_state, chunk_states = chunk_gated_delta_rule(
+        *inputs[:5],
+        scale=q.shape[-1]**-0.5,
+        initial_state=initial_state,
+        output_final_state=True,
+    )
+    ref_out, ref_final_state = _run_fla(*inputs, expand=False)
+
+    torch.testing.assert_close(out.float(), ref_out.float(), atol=2e-2, rtol=2e-2)
+    torch.testing.assert_close(final_state.float(), ref_final_state.float(), atol=2e-2, rtol=2e-2)
+    assert chunk_states.shape == (1, (length + 63) // 64, v.shape[2], v.shape[3], q.shape[3])
 
 
 @pytest.mark.skipif(not _cuda_available(), reason='CUDA is not available')
@@ -143,6 +212,9 @@ def test_chunk_gated_delta_rule_fused_qkv_view_production_shape(
 
     assert not v.is_contiguous()
     assert v.stride(1) == mixed_qkv.shape[-1]
+    # Expand q/k to HV heads, matching the production path; v stays a non-
+    # contiguous fused-QKV view (expansion only touches q/k).
+    q, k = _expand_gva(q, k, v)
     out, final_state, _ = chunk_gated_delta_rule(
         q, k, v, g, beta, initial_state=initial_state, output_final_state=True)
     contiguous_out, contiguous_final_state, _ = chunk_gated_delta_rule(
@@ -164,6 +236,7 @@ def test_chunk_gated_delta_rule_packed_varlen():
     q, k, v, g, beta, _ = _make_inputs(total_length)
     cu_seqlens = torch.tensor([0, 63, 128, 257], device='cuda', dtype=torch.int32)
     initial_state = torch.randn(len(lengths), v.shape[2], v.shape[3], q.shape[3], device='cuda') * 0.05
+    q, k = _expand_gva(q, k, v)
 
     out, final_state, chunk_states = chunk_gated_delta_rule(
         q,
@@ -197,6 +270,7 @@ def test_chunk_gated_delta_rule_prefill_decode_handoff():
     torch.manual_seed(3)
     q, k, v, g, beta, initial_state = _make_inputs(
         65, num_heads=4, num_value_heads=8, key_dim=64, value_dim=64)
+    q, k = _expand_gva(q, k, v)
     _, local_state, _ = chunk_gated_delta_rule(
         q, k, v, g, beta, initial_state=initial_state, output_final_state=True)
     _, fla_state = _run_fla(q, k, v, g, beta, initial_state)
@@ -206,6 +280,7 @@ def test_chunk_gated_delta_rule_prefill_decode_handoff():
         decode_inputs = _make_inputs(
             1, num_heads=4, num_value_heads=8, key_dim=64, value_dim=64, initial_state=False)
         dq, dk, dv, dg, dbeta, _ = decode_inputs
+        dq, dk = _expand_gva(dq, dk, dv)
         local_out, local_state = fused_recurrent_gated_delta_rule(
             dq, dk, dv, g=dg, beta=dbeta, initial_state=local_state,
             output_final_state=True, state_indices=state_indices, transpose_state_layout=True)
@@ -223,6 +298,7 @@ def test_chunk_gated_delta_rule_reuses_precomputed_metadata():
     total_length = sum(lengths)
     inputs = _make_inputs(total_length)
     q, k, v, g, beta, initial_state = inputs
+    q, k = _expand_gva(q, k, v)
     cu_seqlens = torch.tensor([0, 63, 127, 192], device='cuda', dtype=torch.int32)
     chunk_indices = prepare_chunk_indices(cu_seqlens, 64)
     chunk_offsets = prepare_chunk_offsets(cu_seqlens, 64)
@@ -254,6 +330,7 @@ def test_chunk_gated_delta_rule_tp4_service_shape_with_metadata():
     g = -torch.rand(1, length, num_value_heads, device='cuda', dtype=torch.bfloat16) * 0.1
     beta = torch.rand(1, length, num_value_heads, device='cuda', dtype=torch.bfloat16)
     initial_state = torch.randn(1, num_value_heads, value_dim, key_dim, device='cuda') * 0.02
+    q, k = _expand_gva(q, k, v)
     cu_seqlens = torch.tensor([0, length], device='cuda', dtype=torch.int32)
     chunk_indices = prepare_chunk_indices(cu_seqlens, 64)
     chunk_offsets = prepare_chunk_offsets(cu_seqlens, 64)
@@ -453,6 +530,7 @@ def test_cuda_backend_updates_only_selected_state_rows():
     lengths = [63, 65]
     total_length = sum(lengths)
     q, k, v, g, beta, _ = _make_inputs(total_length)
+    q, k = _expand_gva(q, k, v)
     cu_seqlens = torch.tensor([0, 63, 128], device='cuda', dtype=torch.int32)
     chunk_indices = prepare_chunk_indices(cu_seqlens, 64)
     chunk_offsets = prepare_chunk_offsets(cu_seqlens, 64)
@@ -520,6 +598,7 @@ def test_cuda_backend_fla_and_local_branches_match():
     lengths = [63, 65]
     total_length = sum(lengths)
     q, k, v, g, beta, _ = _make_inputs(total_length)
+    q, k = _expand_gva(q, k, v)
     cu_seqlens = torch.tensor([0, 63, 128], device='cuda', dtype=torch.int32)
     chunk_indices = prepare_chunk_indices(cu_seqlens, 64)
     chunk_offsets = prepare_chunk_offsets(cu_seqlens, 64)
@@ -589,6 +668,7 @@ def test_chunk_states_restore_and_run_suffix_reaches_final_state(boundary_chunk)
     torch.manual_seed(10)
     length = 200
     q, k, v, g, beta, initial_state = _make_inputs(length)
+    q, k = _expand_gva(q, k, v)
     scale = q.shape[-1]**-0.5
 
     out_full, final_state, chunk_states = chunk_gated_delta_rule(
