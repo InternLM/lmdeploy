@@ -20,6 +20,9 @@ from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import (
     prepare_dsa_indexer_k_cache,
     prepare_dsa_indexer_q,
 )
+from lmdeploy.pytorch.kernels.cuda.fill_dsa_indexer_metadata import (
+    fill_dsa_indexer_graph_metadata,
+)
 from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
 from lmdeploy.utils import get_logger
 
@@ -81,9 +84,14 @@ _DeepGemmScoreMeta = _DeepGemmPagedScoreMeta | _DeepGemmContiguousScoreMeta
 
 @dataclass
 class _DSAIndexerGraphBuffer:
-    """Stable CUDA graph buffers owned by the DSA indexer metadata builder."""
+    """Stable graph tensors referenced by DSA indexer metadata.
+
+    Single-token graphs alias the common ``kv_seqlens`` input buffer. Multi-
+    token graphs use dedicated indexer lengths and, when required, an expanded
+    block table.
+    """
     indexer_kv_seqlens: Tensor
-    block_offsets: Tensor | None
+    expanded_block_offsets: Tensor | None
     schedule: Tensor | None
 
 
@@ -123,7 +131,7 @@ def _get_sparse_index_topk(topk: int):
 
 def _build_deep_gemm_score_meta(
         meta: NSAIndexMeta,
-        block_offsets_buffer: Tensor | None = None,
+        expanded_block_offsets: Tensor | None = None,
         schedule_buffer: Tensor | None = None
 ) -> _DeepGemmScoreMeta | None:
     """Build layer-invariant DeepGEMM index-scoring metadata."""
@@ -147,17 +155,14 @@ def _build_deep_gemm_score_meta(
     context_lens = meta.indexer_kv_seqlens.unsqueeze(-1)
     block_offsets = meta.block_offset
     if context_lens.size(0) != block_offsets.size(0):
-        expanded = torch.repeat_interleave(
-            block_offsets,
-            meta.q_seqlens,
-            dim=0,
-            output_size=context_lens.size(0),
-        )
-        if block_offsets_buffer is not None:
-            block_offsets_buffer.copy_(expanded)
-            block_offsets = block_offsets_buffer
-        else:
-            block_offsets = expanded
+        if expanded_block_offsets is None:
+            expanded_block_offsets = torch.repeat_interleave(
+                block_offsets,
+                meta.q_seqlens,
+                dim=0,
+                output_size=context_lens.size(0),
+            )
+        block_offsets = expanded_block_offsets
     if block_offsets.dtype != torch.int32:
         block_offsets = block_offsets.to(torch.int32)
 
@@ -205,11 +210,11 @@ class DSAIndexerMetaBuilder(
     def make_cudagraph_buffer(self, graph_meta, input_buffers,
                               step_context) -> _DSAIndexerGraphBuffer:
         deep_gemm = _get_deep_gemm()
-        block_offsets = None
+        expanded_block_offsets = None
         schedule = None
         if deep_gemm is not None:
             if graph_meta.decode_query_len > 1:
-                block_offsets = torch.empty(
+                expanded_block_offsets = torch.empty(
                     graph_meta.max_tokens,
                     graph_meta.num_blocks,
                     dtype=torch.int32,
@@ -221,13 +226,17 @@ class DSAIndexerMetaBuilder(
                 dtype=torch.int32,
                 device=graph_meta.device,
             )
-        return _DSAIndexerGraphBuffer(
-            indexer_kv_seqlens=torch.empty(
+        if graph_meta.decode_query_len == 1:
+            indexer_kv_seqlens = input_buffers['kv_seqlens']
+        else:
+            indexer_kv_seqlens = torch.empty(
                 graph_meta.max_tokens,
                 dtype=torch.int32,
                 device=graph_meta.device,
-            ),
-            block_offsets=block_offsets,
+            )
+        return _DSAIndexerGraphBuffer(
+            indexer_kv_seqlens=indexer_kv_seqlens,
+            expanded_block_offsets=expanded_block_offsets,
             schedule=schedule,
         )
 
@@ -246,18 +255,27 @@ class DSAIndexerMetaBuilder(
             cu_seqlens_k=input_buffers['cu_seqlens_k'],
             max_kv_seqlen=graph_meta.num_blocks * graph_meta.block_size,
         )
+        if graph_meta.decode_query_len > 1:
+            fill_dsa_indexer_graph_metadata(
+                sequence_metadata.q_seqlens,
+                sequence_metadata.kv_seqlens,
+                sequence_metadata.cu_seqlens_q,
+                sequence_metadata.block_offsets,
+                buffer.indexer_kv_seqlens,
+                buffer.expanded_block_offsets,
+                graph_meta.decode_query_len,
+            )
         meta = build_nsa_index_meta(
             num_tokens=graph_meta.max_tokens,
             is_decoding=True,
             block_size=step_context.cache_config.block_size,
             num_gpu_blocks=step_context.cache_config.num_gpu_blocks,
             sequence_metadata=sequence_metadata,
+            indexer_kv_seqlens=buffer.indexer_kv_seqlens,
         )
-        buffer.indexer_kv_seqlens.copy_(meta.indexer_kv_seqlens)
-        meta.indexer_kv_seqlens = buffer.indexer_kv_seqlens
         meta.score_meta = _build_deep_gemm_score_meta(
             meta,
-            block_offsets_buffer=buffer.block_offsets,
+            expanded_block_offsets=buffer.expanded_block_offsets,
             schedule_buffer=buffer.schedule,
         )
         return meta
