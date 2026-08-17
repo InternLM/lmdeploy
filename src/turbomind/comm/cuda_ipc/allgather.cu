@@ -342,8 +342,9 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
             invoke(uint{});
         }
         else {
-            // cudaMemcpy2DAsync supports row widths that are not aligned to
-            // the vector types used by the P2P kernels.
+            // multimem.st only supports dtype-width of 32/64/128 bits.
+            // Fall back to the copy engine for smaller alignments (for example,
+            // an odd number of bf16 elements) instead of aborting.
             invoke_copy_engine();
         }
     }
