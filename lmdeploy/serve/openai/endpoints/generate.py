@@ -36,9 +36,12 @@ def check_request(request: GenerateReqInput, server_context) -> str:
     except AttributeError:
         pass
 
-    if request.return_routed_experts and not engine_config.enable_return_routed_experts:
-        return ('routed experts requested but not configured in engine configuration. '
-                'May start api_server with --enable-return-routed-experts flag.')
+    if request.return_routed_experts:
+        if not hasattr(engine_config, 'enable_return_routed_experts'):
+            return f'return_routed_experts is not supported in {type(engine_config).__name__}.'
+        if not engine_config.enable_return_routed_experts:
+            return ('routed experts requested but not configured in engine configuration. '
+                    'May start api_server with --enable-return-routed-experts flag.')
 
     if (request.prompt is not None) ^ (request.input_ids is None):
         return 'You must specify exactly one of prompt or input_ids'
