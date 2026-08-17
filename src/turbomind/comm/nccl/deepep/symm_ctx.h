@@ -16,8 +16,8 @@
 #include <stdexcept>
 #include <vector>
 
-#ifndef NCCL_CHECK
-#define NCCL_CHECK(e)                                                                                                  \
+#ifndef NCCLCHECK
+#define NCCLCHECK(e)                                                                                                   \
     if (auto ec = e; ec != ncclSuccess) {                                                                              \
         auto msg = fmt::format("NCCL error {}:{} '{}'", __FILE__, __LINE__, ncclGetErrorString(ec));                   \
         throw std::runtime_error(msg.c_str());                                                                         \
@@ -50,11 +50,11 @@ public:
         }
 
         int nccl_runtime_version;
-        NCCL_CHECK(ncclGetVersion(&nccl_runtime_version));
+        NCCLCHECK(ncclGetVersion(&nccl_runtime_version));
 
         // Initialize NCCL device communicator
         ncclCommProperties props = NCCL_COMM_PROPERTIES_INITIALIZER;
-        NCCL_CHECK(ncclCommQueryProperties(comm, &props));
+        NCCLCHECK(ncclCommQueryProperties(comm, &props));
         ncclDevCommRequirements_t reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
         if (num_ranks > 1) {
             TM_CHECK(props.railedGinType != NCCL_GIN_TYPE_NONE);
@@ -77,7 +77,7 @@ public:
         dev_comm_.ptr = malloc(sizeof(ncclDevComm_t));
 #endif
         TM_CHECK(dev_comm_.ptr != nullptr);
-        NCCL_CHECK(ncclDevCommCreate(comm, &reqs, static_cast<ncclDevComm_t*>(dev_comm_.ptr)));
+        NCCLCHECK(ncclDevCommCreate(comm, &reqs, static_cast<ncclDevComm_t*>(dev_comm_.ptr)));
 
         // Now we know the NVLink domain size
         ncclTeam_t lsaTeam = ncclTeamLsa(comm);
@@ -113,15 +113,15 @@ public:
         raw_window_ptr_      = this->symmetric_memory_->ptr;
         this->num_gpu_bytes_ = this->symmetric_memory_->num_gpu_bytes;
         this->num_cpu_bytes_ = this->symmetric_memory_->num_cpu_bytes;
-        NCCL_CHECK(ncclCommWindowRegister(
+        NCCLCHECK(ncclCommWindowRegister(
             comm_, raw_window_ptr_, this->symmetric_memory_->num_bytes, &window_, NCCL_WIN_STRICT_ORDERING));
-        NCCL_CHECK(ncclGetLsaDevicePointer(window_, 0, nvl_rank_idx_, &mapped_window_ptr_));
+        NCCLCHECK(ncclGetLsaDevicePointer(window_, 0, nvl_rank_idx_, &mapped_window_ptr_));
 
         // Get LSA pointers for all LSA peers
         // TODO: check whether this is correct for network with RDMA
         nvl_window_ptrs_.resize(num_nvl_ranks_);
         for (int i = 0; i < num_nvl_ranks_; ++i)
-            NCCL_CHECK(ncclGetLsaDevicePointer(window_, 0, i, &nvl_window_ptrs_[i]));
+            NCCLCHECK(ncclGetLsaDevicePointer(window_, 0, i, &nvl_window_ptrs_[i]));
     }
 
     void* get_sym_ptr(void* ptr, const int& dst_rank_idx) const
