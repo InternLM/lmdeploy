@@ -1106,53 +1106,72 @@ static void launchMoeGateNoAuxTCKernel_V2(float*       scales,
     }
     TM_CHECK(token_mask);
 
-    auto dispatch = [&](auto routing) {
+    auto invoke = [&](auto max_expert_num,  //
+                      auto top_k,
+                      auto items_per_thread,
+                      auto vec_size,
+                      auto fuse_mask_clear,
+                      auto routing) {
         constexpr bool kIsRouting = decltype(routing)::value;
         using Mask                = std::conditional_t<kIsRouting, int8_t, int>;
 
-        auto invoke = [&](auto expert_num, auto top_k, auto items_per_thread, auto access_size) {
-            constexpr int threads           = 256;
-            constexpr int threads_per_token = expert_num.value / items_per_thread.value;
-            constexpr int tokens_per_cta    = threads / threads_per_token;
-            const int     blocks            = ceil_div(kIsRouting ? tokens_padded : tokens, tokens_per_cta);
+        constexpr int  thrs_per_tok   = max_expert_num.value / items_per_thread.value;
+        constexpr int  threads        = 256;
+        constexpr int  tokens_per_cta = threads / thrs_per_tok;
+        constexpr bool kFuseMaskClear = fuse_mask_clear.value != 0;
+        const int      blocks         = ceil_div(kFuseMaskClear ? tokens_padded : tokens, tokens_per_cta);
 
-            auto* kernel = MoeGateNoAuxTCKernel_V2<expert_num.value,
-                                                   top_k.value,
-                                                   items_per_thread.value,
-                                                   threads,
-                                                   access_size.value,
-                                                   true,
-                                                   kIsRouting,
-                                                   Mask>;
+        auto* kernel = MoeGateNoAuxTCKernel_V2<max_expert_num.value,
+                                               top_k.value,
+                                               items_per_thread.value,
+                                               threads,
+                                               vec_size.value,
+                                               kFuseMaskClear,
+                                               kIsRouting,
+                                               Mask>;
 
-            kernel<<<blocks, threads, 0, st>>>(scales,
-                                               static_cast<Mask*>(masks),
-                                               accum,
-                                               logits,
-                                               token_mask,
-                                               correction_bias,
-                                               log_tile,
-                                               tiles,
-                                               tokens,
-                                               tokens_padded,
-                                               experts,
-                                               experts_per_token,
-                                               use_sigmoid,
-                                               norm_topk,
-                                               routed_scale);
-            return true;
-        };
+        if constexpr (kIsRouting && !kFuseMaskClear) {
+            cudaMemsetAsync(masks, -1, sizeof(Mask) * experts * tokens_padded, st);
+        }
 
+        kernel<<<blocks, threads, 0, st>>>(scales,
+                                           static_cast<Mask*>(masks),
+                                           accum,
+                                           logits,
+                                           token_mask,
+                                           correction_bias,
+                                           log_tile,
+                                           tiles,
+                                           tokens,
+                                           tokens_padded,
+                                           experts,
+                                           experts_per_token,
+                                           use_sigmoid,
+                                           norm_topk,
+                                           routed_scale);
+        return true;
+    };
+
+    auto dispatch = [&](auto routing) {
         if (experts == 64 && experts_per_token == 4) {
-            return invoke(_Int<64>, _Int<4>, _Int<16>, _Int<4>);
+            return invoke(_Int<64>, _Int<4>, _Int<16>, _Int<4>, _Int<1>, routing);
         }
         if (experts == 160 && experts_per_token == 8) {
-            return invoke(_Int<160>, _Int<8>, _Int<10>, _Int<2>);
+            return invoke(_Int<160>, _Int<8>, _Int<10>, _Int<2>, _Int<1>, routing);
         }
         return false;
     };
 
-    const bool success = is_routing ? dispatch(std::true_type{}) : dispatch(std::false_type{});
+    auto dispatch_mode = [&] {
+        if (is_routing) {
+            return dispatch(std::true_type{});
+        }
+        else {
+            return dispatch(std::false_type{});
+        }
+    };
+
+    const bool success = dispatch_mode();
     TM_CHECK(success) << "unsupported noaux_tc config: expert_num=" << experts << ", top_k=" << experts_per_token;
     TM_CUDA_CHECK(cudaGetLastError());
 }
