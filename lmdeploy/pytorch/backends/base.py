@@ -29,6 +29,7 @@ class OpType(Enum):
     SoftmaxTopK = auto()
     FusedMoE = auto()
     FusedMoEW8A8 = auto()
+    FusedMoEW4A16 = auto()
     FusedMoEStaticF8 = auto()
     LinearBlockedF8 = auto()
     LinearStaticF8 = auto()

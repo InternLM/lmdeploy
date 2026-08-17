@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -8,6 +8,7 @@ import torch
 
 from lmdeploy.messages import PytorchEngineConfig, QuantPolicy
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
+from lmdeploy.pytorch.quantization import CompressedTensorsW4A16Config
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
 from lmdeploy.utils import get_logger, is_bf16_supported
 
@@ -730,6 +731,12 @@ class QuantizationConfig:
     ignored_layers: list[str] = field(default_factory=list)
     fp8_quant_scope: str | None = None
     hf_quant_config: dict[str, Any] = field(default_factory=dict)
+    quant_format: str = None
+    targets: tuple[str, ...] = field(default_factory=tuple)
+    weight_type: str = None
+    symmetric: bool = None
+    dynamic: bool = None
+    compressed_tensors_config: CompressedTensorsW4A16Config | None = None
 
     def __post_init__(self):
         """Validate quantization scope."""
@@ -740,17 +747,32 @@ class QuantizationConfig:
 
     @classmethod
     def from_config(cls, hf_config: Any):
+        quant_sources = []
         quant_config = getattr(hf_config, 'quantization_config', None)
-
-        if quant_config is None:
-            if hasattr(hf_config, 'llm_config') and hasattr(hf_config.llm_config, 'quantization_config'):
-                quant_config = hf_config.llm_config.quantization_config
-            elif hasattr(hf_config, 'text_config') and hasattr(hf_config.text_config, 'quantization_config'):
-                quant_config = hf_config.text_config.quantization_config
+        if quant_config is not None:
+            quant_sources.append(('quantization_config', quant_config))
+        for config_name in ('llm_config', 'text_config'):
+            nested_config = getattr(hf_config, config_name, None)
+            nested_quant_config = getattr(nested_config, 'quantization_config', None)
+            if nested_quant_config is not None:
+                quant_sources.append((f'{config_name}.quantization_config', nested_quant_config))
 
         # no quant config found in hf config
-        if quant_config is None:
+        if not quant_sources:
             return cls()
+
+        quant_config = quant_sources[0][1]
+        compressed_sources = [(path, config) for path, config in quant_sources
+                              if isinstance(config, Mapping) and config.get('quant_method') == 'compressed-tensors']
+        if compressed_sources:
+            if len(compressed_sources) != len(quant_sources):
+                paths = [path for path, _ in quant_sources]
+                raise ValueError(f'Conflicting quantization configs found at {paths}: compressed-tensors cannot be '
+                                 'combined with another quantization method')
+            quant_config = compressed_sources[0][1]
+            for path, candidate in compressed_sources[1:]:
+                if candidate != quant_config:
+                    raise ValueError(f'Conflicting compressed-tensors config found at `{path}`')
 
         quant_method = quant_config['quant_method']
         quant_dtype = quant_config.get('quant_dtype', None)
@@ -761,6 +783,12 @@ class QuantizationConfig:
 
         bits = None
         group_size = None
+        quant_format = None
+        targets = ()
+        weight_type = None
+        symmetric = None
+        dynamic = None
+        compressed_tensors_config = None
 
         if quant_method == 'awq':
             bits = quant_config.get('bits', 4)
@@ -779,18 +807,31 @@ class QuantizationConfig:
                 quant_dtype = 'float8_e5m2'
             else:
                 raise TypeError(f'Unsupported fp8 fmt: {fmt}')
+        elif quant_method == 'compressed-tensors':
+            compressed_tensors_config = CompressedTensorsW4A16Config.from_dict(quant_config)
+            bits = compressed_tensors_config.num_bits
+            group_size = compressed_tensors_config.group_size
+            quant_format = compressed_tensors_config.format
+            targets = compressed_tensors_config.targets
+            weight_type = compressed_tensors_config.weight_type
+            symmetric = compressed_tensors_config.symmetric
+            dynamic = compressed_tensors_config.dynamic
         else:
             raise TypeError(f'Unsupported quant method: {quant_method}')
 
-        resolved_quant_dtype = getattr(torch, quant_dtype, None)
-        if not isinstance(resolved_quant_dtype, torch.dtype):
-            raise ValueError(f'Invalid quant dtype "{quant_dtype}" resolved from model config; '
-                             'expected a torch.dtype attribute on torch.')
-        quant_dtype = resolved_quant_dtype
+        if quant_dtype is not None:
+            resolved_quant_dtype = getattr(torch, quant_dtype, None)
+            if not isinstance(resolved_quant_dtype, torch.dtype):
+                raise ValueError(f'Invalid quant dtype "{quant_dtype}" resolved from model config; '
+                                 'expected a torch.dtype attribute on torch.')
+            quant_dtype = resolved_quant_dtype
 
-        ignored_layers = quant_config.get('ignored_layers', [])
-        if not ignored_layers:
-            ignored_layers = quant_config.get('modules_to_not_convert', [])
+        if compressed_tensors_config is not None:
+            ignored_layers = list(compressed_tensors_config.ignore)
+        else:
+            ignored_layers = quant_config.get('ignored_layers', [])
+            if not ignored_layers:
+                ignored_layers = quant_config.get('modules_to_not_convert', [])
 
         return cls(
             quant_method=quant_method,
@@ -803,12 +844,36 @@ class QuantizationConfig:
             ignored_layers=ignored_layers,
             fp8_quant_scope=fp8_quant_scope,
             hf_quant_config=quant_config,
+            quant_format=quant_format,
+            targets=targets,
+            weight_type=weight_type,
+            symmetric=symmetric,
+            dynamic=dynamic,
+            compressed_tensors_config=compressed_tensors_config,
         )
 
     def get_quant_method(self, prefix: str = '', module_kind: str = 'linear'):
         """Get quant method for module."""
         if module_kind not in {'linear', 'moe', 'norm'}:
             raise ValueError(f'Unsupported quant module kind: {module_kind}')
+        if self.quant_method == 'compressed-tensors':
+            if self.compressed_tensors_config is None:
+                raise RuntimeError('compressed-tensors metadata has not been parsed')
+            if module_kind == 'norm':
+                return None
+            if not prefix:
+                raise ValueError('compressed-tensors dispatch requires a non-empty canonical module prefix')
+            if self.compressed_tensors_config.is_ignored(prefix):
+                return None
+            if module_kind == 'moe' and not self.compressed_tensors_config.is_routed_expert(prefix):
+                raise ValueError(f'compressed-tensors MoE prefix is outside routed experts: `{prefix}`')
+            if (module_kind == 'linear'
+                    and not self.compressed_tensors_config.is_routed_expert_projection(prefix)):
+                raise ValueError(f'compressed-tensors Linear prefix is outside routed expert projections: `{prefix}`')
+            # Linear and fused-MoE callers must keep the quant method so the
+            # missing packed backend fails explicitly instead of falling back
+            # to a BF16 module.
+            return self.quant_method
         if self.quant_method == 'fp8' and self.fp8_quant_scope == 'moe_only' and module_kind != 'moe':
             quant_method = None
             return quant_method
