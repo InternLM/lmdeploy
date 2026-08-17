@@ -469,8 +469,9 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
         # optimized communicator lets the following RMSNorm consume that
         # reduction instead. Attention is consumed in this layer.
         attn_all_reduce = not RMSNorm.can_handle_all_reduce('attn')
-        # MLP is consumed by the next layer, so the final MLP must still reduce.
-        mlp_all_reduce = (layer_idx == config.num_hidden_layers - 1
+        # MLP is consumed by the next target layer, so terminal and MTP blocks
+        # must still reduce their outputs.
+        mlp_all_reduce = (layer_idx >= config.num_hidden_layers - 1
                           or not RMSNorm.can_handle_all_reduce('mlp'))
 
         # build attention layer
