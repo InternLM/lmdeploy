@@ -33,11 +33,15 @@ def _check_fp8_capability():
     Turbomind's fp8 path has no such gate, so an unsupported GPU falls through to a native 'No feasible kernel found'
     abort deep inside gemm.cu instead of a clear Python-level error.
     """
+    if not torch.cuda.is_available():
+        raise RuntimeError('model_format="fp8" requires a CUDA GPU with compute capability >= 9.0 '
+                           '(e.g. H100/H800), but no CUDA device is available. '
+                           'See https://github.com/InternLM/lmdeploy/issues/4863.')
     device = torch.cuda.current_device()
-    major = torch.cuda.get_device_properties(device).major
+    major, minor = torch.cuda.get_device_capability(device)
     if major < 9:
         raise RuntimeError(f'model_format="fp8" requires a GPU with compute capability >= 9.0 '
-                           f'(e.g. H100/H800), but the current GPU (device {device}) is sm{major}.x. '
+                           f'(e.g. H100/H800), but the current GPU (device {device}) is sm{major}.{minor}. '
                            'See https://github.com/InternLM/lmdeploy/issues/4863.')
 
 
