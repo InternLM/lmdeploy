@@ -7,12 +7,14 @@ from types import SimpleNamespace
 import pytest
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
 
-from lmdeploy.serve.anthropic.protocol import MessagesRequest
+from lmdeploy.serve.anthropic.protocol import CountTokensRequest, MessagesRequest
 from lmdeploy.serve.anthropic.router import create_anthropic_router
 from lmdeploy.serve.anthropic.streaming import stream_messages_response
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
+from lmdeploy.serve.utils.server_utils import protocol_error_response
 
 ANTHROPIC_HEADERS = {'anthropic-version': '2023-06-01'}
 DEFAULT_MESSAGES = [{'role': 'user', 'content': 'Hi there'}]
@@ -215,8 +217,15 @@ class _AnthropicTestClient:
         return asyncio.run(self._get(path))
 
     async def _post(self, path: str, *, headers, json):
-        endpoint = self._routes[path.split('?', 1)[0]]
-        result = await endpoint(MessagesRequest(**json), _FakeRawRequest(headers))
+        path = path.split('?', 1)[0]
+        endpoint = self._routes[path]
+        request_cls = CountTokensRequest if path == '/v1/messages/count_tokens' else MessagesRequest
+        try:
+            request = request_cls(**json)
+        except ValidationError as exc:
+            result = _validation_error_response(path, exc)
+            return await self._response_from_result(result)
+        result = await endpoint(request, _FakeRawRequest(headers))
         return await self._response_from_result(result)
 
     async def _get(self, path: str):
@@ -318,6 +327,14 @@ def _messages_payload(**overrides):
     return payload
 
 
+def _validation_error_response(path: str, exc: ValidationError):
+    first_error = next(iter(exc.errors()), {})
+    location = '.'.join(str(part) for part in first_error.get('loc', ()))
+    detail = first_error.get('msg', 'Invalid request body.')
+    message = f'{location}: {detail}' if location else detail
+    return protocol_error_response(path, RequestError(ErrorCode.INVALID_REQUEST, message))
+
+
 def test_messages_non_stream():
     client, context = _make_client(return_context=True)
     response = _post_messages(client)
@@ -333,8 +350,34 @@ def test_messages_non_stream():
     assert len(context.session_mgr.removed) == 1
 
 
+def test_messages_count_tokens_rejects_empty_messages():
+    response = _post_count_tokens(_make_client(), messages=[])
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'type': 'error',
+        'error': {
+            'type': 'invalid_request_error',
+            'message': 'messages: at least one message is required',
+        },
+    }
+
+
 def _post_messages(client: _AnthropicTestClient, **overrides):
     return client.post('/v1/messages', headers=ANTHROPIC_HEADERS, json=_messages_payload(**overrides))
+
+
+def _count_tokens_payload(**overrides):
+    payload = {
+        'model': 'fake-model',
+        'messages': DEFAULT_MESSAGES,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _post_count_tokens(client: _AnthropicTestClient, **overrides):
+    return client.post('/v1/messages/count_tokens', headers=ANTHROPIC_HEADERS, json=_count_tokens_payload(**overrides))
 
 
 def _stream_messages_body(client: _AnthropicTestClient, **overrides):

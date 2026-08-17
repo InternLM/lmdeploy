@@ -68,9 +68,12 @@ def check_request(request: ChatCompletionRequest, server_context) -> str:
         if parser_cls is None or parser_cls.tool_parser_cls is None:
             return 'Please launch the api_server with --tool-call-parser if you want to use tools.'
 
-    if request.return_routed_experts and not engine_config.enable_return_routed_experts:
-        return (
-            'routed experts requested but not configured in engine configuration. '
-            'May start api_server with --enable-return-routed-experts flag.')
+    if request.return_routed_experts:
+        if not hasattr(engine_config, 'enable_return_routed_experts'):
+            return f'return_routed_experts is not supported in {type(engine_config).__name__}.'
+        if not engine_config.enable_return_routed_experts:
+            return (
+                'routed experts requested but not configured in engine configuration. '
+                'May start api_server with --enable-return-routed-experts flag.')
 
     return ''

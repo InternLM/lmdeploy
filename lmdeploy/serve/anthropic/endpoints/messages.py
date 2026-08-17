@@ -173,6 +173,8 @@ def register(router: APIRouter, server_context) -> None:
         gen_config = to_generation_config(
             request,
             default_gen_config=server_context.default_gen_config,
+            skip_special_tokens=parsed_request.skip_special_tokens,
+            spaces_between_special_tokens=parsed_request.spaces_between_special_tokens,
         )
         session = server_context.create_session()
         adapter_name = None if request.model == server_context.async_engine.model_name else request.model
