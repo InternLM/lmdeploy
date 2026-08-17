@@ -132,10 +132,7 @@ void CudaIpcCommImpl::AllGather(
             invoke(uint{});
         }
         else {
-            // multimem.st only supports dtype-width of 32/64/128 bits.
-            // Fall back to the copy engine for smaller alignments (for example,
-            // an odd number of bf16 elements) instead of aborting.
-            invoke_copy_engine();
+            TM_LOG_FATAL("not implemented");
         }
     }
     else {
@@ -342,10 +339,7 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
             invoke(uint{});
         }
         else {
-            // multimem.st only supports dtype-width of 32/64/128 bits.
-            // Fall back to the copy engine for smaller alignments (for example,
-            // an odd number of bf16 elements) instead of aborting.
-            invoke_copy_engine();
+            TM_LOG_FATAL("not implemented");
         }
     }
     else {
