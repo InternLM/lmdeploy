@@ -4,35 +4,50 @@
 
 #include <nccl.h>
 
-#include <cstdio>
 #include <cstdlib>
 #include <dlfcn.h>
 #include <filesystem>
-#include <regex>
+#include <fstream>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <system_error>
+#include <unistd.h>
+#include <vector>
 
 namespace turbomind {
 
-inline std::string RunCommand(const std::string& command)
-{
-    std::string output;
-    if (auto* fp = popen(command.c_str(), "r"); fp) {
-        constexpr int buffer_size = 4096;
-        char          buffer[buffer_size];
-        while (std::fgets(buffer, buffer_size, fp) != nullptr) {
-            output += buffer;
-        }
-        pclose(fp);
-    }
-    return output;
-}
-
 inline bool IsFastRdmaAtomicSupport(const std::string& nic_name)
 {
-    std::string      output = RunCommand("ibstat 2>/dev/null");
-    std::smatch      match;
-    const std::regex pattern("CA '" + nic_name + R"('([\s\S]*?)CA type:\s*(\S+))");
-    return std::regex_search(output, match, pattern) && match[2] == "MT4131";
+    std::ifstream file(std::filesystem::path{"/sys/class/infiniband"} / nic_name / "hca_type");
+    std::string   hca_type;
+    return static_cast<bool>(file >> hca_type) && hca_type == "MT4131";
+}
+
+inline std::optional<std::filesystem::path> FindExecutable(std::string_view name)
+{
+    if (const char* path = std::getenv("PATH"); path && *path) {
+        std::string_view paths{path};
+        while (true) {
+            const auto pos        = paths.find(':');
+            const auto dir        = paths.substr(0, pos);
+            const auto executable = (dir.empty() ? std::filesystem::path{"."} : std::filesystem::path{dir}) / name;
+
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(executable, ec) && access(executable.c_str(), X_OK) == 0) {
+                auto resolved = std::filesystem::canonical(executable, ec);
+                if (!ec) {
+                    return resolved;
+                }
+            }
+
+            if (pos == std::string_view::npos) {
+                break;
+            }
+            paths.remove_prefix(pos + 1);
+        }
+    }
+    return std::nullopt;
 }
 
 inline std::string FindCudaHome()
@@ -43,9 +58,8 @@ inline std::string FindCudaHome()
     if (const char* path = std::getenv("CUDA_PATH"); path && *path) {
         return std::string(path);
     }
-    if (auto nvcc = RunCommand("command -v nvcc 2>/dev/null"); !nvcc.empty()) {
-        nvcc.erase(nvcc.find_last_not_of("\r\n") + 1);
-        return std::filesystem::path(nvcc).parent_path().parent_path().string();
+    if (auto nvcc = FindExecutable("nvcc")) {
+        return nvcc->parent_path().parent_path().string();
     }
 
     constexpr const char* default_path = "/usr/local/cuda";
@@ -84,42 +98,6 @@ inline std::string FindLibRoot()
     }
     TM_CHECK(!libroot.empty()) << "cannot find include files";
     return libroot;
-}
-
-inline float GetRdmaGbs(std::string nic_name)
-{
-    auto output = RunCommand("ibstat 2>/dev/null");
-
-    std::smatch      match;
-    const std::regex pattern("CA '" + nic_name + R"('([\s\S]*?)Port \d+:([\s\S]*?)Rate:\s*(\d+))");
-
-    if (std::regex_search(output, match, pattern)) {
-        return std::stof(match[3]) / 8.0f;
-    }
-
-    return 0.0f;
-}
-
-inline float GetNvlinkGbs(float factor = 0.9)
-{
-    const auto output = RunCommand("nvidia-smi nvlink -s 2>/dev/null");
-    const auto begin  = output.find("GPU ");
-    const auto end    = output.find("\nGPU ", begin + 1);
-
-    if (begin == std::string::npos)
-        return 0.0f;
-
-    const auto       gpu_block = output.substr(begin, end - begin);
-    const std::regex pattern(R"(Link \d+:\s*([\d.]+) GB/s)");
-
-    float total = 0.0f;
-    bool  found = false;
-    for (std::sregex_iterator it(gpu_block.begin(), gpu_block.end(), pattern), last; it != last; ++it) {
-        total += std::stof((*it)[1]);
-        found = true;
-    }
-
-    return found ? total * factor : 0.0f;
 }
 
 }  // namespace turbomind
