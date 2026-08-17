@@ -63,8 +63,7 @@ response = client.chat.completions.create(
 )
 ```
 
-LMDeploy also accepts `reasoning` as an input alias for
-`reasoning_content`. Omitting `preserve_thinking` leaves the behavior to the
+Omitting `preserve_thinking` leaves the behavior to the
 model's chat template; Qwen3.8 preserves earlier reasoning by default. Set it
 to `False` to remove reasoning from completed earlier turns. Preserved
 reasoning is part of the input prompt and increases its token count.

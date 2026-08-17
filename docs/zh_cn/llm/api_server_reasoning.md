@@ -63,8 +63,7 @@ response = client.chat.completions.create(
 )
 ```
 
-LMDeploy 也接受 `reasoning` 作为 `reasoning_content` 的输入别名。不传
-`preserve_thinking` 时，由模型的聊天模板决定默认行为；Qwen3.8 默认保留历史
+不传 `preserve_thinking` 时，由模型的聊天模板决定默认行为；Qwen3.8 默认保留历史
 推理。将其设为 `False` 可移除已经完成的较早轮次中的推理。保留的推理内容会
 成为输入提示词的一部分，并增加输入 Token 数量。
 
