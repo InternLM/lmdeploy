@@ -26,6 +26,21 @@ from .weight_format import (
 logger = get_logger('lmdeploy')
 
 
+def _check_fp8_capability():
+    """Reject model_format='fp8' early on GPUs without native fp8 tensor cores.
+
+    Mirrors lmdeploy/pytorch/check_env/cuda.py's CudaChecker, which runs the same sm>=9.0 check for the pytorch backend.
+    Turbomind's fp8 path has no such gate, so an unsupported GPU falls through to a native 'No feasible kernel found'
+    abort deep inside gemm.cu instead of a clear Python-level error.
+    """
+    device = torch.cuda.current_device()
+    major = torch.cuda.get_device_properties(device).major
+    if major < 9:
+        raise RuntimeError(f'model_format="fp8" requires a GPU with compute capability >= 9.0 '
+                           f'(e.g. H100/H800), but the current GPU (device {device}) is sm{major}.x. '
+                           'See https://github.com/InternLM/lmdeploy/issues/4863.')
+
+
 def _build_resolver(model_format: str | None,
                     group_size: int | None,
                     dtype: torch.dtype) -> (WeightFormatResolver, torch.dtype):
@@ -219,6 +234,8 @@ def get_tm_config(model_path,
 
     # Build resolver after dtype is finalized but before the CT→AWQ rename,
     # so compressed-tensors models instantiate CompressedTensorFormat.
+    if engine_config.model_format == 'fp8':
+        _check_fp8_capability()
     resolver, dtype = _build_resolver(engine_config.model_format,
                                       group_size, dtype)
 
