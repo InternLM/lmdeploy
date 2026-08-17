@@ -92,6 +92,32 @@ class _PendingKVSave:
     logical_block_ids: np.ndarray
 
 
+@dataclass
+class _PendingKVLoad:
+    """Paging ownership retained until one async load reaches all-TP terminal."""
+
+    seq: SchedulerSequence
+    req_id: int
+    load_id: int
+    generation: int
+    local_token_len: int
+    remote_token_len: int
+    logical_block_ids: np.ndarray
+    prefill_target_blocks: int
+    fallback_step: int
+    fallback_logical_block_ids: np.ndarray
+    fallback_restored: bool = False
+    dispatching: bool = False
+    dispatched: bool = False
+    cancelled: bool = False
+    needs_fence: bool = False
+
+    @property
+    def prefill_reservation_blocks(self) -> int:
+        """Unallocated rows still owed to this request's complete prefill."""
+        return max(0, self.prefill_target_blocks - int(self.seq.num_blocks))
+
+
 @dataclass(frozen=True)
 class _PrefillReorderInfo:
     """Immutable pre-admission metadata used only for waiting-list ordering."""
@@ -114,19 +140,35 @@ class _PrefillReorderer:
                 prefer_long_prefill: bool):
         """Return waiting requests in the order the prefill loop should try."""
         waiting = sorted(waiting, key=lambda seq: seq.arrive_time)
+        original = waiting
+        # A completed remote load owns populated private blocks but has not yet
+        # run the suffix that makes those blocks useful.  Keep that one-shot
+        # admission lane ahead of ordinary waiters.  Otherwise a later remote
+        # load can repeatedly evict and reload the completed request under KV
+        # pressure (the load/preemption storm fixed by vLLM #44560).
+        remote_ready = [
+            seq for seq in waiting
+            if self.scheduler._has_remote_prefill_reservation(seq)
+        ]
+        waiting = [
+            seq for seq in waiting
+            if not self.scheduler._has_remote_prefill_reservation(seq)
+        ]
         if prefer_long_prefill:
             # Long-work turns choose one long waiter first. The size policy only
             # reorders this long lane; it is not global shortest-prefill-first
             # admission.
             long_turn_order = self._reorder_for_long_turn(waiting)
             if long_turn_order is not None:
-                return self._warn_if_not_permutation(waiting, long_turn_order)
+                reordered = remote_ready + long_turn_order
+                return self._warn_if_not_permutation(original, reordered)
 
         if allow_long_prefill:
-            return self._warn_if_not_permutation(waiting, waiting)
+            reordered = remote_ready + waiting
+            return self._warn_if_not_permutation(original, reordered)
 
-        reordered = self._reorder_for_short_turn(waiting)
-        return self._warn_if_not_permutation(waiting, reordered)
+        reordered = remote_ready + self._reorder_for_short_turn(waiting)
+        return self._warn_if_not_permutation(original, reordered)
 
     def _warn_if_not_permutation(self, original: SeqList, reordered: SeqList):
         """Warn if reorder drops, duplicates, or substitutes waiting
@@ -228,6 +270,7 @@ class _PrefillAdmissionResult:
     admitted: bool
     prefill_token_count: int = 0
     should_skip: bool = False
+    remote_loading: bool = False
 
     @classmethod
     def admit(cls, prefill_token_count: int):
@@ -241,9 +284,27 @@ class _PrefillAdmissionResult:
     def stop(cls):
         return cls(admitted=False)
 
+    @classmethod
+    def load_remote(cls):
+        return cls(admitted=False, remote_loading=True)
+
     @property
     def should_stop(self):
-        return not self.admitted and not self.should_skip
+        return not self.admitted and not self.should_skip and not self.remote_loading
+
+
+@dataclass(frozen=True)
+class _PrefixMatchBaseline:
+    """Sequence-owned state that a tentative trie match must not discard."""
+
+    step: int
+    num_blocks: int
+    trie_cursor: Any
+    match_start_step: int
+    cached_tokens: int
+    kv_token_limit: int | None
+    fresh_block_range: range | None
+    trie_block_map: dict[int, int]
 
 
 class _PrefillAdmissionAttempt:
@@ -269,10 +330,30 @@ class _PrefillAdmissionAttempt:
         self.prealloc_size = prealloc_size
         self.token_count = token_count
         self.has_admitted = has_admitted
-        self.allow_long_prefill = allow_long_prefill
+        # A completed remote transfer must get one opportunity to consume its
+        # reservation even on a short-prefill turn.  Deferring it behind the
+        # long-prefill cadence leaves populated blocks exposed indefinitely.
+        self.allow_long_prefill = (
+            allow_long_prefill
+            or scheduler._has_remote_prefill_reservation(seq)
+        )
         self._alloc_size = prealloc_size
         self._gate_match_stats_snapshot = None
         self._gate_match_rollback_result = None
+        self._remote_local_token_len: int | None = None
+        self._remote_token_len: int | None = None
+        self._remote_fallback_step: int | None = None
+        overlap = seq.prefix_cache.recompute_overlap
+        self._prefix_match_baseline = _PrefixMatchBaseline(
+            step=int(seq.num_history_ids),
+            num_blocks=int(seq.num_blocks),
+            trie_cursor=seq.prefix_cache.trie_cursor,
+            match_start_step=int(seq.prefix_cache.match_start_step),
+            cached_tokens=int(seq.cached_tokens),
+            kv_token_limit=seq.kv_token_limit,
+            fresh_block_range=overlap.fresh_block_range,
+            trie_block_map=dict(overlap.trie_block_map),
+        )
 
     def run(self):
         """Run the admission route for one waiting prefill.
@@ -311,6 +392,8 @@ class _PrefillAdmissionAttempt:
         if not result.admitted and result.prefill_token_count != 0:
             self._warn_unexpected_state(
                 f'rejected admission result carries token count: prefill_token_count={result.prefill_token_count}')
+        if result.remote_loading and (result.admitted or result.should_skip):
+            self._warn_unexpected_state('remote load result has conflicting admission flags')
         return result
 
     def _warn_unexpected_state(self, message: str):
@@ -321,6 +404,9 @@ class _PrefillAdmissionAttempt:
     def _admit_resources(self):
         if self.scheduler.block_trie.enabled:
             return self._admit_prefix_cache_resources()
+        lookup_result = self._query_external_prefix(None)
+        if lookup_result is not None:
+            return lookup_result
         if not self._prepare_and_evict():
             return _PrefillAdmissionResult.stop()
         return None
@@ -341,9 +427,13 @@ class _PrefillAdmissionAttempt:
         scheduler = self.scheduler
         seq = self.seq
         stats_snapshot = self._gate_match_stats_snapshot
-        if stats_snapshot is None:
+        if stats_snapshot is None and not self._has_private_local_tail():
             stats_snapshot = scheduler.block_trie.stats.snapshot()
             scheduler.block_trie.match(seq)
+
+        lookup_result = self._query_external_prefix(stats_snapshot)
+        if lookup_result is not None:
+            return lookup_result
 
         had_ssm_restore = scheduler.is_ssm and seq.prefix_cache.restore.is_selected
         if not scheduler._pin_ssm_restore_if_needed(seq):
@@ -379,14 +469,83 @@ class _PrefillAdmissionAttempt:
 
         return None
 
+    def _query_external_prefix(self, stats_snapshot):
+        """Poll remote prefix lookup after the tentative local L1 match."""
+        scheduler = self.scheduler
+        connector = scheduler.kv_connector
+        seq = self.seq
+        # Mooncake Store task 7 intentionally excludes recurrent/SSM state and
+        # routed-expert replay, which is not part of the stored value schema.
+        if connector is None or scheduler.is_ssm or seq.return_routed_experts:
+            return None
+        # The just-completed lookup/load already established the longest
+        # available remote prefix for this request snapshot.  Re-querying
+        # before its first forward can only delay admission and, under memory
+        # pressure, used to start another identical full-prefix load.
+        if scheduler._has_remote_prefill_reservation(seq):
+            return None
+
+        fallback_step = int(seq.num_history_ids)
+        local_token_len = fallback_step // seq.block_size * seq.block_size
+        num_external_tokens, load_async = connector.get_num_new_matched_tokens(
+            seq,
+            local_token_len,
+        )
+        if num_external_tokens is None:
+            if stats_snapshot is not None:
+                scheduler._rollback_unscheduled_prefix_match(
+                    seq,
+                    stats_snapshot,
+                    connector_preempted=False,
+                    baseline=self._prefix_match_baseline,
+                )
+            return _PrefillAdmissionResult.skip()
+
+        num_external_tokens = int(num_external_tokens)
+        if num_external_tokens <= 0:
+            return None
+        remote_token_len = min(
+            local_token_len + num_external_tokens,
+            int(seq.get_prefix_cache_max_match_step()),
+        )
+        remote_token_len = remote_token_len // seq.block_size * seq.block_size
+        if remote_token_len <= local_token_len:
+            return None
+        if not load_async:
+            logger.debug(
+                'Connector returned a remote prefix without async flag; '
+                'LMDeploy still isolates the destination from forward: seq_id=%s',
+                seq.seq_id,
+            )
+        self._remote_local_token_len = local_token_len
+        self._remote_token_len = remote_token_len
+        self._remote_fallback_step = fallback_step
+        return None
+
     def _match_prefix_for_prefill_gate(self):
         """Tentatively match once so a request can be rechecked by a gate."""
         scheduler = self.scheduler
-        if not scheduler.block_trie.enabled:
+        if (not scheduler.block_trie.enabled
+                or self._has_private_local_tail()):
             return None
         stats_snapshot = scheduler.block_trie.stats.snapshot()
         scheduler.block_trie.match(self.seq)
         return stats_snapshot
+
+    def _has_private_local_tail(self) -> bool:
+        """Whether GPU blocks after the trie cursor must stay authoritative.
+
+        ``BlockTrie.match`` appends matches after its cursor.  For a preserved
+        multi-turn request with a partial or preallocated tail, appending a
+        full match would leave that private block at the same logical index and
+        place the match one slot too late.  Keep the local table intact and let
+        the external lookup start at the preceding full block boundary.
+        """
+        seq = self.seq
+        if self.scheduler.is_ssm:
+            return False
+        step = int(seq.num_history_ids)
+        return seq.num_blocks > step // seq.block_size
 
     def _keep_gate_prefix_match(self, stats_snapshot, rollback_result: _PrefillAdmissionResult):
         """Keep a gate-enabling match for the following resource admission."""
@@ -436,9 +595,61 @@ class _PrefillAdmissionAttempt:
         """Apply chunk allocation limits and evict for this prefill."""
         scheduler = self.scheduler
         seq = self.seq
-        alloc_size = scheduler._prepare_prefill_allocation(seq, self.prealloc_size)
+        if self._remote_token_len is not None:
+            seq.kv_token_limit = self._remote_token_len
+            # The remote prefix ends at a block boundary and deliberately
+            # leaves at least one token for sampling. Reserve that forward
+            # destination now; otherwise a single load can consume the whole
+            # pool and deadlock when it later tries to run its tail token.
+            alloc_size = max(1, self.prealloc_size)
+            evict_alloc_size = alloc_size
+            # Reserve this candidate's complete remaining prefill as well as
+            # the load destination itself. Reserving only the first chunk can
+            # admit several loads that all make one step and then deadlock.
+            load_required_blocks = scheduler.block_manager.num_required_blocks(
+                seq, alloc_size)
+            candidate_required_blocks = (
+                scheduler._estimate_remote_prefill_reservation(
+                    seq,
+                    remote_token_len=self._remote_token_len,
+                    prealloc_size=alloc_size,
+                ))
+            candidate_reservation_blocks = max(
+                0, candidate_required_blocks - load_required_blocks)
+            evict_alloc_size += candidate_reservation_blocks * seq.block_size
+            if self._remote_fallback_step != self._remote_local_token_len:
+                # Replacing an existing partial block needs one additional
+                # physical row while the original is pinned for fallback.
+                evict_alloc_size += seq.block_size
+        else:
+            alloc_size = scheduler._prepare_prefill_allocation(seq, self.prealloc_size)
+            evict_alloc_size = alloc_size
+            if (scheduler.kv_connector is not None
+                    and seq.kv_token_limit is not None):
+                # A local long prefill competes with remote loads for the same
+                # pool. Always gate against the complete *current* ISL before
+                # admitting a chunk.  A multi-turn sequence can still carry
+                # the completed prior turn's target until its next scheduler
+                # output is observed; membership alone therefore cannot prove
+                # that the new, longer turn has already reserved its tail.
+                required_blocks = scheduler.block_manager.num_required_blocks(
+                    seq, alloc_size)
+                target_blocks = scheduler._prefill_target_blocks(
+                    seq, self.prealloc_size)
+                target_required_blocks = max(
+                    0, target_blocks - int(seq.num_blocks))
+                extra_blocks = max(
+                    0, target_required_blocks - required_blocks)
+                evict_alloc_size += extra_blocks * seq.block_size
+        # In-flight prefills still need free rows for later chunks. Make that
+        # abstract headroom part of every admission check, excluding the
+        # current request because its own allocation consumes its reservation.
+        reserved_blocks = scheduler._remote_prefill_reserved_blocks(
+            exclude_req_id=int(seq.seq_id),
+        )
+        evict_alloc_size += reserved_blocks * seq.block_size
         self._alloc_size = alloc_size
-        if self._evict_for_seq(alloc_size):
+        if self._evict_for_seq(evict_alloc_size):
             return True
         seq.kv_token_limit = None
         return False
@@ -449,7 +660,8 @@ class _PrefillAdmissionAttempt:
         scheduler = self.scheduler
         hanging = reversed(scheduler.hanging)
         waiting = reversed(self.evictable_waiting)
-        evictable = list(chain(hanging, waiting))
+        evictable = scheduler._exclude_remote_prefill_victims(
+            list(chain(hanging, waiting)))
         return scheduler.eviction_helper.evict_for_seq(self.seq, evictable, alloc_size)
 
     def _rollback_prefix_match(self, stats_snapshot, reason: str):
@@ -457,7 +669,11 @@ class _PrefillAdmissionAttempt:
         logger.debug('Rollback tentative prefix-cache match: session_id=%s seq_id=%s reason=%s '
                      'num_history_ids=%s restore_state=%s', seq.session_id, seq.seq_id, reason, seq.num_history_ids,
                      seq.prefix_cache.restore.slot)
-        self.scheduler._rollback_unscheduled_prefix_match(seq, stats_snapshot)
+        self.scheduler._rollback_unscheduled_prefix_match(
+            seq,
+            stats_snapshot,
+            baseline=self._prefix_match_baseline,
+        )
 
     def _finish_admission(self):
         scheduler = self.scheduler
@@ -467,6 +683,17 @@ class _PrefillAdmissionAttempt:
         # post-match/post-rollback cost, not the conservative pre-match
         # estimate used to decide whether this sequence is worth trying.
         prefill_token_count = scheduler._prefill_admission_token_count(seq)
+        if self._remote_token_len is not None:
+            assert self._remote_local_token_len is not None
+            assert self._remote_fallback_step is not None
+            scheduler._start_remote_kv_load(
+                seq,
+                local_token_len=self._remote_local_token_len,
+                remote_token_len=self._remote_token_len,
+                fallback_step=self._remote_fallback_step,
+                prealloc_size=self._alloc_size,
+            )
+            return _PrefillAdmissionResult.load_remote()
         scheduler.block_manager.allocate(seq, self._alloc_size)
         if scheduler.block_trie.enabled:
             scheduler.block_trie.allocate(seq)
@@ -474,6 +701,12 @@ class _PrefillAdmissionAttempt:
             scheduler.state_manager.allocate(seq)
         if scheduler.block_trie.enabled:
             scheduler._finish_prefix_cache_schedule(seq)
+        if seq.kv_token_limit is not None:
+            scheduler._register_prefill_reservation(
+                seq,
+                prealloc_size=self.prealloc_size,
+            )
+        scheduler._consume_remote_prefill_reservation(seq)
         return _PrefillAdmissionResult.admit(prefill_token_count)
 
 
@@ -524,10 +757,131 @@ class Scheduler:
         # workers finish the save wave.
         self._kv_seq_generations: dict[int, int] = {}
         self._pending_kv_saves: dict[int, _PendingKVSave] = {}
+        self._pending_kv_loads: dict[int, _PendingKVLoad] = {}
+        self._active_kv_load_by_req: dict[int, int] = {}
+        # Successful remote loads retain a one-shot admission marker until
+        # their first real prefill allocation.  Capacity is tracked separately
+        # through the complete prompt: a long prefill must not admit another
+        # load (or grow another request) into rows needed by a later chunk.
+        self._remote_prefill_reservations: dict[int, int] = {}
+        self._prefill_reservation_targets: dict[
+            int, tuple[SchedulerSequence, int]
+        ] = {}
 
     def tick(self):
         """Mark one scheduler progress step (once per forward dispatch)."""
         self.scheduler_tick += 1
+
+    def _has_remote_prefill_reservation(self, seq: SchedulerSequence) -> bool:
+        """Whether a completed remote load still awaits its first forward."""
+        return int(seq.seq_id) in self._remote_prefill_reservations
+
+    def _consume_remote_prefill_reservation(self, seq: SchedulerSequence) -> None:
+        """Consume only the completed-load first-admission marker."""
+        self._remote_prefill_reservations.pop(int(seq.seq_id), None)
+
+    def _release_prefill_reservation(self, seq: SchedulerSequence) -> None:
+        """Release both remote-ready protection and full-prefill headroom."""
+        req_id = int(seq.seq_id)
+        self._remote_prefill_reservations.pop(req_id, None)
+        self._prefill_reservation_targets.pop(req_id, None)
+
+    def _prefill_target_blocks(
+        self,
+        seq: SchedulerSequence,
+        prealloc_size: int,
+    ) -> int:
+        """Return the absolute rows required by the complete prompt."""
+        block_size = self.cache_config.block_size
+        target_tokens = int(seq.num_all_ids) + max(0, int(prealloc_size))
+        return (target_tokens + block_size - 1) // block_size
+
+    def _register_prefill_reservation(
+        self,
+        seq: SchedulerSequence,
+        *,
+        prealloc_size: int = 0,
+        target_blocks: int | None = None,
+    ) -> None:
+        """Retain complete-ISL capacity until the final prefill completes."""
+        if self.kv_connector is None:
+            return
+        req_id = int(seq.seq_id)
+        if target_blocks is None:
+            target_blocks = self._prefill_target_blocks(seq, prealloc_size)
+        previous = self._prefill_reservation_targets.get(req_id)
+        if previous is not None:
+            target_blocks = max(int(target_blocks), int(previous[1]))
+        self._prefill_reservation_targets[req_id] = (seq, int(target_blocks))
+
+    def _release_completed_prefill_reservations(
+        self,
+        seqs: SeqList,
+    ) -> None:
+        """Release capacity only after scheduler-visible final-prefill output.
+
+        Long-context intermediate chunks advance ``num_history_ids`` before
+        their forward finishes.  The last chunk does not: its model output
+        advances the sequence to ``input_end_pos``.  This boundary therefore
+        distinguishes an allocated final chunk from a completed one.
+        """
+        for seq in seqs:
+            req_id = int(seq.seq_id)
+            if req_id not in self._prefill_reservation_targets:
+                continue
+            if self._has_remote_prefill_reservation(seq):
+                continue
+            if int(seq.num_history_ids) >= int(seq.input_end_pos):
+                self._prefill_reservation_targets.pop(req_id, None)
+
+    def _exclude_remote_prefill_victims(self, seqs: SeqList) -> SeqList:
+        """Keep successfully loaded waiters out of every eviction path."""
+        return [
+            seq for seq in seqs
+            if not self._has_remote_prefill_reservation(seq)
+        ]
+
+    def _remote_prefill_reserved_blocks(
+        self,
+        *,
+        exclude_req_id: int | None = None,
+    ) -> int:
+        """Return headroom owed to other in-flight prefills.
+
+        Targets cover the entire remaining input, not merely the next chunk.
+        They shrink dynamically as blocks are allocated. Pending remote loads
+        are not registered until completion and are counted separately.
+        """
+        total = sum(
+            max(0, int(target_blocks) - int(seq.num_blocks))
+            for req_id, (seq, target_blocks)
+            in self._prefill_reservation_targets.items()
+            if req_id != exclude_req_id
+        )
+        total += sum(
+            int(pending.prefill_reservation_blocks)
+            for pending in self._pending_kv_loads.values()
+            if not pending.cancelled and pending.req_id != exclude_req_id
+        )
+        return total
+
+    def _estimate_remote_prefill_reservation(
+        self,
+        seq: SchedulerSequence,
+        *,
+        remote_token_len: int,
+        prealloc_size: int,
+    ) -> int:
+        """Return rows needed to reach the complete-prefill allocation target.
+
+        ``remote_token_len`` is validated by the caller and retained in the
+        signature to make the admission contract explicit.  The reservation
+        intentionally covers every remaining ISL chunk (vLLM #44560).
+        """
+        if remote_token_len > int(seq.num_all_ids):
+            raise ValueError('remote prefix exceeds request token length')
+        target_blocks = self._prefill_target_blocks(seq, prealloc_size)
+        return max(0, target_blocks - int(seq.num_blocks))
 
     def shutdown(self) -> None:
         """Release scheduler-side connector resources exactly once."""
@@ -538,6 +892,136 @@ class Scheduler:
                 connector.shutdown()
         finally:
             self._release_all_kv_save_pins()
+            self._release_all_kv_load_pins()
+
+    def _start_remote_kv_load(
+        self,
+        seq: SchedulerSequence,
+        *,
+        local_token_len: int,
+        remote_token_len: int,
+        fallback_step: int,
+        prealloc_size: int,
+    ) -> Any:
+        """Build private load destinations while preserving a partial tail."""
+        connector = self.kv_connector
+        if connector is None:
+            raise RuntimeError('remote KV allocation requires a connector')
+        block_size = self.cache_config.block_size
+        if (local_token_len % block_size != 0
+                or remote_token_len % block_size != 0
+                or remote_token_len <= local_token_len):
+            raise ValueError('remote KV token bounds must be increasing and block aligned')
+        if not local_token_len <= fallback_step < local_token_len + block_size:
+            raise ValueError('fallback_step must be within the local boundary block')
+
+        local_blocks = local_token_len // block_size
+        remote_blocks = remote_token_len // block_size
+        fallback_ids = np.empty((0, ), dtype=np.int64)
+        fallback_detached = False
+        logical_ids = np.empty((0, ), dtype=np.int64)
+        load_suffix_pinned = False
+        generation = self._kv_seq_generations.setdefault(int(seq.seq_id), 0)
+        load_request = None
+        try:
+            if fallback_step > local_token_len:
+                all_logical_ids = seq.logical_blocks.get_real_blocks()
+                if len(all_logical_ids) <= local_blocks:
+                    raise RuntimeError(
+                        f'request {seq.seq_id} has no partial fallback block '
+                        f'at index {local_blocks}')
+                fallback_ids = np.asarray(
+                    all_logical_ids[local_blocks:local_blocks + 1],
+                    dtype=np.int64,
+                ).copy()
+                self.block_manager.pin_logical_blocks(fallback_ids)
+                self.block_manager.truncate(seq, local_blocks)
+                fallback_detached = True
+
+            self.block_manager.allocate(seq, prealloc_size)
+            all_logical_ids = seq.logical_blocks.get_real_blocks()
+            if len(all_logical_ids) < remote_blocks:
+                raise RuntimeError(
+                    f'request {seq.seq_id} owns {len(all_logical_ids)} blocks, '
+                    f'but remote load needs {remote_blocks}')
+            logical_ids = np.asarray(
+                all_logical_ids[local_blocks:remote_blocks],
+                dtype=np.int64,
+            ).copy()
+            physical_ids = self.block_manager.pin_logical_blocks(logical_ids)
+            load_suffix_pinned = True
+            load_request = connector.update_state_after_alloc(
+                seq,
+                tuple(int(block_id) for block_id in physical_ids),
+                remote_token_len - local_token_len,
+                generation=generation,
+            )
+            if load_request is None:
+                raise RuntimeError(
+                    f'connector did not create a load plan for request {seq.seq_id}')
+            expected = (
+                int(seq.seq_id),
+                generation,
+                local_token_len,
+                remote_token_len,
+            )
+            actual = (
+                int(load_request.req_id),
+                int(load_request.generation),
+                int(load_request.local_token_len),
+                int(load_request.remote_token_len),
+            )
+            if actual != expected:
+                raise RuntimeError(
+                    f'connector load plan mismatch for request {seq.seq_id}: '
+                    f'{actual} != {expected}')
+            load_id = int(load_request.load_id)
+            if load_id in self._pending_kv_loads:
+                raise RuntimeError(f'duplicate connector load_id {load_id}')
+            req_id = int(seq.seq_id)
+            if req_id in self._active_kv_load_by_req:
+                raise RuntimeError(f'request {req_id} already has an active remote load')
+            if tuple(int(block_id) for block_id in load_request.block_ids) != tuple(
+                    int(block_id) for block_id in physical_ids):
+                raise RuntimeError(
+                    f'connector physical load suffix changed for request {seq.seq_id}')
+            prefill_target_blocks = self._prefill_target_blocks(
+                seq, prealloc_size)
+            self._pending_kv_loads[load_id] = _PendingKVLoad(
+                seq=seq,
+                req_id=int(seq.seq_id),
+                load_id=load_id,
+                generation=generation,
+                local_token_len=local_token_len,
+                remote_token_len=remote_token_len,
+                logical_block_ids=logical_ids,
+                prefill_target_blocks=prefill_target_blocks,
+                fallback_step=fallback_step,
+                fallback_logical_block_ids=fallback_ids,
+            )
+            self._active_kv_load_by_req[req_id] = load_id
+            seq.state.begin_remote_load()
+            return load_request
+        except BaseException:
+            if load_request is not None:
+                load_id = int(load_request.load_id)
+                self._pending_kv_loads.pop(load_id, None)
+                if self._active_kv_load_by_req.get(int(seq.seq_id)) == load_id:
+                    self._active_kv_load_by_req.pop(int(seq.seq_id), None)
+                connector.update_connector_output({
+                    'cancelled_load_ids': {load_id},
+                })
+            if load_suffix_pinned:
+                self.block_manager.release_pinned_logical_blocks(logical_ids)
+            self.block_manager.truncate(seq, local_blocks)
+            if fallback_detached:
+                # Adopt the fallback pin as the restored sequence reference.
+                seq.logical_blocks.append(fallback_ids)
+            elif len(fallback_ids) > 0:
+                self.block_manager.release_pinned_logical_blocks(fallback_ids)
+            seq.set_step(min(fallback_step, seq.num_all_ids))
+            seq.kv_token_limit = None
+            raise
 
     def mark_kv_connector_preempted(self, seq: SchedulerSequence) -> None:
         """Start a new connector generation before a sequence recomputes.
@@ -547,10 +1031,12 @@ class Scheduler:
         from work submitted after the request is allocated again.  Existing
         jobs remain pinned until workers acknowledge their save IDs.
         """
+        self._release_prefill_reservation(seq)
         if self.kv_connector is None:
             return
 
         req_id = int(seq.seq_id)
+        self._cancel_remote_kv_load(seq, make_waiting=True)
         old_generation = self._kv_seq_generations.get(req_id, 0)
         self._kv_seq_generations[req_id] = old_generation + 1
 
@@ -623,11 +1109,101 @@ class Scheduler:
         )
         metadata = connector.build_connector_meta(scheduler_output)
         try:
+            self._lease_kv_load_metadata(metadata)
             self._pin_kv_connector_metadata(metadata, snapshots)
         except BaseException:
             self.rollback_kv_connector_metadata(metadata)
             raise
         return metadata
+
+    def build_kv_connector_progress_metadata(self) -> Any | None:
+        """Build connector-only work when there is no model forward.
+
+        Only ready loads are emitted. Building acquires a temporary dispatch
+        lease; the engine commits successful delivery with
+        :meth:`mark_kv_connector_metadata_dispatched`.  A failed RPC therefore
+        rolls the lease back and retries the same load ID without serializing
+        in-flight work every poll.
+        """
+        connector = self.kv_connector
+        if connector is None or not self._has_ready_kv_loads():
+            return None
+        scheduler_output = SchedulerOutput(
+            running=[],
+            swap_in_map={},
+            swap_out_map={},
+            copy_map={},
+        )
+        metadata = connector.build_connector_meta(scheduler_output)
+        if not getattr(metadata, 'load_requests', ()):
+            return None
+        try:
+            self._lease_kv_load_metadata(metadata)
+        except BaseException:
+            self.rollback_kv_connector_metadata(metadata)
+            raise
+        return metadata
+
+    def _lease_kv_load_metadata(self, metadata: Any) -> None:
+        """Protect the build-to-RPC await window from cancellation."""
+        leased_ids = []
+        try:
+            for load_request in getattr(metadata, 'load_requests', ()):
+                load_id = int(load_request.load_id)
+                pending = self._pending_kv_loads.get(load_id)
+                if pending is None:
+                    raise RuntimeError(
+                        f'connector metadata refers to unknown load_id {load_id}')
+                if ((pending.cancelled and not pending.needs_fence)
+                        or pending.dispatching or pending.dispatched):
+                    raise RuntimeError(
+                        f'connector load_id {load_id} is not ready for dispatch')
+                pending.dispatching = True
+                leased_ids.append(load_id)
+        except BaseException:
+            for load_id in leased_ids:
+                pending = self._pending_kv_loads.get(load_id)
+                if pending is not None:
+                    pending.dispatching = False
+            raise
+
+    def mark_kv_connector_metadata_dispatched(self, metadata: Any | None) -> None:
+        """Commit metadata only after its executor RPC was accepted."""
+        if metadata is None:
+            return
+        load_requests = tuple(getattr(metadata, 'load_requests', ()) or ())
+        if not load_requests:
+            return
+        connector = self.kv_connector
+        if connector is not None:
+            marker = getattr(connector, 'mark_connector_meta_dispatched', None)
+            if marker is not None:
+                marker(metadata)
+            else:
+                connector.update_connector_output({
+                    'dispatched_load_ids': {
+                        int(load_request.load_id)
+                        for load_request in load_requests
+                    },
+                })
+        for load_request in load_requests:
+            pending = self._pending_kv_loads.get(int(load_request.load_id))
+            if pending is None:
+                continue
+            if (pending.req_id != int(load_request.req_id)
+                    or pending.generation != int(load_request.generation)):
+                raise RuntimeError(
+                    f'stale connector load dispatch for load_id {load_request.load_id}')
+            pending.dispatching = False
+            pending.dispatched = True
+            pending.needs_fence = False
+
+    def _has_ready_kv_loads(self) -> bool:
+        return any(
+            not pending.dispatching and not pending.dispatched
+            and (not pending.cancelled or pending.needs_fence)
+            for pending in self._pending_kv_loads.values()
+        )
 
     def _pin_kv_connector_metadata(
         self,
@@ -694,14 +1270,175 @@ class Scheduler:
         return set()
 
     def update_connector_output(self, connector_output: Any) -> None:
-        """Consume all-TP completions and release scheduler block pins."""
+        """Consume all-TP completions and publish or roll back loaded KV."""
         completed_save_ids = self._completed_kv_save_ids(connector_output)
+        completed_load_ids = self._completed_kv_load_ids(connector_output)
+        failed_load_ids = self._failed_kv_load_ids(connector_output)
         connector = self.kv_connector
         try:
             if connector is not None:
                 connector.update_connector_output(connector_output)
         finally:
             self._release_kv_save_pins(completed_save_ids)
+            for load_id in completed_load_ids:
+                self._finish_kv_load(
+                    load_id,
+                    failed=load_id in failed_load_ids,
+                )
+
+    @staticmethod
+    def _output_ids(connector_output: Any, name: str) -> set[int]:
+        if connector_output is None:
+            return set()
+        if isinstance(connector_output, dict):
+            values = connector_output.get(name)
+        else:
+            values = getattr(connector_output, name, None)
+        if values is None:
+            return set()
+        return {int(value) for value in values}
+
+    @classmethod
+    def _completed_kv_load_ids(cls, connector_output: Any) -> set[int]:
+        completed = cls._output_ids(connector_output, 'completed_load_ids')
+        if completed:
+            return completed
+        completed = cls._output_ids(connector_output, 'finished_recving')
+        if completed:
+            return completed
+        if isinstance(connector_output, tuple) and len(connector_output) == 2:
+            values = connector_output[1]
+            if values is not None:
+                return {int(value) for value in values}
+        return set()
+
+    @classmethod
+    def _failed_kv_load_ids(cls, connector_output: Any) -> set[int]:
+        return cls._output_ids(connector_output, 'failed_load_ids')
+
+    def _finish_kv_load(self, load_id: int, *, failed: bool) -> None:
+        pending = self._pending_kv_loads.pop(int(load_id), None)
+        if pending is None:
+            return
+        seq = pending.seq
+        current_generation = self._kv_seq_generations.get(pending.req_id)
+        active = (
+            not pending.cancelled
+            and current_generation == pending.generation
+            and self._active_kv_load_by_req.get(pending.req_id) == pending.load_id
+            and seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+        )
+        if self._active_kv_load_by_req.get(pending.req_id) == pending.load_id:
+            self._active_kv_load_by_req.pop(pending.req_id, None)
+        try:
+            if not active:
+                if (not pending.fallback_restored
+                        and seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS):
+                    self._detach_remote_kv_suffix(pending)
+                return
+            if failed:
+                self._detach_remote_kv_suffix(pending)
+            else:
+                try:
+                    seq.kv_token_limit = pending.remote_token_len
+                    if self.block_trie.enabled:
+                        # Publish only after every TP worker reports that the
+                        # destination suffix is completely populated.
+                        self.block_trie.allocate(seq)
+                    seq.set_step(pending.remote_token_len)
+                    seq.kv_token_limit = None
+                    if self.block_trie.enabled:
+                        self._finish_prefix_cache_schedule(seq)
+                    self._register_prefill_reservation(
+                        seq,
+                        target_blocks=pending.prefill_target_blocks,
+                    )
+                    self._remote_prefill_reservations[pending.req_id] = (
+                        pending.prefill_reservation_blocks)
+                except BaseException:
+                    logger.exception(
+                        'Failed to publish completed remote KV; falling back '
+                        'to local prefix: req_id=%s load_id=%s',
+                        pending.req_id,
+                        pending.load_id,
+                    )
+                    self._detach_remote_kv_suffix(pending)
+            seq.state.finish_remote_load()
+            logger.info(
+                'Mooncake load applied: req_id=%s load_id=%s generation=%s '
+                'failed=%s step=%s',
+                pending.req_id,
+                pending.load_id,
+                pending.generation,
+                failed,
+                seq.num_history_ids,
+            )
+        finally:
+            self.block_manager.release_pinned_logical_blocks(
+                pending.logical_block_ids)
+            if (len(pending.fallback_logical_block_ids) > 0
+                    and not pending.fallback_restored):
+                self.block_manager.release_pinned_logical_blocks(
+                    pending.fallback_logical_block_ids)
+
+    def _detach_remote_kv_suffix(self, pending: _PendingKVLoad) -> None:
+        """Drop the request reference while preserving any transfer pin."""
+        seq = pending.seq
+        self._release_prefill_reservation(seq)
+        local_blocks = pending.local_token_len // self.cache_config.block_size
+        if len(seq.logical_blocks) >= local_blocks:
+            self.block_manager.truncate(seq, local_blocks)
+        if (len(pending.fallback_logical_block_ids) > 0
+                and not pending.fallback_restored):
+            # The fallback pin becomes the sequence's restored ownership.
+            seq.logical_blocks.append(pending.fallback_logical_block_ids)
+            pending.fallback_restored = True
+        seq.set_step(min(pending.fallback_step, seq.num_all_ids))
+        seq.kv_token_limit = None
+
+    def cancel_remote_kv_load(
+        self,
+        seq: SchedulerSequence,
+        *,
+        make_waiting: bool = True,
+    ) -> None:
+        """Cancel scheduling ownership without racing an in-flight device write."""
+        self._cancel_remote_kv_load(seq, make_waiting=make_waiting)
+
+    def _cancel_remote_kv_load(
+        self,
+        seq: SchedulerSequence,
+        *,
+        make_waiting: bool,
+    ) -> None:
+        self._release_prefill_reservation(seq)
+        pending_loads = [
+            pending
+            for pending in self._pending_kv_loads.values()
+            if pending.req_id == int(seq.seq_id) and not pending.cancelled
+        ]
+        if not pending_loads:
+            return
+        cancelled_ids = set()
+        for pending in pending_loads:
+            pending.cancelled = True
+            cancelled_ids.add(pending.load_id)
+            if self._active_kv_load_by_req.get(pending.req_id) == pending.load_id:
+                self._active_kv_load_by_req.pop(pending.req_id, None)
+            if seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS:
+                self._detach_remote_kv_suffix(pending)
+                if make_waiting:
+                    seq.state.finish_remote_load()
+            if (not pending.dispatching and not pending.dispatched
+                    and not pending.needs_fence):
+                self._pending_kv_loads.pop(pending.load_id, None)
+                self.block_manager.release_pinned_logical_blocks(
+                    pending.logical_block_ids)
+        connector = self.kv_connector
+        if connector is not None and cancelled_ids:
+            connector.update_connector_output({
+                'cancelled_load_ids': cancelled_ids,
+            })
 
     def rollback_kv_connector_metadata(self, metadata: Any | None) -> None:
         """Undo pins and save bookkeeping after executor dispatch fails."""
@@ -712,9 +1449,32 @@ class Scheduler:
             for save_request in getattr(metadata, 'save_requests', ())
         }
         self._release_kv_save_pins(save_ids)
+        load_ids = {
+            int(load_request.load_id)
+            for load_request in getattr(metadata, 'load_requests', ())
+        }
+        self._rollback_kv_load_dispatches(load_ids)
         connector = self.kv_connector
-        if connector is not None and save_ids:
-            connector.update_connector_output({'rolled_back_save_ids': save_ids})
+        if connector is not None and (save_ids or load_ids):
+            rolled_back = {}
+            if save_ids:
+                rolled_back['rolled_back_save_ids'] = save_ids
+            if load_ids:
+                rolled_back['rolled_back_load_ids'] = load_ids
+            connector.update_connector_output(rolled_back)
+
+    def _rollback_kv_load_dispatches(self, load_ids) -> None:
+        """Release a failed RPC lease, retaining the same ready load ID."""
+        for load_id in load_ids:
+            pending = self._pending_kv_loads.get(int(load_id))
+            if pending is None:
+                continue
+            pending.dispatching = False
+            if pending.cancelled and not pending.dispatched:
+                # The failed collective may have submitted on only a subset
+                # of TP ranks. Keep the tombstone pin and re-dispatch this
+                # idempotent load ID until one all-rank RPC succeeds.
+                pending.needs_fence = True
 
     def _release_kv_save_pins(self, save_ids) -> None:
         pending_saves = getattr(self, '_pending_kv_saves', {})
@@ -728,20 +1488,60 @@ class Scheduler:
         pending_saves = getattr(self, '_pending_kv_saves', {})
         self._release_kv_save_pins(tuple(pending_saves))
 
+    def _release_all_kv_load_pins(self) -> None:
+        pending_loads = getattr(self, '_pending_kv_loads', {})
+        for load_id, pending in tuple(pending_loads.items()):
+            pending_loads.pop(load_id, None)
+            self.block_manager.release_pinned_logical_blocks(
+                pending.logical_block_ids)
+            if (len(pending.fallback_logical_block_ids) > 0
+                    and not pending.fallback_restored):
+                self.block_manager.release_pinned_logical_blocks(
+                    pending.fallback_logical_block_ids)
+        getattr(self, '_active_kv_load_by_req', {}).clear()
+        getattr(self, '_remote_prefill_reservations', {}).clear()
+        getattr(self, '_prefill_reservation_targets', {}).clear()
+
+    def has_pending_kv_transfer_work(self) -> bool:
+        """Return whether scheduler-owned save/load block pins remain."""
+        return bool(
+            getattr(self, '_pending_kv_saves', {})
+            or getattr(self, '_pending_kv_loads', {})
+        )
+
+    def has_pending_kv_lookup_work(self) -> bool:
+        """Return whether a scheduler-side non-blocking lookup is running."""
+        connector = self.kv_connector
+        if connector is None:
+            return False
+        checker = getattr(connector, 'has_pending_kv_lookup_work', None)
+        if checker is not None:
+            return bool(checker())
+        connector_scheduler = getattr(connector, 'connector_scheduler', None)
+        checker = getattr(connector_scheduler, 'has_pending_kv_lookup_work', None)
+        return bool(checker is not None and checker())
+
     def has_pending_kv_connector_work(self) -> bool:
-        """Return whether async connector work still owns cache blocks."""
-        return bool(getattr(self, '_pending_kv_saves', {}))
+        """Compatibility union used by existing engine-loop wakeup paths."""
+        return (
+            self.has_pending_kv_transfer_work()
+            or self.has_pending_kv_lookup_work()
+        )
 
     def request_kv_connector_finished(self, seq: SchedulerSequence) -> None:
         """Notify the connector before a sequence's request ref is freed."""
         connector = self.kv_connector
-        if connector is not None:
-            block_ids = tuple(
-                int(block_id)
-                for block_id in self.block_manager.get_block_table(seq)
-            )
-            connector.request_finished(seq, block_ids)
-        self._kv_seq_generations.pop(int(seq.seq_id), None)
+        try:
+            if connector is not None:
+                block_ids = tuple(
+                    int(block_id)
+                    for block_id in self.block_manager.get_block_table(seq)
+                )
+                connector.request_finished(seq, block_ids)
+        finally:
+            self._release_prefill_reservation(seq)
+            self._cancel_remote_kv_load(seq, make_waiting=False)
+            self._kv_seq_generations.pop(int(seq.seq_id), None)
 
     def _ensure_runtime_state_available(self):
         """Make one state-cache slot available for an SSM runtime state.
@@ -762,7 +1562,14 @@ class Scheduler:
             return True
         return self.block_trie.state_checkpoints.pin_restore(seq)
 
-    def _rollback_unscheduled_prefix_match(self, seq: SchedulerSequence, stats_snapshot=None):
+    def _rollback_unscheduled_prefix_match(
+        self,
+        seq: SchedulerSequence,
+        stats_snapshot=None,
+        *,
+        connector_preempted: bool = True,
+        baseline: _PrefixMatchBaseline | None = None,
+    ):
         """Drop a tentative prefix match that will not be used now.
 
         ``block_trie.match()`` mutates sequence state immediately: it advances
@@ -771,10 +1578,28 @@ class Scheduler:
         the waiting sequence can be scheduled cleanly in a later round.
         """
         self.block_trie.stats.restore(stats_snapshot)
+        if baseline is not None and not self.is_ssm:
+            if seq.num_blocks < baseline.num_blocks:
+                raise RuntimeError(
+                    'tentative prefix match removed sequence-owned baseline blocks')
+            if seq.num_blocks > baseline.num_blocks:
+                self.block_manager.truncate(seq, baseline.num_blocks)
+            seq.set_step(baseline.step)
+            seq.kv_token_limit = baseline.kv_token_limit
+            prefix_cache = seq.prefix_cache
+            prefix_cache.trie_cursor = baseline.trie_cursor
+            prefix_cache.match_start_step = baseline.match_start_step
+            overlap = prefix_cache.recompute_overlap
+            overlap.fresh_block_range = baseline.fresh_block_range
+            overlap.trie_block_map.clear()
+            overlap.trie_block_map.update(baseline.trie_block_map)
+            seq.cached_tokens = baseline.cached_tokens
+            return
         if self.is_ssm:
             self.block_trie.state_checkpoints.unpin_restore(seq)
         if seq.num_blocks > 0 or seq.logical_state >= 0:
-            self.mark_kv_connector_preempted(seq)
+            if connector_preempted:
+                self.mark_kv_connector_preempted(seq)
             seq.state.free()
         elif seq.num_history_ids > 0:
             seq.set_step(0)
@@ -861,8 +1686,14 @@ class Scheduler:
             seq.kv_token_limit = seq.num_history_ids + chunk_size
             prealloc_size = 0
 
-        evictable = self.hanging + self.waiting
-        if not self.eviction_helper.evict_for_seq(seq, evictable, prealloc_size):
+        evictable = self._exclude_remote_prefill_victims(
+            self.hanging + self.waiting)
+        reserved_blocks = self._remote_prefill_reserved_blocks(
+            exclude_req_id=int(seq.seq_id))
+        eviction_prealloc_size = (
+            prealloc_size + reserved_blocks * seq.block_size)
+        if not self.eviction_helper.evict_for_seq(
+                seq, evictable, eviction_prealloc_size):
             seq.kv_token_limit = old_kv_token_limit
             return False
 
@@ -900,6 +1731,7 @@ class Scheduler:
 
     # status list properties
     waiting = create_status_list_property(MessageStatus.WAITING)
+    remote_loading = create_status_list_property(MessageStatus.WAITING_FOR_REMOTE_KVS)
     ready = create_status_list_property(MessageStatus.READY)
     hanging = create_status_list_property(MessageStatus.STOPPED)
     running = create_status_list_property(MessageStatus.RUNNING)
@@ -908,6 +1740,7 @@ class Scheduler:
 
     # num status methods
     num_waiting = create_num_status_method(MessageStatus.WAITING)
+    num_remote_loading = create_num_status_method(MessageStatus.WAITING_FOR_REMOTE_KVS)
     num_ready = create_num_status_method(MessageStatus.READY)
     num_running = create_num_status_method(MessageStatus.RUNNING)
     num_migration_waiting = create_num_status_method(MessageStatus.MIGRATION_WAITING)
@@ -915,6 +1748,7 @@ class Scheduler:
 
     # has status methods
     has_waiting = create_has_status_method(MessageStatus.WAITING)
+    has_remote_loading = create_has_status_method(MessageStatus.WAITING_FOR_REMOTE_KVS)
     has_ready = create_has_status_method(MessageStatus.READY)
     has_migration_waiting = create_has_status_method(MessageStatus.MIGRATION_WAITING)
     has_migration_done = create_has_status_method(MessageStatus.MIGRATION_DONE)
@@ -947,8 +1781,15 @@ class Scheduler:
 
             hanging = reversed(self.hanging)
             waiting = reversed(waiting)
-            evictable = list(chain(hanging, waiting))
-            return self.eviction_helper.evict_for_seq(seq, evictable, 0)
+            evictable = self._exclude_remote_prefill_victims(
+                list(chain(hanging, waiting)))
+            reserved_blocks = self._remote_prefill_reserved_blocks(
+                exclude_req_id=int(seq.seq_id))
+            return self.eviction_helper.evict_for_seq(
+                seq,
+                evictable,
+                reserved_blocks * seq.block_size,
+            )
 
         def _reorder_migrating():
             """Reorder waiting."""
@@ -956,7 +1797,12 @@ class Scheduler:
 
         migration_waiting = _reorder_migrating()
 
-        max_batches = self.scheduler_config.max_batches - self.num_ready() - self.num_running()
+        max_batches = (
+            self.scheduler_config.max_batches
+            - self.num_ready()
+            - self.num_running()
+            - self.num_remote_loading()
+        )
         while len(migration_waiting) > 0 and len(migration_ready) < max_batches:
             seq = migration_waiting.pop(0)
             self.block_trie.match(seq)
@@ -977,29 +1823,36 @@ class Scheduler:
                           prefer_long_prefill: bool = False):
         """Schedule for prefilling."""
 
-        max_batches = self.scheduler_config.max_batches - self.num_ready() - self.num_running()
+        max_batches = (
+            self.scheduler_config.max_batches
+            - self.num_ready()
+            - self.num_running()
+            - self.num_remote_loading()
+        )
         swap_out_map: MapType = dict()
         swap_in_map: MapType = dict()
         copy_map: MapType = dict()
         running: SeqList = []
+        admitted_slots = 0
         token_count = 0
 
         def _to_running(seq: SchedulerSequence, prefill_token_count: int):
             """Activate an admitted sequence and count its prefill tokens."""
+            nonlocal admitted_slots, token_count
             seq.state.activate()
             running.append(seq)
-            nonlocal token_count
+            admitted_slots += 1
             token_count += prefill_token_count
 
         num_waiting = self.seq_manager.num_sequences(MessageStatus.WAITING)
-        if (len(running) >= max_batches or num_waiting == 0):
+        if (admitted_slots >= max_batches or num_waiting == 0):
             return running, swap_in_map, swap_out_map, copy_map
 
         waiting = _PrefillReorderer(self).reorder(self.waiting,
                                                  allow_long_prefill=allow_long_prefill,
                                                  prefer_long_prefill=prefer_long_prefill)
         skipped_waiting: SeqList = []
-        while len(waiting) > 0 and len(running) < max_batches:
+        while len(waiting) > 0 and admitted_slots < max_batches:
             seq = waiting.pop(0)
             evictable_waiting = skipped_waiting + waiting
             admission = _PrefillAdmissionAttempt(
@@ -1012,6 +1865,12 @@ class Scheduler:
                 allow_long_prefill=allow_long_prefill,
             ).run()
 
+            if admission.remote_loading:
+                # Async loads retain a model-runner request slot even though
+                # this scheduler call emits no forward for them yet.
+                admitted_slots += 1
+                seq.record_event(EventType.SCHEDULED)
+                continue
             if admission.should_skip:
                 skipped_waiting.append(seq)
                 continue
@@ -1037,6 +1896,7 @@ class Scheduler:
 
         running = _reorder_running()
         assert len(running) != 0
+        self._release_completed_prefill_reservations(running)
 
         eviction_helper = self.eviction_helper
         swap_out_map: MapType = dict()
@@ -1046,17 +1906,24 @@ class Scheduler:
         def __evict_for_seq(seq: SchedulerSequence, num_required_blocks: int):
             """Evict until can append."""
             if num_required_blocks == 0:
-                # No need to evict, just return True.
+                # This request does not spend reserved headroom.
                 return True
-            elif num_required_blocks < self.block_manager.get_num_free_gpu_blocks():
+            reserved_blocks = self._remote_prefill_reserved_blocks(
+                exclude_req_id=int(seq.seq_id))
+            total_required_blocks = num_required_blocks + reserved_blocks
+            if total_required_blocks <= self.block_manager.get_num_free_gpu_blocks():
                 # Enough free blocks, just return True.
                 return True
 
             from itertools import chain
             hanging = reversed(self.hanging)
             waiting = reversed(self.waiting)
-            evictable = list(chain(hanging, waiting))
-            return eviction_helper.evict_for_seq(seq, evictable, prealloc_size)
+            evictable = self._exclude_remote_prefill_victims(
+                list(chain(hanging, waiting)))
+            eviction_prealloc_size = (
+                prealloc_size + reserved_blocks * seq.block_size)
+            return eviction_helper.evict_for_seq(
+                seq, evictable, eviction_prealloc_size)
 
         # 1. running
         while len(running) > 0:
@@ -1073,7 +1940,10 @@ class Scheduler:
                 self.mark_kv_connector_preempted(seq_preempted)
                 seq_preempted.state.evict()
 
-            if self.block_manager.get_num_free_gpu_blocks() < num_required_blocks:
+            reserved_blocks = self._remote_prefill_reserved_blocks(
+                exclude_req_id=int(seq.seq_id))
+            if self.block_manager.get_num_free_gpu_blocks() < (
+                    num_required_blocks + reserved_blocks):
                 self.mark_kv_connector_preempted(seq)
                 seq.state.evict()
                 continue
@@ -1106,6 +1976,7 @@ class Scheduler:
         """
         assert len(running) > 0
         eviction_helper = self.eviction_helper
+        self._release_completed_prefill_reservations(running)
 
         valid_mask = [True for _ in running]
 
@@ -1119,7 +1990,14 @@ class Scheduler:
             if num_required_blocks == 0:
                 continue
 
-            if eviction_helper.evict_for_seq(seq, self.hanging + self.waiting, prealloc_size):
+            evictable = self._exclude_remote_prefill_victims(
+                self.hanging + self.waiting)
+            reserved_blocks = self._remote_prefill_reserved_blocks(
+                exclude_req_id=int(seq.seq_id))
+            eviction_prealloc_size = (
+                prealloc_size + reserved_blocks * seq.block_size)
+            if eviction_helper.evict_for_seq(
+                    seq, evictable, eviction_prealloc_size):
                 self.block_manager.allocate(seq, prealloc_size)
                 self.block_trie.allocate(seq)
                 continue
@@ -1142,6 +2020,11 @@ class Scheduler:
         assert session_id in self.sessions
         session = self.sessions[session_id]
         for seq in session.sequences.values():
+            connector = self.kv_connector
+            cancel_lookup = getattr(connector, 'cancel_lookup', None)
+            if cancel_lookup is not None:
+                cancel_lookup(int(seq.seq_id))
+            self._release_prefill_reservation(seq)
             seq.state.stop()
 
     def end_session(self, session_id: int):
@@ -1162,7 +2045,12 @@ class Scheduler:
 
     def has_unfinished(self):
         """Check if there are any unfinished message."""
-        return self.has_ready() or self.has_waiting() or self.has_migration_done()
+        return (
+            self.has_ready()
+            or self.has_waiting()
+            or self.has_remote_loading()
+            or self.has_migration_done()
+        )
 
     def get_block_tables(self, seqs: SeqList):
         """Get block tables for the sequences."""
@@ -1226,7 +2114,11 @@ class Scheduler:
         cache_usage = 1.0 - free_blocks / total_blocks if total_blocks else 0.0
         return ScheduleMetrics(
             active_seqs=self.num_running(),
-            waiting_seqs=self.num_waiting() + self.num_ready(),
+            waiting_seqs=(
+                self.num_waiting()
+                + self.num_remote_loading()
+                + self.num_ready()
+            ),
             cache_usage=cache_usage,
             prefix_cache_hit_rate=self.block_trie.stats.hit_rate(),
             scheduler_tick=self.scheduler_tick,

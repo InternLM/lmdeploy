@@ -10,6 +10,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServ
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
+from lmdeploy.pytorch.kv_connector.base import KVConnectorMetadata, KVConnectorOutput
 from lmdeploy.utils import get_logger
 
 from .dist_utils import init_process_group, setup_master_addr
@@ -183,10 +184,16 @@ class WorkerWrapperBase:
 
     def poll_kv_connector(
         self,
+        connector_metadata: KVConnectorMetadata | None = None,
         acknowledged_sending: set[int] | None = None,
-    ) -> tuple[set[int] | None, set[int] | None]:
-        """Poll worker-local sticky connector completions."""
-        return self.model_agent.poll_kv_connector(acknowledged_sending)
+        acknowledged_recving: set[int] | None = None,
+    ) -> KVConnectorOutput:
+        """Submit worker-local loads and poll sticky completions."""
+        return self.model_agent.poll_kv_connector(
+            connector_metadata,
+            acknowledged_sending,
+            acknowledged_recving,
+        )
 
     def release(self):
         """Stop engine loop."""

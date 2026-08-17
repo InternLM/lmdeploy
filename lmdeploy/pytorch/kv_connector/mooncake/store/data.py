@@ -409,11 +409,63 @@ class MooncakeStoreSaveRequest:
                     f'block_hashes must contain {MOONCAKE_BLOCK_HASH_BYTES}-byte values')
 
 
+@dataclass(frozen=True)
+class MooncakeStoreLoadRequest:
+    """Serializable description of one asynchronous KV-cache load.
+
+    ``local_token_len`` is the block-aligned prefix already resident in the
+    worker's GPU cache.  ``remote_token_len`` is the longer block-aligned
+    prefix found in Mooncake Store.  Consequently, only the absolute logical
+    block range ``[local_token_len, remote_token_len)`` is fetched.
+    ``block_ids`` and ``block_hashes`` contain only that external suffix and
+    are parallel arrays; the worker validates their expected length using the
+    configured cache block size.
+    """
+
+    req_id: RequestId
+    load_id: int
+    generation: int
+    local_token_len: int
+    remote_token_len: int
+    block_ids: tuple[int, ...]
+    block_hashes: tuple[bytes, ...]
+
+    def __post_init__(self) -> None:
+        for field_name in (
+                'req_id',
+                'load_id',
+                'generation',
+                'local_token_len',
+                'remote_token_len',
+        ):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f'{field_name} must be a non-negative integer')
+        if self.remote_token_len <= self.local_token_len:
+            raise ValueError('remote_token_len must be greater than local_token_len')
+        if not isinstance(self.block_ids, tuple):
+            raise TypeError('block_ids must be a tuple')
+        if not isinstance(self.block_hashes, tuple):
+            raise TypeError('block_hashes must be a tuple')
+        if len(self.block_ids) != len(self.block_hashes):
+            raise ValueError('block_ids and block_hashes must have the same length')
+        if not self.block_ids:
+            raise ValueError('a load request must contain at least one block')
+        for block_id in self.block_ids:
+            if isinstance(block_id, bool) or not isinstance(block_id, int) or block_id < 0:
+                raise ValueError('block_ids must contain non-negative integers')
+        for block_hash in self.block_hashes:
+            if not isinstance(block_hash, bytes) or len(block_hash) != MOONCAKE_BLOCK_HASH_BYTES:
+                raise ValueError(
+                    f'block_hashes must contain {MOONCAKE_BLOCK_HASH_BYTES}-byte values')
+
+
 @dataclass
 class MooncakeStoreConnectorMetadata(KVConnectorMetadata):
     """Serializable scheduler metadata for one engine step."""
 
     save_requests: tuple[MooncakeStoreSaveRequest, ...] = field(default_factory=tuple)
+    load_requests: tuple[MooncakeStoreLoadRequest, ...] = field(default_factory=tuple)
     preempted_save_ids: tuple[int, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
@@ -421,6 +473,10 @@ class MooncakeStoreConnectorMetadata(KVConnectorMetadata):
             raise TypeError('save_requests must be a tuple')
         if not all(isinstance(request, MooncakeStoreSaveRequest) for request in self.save_requests):
             raise TypeError('save_requests must contain MooncakeStoreSaveRequest values')
+        if not isinstance(self.load_requests, tuple):
+            raise TypeError('load_requests must be a tuple')
+        if not all(isinstance(request, MooncakeStoreLoadRequest) for request in self.load_requests):
+            raise TypeError('load_requests must contain MooncakeStoreLoadRequest values')
         if not isinstance(self.preempted_save_ids, tuple):
             raise TypeError('preempted_save_ids must be a tuple')
         for save_id in self.preempted_save_ids:

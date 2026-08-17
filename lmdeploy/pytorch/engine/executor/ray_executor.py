@@ -16,6 +16,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, Misc
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.kv_connector.base import KVConnectorMetadata, KVConnectorOutput
 from lmdeploy.pytorch.ray import RayContext, get_device_str
 from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.utils import get_logger, try_import_deeplink
@@ -525,12 +526,15 @@ class RayExecutor(ExecutorBase):
         ret = ret.to_tensor()
         return ret
 
-    async def poll_kv_connector(self) -> set[int]:
-        """Poll and aggregate sticky connector completions from every TP
-        worker."""
+    async def poll_kv_connector(
+        self,
+        connector_metadata: KVConnectorMetadata | None = None,
+    ) -> KVConnectorOutput:
+        """Submit loads and aggregate completions from every TP worker."""
+        acknowledged_sending, acknowledged_recving = self._kv_connector_poll_acknowledgements()
         outputs = await self.collective_rpc_async(
             'poll_kv_connector',
-            (self._kv_connector_poll_acknowledgements(), ),
+            (connector_metadata, acknowledged_sending, acknowledged_recving),
         )
         return self._aggregate_kv_connector_outputs(outputs)
 

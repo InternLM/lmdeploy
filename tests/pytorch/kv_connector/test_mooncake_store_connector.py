@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import pickle
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.kv_connector import KVConnectorMetadata, KVConnectorRole
+from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput
 from lmdeploy.pytorch.kv_connector.mooncake.store import worker as worker_module
 from lmdeploy.pytorch.kv_connector.mooncake.store.connector import MooncakeStoreConnector
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import MooncakeStoreConnectorMetadata
@@ -135,7 +137,7 @@ def test_connector_rejects_a_different_connector_configuration():
 
 def test_scheduler_empty_implementations_are_fail_closed(cache_config):
     connector = MooncakeStoreConnector(KVConnectorRole.SCHEDULER, cache_config)
-    request = object()
+    request = SimpleNamespace(seq_id=1, all_ids=[])
 
     assert connector.get_num_new_matched_tokens(request, 0) == (0, False)
     assert connector.update_state_after_alloc(request, [1, 2], 0) is None
@@ -165,7 +167,7 @@ def test_worker_unimplemented_hooks_are_safe_noops(cache_config):
     assert connector.handle_preemptions(metadata) is None
     assert not connector.has_pending_step_transfers()
     assert connector.submit_transfers() is None
-    assert connector.get_finished({1}) == (None, None)
+    assert connector.get_finished({1}) == KVConnectorOutput()
     assert connector.get_block_ids_with_load_errors() == set()
     assert connector.shutdown() is None
 
@@ -180,6 +182,7 @@ def test_scheduler_methods_delegate_arguments_and_results(cache_config):
     metadata = MooncakeStoreConnectorMetadata()
     scheduler.get_num_new_matched_tokens = MagicMock(return_value=(17, True))
     scheduler.update_state_after_alloc = MagicMock(return_value=None)
+    scheduler.mark_connector_meta_dispatched = MagicMock(return_value=None)
     scheduler.build_connector_meta = MagicMock(return_value=metadata)
     scheduler.on_new_request = MagicMock(return_value=None)
     scheduler.update_connector_output = MagicMock(return_value=None)
@@ -189,8 +192,21 @@ def test_scheduler_methods_delegate_arguments_and_results(cache_config):
     assert connector.get_num_new_matched_tokens(request, 3) == (17, True)
     scheduler.get_num_new_matched_tokens.assert_called_once_with(request, 3)
 
-    assert connector.update_state_after_alloc(request, [4, 5], 14) is None
-    scheduler.update_state_after_alloc.assert_called_once_with(request, [4, 5], 14)
+    assert connector.update_state_after_alloc(
+        request,
+        [4, 5],
+        14,
+        generation=6,
+    ) is None
+    scheduler.update_state_after_alloc.assert_called_once_with(
+        request,
+        [4, 5],
+        14,
+        generation=6,
+    )
+
+    assert connector.mark_connector_meta_dispatched(metadata) is None
+    scheduler.mark_connector_meta_dispatched.assert_called_once_with(metadata)
 
     assert connector.build_connector_meta(scheduler_output) is metadata
     scheduler.build_connector_meta.assert_called_once_with(scheduler_output)
@@ -219,8 +235,16 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
     worker.register_kv_caches = MagicMock(return_value=None)
     worker.handle_preemptions = MagicMock(return_value=None)
     worker.has_pending_step_transfers = MagicMock(return_value=True)
+    worker.has_pending_step_loads = MagicMock(return_value=True)
+    worker.has_pending_step_saves = MagicMock(return_value=True)
+    worker.submit_loads = MagicMock(return_value=None)
+    worker.submit_saves = MagicMock(return_value=None)
     worker.submit_transfers = MagicMock(return_value=None)
-    worker.poll_finished = MagicMock(return_value=({1}, {2}))
+    connector_output = KVConnectorOutput(
+        completed_save_ids={1},
+        completed_load_ids={2},
+    )
+    worker.poll_finished = MagicMock(return_value=connector_output)
     worker.get_block_ids_with_load_errors = MagicMock(return_value={7, 8})
     worker.shutdown = MagicMock(return_value=None)
 
@@ -234,6 +258,19 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
     save_ready_event = object()
     assert connector.has_pending_step_transfers()
     worker.has_pending_step_transfers.assert_called_once_with(metadata)
+    assert connector.has_pending_step_loads()
+    worker.has_pending_step_loads.assert_called_once_with(metadata)
+    assert connector.has_pending_step_saves()
+    worker.has_pending_step_saves.assert_called_once_with(metadata)
+
+    assert connector.submit_loads() is None
+    worker.submit_loads.assert_called_once_with(metadata)
+
+    assert connector.submit_saves(save_ready_event=save_ready_event) is None
+    worker.submit_saves.assert_called_once_with(
+        metadata,
+        save_ready_event=save_ready_event,
+    )
 
     assert connector.submit_transfers(save_ready_event=save_ready_event) is None
     worker.submit_transfers.assert_called_once_with(
@@ -241,17 +278,22 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
         save_ready_event=save_ready_event,
     )
 
-    assert connector.poll_finished({9}) == ({1}, {2})
-    worker.poll_finished.assert_called_once_with({9})
+    assert connector.poll_finished({9}, {10}) is connector_output
+    worker.poll_finished.assert_called_once_with({9}, {10})
 
-    worker.submit_transfers.reset_mock()
+    worker.submit_loads.reset_mock()
+    worker.submit_saves.reset_mock()
     worker.poll_finished.reset_mock()
-    assert connector.get_finished({1, 3}, ready_event=save_ready_event) == ({1}, {2})
-    worker.submit_transfers.assert_called_once_with(
+    assert connector.get_finished(
+        {1, 3},
+        ready_event=save_ready_event,
+    ) is connector_output
+    worker.submit_loads.assert_called_once_with(metadata)
+    worker.submit_saves.assert_called_once_with(
         metadata,
         save_ready_event=save_ready_event,
     )
-    worker.poll_finished.assert_called_once_with(set())
+    worker.poll_finished.assert_called_once_with(None, None)
 
     assert connector.get_block_ids_with_load_errors() == {7, 8}
     worker.get_block_ids_with_load_errors.assert_called_once_with()

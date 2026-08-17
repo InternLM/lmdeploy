@@ -1312,6 +1312,11 @@ class InputsMakerAsync:
             if rollback_metadata is not None:
                 rollback_metadata(forward_inputs.get('kv_connector_metadata'))
             raise
+        connector_metadata = forward_inputs.get('kv_connector_metadata')
+        if connector_metadata is not None:
+            mark_dispatched = getattr(self.scheduler, 'mark_kv_connector_metadata_dispatched', None)
+            if mark_dispatched is not None:
+                mark_dispatched(connector_metadata)
         self._last_forward_kind = self._forward_kind(inputs, forward_inputs['delta'])
         self.scheduler.tick()
         self.forward_inputs = forward_inputs

@@ -16,6 +16,7 @@ import torch.multiprocessing as mp
 
 from lmdeploy.pytorch.backends.selector import init_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.kv_connector.base import KVConnectorMetadata, KVConnectorOutput
 from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
@@ -411,11 +412,15 @@ class MPExecutor(ExecutorBase):
         """Get output async."""
         return await self.remote_outs.get()
 
-    async def poll_kv_connector(self) -> set[int]:
-        """Poll and aggregate sticky connector completions from all workers."""
+    async def poll_kv_connector(
+        self,
+        connector_metadata: KVConnectorMetadata | None = None,
+    ) -> KVConnectorOutput:
+        """Submit loads and aggregate completions from all workers."""
+        acknowledged_sending, acknowledged_recving = self._kv_connector_poll_acknowledgements()
         outputs = await self.collective_rpc_async(
             'poll_kv_connector',
-            args=(self._kv_connector_poll_acknowledgements(), ),
+            args=(connector_metadata, acknowledged_sending, acknowledged_recving),
         )
         return self._aggregate_kv_connector_outputs(outputs)
 

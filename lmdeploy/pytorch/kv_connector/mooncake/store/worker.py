@@ -19,7 +19,7 @@ from uuid import uuid4
 import torch
 import zmq
 
-from lmdeploy.pytorch.kv_connector.base import KVCacheValue, RequestId
+from lmdeploy.pytorch.kv_connector.base import KVCacheValue, KVConnectorOutput, RequestId
 from lmdeploy.utils import get_logger
 
 from .data import (
@@ -27,6 +27,7 @@ from .data import (
     MooncakeStoreConfig,
     MooncakeStoreConnectorMetadata,
     MooncakeStoreKeyMetadata,
+    MooncakeStoreLoadRequest,
     MooncakeStoreRegistration,
     MooncakeStoreSaveRequest,
     build_store_key,
@@ -163,6 +164,12 @@ class _StoreTask:
     ready_event: Any | None
     enqueue_time: float
     ready_waited: bool = False
+
+
+@dataclass
+class _LoadTask:
+    request: MooncakeStoreLoadRequest
+    enqueue_time: float
 
 
 class KVCacheStoreSendingThread(threading.Thread):
@@ -561,6 +568,286 @@ class KVCacheStoreSendingThread(threading.Thread):
         self.join()
 
 
+class KVCacheStoreRecvingThread(threading.Thread):
+    """Single-queue background reader for one Mooncake worker rank.
+
+    The scheduler allocates and owns every destination block before a request
+    reaches this thread.  ``batch_get_into_multi_buffers`` therefore writes
+    directly into registered GPU cache rows without blocking model execution;
+    the request may resume only after the resulting load ID is completed by
+    every tensor-parallel worker.
+    """
+
+    _STOP = object()
+
+    def __init__(
+        self,
+        *,
+        store: Any,
+        registrations: tuple[MooncakeStoreRegistration, ...],
+        row_block_sizes: tuple[int, ...],
+        num_gpu_blocks: int,
+        key_metadata: MooncakeStoreKeyMetadata,
+        global_rank: int,
+        tp_rank: int,
+        tp_size: int,
+        completion_callback: Callable[[int, set[int]], None],
+    ) -> None:
+        super().__init__(name='MooncakeKVCacheStoreReceiver', daemon=True)
+        if len(registrations) != len(row_block_sizes) or not registrations:
+            raise ValueError('Mooncake receiver requires one block size per registered region')
+        if key_metadata.tp_size != tp_size:
+            raise ValueError(
+                'Mooncake receiver tp_size must match key metadata: '
+                f'{tp_size} != {key_metadata.tp_size}')
+        if tp_rank < 0 or tp_rank >= tp_size:
+            raise ValueError(f'tp_rank must be in [0, {tp_size}), got {tp_rank}')
+        self.store = store
+        self.registrations = registrations
+        self.row_block_sizes = row_block_sizes
+        self.num_gpu_blocks = num_gpu_blocks
+        self.key_metadata = key_metadata
+        self.global_rank = global_rank
+        self.tp_rank = tp_rank
+        self.tp_size = tp_size
+        self.key_rank = tp_rank // key_metadata.kv_head_replica_num
+        self.completion_callback = completion_callback
+        self.request_queue: queue.Queue[_LoadTask | object] = queue.Queue()
+        self._state_lock = threading.Lock()
+        self._closed = False
+
+    def add_request(self, request: MooncakeStoreLoadRequest) -> None:
+        """Enqueue a load without waiting for Store or GPU transfer work."""
+        with self._state_lock:
+            if self._closed:
+                raise RuntimeError('Mooncake KV-cache receiver is closed')
+            self.request_queue.put(_LoadTask(request, time.perf_counter()))
+        logger.info(
+            'Mooncake KV load enqueued: global_rank=%d tp_rank=%d tp_size=%d '
+            'req_id=%s load_id=%d generation=%d local_token_len=%d '
+            'remote_token_len=%d blocks=%d',
+            self.global_rank,
+            self.tp_rank,
+            self.tp_size,
+            request.req_id,
+            request.load_id,
+            request.generation,
+            request.local_token_len,
+            request.remote_token_len,
+            len(request.block_ids),
+        )
+
+    def _validate_request(self, request: MooncakeStoreLoadRequest) -> None:
+        block_size = self.key_metadata.block_size
+        if request.local_token_len % block_size != 0:
+            raise ValueError('load local_token_len must be block aligned')
+        if request.remote_token_len % block_size != 0:
+            raise ValueError('load remote_token_len must be block aligned')
+        expected_blocks = (
+            request.remote_token_len - request.local_token_len
+        ) // block_size
+        if expected_blocks <= 0:
+            raise ValueError('load request must contain a non-empty external suffix')
+        if len(request.block_ids) != expected_blocks:
+            raise ValueError(
+                f'load request has {len(request.block_ids)} suffix blocks, '
+                f'expected {expected_blocks}')
+        if len(request.block_hashes) != expected_blocks:
+            raise ValueError(
+                f'load request has {len(request.block_hashes)} suffix hashes, '
+                f'expected {expected_blocks}')
+        for block_id in request.block_ids:
+            self._validate_block_id(block_id)
+
+    def _validate_block_id(self, block_id: int) -> None:
+        if isinstance(block_id, bool) or not isinstance(block_id, int):
+            raise TypeError('physical block IDs must be integers')
+        if block_id < 0 or block_id >= self.num_gpu_blocks:
+            raise ValueError(
+                f'physical block ID {block_id} is outside [0, {self.num_gpu_blocks})')
+
+    def _scatter_block(self, block_id: int) -> tuple[list[int], list[int]]:
+        self._validate_block_id(block_id)
+        addresses = [
+            registration.address + block_id * block_bytes
+            for registration, block_bytes in zip(
+                self.registrations,
+                self.row_block_sizes,
+                strict=True,
+            )
+        ]
+        return addresses, list(self.row_block_sizes)
+
+    def _load(self, request: MooncakeStoreLoadRequest) -> set[int]:
+        """Load the whole external suffix and return failed physical blocks."""
+        self._validate_request(request)
+
+        # KV-head replicas share one key namespace, but every TP rank needs a
+        # complete local GPU copy.  Unlike the save path, loads must never use
+        # replica-rank striding or block_id % replica_num filtering.
+        keys = [
+            build_store_key(self.key_metadata, self.key_rank, block_hash)
+            for block_hash in request.block_hashes
+        ]
+        addresses = []
+        sizes = []
+        for block_id in request.block_ids:
+            block_addresses, block_sizes = self._scatter_block(block_id)
+            addresses.append(block_addresses)
+            sizes.append(block_sizes)
+
+        total_bytes = sum(sum(block_sizes) for block_sizes in sizes)
+        logger.info(
+            'Mooncake Store interaction before: operation=load_batch_get_into_multi_buffers '
+            'global_rank=%d tp_rank=%d tp_size=%d req_id=%s load_id=%d generation=%d '
+            'local_token_len=%d remote_token_len=%d keys=%d fragments_per_key=%d '
+            'bytes=%d first_key=%s last_key=%s',
+            self.global_rank,
+            self.tp_rank,
+            self.tp_size,
+            request.req_id,
+            request.load_id,
+            request.generation,
+            request.local_token_len,
+            request.remote_token_len,
+            len(keys),
+            len(self.registrations),
+            total_bytes,
+            keys[0],
+            keys[-1],
+        )
+        start = time.perf_counter()
+        try:
+            results = self.store.batch_get_into_multi_buffers(keys, addresses, sizes)
+            if not isinstance(results, Sequence) or isinstance(results, (str, bytes)):
+                raise TypeError('batch_get_into_multi_buffers must return a sequence')
+            results = list(results)
+            if len(results) != len(keys):
+                raise ValueError(
+                    f'batch_get_into_multi_buffers returned {len(results)} results '
+                    f'for {len(keys)} keys')
+            if any(isinstance(result, bool) or not isinstance(result, int) for result in results):
+                raise TypeError('batch_get_into_multi_buffers returned a non-integer result')
+        except Exception as e:
+            logger.error(
+                'Mooncake Store interaction after: operation=load_batch_get_into_multi_buffers '
+                'global_rank=%d tp_rank=%d tp_size=%d req_id=%s load_id=%d generation=%d '
+                'status=error keys=%d fragments_per_key=%d bytes=%d elapsed_ms=%.3f error=%s',
+                self.global_rank,
+                self.tp_rank,
+                self.tp_size,
+                request.req_id,
+                request.load_id,
+                request.generation,
+                len(keys),
+                len(self.registrations),
+                total_bytes,
+                (time.perf_counter() - start) * 1000,
+                e,
+                exc_info=True,
+            )
+            return set(request.block_ids)
+
+        failed_indices = [index for index, result in enumerate(results) if result < 0]
+        failed_block_ids = {request.block_ids[index] for index in failed_indices}
+        status = 'ok' if not failed_indices else 'partial_failure'
+        log = logger.info if not failed_indices else logger.error
+        log(
+            'Mooncake Store interaction after: operation=load_batch_get_into_multi_buffers '
+            'global_rank=%d tp_rank=%d tp_size=%d req_id=%s load_id=%d generation=%d '
+            'status=%s keys=%d failed=%d fragments_per_key=%d bytes=%d elapsed_ms=%.3f '
+            'result_codes=%s',
+            self.global_rank,
+            self.tp_rank,
+            self.tp_size,
+            request.req_id,
+            request.load_id,
+            request.generation,
+            status,
+            len(keys),
+            len(failed_indices),
+            len(self.registrations),
+            total_bytes,
+            (time.perf_counter() - start) * 1000,
+            _result_histogram(results),
+        )
+        return failed_block_ids
+
+    def run(self) -> None:
+        while True:
+            item = self.request_queue.get()
+            try:
+                if item is self._STOP:
+                    return
+                assert isinstance(item, _LoadTask)
+                request = item.request
+                logger.info(
+                    'Mooncake KV load dequeued: global_rank=%d tp_rank=%d tp_size=%d '
+                    'req_id=%s load_id=%d generation=%d queue_wait_ms=%.3f',
+                    self.global_rank,
+                    self.tp_rank,
+                    self.tp_size,
+                    request.req_id,
+                    request.load_id,
+                    request.generation,
+                    (time.perf_counter() - item.enqueue_time) * 1000,
+                )
+                failed_block_ids: set[int]
+                try:
+                    failed_block_ids = self._load(request)
+                except Exception:
+                    # Validation/address construction failures must still
+                    # complete the load so the scheduler can safely fall back
+                    # instead of leaving the request parked forever.
+                    failed_block_ids = set(request.block_ids)
+                    logger.exception(
+                        'Mooncake KV load failed unexpectedly: global_rank=%d tp_rank=%d '
+                        'req_id=%s load_id=%d',
+                        self.global_rank,
+                        self.tp_rank,
+                        request.req_id,
+                        request.load_id,
+                    )
+                try:
+                    self.completion_callback(request.load_id, failed_block_ids)
+                except Exception:
+                    # A bookkeeping callback must not kill the sole receiver
+                    # and strand all subsequently queued load waves.
+                    logger.exception(
+                        'Mooncake KV load completion callback failed: '
+                        'global_rank=%d tp_rank=%d req_id=%s load_id=%d',
+                        self.global_rank,
+                        self.tp_rank,
+                        request.req_id,
+                        request.load_id,
+                    )
+                logger.info(
+                    'Mooncake KV load completed: global_rank=%d tp_rank=%d tp_size=%d '
+                    'req_id=%s load_id=%d generation=%d status=%s failed_blocks=%d',
+                    self.global_rank,
+                    self.tp_rank,
+                    self.tp_size,
+                    request.req_id,
+                    request.load_id,
+                    request.generation,
+                    'ok' if not failed_block_ids else 'error',
+                    len(failed_block_ids),
+                )
+            finally:
+                self.request_queue.task_done()
+
+    def close(self) -> None:
+        """Stop accepting work, drain queued loads, and join exactly once."""
+        with self._state_lock:
+            if self._closed:
+                return
+            self._closed = True
+        self.request_queue.join()
+        self.request_queue.put(self._STOP)
+        self.request_queue.join()
+        self.join()
+
+
 class MooncakeStoreWorker:
     """Worker-side component of the Mooncake Store connector."""
 
@@ -603,6 +890,7 @@ class MooncakeStoreWorker:
         self.store: Any | None = None
         self.lookup_server: LookupKeyServer | None = None
         self.kv_send_thread: KVCacheStoreSendingThread | None = None
+        self.kv_recv_thread: KVCacheStoreRecvingThread | None = None
         self._registered_regions: tuple[MooncakeStoreRegistration, ...] | None = None
         self._row_block_sizes: tuple[int, ...] | None = None
         self._key_metadata: MooncakeStoreKeyMetadata | None = None
@@ -610,7 +898,17 @@ class MooncakeStoreWorker:
         self._completion_lock = threading.Lock()
         self._inflight_save_ids: set[int] = set()
         self._completed_save_ids: set[int] = set()
-        self._acknowledged_save_ids: set[int] = set()
+        # Save/load IDs are allocated from independent, monotonically
+        # increasing scheduler counters.  A watermark rejects delayed
+        # duplicate metadata without retaining one tombstone per operation.
+        # An operation already in ``_inflight_*_ids`` remains an explicit
+        # exception when a higher ID is acknowledged out of order.
+        self._acknowledged_save_watermark = -1
+        self._inflight_load_ids: set[int] = set()
+        self._completed_load_ids: set[int] = set()
+        self._failed_load_ids: set[int] = set()
+        self._acknowledged_load_watermark = -1
+        self._load_error_block_ids: set[int] = set()
 
         extra_config = kv_transfer_config.kv_connector_extra_config
         self._model_name = extra_config.get(
@@ -670,9 +968,27 @@ class MooncakeStoreWorker:
 
     def _mark_save_finished(self, save_id: int) -> None:
         with self._completion_lock:
+            was_inflight = save_id in self._inflight_save_ids
             self._inflight_save_ids.discard(save_id)
-            if save_id not in self._acknowledged_save_ids:
-                self._completed_save_ids.add(save_id)
+            if save_id <= self._acknowledged_save_watermark and not was_inflight:
+                return
+            self._completed_save_ids.add(save_id)
+
+    def _mark_load_finished(
+        self,
+        load_id: int,
+        failed_block_ids: set[int],
+    ) -> None:
+        """Publish one sticky receive completion and any failed destinations."""
+        with self._completion_lock:
+            was_inflight = load_id in self._inflight_load_ids
+            self._inflight_load_ids.discard(load_id)
+            if load_id <= self._acknowledged_load_watermark and not was_inflight:
+                return
+            self._completed_load_ids.add(load_id)
+            if failed_block_ids:
+                self._failed_load_ids.add(load_id)
+                self._load_error_block_ids.update(failed_block_ids)
 
     def _start_sender(self) -> None:
         if self.kv_send_thread is not None:
@@ -697,6 +1013,31 @@ class MooncakeStoreWorker:
         )
         sender.start()
         self.kv_send_thread = sender
+
+    def _start_receiver(self) -> None:
+        if self.kv_role not in ('kv_consumer', 'kv_both'):
+            return
+        if self.kv_recv_thread is not None:
+            return
+        registrations = self._registered_regions
+        row_block_sizes = self._row_block_sizes
+        key_metadata = self._key_metadata
+        if registrations is None or row_block_sizes is None or key_metadata is None:
+            raise RuntimeError('Mooncake receiver cannot start before KV cache registration')
+        assert self.store is not None
+        receiver = KVCacheStoreRecvingThread(
+            store=self.store,
+            registrations=registrations,
+            row_block_sizes=row_block_sizes,
+            num_gpu_blocks=self._cache_config.num_gpu_blocks,
+            key_metadata=key_metadata,
+            global_rank=self.global_rank,
+            tp_rank=self.tp_rank,
+            tp_size=self.tp_size,
+            completion_callback=self._mark_load_finished,
+        )
+        receiver.start()
+        self.kv_recv_thread = receiver
 
     def _create_store(self, store_factory: StoreFactory) -> Any:
         logger.info(
@@ -874,6 +1215,7 @@ class MooncakeStoreWorker:
             if frozenset(registrations) == frozenset(self._registered_regions):
                 try:
                     self._start_sender()
+                    self._start_receiver()
                     self._start_lookup_server()
                 except Exception:
                     self.shutdown()
@@ -902,6 +1244,7 @@ class MooncakeStoreWorker:
         self._key_metadata = key_metadata
         try:
             self._start_sender()
+            self._start_receiver()
             self._start_lookup_server()
         except Exception:
             self.shutdown()
@@ -920,7 +1263,10 @@ class MooncakeStoreWorker:
         """Finish unsubmitted preempted waves without cancelling GPU readers."""
         with self._completion_lock:
             for save_id in connector_metadata.preempted_save_ids:
-                if save_id not in self._inflight_save_ids and save_id not in self._acknowledged_save_ids:
+                if (
+                    save_id not in self._inflight_save_ids
+                    and save_id > self._acknowledged_save_watermark
+                ):
                     self._completed_save_ids.add(save_id)
         return None
 
@@ -928,10 +1274,57 @@ class MooncakeStoreWorker:
     def has_pending_step_transfers(
         connector_metadata: MooncakeStoreConnectorMetadata,
     ) -> bool:
+        """Return whether this step has load or save requests to enqueue."""
+        return bool(
+            connector_metadata.load_requests
+            or connector_metadata.save_requests
+        )
+
+    @staticmethod
+    def has_pending_step_loads(
+        connector_metadata: MooncakeStoreConnectorMetadata,
+    ) -> bool:
+        """Return whether this step has load requests to enqueue."""
+        return bool(connector_metadata.load_requests)
+
+    @staticmethod
+    def has_pending_step_saves(
+        connector_metadata: MooncakeStoreConnectorMetadata,
+    ) -> bool:
         """Return whether this step has save requests to enqueue."""
         return bool(connector_metadata.save_requests)
 
-    def submit_transfers(
+    def submit_loads(
+        self,
+        connector_metadata: MooncakeStoreConnectorMetadata,
+    ) -> None:
+        """Submit this step's loads before their requests can run forward."""
+        receiver = self.kv_recv_thread
+        if connector_metadata.load_requests and receiver is None:
+            raise RuntimeError('Mooncake KV caches must be registered before submitting loads')
+
+        assert receiver is not None or not connector_metadata.load_requests
+        for request in connector_metadata.load_requests:
+            with self._completion_lock:
+                if (
+                    request.load_id in self._inflight_load_ids
+                    or request.load_id in self._completed_load_ids
+                    or request.load_id <= self._acknowledged_load_watermark
+                ):
+                    continue
+                self._inflight_load_ids.add(request.load_id)
+            try:
+                assert receiver is not None
+                receiver.add_request(request)
+            except Exception:
+                # A submission failure is terminal for the load wave. Publish
+                # it like a Store GET failure so the scheduler can unpin the
+                # blocks and fall back instead of waiting forever.
+                self._mark_load_finished(request.load_id, set(request.block_ids))
+                raise
+        return None
+
+    def submit_saves(
         self,
         connector_metadata: MooncakeStoreConnectorMetadata,
         *,
@@ -945,9 +1338,11 @@ class MooncakeStoreWorker:
         assert sender is not None or not connector_metadata.save_requests
         for request in connector_metadata.save_requests:
             with self._completion_lock:
-                if (request.save_id in self._inflight_save_ids
-                        or request.save_id in self._completed_save_ids
-                        or request.save_id in self._acknowledged_save_ids):
+                if (
+                    request.save_id in self._inflight_save_ids
+                    or request.save_id in self._completed_save_ids
+                    or request.save_id <= self._acknowledged_save_watermark
+                ):
                     continue
                 self._inflight_save_ids.add(request.save_id)
             try:
@@ -958,13 +1353,27 @@ class MooncakeStoreWorker:
                 raise
         return None
 
+    def submit_transfers(
+        self,
+        connector_metadata: MooncakeStoreConnectorMetadata,
+        *,
+        save_ready_event: Any | None = None,
+    ) -> None:
+        """Compatibility hook submitting loads first, then save waves."""
+        self.submit_loads(connector_metadata)
+        self.submit_saves(
+            connector_metadata,
+            save_ready_event=save_ready_event,
+        )
+        return None
+
     def get_finished(
         self,
         finished_req_ids: set[RequestId],
         connector_metadata: MooncakeStoreConnectorMetadata,
         *,
         ready_event: Any | None = None,
-    ) -> tuple[set[RequestId] | None, set[RequestId] | None]:
+    ) -> KVConnectorOutput:
         """Compatibility wrapper combining submission and sticky polling."""
         del finished_req_ids
         self.submit_transfers(
@@ -973,24 +1382,61 @@ class MooncakeStoreWorker:
         )
         return self.poll_finished()
 
+    @staticmethod
+    def _validate_acknowledged_ids(
+        acknowledged_ids: set[int],
+        field_name: str,
+    ) -> None:
+        if any(
+            isinstance(operation_id, bool)
+            or not isinstance(operation_id, int)
+            or operation_id < 0
+            for operation_id in acknowledged_ids
+        ):
+            raise ValueError(f'{field_name} must contain non-negative integers')
+
     def poll_finished(
         self,
-        acknowledged_ids: set[int] | None = None,
-    ) -> tuple[set[int] | None, set[int] | None]:
-        """Acknowledge and poll save IDs, retaining unacknowledged results."""
-        acknowledged_ids = acknowledged_ids or set()
-        if any(isinstance(save_id, bool) or not isinstance(save_id, int) or save_id < 0
-               for save_id in acknowledged_ids):
-            raise ValueError('acknowledged_ids must contain non-negative integers')
+        acknowledged_sending: set[int] | None = None,
+        acknowledged_recving: set[int] | None = None,
+    ) -> KVConnectorOutput:
+        """Acknowledge and poll sticky save/load operation completions."""
+        acknowledged_sending = acknowledged_sending or set()
+        acknowledged_recving = acknowledged_recving or set()
+        self._validate_acknowledged_ids(
+            acknowledged_sending,
+            'acknowledged_sending',
+        )
+        self._validate_acknowledged_ids(
+            acknowledged_recving,
+            'acknowledged_recving',
+        )
         with self._completion_lock:
-            self._completed_save_ids.difference_update(acknowledged_ids)
-            self._acknowledged_save_ids.update(acknowledged_ids)
-            completed = set(self._completed_save_ids)
-        return (completed or None), None
+            self._completed_save_ids.difference_update(acknowledged_sending)
+            if acknowledged_sending:
+                self._acknowledged_save_watermark = max(
+                    self._acknowledged_save_watermark,
+                    max(acknowledged_sending),
+                )
+            self._completed_load_ids.difference_update(acknowledged_recving)
+            self._failed_load_ids.difference_update(acknowledged_recving)
+            if acknowledged_recving:
+                self._acknowledged_load_watermark = max(
+                    self._acknowledged_load_watermark,
+                    max(acknowledged_recving),
+                )
+            return KVConnectorOutput(
+                completed_save_ids=set(self._completed_save_ids),
+                completed_load_ids=set(self._completed_load_ids),
+                failed_load_ids=set(self._failed_load_ids),
+            )
 
     def get_block_ids_with_load_errors(self) -> set[int]:
-        """Report no load errors before external loading is implemented."""
-        return set()
+        """Consume physical GPU block IDs whose latest Store GET failed."""
+        with self._completion_lock:
+            failed_block_ids = set(self._load_error_block_ids)
+            self._load_error_block_ids.clear()
+        return failed_block_ids
 
     def lookup(self, token_len: int, block_hashes: Sequence[bytes]) -> int:
         """Return the longest prefix present for every unique KV-head shard."""
@@ -1076,6 +1522,8 @@ class MooncakeStoreWorker:
         """Release Mooncake resources exactly once."""
         lookup_server = self.lookup_server
         self.lookup_server = None
+        recv_thread = self.kv_recv_thread
+        self.kv_recv_thread = None
         send_thread = self.kv_send_thread
         self.kv_send_thread = None
         store = self.store
@@ -1088,11 +1536,15 @@ class MooncakeStoreWorker:
                 lookup_server.close()
         finally:
             try:
-                if send_thread is not None:
-                    send_thread.close()
+                if recv_thread is not None:
+                    recv_thread.close()
             finally:
-                if store is not None:
-                    self._close_store(store)
+                try:
+                    if send_thread is not None:
+                        send_thread.close()
+                finally:
+                    if store is not None:
+                        self._close_store(store)
         return None
 
     def _close_store(self, store: Any) -> None:
@@ -1214,6 +1666,9 @@ class LookupKeyServer:
         )
         start = time.perf_counter()
         try:
+            recv_thread = getattr(self.store_worker, 'kv_recv_thread', None)
+            if recv_thread is not None:
+                recv_thread.request_queue.join()
             send_thread = getattr(self.store_worker, 'kv_send_thread', None)
             if send_thread is not None:
                 send_thread.request_queue.join()

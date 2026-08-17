@@ -9,6 +9,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
+from lmdeploy.pytorch.kv_connector.base import KVConnectorMetadata, KVConnectorOutput
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -56,6 +57,7 @@ class ExecutorBase:
         # same save id.  The ids emitted by one poll are acknowledged to all
         # workers on the next poll.
         self._kv_connector_acknowledged_sending: set[int] = set()
+        self._kv_connector_acknowledged_recving: set[int] = set()
         self._maybe_disable_unsupported_prefix_caching(check_window=not self._has_cache_update_hook())
 
     def _has_cache_update_hook(self):
@@ -159,37 +161,104 @@ class ExecutorBase:
         """Get output async."""
         raise NotImplementedError('Not Implemented')
 
-    async def poll_kv_connector(self) -> set[int]:
-        """Poll TP-wide sticky KV-transfer completions without waiting for
-        I/O."""
+    async def poll_kv_connector(
+        self,
+        connector_metadata: KVConnectorMetadata | None = None,
+    ) -> KVConnectorOutput:
+        """Submit connector-only metadata and poll TP-wide completions."""
         raise NotImplementedError('Not Implemented')
 
-    def _kv_connector_poll_acknowledgements(self) -> set[int]:
-        """Return completions to acknowledge in the next worker poll."""
-        return set(getattr(self, '_kv_connector_acknowledged_sending', set()))
+    def _kv_connector_poll_acknowledgements(self) -> tuple[set[int], set[int]]:
+        """Return save/load completions to acknowledge in the next poll."""
+        sending = set(getattr(self, '_kv_connector_acknowledged_sending', set()))
+        recving = set(getattr(self, '_kv_connector_acknowledged_recving', set()))
+        return sending, recving
 
-    def _aggregate_kv_connector_outputs(self, outputs: list[Any]) -> set[int]:
-        """Return save ids reported complete by every local TP worker.
+    def has_pending_kv_connector_ack(self) -> bool:
+        """Return whether workers still need the final sticky-completion ACK."""
+        sending, recving = self._kv_connector_poll_acknowledgements()
+        return bool(sending or recving)
+
+    @staticmethod
+    def _normalize_kv_connector_output(output: Any) -> KVConnectorOutput:
+        """Normalize structured and legacy worker connector outputs."""
+        if output is None:
+            return KVConnectorOutput()
+        if isinstance(output, KVConnectorOutput):
+            return KVConnectorOutput(
+                completed_save_ids=output.completed_save_ids,
+                completed_load_ids=output.completed_load_ids,
+                failed_load_ids=output.failed_load_ids,
+            )
+        if isinstance(output, dict):
+            completed_saves = output.get(
+                'completed_save_ids',
+                output.get('finished_sending', ()),
+            )
+            completed_loads = output.get(
+                'completed_load_ids',
+                output.get('finished_recving', ()),
+            )
+            failed_loads = output.get('failed_load_ids', ())
+            return KVConnectorOutput(
+                completed_save_ids=completed_saves or (),
+                completed_load_ids=completed_loads or (),
+                failed_load_ids=failed_loads or (),
+            )
+        if isinstance(output, tuple) and len(output) == 2:
+            completed_saves, completed_loads = output
+            return KVConnectorOutput(
+                completed_save_ids=completed_saves or (),
+                completed_load_ids=completed_loads or (),
+            )
+
+        completed_saves = getattr(
+            output,
+            'completed_save_ids',
+            getattr(output, 'finished_sending', ()),
+        )
+        completed_loads = getattr(
+            output,
+            'completed_load_ids',
+            getattr(output, 'finished_recving', ()),
+        )
+        failed_loads = getattr(output, 'failed_load_ids', ())
+        return KVConnectorOutput(
+            completed_save_ids=completed_saves or (),
+            completed_load_ids=completed_loads or (),
+            failed_load_ids=failed_loads or (),
+        )
+
+    def _aggregate_kv_connector_outputs(self, outputs: list[Any]) -> KVConnectorOutput:
+        """Return operation IDs terminal on every local TP worker.
 
         Each worker retains its local completion until it is acknowledged, so
-        taking the intersection remains correct when ranks finish on different
-        engine ticks.
+        taking independent save/load intersections remains correct when ranks
+        finish on different engine ticks. A load fails globally if any rank
+        fails, but it is not published until every rank reaches a terminal
+        state.
         """
         if not outputs:
             self._kv_connector_acknowledged_sending = set()
-            return set()
+            self._kv_connector_acknowledged_recving = set()
+            return KVConnectorOutput()
 
-        finished_per_rank: list[set[int]] = []
-        for output in outputs:
-            if output is None:
-                finished_per_rank.append(set())
-                continue
-            finished_sending, _ = output
-            finished_per_rank.append(set(finished_sending or ()))
+        normalized = [self._normalize_kv_connector_output(output) for output in outputs]
+        completed_saves = set.intersection(*(output.completed_save_ids for output in normalized))
+        completed_loads = set.intersection(*(output.completed_load_ids for output in normalized))
+        failed_loads = set().union(*(output.failed_load_ids for output in normalized))
+        failed_loads.intersection_update(completed_loads)
 
-        finished = set.intersection(*finished_per_rank)
-        self._kv_connector_acknowledged_sending = finished
-        return finished
+        # These remain set until the next successful collective poll carries
+        # them back to every worker. EngineLoop treats pending ACKs as runnable
+        # connector work even if the scheduler released its final transfer.
+        self._kv_connector_acknowledged_sending = completed_saves
+        self._kv_connector_acknowledged_recving = completed_loads
+        return KVConnectorOutput(
+            completed_save_ids=completed_saves,
+            completed_load_ids=completed_loads,
+            failed_load_ids=failed_loads,
+        )
 
     """ PD Disaggregation API Begin """
 

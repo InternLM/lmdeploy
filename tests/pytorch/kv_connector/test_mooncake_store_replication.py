@@ -533,7 +533,7 @@ def test_tp_completion_intersection_holds_and_releases_scheduler_pin_once():
         [({save_id}, None)] * 7 + [(None, None)], )
     scheduler.update_connector_output(incomplete)
 
-    assert incomplete == set()
+    assert not incomplete
     assert np.array_equal(allocator.get_ref_count(logical_ids), np.array([1]))
     assert scheduler.has_pending_kv_connector_work()
 
@@ -541,7 +541,7 @@ def test_tp_completion_intersection_holds_and_releases_scheduler_pin_once():
                                                          8, )
     scheduler.update_connector_output(completed)
 
-    assert completed == {save_id}
+    assert completed.completed_save_ids == {save_id}
     assert np.array_equal(allocator.get_ref_count(logical_ids), np.array([0]))
     assert not scheduler.has_pending_kv_connector_work()
 

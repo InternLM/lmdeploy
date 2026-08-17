@@ -10,6 +10,7 @@ from lmdeploy.pytorch.kv_connector.base import (
     KVCacheValue,
     KVConnectorBase,
     KVConnectorMetadata,
+    KVConnectorOutput,
     KVConnectorRole,
     RequestId,
 )
@@ -91,14 +92,34 @@ class MooncakeStoreConnector(KVConnectorBase):
         request: SchedulerSequence,
         block_ids: Sequence[int],
         num_external_tokens: int,
+        generation: int = 0,
+    ) -> Any | None:
+        return self._require_scheduler().update_state_after_alloc(
+            request,
+            block_ids,
+            num_external_tokens,
+            generation=generation,
+        )
+
+    def mark_connector_meta_dispatched(
+        self,
+        connector_metadata: KVConnectorMetadata,
     ) -> None:
-        return self._require_scheduler().update_state_after_alloc(request, block_ids, num_external_tokens)
+        """Tell scheduler bookkeeping that metadata reached the executor."""
+        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
+            raise TypeError('connector_metadata must be a MooncakeStoreConnectorMetadata')
+        return self._require_scheduler().mark_connector_meta_dispatched(
+            connector_metadata,
+        )
 
     def build_connector_meta(self, scheduler_output: SchedulerOutput) -> MooncakeStoreConnectorMetadata:
         return self._require_scheduler().build_connector_meta(scheduler_output)
 
     def on_new_request(self, request: SchedulerSequence) -> None:
         return self._require_scheduler().on_new_request(request)
+
+    def cancel_lookup(self, request_id: int) -> None:
+        return self._require_scheduler().cancel_lookup(request_id)
 
     def update_connector_output(self, connector_output: Any) -> None:
         return self._require_scheduler().update_connector_output(connector_output)
@@ -138,6 +159,39 @@ class MooncakeStoreConnector(KVConnectorBase):
             raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
         return worker.has_pending_step_transfers(connector_metadata)
 
+    def has_pending_step_loads(self) -> bool:
+        worker = self._require_worker()
+        if not self.has_connector_metadata():
+            return False
+        connector_metadata = self._get_connector_metadata()
+        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
+            raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
+        return worker.has_pending_step_loads(connector_metadata)
+
+    def has_pending_step_saves(self) -> bool:
+        worker = self._require_worker()
+        if not self.has_connector_metadata():
+            return False
+        connector_metadata = self._get_connector_metadata()
+        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
+            raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
+        return worker.has_pending_step_saves(connector_metadata)
+
+    def submit_loads(self) -> None:
+        worker, connector_metadata = self._get_worker_step_metadata()
+        return worker.submit_loads(connector_metadata)
+
+    def submit_saves(
+        self,
+        *,
+        save_ready_event: Any | None = None,
+    ) -> None:
+        worker, connector_metadata = self._get_worker_step_metadata()
+        return worker.submit_saves(
+            connector_metadata,
+            save_ready_event=save_ready_event,
+        )
+
     def submit_transfers(
         self,
         *,
@@ -152,8 +206,12 @@ class MooncakeStoreConnector(KVConnectorBase):
     def poll_finished(
         self,
         acknowledged_sending: set[RequestId] | None = None,
-    ) -> tuple[set[RequestId] | None, set[RequestId] | None]:
-        return self._require_worker().poll_finished(acknowledged_sending or set())
+        acknowledged_recving: set[RequestId] | None = None,
+    ) -> KVConnectorOutput:
+        return self._require_worker().poll_finished(
+            acknowledged_sending,
+            acknowledged_recving,
+        )
 
     def get_block_ids_with_load_errors(self) -> set[int]:
         return self._require_worker().get_block_ids_with_load_errors()

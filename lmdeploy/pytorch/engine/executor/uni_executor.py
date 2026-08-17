@@ -6,6 +6,7 @@ from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
+from lmdeploy.pytorch.kv_connector.base import KVConnectorMetadata, KVConnectorOutput
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
@@ -111,10 +112,16 @@ class UniExecutor(ExecutorBase):
         assert dp_rank == 0
         return await self.model_agent.get_output_async()
 
-    async def poll_kv_connector(self) -> set[int]:
-        """Poll connector completion on the single model worker."""
+    async def poll_kv_connector(
+        self,
+        connector_metadata: KVConnectorMetadata | None = None,
+    ) -> KVConnectorOutput:
+        """Submit loads and poll completion on the single model worker."""
+        acknowledged_sending, acknowledged_recving = self._kv_connector_poll_acknowledgements()
         output = self.model_agent.poll_kv_connector(
-            self._kv_connector_poll_acknowledgements(),
+            connector_metadata,
+            acknowledged_sending,
+            acknowledged_recving,
         )
         return self._aggregate_kv_connector_outputs([output])
 

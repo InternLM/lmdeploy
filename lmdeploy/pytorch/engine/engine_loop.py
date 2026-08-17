@@ -13,6 +13,7 @@ from torch.profiler import record_function
 from lmdeploy.messages import RequestMetrics
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput
 from lmdeploy.pytorch.messages import MessageStatus, UpdateTokenMode
 from lmdeploy.pytorch.utils import cancel_async_tasks, wait_for_async_tasks
 from lmdeploy.utils import get_logger
@@ -66,9 +67,14 @@ class RunableEventAsync:
         """Check whether scheduler or engine-local state has runnable work."""
         if self.scheduler.has_unfinished():
             return True
-        pending_kv_work = getattr(self.scheduler, 'has_pending_kv_connector_work', None)
-        if pending_kv_work is not None and pending_kv_work():
-            return True
+        for name in (
+            'has_pending_kv_transfer_work',
+            'has_pending_kv_lookup_work',
+            'has_pending_kv_connector_work',
+        ):
+            pending_kv_work = getattr(self.scheduler, name, None)
+            if pending_kv_work is not None and pending_kv_work():
+                return True
         return self.extra_runable_checker is not None and self.extra_runable_checker()
 
     async def wait(self):
@@ -142,7 +148,7 @@ class EngineLoop:
         self.migration_event = asyncio.Event()
         # Active long-context chunks are owned by InputsMaker, not the
         # scheduler WAITING/READY queues, so include them in the runnable gate.
-        self.has_runable_event = RunableEventAsync(self.scheduler, self.inputs_maker.has_pending_long_context_chunk)
+        self.has_runable_event = RunableEventAsync(self.scheduler, self._has_engine_local_runnable_work)
         # Sleep uses a small handshake with the scheduling loops:
         # 1. sleep() sets _sleep_requested and waits for main/migration drain events.
         # 2. main_loop and migration_loop reach safe boundaries, acknowledge
@@ -439,15 +445,63 @@ class EngineLoop:
         step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
         self.resp_queue.put_nowait(step_outputs)
 
-    def _has_pending_kv_connector_work(self) -> bool:
-        checker = getattr(self.scheduler, 'has_pending_kv_connector_work', None)
+    def _has_engine_local_runnable_work(self) -> bool:
+        """Return work owned outside scheduler queues."""
+        if self.inputs_maker.has_pending_long_context_chunk():
+            return True
+        return self._has_pending_kv_connector_ack()
+
+    def _has_pending_kv_transfer_work(self) -> bool:
+        """Return whether submitted or ready KV transfers need progress."""
+        checker = getattr(self.scheduler, 'has_pending_kv_transfer_work', None)
+        if checker is None:
+            checker = getattr(self.scheduler, 'has_pending_kv_connector_work', None)
         return checker is not None and checker()
 
-    async def _poll_kv_connector(self) -> set[int]:
+    def _has_pending_kv_lookup_work(self) -> bool:
+        """Return whether scheduler-side asynchronous lookups need revisiting."""
+        checker = getattr(self.scheduler, 'has_pending_kv_lookup_work', None)
+        return checker is not None and checker()
+
+    def _has_pending_kv_connector_ack(self) -> bool:
+        """Return whether the executor owes workers a sticky-completion ACK."""
+        checker = getattr(getattr(self, 'executor', None), 'has_pending_kv_connector_ack', None)
+        return checker is not None and checker()
+
+    def _has_pending_kv_connector_work(self) -> bool:
+        """Return any connector work that keeps the engine loop runnable."""
+        return (
+            self._has_pending_kv_transfer_work()
+            or self._has_pending_kv_lookup_work()
+            or self._has_pending_kv_connector_ack()
+        )
+
+    def _has_pending_kv_progress_work(self) -> bool:
+        """Return worker-side transfer/ACK work, excluding CPU lookups."""
+        return self._has_pending_kv_transfer_work() or self._has_pending_kv_connector_ack()
+
+    async def _poll_kv_connector(self) -> KVConnectorOutput:
         """Make one non-blocking connector progress RPC."""
-        if not self._has_pending_kv_connector_work():
-            return set()
-        completed = await self.executor.poll_kv_connector()
+        if not self._has_pending_kv_progress_work():
+            return KVConnectorOutput()
+
+        metadata = None
+        if self._has_pending_kv_transfer_work():
+            build_metadata = getattr(self.scheduler, 'build_kv_connector_progress_metadata', None)
+            if build_metadata is not None:
+                metadata = build_metadata()
+
+        try:
+            completed = await self.executor.poll_kv_connector(metadata)
+        except BaseException:
+            rollback_metadata = getattr(self.scheduler, 'rollback_kv_connector_metadata', None)
+            if rollback_metadata is not None:
+                rollback_metadata(metadata)
+            raise
+        if metadata is not None:
+            mark_dispatched = getattr(self.scheduler, 'mark_kv_connector_metadata_dispatched', None)
+            if mark_dispatched is not None:
+                mark_dispatched(metadata)
         if completed:
             self.scheduler.update_connector_output(completed)
         return completed
@@ -462,9 +516,10 @@ class EngineLoop:
         Prefetch dispatches the next worker forward before the engine consumes
         the current output.  Dropping that local bookkeeping during sleep can
         therefore strand connector pins for metadata that a worker has already
-        received (or is about to receive).  Drain that forward without
-        prefetching another one, then keep polling until all asynchronous saves
-        release their scheduler-owned block references.
+        received (or is about to receive). Drain that forward without
+        prefetching another one, then keep polling until all asynchronous loads
+        and saves release their scheduler-owned block references and their
+        final sticky-completion ACKs reach every worker.
         """
         if next_running is not None:
             assert forward_inputs is not None
@@ -475,9 +530,9 @@ class EngineLoop:
             )
             self.inputs_maker.deactivate_evict_seqs()
 
-        while self._has_pending_kv_connector_work():
+        while self._has_pending_kv_progress_work():
             await self._poll_kv_connector()
-            if self._has_pending_kv_connector_work():
+            if self._has_pending_kv_progress_work():
                 await asyncio.sleep(_KV_CONNECTOR_IDLE_POLL_INTERVAL)
         return None, None
 
@@ -544,8 +599,11 @@ class EngineLoop:
                 if next_running is None:
                     if self._sleep_requested:
                         continue
-                    if self._has_pending_kv_connector_work():
+                    pending_progress = self._has_pending_kv_progress_work()
+                    pending_lookup = self._has_pending_kv_lookup_work()
+                    if pending_progress:
                         await self._poll_kv_connector()
+                    if pending_progress or pending_lookup:
                         has_runable_event.set()
                         await asyncio.sleep(_KV_CONNECTOR_IDLE_POLL_INTERVAL)
                         continue

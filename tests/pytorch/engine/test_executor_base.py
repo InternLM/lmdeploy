@@ -11,6 +11,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
 from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _CacheBlockSize
+from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput
 
 
 class _RecordingExecutor(ExecutorBase):
@@ -424,6 +425,7 @@ def test_build_cache_config_carries_prefix_cache_state_budget():
 def test_kv_connector_completion_aggregation_is_tp_wide_and_sticky():
     executor = object.__new__(ExecutorBase)
     executor._kv_connector_acknowledged_sending = set()
+    executor._kv_connector_acknowledged_recving = set()
 
     # Rank 0 finishes both waves first. Only the wave also reported by rank 1
     # may be exposed to the scheduler.
@@ -432,8 +434,10 @@ def test_kv_connector_completion_aggregation_is_tp_wide_and_sticky():
         ({10}, None),
     ])
 
-    assert completed == {10}
-    assert executor._kv_connector_poll_acknowledgements() == {10}
+    assert completed.completed_save_ids == {10}
+    assert completed.completed_load_ids == set()
+    assert executor._kv_connector_poll_acknowledgements() == ({10}, set())
+    assert executor.has_pending_kv_connector_ack()
 
     # The previous global completion is acknowledged on this poll. Rank 0's
     # sticky wave 11 remains visible until rank 1 catches up on a later tick.
@@ -441,14 +445,46 @@ def test_kv_connector_completion_aggregation_is_tp_wide_and_sticky():
         ({11}, None),
         (None, None),
     ])
-    assert completed == set()
-    assert executor._kv_connector_poll_acknowledgements() == set()
+    assert not completed
+    assert executor._kv_connector_poll_acknowledgements() == (set(), set())
 
     completed = executor._aggregate_kv_connector_outputs([
         ({11}, None),
         ({11}, None),
     ])
-    assert completed == {11}
+    assert completed.completed_save_ids == {11}
+
+    # One final poll carries wave 11's ACK back to both workers. Empty worker
+    # outputs then clear the executor-local ACK so the idle loop can stop.
+    completed = executor._aggregate_kv_connector_outputs([
+        KVConnectorOutput(),
+        KVConnectorOutput(),
+    ])
+    assert not completed
+    assert not executor.has_pending_kv_connector_ack()
+
+
+def test_kv_connector_load_failure_waits_for_all_tp_ranks_and_uses_union():
+    executor = object.__new__(ExecutorBase)
+    executor._kv_connector_acknowledged_sending = set()
+    executor._kv_connector_acknowledged_recving = set()
+
+    # Rank 0 fails first. It remains sticky locally, but neither success nor
+    # failure is safe to publish until rank 1 also reaches a terminal state.
+    completed = executor._aggregate_kv_connector_outputs([
+        KVConnectorOutput(failed_load_ids={20}),
+        KVConnectorOutput(),
+    ])
+    assert not completed
+    assert not executor.has_pending_kv_connector_ack()
+
+    completed = executor._aggregate_kv_connector_outputs([
+        KVConnectorOutput(failed_load_ids={20}),
+        KVConnectorOutput(completed_load_ids={20}),
+    ])
+    assert completed.completed_load_ids == {20}
+    assert completed.failed_load_ids == {20}
+    assert executor._kv_connector_poll_acknowledgements() == (set(), {20})
 
 
 def test_engine_config_rejects_unaligned_prefix_cache_decode_state_interval():

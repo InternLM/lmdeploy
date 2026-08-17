@@ -9,6 +9,7 @@ import pytest
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.kv_connector import KVConnectorRole, build_kv_connector
+from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput
 
 
 def _cache_config(transfer_config=None):
@@ -337,6 +338,12 @@ def test_async_step_binds_handles_and_clears_connector_metadata():
         def handle_preemptions(self, value):
             events.append(('preempt', value))
 
+        def has_pending_step_loads(self):
+            return True
+
+        def submit_loads(self):
+            events.append('submit-loads')
+
         def clear_connector_metadata(self):
             events.append('clear')
 
@@ -354,6 +361,7 @@ def test_async_step_binds_handles_and_clears_connector_metadata():
     assert events == [
         ('bind', metadata),
         ('preempt', metadata),
+        'submit-loads',
         ('forward', 'inputs'),
         'clear',
     ]
@@ -408,9 +416,9 @@ def test_submit_kv_connector_save_records_event_on_forward_stream(monkeypatch):
         def submit_transfers(self, *, save_ready_event=None):
             events.append(('submit', save_ready_event))
 
-        def poll_finished(self, acknowledged_sending):
-            events.append(('poll', acknowledged_sending))
-            return {3}, None
+        def poll_finished(self, acknowledged_sending, acknowledged_recving):
+            events.append(('poll', acknowledged_sending, acknowledged_recving))
+            return KVConnectorOutput(completed_save_ids={3})
 
     monkeypatch.setattr(agent_module.torch.cuda, 'Event', _Event)
     agent = BaseModelAgent.__new__(BaseModelAgent)
@@ -418,13 +426,56 @@ def test_submit_kv_connector_save_records_event_on_forward_stream(monkeypatch):
     agent.kv_connector = _Connector()
 
     agent._submit_kv_connector_save()
-    assert agent.poll_kv_connector({1, 2}) == ({3}, None)
+    output = agent.poll_kv_connector(None, {1, 2}, {4})
+    assert output.completed_save_ids == {3}
 
     ready_event = events[1][1]
     assert events == [
         ('record', stream),
         ('submit', ready_event),
-        ('poll', {1, 2}),
+        ('poll', {1, 2}, {4}),
+    ]
+
+
+def test_poll_kv_connector_submits_progress_load_before_poll_and_clears_metadata():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    events = []
+    metadata = object()
+
+    class _Connector:
+
+        def bind_connector_metadata(self, value):
+            events.append(('bind', value))
+
+        def handle_preemptions(self, value):
+            events.append(('preempt', value))
+
+        def has_pending_step_loads(self):
+            return True
+
+        def submit_loads(self):
+            events.append('submit-loads')
+
+        def clear_connector_metadata(self):
+            events.append('clear')
+
+        def poll_finished(self, acknowledged_sending, acknowledged_recving):
+            events.append(('poll', acknowledged_sending, acknowledged_recving))
+            return KVConnectorOutput(completed_load_ids={9})
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.kv_connector = _Connector()
+
+    output = agent.poll_kv_connector(metadata, {1}, {2})
+
+    assert output.completed_load_ids == {9}
+    assert events == [
+        ('bind', metadata),
+        ('preempt', metadata),
+        'submit-loads',
+        'clear',
+        ('poll', {1}, {2}),
     ]
 
 

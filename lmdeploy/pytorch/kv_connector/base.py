@@ -13,6 +13,7 @@ PyTorch engine.
 import enum
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -38,6 +39,43 @@ class KVConnectorMetadata(ABC):
     Implementations must remain serializable because distributed executors may
     send an instance to model workers through multiprocessing RPC.
     """
+
+
+@dataclass
+class KVConnectorOutput:
+    """Terminal worker-side KV-transfer operations.
+
+    Operation IDs, rather than user request IDs, are used because one request
+    can own more than one asynchronous transfer generation.  Load failures are
+    terminal load completions as well: the scheduler can release the transfer
+    pin and fall back to normal model computation once every TP rank has
+    reached a terminal state.
+    """
+
+    completed_save_ids: set[RequestId] = field(default_factory=set)
+    completed_load_ids: set[RequestId] = field(default_factory=set)
+    failed_load_ids: set[RequestId] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        """Own mutable, integer-normalized ID sets after deserialization."""
+        self.completed_save_ids = {int(op_id) for op_id in self.completed_save_ids}
+        self.completed_load_ids = {int(op_id) for op_id in self.completed_load_ids}
+        self.failed_load_ids = {int(op_id) for op_id in self.failed_load_ids}
+        self.completed_load_ids.update(self.failed_load_ids)
+
+    def __bool__(self) -> bool:
+        """Return whether this output contains a terminal operation."""
+        return bool(self.completed_save_ids or self.completed_load_ids or self.failed_load_ids)
+
+    @property
+    def finished_sending(self) -> set[RequestId]:
+        """Compatibility alias for connectors ported from vLLM."""
+        return self.completed_save_ids
+
+    @property
+    def finished_recving(self) -> set[RequestId]:
+        """Compatibility alias retaining vLLM's historical spelling."""
+        return self.completed_load_ids
 
 
 class KVConnectorBase(ABC):
@@ -96,6 +134,30 @@ class KVConnectorBase(ABC):
         """
         return self.has_connector_metadata()
 
+    def has_pending_step_loads(self) -> bool:
+        """Return whether bound metadata contains loads to submit."""
+        return False
+
+    def has_pending_step_saves(self) -> bool:
+        """Return whether bound metadata contains saves to submit.
+
+        The default delegates to the original combined hook so connectors
+        implemented against the save-only interface remain compatible.
+        """
+        return self.has_pending_step_transfers()
+
+    def submit_loads(self) -> None:
+        """Submit bound load work before the model forward is queued."""
+        return None
+
+    def submit_saves(
+        self,
+        *,
+        save_ready_event: Any | None = None,
+    ) -> None:
+        """Submit bound save work after the model forward is queued."""
+        self.submit_transfers(save_ready_event=save_ready_event)
+
     def submit_transfers(
         self,
         *,
@@ -115,32 +177,36 @@ class KVConnectorBase(ABC):
         finished_req_ids: set[RequestId],
         *,
         ready_event: Any | None = None,
-    ) -> tuple[set[RequestId] | None, set[RequestId] | None]:
+    ) -> KVConnectorOutput:
         """Compatibility wrapper combining submission and completion polling.
 
         ``finished_req_ids`` is retained for connectors ported from vLLM. New
-        LMDeploy integrations should submit via :meth:`submit_transfers` and
-        collect sticky completions via :meth:`poll_finished` instead. A
-        connector may use operation identifiers rather than user request
-        identifiers when one request has multiple concurrent transfer waves.
+        LMDeploy integrations should submit via :meth:`submit_loads` and
+        :meth:`submit_saves`, then collect sticky completions via
+        :meth:`poll_finished`. A connector may use operation identifiers
+        rather than user request identifiers when one request has multiple
+        concurrent transfer waves.
         """
         del finished_req_ids
-        self.submit_transfers(save_ready_event=ready_event)
+        self.submit_loads()
+        self.submit_saves(save_ready_event=ready_event)
         return self.poll_finished()
 
     def poll_finished(
         self,
         acknowledged_sending: set[RequestId] | None = None,
-    ) -> tuple[set[RequestId] | None, set[RequestId] | None]:
+        acknowledged_recving: set[RequestId] | None = None,
+    ) -> KVConnectorOutput:
         """Poll sticky transfer completions without executing a model step.
 
         Distributed executors use this connector-only hook after the final
         forward as well as between normal forwards.  Implementations should
         retain local completions until they appear in
-        ``acknowledged_sending`` so completions from different tensor-parallel
-        ranks cannot be lost across polling rounds.
+        ``acknowledged_sending`` or ``acknowledged_recving`` so completions
+        from different tensor-parallel ranks cannot be lost across polling
+        rounds.
         """
-        return None, None
+        return KVConnectorOutput()
 
     def get_block_ids_with_load_errors(self) -> set[int]:
         """Return GPU block IDs whose external-cache load failed."""
@@ -174,14 +240,19 @@ class KVConnectorBase(ABC):
         request: 'SchedulerSequence',
         block_ids: Sequence[int],
         num_external_tokens: int,
-    ) -> None:
+        generation: int = 0,
+    ) -> Any | None:
         """Update connector state after GPU blocks are allocated for a request.
 
         ``block_ids`` are physical scheduler block IDs. A connector is
         responsible for translating them to the cache engine's kernel-page
-        layout when the two block sizes differ. For an asynchronous load, the
-        scheduler may call this hook once for the externally matched range and
-        again after the transfer when it allocates additional compute blocks.
+        layout when the two block sizes differ. ``generation`` distinguishes a
+        reused request ID after cancellation or recompute preemption. For an
+        asynchronous load, the scheduler may call this hook once for the
+        externally matched range and again after the transfer when it
+        allocates additional compute blocks. The returned connector-specific
+        plan, when present, is kept sticky by the scheduler until it reaches a
+        terminal worker completion.
         """
         raise NotImplementedError
 

@@ -6,6 +6,7 @@ import pytest
 
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
+from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput
 
 
 @pytest.fixture(scope='module')
@@ -111,16 +112,19 @@ def test_ray_executor_polls_all_tp_workers_with_sticky_ack(ray_components):
     _, _, ray_executor_cls = ray_components
     executor = _make_executor(ray_executor_cls, _make_cache_config())
     executor._kv_connector_acknowledged_sending = {5}
+    executor._kv_connector_acknowledged_recving = {6}
     executor.collective_rpc_async = AsyncMock(return_value=[
-        ({7, 8}, None),
-        ({8}, None),
+        KVConnectorOutput(completed_save_ids={7, 8}, completed_load_ids={9}),
+        KVConnectorOutput(completed_save_ids={8}, completed_load_ids={9}),
     ])
+    metadata = object()
 
-    completed = asyncio.run(executor.poll_kv_connector())
+    completed = asyncio.run(executor.poll_kv_connector(metadata))
 
-    assert completed == {8}
+    assert completed.completed_save_ids == {8}
+    assert completed.completed_load_ids == {9}
     executor.collective_rpc_async.assert_awaited_once_with(
         'poll_kv_connector',
-        ({5}, ),
+        (metadata, {5}, {6}),
     )
-    assert executor._kv_connector_poll_acknowledgements() == {8}
+    assert executor._kv_connector_poll_acknowledgements() == ({8}, {9})

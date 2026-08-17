@@ -11,6 +11,7 @@ import torch
 
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
+from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput
 from lmdeploy.pytorch.kv_connector.mooncake.store import worker as worker_module
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     DEFAULT_GLOBAL_SEGMENT_SIZE,
@@ -18,6 +19,7 @@ from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     MooncakeStoreConfig,
     MooncakeStoreConnectorMetadata,
     MooncakeStoreKeyMetadata,
+    MooncakeStoreLoadRequest,
     MooncakeStoreSaveRequest,
     build_prefix_block_hashes,
     build_store_key,
@@ -144,15 +146,19 @@ class RecordingLogger:
 
 class AsyncFakeStore(FakeStore):
 
-    def __init__(self, exists_results=(), put_results=()):
+    def __init__(self, exists_results=(), put_results=(), get_results=()):
         super().__init__()
         self.exists_results = deque(exists_results)
         self.put_results = deque(put_results)
+        self.get_results = deque(get_results)
         self.exists_calls = []
         self.put_calls = []
+        self.get_calls = []
         self.operations = []
         self.exists_started = threading.Event()
+        self.get_started = threading.Event()
         self.exists_gate = None
+        self.get_gate = None
         self.close_event = threading.Event()
 
     def batch_is_exist(self, keys):
@@ -170,6 +176,17 @@ class AsyncFakeStore(FakeStore):
         self.operations.append('put')
         self.put_calls.append((list(keys), addresses, sizes, replicate_config))
         result = self.put_results.popleft()
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    def batch_get_into_multi_buffers(self, keys, addresses, sizes):
+        self.operations.append('get')
+        self.get_calls.append((list(keys), addresses, sizes))
+        self.get_started.set()
+        if self.get_gate is not None:
+            assert self.get_gate.wait(timeout=2), 'batch_get gate was not released'
+        result = self.get_results.popleft()
         if isinstance(result, BaseException):
             raise result
         return result
@@ -228,6 +245,7 @@ def make_cache_config(
     block_size=64,
     num_gpu_blocks=1,
     extra_config=None,
+    kv_role='kv_both',
     window_size=-1,
     states_shapes=None,
 ):
@@ -243,7 +261,7 @@ def make_cache_config(
         states_shapes=states_shapes or [],
         kv_transfer_config=KVTransferConfig(
             kv_connector='MooncakeStoreConnector',
-            kv_role='kv_both',
+            kv_role=kv_role,
             kv_connector_extra_config=extra_config,
         ),
     )
@@ -626,6 +644,7 @@ def _make_async_worker(
     tp_rank=1,
     tp_size=2,
     kv_head_replica_num=1,
+    kv_role='kv_both',
     rows=None,
 ):
     path = write_store_config(tmp_path)
@@ -638,6 +657,7 @@ def _make_async_worker(
                 'model_name': 'test-model',
                 'cache_prefix': 'tenant/a',
             },
+            kv_role=kv_role,
         ),
         global_rank=1,
         tp_rank=tp_rank,
@@ -665,6 +685,30 @@ def _save_request(save_id, *, block_ids=(3, 1, 2), token_len=192):
     )
 
 
+def _load_request(
+    load_id,
+    *,
+    block_ids=(1, 2),
+    local_token_len=64,
+    remote_token_len=192,
+):
+    block_hashes = build_prefix_block_hashes(
+        np.arange(remote_token_len, dtype=np.int64),
+        64,
+    )
+    local_blocks = local_token_len // 64
+    remote_blocks = remote_token_len // 64
+    return MooncakeStoreLoadRequest(
+        req_id=19,
+        load_id=load_id,
+        generation=3,
+        local_token_len=local_token_len,
+        remote_token_len=remote_token_len,
+        block_ids=block_ids,
+        block_hashes=block_hashes[local_blocks:remote_blocks],
+    )
+
+
 def test_submit_transfers_is_separate_from_sticky_completion_poll(tmp_path):
     store = AsyncFakeStore(exists_results=([1], ))
     worker, _ = _make_async_worker(tmp_path, store)
@@ -688,7 +732,7 @@ def test_submit_transfers_is_separate_from_sticky_completion_poll(tmp_path):
         worker.kv_send_thread.request_queue.join()
 
         worker.poll_finished = original_poll_finished
-        assert worker.poll_finished() == ({30}, None)
+        assert worker.poll_finished() == KVConnectorOutput(completed_save_ids={30})
     finally:
         worker.poll_finished = original_poll_finished
         worker.shutdown()
@@ -817,6 +861,353 @@ def test_save_metadata_is_pickle_serializable():
     assert pickle.loads(pickle.dumps(metadata)) == metadata
 
 
+def test_load_metadata_is_suffix_only_and_pickle_serializable():
+    request = _load_request(
+        32,
+        block_ids=(3, 0),
+        local_token_len=64,
+        remote_token_len=192,
+    )
+    metadata = MooncakeStoreConnectorMetadata(load_requests=(request, ))
+
+    restored = pickle.loads(pickle.dumps(metadata))
+    assert restored == metadata
+    assert len(restored.load_requests[0].block_ids) == 2
+    assert len(restored.load_requests[0].block_hashes) == 2
+
+    with pytest.raises(ValueError, match='same length'):
+        MooncakeStoreLoadRequest(
+            req_id=1,
+            load_id=1,
+            generation=0,
+            local_token_len=64,
+            remote_token_len=192,
+            block_ids=(0, 1),
+            block_hashes=(b'x' * 32, ),
+        )
+
+
+def test_receiver_enqueue_is_async_and_loads_suffix_into_allocated_blocks(
+    tmp_path,
+    patch_worker_runtime,
+):
+    store = AsyncFakeStore(get_results=([0], ))
+    store.get_gate = threading.Event()
+    worker, _ = _make_async_worker(tmp_path, store)
+    request = _load_request(
+        60,
+        block_ids=(3, ),
+        local_token_len=64,
+        remote_token_len=128,
+    )
+
+    try:
+        assert worker.submit_loads(
+            MooncakeStoreConnectorMetadata(load_requests=(request, )),
+        ) is None
+        assert store.get_started.wait(timeout=2)
+        assert worker.poll_finished() == KVConnectorOutput()
+
+        store.get_gate.set()
+        worker.kv_recv_thread.request_queue.join()
+        assert worker.poll_finished() == KVConnectorOutput(
+            completed_load_ids={60},
+        )
+        assert store.get_calls == [(
+            [build_store_key(worker._key_metadata, 1, request.block_hashes[0])],
+            [[0x1000 + 3 * 100, 0x2000 + 3 * 200]],
+            [[100, 200]],
+        )]
+        messages = [message for _, message in patch_worker_runtime.messages]
+        assert any(
+            'interaction before: operation=load_batch_get_into_multi_buffers' in message
+            for message in messages
+        )
+        assert any(
+            'interaction after: operation=load_batch_get_into_multi_buffers' in message
+            for message in messages
+        )
+    finally:
+        store.get_gate.set()
+        worker.shutdown()
+
+
+@pytest.mark.parametrize(
+    ('tp_rank', 'kv_head_replica_num', 'key_rank'),
+    [
+        (0, 8, 0),
+        (1, 8, 0),
+        (4, 4, 1),
+        (5, 4, 1),
+    ],
+)
+def test_receiver_loads_full_suffix_on_every_kv_replica(
+    tmp_path,
+    tp_rank,
+    kv_head_replica_num,
+    key_rank,
+):
+    store = AsyncFakeStore(get_results=([0, 0], ))
+    worker, _ = _make_async_worker(
+        tmp_path,
+        store,
+        num_gpu_blocks=16,
+        tp_rank=tp_rank,
+        tp_size=8,
+        kv_head_replica_num=kv_head_replica_num,
+    )
+    request = _load_request(70 + tp_rank, block_ids=(7, 0))
+
+    worker.submit_loads(
+        MooncakeStoreConnectorMetadata(load_requests=(request, )),
+    )
+    worker.kv_recv_thread.request_queue.join()
+
+    keys, addresses, sizes = store.get_calls[0]
+    assert keys == [
+        build_store_key(worker._key_metadata, key_rank, block_hash)
+        for block_hash in request.block_hashes
+    ]
+    # Saving is replica-striped, but every rank must restore the complete
+    # remote suffix into its own allocated GPU cache copy.
+    assert len(keys) == len(addresses) == len(sizes) == 2
+    assert addresses == [
+        [0x1000 + 7 * 25, 0x2000 + 7 * 50],
+        [0x1000, 0x2000],
+    ]
+    assert sizes == [[25, 50], [25, 50]]
+    assert worker.poll_finished() == KVConnectorOutput(
+        completed_load_ids={70 + tp_rank},
+    )
+    worker.shutdown()
+
+
+def test_receiver_one_key_scatters_all_99_registered_rows(tmp_path):
+    store = AsyncFakeStore(get_results=([0], ))
+    rows = {
+        f'row.{index}': FakeTensor(0x100000 + index * 0x1000, size=400)
+        for index in range(99)
+    }
+    worker, _ = _make_async_worker(tmp_path, store, rows=rows)
+    request = _load_request(
+        80,
+        block_ids=(2, ),
+        local_token_len=64,
+        remote_token_len=128,
+    )
+
+    worker.submit_loads(
+        MooncakeStoreConnectorMetadata(load_requests=(request, )),
+    )
+    worker.kv_recv_thread.request_queue.join()
+
+    _, addresses, sizes = store.get_calls[0]
+    assert len(addresses) == len(sizes) == 1
+    assert len(addresses[0]) == len(sizes[0]) == 99
+    assert addresses[0][0] == 0x100000 + 2 * 100
+    assert addresses[0][-1] == 0x100000 + 98 * 0x1000 + 2 * 100
+    assert sizes[0] == [100] * 99
+    worker.shutdown()
+
+
+def test_failed_load_is_terminal_sticky_and_has_independent_receive_ack(tmp_path):
+    store = AsyncFakeStore(get_results=([0, -5], ))
+    worker, _ = _make_async_worker(tmp_path, store)
+    request = _load_request(90, block_ids=(1, 2))
+
+    worker.submit_loads(
+        MooncakeStoreConnectorMetadata(load_requests=(request, )),
+    )
+    worker.kv_recv_thread.request_queue.join()
+
+    expected = KVConnectorOutput(
+        completed_load_ids={90},
+        failed_load_ids={90},
+    )
+    assert worker.poll_finished() == expected
+    assert worker.poll_finished(acknowledged_sending={90}) == expected
+    assert worker.get_block_ids_with_load_errors() == {2}
+    assert worker.get_block_ids_with_load_errors() == set()
+    assert worker.poll_finished(acknowledged_recving={90}) == KVConnectorOutput()
+    worker.shutdown()
+
+
+def test_ack_watermarks_bound_long_running_state_and_reject_old_metadata(
+    tmp_path,
+    monkeypatch,
+):
+    store = AsyncFakeStore()
+    worker, _ = _make_async_worker(tmp_path, store)
+
+    # Exercise many independent waves in batches.  Once the executor sends
+    # the final ACK, only two integer watermarks remain; there is no
+    # per-operation acknowledged tombstone collection to grow forever.
+    num_waves = 4096
+    ack_batch_size = 64
+    for start in range(0, num_waves, ack_batch_size):
+        operation_ids = set(range(start, start + ack_batch_size))
+        for operation_id in operation_ids:
+            worker._mark_save_finished(operation_id)
+            worker._mark_load_finished(operation_id, set())
+        output = worker.poll_finished()
+        assert operation_ids <= output.completed_save_ids
+        assert operation_ids <= output.completed_load_ids
+        assert worker.poll_finished(
+            acknowledged_sending=operation_ids,
+            acknowledged_recving=operation_ids,
+        ) == KVConnectorOutput()
+
+    assert worker._acknowledged_save_watermark == num_waves - 1
+    assert worker._acknowledged_load_watermark == num_waves - 1
+    assert worker._completed_save_ids == set()
+    assert worker._completed_load_ids == set()
+    assert worker._failed_load_ids == set()
+
+    send_calls = []
+    recv_calls = []
+    assert worker.kv_send_thread is not None
+    assert worker.kv_recv_thread is not None
+    monkeypatch.setattr(
+        worker.kv_send_thread,
+        'add_request',
+        lambda request, ready_event: send_calls.append((request, ready_event)),
+    )
+    monkeypatch.setattr(
+        worker.kv_recv_thread,
+        'add_request',
+        recv_calls.append,
+    )
+
+    old_id = num_waves // 2
+    worker.submit_transfers(
+        MooncakeStoreConnectorMetadata(
+            save_requests=(
+                _save_request(old_id, block_ids=(0, ), token_len=64),
+            ),
+            load_requests=(
+                _load_request(
+                    old_id,
+                    block_ids=(0, ),
+                    local_token_len=64,
+                    remote_token_len=128,
+                ),
+            ),
+        ),
+    )
+    assert send_calls == []
+    assert recv_calls == []
+
+    new_id = num_waves
+    new_save = _save_request(new_id, block_ids=(0, ), token_len=64)
+    new_load = _load_request(
+        new_id,
+        block_ids=(0, ),
+        local_token_len=64,
+        remote_token_len=128,
+    )
+    worker.submit_transfers(
+        MooncakeStoreConnectorMetadata(
+            save_requests=(new_save, ),
+            load_requests=(new_load, ),
+        ),
+    )
+    assert send_calls == [(new_save, None)]
+    assert recv_calls == [new_load]
+    assert worker._inflight_save_ids == {new_id}
+    assert worker._inflight_load_ids == {new_id}
+
+    worker._mark_save_finished(new_id)
+    worker._mark_load_finished(new_id, set())
+    assert worker.poll_finished() == KVConnectorOutput(
+        completed_save_ids={new_id},
+        completed_load_ids={new_id},
+    )
+    assert worker.poll_finished(
+        acknowledged_sending={new_id},
+        acknowledged_recving={new_id},
+    ) == KVConnectorOutput()
+    worker.shutdown()
+
+
+def test_ack_watermark_does_not_hide_an_older_inflight_completion(tmp_path):
+    store = AsyncFakeStore()
+    worker, _ = _make_async_worker(tmp_path, store)
+    older_id = 7
+    newer_id = 8
+    worker._inflight_save_ids.add(older_id)
+    worker._inflight_load_ids.add(older_id)
+
+    # Out-of-order terminal notifications are legal (for example an
+    # unsubmitted preempted save can finish before an earlier Store RPC).
+    worker.poll_finished(
+        acknowledged_sending={newer_id},
+        acknowledged_recving={newer_id},
+    )
+    worker._mark_save_finished(older_id)
+    worker._mark_load_finished(older_id, set())
+
+    assert worker.poll_finished() == KVConnectorOutput(
+        completed_save_ids={older_id},
+        completed_load_ids={older_id},
+    )
+    worker.shutdown()
+
+
+def test_get_exception_completes_failure_and_receiver_processes_next_job(
+    tmp_path,
+    patch_worker_runtime,
+):
+    store = AsyncFakeStore(get_results=(RuntimeError('get failed'), [0]))
+    worker, _ = _make_async_worker(tmp_path, store)
+    failed_request = _load_request(
+        100,
+        block_ids=(0, ),
+        local_token_len=64,
+        remote_token_len=128,
+    )
+    good_request = _load_request(
+        101,
+        block_ids=(1, ),
+        local_token_len=64,
+        remote_token_len=128,
+    )
+
+    worker.submit_loads(
+        MooncakeStoreConnectorMetadata(
+            load_requests=(failed_request, good_request),
+        ),
+    )
+    worker.kv_recv_thread.request_queue.join()
+
+    assert worker.kv_recv_thread.is_alive()
+    assert worker.poll_finished() == KVConnectorOutput(
+        completed_load_ids={100, 101},
+        failed_load_ids={100},
+    )
+    assert worker.get_block_ids_with_load_errors() == {0}
+    assert any(
+        'operation=load_batch_get_into_multi_buffers' in message
+        and 'status=error' in message
+        and 'get failed' in message
+        for level, message in patch_worker_runtime.messages
+        if level == 'error'
+    )
+    worker.shutdown()
+
+
+def test_producer_only_worker_does_not_start_receiver(tmp_path):
+    store = AsyncFakeStore()
+    worker, _ = _make_async_worker(
+        tmp_path,
+        store,
+        kv_role='kv_producer',
+    )
+
+    assert worker.kv_recv_thread is None
+    assert worker.kv_send_thread is not None
+    worker.shutdown()
+
+
 def test_sender_queries_then_waits_and_puts_only_missing_scatter(tmp_path, patch_worker_runtime):
     store = AsyncFakeStore(exists_results=([1, 0, 1], ), put_results=([0], ))
     worker, replicate_config = _make_async_worker(tmp_path, store)
@@ -838,9 +1229,9 @@ def test_sender_queries_then_waits_and_puts_only_missing_scatter(tmp_path, patch
     assert addresses == [[0x1000 + 100, 0x2000 + 200]]
     assert sizes == [[100, 200]]
     assert passed_config is replicate_config
-    assert worker.poll_finished() == ({41}, None)
-    assert worker.poll_finished() == ({41}, None)
-    assert worker.poll_finished({41}) == (None, None)
+    assert worker.poll_finished() == KVConnectorOutput(completed_save_ids={41})
+    assert worker.poll_finished() == KVConnectorOutput(completed_save_ids={41})
+    assert worker.poll_finished({41}) == KVConnectorOutput()
 
     messages = [message for _, message in patch_worker_runtime.messages]
     for operation in ('save_batch_is_exist', 'save_batch_put_from_multi_buffers'):
@@ -910,7 +1301,9 @@ def test_sender_stripes_replicated_kv_by_absolute_logical_ordinal(
     ]
     assert store.operations == ['query', 'event', 'put']
     assert ready_event.calls == 1
-    assert worker.poll_finished() == ({140 + tp_rank}, None)
+    assert worker.poll_finished() == KVConnectorOutput(
+        completed_save_ids={140 + tp_rank},
+    )
     worker.shutdown()
 
 
@@ -938,7 +1331,7 @@ def test_sender_empty_replica_wave_waits_ready_before_completion(tmp_path):
     assert store.exists_calls == []
     assert store.put_calls == []
     assert ready_event.calls == 1
-    assert worker.poll_finished() == ({159}, None)
+    assert worker.poll_finished() == KVConnectorOutput(completed_save_ids={159})
     worker.shutdown()
 
 
@@ -957,7 +1350,7 @@ def test_all_existing_still_waits_for_forward_before_completion(tmp_path):
     assert store.operations == ['query', 'event']
     assert ready_event.calls == 1
     assert store.put_calls == []
-    assert worker.poll_finished() == ({42}, None)
+    assert worker.poll_finished() == KVConnectorOutput(completed_save_ids={42})
     worker.shutdown()
 
 
@@ -973,14 +1366,14 @@ def test_sender_enqueue_does_not_block_on_store_query(tmp_path):
             set(),
             MooncakeStoreConnectorMetadata(save_requests=(request, )),
             ready_event=ready_event,
-        ) == (None, None)
+        ) == KVConnectorOutput()
         assert store.exists_started.wait(timeout=2)
         assert ready_event.calls == 0
-        assert worker.poll_finished() == (None, None)
+        assert worker.poll_finished() == KVConnectorOutput()
 
         store.exists_gate.set()
         worker.kv_send_thread.request_queue.join()
-        assert worker.poll_finished() == ({43}, None)
+        assert worker.poll_finished() == KVConnectorOutput(completed_save_ids={43})
     finally:
         store.exists_gate.set()
         worker.shutdown()
@@ -1007,7 +1400,7 @@ def test_query_error_completes_save_and_sender_processes_next_job(tmp_path):
     assert first_event.calls == second_event.calls == 1
     assert store.put_calls == []
     assert worker.kv_send_thread.is_alive()
-    assert worker.poll_finished() == ({44, 45}, None)
+    assert worker.poll_finished() == KVConnectorOutput(completed_save_ids={44, 45})
     worker.shutdown()
 
 
@@ -1032,7 +1425,7 @@ def test_put_exception_completes_save_and_sender_processes_next_job(
     worker.kv_send_thread.request_queue.join()
 
     assert worker.kv_send_thread.is_alive()
-    assert worker.poll_finished() == ({47, 48}, None)
+    assert worker.poll_finished() == KVConnectorOutput(completed_save_ids={47, 48})
     assert any(
         'operation=save_batch_put_from_multi_buffers' in message
         and 'status=error' in message
@@ -1121,8 +1514,8 @@ def test_preempted_unsubmitted_save_is_sticky_completed(tmp_path):
 
     worker.handle_preemptions(MooncakeStoreConnectorMetadata(preempted_save_ids=(51, )))
 
-    assert worker.poll_finished() == ({51}, None)
-    assert worker.poll_finished({51}) == (None, None)
+    assert worker.poll_finished() == KVConnectorOutput(completed_save_ids={51})
+    assert worker.poll_finished({51}) == KVConnectorOutput()
     worker.shutdown()
 
 
@@ -1143,12 +1536,12 @@ def test_preemption_does_not_cancel_an_inflight_save(tmp_path):
         assert store.exists_started.wait(timeout=2)
 
         worker.handle_preemptions(MooncakeStoreConnectorMetadata(preempted_save_ids=(52, )))
-        assert worker.poll_finished() == (None, None)
+        assert worker.poll_finished() == KVConnectorOutput()
 
         store.exists_gate.set()
         worker.kv_send_thread.request_queue.join()
         assert ready_event.calls == 1
-        assert worker.poll_finished() == ({52}, None)
+        assert worker.poll_finished() == KVConnectorOutput(completed_save_ids={52})
     finally:
         store.exists_gate.set()
         worker.shutdown()
@@ -1171,7 +1564,7 @@ def test_invalid_physical_block_fails_before_store_interaction_but_completes(tmp
     assert store.exists_calls == []
     assert store.put_calls == []
     assert ready_event.calls == 1
-    assert worker.poll_finished() == ({53}, None)
+    assert worker.poll_finished() == KVConnectorOutput(completed_save_ids={53})
     worker.shutdown()
 
 
@@ -1194,6 +1587,35 @@ def test_shutdown_drains_sender_before_closing_store(tmp_path):
         assert shutdown_thread.is_alive()
     finally:
         store.exists_gate.set()
+    shutdown_thread.join(timeout=2)
+
+    assert not shutdown_thread.is_alive()
+    assert store.close_event.is_set()
+    assert store.close_calls == 1
+
+
+def test_shutdown_drains_receiver_before_closing_store(tmp_path):
+    store = AsyncFakeStore(get_results=([0], ))
+    store.get_gate = threading.Event()
+    worker, _ = _make_async_worker(tmp_path, store)
+    request = _load_request(
+        110,
+        block_ids=(0, ),
+        local_token_len=64,
+        remote_token_len=128,
+    )
+    worker.submit_loads(
+        MooncakeStoreConnectorMetadata(load_requests=(request, )),
+    )
+    assert store.get_started.wait(timeout=2)
+
+    shutdown_thread = threading.Thread(target=worker.shutdown)
+    shutdown_thread.start()
+    try:
+        assert not store.close_event.wait(timeout=0.1)
+        assert shutdown_thread.is_alive()
+    finally:
+        store.get_gate.set()
     shutdown_thread.join(timeout=2)
 
     assert not shutdown_thread.is_alive()

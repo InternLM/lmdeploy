@@ -25,6 +25,7 @@ from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
 from lmdeploy.pytorch.kv_connector import KVConnectorRole, build_kv_connector
+from lmdeploy.pytorch.kv_connector.base import KVConnectorMetadata, KVConnectorOutput
 from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
@@ -1031,6 +1032,7 @@ class BaseModelAgent:
         connector.bind_connector_metadata(kv_connector_metadata)
         try:
             connector.handle_preemptions(kv_connector_metadata)
+            self._submit_kv_connector_loads()
             return await self._async_step_impl(
                 inputs=inputs,
                 delta=delta,
@@ -1049,22 +1051,59 @@ class BaseModelAgent:
 
     def poll_kv_connector(
         self,
+        connector_metadata: KVConnectorMetadata | None = None,
         acknowledged_sending: set[int] | None = None,
-    ) -> tuple[set[int] | None, set[int] | None]:
-        """Poll transfer completion without waiting for model work."""
+        acknowledged_recving: set[int] | None = None,
+    ) -> KVConnectorOutput:
+        """Submit connector-only loads and poll transfer completion.
+
+        Progress metadata follows the same bind/handle/clear lifecycle as a
+        normal model step, but intentionally submits no saves because there is
+        no preceding model forward from which to record a readiness event.
+        """
         connector = getattr(self, 'kv_connector', None)
         if connector is None:
-            return None, None
-        return connector.poll_finished(acknowledged_sending or set())
+            return KVConnectorOutput()
+
+        if connector_metadata is not None:
+            connector.bind_connector_metadata(connector_metadata)
+            try:
+                connector.handle_preemptions(connector_metadata)
+                self._submit_kv_connector_loads()
+            finally:
+                connector.clear_connector_metadata()
+
+        return connector.poll_finished(
+            acknowledged_sending or set(),
+            acknowledged_recving or set(),
+        )
+
+    def _submit_kv_connector_loads(self) -> None:
+        """Submit this step's loads before any model forward is queued."""
+        connector = getattr(self, 'kv_connector', None)
+        if connector is None:
+            return
+        has_loads = getattr(connector, 'has_pending_step_loads', None)
+        if has_loads is None or not has_loads():
+            return
+        connector.submit_loads()
 
     def _submit_kv_connector_save(self) -> None:
         """Submit this step's save jobs after its KV writes are queued."""
         connector = getattr(self, 'kv_connector', None)
-        if connector is None or not connector.has_pending_step_transfers():
+        if connector is None:
+            return
+        has_saves = getattr(connector, 'has_pending_step_saves', None)
+        if has_saves is None:
+            has_saves = connector.has_pending_step_transfers
+        if not has_saves():
             return
         ready_event = torch.cuda.Event()
         ready_event.record(self.stream)
-        connector.submit_transfers(save_ready_event=ready_event)
+        submit_saves = getattr(connector, 'submit_saves', None)
+        if submit_saves is None:
+            submit_saves = connector.submit_transfers
+        submit_saves(save_ready_event=ready_event)
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""
