@@ -24,7 +24,7 @@ def run_base_eval_test(config, run_config, worker_id, test_type='infer'):
     case_name = get_case_str_by_config(run_config)
     model_path = get_model_path_from_config(config, run_config.get('model'))
     # Keep concurrent OC workers modest; api_server itself batches requests.
-    extra_config = {'max-num-workers': 16}
+    extra_config = {'max-num-workers': 256}
 
     if test_type == 'infer':
         port = constant.DEFAULT_PORT + get_workerid(worker_id)

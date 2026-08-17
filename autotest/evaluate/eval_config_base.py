@@ -1,50 +1,41 @@
-# flake8: noqa
-"""API-based base-model OpenCompass config (PPL / LL / gen).
-
-Uses ``TurboMindAPIModel`` against a running ``lmdeploy serve api_server``
-(``/get_ppl``, ``/v1/encode``, completions).
-"""
-
 import os as _os
 
 from mmengine.config import read_base
 from opencompass.models.turbomind_api import TurboMindAPIModel
 from opencompass.partitioners import NaivePartitioner, NumWorkerPartitioner
 from opencompass.runners import LocalRunner
-from opencompass.tasks import OpenICLEvalTask, OpenICLInferConcurrentTask
+from opencompass.tasks import OpenICLEvalTask, OpenICLInferTask
+
+# One MMLU-Pro subject (not CS+physics): extra knowledge signal for Qwen3 / 3.5
+# base without a second gen task.
+MMLU_PRO_KEEP = {
+    'mmlu_pro_computer_science',
+}
 
 #######################################################################
 #                          Import base configs                        #
 #######################################################################
 
 with read_base():
-    from opencompass.configs.datasets.gpqa.gpqa_few_shot_ppl_4b5a83 import \
-        gpqa_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.gsm8k.gsm8k_gen_17d0dc import \
-        gsm8k_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.mmlu.mmlu_ppl_ac766d import \
-        mmlu_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.race.race_few_shot_ppl import \
-        race_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.winogrande.winogrande_5shot_ll_252f01 import \
-        winogrande_datasets  # noqa: F401, E501
-
-    from opencompass.configs.summarizers.groups.mmlu import \
-        mmlu_summary_groups  # noqa: F401, E501
+    from opencompass.configs.datasets.gpqa.gpqa_few_shot_ppl_4b5a83 import gpqa_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.gsm8k.gsm8k_new_gen import gsm8k_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.humaneval.internal_humaneval_v2_new_gen import (
+        humaneval_datasets,  # noqa: F401, E501
+    )
+    from opencompass.configs.datasets.mmlu_pro.mmlu_pro_few_shot_new_gen import mmlu_pro_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.race.race_few_shot_ppl import race_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.winogrande.winogrande_5shot_ll_252f01 import (
+        winogrande_datasets,  # noqa: F401, E501
+    )
 
 #######################################################################
-#                     Dataset subset overrides                        #
+#                         Dataset list                                #
 #######################################################################
 
-race_datasets = [race_datasets[1]]
-mmlu_datasets = [
-    x for x in mmlu_datasets if x['abbr'].replace('lukaemon_mmlu_', '') in [
-        'business_ethics', 'clinical_knowledge', 'college_medicine',
-        'global_facts', 'human_aging', 'management', 'marketing',
-        'medical_genetics', 'miscellaneous', 'nutrition',
-        'professional_accounting', 'professional_medicine', 'virology'
-    ]
+mmlu_pro_datasets = [
+    x for x in mmlu_pro_datasets if x['abbr'] in MMLU_PRO_KEEP
 ]
+race_datasets = [race_datasets[1]]  # RACE-High only
 
 datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')), [])
 
@@ -77,22 +68,37 @@ models = [
 #                            Summarizer                               #
 #######################################################################
 
+gate_summary_groups = [
+    {
+        'name': 'base_gate_average',
+        'subsets': [
+            ['race-high', 'accuracy'],
+            ['GPQA_diamond', 'accuracy'],
+            ['winogrande', 'accuracy'],
+            ['gsm8k', 'accuracy'],
+            ['mmlu_pro_computer_science', 'accuracy'],
+            ['openai_humaneval', 'humaneval_pass@1'],
+        ],
+    },
+]
+
 summarizer = dict(
     dataset_abbrs=[
+        ['base_gate_average', 'naive_average'],
+        '',
+        'PPL',
         ['race-high', 'accuracy'],
         ['GPQA_diamond', 'accuracy'],
-        ['mmlu', 'naive_average'],
-        ['gsm8k', 'accuracy'],
+        '',
+        'LL',
         ['winogrande', 'accuracy'],
         '',
-        'mmlu',
-        'mmlu-stem',
-        'mmlu-social-science',
-        'mmlu-humanities',
-        'mmlu-other',
+        'Gen',
+        ['gsm8k', 'accuracy'],
+        ['mmlu_pro_computer_science', 'accuracy'],
+        ['openai_humaneval', 'humaneval_pass@1'],
     ],
-    summary_groups=sum(
-        [v for k, v in locals().items() if k.endswith('_summary_groups')], []),
+    summary_groups=gate_summary_groups,
 )
 
 #######################################################################
@@ -104,6 +110,7 @@ _dataset_size_root = _os.path.dirname(
 _dataset_type = _os.environ.get('CHAT_TYPE', 'base').rstrip('/')
 dataset_size_path = f'{_dataset_size_root}/dataset_size_{_dataset_type}.json'
 
+# PPLInferencer / LLInferencer are not supported by OpenICLInferConcurrentTask.
 infer = dict(
     partitioner=dict(
         type=NumWorkerPartitioner,
@@ -114,7 +121,7 @@ infer = dict(
         type=LocalRunner,
         max_num_workers=64,
         retry=0,
-        task=dict(type=OpenICLInferConcurrentTask),
+        task=dict(type=OpenICLInferTask),
     ),
 )
 
