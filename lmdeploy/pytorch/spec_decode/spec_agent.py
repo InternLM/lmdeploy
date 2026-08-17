@@ -229,7 +229,11 @@ class SpecModelAgent(BaseSpecModelAgent):
             return 0
         with self.draft_context():
             draft_tp = self.draft_dist_ctx.dist_config.attn_tp
-            request_collector = partial(collect_block_cache_requests, self.proposer.model)
+            cache_request_model = self.proposer.model
+            # Ray may recollect plans after the model has been graph-wrapped.
+            if not isinstance(cache_request_model, torch.nn.Module):
+                cache_request_model = cache_request_model.get_model()
+            request_collector = partial(collect_block_cache_requests, cache_request_model)
             self.block_cache_plan = CacheEngine.build_cache_plan(
                 self.model_config,
                 cache_config,

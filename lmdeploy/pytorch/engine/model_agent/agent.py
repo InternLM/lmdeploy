@@ -350,6 +350,8 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         self.block_cache_plan = None
+        # Exact target/draft bytes used when cache capacity was calculated.
+        self._cache_plan_block_nbytes: tuple[int, int]
         self.state_cache_engine = None
         self.profiler: AgentProfiler = None
         try:
@@ -1225,7 +1227,11 @@ class BaseModelAgent:
         bytes."""
         with self.all_context():
             tp = self.dist_config.attn_tp
-            request_collector = partial(collect_block_cache_requests, self.patched_model)
+            cache_request_model = self.patched_model
+            # Ray may recollect plans after the model has been graph-wrapped.
+            if not isinstance(cache_request_model, torch.nn.Module):
+                cache_request_model = cache_request_model.get_model()
+            request_collector = partial(collect_block_cache_requests, cache_request_model)
             self.block_cache_plan = CacheEngine.build_cache_plan(
                 self.model_config,
                 cache_config,
@@ -1242,6 +1248,7 @@ class BaseModelAgent:
             memory_nbytes = 0
             if self.memdecode_agent is not None:
                 memory_nbytes = self.memdecode_agent.build_cache_plan(cache_config)
+            self._cache_plan_block_nbytes = (target_nbytes, spec_nbytes)
             return target_nbytes, spec_nbytes, memory_nbytes
 
     def build_graph_runner(self):
@@ -1560,6 +1567,26 @@ class BaseModelAgent:
         torch.cuda.empty_cache()
         self.state.to_sleep.clear()
 
+    def _rebuild_models_after_level2_sleep(self):
+        """Rebuild models, cache bindings, and graph runners in that order."""
+        expected_block_nbytes = self._cache_plan_block_nbytes
+        old_empty_init = self.misc_config.empty_init
+        self.misc_config.empty_init = True
+        try:
+            self.build_model()
+            target_nbytes, spec_nbytes, _ = self.build_cache_plans(
+                self.cache_config,
+                self.spec_agent.cache_config,
+            )
+            actual_block_nbytes = (target_nbytes, spec_nbytes)
+            if actual_block_nbytes != expected_block_nbytes:
+                raise RuntimeError(
+                    'Level-2 wakeup rebuilt cache plans with different logical-block sizes: '
+                    f'expected target/draft {expected_block_nbytes}, got {actual_block_nbytes}.')
+            self.build_graph_runner()
+        finally:
+            self.misc_config.empty_init = old_empty_init
+
     @torch.inference_mode()
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
@@ -1579,11 +1606,7 @@ class BaseModelAgent:
                     spec_model.to(torch.cuda.current_device())
             else:
                 # user should update weights after wakeup
-                old_empty_init = self.misc_config.empty_init
-                self.misc_config.empty_init = True
-                self.build_model()
-                self.build_graph_runner()
-                self.misc_config.empty_init = old_empty_init
+                self._rebuild_models_after_level2_sleep()
 
         if 'kv_cache' in tags:
             self.build_cache_engine()
