@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING
@@ -12,7 +13,7 @@ from lmdeploy.pytorch.utils import CtxMgrBase, singleton
 from .config import DistConfig, TPMode
 
 if TYPE_CHECKING:
-    from .backends.cuda.communicator import CudaCommunicator
+    from .backends.communicator import DeviceCommunicator
 
 
 @dataclass
@@ -24,21 +25,26 @@ class DistGroup:
     cpu_groups: list[dist.ProcessGroup] = None
     gpu_groups: list[dist.ProcessGroup] = None
     gpu_gather_group: dist.ProcessGroup = None
-    communicator: 'CudaCommunicator' = None
+    communicator: 'DeviceCommunicator' = None
 
-    def supports_deferred_allreduce(self, dtype: torch.dtype) -> bool:
-        """Whether this group can defer all-reduce to the following RMSNorm."""
-        return self.communicator is not None and self.communicator.supports_deferred_allreduce(dtype)
+    def supports_optimized_all_reduce(self) -> bool:
+        """Whether this group has an optimized all-reduce implementation."""
+        return self.communicator is not None and self.communicator.supports_optimized_all_reduce()
 
-    def try_fused_allreduce_rmsnorm(self,
-                                    input: torch.Tensor,
-                                    residual: torch.Tensor,
-                                    weight: torch.Tensor,
-                                    eps: float):
-        """Run fused all-reduce and RMSNorm, or return ``None``."""
+    def supports_fused_all_reduce_residual_rms_norm(self) -> bool:
+        """Whether this group can fuse all-reduce, residual and RMSNorm."""
+        return (self.communicator is not None
+                and self.communicator.supports_fused_all_reduce_residual_rms_norm())
+
+    def try_fused_all_reduce_residual_rms_norm(self,
+                                               input: torch.Tensor,
+                                               residual: torch.Tensor,
+                                               weight: torch.Tensor,
+                                               eps: float):
+        """Run fused all-reduce, residual and RMSNorm, or return ``None``."""
         if self.communicator is None:
             return None
-        return self.communicator.try_fused_allreduce_rmsnorm(
+        return self.communicator.try_fused_all_reduce_residual_rms_norm(
             input=input, residual=residual, weight=weight, eps=eps)
 
     def all_reduce_(self, tensor: torch.Tensor):
@@ -213,16 +219,15 @@ def _build_tp_group(context: 'DistContext', timeout: timedelta, cpu_backend: str
 
 
 def _build_tp_communicators(context: 'DistContext'):
-    """Attach one optional communicator to each unique TP group."""
-    from .backends.cuda.communicator import build_cuda_communicator
-
+    """Attach one device communicator to each unique TP group."""
+    build_communicator = context.communicator_builder
     groups = (context.attn_tp_group, context.mlp_tp_group, context.moe_tp_group)
     for group in {id(group): group for group in groups}.values():
         if group.gpu_group is None:
             continue
-        group.communicator = build_cuda_communicator(
+        group.communicator = build_communicator(
             cpu_group=group.cpu_group,
-            gpu_group=group.gpu_group,
+            device_group=group.gpu_group,
             dist_config=context.dist_config,
         )
 
@@ -242,6 +247,7 @@ class DistContext:
     ep_gpu_group: dist.ProcessGroup = None
     ep_gpu_groups: list[dist.ProcessGroup] = None
     dist_config: DistConfig = None
+    communicator_builder: Callable = None
 
     @classmethod
     def _build_ep_group(cls, context: 'DistContext', timeout: timedelta, ccl_backend: str = 'nccl'):
@@ -268,19 +274,27 @@ class DistContext:
         context.ep_gpu_groups = ep_gpu_groups
 
     @classmethod
-    def build(cls, rank: int = 0, dist_config: DistConfig = None, ccl_backend: str = 'nccl'):
+    def build(cls,
+              rank: int = 0,
+              dist_config: DistConfig = None,
+              ccl_backend: str = 'nccl',
+              communicator_builder: Callable = None):
         """Build dist context."""
         timeout = timedelta(days=35600)
         cpu_backend = 'gloo'
 
         if dist_config is None:
             dist_config = DistConfig()
+        if communicator_builder is None:
+            from .backends.communicator import build_communicator
+            communicator_builder = build_communicator
 
         dp_rank = dist_config.dp_rank
         world_size = dist_config.world_size
         context = DistContext(rank=rank,
                               dp_rank=dp_rank,
                               dist_config=dist_config,
+                              communicator_builder=communicator_builder,
                               attn_tp_group=DistGroup(rank=0),
                               mlp_tp_group=DistGroup(rank=0),
                               moe_tp_group=DistGroup(rank=0),

@@ -2,9 +2,13 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
 import torch
 
+from lmdeploy.pytorch.backends import communicator as base_communicator_module
 from lmdeploy.pytorch.backends.cuda import communicator as communicator_module
+from lmdeploy.pytorch.backends.dlinfer.op_backend import DlinferOpsBackend
+from lmdeploy.pytorch.nn import norm as norm_module
 
 
 class _Collective:
@@ -19,7 +23,10 @@ class _Collective:
     def supports(self, dtype):
         return self._supports
 
-    def fused_allreduce_rmsnorm(self, **kwargs):
+    def is_available(self):
+        return self._supports
+
+    def fused_all_reduce_residual_rms_norm(self, **kwargs):
         return self._result
 
     def all_reduce_(self, input):
@@ -40,8 +47,36 @@ def _build_communicator(monkeypatch,
     monkeypatch.setattr(communicator_module._envs, 'allreduce_use_symm_mem', True)
     monkeypatch.setattr(communicator_module, 'FlashInferAllReduce', lambda group: flashinfer)
     monkeypatch.setattr(communicator_module, 'SymmetricMemoryAllReduce', lambda group: symm_mem)
-    communicator = communicator_module.CudaCommunicator(cpu_group='cpu', gpu_group='gpu')
+    communicator = communicator_module.CudaCommunicator(cpu_group='cpu', device_group='gpu')
     return communicator, flashinfer, symm_mem
+
+
+def _build_norm(monkeypatch, *, optimized=True, fused=False):
+    impl = Mock()
+    builder = SimpleNamespace(build=Mock(return_value=impl))
+    backend = SimpleNamespace(get_layer_impl_builder=Mock(return_value=builder))
+    group = Mock()
+    group.supports_optimized_all_reduce.return_value = optimized
+    group.supports_fused_all_reduce_residual_rms_norm.return_value = fused
+    monkeypatch.setattr(norm_module, 'get_backend', lambda: backend)
+    monkeypatch.setattr(norm_module, 'get_dist_group', lambda layer_type: group)
+    norm = norm_module.RMSNorm(4, dtype=torch.float32, device='cpu', all_reduce_group='attn')
+    return norm, impl, group
+
+
+def test_device_communicator_fallback(monkeypatch):
+    all_reduce = Mock()
+    monkeypatch.setattr(base_communicator_module.dist, 'all_reduce', all_reduce)
+    communicator = base_communicator_module.DeviceCommunicator(device_group='device')
+
+    assert not communicator.supports_optimized_all_reduce()
+    assert not communicator.supports_fused_all_reduce_residual_rms_norm()
+    assert communicator.try_fused_all_reduce_residual_rms_norm(
+        input=torch.ones(1), residual=torch.ones(1), weight=torch.ones(1), eps=1e-6) is None
+
+    input = torch.ones(1)
+    communicator.all_reduce_(input)
+    all_reduce.assert_called_once_with(input, group='device')
 
 
 def test_cuda_communicator_dispatch(monkeypatch):
@@ -51,8 +86,9 @@ def test_cuda_communicator_dispatch(monkeypatch):
     nccl_all_reduce = Mock()
     monkeypatch.setattr(communicator_module.dist, 'all_reduce', nccl_all_reduce)
 
-    assert communicator.supports_deferred_allreduce(torch.bfloat16)
-    assert communicator.try_fused_allreduce_rmsnorm(
+    assert communicator.supports_optimized_all_reduce()
+    assert communicator.supports_fused_all_reduce_residual_rms_norm()
+    assert communicator.try_fused_all_reduce_residual_rms_norm(
         input=torch.ones(1), residual=torch.ones(1), weight=torch.ones(1), eps=1e-6) is fused_result
 
     input = torch.ones(1)
@@ -68,6 +104,61 @@ def test_cuda_communicator_dispatch(monkeypatch):
     symm_mem._handled = False
     communicator.all_reduce_(input)
     nccl_all_reduce.assert_called_once_with(input, group='gpu')
+
+
+def test_symm_mem_does_not_handle_rms_norm_fusion(monkeypatch):
+    symm_mem = _Collective('cpu')
+    monkeypatch.setattr(communicator_module._envs, 'allreduce_use_flashinfer', False)
+    monkeypatch.setattr(communicator_module._envs, 'allreduce_use_symm_mem', True)
+    monkeypatch.setattr(communicator_module, 'SymmetricMemoryAllReduce', lambda group: symm_mem)
+    communicator = communicator_module.CudaCommunicator(cpu_group='cpu', device_group='gpu')
+
+    assert communicator.supports_optimized_all_reduce()
+    assert not communicator.supports_fused_all_reduce_residual_rms_norm()
+    assert communicator.try_fused_all_reduce_residual_rms_norm(
+        input=torch.ones(1), residual=torch.ones(1), weight=torch.ones(1), eps=1e-6) is None
+
+
+def test_rms_norm_fuses_pending_all_reduce(monkeypatch):
+    norm, impl, group = _build_norm(monkeypatch, fused=True)
+    fused_output = (torch.full((1, 4), 2.0), torch.full((1, 4), 3.0))
+    group.try_fused_all_reduce_residual_rms_norm.return_value = fused_output
+    input = torch.ones((1, 4), dtype=torch.bfloat16)
+    residual = torch.ones_like(input)
+
+    assert norm(input, residual) is fused_output
+    group.try_fused_all_reduce_residual_rms_norm.assert_called_once()
+    group.all_reduce_.assert_not_called()
+    impl.forward.assert_not_called()
+
+
+def test_rms_norm_falls_back_to_standalone_all_reduce(monkeypatch):
+    norm, impl, group = _build_norm(monkeypatch)
+    impl.forward.return_value = object()
+    input = torch.ones((1, 4), dtype=torch.bfloat16)
+    residual = torch.ones_like(input)
+    output = norm(input, residual)
+
+    assert output is impl.forward.return_value
+    group.try_fused_all_reduce_residual_rms_norm.assert_not_called()
+    group.all_reduce_.assert_called_once_with(input)
+    impl.forward.assert_called_once_with(input, norm.weight, residual)
+
+    group.reset_mock()
+    impl.reset_mock()
+    norm(input)
+    group.all_reduce_.assert_not_called()
+    impl.forward.assert_called_once_with(input, norm.weight, None)
+
+
+def test_rms_norm_keeps_normal_path_without_optimized_all_reduce(monkeypatch):
+    norm, impl, group = _build_norm(monkeypatch, optimized=False)
+    input = torch.ones((1, 4), dtype=torch.bfloat16)
+    residual = torch.ones_like(input)
+    norm(input, residual)
+
+    group.all_reduce_.assert_not_called()
+    impl.forward.assert_called_once_with(input, norm.weight, residual)
 
 
 def test_flashinfer_allreduce_in_place():
@@ -145,13 +236,24 @@ def test_build_cuda_communicator_gates_unsupported_parallelism(monkeypatch):
             SimpleNamespace(dp=1, ep=2, attn_tp=8, enable_microbatch=False),
             SimpleNamespace(dp=1, ep=1, attn_tp=8, enable_microbatch=True),
     ):
-        assert communicator_module.build_cuda_communicator('cpu', 'gpu', config) is None
+        assert communicator_module.build_cuda_communicator('cpu', 'device', config) is None
     communicator_cls.assert_not_called()
 
     config = SimpleNamespace(dp=1, ep=1, attn_tp=4, enable_microbatch=False)
-    communicator = communicator_module.build_cuda_communicator('cpu', 'gpu', config)
+    communicator = communicator_module.build_cuda_communicator('cpu', 'device', config)
     assert communicator is communicator_cls.return_value
-    communicator_cls.assert_called_once_with(cpu_group='cpu', gpu_group='gpu')
+    communicator_cls.assert_called_once_with(cpu_group='cpu', device_group='device')
+
+
+def test_dlinfer_communicator_rejects_cuda_options(monkeypatch):
+    monkeypatch.setattr(communicator_module._envs, 'allreduce_use_flashinfer', True)
+    with pytest.raises(AssertionError, match='not supported by DLInfer'):
+        DlinferOpsBackend.build_communicator('cpu', 'device', SimpleNamespace())
+
+    monkeypatch.setattr(communicator_module._envs, 'allreduce_use_flashinfer', False)
+    communicator = DlinferOpsBackend.build_communicator('cpu', 'device', SimpleNamespace())
+    assert isinstance(communicator, base_communicator_module.DeviceCommunicator)
+    assert communicator.device_group == 'device'
 
 
 def test_symm_mem_is_tried_only_for_supported_config(monkeypatch):
@@ -162,13 +264,13 @@ def test_symm_mem_is_tried_only_for_supported_config(monkeypatch):
 
     config = SimpleNamespace(dp=1, ep=1, attn_tp=2, enable_microbatch=False)
     assert communicator_module.should_try_symm_mem(config)
-    assert communicator_module.build_cuda_communicator('cpu', 'gpu', config) is communicator_cls.return_value
+    assert communicator_module.build_cuda_communicator('cpu', 'device', config) is communicator_cls.return_value
 
     config.attn_tp = 1
     assert not communicator_module.should_try_symm_mem(config)
-    assert communicator_module.build_cuda_communicator('cpu', 'gpu', config) is None
+    assert communicator_module.build_cuda_communicator('cpu', 'device', config) is None
 
     monkeypatch.setattr(communicator_module._envs, 'allreduce_use_symm_mem', False)
     config.attn_tp = 2
     assert not communicator_module.should_try_symm_mem(config)
-    assert communicator_module.build_cuda_communicator('cpu', 'gpu', config) is None
+    assert communicator_module.build_cuda_communicator('cpu', 'device', config) is None

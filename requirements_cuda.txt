@@ -2,4 +2,3 @@
 -r requirements/runtime_cuda.txt
 -r requirements/lite.txt
 -r requirements/serve.txt
-flashinfer-python==0.6.15.post1

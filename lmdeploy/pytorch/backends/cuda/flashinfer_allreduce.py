@@ -82,12 +82,16 @@ class FlashInferAllReduce:
         cudart.cudaSetDevice(torch.cuda.current_device())
         self._comm = comm
 
-    def supports(self, dtype: torch.dtype) -> bool:
-        """Whether this group can fuse an all-reduce with RMSNorm."""
-        if dtype != torch.bfloat16 or self._max_size == 0:
+    def is_available(self) -> bool:
+        """Whether the fused collective implementation is available."""
+        if self._max_size == 0:
             return False
         self._initialize()
         return True
+
+    def supports(self, dtype: torch.dtype) -> bool:
+        """Whether this group can handle the given dtype."""
+        return dtype == torch.bfloat16 and self.is_available()
 
     def _get_workspace(self, input: torch.Tensor):
         hidden_dim = input.size(-1)
@@ -132,11 +136,11 @@ class FlashInferAllReduce:
         input.copy_(output)
         return True
 
-    def fused_allreduce_rmsnorm(self,
-                                input: torch.Tensor,
-                                residual: torch.Tensor,
-                                weight: torch.Tensor,
-                                eps: float):
+    def fused_all_reduce_residual_rms_norm(self,
+                                           input: torch.Tensor,
+                                           residual: torch.Tensor,
+                                           weight: torch.Tensor,
+                                           eps: float):
         """Fuse all-reduce, residual addition and RMSNorm when supported."""
         if not self.supports(input.dtype):
             return None

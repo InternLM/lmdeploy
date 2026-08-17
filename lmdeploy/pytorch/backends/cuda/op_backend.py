@@ -121,6 +121,23 @@ class CudaOpsBackend(DefaultOpsBackend):
         from .attention.v4 import CudaV4AttentionMetadata
         return CudaV4AttentionMetadata
 
+    @classmethod
+    def build_communicator(cls, cpu_group, device_group, dist_config):
+        """Build a CUDA communicator."""
+        from .communicator import build_cuda_communicator
+        communicator = build_cuda_communicator(
+            cpu_group=cpu_group,
+            device_group=device_group,
+            dist_config=dist_config,
+        )
+        if communicator is not None:
+            return communicator
+        return super().build_communicator(
+            cpu_group=cpu_group,
+            device_group=device_group,
+            dist_config=dist_config,
+        )
+
     @staticmethod
     def get_k_block_shape(
         block_size: int,

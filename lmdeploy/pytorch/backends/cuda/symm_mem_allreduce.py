@@ -84,6 +84,10 @@ class SymmetricMemoryAllReduce:
         """Whether this group can all-reduce the given dtype."""
         return self._enabled and dtype == torch.bfloat16
 
+    def is_available(self) -> bool:
+        """Whether the optimized collective implementation is available."""
+        return self._enabled
+
     def all_reduce_(self, input: torch.Tensor) -> bool:
         """All-reduce ``input`` in place, returning whether it was handled."""
         if (not self.supports(input.dtype) or not input.is_contiguous()

@@ -19,6 +19,18 @@ class DlinferOpsBackend(DefaultOpsBackend):
         return 'dlinfer'
 
     @classmethod
+    def build_communicator(cls, cpu_group, device_group, dist_config):
+        """Build a DLInfer communicator."""
+        from lmdeploy.pytorch import envs
+        cuda_communicator_enabled = envs.allreduce_use_flashinfer or envs.allreduce_use_symm_mem
+        assert not cuda_communicator_enabled, 'CUDA communicators are not supported by DLInfer.'
+        return super().build_communicator(
+            cpu_group=cpu_group,
+            device_group=device_group,
+            dist_config=dist_config,
+        )
+
+    @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
         """Get dlinfer layer builder."""
         if layer_type == OpType.PagedAttention:

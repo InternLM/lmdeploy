@@ -38,6 +38,7 @@ class RMSNorm(nn.Module):
         tp: bool = False,
         align: int = 1,
         prefix: str = '',
+        all_reduce_group: str | None = None,
     ):
         super().__init__()
         backend = get_backend()
@@ -69,6 +70,17 @@ class RMSNorm(nn.Module):
         self.align = align
         self.eps = eps
         self._cast_weight = None
+        self._all_reduce_group = None
+        self._fuse_all_reduce = False
+        if all_reduce_group is not None and self.can_handle_all_reduce(all_reduce_group):
+            group = get_dist_group(all_reduce_group)
+            self._all_reduce_group = group
+            self._fuse_all_reduce = group.supports_fused_all_reduce_residual_rms_norm()
+
+    @staticmethod
+    def can_handle_all_reduce(layer_type: str) -> bool:
+        """Whether this norm can consume a pending all-reduce."""
+        return get_dist_group(layer_type).supports_optimized_all_reduce()
 
     def _get_cast_weight(self, dtype: torch.dtype):
         """Return a cached weight cast for dtype-constrained fused kernels."""
@@ -81,23 +93,6 @@ class RMSNorm(nn.Module):
     def update_weights(self):
         """Invalidate the fused-kernel weight after an online update."""
         self._cast_weight = None
-
-    def forward_with_allreduce(self,
-                               x: torch.Tensor,
-                               residual: torch.Tensor,
-                               layer_type: str):
-        """Apply a pending TP all-reduce together with residual RMSNorm."""
-        group = get_dist_group(layer_type)
-        output = group.try_fused_allreduce_rmsnorm(
-            input=x,
-            residual=residual,
-            weight=self._get_cast_weight(x.dtype),
-            eps=self.eps,
-        )
-        if output is not None:
-            return output
-        group.all_reduce_(x)
-        return self(x, residual)
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
@@ -117,6 +112,17 @@ class RMSNorm(nn.Module):
 
     def forward(self, x: torch.Tensor, residual: torch.Tensor = None):
         """forward."""
+        if residual is not None and self._all_reduce_group is not None:
+            if self._fuse_all_reduce:
+                output = self._all_reduce_group.try_fused_all_reduce_residual_rms_norm(
+                    input=x,
+                    residual=residual,
+                    weight=self._get_cast_weight(x.dtype),
+                    eps=self.eps,
+                )
+                if output is not None:
+                    return output
+            self._all_reduce_group.all_reduce_(x)
         return self.impl.forward(x, self.weight, residual)
 
 

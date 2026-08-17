@@ -4,34 +4,39 @@ from torch import distributed as dist
 
 from lmdeploy.pytorch import envs as _envs
 
+from ..communicator import DeviceCommunicator
 from .flashinfer_allreduce import FlashInferAllReduce
 from .symm_mem_allreduce import SymmetricMemoryAllReduce
 
 
-class CudaCommunicator:
-    """Dispatch optional CUDA collectives with an NCCL fallback."""
+class CudaCommunicator(DeviceCommunicator):
+    """Dispatch optional CUDA collectives with a process-group fallback."""
 
-    def __init__(self, cpu_group: dist.ProcessGroup, gpu_group: dist.ProcessGroup):
-        self.gpu_group = gpu_group
+    def __init__(self, cpu_group: dist.ProcessGroup, device_group: dist.ProcessGroup):
+        super().__init__(device_group=device_group)
         self._flashinfer = (FlashInferAllReduce(cpu_group)
                             if _envs.allreduce_use_flashinfer else None)
         self._symm_mem = (SymmetricMemoryAllReduce(cpu_group)
                           if _envs.allreduce_use_symm_mem else None)
 
-    def supports_deferred_allreduce(self, dtype: torch.dtype) -> bool:
-        """Whether all-reduce can be deferred to the following RMSNorm."""
-        return ((self._flashinfer is not None and self._flashinfer.supports(dtype))
-                or (self._symm_mem is not None and self._symm_mem.supports(dtype)))
+    def supports_optimized_all_reduce(self) -> bool:
+        """Whether an optimized all-reduce implementation is available."""
+        return ((self._flashinfer is not None and self._flashinfer.is_available())
+                or (self._symm_mem is not None and self._symm_mem.is_available()))
 
-    def try_fused_allreduce_rmsnorm(self,
-                                    input: torch.Tensor,
-                                    residual: torch.Tensor,
-                                    weight: torch.Tensor,
-                                    eps: float):
-        """Run FlashInfer all-reduce and RMSNorm fusion when eligible."""
+    def supports_fused_all_reduce_residual_rms_norm(self) -> bool:
+        """Whether fused all-reduce, residual and RMSNorm is available."""
+        return self._flashinfer is not None and self._flashinfer.is_available()
+
+    def try_fused_all_reduce_residual_rms_norm(self,
+                                               input: torch.Tensor,
+                                               residual: torch.Tensor,
+                                               weight: torch.Tensor,
+                                               eps: float):
+        """Run fused all-reduce, residual and RMSNorm when eligible."""
         if self._flashinfer is None:
             return None
-        return self._flashinfer.fused_allreduce_rmsnorm(
+        return self._flashinfer.fused_all_reduce_residual_rms_norm(
             input=input,
             residual=residual,
             weight=weight,
@@ -39,13 +44,12 @@ class CudaCommunicator:
         )
 
     def all_reduce_(self, input: torch.Tensor):
-        """Dispatch all-reduce through FlashInfer, symmetric memory, or
-        NCCL."""
+        """Dispatch all-reduce through optimized CUDA backends."""
         if self._flashinfer is not None and self._flashinfer.all_reduce_(input):
             return
         if self._symm_mem is not None and self._symm_mem.all_reduce_(input):
             return
-        dist.all_reduce(input, group=self.gpu_group)
+        super().all_reduce_(input)
 
     def close(self):
         """Release communicator-owned workspaces."""
@@ -62,10 +66,11 @@ def should_try_symm_mem(dist_config) -> bool:
             and not dist_config.enable_microbatch)
 
 
-def build_cuda_communicator(cpu_group: dist.ProcessGroup, gpu_group: dist.ProcessGroup, dist_config):
+def build_cuda_communicator(cpu_group: dist.ProcessGroup, device_group: dist.ProcessGroup,
+                            dist_config):
     """Build the optional CUDA communicator for a TP group."""
     compatible = dist_config.dp == 1 and dist_config.ep == 1 and not dist_config.enable_microbatch
     enabled = _envs.allreduce_use_flashinfer or should_try_symm_mem(dist_config)
     if not compatible or not enabled:
         return None
-    return CudaCommunicator(cpu_group=cpu_group, gpu_group=gpu_group)
+    return CudaCommunicator(cpu_group=cpu_group, device_group=device_group)
