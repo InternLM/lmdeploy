@@ -218,7 +218,10 @@ def _convert_image_source_to_url(source: Any) -> str:
 
 
 def _convert_system_message(content: str | list[ContentBlockParam]) -> list[dict[str, str]]:
-    """Convert Anthropic system content into zero or one chat message."""
+    """Convert Anthropic system content into zero or one chat message.
+
+    Only text blocks are retained when ``content`` is a block list.
+    """
 
     if isinstance(content, str):
         system_text = content
