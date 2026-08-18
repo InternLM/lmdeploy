@@ -237,7 +237,7 @@ class ChatCompletionRequest(BaseModel):
     )
     # Extended input fields from /generate endpoint.
     # input_ids and image_data are fallback inputs — they are only used when
-    # messages is empty/None/''. When messages is non-empty, it takes priority.
+    # messages is empty. When messages is non-empty, it takes priority.
     input_ids: list[int] | None = Field(
         default=None,
         description=('Token IDs as input. Only used when messages is empty. '
