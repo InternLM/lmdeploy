@@ -19,9 +19,10 @@ MMLU_PRO_KEEP = {
 with read_base():
     from opencompass.configs.datasets.gpqa.gpqa_few_shot_ppl_4b5a83 import gpqa_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.gsm8k.gsm8k_new_gen import gsm8k_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.humaneval.internal_humaneval_v2_new_gen import (
-        humaneval_datasets,  # noqa: F401, E501
-    )
+
+    # from opencompass.configs.datasets.humaneval.internal_humaneval_v2_new_gen import (
+    #   humaneval_datasets,  # noqa: F401, E501
+    # )
     from opencompass.configs.datasets.mmlu_pro.mmlu_pro_few_shot_new_gen import mmlu_pro_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.race.race_few_shot_ppl import race_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.winogrande.winogrande_5shot_ll_252f01 import (
@@ -63,43 +64,6 @@ models = [
         run_cfg=dict(num_gpus=0),
     )
 ]
-
-#######################################################################
-#                            Summarizer                               #
-#######################################################################
-
-gate_summary_groups = [
-    {
-        'name': 'base_gate_average',
-        'subsets': [
-            ['race-high', 'accuracy'],
-            ['GPQA_diamond', 'accuracy'],
-            ['winogrande', 'accuracy'],
-            ['gsm8k', 'accuracy'],
-            ['mmlu_pro_computer_science', 'accuracy'],
-            ['openai_humaneval', 'humaneval_pass@1'],
-        ],
-    },
-]
-
-summarizer = dict(
-    dataset_abbrs=[
-        ['base_gate_average', 'naive_average'],
-        '',
-        'PPL',
-        ['race-high', 'accuracy'],
-        ['GPQA_diamond', 'accuracy'],
-        '',
-        'LL',
-        ['winogrande', 'accuracy'],
-        '',
-        'Gen',
-        ['gsm8k', 'accuracy'],
-        ['mmlu_pro_computer_science', 'accuracy'],
-        ['openai_humaneval', 'humaneval_pass@1'],
-    ],
-    summary_groups=gate_summary_groups,
-)
 
 #######################################################################
 #                         Infer / Eval runners                        #
