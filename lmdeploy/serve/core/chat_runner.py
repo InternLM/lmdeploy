@@ -30,6 +30,7 @@ class ChatRunnerOptions:
     """Endpoint-specific runtime knobs for the shared chat runner."""
 
     input_ids: list[int] | None = None
+    do_preprocess: bool = True
     adapter_name: str | None = None
     gen_config_kwargs: dict[str, Any] = field(default_factory=dict)
     preprocess_kwargs: dict[str, Any] = field(default_factory=dict)
@@ -112,8 +113,6 @@ class ChatRunner:
             adapter_name = parsed_request.model
 
         engine_messages = None if options.input_ids is not None else parsed_request.messages
-        do_preprocess = options.input_ids is None
-
         session = server_context.create_session(parsed_request.session_id)
         preprocessed = await server_context.async_engine.preprocess(
             engine_messages,
@@ -121,7 +120,7 @@ class ChatRunner:
             gen_config=gen_config,
             tools=parsed_request.tools,
             reasoning_effort=parsed_request.reasoning_effort,
-            do_preprocess=do_preprocess,
+            do_preprocess=options.do_preprocess,
             adapter_name=adapter_name,
             chat_template_kwargs=_chat_template_kwargs_from_request(parsed_request),
             input_ids=options.input_ids,

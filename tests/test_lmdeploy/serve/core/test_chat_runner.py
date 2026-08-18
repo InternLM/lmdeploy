@@ -167,7 +167,12 @@ def test_runner_always_preprocesses_chat_messages():
 def test_runner_skips_preprocess_for_raw_input_ids():
     context = _FakeServerContext(_Parser)
 
-    asyncio.run(ChatRunner.prepare(context, _request(messages=[]), ChatRunnerOptions(input_ids=[1, 2, 3])))
+    asyncio.run(
+        ChatRunner.prepare(
+            context,
+            _request(messages=[]),
+            ChatRunnerOptions(input_ids=[1, 2, 3], do_preprocess=False),
+        ))
 
     assert context.async_engine.preprocess_kwargs['do_preprocess'] is False
     assert context.async_engine.preprocess_kwargs['input_ids'] == [1, 2, 3]

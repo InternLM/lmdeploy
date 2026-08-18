@@ -193,6 +193,7 @@ def register(router: APIRouter, server_context) -> None:
                 request,
                 ChatRunnerOptions(
                     input_ids=resolved_input_ids,
+                    do_preprocess=resolved_input_ids is None,
                     adapter_name=adapter_name,
                     gen_config_kwargs=dict(
                         logits_processors=logits_processors,

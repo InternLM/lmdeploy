@@ -38,7 +38,10 @@ class OpenAIServingResponses:
             chat_runner = await ChatRunner.prepare(
                 self.server_context,
                 request_context.chat_request,
-                ChatRunnerOptions(gen_config_kwargs=dict(random_seed=request.seed)),
+                ChatRunnerOptions(
+                    do_preprocess=True,
+                    gen_config_kwargs=dict(random_seed=request.seed),
+                ),
             )
         except RequestError as error:
             return request_error_response(error)

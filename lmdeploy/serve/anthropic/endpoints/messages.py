@@ -79,7 +79,10 @@ def register(router: APIRouter, server_context) -> None:
             chat_runner = await ChatRunner.prepare(
                 server_context,
                 openai_request,
-                ChatRunnerOptions(input_ids=resolved_input_ids),
+                ChatRunnerOptions(
+                    input_ids=resolved_input_ids,
+                    do_preprocess=resolved_input_ids is None,
+                ),
             )
         except RequestError as error:
             return create_request_error_response(error)
