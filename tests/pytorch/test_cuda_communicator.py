@@ -115,8 +115,10 @@ def test_rms_norm_fuses_or_falls_back(monkeypatch):
     impl.forward.assert_called_once_with(input, norm.weight, residual)
 
 
-def test_flashinfer_allreduce_in_place_and_dtype_guards():
-    from lmdeploy.pytorch.backends.cuda.flashinfer_allreduce import FlashInferAllReduce
+def test_flashinfer_allreduce_in_place_and_dtype_guards(monkeypatch):
+    from lmdeploy.pytorch.backends.cuda import flashinfer_allreduce as flashinfer_module
+
+    FlashInferAllReduce = flashinfer_module.FlashInferAllReduce
 
     flashinfer = FlashInferAllReduce.__new__(FlashInferAllReduce)
     flashinfer.is_available = Mock(return_value=True)
@@ -128,15 +130,17 @@ def test_flashinfer_allreduce_in_place_and_dtype_guards():
     flashinfer._one_shot_max_size = 1024
     flashinfer._comm = SimpleNamespace(
         AllReduceFusionPattern=SimpleNamespace(kAllReduce=0),
-        allreduce_fusion=Mock(return_value=torch.full((2, 4), 2.0)),
+        allreduce_fusion=Mock(
+            return_value=torch.full((2, 4), 2.0, dtype=torch.bfloat16)),
     )
     flashinfer._get_workspace = Mock(return_value='workspace')
     flashinfer.supports = Mock(return_value=True)
 
-    input = torch.ones(2, 4)
+    input = torch.ones(1, 2, 4, dtype=torch.bfloat16)
     assert flashinfer.all_reduce_(input)
     torch.testing.assert_close(input, torch.full_like(input, 2.0))
     call_kwargs = flashinfer._comm.allreduce_fusion.call_args.kwargs
+    assert call_kwargs['input'].shape == (2, 4)
     assert call_kwargs['trigger_completion_at_end']
     assert call_kwargs['use_oneshot']
 
@@ -150,6 +154,31 @@ def test_flashinfer_allreduce_in_place_and_dtype_guards():
     )
     assert output is None
     assert flashinfer._comm.allreduce_fusion.call_count == fused_calls
+
+    workspace_error = FlashInferAllReduce.__new__(FlashInferAllReduce)
+    workspace_error.group = 'cpu'
+    workspace_error._world_size = 2
+    workspace_error._max_size = 1024
+    workspace_error._one_shot_max_size = 1024
+    workspace_error._workspace = None
+    workspace_error._hidden_dim = None
+    workspace_error._dtype = None
+    workspace_error._disabled = False
+    create_workspace = Mock(side_effect=RuntimeError('unsupported topology'))
+    workspace_error._comm = SimpleNamespace(
+        AllReduceFusionPattern=SimpleNamespace(kAllReduce=0),
+        create_allreduce_fusion_workspace=create_workspace,
+        allreduce_fusion=Mock(),
+    )
+    workspace_error.supports = Mock(return_value=True)
+    monkeypatch.setattr(flashinfer_module.dist, 'get_rank', lambda group: 0)
+
+    input = torch.ones(2, 4, dtype=torch.bfloat16)
+    assert not workspace_error.all_reduce_(input)
+    assert workspace_error._disabled
+    assert not workspace_error.all_reduce_(input)
+    create_workspace.assert_called_once()
+    workspace_error._comm.allreduce_fusion.assert_not_called()
 
 
 def test_symm_mem_allreduce_selects_group_algorithm(monkeypatch):

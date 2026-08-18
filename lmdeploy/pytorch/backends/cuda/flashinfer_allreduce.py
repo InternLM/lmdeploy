@@ -58,6 +58,7 @@ class FlashInferAllReduce:
         self._workspace = None
         self._hidden_dim = None
         self._dtype = None
+        self._disabled = False
         self._world_size = dist.get_world_size(group)
         major, minor = torch.cuda.get_device_capability()
         self._device_capability = major * 10 + minor
@@ -84,7 +85,7 @@ class FlashInferAllReduce:
 
     def is_available(self) -> bool:
         """Whether the fused collective implementation is available."""
-        if self._max_size == 0:
+        if self._disabled or self._max_size == 0:
             return False
         self._initialize()
         return True
@@ -94,6 +95,8 @@ class FlashInferAllReduce:
         return dtype in (torch.float16, torch.bfloat16) and self.is_available()
 
     def _get_workspace(self, input: torch.Tensor):
+        if self._disabled:
+            return None
         hidden_dim = input.size(-1)
         if self._workspace is not None:
             assert self._hidden_dim == hidden_dim and self._dtype == input.dtype
@@ -101,15 +104,30 @@ class FlashInferAllReduce:
 
         rank = dist.get_rank(self.group)
         max_token_num = min(_MAX_TOKEN_NUM, self._max_size // input[0].nbytes)
-        self._workspace = self._comm.create_allreduce_fusion_workspace(
-            backend='trtllm',
-            world_size=self._world_size,
-            rank=rank,
-            max_token_num=max_token_num,
-            hidden_dim=hidden_dim,
-            dtype=input.dtype,
-            group=self.group,
-        )
+        try:
+            workspace = self._comm.create_allreduce_fusion_workspace(
+                backend='trtllm',
+                world_size=self._world_size,
+                rank=rank,
+                max_token_num=max_token_num,
+                hidden_dim=hidden_dim,
+                dtype=input.dtype,
+                group=self.group,
+            )
+        except Exception as e:
+            self._disabled = True
+            logger.warning(
+                'Failed to initialize the FlashInfer all-reduce workspace; '
+                f'disabling FlashInfer for this process group: {e}')
+            return None
+        if workspace is None:
+            self._disabled = True
+            logger.warning(
+                'Failed to initialize the FlashInfer all-reduce workspace; '
+                'disabling FlashInfer for this process group.')
+            return None
+
+        self._workspace = workspace
         self._hidden_dim = hidden_dim
         self._dtype = input.dtype
         logger.info(
@@ -119,21 +137,26 @@ class FlashInferAllReduce:
 
     def all_reduce_(self, input: torch.Tensor) -> bool:
         """All-reduce ``input`` in place, returning whether it was handled."""
-        if (input.dim() != 2 or not input.is_contiguous()
-                or input.nbytes > self._max_size
-                or input.size(0) > _MAX_TOKEN_NUM
+        if input.dim() < 2 or not input.is_contiguous():
+            return False
+        input_2d = input.flatten(0, -2)
+        if (input_2d.nbytes > self._max_size
+                or input_2d.size(0) > _MAX_TOKEN_NUM
                 or not self.supports(input.dtype)):
             return False
 
+        workspace = self._get_workspace(input_2d)
+        if workspace is None:
+            return False
         output = self._comm.allreduce_fusion(
-            input=input,
-            workspace=self._get_workspace(input),
+            input=input_2d,
+            workspace=workspace,
             pattern=self._comm.AllReduceFusionPattern.kAllReduce,
             launch_with_pdl=True,
             trigger_completion_at_end=True,
-            use_oneshot=input.nbytes <= self._one_shot_max_size,
+            use_oneshot=input_2d.nbytes <= self._one_shot_max_size,
         )
-        input.copy_(output)
+        input_2d.copy_(output)
         return True
 
     def fused_all_reduce_residual_rms_norm(self,
@@ -154,9 +177,12 @@ class FlashInferAllReduce:
 
         norm_out = torch.empty_like(input_2d)
         residual_out = torch.empty_like(residual_2d)
+        workspace = self._get_workspace(input_2d)
+        if workspace is None:
+            return None
         self._comm.allreduce_fusion(
             input=input_2d,
-            workspace=self._get_workspace(input_2d),
+            workspace=workspace,
             pattern=self._comm.AllReduceFusionPattern.kARResidualRMSNorm,
             launch_with_pdl=True,
             # Keep completion conservative; early signaling requires separate
