@@ -2,8 +2,9 @@
 import asyncio
 import enum
 import logging
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Coroutine, Dict, List
+from typing import Any
 
 from lmdeploy.messages import RequestMetrics, ResponseType
 from lmdeploy.utils import get_logger
@@ -45,7 +46,7 @@ class Request:
     resp: Response = None
 
 
-ReqList = List[Request]
+ReqList = list[Request]
 
 
 def _run_until_complete(future: Awaitable):
@@ -69,7 +70,7 @@ class RequestSender:
     """
     sender_id: int
     manager: 'RequestManager'
-    resp_dict: Dict[int, List[Response]] = field(default_factory=dict)
+    resp_dict: dict[int, list[Response]] = field(default_factory=dict)
 
     @classmethod
     def new(cls, sender_id: int, manager: 'RequestManager'):
@@ -99,9 +100,10 @@ class RequestSender:
         """Async rq_que put."""
         self.req_que.put_nowait(reqs)
 
-    def _gather_request(self, req_types: List[RequestType], data: List[Any]):
+    def _gather_request(self, req_types: list[RequestType], data: list[Any]):
         """Gather requests."""
-        if self.manager._loop_task is None:
+        should_enqueue = any(not self.manager.is_request_blocked(rtype) for rtype in req_types)
+        if should_enqueue and self.manager._loop_task is None:
             self.manager.create_loop_task()
         assert len(req_types) == len(data)
 
@@ -114,15 +116,20 @@ class RequestSender:
                             event=event,
                             data=None,
                             err_msg=None)
+            if self.manager.is_request_blocked(rtype):
+                self.manager.reject_request(resp, rtype, 'request type is blocked')
+                resps.append(resp)
+                continue
             req = Request(type=rtype, sender_id=self.sender_id, data=rdata, resp=resp)
             resps.append(resp)
             reqs.append(req)
         return resps, reqs
 
-    def batched_send_async(self, req_types: List[RequestType], data: List[Any]):
+    def batched_send_async(self, req_types: list[RequestType], data: list[Any]):
         """Batched send request asynchronize."""
         resps, reqs = self._gather_request(req_types, data)
-        self._req_put(reqs)
+        if len(reqs) > 0:
+            self._req_put(reqs)
         return resps
 
     def send_async(self, req_type: RequestType, data: Any):
@@ -166,11 +173,11 @@ class RequestManager:
     """Request manager."""
 
     def __init__(self):
-        self.senders: Dict[int, RequestSender] = dict()
-        self.callbacks: Dict[RequestType, Callable] = dict()
-        self.request_priority: List[RequestType] = [
-            RequestType.STOP_ENGINE, RequestType.ADD_SESSION, RequestType.STOP_SESSION, RequestType.END_SESSION,
-            RequestType.ADD_MESSAGE
+        self.senders: dict[int, RequestSender] = dict()
+        self.callbacks: dict[RequestType, Callable] = dict()
+        self.request_priority: list[RequestType] = [
+            RequestType.STOP_ENGINE, RequestType.ADD_SESSION, RequestType.ADD_MESSAGE,
+            RequestType.STOP_SESSION, RequestType.END_SESSION,
         ]
         self.requests: asyncio.Queue = None
         self._loop_task: asyncio.Future = None
@@ -182,6 +189,9 @@ class RequestManager:
         self._sender_wait_task: asyncio.Task = None
         self._send_count = 0
         self._send_event = None
+        # Sleep uses this admission gate to reject new inference work while
+        # still allowing cleanup requests such as STOP_SESSION/END_SESSION.
+        self._blocked_request_types: set[RequestType] = set()
 
     async def prepare_send(self):
         if self._condition is None:
@@ -287,13 +297,46 @@ class RequestManager:
         self.senders[sender_id] = new_sender
         return new_sender
 
+    def block_request_types(self, req_types: set[RequestType] | list[RequestType]):
+        """Block request types from entering the engine."""
+        req_types = set(req_types)
+        newly_blocked = req_types - self._blocked_request_types
+        self._blocked_request_types.update(req_types)
+        if newly_blocked:
+            names = ', '.join(sorted(req_type.name for req_type in newly_blocked))
+            logger.info(f'Blocking engine request types: {names}')
+
+    def unblock_request_types(self, req_types: set[RequestType] | list[RequestType]):
+        """Allow request types to enter the engine."""
+        req_types = set(req_types)
+        newly_unblocked = req_types & self._blocked_request_types
+        self._blocked_request_types.difference_update(req_types)
+        if newly_unblocked:
+            names = ', '.join(sorted(req_type.name for req_type in newly_unblocked))
+            logger.info(f'Unblocking engine request types: {names}')
+
+    def is_request_blocked(self, req_type: RequestType):
+        """Check whether a request type is blocked."""
+        return req_type in self._blocked_request_types
+
+    def reject_request(self, resp: Response, req_type: RequestType | None = None, reason: str = ''):
+        """Reject request and wake sender."""
+        if req_type is not None:
+            reason = reason or 'request rejected'
+            logger.debug(f'Reject {req_type.name} request from sender {resp.sender_id}: {reason}')
+        elif reason:
+            logger.debug(f'Reject response from sender {resp.sender_id}: {reason}')
+        resp.type = ResponseType.CANCEL
+        resp.is_done = True
+        self.response(resp)
+
     def has_requests(self):
         """Has unprocessed request."""
         if self.requests is None:
             return False
         return not self.requests.empty()
 
-    async def get_all_requests(self) -> Dict[RequestType, List[Request]]:
+    async def get_all_requests(self) -> dict[RequestType, list[Request]]:
         """Get all requests in current queue."""
         num_reqs = self.requests.qsize()
         reqs: ReqList = []
@@ -315,7 +358,7 @@ class RequestManager:
             __proc_reqs(elem)
 
         # gather requests
-        reqs_by_type: Dict[RequestType, List[Request]] = dict((t, []) for t in RequestType)
+        reqs_by_type: dict[RequestType, list[Request]] = dict((t, []) for t in RequestType)
         for req in reqs:
             reqs_by_type[req.type].append(req)
         return reqs_by_type
@@ -324,7 +367,7 @@ class RequestManager:
         """Bind handler for given request type."""
         self.callbacks[req_type] = callback
 
-    def set_request_priority(self, priority: List[RequestType]):
+    def set_request_priority(self, priority: list[RequestType]):
         """Set the priority of request type."""
         self.request_priority = priority
 
@@ -334,6 +377,11 @@ class RequestManager:
 
     def process_request(self, req_type: RequestType, reqs: ReqList, **kwargs):
         """Process reqs with given req type."""
+        if self.is_request_blocked(req_type):
+            for req in reqs:
+                self.reject_request(req.resp, req_type, 'queued request type is blocked')
+            return
+
         # get callback
         func = self.callbacks.get(req_type, None)
         if func is not None:

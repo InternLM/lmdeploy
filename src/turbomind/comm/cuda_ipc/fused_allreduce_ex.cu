@@ -12,11 +12,12 @@
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/meta.h"
+#include "src/turbomind/kernels/norm/rms_norm_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind::comm {
 
-template<class T, int vec_size, int block_dim, int groups, class Relaxed>
+template<class T, int vec_size, int block_dim, int groups, bool ZeroCentered, class Relaxed>
 __global__ void AllreduceResidualBiasRMSnormV_Simple_Pull(T*                     buf,
                                                           T*                     res,
                                                           const T*               bias,
@@ -40,6 +41,7 @@ __global__ void AllreduceResidualBiasRMSnormV_Simple_Pull(T*                    
                                                           constant<vec_size>,
                                                           constant<block_dim>,
                                                           constant<groups>,
+                                                          constant<ZeroCentered>,
                                                           Relaxed relaxed)
 {
     SystemSemaphore sem(g_semaphores, g_ranks, blockIdx.x, threadIdx.x);
@@ -135,7 +137,7 @@ __global__ void AllreduceResidualBiasRMSnormV_Simple_Pull(T*                    
             if (di < vdim) {
                 PRAGMA_UNROLL
                 for (int i = 0; i < vec_size; ++i) {
-                    r_vec[i] = static_cast<T>(((float)r_vec[i] * sum)) * w_vec[i];
+                    r_vec[i] = kernel::ApplyRMSnorm<ZeroCentered>(r_vec[i], sum, w_vec[i]);
                 }
                 Store(buf + idx, r_vec);
             }
@@ -186,7 +188,7 @@ __global__ void AllreduceResidualBiasRMSnormV_Simple_Pull(T*                    
     sem.Update(g_semaphores, g_ranks, blockIdx.x, threadIdx.x);
 }
 
-template<class T, int vec_size, int block_dim, int groups, class Relaxed>
+template<class T, int vec_size, int block_dim, int groups, bool ZeroCentered, class Relaxed>
 __global__ void AllreduceResidualBiasRMSnormV_NVLS(T*                   rs_mc_buf,
                                                    T*                   ag_mc_buf,
                                                    T*                   res,
@@ -204,6 +206,7 @@ __global__ void AllreduceResidualBiasRMSnormV_NVLS(T*                   rs_mc_bu
                                                    constant<vec_size>,
                                                    constant<block_dim>,
                                                    constant<groups>,
+                                                   constant<ZeroCentered>,
                                                    Relaxed relaxed)
 {
 
@@ -276,7 +279,7 @@ __global__ void AllreduceResidualBiasRMSnormV_NVLS(T*                   rs_mc_bu
         if (di < vdim) {
             PRAGMA_UNROLL
             for (int i = 0; i < vec_size; ++i) {
-                vec[i] = static_cast<T>(((float)vec[i] * sum)) * w_vec[i];
+                vec[i] = kernel::ApplyRMSnorm<ZeroCentered>(vec[i], sum, w_vec[i]);
             }
             multimem_st(ag_mc_buf + idx, vec);
         }
@@ -296,6 +299,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
                                                      const void*  bias,
                                                      const void*  weights,
                                                      float        eps,
+                                                     bool         zero_centered,
                                                      int          dim,
                                                      DataType     dtype,
                                                      int          group0,
@@ -303,7 +307,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
                                                      const int*   local_token_nums,
                                                      cudaStream_t stream)
 {
-    FT_CHECK(group0 * group1 == 0);
+    TM_CHECK(group0 * group1 == 0);
 
     const auto& g0 = groups_.at(group0);
     const auto& g1 = groups_.at(group1);
@@ -313,7 +317,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
 
     const int inner_tp = std::min(tp0, tp1);
 
-    FT_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
+    TM_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
 
     Array<int, kMaxRanks> offsets{};
     Array<int, kMaxRanks> firsts{};
@@ -339,7 +343,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
 
     auto semaphore = groups_.at(0).semaphore.handle();
 
-    auto invoke = [&](auto t, auto groups) {
+    auto invoke = [&](auto t, auto groups, auto zero_centered_c) {
         using T                = decltype(t);
         constexpr int vec_size = sizeof(uint4) / sizeof(T);
 
@@ -365,6 +369,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
                                                                               constant<vec_size>{},
                                                                               constant<1024>{},
                                                                               constant<1>{},
+                                                                              zero_centered_c,
                                                                               std::true_type{});
         }
         else {
@@ -397,12 +402,11 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
                                                                                      constant<vec_size>{},
                                                                                      constant<1024>{},
                                                                                      constant<1>{},
+                                                                                     zero_centered_c,
                                                                                      std::true_type{});
         }
         return true;
     };
-
-    sync_check_cuda_error();
 
     auto dispatch_D = [&](auto t) {
         using T                = decltype(t);
@@ -410,16 +414,24 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
         if (dim % vec_size) {
             return false;  // non-aligned
         }
+        auto invoke_mode = [&](auto groups) {
+            if (zero_centered) {
+                return invoke(t, groups, constant<true>{});
+            }
+            else {
+                return invoke(t, groups, constant<false>{});
+            }
+        };
         const int vdim = dim / vec_size;
         if (0) {}
         else if (vdim <= 256) {
-            return invoke(t, constant<4>{});
+            return invoke_mode(constant<4>{});
         }
         else if (vdim <= 512) {
-            return invoke(t, constant<2>{});
+            return invoke_mode(constant<2>{});
         }
         else if (vdim <= 1024) {
-            return invoke(t, constant<1>{});
+            return invoke_mode(constant<1>{});
         }
         return false;  // > 1024 vdim
     };

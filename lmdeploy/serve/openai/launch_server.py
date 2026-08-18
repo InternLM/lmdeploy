@@ -6,7 +6,6 @@ import random
 import signal
 import socket
 import sys
-from typing import List, Union
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.utils import get_logger
@@ -16,27 +15,37 @@ from .api_server import serve
 logger = get_logger('lmdeploy')
 
 
-def find_available_ports(num: int) -> List[int]:
-    """Find available port."""
+def is_port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(('127.0.0.1', port))
+            return True
+        except Exception:
+            return False
 
-    def __is_port_ok(port: int):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.bind(('127.0.0.1', port))
-                s.listen(1)
-                return True
-            except Exception:
-                return False
+
+def find_available_ports(num: int) -> list[int]:
+    """Find available port."""
 
     ports = []
     test_port = 3000
     while len(ports) < num:
         test_port += random.randint(10, 500)
-        if __is_port_ok(test_port):
+        if is_port_available(test_port):
             ports.append(test_port)
 
     return ports
+
+
+def _validate_server_port_range(base_port: int, dp_per_node: int) -> None:
+    """Validate base port and the contiguous DP port range."""
+    if not 1 <= base_port <= 65535:
+        raise ValueError(f'server_port must be between 1 and 65535, got {base_port}')
+    end_port = base_port + dp_per_node - 1
+    if end_port > 65535:
+        raise ValueError(f'server_port {base_port} cannot accommodate dp_per_node={dp_per_node}: '
+                         f'ports {base_port}-{end_port} exceed the maximum port 65535')
 
 
 def get_host_ip():
@@ -47,17 +56,24 @@ def get_host_ip():
         return ip
 
 
-def _run_server(gpu_ids: List[int], model_path: str, **kwargs):
+def _run_server(gpu_ids: list[int], model_path: str, **kwargs):
     """Launch a server process."""
     cuda_visible_devices = ','.join([str(_) for _ in gpu_ids])
     os.setpgrp()
     if len(gpu_ids) > 0:
         os.environ['CUDA_VISIBLE_DEVICES'] = cuda_visible_devices
-    serve(model_path, **kwargs)
+    try:
+        serve(model_path, **kwargs)
+    except Exception:
+        logger.exception('Server process failed during startup or serving.')
+        # Avoid Python multiprocessing atexit cleanup blocking forever while
+        # non-daemon engine/Ray children are still alive. The launcher will
+        # observe the non-zero exit code and terminate this process group.
+        os._exit(1)
 
 
-def cleanup_processes(processes: List[mp.Process]):
-    """Clean up server process."""
+def terminate_processes(processes: list[mp.Process]):
+    """Terminate child server process groups."""
     for process in processes:
         logger.info(f'Terminating process group {process.pid}')
         try:
@@ -77,17 +93,22 @@ def cleanup_processes(processes: List[mp.Process]):
                 pass
 
     logger.info('All processes terminated')
+
+
+def cleanup_processes(processes: list[mp.Process]):
+    """Clean up server process."""
+    terminate_processes(processes)
     sys.exit(0)
 
 
 def launch_server(num_nodes: int,
                   node_rank: int,
                   model_path: str,
-                  backend_config: Union[PytorchEngineConfig, TurbomindEngineConfig],
+                  backend_config: PytorchEngineConfig | TurbomindEngineConfig,
                   proxy_url: str = None,
+                  server_port: int | None = None,
                   **kwargs):
     """Run multiple server processes in dp mode."""
-    assert proxy_url is not None, 'Please launch proxy server and pass proxy_url'
     log_level = kwargs.get('log_level', 'ERROR')
     logger.setLevel(log_level)
 
@@ -109,7 +130,15 @@ def launch_server(num_nodes: int,
     server_urls = []
     processes = []
 
-    server_port_li = find_available_ports(dp_per_node)
+    if proxy_url is not None and server_port is None:
+        server_port_li = find_available_ports(dp_per_node)
+    else:
+        base_port = server_port if server_port is not None else 23333
+        _validate_server_port_range(base_port, dp_per_node)
+        server_port_li = [base_port + i for i in range(dp_per_node)]
+        for port in server_port_li:
+            if not is_port_available(port):
+                raise ValueError(f'Port {port} is not available')
 
     for idx in range(dp_per_node):
         backend_config_dp = copy.deepcopy(backend_config)
@@ -137,5 +166,17 @@ def launch_server(num_nodes: int,
     signal.signal(signal.SIGTERM, lambda sig, frame: cleanup_processes(processes))
     signal.signal(signal.SIGQUIT, lambda sig, frame: cleanup_processes(processes))
 
-    for p in processes:
-        p.join()
+    # Poll all DP server processes so one failed child cannot be hidden behind
+    # another healthy long-running server blocked in join().
+    alive_processes = list(processes)
+    while alive_processes:
+        for process in list(alive_processes):
+            process.join(timeout=1)
+            if process.exitcode is None:
+                continue
+
+            alive_processes.remove(process)
+            if process.exitcode != 0:
+                logger.error(f'Server process {process.pid} exited with code {process.exitcode}')
+                terminate_processes([process, *alive_processes])
+                raise RuntimeError(f'Server process {process.pid} exited with code {process.exitcode}')

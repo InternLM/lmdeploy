@@ -16,6 +16,11 @@ class InternVL3ModelConfigBuilder(AutoModelConfigBuilder):
         # hack quantization_config
         if hasattr(hf_config, 'quantization_config') and not hasattr(hf_config.text_config, 'quantization_config'):
             setattr(hf_config.text_config, 'quantization_config', hf_config.quantization_config)
+
+        # fix transformers>5
+        if hasattr(hf_config.text_config, 'tie_word_embeddings'):
+            hf_config.tie_word_embeddings = hf_config.text_config.tie_word_embeddings
+
         cfg = DefaultModelConfigBuilder.build(hf_config.text_config, model_path, **kwargs)
         cfg.hf_config = hf_config
         return cfg

@@ -1,17 +1,109 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, List, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
-from lmdeploy.messages import EngineOutput
-from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
-                                                   DistServeInitRequest)
+from lmdeploy.messages import EngineOutput, ResponseType
+from lmdeploy.pytorch.disagg.conn.protocol import (
+    DistServeConnectionRequest,
+    DistServeDropConnectionRequest,
+    DistServeInitRequest,
+)
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.engine.engine import Engine
+
+
+@dataclass(frozen=True)
+class StreamError:
+    """Serializable error raised by a remote streaming producer."""
+
+    type_name: str
+    message: str
+
+    @classmethod
+    def from_exception(cls, error: BaseException):
+        """Build a transport-safe error description."""
+        error_type = type(error)
+        type_name = f'{error_type.__module__}.{error_type.__qualname__}'
+        return cls(type_name=type_name, message=str(error))
+
+
+class MPStreamError(RuntimeError):
+    """Error propagated by an MP streaming transport."""
+
+    def __init__(self, error: StreamError):
+        self.remote_error = error
+        super().__init__(f'{error.type_name}: {error.message}')
+
+
+@dataclass
+class StreamPollResult:
+    """Atomic snapshot returned by an MP stream poll."""
+
+    output: Any = None
+    has_output: bool = False
+    done: bool = False
+    error: StreamError | None = None
+
+
+@dataclass
+class StreamMailbox:
+    """Single-slot coalescing mailbox shared by MP stream backends."""
+
+    event: asyncio.Event = field(default_factory=asyncio.Event)
+    output: Any = None
+    pending: bool = False
+    done: bool = False
+    error: StreamError | None = None
+
+    def publish(self, output: Any):
+        """Publish or replace the pending coalesced output."""
+        if self.done:
+            raise RuntimeError('Cannot publish output after stream completion.')
+        self.output = output
+        self.pending = True
+        self.event.set()
+
+    def finish(self):
+        """Mark the producer complete without touching pending output."""
+        self.done = True
+        self.event.set()
+
+    def fail(self, error: BaseException):
+        """Record a producer failure without overwriting pending output."""
+        self.error = StreamError.from_exception(error)
+        self.done = True
+        self.event.set()
+
+    def drain(self):
+        """Atomically transfer pending output and terminal state."""
+        poll_result = StreamPollResult(
+            output=self.output if self.pending else None,
+            has_output=self.pending,
+            done=self.done,
+            error=self.error,
+        )
+        self.output = None
+        self.pending = False
+        self.error = None
+        self.event.clear()
+        return poll_result
+
+
+def iter_stream_poll_outputs(poll_result: StreamPollResult, method: str):
+    """Apply common Ray/ZMQ output and error delivery semantics."""
+    if poll_result.has_output:
+        yield poll_result.output
+    if poll_result.error is not None:
+        if method == 'instance_async_stream_infer':
+            yield EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
+        else:
+            raise MPStreamError(poll_result.error)
 
 
 class EngineInstancePool:
@@ -81,6 +173,10 @@ class EngineWorkerBase:
         """Get schedule metrics."""
         return self.engine.get_schedule_metrics()
 
+    async def get_health_status(self):
+        """Get engine health status."""
+        return await self.engine.get_health_status()
+
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
         return self.engine.p2p_initialize(conn_request)
@@ -97,17 +193,29 @@ class EngineWorkerBase:
         """
         return self.engine.p2p_drop_connect(drop_conn_request)
 
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """sleep."""
-        return self.engine.sleep(level)
+        return await self.engine.sleep(level)
 
-    def wakeup(self, tags: Optional[List[str]] = None):
+    def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
         return self.engine.wakeup(tags)
 
     def update_params(self, request: Any):
         """Update params."""
         return self.engine.update_params(request)
+
+    async def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        return await self.engine.init_weights_update_group(request)
+
+    async def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        return await self.engine.update_weights_from_distributed(request)
+
+    async def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        return await self.engine.destroy_weights_update_group(request)
 
     def close(self) -> None:
         """Close engine worker."""
@@ -148,7 +256,13 @@ class EngineOutputGather:
     def pop(self, stream_id, result):
         if not isinstance(result, EngineOutput):
             return result
-        output = self._output.pop(stream_id)
+        output = self._output.pop(stream_id, None)
+        if output is None:
+            return result
         result.token_ids = output.token_ids or []
         result.logprobs = output.logprobs or None
         return result
+
+    def discard(self, stream_id):
+        """Discard gathered output for a stream."""
+        self._output.pop(stream_id, None)

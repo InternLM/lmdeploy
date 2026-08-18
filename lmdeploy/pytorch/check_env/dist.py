@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from lmdeploy.pytorch.config import DistConfig
-from lmdeploy.utils import is_dlblas_installed
+from lmdeploy.utils import is_deep_ep_installed, is_deep_gemm_installed
 
 from .base import BaseChecker
 
@@ -41,9 +41,10 @@ class DistChecker(BaseChecker):
                               f'Get distributed_executor_backend={distributed_executor_backend}.')
 
         if self.ep > 1:
-            if self.device_type == 'cuda' and not is_dlblas_installed():
+            if self.device_type == 'cuda' and (not is_deep_ep_installed() or not is_deep_gemm_installed()):
                 self.log_and_exit(mod_name='Dist',
-                                  message='ep>1 requires install dlblas(https://github.com/DeepLink-org/dlBLAS).')
+                                  message='ep>1 requires install DeepEP(https://github.com/deepseek-ai/DeepEP) '
+                                  'and DeepGEMM(https://github.com/deepseek-ai/DeepGEMM).')
             if self.ep % self.dp != 0:
                 self.log_and_exit(mod_name='Dist',
                                   message=f'ep>1 requires ep % dp == 0. Get dp={self.dp} and ep={self.ep}.')

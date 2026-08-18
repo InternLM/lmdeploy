@@ -60,7 +60,7 @@ def supports_tma():
         return False
 
     VALID_VERSION = version.parse('3.4.0')
-    return TRITON_VERSION == VALID_VERSION
+    return TRITON_VERSION >= VALID_VERSION
 
 
 if supports_tma():

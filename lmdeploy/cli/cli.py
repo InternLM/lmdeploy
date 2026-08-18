@@ -3,11 +3,16 @@
 import os
 
 from ..version import __version__
-from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter, FlexibleArgumentParser, convert_args,
-                    get_speculative_config)
+from .utils import (
+    ArgumentHelper,
+    DefaultsAndTypesHelpFormatter,
+    FlexibleArgumentParser,
+    convert_args,
+    get_speculative_config,
+)
 
 
-class CLI(object):
+class CLI:
     _desc = 'The CLI provides a unified API for converting, ' \
             'compressing and deploying large language models.'
     parser = FlexibleArgumentParser(prog='lmdeploy', description=_desc, add_help=True)
@@ -29,11 +34,10 @@ class CLI(object):
                             ' which is converted by `lmdeploy convert` command or '
                             'download from ii) and iii). - ii) the model_id of a '
                             'lmdeploy-quantized model hosted inside a model repo on '
-                            'huggingface.co, such as "internlm/internlm-chat-20b-4bit",'
-                            ' "lmdeploy/llama2-chat-70b-4bit", etc. - iii) the model_id'
-                            ' of a model hosted inside a model repo on huggingface.co,'
-                            ' such as "internlm/internlm-chat-7b", "qwen/qwen-7b-chat "'
-                            ', "baichuan-inc/baichuan2-7b-chat" and so on')
+                            'huggingface.co, such as "lmdeploy/llama2-chat-70b-4bit",'
+                            ' etc. - iii) the model_id of a model hosted inside a model'
+                            ' repo on huggingface.co, such as "internlm/internlm2_5-7b-chat",'
+                            ' "internlm/Intern-S2-Preview" and so on')
         # common args
         ArgumentHelper.backend(parser)
         # chat template args
@@ -41,6 +45,7 @@ class CLI(object):
         # model args
         ArgumentHelper.revision(parser)
         ArgumentHelper.download_dir(parser)
+        ArgumentHelper.trust_remote_code(parser)
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
@@ -48,6 +53,8 @@ class CLI(object):
         ArgumentHelper.device(pt_group)
         ArgumentHelper.eager_mode(pt_group)
         ArgumentHelper.dllm_block_length(pt_group)
+        ArgumentHelper.prefix_cache_state_budget(pt_group)
+        ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
@@ -55,6 +62,7 @@ class CLI(object):
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
         quant_policy = ArgumentHelper.quant_policy(pt_group)
+        language_model_only = ArgumentHelper.language_model_only(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -65,6 +73,7 @@ class CLI(object):
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(prefix_caching_act)
         tb_group._group_actions.append(quant_policy)
+        tb_group._group_actions.append(language_model_only)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.communicator(tb_group)
@@ -124,8 +133,7 @@ class CLI(object):
             if sys.platform.startswith('linux'):
                 try:
                     res = subprocess.run(['nvidia-smi', 'topo', '-m'],
-                                         stdout=subprocess.PIPE,
-                                         stderr=subprocess.PIPE,
+                                         capture_output=True,
                                          text=True,
                                          check=True)
                     if res.returncode == 0:

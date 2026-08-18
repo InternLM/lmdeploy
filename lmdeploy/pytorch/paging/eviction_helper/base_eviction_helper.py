@@ -1,10 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
 
 from ...messages import SchedulerSequence
 from ..scheduler import Scheduler
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 class BaseEvictionHelper:
@@ -21,6 +20,6 @@ class BaseEvictionHelper:
         """Sequence need swap in."""
         raise NotImplementedError('Not implemented.')
 
-    def evict_for_seq(self, seq: SchedulerSequence, evictable_seqs: List[SchedulerSequence], prealloc_size: int):
+    def evict_for_seq(self, seq: SchedulerSequence, evictable_seqs: list[SchedulerSequence], prealloc_size: int):
         """Evict seqs."""
         raise NotImplementedError('Not implemented.')

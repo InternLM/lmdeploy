@@ -1,6 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
-                                                   DistServeInitRequest)
+from lmdeploy.pytorch.disagg.conn.protocol import (
+    DistServeConnectionRequest,
+    DistServeDropConnectionRequest,
+    DistServeInitRequest,
+)
 
 
 class EngineBase:
@@ -34,6 +37,10 @@ class EngineBase:
 
     def create_instance(self, cuda_stream_id=0):
         """Create instance."""
+        raise NotImplementedError('This method is not implemented.')
+
+    async def get_health_status(self) -> dict:
+        """Get backend health status."""
         raise NotImplementedError('This method is not implemented.')
 
 

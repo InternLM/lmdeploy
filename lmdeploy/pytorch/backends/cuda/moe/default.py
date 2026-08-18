@@ -1,11 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Callable, List, Optional
+from collections.abc import Callable
 
 import torch
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.backends.deepep_moe_checker import get_moe_backend
+from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.backends.moe import FusedMoEBuilder, FusedMoEImpl
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda import fused_moe
@@ -47,7 +47,7 @@ class TritonFusedMoEImpl(FusedMoEImpl):
                 down_weights: torch.Tensor,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
-                expert_list: List[int] = None,
+                expert_list: list[int] = None,
                 act_func: Callable = None):
         """forward."""
         expert_offset = 0
@@ -81,8 +81,9 @@ class FusedMoENormal:
         layer_index: int = 0,
         top_k: int = 8,
         out_dtype: torch.dtype = torch.bfloat16,
+        num_max_dispatch_tokens_per_rank: int = 128,
     ):
-        from dlblas.layers.moe.token_dispatcher import DeepEPTokenDispatcherNormal
+        from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherNormal
         self.layer_index = layer_index
         self.top_k = top_k
         self.num_experts = num_experts
@@ -94,6 +95,7 @@ class FusedMoENormal:
             num_local_experts=self.num_local_experts,
             hidden_size=hidden_dim,
             params_dtype=out_dtype,
+            num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
         )
 
     def forward(
@@ -103,7 +105,7 @@ class FusedMoENormal:
         topk_ids: torch.LongTensor,
         up_weights: torch.Tensor,
         down_weights: torch.Tensor,
-        expert_list: List[int] = None,
+        expert_list: list[int] = None,
     ):
         """forward."""
         from lmdeploy.pytorch.kernels.cuda.fused_moe_ep import fused_moe_v3
@@ -129,7 +131,7 @@ class FusedMoENormal:
                        x: torch.Tensor,
                        topk_idx: torch.Tensor,
                        topk_weights: torch.Tensor,
-                       num_experts: Optional[int] = None,
+                       num_experts: int | None = None,
                        previous_event=None,
                        async_finish=True):
         return self.token_dispatcher.dispatch_normal_async(x, topk_idx, topk_weights, num_experts, previous_event,
@@ -148,7 +150,7 @@ class FusedMoENormal:
 
 
 def _disposible_tensor(tensor):
-    from dlblas.utils.utils import DisposibleTensor
+    from lmdeploy.pytorch.backends.cuda.token_dispatcher import DisposibleTensor
     if isinstance(tensor, torch.Tensor):
         tensor = DisposibleTensor(tensor)
     else:
@@ -201,7 +203,7 @@ def dispatch_async_ll(
     self,
     hidden_states: torch.Tensor,
     topk_idx: torch.Tensor,
-    num_experts: Optional[int] = None,
+    num_experts: int | None = None,
     use_fp8: bool = True,
     async_finish: bool = True,
 ):
@@ -237,8 +239,9 @@ class FusedMoELowLatency:
         hidden_dim: int,
         layer_index: int,
         out_dtype: torch.dtype = torch.bfloat16,
+        num_max_dispatch_tokens_per_rank: int = 128,
     ):
-        from dlblas.layers.moe.token_dispatcher import DeepEPTokenDispatcherLowLatency
+        from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherLowLatency
         self.num_experts = num_experts
         self.layer_index = layer_index
         self.out_dtype = out_dtype
@@ -248,6 +251,7 @@ class FusedMoELowLatency:
             num_local_experts=num_experts // ep_size,
             hidden_size=hidden_dim,
             params_dtype=out_dtype,
+            num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
         )
 
     def experts(
@@ -258,8 +262,7 @@ class FusedMoELowLatency:
         masked_m: torch.Tensor,
         expected_m: int,
     ):
-        from dlblas.utils.utils import DisposibleTensor
-
+        from lmdeploy.pytorch.backends.cuda.token_dispatcher import DisposibleTensor
         from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul_moe_ep
         from lmdeploy.pytorch.third_party.deep_gemm import m_grouped_bf16_gemm_nt_masked
         num_groups, m, _ = hidden_states.shape
@@ -282,7 +285,7 @@ class FusedMoELowLatency:
                 topk_ids: torch.LongTensor,
                 up_weights: torch.Tensor,
                 down_weights: torch.Tensor,
-                expert_list: List[int] = None):
+                expert_list: list[int] = None):
         """forward."""
         recv_hidden_states, topk_idx, topk_weights, masked_m, expected_m = dispatch_ll(
             self.token_dispatcher,
@@ -304,7 +307,7 @@ class FusedMoELowLatency:
         self,
         hidden_states: torch.Tensor,
         topk_idx: torch.Tensor,
-        num_experts: Optional[int] = None,
+        num_experts: int | None = None,
         use_fp8: bool = False,
         async_finish: bool = True,
     ):
@@ -339,6 +342,7 @@ def build_deepep_moe(
     top_k: int,
     layer_idx: int = 0,
     out_dtype: torch.dtype = torch.bfloat16,
+    num_max_dispatch_tokens_per_rank: int = 128,
 ):
     if low_latency_mode:
         return FusedMoELowLatency(ep_size=ep_size,
@@ -346,7 +350,8 @@ def build_deepep_moe(
                                   num_experts=num_experts,
                                   hidden_dim=hidden_dim,
                                   layer_index=layer_idx,
-                                  out_dtype=out_dtype)
+                                  out_dtype=out_dtype,
+                                  num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank)
     else:
         return FusedMoENormal(ep_size=ep_size,
                               ep_group=ep_group,
@@ -354,7 +359,8 @@ def build_deepep_moe(
                               hidden_dim=hidden_dim,
                               layer_index=layer_idx,
                               top_k=top_k,
-                              out_dtype=out_dtype)
+                              out_dtype=out_dtype,
+                              num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank)
 
 
 class FusedMoEEPImpl(TritonFusedMoEImpl):
@@ -370,6 +376,7 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         renormalize: bool = False,
         layer_idx: int = 0,
         out_dtype: torch.dtype = torch.bfloat16,
+        num_max_dispatch_tokens_per_rank: int = 128,
     ):
         super().__init__(top_k, num_experts, renormalize)
         self.num_experts = num_experts
@@ -378,19 +385,21 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         self.hidden_dim = hidden_dim
         self.layer_idx = layer_idx
         self.out_dtype = out_dtype
+        self.num_max_dispatch_tokens_per_rank = num_max_dispatch_tokens_per_rank
 
         try:
             import deep_gemm  # noqa: F401
         except ImportError:
             logger.exception('DeepGEMM is required for DeepEP MoE implementation.')
+            raise
 
-        try:
-            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode, use_deepep  # noqa: F401
-            get_moe_backend().set_deepep_moe_backend()
-            if hasattr(DeepEPBuffer, 'set_explicitly_destroy'):
-                DeepEPBuffer.set_explicitly_destroy()
-        except ImportError:
-            logger.warning('For higher performance, please install DeepEP https://github.com/deepseek-ai/DeepEP')
+        from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer, use_deepep
+        if not use_deepep:
+            raise ImportError('DeepEP is required for DeepEP MoE implementation. Please install '
+                              'https://github.com/deepseek-ai/DeepEP.')
+        get_deepep_state().enable()
+        if hasattr(DeepEPBuffer, 'set_explicitly_destroy'):
+            DeepEPBuffer.set_explicitly_destroy()
 
         # pre-allocate buffer
         self.fusedmoe_build(True)
@@ -406,7 +415,7 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
                 down_weights: torch.Tensor,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
-                expert_list: List[int] = None,
+                expert_list: list[int] = None,
                 act_func: Callable = None):
         """forward."""
         assert act_func is None, 'Activation function is not supported in DeepEP MoE.'
@@ -415,7 +424,7 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
 
         topk_weights = self.do_renormalize(topk_weights)
         step_ctx = get_step_ctx_manager().current_context()
-        low_latency_mode = step_ctx.is_decoding
+        low_latency_mode = step_ctx.global_is_decoding()
         moe = self.fusedmoe_build(low_latency_mode)
         out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, down_weights, expert_list)
 
@@ -440,7 +449,8 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
                                       self.hidden_dim,
                                       self.top_k,
                                       layer_idx=self.layer_idx,
-                                      out_dtype=self.out_dtype)
+                                      out_dtype=self.out_dtype,
+                                      num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank)
         return deepep_moe
 
 
@@ -457,6 +467,7 @@ class TritonFusedMoEBuilder(FusedMoEBuilder):
         ep_group: dist.ProcessGroup = None,
         layer_idx: int = 0,
         out_dtype: torch.dtype = torch.bfloat16,
+        num_max_dispatch_tokens_per_rank: int = 128,
     ):
         """Build from mlp."""
         if ep_size > 1:
@@ -467,5 +478,6 @@ class TritonFusedMoEBuilder(FusedMoEBuilder):
                                   hidden_dim=hidden_dim,
                                   renormalize=renormalize,
                                   layer_idx=layer_idx,
-                                  out_dtype=out_dtype)
+                                  out_dtype=out_dtype,
+                                  num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank)
         return TritonFusedMoEImpl(top_k=top_k, num_experts=num_experts, renormalize=renormalize)

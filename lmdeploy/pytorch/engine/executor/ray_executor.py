@@ -1,9 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import contextlib
-import json
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import ray
 import ray.exceptions
@@ -46,43 +45,7 @@ def _get_master_port():
     return find_available_port()
 
 
-def get_ascend_device_rank_mapping(master_addr):
-    rank_table_file = _envs.ascend_rank_table_file
-    if not rank_table_file:
-        raise ValueError('ASCEND_RANK_TABLE_FILE_PATH is not set')
-    with open(rank_table_file, 'r') as f:
-        rank_table = json.load(f)
-    try:
-        assert master_addr == rank_table['server_list'][0]['server_id'], 'Master address does not match rank table'
-        rank_mapping: Dict[int, int] = {}
-        worker_ip_by_rank: Dict[int, str] = {}
-        for server in rank_table['server_list']:
-            node_ip = server['server_id']
-            for idx, device in enumerate(server['device']):
-                # Prefer explicit device_id if present; fall back to enumeration order.
-                local_rank = int(device.get('device_id', idx))
-                global_rank = int(device['rank_id'])
-                rank_mapping[global_rank] = local_rank
-                worker_ip_by_rank[global_rank] = node_ip
-
-        if len(worker_ip_by_rank) == 0:
-            raise ValueError('Rank table contains no devices.')
-
-        ranks = sorted(worker_ip_by_rank.keys())
-        if ranks[0] != 0 or ranks[-1] != len(ranks) - 1:
-            raise ValueError(f'Rank ids are not contiguous starting from 0: {ranks[:8]}...{ranks[-8:]}')
-        worker_ips = [worker_ip_by_rank[r] for r in range(len(ranks))]
-    except Exception as e:
-        logger.error(f'Parse rank table file({rank_table})  failed')
-        raise e
-
-    envs = {
-        'ASCEND_RANK_TABLE_FILE_PATH': rank_table_file,
-    }
-    return rank_mapping, worker_ips, envs
-
-
-def _update_env_cuda_alloc_conf(env_vars: Dict):
+def _update_env_cuda_alloc_conf(env_vars: dict):
     """Update runtime env for CUDA alloc conf."""
     cuda_alloc_conf = os.getenv('PYTORCH_CUDA_ALLOC_CONF', None)
     if cuda_alloc_conf is None:
@@ -105,17 +68,17 @@ def _update_env_cuda_alloc_conf(env_vars: Dict):
     env_vars['PYTORCH_CUDA_ALLOC_CONF'] = cuda_alloc_conf
 
 
-def _update_runtime_envs(runtime_env: Dict):
+def _update_runtime_envs(runtime_env: dict):
     """Update runtime envs."""
     new_envs = _envs.get_all_envs()
-    env_vars: Dict = runtime_env.get('env_vars', {})
+    env_vars: dict = runtime_env.get('env_vars', {})
     env_vars.update(new_envs)
     _update_env_cuda_alloc_conf(env_vars)
     runtime_env['env_vars'] = env_vars
     return runtime_env
 
 
-def _update_runtime_env_nsys(runtime_env: Dict):
+def _update_runtime_env_nsys(runtime_env: dict):
     """Update runtime env for nsys."""
     nsight_env = {
         't': 'cuda,cudnn,cublas,nvtx',
@@ -163,11 +126,12 @@ class RayWorkerWrapper(WorkerWrapperBase):
         model_config: ModelConfig,
         dist_config: DistConfig,
         misc_config: MiscConfig,
-        adapters: Dict[str, str] = None,
+        adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         dtype: str = 'auto',
         log_level: int = 30,
         specdecode_config: SpecDecodeConfig = None,
+        trust_remote_code: bool = False
     ):
         init_backend(device_type)
         try_import_deeplink(device_type)
@@ -183,6 +147,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
             device_type=device_type,
             log_level=log_level,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code
         )
         self.node_ip = ray.util.get_node_ip_address()
         self._remote_logger = RemoteLogger()
@@ -191,7 +156,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
         """Set worker local rank."""
         torch.cuda.set_device(local_rank)
 
-    def set_env(self, envs: Dict[str, str]):
+    def set_env(self, envs: dict[str, str]):
         for key, value in envs.items():
             os.environ[key] = value
 
@@ -211,7 +176,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
             tmp = torch.empty((1, ), device='cuda')
             all_reduce(tmp, group=group)
 
-    def pack_output(self, output: Dict):
+    def pack_output(self, output: dict):
         """Pack output."""
         return output.to_numpy()
 
@@ -239,10 +204,11 @@ class RayExecutor(ExecutorBase):
         backend_config: BackendConfig,
         dist_config: DistConfig,
         misc_config: MiscConfig,
-        adapters: Dict[str, str] = None,
+        adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         dtype: str = 'auto',
         specdecode_config: SpecDecodeConfig = None,
+        trust_remote_code: bool = False,
     ):
         """Initialize Executor."""
         super().__init__(
@@ -255,6 +221,7 @@ class RayExecutor(ExecutorBase):
             adapters=adapters,
             device_type=device_type,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code,
         )
 
         device_ctx = DeviceContext(device_type)
@@ -287,6 +254,7 @@ class RayExecutor(ExecutorBase):
                 dtype=dtype,
                 log_level=logger.level,
                 specdecode_config=specdecode_config,
+                trust_remote_code=trust_remote_code
             )
 
             logger.info('Init ray workers.')
@@ -311,8 +279,8 @@ class RayExecutor(ExecutorBase):
 
     def collective_rpc(self,
                        method: str,
-                       args: Tuple[Any] = None,
-                       kwargs: Dict[str, Any] = None,
+                       args: tuple[Any] = None,
+                       kwargs: dict[str, Any] = None,
                        timeout: float = None):
         """Collective rpc."""
         if args is None:
@@ -320,6 +288,18 @@ class RayExecutor(ExecutorBase):
         if kwargs is None:
             kwargs = dict()
         return ray.get([getattr(worker, method).remote(*args, **kwargs) for worker in self.workers], timeout=timeout)
+
+    async def collective_rpc_async(self,
+                                   method: str,
+                                   args: tuple[Any] = None,
+                                   kwargs: dict[str, Any] = None):
+        """Collective async rpc."""
+        if args is None:
+            args = list()
+        if kwargs is None:
+            kwargs = dict()
+        tasks = [getattr(worker, method).remote(*args, **kwargs) for worker in self.workers]
+        return await asyncio.gather(*tasks)
 
     def build_model(self):
         """Build model."""
@@ -349,15 +329,38 @@ class RayExecutor(ExecutorBase):
         """Update params."""
         self.collective_rpc('update_params', (request, ))
 
+    def _reduce_worker_status(self, results: list[tuple[bool, str]], op_name: str) -> tuple[bool, str]:
+        """Reduce worker status results."""
+        successes, messages = zip(*results)
+        if all(successes):
+            return True, messages[0]
+        message = ' | '.join(f'rank{idx}: {message}' for idx, message in enumerate(messages))
+        return False, f'{op_name}: {message}'
+
+    def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        results = self.collective_rpc('init_weights_update_group', (request, ))
+        return self._reduce_worker_status(results, 'init_weights_update_group')
+
+    def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        results = self.collective_rpc('update_weights_from_distributed', (request, ))
+        return self._reduce_worker_status(results, 'update_weights_from_distributed')
+
+    def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        results = self.collective_rpc('destroy_weights_update_group', (request, ))
+        return self._reduce_worker_status(results, 'destroy_weights_update_group')
+
     def warmup(self):
         """Build cache engine."""
         self.collective_rpc('warmup')
 
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """Sleep."""
-        self.collective_rpc('sleep', (level, ))
+        await self.collective_rpc_async('sleep', (level, ))
 
-    def wakeup(self, tags: Optional[List[str]] = None):
+    def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
         if tags is None or 'kv_cache' in tags:
             self.update_configs()
@@ -482,20 +485,25 @@ class RayExecutor(ExecutorBase):
 
         if self._prev_out is not None:
             try:
-                ray.get(self._prev_out)
-            except SystemExit:
+                # Await (instead of blocking ray.get) so the engine event loop is yielded while the
+                # previous forward runs. Blocking here stalls the whole loop, starving co-located
+                # async tasks such as the health probe.
+                await asyncio.gather(*self._prev_out)
+            except (SystemExit, ray.exceptions.RayActorError):
                 logger.error('Ray worker exited.')
                 raise
             finally:
                 # free ray.put inputs
                 try:
-                    ray._private.internal_api.free(self._prev_inputs)
+                    ray.internal.free(self._prev_inputs, local_only=False)
                 except Exception as e:
                     logger.warning(f'Free input ref failed: {e}')
 
         self._prev_inputs = ray.put(inputs)
-        # make sure in order
-        self._prev_out = self.dag.execute(self._prev_inputs)
+        # non-compiled dag would add input object ref, and the ref can not be released in python
+        self._prev_out = [
+            worker.forward_async.remote(self._prev_inputs) for worker in self.workers
+        ]
 
     async def get_output_async(self):
         """Get output async."""
@@ -514,11 +522,23 @@ class RayExecutor(ExecutorBase):
         handle = ray.get(handle_ref)
         ray.get(self.workers[0].remote_log_end.remote(handle))
 
-    def _sort_workers(self, driver_ip: str, workers: List[RayWorkerWrapper]):
+    def _sort_workers(self, driver_ip: str, workers: list[RayWorkerWrapper]):
+        """Sort workers."""
+        # External bundle handling is only applicable when lmdeploy does NOT own
+        # the placement group. If lmdeploy owns the PG, we should continue to
+        # sort workers even if external bundle indices are specified.
+        if (not _envs.ray_external_pg_bundles) or self.ray_ctx.owned_pg:
+            return self._sort_workers_by_driver_then_worker_ip(driver_ip, workers)
+        else:
+            # do not sort when external bundle indices are specified and the
+            # placement group is externally managed
+            return workers
+
+    def _sort_workers_by_driver_then_worker_ip(self, driver_ip: str, workers: list[RayWorkerWrapper]):
         """Sort workers by ip."""
         worker_ips = ray.get([worker.get_node_ip.remote() for worker in workers])
 
-        ip_counts: Dict[str, int] = {}
+        ip_counts: dict[str, int] = {}
         for ip in worker_ips:
             ip_counts[ip] = ip_counts.get(ip, 0) + 1
 
@@ -544,7 +564,7 @@ class RayExecutor(ExecutorBase):
         workers = [item[0] for item in sorted_worker_ip_map]
         return workers
 
-    def _sort_workers_by_ip(self, ips, workers: List[RayWorkerWrapper]):
+    def _sort_workers_by_ip(self, ips, workers: list[RayWorkerWrapper]):
         worker_ips = ray.get([worker.get_node_ip.remote() for worker in workers])
 
         if len(ips) != len(workers):
@@ -566,21 +586,33 @@ class RayExecutor(ExecutorBase):
         sorted_workers = [item[0] for item in sorted_worker_ip_map]
         return sorted_workers
 
-    def _valid_bundle_id(self, bundle_id: int):
-        """Check if a bundle is valid only when self.use_external_ray=True."""
-        if (not self.ray_ctx.owned_pg and _envs.ray_external_pg_bundles
-                and bundle_id not in _envs.ray_external_pg_bundles):
-            return False
-        return True
-
     def _init_workers_ray(self, placement_group: PlacementGroup, worker_kwargs: dict):
         """Init worker ray."""
         device_str = get_device_str()
         bundle_indices = []
-        for bundle_id, bundle in enumerate(placement_group.bundle_specs):
-            if bundle.get(device_str, 0) and self._valid_bundle_id(bundle_id):
-                bundle_indices.append(bundle_id)
+        if not _envs.ray_external_pg_bundles:
+            for bundle_id, bundle in enumerate(placement_group.bundle_specs):
+                if bundle.get(device_str, 0):
+                    bundle_indices.append(bundle_id)
+        else:
+            # use external specified bundle indices，keep the order as well
+            bundle_indices = _envs.ray_external_pg_bundles.copy()
+            # validate external bundle indices
+            num_bundles = len(placement_group.bundle_specs)
+            for bundle_id in bundle_indices:
+                if bundle_id < 0 or bundle_id >= num_bundles:
+                    raise ValueError(f'External bundle index {bundle_id} is out of range. '
+                                     f'Placement group has {num_bundles} bundles (valid indices: 0-{num_bundles - 1}).')
+                bundle = placement_group.bundle_specs[bundle_id]
+                if not bundle.get(device_str, 0):
+                    raise ValueError(
+                        f'External bundle index {bundle_id} does not have required resource: {device_str}. '
+                        f'Available resources in this bundle: {dict(bundle)}')
         attn_tp = self.dist_config.attn_tp
+        if len(bundle_indices) < attn_tp:
+            raise ValueError(f'Not enough bundle indices for attention tensor parallelism. '
+                             f'Required: {attn_tp}, Provided: {len(bundle_indices)} '
+                             f'(bundle_indices: {bundle_indices}).')
         bundle_indices = bundle_indices[:attn_tp]
 
         workers = list()
@@ -603,11 +635,14 @@ class RayExecutor(ExecutorBase):
                     runtime_env=runtime_env,
                 )(RayWorkerWrapper).remote(**worker_kwargs)
             else:
+                runtime_env = dict()
+                runtime_env = _update_runtime_envs(runtime_env)
                 worker = ray.remote(
                     num_cpus=0,
                     num_gpus=0,
                     resources={device_str: 0.01},
                     scheduling_strategy=scheduling_strategy,
+                    runtime_env=runtime_env,
                 )(RayWorkerWrapper).remote(**worker_kwargs)
             workers.append(worker)
         return workers
@@ -628,40 +663,47 @@ class RayExecutor(ExecutorBase):
 
     def _init_ascend_distributed_environment(self, driver_ip):
         """Init ascend distributed environment."""
-        rank_table_file = _envs.ascend_rank_table_file
+        from collections import defaultdict
+
         set_rt_visable_devices_by_ray = _envs.ascend_set_rt_visable_devices_by_ray
+        self.workers = self._sort_workers(driver_ip, self.workers)
 
-        if rank_table_file:
-            # if rank table file is set, use it to get rank mapping, multiple nodes
-            rank_mapping, worker_ips, envs = get_ascend_device_rank_mapping(driver_ip)
-            rank_start = self.rank_offset
-            rank_end = rank_start + len(self.workers)
-            if rank_end > len(worker_ips):
-                raise ValueError(
-                    'Rank table world_size is smaller than required ranks for current dp_rank. '
-                    f'rank_table_world_size={len(worker_ips)}, required_rank_range=[{rank_start}, {rank_end})')
+        if set_rt_visable_devices_by_ray:
+            # Ray populated ASCEND_RT_VISIBLE_DEVICES per actor; no set_device.
+            return
 
-            # In dp mode each process only owns a slice of global ranks.
-            expected_worker_ips = worker_ips[rank_start:rank_end]
-            self.workers = self._sort_workers_by_ip(expected_worker_ips, self.workers)
+        worker_ips = ray.get([w.get_node_ip.remote() for w in self.workers])
+        is_multi_node_pg = len(set(worker_ips)) > 1
 
-            ray.get(
-                [worker.set_device.remote(rank_mapping[rank_start + idx]) for idx, worker in enumerate(self.workers)])
-            ray.get([worker.set_env.remote(envs) for worker in self.workers])
-        elif not set_rt_visable_devices_by_ray:
-            # if rank table file is not set, treat as single node
-            # simply set device by index, this is for single node, multiple devices
-            self.workers = self._sort_workers(driver_ip, self.workers)
-            ray.get([worker.set_device.remote(idx + self.rank_offset) for idx, worker in enumerate(self.workers)])
+        if is_multi_node_pg:
+            # Cross-node TP: each worker uses its index within its own node.
+            local_indices: list[int] = []
+            counts: dict[str, int] = defaultdict(int)
+            for ip in worker_ips:
+                local_indices.append(counts[ip])
+                counts[ip] += 1
+            ray.get([w.set_device.remote(local_indices[idx]) for idx, w in enumerate(self.workers)])
+            return
+
+        # Single-node PG below.
+        if 'ASCEND_RT_VISIBLE_DEVICES' in os.environ:
+            ray.get([w.set_device.remote(idx + self.rank_offset) for idx, w in enumerate(self.workers)])
         else:
-            self.workers = self._sort_workers(driver_ip, self.workers)
+            local_npu_count = torch.npu.device_count()
+            if local_npu_count <= 0:
+                raise RuntimeError(
+                    'torch.npu.device_count() returned a non-positive value; '
+                    'cannot derive local NPU offset. Please set '
+                    'ASCEND_RT_VISIBLE_DEVICES explicitly.')
+            local_offset = self.rank_offset % local_npu_count
+            ray.get([w.set_device.remote(idx + local_offset) for idx, w in enumerate(self.workers)])
 
     """ PD Disaggregation API Begin """
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.collective_rpc('p2p_initialize', (init_request, ))
 
-    def p2p_connect(self, remote_engine_id: str, conn_request: List[DistServeKVTransferEndpointInfo]):
+    def p2p_connect(self, remote_engine_id: str, conn_request: list[DistServeKVTransferEndpointInfo]):
         """Rdma connect."""
         return self.collective_rpc('p2p_connect', (
             remote_engine_id,

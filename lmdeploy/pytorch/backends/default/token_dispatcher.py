@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
 
 import torch
 
@@ -80,7 +79,7 @@ class AlltoAllTokenDispatcher(TokenDispatcherImpl):
         return num_tokens_per_local_expert
 
     def dispatch(self, hidden_states: torch.Tensor, topk_ids: torch.Tensor, probs: torch.Tensor,
-                 local_expert_indices) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+                 local_expert_indices) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         self.hidden_shape = hidden_states.shape
         self.topk_ids = topk_ids
         self.routing_map, self.topk_weights = super().indices_to_multihot(topk_ids, probs, self.num_experts)

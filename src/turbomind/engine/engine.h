@@ -3,6 +3,7 @@
 
 #include <memory>
 
+#include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/gateway.h"
 
 #include "src/turbomind/models/language_model.h"
@@ -12,6 +13,7 @@
 namespace turbomind {
 
 struct ScheduleMetrics;
+class VisionModel;
 
 class Engine {
 public:
@@ -26,16 +28,22 @@ public:
         return static_cast<bool>(impl_);
     }
 
-    Engine(DataType      dtype,
-           EngineParam   param,
-           LanguageModel model,
-           Context&      ctx,
-           Gateway&      gateway,
-           int           device_id,
-           int           queue_id,
-           int           phases);
+    Engine(EngineParam                  param,
+           ObjectAllocator              alloc,
+           CacheRegistry                cache_registry,
+           LanguageModel                model,
+           std::unique_ptr<VisionModel> vision_model,  // null for text-only checkpoints
+           Context&                     ctx,
+           Gateway&                     gateway,
+           int                          device_id,
+           int                          queue_id,
+           int                          phases);
 
     void Start();
+
+    // Wait for the engine loop to observe gateway shutdown. This intentionally
+    // leaves the executor queues open until every TP peer has exited its loop.
+    void Join();
 
     std::shared_ptr<ScheduleMetrics> GetScheduleMetrics();
 

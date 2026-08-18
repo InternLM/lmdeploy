@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional
 
 import torch
 import triton
@@ -102,7 +101,7 @@ def _quant_fp8_kernel(
         s_ptr += m_id_stride * stride_sm
 
 
-def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor, scale_fmt: Optional[str] = None):
+def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor, scale_fmt: str | None = None):
     """Quant online."""
     assert scale_fmt in (None, 'ue8m0')
     round_scale = 1 if scale_fmt == 'ue8m0' else 0
@@ -160,7 +159,7 @@ def quant_fp8(A: Tensor,
               group_size: int,
               dtype: torch.dtype = torch.float8_e4m3fn,
               trans_scale: bool = False,
-              scale_fmt: Optional[str] = None):
+              scale_fmt: str | None = None):
     """Quant fp8."""
     assert A.dim() == 2
     M, K = A.shape
@@ -168,16 +167,36 @@ def quant_fp8(A: Tensor,
     num_groups = K // group_size
     out = torch.empty_like(A, dtype=dtype)
     if trans_scale:
-        scales = A.new_empty(num_groups, M, dtype=torch.float32).T
+        # Keep M logically contiguous while padding the physical K-block pitch
+        # to the 16-byte alignment required by Hopper TMA descriptors.
+        scale_alignment = 16 // torch.float32.itemsize
+        aligned_m = triton.cdiv(M, scale_alignment) * scale_alignment
+        scales = torch.empty_strided((M, num_groups), (1, aligned_m), dtype=torch.float32, device=A.device)
     else:
         scales = A.new_empty(M, num_groups, dtype=torch.float32)
     return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt)
 
 
+def per_token_group_quant_fp8(A: Tensor,
+                              group_size: int,
+                              dtype: torch.dtype = torch.float8_e4m3fn,
+                              scale_fmt: str | None = None):
+    """Per-token-group FP8 quantization for tensors with arbitrary leading
+    dims."""
+    assert A.dim() >= 2
+    assert A.stride(-1) == 1, f'{A} groups must be contiguous'
+    M = A.numel() // A.size(-1)
+    K = A.size(-1)
+    assert K % group_size == 0
+    out = torch.empty_like(A, dtype=dtype)
+    scales = A.new_empty(*A.shape[:-1], K // group_size, dtype=torch.float32)
+    return _quant_fp8_launcher(A.view(M, K), group_size, out.view(M, K), scales.view(M, K // group_size), scale_fmt)
+
+
 def quant_fp8_tma(A: Tensor,
                   group_size: int,
                   dtype: torch.dtype = torch.float8_e4m3fn,
-                  scale_fmt: Optional[str] = None):
+                  scale_fmt: str | None = None):
     """Quant fp8 tma."""
     from lmdeploy.pytorch.third_party.deep_gemm import ceil_div, get_m_alignment_for_contiguous_layout
     assert A.dim() == 2

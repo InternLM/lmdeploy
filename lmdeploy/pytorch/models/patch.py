@@ -6,7 +6,7 @@ import inspect
 import os.path as osp
 import re
 import sys
-from typing import Any, Dict
+from typing import Any
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -16,12 +16,12 @@ from lmdeploy.utils import get_logger
 
 from ..config import ModelConfig
 from ..devices import get_device_manager
-from .module_map import CUSTOM_MODULE_MAP, DEVICE_SPECIAL_MODULE_MAP, MODULE_MAP
+from .module_map import CUSTOM_MODULE_MAP, DEVICE_SPECIAL_MODULE_MAP, MODULE_MAP, REMOVED_MODEL_MAP
 
 logger = get_logger('lmdeploy')
 
 
-def _get_rewrite_qualname(origin_qualname: str, module_map: Dict[str, str]) -> str:
+def _get_rewrite_qualname(origin_qualname: str, module_map: dict[str, str]) -> str:
     """Get rewrite module from origin module name.
 
     Args:
@@ -58,7 +58,7 @@ def _class_from_qualname(qualname: str) -> Any:
     return cls_type
 
 
-def _find_rewrite_module_qualname(model, module_map: Dict[str, str]):
+def _find_rewrite_module_qualname(model, module_map: dict[str, str]):
     """Find rewrite module."""
     module_name = inspect.getmodule(model).__name__
     class_name = model.__class__.__name__
@@ -93,7 +93,7 @@ def _find_rewrite_module_qualname(model, module_map: Dict[str, str]):
     return rewrite_qualname
 
 
-def get_rewrite_cls(model: torch.nn.Module, module_map: Dict[str, str] = None):
+def get_rewrite_cls(model: torch.nn.Module, module_map: dict[str, str] = None):
     """Get rewrite cls."""
     if module_map is None:
         module_map = _get_module_map()
@@ -133,13 +133,13 @@ def update_custom_module_map(module_map_path: str):
     if hasattr(custom_mod, 'MODULE_MAP'):
         has_map = True
         mod_map = custom_mod.MODULE_MAP
-        assert isinstance(mod_map, Dict)
+        assert isinstance(mod_map, dict)
         new_mod_map.update(mod_map)
 
     if hasattr(custom_mod, 'CUSTOM_MODULE_MAP'):
         has_map = True
         mod_map = custom_mod.CUSTOM_MODULE_MAP
-        assert isinstance(mod_map, Dict)
+        assert isinstance(mod_map, dict)
         new_mod_map.update(mod_map)
 
     if not has_map:
@@ -153,6 +153,15 @@ def update_custom_module_map(module_map_path: str):
     CUSTOM_MODULE_MAP.update(new_mod_map)
 
 
+def _raise_if_removed_model(arch: str):
+    """Raise a clear error for intentionally removed model families."""
+    family = REMOVED_MODEL_MAP.get(arch)
+    if family is None:
+        return
+    raise RuntimeError(f'{family} ({arch}) support has been removed from LMDeploy. '
+                       'Please use an older LMDeploy release or migrate to a newer supported model family.')
+
+
 def _get_model_class(config, module_map):
     """Get model class."""
     auto_map = getattr(config, 'auto_map', dict())
@@ -160,6 +169,7 @@ def _get_model_class(config, module_map):
         mapname = auto_map['AutoModelForCausalLM']
         if '.' in mapname:
             mapname = mapname.split('.')[-1]
+        _raise_if_removed_model(mapname)
         if mapname in module_map:
             qualname = module_map[mapname]
             module_cls = _class_from_qualname(qualname)
@@ -177,6 +187,7 @@ def _get_model_class(config, module_map):
         return module_cls
 
     for arch in architectures:
+        _raise_if_removed_model(arch)
         if arch in module_map:
             qualname = module_map[arch]
             module_cls = _class_from_qualname(qualname)
@@ -197,45 +208,36 @@ def build_model_from_hf_config(model_config: PretrainedConfig,
     if device is None:
         device = torch.device('cuda')
     model_cls = _get_model_class(model_config, module_map)
+    # update quant config
+    if build_model_ctx is not None and hasattr(model_cls, 'update_quant_config'):
+        build_model_ctx.quant_config = model_cls.update_quant_config(build_model_ctx.quant_config)
+
     with build_model_context(build_model_ctx):
         model = model_cls(model_config, ctx_mgr, dtype=dtype, device=device)
     return model.eval()
 
 
-def _patch_quantization_config(model_config: PretrainedConfig, model_format: str):
-    """Patch quantization config."""
-    if model_format is None:
-        return
-
-    if hasattr(model_config, 'quantization_config'):
-        logger.warning('Can not perform weight quantization on quantized model.')
-        return
-
-    if model_format == 'fp8':
-        logger.debug('Patch quantization config for fp8.')
-        from lmdeploy.pytorch.envs import scale_fmt
-        quantization_config = dict(quant_method='fp8', fmt='e4m3', weight_block_size=[128, 128], scale_fmt=scale_fmt)
-    else:
-        raise RuntimeError(f'Unsupported weight quantization method: {model_format}')
-    model_config.quantization_config = quantization_config
-
-
 @torch.inference_mode()
-def build_patched_model(config: ModelConfig,
-                        device: torch.device = None,
-                        model_format: str = None,
-                        build_model_ctx: 'BuildModelContext' = None):
+def build_patched_model(config: ModelConfig, device: torch.device = None, build_model_ctx: 'BuildModelContext' = None):
     """Build patched model."""
+    from lmdeploy.pytorch.backends import get_backend
+
     model_config = config.hf_config
-    llm_config = config.llm_config
-    _patch_quantization_config(llm_config, model_format)
     dtype = config.dtype
-    return build_model_from_hf_config(model_config, dtype=dtype, device=device, build_model_ctx=build_model_ctx)
+    ctx_mgr = StepContextManager(build_model_ctx)
+    with get_backend().model_build_context(ctx_mgr):
+        return build_model_from_hf_config(
+            model_config,
+            dtype=dtype,
+            device=device,
+            ctx_mgr=ctx_mgr,
+            build_model_ctx=build_model_ctx,
+        )
 
 
 @torch.inference_mode()
 def add_adapters(model: torch.nn.Module,
-                 adapters: Dict[str, str],
+                 adapters: dict[str, str],
                  dtype: torch.dtype = torch.float16,
                  device: torch.device = None):
     """Add adapters."""
@@ -353,3 +355,8 @@ def get_build_model_context() -> BuildModelContext:
     """Get build model context."""
     global BUILD_MODEL_CTX
     return BUILD_MODEL_CTX
+
+
+def add_prefix(name: str, prefix: str) -> str:
+    """Add prefix to module name."""
+    return name if not prefix else f'{prefix}.{name}'

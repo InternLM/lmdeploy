@@ -17,6 +17,8 @@ class VLAsyncEngine(AsyncEngine):
                  backend: Literal['turbomind', 'pytorch'] = 'turbomind',
                  backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
                  vision_config: VisionConfig | None = None,
+                 trust_remote_code: bool = False,
+                 allowed_media_domains: list[str] | None = None,
                  **kwargs) -> None:
         from lmdeploy.serve.processors import MultimodalProcessor
         from lmdeploy.utils import try_import_deeplink
@@ -24,16 +26,33 @@ class VLAsyncEngine(AsyncEngine):
 
         if backend == 'pytorch':
             try_import_deeplink(backend_config.device_type)
+        self.vl_encoder = ImageEncoder(model_path,
+                                       backend,
+                                       vision_config,
+                                       backend_config=backend_config,
+                                       trust_remote_code=trust_remote_code)
         if backend_config and backend_config.enable_prefix_caching:
-            backend_config.enable_prefix_caching = False
-            logger.warning('Prefix caching is disabled since LMDeploy hasn\'t support in on VL models yet')
-        self.vl_encoder = ImageEncoder(model_path, backend, vision_config, backend_config=backend_config)
-        super().__init__(model_path, backend=backend, backend_config=backend_config, **kwargs)
+            native_tm_vision = (backend == 'turbomind'
+                                and getattr(self.vl_encoder.model, '_turbomind_native_vision', False))
+            pytorch_new_preprocess = (backend == 'pytorch'
+                                      and getattr(self.vl_encoder, '_uses_new_preprocess', False))
+            if not (native_tm_vision or pytorch_new_preprocess):
+                backend_config.enable_prefix_caching = False
+                logger.warning('Prefix caching is disabled for this VL model path. '
+                               'Supported: TurboMind native-vision models and PyTorch new-preprocess '
+                               'multimodal inputs.')
+        super().__init__(model_path,
+                         backend=backend,
+                         backend_config=backend_config,
+                         trust_remote_code=trust_remote_code,
+                         allowed_media_domains=allowed_media_domains,
+                         **kwargs)
         # Update prompt_processor to support multimodal processing
         self.prompt_processor = MultimodalProcessor(self.tokenizer,
                                                     self.chat_template,
                                                     vl_encoder=self.vl_encoder,
-                                                    backend=backend)
+                                                    backend=backend,
+                                                    allowed_media_domains=allowed_media_domains)
         if self.model_name == 'base':
             raise RuntimeError(
                 'please specify chat template as guided in https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html#set-chat-template'  # noqa: E501

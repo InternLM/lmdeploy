@@ -5,80 +5,90 @@ import fire
 import yaml
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.utils import is_bf16_supported
+from lmdeploy.messages import SpeculativeConfig
 
 gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 
 
-def _is_bf16_supported_by_device():
-    """Check if bf16 is supported based on the current device."""
-    device = os.environ.get('DEVICE', 'cuda')
-    if device == 'ascend':
-        # For Ascend, bf16 support check would be different
-        # Placeholder implementation
-        return True
+def run_pipeline_chat_test(model_path, run_config, cases_path, is_pr_test: bool = False):
+    backend = run_config.get('backend')
+    communicator = run_config.get('communicator')
+    quant_policy = run_config.get('quant_policy')
+    extra_params = run_config.get('extra_params', {})
+    parallel_config = run_config.get('parallel_config', {})
+
+    if backend == 'pytorch':
+        backend_config = PytorchEngineConfig(quant_policy=quant_policy)
     else:
-        # For CUDA and default, use the existing check
-        return is_bf16_supported()
+        backend_config = TurbomindEngineConfig(communicator=communicator, quant_policy=quant_policy)
 
-
-def _clear_device_cache():
-    """Clear cache based on the current device type."""
-    device = os.environ.get('DEVICE', 'cuda')
-    if device == 'ascend':
-        try:
-            import torch_npu
-            torch_npu.npu.empty_cache()
-        except ImportError:
-            pass  # torch_npu not available
-    else:
-        import torch
-        torch.cuda.empty_cache()
-
-
-def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test, extra: object = None):
-
-    if 'pytorch' in backend_type:
-        backend_config = PytorchEngineConfig(tp=tp)
-    else:
-        backend_config = TurbomindEngineConfig(tp=tp)
-
-    # Add device_type based on DEVICE environment variable
-    device = os.environ.get('DEVICE', '')
-    if device:
-        backend_config.device_type = device
-
-    if 'lora' in backend_type:
-        backend_config.adapters = extra.get('adapters')
-    if 'kvint' in backend_type:
-        backend_config.quant_policy = extra.get('quant_policy')
-    if 'turbomind' in backend_type and extra is not None and 'communicator' in extra:
-        backend_config.communicator = extra.get('communicator')
-
-    if extra is not None and 'cache-max-entry-count' in extra and extra.get('cache-max-entry-count') is not None:
-        backend_config.cache_max_entry_count = extra.get('cache-max-entry-count')
-
-    if extra and extra.get('enable_prefix_caching', False):
-        backend_config.enable_prefix_caching = True
-
-    if 'w4' in model_path or ('4bits' in model_path or 'awq' in model_path.lower()):
+    # quant format
+    model_lower = model_path.lower()
+    if 'w4' in model_lower or '4bits' in model_lower or 'awq' in model_lower:
         backend_config.model_format = 'awq'
-    if 'gptq' in model_path.lower():
+    elif 'gptq' in model_lower:
         backend_config.model_format = 'gptq'
-    if not _is_bf16_supported_by_device():
-        backend_config.dtype = 'float16'
+
+    # Parallel config
+    for para_key in ('dp', 'ep', 'cp'):
+        if para_key in parallel_config:
+            setattr(backend_config, para_key, parallel_config[para_key])
+    if 'tp' in parallel_config and parallel_config['tp'] > 1:
+        backend_config.tp = parallel_config['tp']
+
+    speculative_config = None
+    spec_cfg = extra_params.pop('speculative_config', None)
+    if isinstance(spec_cfg, dict):
+        speculative_config = SpeculativeConfig(**spec_cfg)
+    else:
+        spec_kwargs = {}
+        for src, dst in (
+            ('speculative-algorithm', 'method'),
+            ('speculative-num-draft-tokens', 'num_speculative_tokens'),
+            ('speculative-draft-model', 'model'),
+        ):
+            if src in extra_params:
+                spec_kwargs[dst] = extra_params.pop(src)
+        if 'method' in spec_kwargs:
+            speculative_config = SpeculativeConfig(**spec_kwargs)
+
+    # Extra params
+    # Normalize CLI-style kebab-case keys to PytorchEngineConfig attribute
+    param_name_map = {'device': 'device_type', 'cache_block_seq_len': 'block_size'}
+    # YAML/CLI ``null`` means a bare flag (same as ``--enable-prefix-caching``).
+    # Fire may also leave it as the string ``'null'`` after shell escaping.
+    flag_true_on_null = {'enable_prefix_caching'}
+    set_attrs = set()
+    for key, value in extra_params.items():
+        attr_name = key.replace('-', '_')
+        attr_name = param_name_map.get(attr_name, attr_name)
+        if attr_name in flag_true_on_null and (value is None or value == 'null'):
+            value = True
+        try:
+            setattr(backend_config, attr_name, value)
+            set_attrs.add(attr_name)
+        except AttributeError:
+            print(f"Warning: Cannot set attribute '{attr_name}' on backend_config. Skipping.")
+
+    # setattr after construction does not re-run __post_init__, so keep
+    # kernel_block_size in sync with an overridden block_size (mirrors the
+    # default ``kernel_block_size == -1`` behaviour used by the CLI path).
+    if 'block_size' in set_attrs and 'kernel_block_size' not in set_attrs:
+        backend_config.kernel_block_size = backend_config.block_size
 
     print('backend_config config: ' + str(backend_config))
-    pipe = pipeline(model_path, backend_config=backend_config)
+    print('speculative_config config: ' + str(speculative_config))
+    pipe = pipeline(model_path, backend_config=backend_config, speculative_config=speculative_config,
+                    trust_remote_code=True)
 
     cases_path = os.path.join(cases_path)
     with open(cases_path) as f:
         cases_info = yaml.load(f.read(), Loader=yaml.SafeLoader)
 
     for case in cases_info.keys():
-        if ('coder' in model_path or 'CodeLlama' in model_path) and 'code' not in case:
-            continue
         if is_pr_test and case != 'memory_test':
+            continue
+        if case != 'code_testcase' and 'code' in model_path.lower():
             continue
         case_info = cases_info.get(case)
 
@@ -95,10 +105,6 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
               f'[caseresult {case} end]\n')
 
     pipe.close()
-    import gc
-
-    gc.collect()
-    _clear_device_cache()
 
 
 if __name__ == '__main__':

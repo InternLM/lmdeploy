@@ -11,29 +11,23 @@
 |              Llama3              |    8B, 70B     | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |             Llama3.1             |    8B, 70B     | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |     Llama3.2<sup>\[2\]</sup>     |     1B, 3B     | LLM  |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
-|             InternLM             |    7B - 20B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |            InternLM2             |    7B - 20B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |           InternLM2.5            |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |            InternLM3             |       8B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|       InternLM-XComposer2        |  7B, 4khd-7B   | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|      InternLM-XComposer2.5       |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |            Intern-S1             |      241B      | MLLM |    Yes    |   Yes   |   Yes   |  No   |
 |          Intern-S1-mini          |      8.3B      | MLLM |    Yes    |   Yes   |   Yes   |  No   |
 |          Intern-S1-Pro           |      1TB       | MLLM |    Yes    |    -    |    -    |  No   |
-|               Qwen               |   1.8B - 72B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |     Qwen1.5<sup>\[1\]</sup>      |  1.8B - 110B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |      Qwen2<sup>\[2\]</sup>       |   0.5B - 72B   | LLM  |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
 |            Qwen2-MoE             |    57BA14B     | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|              Qwen3               |   0.6B-235B    | LLM  |    Yes    |   Yes   |  Yes\*  |  Yes  |
 |     Qwen2.5<sup>\[2\]</sup>      |   0.5B - 72B   | LLM  |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
+|              Qwen3               |   0.6B-235B    | LLM  |    Yes    |   Yes   |  Yes\*  |  Yes  |
+|     Qwen3.5<sup>\[3\]</sup>      |   0.8B-397B    | LLM  |    Yes    |   Yes   |   No    |  Yes  |
 |     Mistral<sup>\[1\]</sup>      |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  No   |
 |             Mixtral              |  8x7B, 8x22B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |           DeepSeek-V2            |   16B, 236B    | LLM  |    Yes    |   Yes   |   Yes   |  No   |
 |          DeepSeek-V2.5           |      236B      | LLM  |    Yes    |   Yes   |   Yes   |  No   |
-|             Qwen-VL              |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |           DeepSeek-VL            |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|             Baichuan             |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|            Baichuan2             |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |            Code Llama            |    7B - 34B    | LLM  |    Yes    |   Yes   |   Yes   |  No   |
 |                YI                |    6B - 34B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |          LLaVA(1.5,1.6)          |    7B - 34B    | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -46,6 +40,7 @@
 |       MiniCPM-Llama3-V-2_5       |       -        | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |          MiniCPM-V-2_6           |       -        | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |               GLM4               |       9B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|          GLM-4.7-Flash           |      30B       | LLM  |    Yes    |   No    |   No    |  No   |
 |            CodeGeeX4             |       9B       | LLM  |    Yes    |   Yes   |   Yes   |   -   |
 |              Molmo               |    7B-D,72B    | MLLM |    Yes    |   Yes   |   Yes   |  No   |
 |             gpt-oss              |    20B,120B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -55,6 +50,7 @@
 ```{note}
 * [1] turbomind 引擎不支持 window attention。所以，对于应用了 window attention，并开启了对应的开关"use_sliding_window"的模型，比如 Mistral、Qwen1.5 等，在推理时，请选择 pytorch engine
 * [2] 当模型的 head_dim 非 128 时，turbomind 不支持它的 kv cache 4/8 bit 量化和推理。比如，llama3.2-1B，qwen2-0.5B，internvl2-1B 等等
+* [3] turbomind 目前暂不支持 Qwen3.5 系列的视觉编码器。
 ```
 
 ## PyTorchEngine CUDA 平台
@@ -67,24 +63,25 @@
 |            Llama3.1            |     8B, 70B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            Llama3.2            |     1B, 3B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |             Llama4             | Scout, Maverick | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
-|            InternLM            |    7B - 20B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |           InternLM2            |    7B - 20B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |          InternLM2.5           |       7B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |           InternLM3            |       8B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |           Intern-S1            |      241B       | MLLM |    Yes    |   Yes   |   Yes   | Yes  |   -   |
 |         Intern-S1-mini         |      8.3B       | MLLM |    Yes    |   Yes   |   Yes   | Yes  |   -   |
-|           Baichuan2            |       7B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  No   |
-|           Baichuan2            |       13B       | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|         Intern-S1-Pro          |       1TB       | MLLM |    Yes    |    -    |    -    |  -   |  No   |
+|       Intern-S2-Preview        |  35B-A3B, 397B  | MLLM |    Yes    |   No    |   No    |  No  |  No   |
+|        Intern-S2-Mobius        |       35B       | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |            ChatGLM2            |       6B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |               YI               |    6B - 34B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            Mistral             |       7B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            Mixtral             |   8x7B, 8x22B   | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
-|              QWen              |   1.8B - 72B    | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            QWen1.5             |   0.5B - 110B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |          QWen1.5-MoE           |      A2.7B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |             QWen2              |   0.5B - 72B    | LLM  |    Yes    |   Yes   |   No    | Yes  |  Yes  |
 |            Qwen2.5             |   0.5B - 72B    | LLM  |    Yes    |   Yes   |   No    | Yes  |  Yes  |
 |             Qwen3              |   0.6B - 235B   | LLM  |    Yes    |   Yes   |  Yes\*  |  -   |  Yes  |
+|            QWen3.5             |    0.8B-397B    | MLLM |    Yes    |   No    |   No    |  No  |  No   |
+|           Qwen3-Omni           |     30B-A3B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |           QWen3-Next           |       80B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |            QWen2-VL            |     2B, 7B      | MLLM |    Yes    |   Yes   |   No    |  No  |  Yes  |
 |           QWen2.5-VL           |    3B - 72B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
@@ -94,23 +91,23 @@
 |         DeepSeek-V2.5          |      236B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |          DeepSeek-V3           |      685B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |         DeepSeek-V3.2          |      685B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+|          DeepSeek-V4           |   284B, 1.6T    | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+|              Hy3               |    295B-A21B    | LLM  |    Yes    |   No    |   No    | Yes  |  No   |
 |          DeepSeek-VL2          |    3B - 27B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |            MiniCPM3            |       4B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |         MiniCPM-V-2_6          |       8B        | LLM  |    Yes    |   No    |   No    |  No  |  Yes  |
 |             Gemma              |      2B-7B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
-|           StarCoder2           |     3B-15B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |           Phi-3-mini           |      3.8B       | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |          Phi-3-vision          |      4.2B       | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |           Phi-4-mini           |      3.8B       | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |          CogVLM-Chat           |       17B       | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |          CogVLM2-Chat          |       19B       | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
-| LLaVA(1.5,1.6)<sup>\[2\]</sup> |     7B-34B      | MLLM |    No     |   No    |   No    |  No  |  No   |
+| LLaVA(1.5,1.6)<sup>\[1\]</sup> |     7B-34B      | MLLM |    No     |   No    |   No    |  No  |  No   |
 |         InternVL(v1.5)         |     2B-26B      | MLLM |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |           InternVL2            |     1B-76B      | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |        InternVL2.5(MPO)        |     1B-78B      | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |           InternVL3            |     1B-78B      | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |          InternVL3.5           |   1B-241BA28B   | MLLM |    Yes    |   Yes   |   Yes   |  No  |  No   |
-| Mono-InternVL<sup>\[1\]</sup>  |       2B        | MLLM |   Yes\*   |   Yes   |   Yes   |  -   |   -   |
 |            ChemVLM             |     8B-26B      | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
 |             Gemma2             |     9B-27B      | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |             Gemma3             |     1B-27B      | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
@@ -120,6 +117,9 @@
 |       GLM-4.1V-Thinking        |       9B        | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |            GLM-4.5             |      355B       | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |          GLM-4.5-Air           |      106B       | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
+|         GLM-4.7-Flash          |       30B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+|             GLM-5              |      754B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+|            GLM-5.2             |      754B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |           CodeGeeX4            |       9B        | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |          Phi-3.5-mini          |      3.8B       | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |          Phi-3.5-MoE           |     16x3.8B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
@@ -127,8 +127,7 @@
 |              SDAR              |    1.7B-30B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 
 ```{note}
-* [1] 目前，Mono-InternVL不支持FP16，因为数值不稳定。请改用BF16
-* [2] 自 0.6.4 之后，PyTorch 引擎移除了对 llava 模型原始格式的支持。我们建议使用它们对应的 transformers 格式的模型。这些模型可以在 https://huggingface.co/llava-hf 中找到
+* [1] 自 0.6.4 之后，PyTorch 引擎移除了对 llava 模型原始格式的支持。我们建议使用它们对应的 transformers 格式的模型。这些模型可以在 https://huggingface.co/llava-hf 中找到
 自 0.11.1 起，PytorchEngine 移除了 mllama 的支持
 ```
 

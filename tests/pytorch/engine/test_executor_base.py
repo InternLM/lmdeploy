@@ -1,0 +1,426 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+from types import SimpleNamespace
+
+import pytest
+import torch
+
+from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.pytorch.config import CacheConfig, StateCacheSpec
+from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as update_deepseek_v4_cache_config
+from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
+from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _CacheBlockSize
+
+
+class _RecordingExecutor(ExecutorBase):
+
+    def __init__(self, empty_init: bool):
+        super().__init__(
+            model_path='',
+            model_config=SimpleNamespace(sliding_window=None, states_shapes=None),
+            cache_config=SimpleNamespace(role=EngineRole.Hybrid),
+            backend_config=SimpleNamespace(),
+            dist_config=SimpleNamespace(dp=1, world_size=1),
+            misc_config=SimpleNamespace(empty_init=empty_init, memdecode_config=None),
+        )
+        self.calls = []
+
+    def build_model(self):
+        self.calls.append('build_model')
+
+    def update_configs(self):
+        self.calls.append('update_configs')
+
+    def build_graph_runner(self):
+        self.calls.append('build_graph_runner')
+
+    def build_cache_engine(self):
+        self.calls.append('build_cache_engine')
+
+    def warmup(self):
+        self.calls.append('warmup')
+
+
+def test_init_warms_up_model_by_default():
+    executor = _RecordingExecutor(empty_init=False)
+
+    executor.init()
+
+    assert executor.calls == [
+        'build_model',
+        'update_configs',
+        'build_graph_runner',
+        'build_cache_engine',
+        'warmup',
+    ]
+
+
+def test_init_skips_model_warmup_for_empty_init():
+    executor = _RecordingExecutor(empty_init=True)
+
+    executor.init()
+
+    assert executor.calls == [
+        'build_model',
+        'update_configs',
+        'build_graph_runner',
+        'build_cache_engine',
+    ]
+
+
+def test_get_num_gpu_blocks_without_spec_cache():
+    available_mem = 4096
+    cache_block_size = 256
+
+    num_gpu_blocks = ExecutorBase._get_num_gpu_blocks(available_mem, cache_block_size)
+
+    assert num_gpu_blocks == 16
+
+
+def test_get_num_gpu_blocks_with_spec_cache():
+    available_mem = 4096
+    cache_block_size = 256
+    spec_cache_block_size = 256
+
+    num_gpu_blocks = ExecutorBase._get_num_gpu_blocks(available_mem, cache_block_size, spec_cache_block_size)
+
+    assert num_gpu_blocks == 8
+
+
+def test_get_num_gpu_blocks_rejects_empty_cache_block():
+    with pytest.raises(RuntimeError, match='No enough gpu memory for kv cache.'):
+        ExecutorBase._get_num_gpu_blocks(available_mem=4096, cache_block_size=0)
+
+
+def test_sync_spec_cache_block_size_updates_kernel_block_size():
+    executor = object.__new__(ExecutorBase)
+    executor.cache_config = CacheConfig(max_batches=1,
+                                        block_size=32,
+                                        kernel_block_size=16,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0)
+    spec_cache_config = CacheConfig(max_batches=1,
+                                    block_size=64,
+                                    kernel_block_size=64,
+                                    num_cpu_blocks=0,
+                                    num_gpu_blocks=0)
+    executor.specdecode_config = SimpleNamespace(cache_config=spec_cache_config)
+
+    executor._sync_spec_cache_block_size()
+
+    assert spec_cache_config.block_size == 32
+    assert spec_cache_config.kernel_block_size == 16
+
+
+def test_adjust_block_size_uses_deepseek_v4_cache_hook_before_large_head_dim_rule():
+    executor = object.__new__(ExecutorBase)
+    executor.cache_config = CacheConfig(max_batches=1,
+                                        block_size=192,
+                                        kernel_block_size=64,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0)
+    executor.model_config = SimpleNamespace(k_head_dim=512,
+                                            use_flash_mla=False,
+                                            update_cache_config_func=update_deepseek_v4_cache_config)
+
+    executor._adjust_block_size()
+
+    assert executor.cache_config.block_size == 256
+    assert executor.cache_config.kernel_block_size == 256
+    assert executor.cache_config.window_size == -1
+
+
+def test_executor_disables_prefix_cache_with_generic_sliding_window():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0,
+                               enable_prefix_caching=True)
+    model_config = SimpleNamespace(sliding_window=4096, update_cache_config_func=None)
+
+    ExecutorBase(model_path='',
+                 model_config=model_config,
+                 cache_config=cache_config,
+                 backend_config=SimpleNamespace(),
+                 dist_config=SimpleNamespace(dp=1, world_size=1),
+                 misc_config=SimpleNamespace())
+
+    assert cache_config.window_size == 4096
+    assert not cache_config.enable_prefix_caching
+
+
+def test_executor_keeps_prefix_cache_after_deepseek_v4_window_normalization():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=192,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0,
+                               enable_prefix_caching=True)
+    model_config = SimpleNamespace(sliding_window=4096,
+                                   update_cache_config_func=update_deepseek_v4_cache_config)
+
+    executor = ExecutorBase(model_path='',
+                            model_config=model_config,
+                            cache_config=cache_config,
+                            backend_config=SimpleNamespace(),
+                            dist_config=SimpleNamespace(dp=1, world_size=1),
+                            misc_config=SimpleNamespace())
+
+    assert cache_config.enable_prefix_caching
+
+    executor._adjust_block_size()
+    executor._maybe_disable_unsupported_prefix_caching()
+
+    assert cache_config.block_size == 256
+    assert cache_config.kernel_block_size == 256
+    assert cache_config.window_size == -1
+    assert cache_config.enable_prefix_caching
+
+
+def test_executor_keeps_prefix_cache_with_spec_decode():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0,
+                               enable_prefix_caching=True)
+    model_config = SimpleNamespace(sliding_window=None)
+
+    ExecutorBase(model_path='',
+                 model_config=model_config,
+                 cache_config=cache_config,
+                 backend_config=SimpleNamespace(),
+                 dist_config=SimpleNamespace(dp=1, world_size=1),
+                 misc_config=SimpleNamespace(),
+                 specdecode_config=SimpleNamespace())
+
+    assert cache_config.enable_prefix_caching
+
+
+def test_executor_disables_prefix_cache_with_pd_role():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0,
+                               enable_prefix_caching=True,
+                               role=EngineRole.Prefill)
+    model_config = SimpleNamespace(sliding_window=None)
+
+    ExecutorBase(model_path='',
+                 model_config=model_config,
+                 cache_config=cache_config,
+                 backend_config=SimpleNamespace(),
+                 dist_config=SimpleNamespace(dp=1, world_size=1),
+                 misc_config=SimpleNamespace())
+
+    assert not cache_config.enable_prefix_caching
+
+
+def test_get_rank_cache_block_sizes_only_charges_spec_rank():
+    executor = object.__new__(ExecutorBase)
+    executor.dist_config = SimpleNamespace(attn_tp=2)
+
+    cache_block_sizes = executor._get_rank_cache_block_sizes(4, _CacheBlockSize(target=256, spec=128))
+
+    assert cache_block_sizes == [384, 256, 384, 256]
+
+
+def test_get_rank_cache_block_sizes_charges_all_ranks_when_spec_tp_matches_target():
+    executor = object.__new__(ExecutorBase)
+    executor.dist_config = SimpleNamespace(attn_tp=4)
+    executor.specdecode_config = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=4))
+
+    cache_block_sizes = executor._get_rank_cache_block_sizes(4, _CacheBlockSize(target=256, spec=128))
+
+    assert cache_block_sizes == [384, 384, 384, 384]
+
+
+def test_get_cache_block_sizes_uses_spec_tp(monkeypatch):
+    executor = object.__new__(ExecutorBase)
+    executor.dist_config = SimpleNamespace(attn_tp=4)
+    executor.cache_config = object()
+    executor.model_config = object()
+    executor.specdecode_config = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=4))
+    executor.misc_config = SimpleNamespace(memdecode_config=None)
+    spec_cache_config = object()
+    spec_model_config = object()
+    world_sizes = []
+
+    def fake_get_cache_block_size(cache_config, model_config, world_size):
+        world_sizes.append(world_size)
+        return 256 if model_config is executor.model_config else 128
+
+    monkeypatch.setattr(CacheEngine, 'get_cache_block_size', fake_get_cache_block_size)
+
+    cache_block_size = executor._get_cache_block_sizes(spec_cache_config, spec_model_config)
+
+    assert cache_block_size == _CacheBlockSize(target=256, spec=128)
+    assert world_sizes == [4, 4]
+
+
+def test_get_cache_block_sizes_includes_nested_memdecode_memory_model(monkeypatch):
+    executor = object.__new__(ExecutorBase)
+    memory_model_config = object()
+    executor.dist_config = SimpleNamespace(attn_tp=8)
+    executor.cache_config = object()
+    executor.model_config = object()
+    executor.misc_config = SimpleNamespace(
+        memdecode_config=SimpleNamespace(memory_model_config=memory_model_config))
+    executor.specdecode_config = None
+    calls = []
+
+    def fake_get_cache_block_size(cache_config, model_config, world_size):
+        calls.append((cache_config, model_config, world_size))
+        if model_config is memory_model_config:
+            return 64
+        return 256
+
+    monkeypatch.setattr(CacheEngine, 'get_cache_block_size', fake_get_cache_block_size)
+
+    cache_block_size = executor._get_cache_block_sizes(None, None)
+
+    assert cache_block_size == _CacheBlockSize(target=256, memory=64)
+    assert calls == [
+        (executor.cache_config, executor.model_config, 8),
+        (executor.cache_config, memory_model_config, 8),
+    ]
+
+
+def test_validate_memdecode_configs_rejects_specdecode():
+    executor = object.__new__(ExecutorBase)
+    executor.misc_config = SimpleNamespace(
+        memdecode_config=SimpleNamespace(memory_model_config=SimpleNamespace()))
+    executor.specdecode_config = SimpleNamespace()
+
+    with pytest.raises(ValueError, match='MemDecode and speculative decoding cannot be enabled together.'):
+        executor._validate_memdecode_configs()
+
+
+def test_validate_memdecode_configs_rejects_state_cache_mismatch():
+    executor = object.__new__(ExecutorBase)
+    executor.model_config = SimpleNamespace(states_shapes=[])
+    executor.misc_config = SimpleNamespace(
+        memdecode_config=SimpleNamespace(memory_model_config=SimpleNamespace(states_shapes=[(1, 2, 3)])))
+    executor.specdecode_config = None
+
+    with pytest.raises(ValueError, match='Base and memory model must both use SSM state caches or both not use them.'):
+        executor._validate_memdecode_configs()
+
+
+def test_update_num_gpu_blocks_can_be_limited_by_non_spec_rank():
+    executor = object.__new__(ExecutorBase)
+    executor.dist_config = SimpleNamespace(attn_tp=2)
+    executor.cache_config = CacheConfig(max_batches=1,
+                                        block_size=64,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0,
+                                        cache_max_entry_count=1.0)
+    spec_cache_config = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
+
+    executor._update_num_gpu_blocks([2048, 768], _CacheBlockSize(target=256, spec=256), spec_cache_config)
+
+    assert executor.cache_config.num_gpu_blocks == 3
+    assert spec_cache_config.num_gpu_blocks == 3
+
+
+def test_get_state_cache_mem_uses_prefix_cache_state_budget():
+    executor = object.__new__(ExecutorBase)
+    state_shapes = [((2, ), torch.float32)]
+    executor.cache_config = CacheConfig(max_batches=4,
+                                        block_size=64,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0,
+                                        states_shapes=state_shapes,
+                                        prefix_cache_state_budget=3)
+
+    mem = executor._get_state_cache_mem()
+
+    expected_num_state_caches = 4 + 2 + 3
+    expected_mem = StateCacheEngine.get_cache_state_size(state_shapes) * expected_num_state_caches
+    assert executor.cache_config.num_state_caches == expected_num_state_caches
+    assert mem == expected_mem
+
+
+def test_get_mem_state_cache_mem_uses_memory_model_state_specs():
+    executor = object.__new__(ExecutorBase)
+    state_specs = [StateCacheSpec('memory_state', (96, ), torch.float32, layer_ids=[1, 3])]
+    state_shapes = [(spec.shape, spec.dtype) for spec in state_specs]
+    memory_model_config = SimpleNamespace(states_shapes=state_shapes, state_cache_specs=state_specs, num_layers=4)
+    executor.cache_config = CacheConfig(max_batches=1,
+                                        block_size=64,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0,
+                                        num_state_caches=2)
+    executor.misc_config = SimpleNamespace(
+        memdecode_config=SimpleNamespace(memory_model_config=memory_model_config))
+
+    mem = executor._get_mem_state_cache_mem()
+
+    expected = StateCacheEngine.get_cache_state_size(
+        state_shapes, state_specs=state_specs, num_layers=memory_model_config.num_layers) * 2
+    assert mem == expected
+
+
+def test_get_state_cache_mem_keeps_ssm_prefix_cache_enabled_without_extra_budget():
+    executor = object.__new__(ExecutorBase)
+    state_shapes = [((2, ), torch.float32)]
+    executor.cache_config = CacheConfig(max_batches=4,
+                                        block_size=64,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0,
+                                        states_shapes=state_shapes,
+                                        enable_prefix_caching=True,
+                                        prefix_cache_state_budget=0)
+
+    executor._get_state_cache_mem()
+
+    assert executor.cache_config.num_state_caches == 4 + 2
+    assert executor.cache_config.enable_prefix_caching
+
+
+def test_get_state_cache_mem_keeps_budgeted_ssm_prefix_cache_enabled():
+    executor = object.__new__(ExecutorBase)
+    state_shapes = [((2, ), torch.float32)]
+    executor.cache_config = CacheConfig(max_batches=4,
+                                        block_size=64,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0,
+                                        states_shapes=state_shapes,
+                                        enable_prefix_caching=True,
+                                        prefix_cache_state_budget=2)
+
+    executor._get_state_cache_mem()
+
+    assert executor.cache_config.num_state_caches == 4 + 2 + 2
+    assert executor.cache_config.enable_prefix_caching
+
+
+def test_get_state_cache_mem_leaves_non_ssm_prefix_cache_enabled():
+    executor = object.__new__(ExecutorBase)
+    executor.cache_config = CacheConfig(max_batches=4,
+                                        block_size=64,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0,
+                                        enable_prefix_caching=True,
+                                        prefix_cache_state_budget=0)
+
+    mem = executor._get_state_cache_mem()
+
+    assert mem == 0
+    assert executor.cache_config.enable_prefix_caching
+
+
+def test_build_cache_config_carries_prefix_cache_state_budget():
+    engine_config = PytorchEngineConfig(max_batch_size=4,
+                                        prefix_cache_state_budget=3,
+                                        prefix_cache_decode_state_interval=128)
+
+    cache_config = ConfigBuilder.build_cache_config(engine_config)
+
+    assert cache_config.prefix_cache_state_budget == 3
+    assert cache_config.prefix_cache_decode_state_interval == 128
+
+
+def test_engine_config_rejects_unaligned_prefix_cache_decode_state_interval():
+    with pytest.raises(AssertionError):
+        PytorchEngineConfig(max_batch_size=4, prefix_cache_decode_state_interval=96)

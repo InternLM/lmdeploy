@@ -1,10 +1,9 @@
 from functools import lru_cache
-from typing import List
 
 from transformers import AutoTokenizer
 
 
-def parse_sse_stream(content: str) -> list:
+def parse_sse_stream(content: str) -> list[str]:
     """Parse SSE (Server-Sent Events) stream content into a list of events.
 
     Each event is either a JSON string or "[DONE]".
@@ -31,7 +30,7 @@ def _load_tokenizer_cached(model_path: str):
         raise RuntimeError(f"Failed to load tokenizer from '{model_path}': {e}")
 
 
-def encode_text(model_path: str, text: str) -> List[int]:
+def encode_text(model_path: str, text: str) -> list[int]:
     tokenizer = _load_tokenizer_cached(model_path)
 
     encoded = tokenizer.encode(text)

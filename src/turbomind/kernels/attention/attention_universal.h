@@ -16,7 +16,11 @@
 
 namespace turbomind {
 
-template<class Arch_, class Mainloop, class CacheIteratorFactory_, class CtaMap_>
+namespace attention {
+struct DecodingCtaMap;
+}  // namespace attention
+
+template<class Arch_, class Mainloop, class CacheIteratorFactory_, class CtaMap_, bool Causal_ = true>
 struct AttentionUniversal {
 
     using T   = typename Mainloop::T;
@@ -29,7 +33,8 @@ struct AttentionUniversal {
 
     using Arch = Arch_;
 
-    static constexpr int kWarpCount = Impl::kWarpCount;
+    static constexpr int  kWarpCount = Impl::kWarpCount;
+    static constexpr bool kCausal    = Causal_;
 
     using ParamType = AttentionParams<T>;
 
@@ -49,7 +54,9 @@ struct AttentionUniversal {
 
     using SharedStorage = typename Mainloop::SharedStorage;
 
-    static constexpr bool kProcessKV = CTA_Q == 1;
+    // Only process KV inline during decoding (DecodingCtaMap), not during context attention
+    // (AttentionCtaMap), even when CTA_Q == 1 (e.g. SIMT kernels).
+    static constexpr bool kProcessKV = std::is_same_v<CtaMap, attention::DecodingCtaMap>;
 
     const int q_group_size_;
     const int q_head_per_cta_;
@@ -73,10 +80,14 @@ struct AttentionUniversal {
     __device__ void ApplyBias(
         VecQ& vec_Q, VecKV& vec_K, VecKV& vec_V, const ParamType& params, int head_idx, int kv_head_idx, int2 offset)
     {
-        using Map              = typename Impl::ThreadMapQ;
+        using Map = typename Impl::ThreadMapQ;
+
         constexpr int kVecSize = Map::kAccessC;
         constexpr int ITER_C   = Map::kIterC;
         constexpr int ITER_S   = Map::kIterS;
+
+        constexpr bool HAS_V = kHeadDim != 576;
+
         if constexpr (kProcessKV) {
             Array<T, kVecSize> bias_K[ITER_C];
             Array<T, kVecSize> bias_V[ITER_C];
@@ -87,7 +98,7 @@ struct AttentionUniversal {
                 if (params.k_bias) {
                     Ldg(bias_K[c], &params.k_bias[k_idx]);
                 }
-                if (params.v_bias) {
+                if (params.v_bias && HAS_V) {
                     Ldg(bias_V[c], &params.v_bias[k_idx]);
                 }
             }
@@ -97,7 +108,7 @@ struct AttentionUniversal {
                 if (params.k_bias) {
                     vec_K[0][c] = vec_K[0][c] + bias_K[c];
                 }
-                if (params.v_bias) {
+                if (params.v_bias && HAS_V) {
                     vec_V[0][c] = vec_V[0][c] + bias_V[c];
                 }
             }
@@ -179,6 +190,8 @@ struct AttentionUniversal {
         constexpr int ITER_C = Map::kIterC;
         constexpr int ITER_S = Map::kIterS;
 
+        constexpr bool HAS_V = kHeadDim != 576;
+
         Vec vec_Q[ITER_S][ITER_C]{};  // [QxH, D]
         Vec vec_K[1][ITER_C];
         Vec vec_V[1][ITER_C];
@@ -203,7 +216,9 @@ struct AttentionUniversal {
                     if constexpr (kProcessKV) {  // duplicate loads in s
                         if (s == 0) {
                             Ldg(vec_K[0][c], &params.k[k_idx]);
-                            Ldg(vec_V[0][c], &params.v[k_idx]);
+                            if constexpr (HAS_V) {
+                                Ldg(vec_V[0][c], &params.v[k_idx]);
+                            }
                         }
                     }
                 }
@@ -219,11 +234,12 @@ struct AttentionUniversal {
             rope.init(di);
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
-                const int ti = (offset.y + s * Map::kDeltaS) / CTA_H + query_idx + history_len;
-                rope.apply(vec_Q[s][c], ti);
+                const int qi = (offset.y + s * Map::kDeltaS) / CTA_H + query_idx;
+                const int ti = qi + history_len;
+                rope.apply(vec_Q[s][c], ti, qi);
                 if constexpr (kProcessKV) {
                     if (s == 0) {
-                        rope.apply(vec_K[0][c], ti);
+                        rope.apply(vec_K[0][c], ti, qi);
                     }
                 }
             }
@@ -245,6 +261,12 @@ struct AttentionUniversal {
             const int qi = offset.y / CTA_H;
             const int ti = history_len;
 
+            // Read-only prefix: skip the KV store when this position falls inside a
+            // leading read-only logical block whose KV is already valid.
+            const int logical_block_size = params.block_iter_params.block_len * (int)params.cp_size;
+            const int readonly_len =
+                params.readonly_block_num ? params.readonly_block_num[batch_idx] * logical_block_size : 0;
+
             int local_ti, local_ti_rank;
             local_ti = params.cp_size.divmod(local_ti_rank, ti);
 
@@ -253,7 +275,9 @@ struct AttentionUniversal {
 
             if constexpr (!std::is_same_v<T, Tkv>) {
                 warp_stats<Map::kWarpThreadC>(param_K, vec_K, bitsof<Tkv>);
-                warp_stats<Map::kWarpThreadC>(param_V, vec_V, bitsof<Tkv>);
+                if constexpr (HAS_V) {
+                    warp_stats<Map::kWarpThreadC>(param_V, vec_V, bitsof<Tkv>);
+                }
             }
 
             Array<Tkv, kVecSize> out_K[1][ITER_C];
@@ -264,29 +288,37 @@ struct AttentionUniversal {
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 out_K[0][c] = conv_K(vec_K[0][c]);
-                out_V[0][c] = conv_V(vec_V[0][c]);
+                if constexpr (HAS_V) {
+                    out_V[0][c] = conv_V(vec_V[0][c]);
+                }
             }
 
-            iterator.block_head_.with(
-                iterator.block_ptrs_, local_ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
-                    if (local_ti_rank != params.cp_rank) {
-                        return;
-                    }
-                    PRAGMA_UNROLL
-                    for (int c = 0; c < ITER_C; ++c) {
-                        const int di = offset.x + c * Map::kDeltaC;
-                        if (qi < CTA_Q) {
-                            Store(&k_cache[di], out_K[0][c]);
-                            Store(&v_cache[di], out_V[0][c]);
+            if (ti >= readonly_len) {
+                iterator.block_head_.with(
+                    iterator.block_ptrs_, local_ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
+                        if (local_ti_rank != params.cp_rank) {
+                            return;
                         }
-                    }
-                    if constexpr (!std::is_same_v<T, Tkv>) {
-                        if (qi < CTA_Q && offset.x == 0) {
-                            StoreQuantParam<Tkv>(k_param, param_K[0]);
-                            StoreQuantParam<Tkv>(v_param, param_V[0]);
+                        PRAGMA_UNROLL
+                        for (int c = 0; c < ITER_C; ++c) {
+                            const int di = offset.x + c * Map::kDeltaC;
+                            if (qi < CTA_Q) {
+                                Store(&k_cache[di], out_K[0][c]);
+                                if constexpr (HAS_V) {
+                                    Store(&v_cache[di], out_V[0][c]);
+                                }
+                            }
                         }
-                    }
-                });
+                        if constexpr (!std::is_same_v<T, Tkv>) {
+                            if (qi < CTA_Q && offset.x == 0) {
+                                StoreQuantParam<Tkv>(k_param, param_K[0]);
+                                if constexpr (HAS_V) {
+                                    StoreQuantParam<Tkv>(v_param, param_V[0]);
+                                }
+                            }
+                        }
+                    });
+            }
 
             __syncthreads();
         }
@@ -372,11 +404,15 @@ struct AttentionUniversal {
             return (local_ti + (local_ti_rank > rank ? 1 : 0));
         };
 
-        const int last_K = history_len + min(query_idx + CTA_Q, input_len);
+        int first_K = 0;
+        int last_K  = context_len;
+        if constexpr (kCausal) {
+            last_K  = history_len + min(query_idx + CTA_Q, input_len);
+            first_K = max(history_len + query_idx - (params.window_size - 1), 0);
+        }
         const int last_K_tile =
             (get_cp_len(last_K, 0) - 1) / CTA_S + 1;  // past-the-end index to past-the-end tile index conversion
 
-        const int first_K      = max(history_len + query_idx - (params.window_size - 1), 0);
         const int first_K_tile = get_cp_len(first_K, 0) / CTA_S;
 
         const int tile_count = last_K_tile - first_K_tile;
@@ -423,22 +459,28 @@ struct AttentionUniversal {
 
         int tile_iter = iter_end - iter_begin;
 
-        //    min(Q) >= max(K)
-        // -> offset_Q >= offset_K + CTA_S - x * CTA_S
-        // -> x * CTA_S >= offset_K - offset_Q + CTA_S
-        int mask_iter_back = cdiv(max(0, offset_K - offset_Q + CTA_S), CTA_S);
-        //    max(Q) < min(K) + w
-        // -> offset_Q + CTA_Q - 1 < offset_K - tile_iter * CTA_S + x * CTA_S + w
-        // -> x * CTA_S >= offset_Q + CTA_Q - offset_K + tile_iter * CTA_S - w
-        int mask_iter_front = cdiv(max(0, offset_Q + CTA_Q - offset_K + tile_iter * CTA_S - params.window_size), CTA_S);
+        // The highest K tile may be partial in non-causal mode. It still needs
+        // masking so zero-filled OOB lanes do not enter softmax as valid scores.
+        int mask_iter_back  = 1;
+        int mask_iter_front = 0;
+        if constexpr (kCausal) {
+            //    min(Q) >= max(K)
+            // -> offset_Q >= offset_K + CTA_S - x * CTA_S
+            // -> x * CTA_S >= offset_K - offset_Q + CTA_S
+            mask_iter_back = cdiv(max(0, offset_K - offset_Q + CTA_S), CTA_S);
+            //    max(Q) < min(K) + w
+            // -> offset_Q + CTA_Q - 1 < offset_K - tile_iter * CTA_S + x * CTA_S + w
+            // -> x * CTA_S >= offset_Q + CTA_Q - offset_K + tile_iter * CTA_S - w
+            mask_iter_front = cdiv(max(0, offset_Q + CTA_Q - offset_K + tile_iter * CTA_S - params.window_size), CTA_S);
 
-        if (params.cp_size > 1) {
-            mask_iter_back =
-                cdiv(max(0, params.cp_size * (offset_K + CTA_S) - offset_Q + params.cp_rank), params.cp_size * CTA_S);
-            mask_iter_front = cdiv(max(0,
-                                       offset_Q + CTA_Q - params.window_size - params.cp_rank
-                                           - params.cp_size * (offset_K - tile_iter * CTA_S)),
-                                   params.cp_size * CTA_S);
+            if (params.cp_size > 1) {
+                mask_iter_back  = cdiv(max(0, params.cp_size * (offset_K + CTA_S) - offset_Q + params.cp_rank),
+                                      params.cp_size * CTA_S);
+                mask_iter_front = cdiv(max(0,
+                                           offset_Q + CTA_Q - params.window_size - params.cp_rank
+                                               - params.cp_size * (offset_K - tile_iter * CTA_S)),
+                                       params.cp_size * CTA_S);
+            }
         }
 
 #if 0
@@ -465,7 +507,8 @@ struct AttentionUniversal {
 
         Mainloop mainloop;
         mainloop.SetCpInfo(params.cp_size, params.cp_rank);
-        mainloop(frag_Q,
+        mainloop(std::integral_constant<bool, kCausal>{},
+                 frag_Q,
                  cache_iter,
                  frag_O,
                  frag_M,

@@ -33,18 +33,6 @@ void ModelRequest::Cancel()
     }
 }
 
-void ModelRequest::End(std::function<void(int)> cb, uint64_t session_id)
-{
-    auto r = std::make_shared<Request>();
-
-    r->id = r->session.id = session_id;
-    r->session.kill_flag  = true;
-
-    r->end_cb = std::move(cb);
-
-    gateway_->kill(std::move(r));
-}
-
 auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> OutputParam
 {
     inputs_  = std::make_shared<TensorMap>();
@@ -72,7 +60,7 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     // is used instead
     const int max_seq_len = session_len_ + 1;
     const int max_out_len = std::min(output_len, session_len_) + 1;
-    // This does not include histroy length in interactive mode
+    // Sized by `session_len` since the actual history length isn't known here
     const int max_in_out_len = std::min(input_len + output_len, session_len_) + 1;
 
     for (auto& [k, v] : *param.tensors) {
@@ -85,6 +73,10 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     if (param.gen_cfg.output_logits) {
         const int len = param.gen_cfg.output_logits == GenerationConfig::kAll ? max_in_out_len : max_out_len;
         add(outputs_, "logits", data_type_, kCPU, len, vocab_size_);
+    }
+
+    if (param.gen_cfg.return_ppl) {
+        add(outputs_, "ce_loss", data_type_v<float>, kCPU, 1);
     }
 
     if (param.gen_cfg.output_last_hidden_state) {
@@ -106,6 +98,7 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     for (const auto& [k, v] : *outputs_) {
         r->outputs.emplace(k, v);
     }
+    r->mm_inputs = param.mm_inputs;
 
     auto state = std::make_shared<AtomicRequestState>();
 
@@ -115,12 +108,10 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
         metrics->scheduled_time.store(0, std::memory_order_relaxed);
     }
 
-    if (param.session.start_flag) {
-        session_id_ = param.session.id;
-    }
+    session_id_ = param.session.id;
 
     r->id            = param.session.id;
-    r->session       = param.session;
+    r->step          = param.session.step;
     r->gen_cfg       = param.gen_cfg;
     r->stream_output = param.stream_output;
     r->forward_cb    = std::move(cb);

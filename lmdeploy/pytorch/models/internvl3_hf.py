@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -13,14 +14,14 @@ from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.models.utils.micro_batch import enable_micro_batch, split_batch
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn import LayerNorm, RMSNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_o_proj, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import build_model_from_hf_config
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin, vlm_model
+from .utils.model import DeployModelMixinV1, vlm_model
 
 
 @torch.compile(dynamic=True)
@@ -218,7 +219,7 @@ class InternVLVisionAttention(nn.Module):
         eps = self.config.layer_norm_eps
         return post_rms_norm(q, k, self.q_norm.weight, self.k_norm.weight, variance, eps, self.embed_dim, dtype)
 
-    def qkv_norm(self, q: torch.Tensor, k: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def qkv_norm(self, q: torch.Tensor, k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         import lmdeploy.pytorch.distributed as dist
         q_shape = q.shape
         k_shape = k.shape
@@ -387,7 +388,7 @@ class InternVLVisionModel(nn.Module):
 
     def forward(
         self,
-        pixel_values: Optional[torch.FloatTensor] = None,
+        pixel_values: torch.FloatTensor | None = None,
     ):
         """forward."""
         assert pixel_values.dim() == 4
@@ -439,7 +440,7 @@ class InternVLMultiModalProjector(nn.Module):
         return hidden_states
 
 
-class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
+class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -453,6 +454,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
         self.vision_tower = InternVLVisionModel(config.vision_config, dtype=dtype, device=device)
         self.multi_modal_projector = InternVLMultiModalProjector(config, dtype=dtype, device=device)
         self.language_model = build_model_from_hf_config(config.text_config, dtype=dtype, device=device)
+        self.lm_head = self.language_model.lm_head
         self.vision_feature_layer = config.vision_feature_layer
         self.vision_feature_select_strategy = config.vision_feature_select_strategy
 
@@ -485,10 +487,6 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
         torch._dynamo.mark_dynamic(pixel_values, dims)
         self.has_compiled_vit = True
 
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.language_model.get_logits(hidden_states)
-
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.language_model.get_input_embeddings()
@@ -496,7 +494,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
     def get_image_features(
         self,
         pixel_values: torch.FloatTensor,
-        vision_feature_layer: Union[int, List[int]],
+        vision_feature_layer: int | list[int],
         vision_feature_select_strategy: str,
         **kwargs,
     ):
@@ -506,7 +504,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
         Args:
             pixel_values (`torch.FloatTensor]` of shape `(batch_size, channels, height, width)`)
                The tensors corresponding to the input images.
-            vision_feature_layer (`int` or `List[int]`):
+            vision_feature_layer (`int` or `list[int]`):
                 Layer index or list of layer indices to extract features from.
         Returns:
             vision_features (`torch.Tensor`): Image feature tensor of shape `(num_images, image_length, embed_dim)`.
@@ -577,7 +575,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         pixel_values: torch.Tensor = None,
         image_mask: torch.Tensor = None,
@@ -613,7 +611,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -656,17 +654,18 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
             inputs_embeds=inputs_embeds,
         )
 
-    def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], adapter_id: int):
+    def load_lora_weights(self, weights: Iterable[tuple[str, torch.Tensor]], adapter_id: int):
         """Load lora weights."""
 
-        if hasattr(self.model.language_model, 'load_lora_weights'):
-            return self.model.language_model.load_lora_weights(weights, adapter_id)
+        if hasattr(self.language_model, 'load_lora_weights'):
+            return self.language_model.load_lora_weights(weights, adapter_id)
         else:
             from lmdeploy.pytorch.adapter.adapter import load_lora_weights
 
-            return load_lora_weights(weights, adapter_id)
+            return load_lora_weights(self, weights, adapter_id)
 
-    def rename_weight(self, name: str) -> str:
+    @classmethod
+    def rename_weight(cls, name: str) -> str:
         """Rename weight."""
         if name == 'lm_head.weight':
             return 'language_model.lm_head.weight'
@@ -676,7 +675,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
             return name[len('model.'):]
         return name
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         lang_prefix = 'language_model.'
@@ -722,8 +721,8 @@ class InternVLProcessor(BaseModelInputProcessor):
         self.dtype = dtype
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
@@ -738,10 +737,10 @@ class InternVLProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad,
-                                       meta=dict(image_token_id=image_token_id))
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=offset,
+                                     end=offset + num_pad,
+                                     meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

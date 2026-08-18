@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 from contextlib import redirect_stdout
-from typing import Dict, List
 
 import torch
 from transformers import AutoConfig
@@ -49,7 +48,7 @@ class DeepSeek2VisionModel(VisionModel):
             return arch == cls._arch
         return False
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         check_trans_version()
         check_deepseek_vl2_install()
         from deepseek_vl2.models.processing_deepseek_vl_v2 import DeepseekVLV2Processor
@@ -58,30 +57,32 @@ class DeepSeek2VisionModel(VisionModel):
         with open(os.devnull, 'w') as devnull:
             with redirect_stdout(devnull):
                 self.image_processor = DeepseekVLV2Processor.from_pretrained(self.model_path,
-                                                                             image_token='<IMAGE_TOKEN>')
+                                                                             image_token='<IMAGE_TOKEN>',
+                                                                             trust_remote_code=trust_remote_code)
                 self.image_token_id = self.image_processor.image_token_id
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         # TODO, implement for tubomind engine
         raise NotImplementedError()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to the spec of `super.preprocess()"""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
 
         # convert to upstream api formats
-        images = [img_parameter[0] for img_parameter in images]
+        images = [item[1] for item in images]
         formatted_messages = []
         for message in messages:
             text_content = DeepSeek2VisionModel.proc_single_message(message)
-            image_content = [x['image'] for x in message['content'] if x['type'] == 'image']
+            mm_items = self.collect_multimodal_items([message])
+            image_content = [data for modality, data, _ in mm_items if modality == 'image']
             formatted_messages.append(dict(role=message['role'], content=text_content, images=image_content))
 
         # NOTE: DeepseekVLV2Processor inputs
-        # conversations (List[Dict]): conversations with a list of messages;
-        # images (List[ImageType]): the list of images;
+        # conversations (list[dict]): conversations with a list of messages;
+        # images (list[ImageType]): the list of images;
         # force_batchify (bool): force batchify the inputs;
         # inference_mode (bool): if True, then remove the last eos token;
         prepare = self.image_processor(conversations=formatted_messages,
@@ -103,12 +104,12 @@ class DeepSeek2VisionModel(VisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -147,8 +148,9 @@ class DeepSeek2VisionModel(VisionModel):
         return content
 
     @staticmethod
-    def proc_messages(messages, chat_template, sequence_start):
+    def proc_messages(messages, chat_template, tools=None, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
@@ -156,13 +158,13 @@ class DeepSeek2VisionModel(VisionModel):
             if content is None:
                 continue
             prompt_messages.append(dict(role='user', content=content))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+        prompt = chat_template.messages2prompt(prompt_messages, tools=tools, **chat_template_kwargs)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_pytorch(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_turbomind(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer)

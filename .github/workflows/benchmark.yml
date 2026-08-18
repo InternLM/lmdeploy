@@ -17,37 +17,53 @@ on:
         required: true
         description: 'Set benchmark type. Default is "["longtext", "throughput", "api_server", "prefixcache"]"'
         type: string
-        default: "['apiserver', 'throughput', 'longtext', 'prefixcache']"
+        default: "['apiserver', 'mllm_apiserver', 'throughput', 'longtext', 'prefixcache']"
+      backend:
+        required: true
+        description: 'Set backend filter. Default is "["turbomind", "pytorch"]"'
+        type: string
+        default: "['turbomind', 'pytorch']"
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
         type: boolean
         default: false
+      docker_tag:
+        required: true
+        description: 'Docker tag'
+        type: string
+        default: 'latest-cu12.8'
+      result_tag:
+        required: true
+        description: 'result_tag if is not none, benchmark results will be uploaded to feishu'
+        type: string
+        default: "default"
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
-  REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
-  ALLURE_REPORT_DIR: /nvme/qa_test_models/benchmark-reports/allure_report/${{ github.run_id }}
-  TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ github.run_id }}
+  REPORT_DIR: /nvme/qa_test_models/benchmark_report/${{ inputs.repo_ref }}_${{ github.run_id }}
+  ALLURE_REPORT_DIR: /nvme/qa_test_models/benchmark_report/allure_report/${{ inputs.repo_ref }}_${{ github.run_id }}
+  TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  RUN_ID: ${{ inputs.repo_ref }}_${{ github.run_id }}
 
 jobs:
   linux-build:
     if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py310]
+        pyver: [py312]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
-      PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.8
+      PLAT_NAME: manylinux_2_28_x86_64
+      DOCKER_TAG: manylinux_2_28-cuda12.8
     steps:
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main
         with:
           # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
           tool-cache: false
@@ -87,7 +103,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 50
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -111,7 +127,7 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py310
+          name: my-artifact-${{ github.run_id }}-py312
       - name: Copy Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
@@ -133,6 +149,7 @@ jobs:
       matrix:
         benchmark_type: ${{fromJSON(github.event.inputs.benchmark_type)}}
         gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
+        transformers: ["", "legacy"]
         include:
           - n: 8
             gpu_num: gpu_num_1
@@ -142,9 +159,11 @@ jobs:
             gpu_num: gpu_num_4
           - n: 1
             gpu_num: gpu_num_8
+    env:
+      TEST_ENV: ${{ matrix.transformers }}
     timeout-minutes: 480
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -168,44 +187,47 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+      - name: Downgrade transformers
+        if: ${{matrix.transformers == 'legacy'}}
+        run: |
+          pip install transformers==4.57.6
       - name: Check env
         run: |
           python3 -m pip list
           lmdeploy check_env
-      - name: Run other benchmark
+      - name: Run other benchmark - all
+        if: contains(fromJson(github.event.inputs.backend), 'turbomind') && contains(fromJson(github.event.inputs.backend), 'pytorch')
         run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} --run_id ${{ github.run_id }} -m '${{matrix.gpu_num}} and not pr_test' --alluredir=${{env.ALLURE_REPORT_DIR}}
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.gpu_num}} and not pr_test and not function' --alluredir=${{env.ALLURE_REPORT_DIR}}
+      - name: Run other benchmark - turbomind
+        if: contains(fromJson(github.event.inputs.backend), 'turbomind') && !contains(fromJson(github.event.inputs.backend), 'pytorch')
+        run: |
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.gpu_num}} and not pr_test and not function and turbomind' --alluredir=${{env.ALLURE_REPORT_DIR}}
+      - name: Run other benchmark - pytorch
+        if: contains(fromJson(github.event.inputs.backend), 'pytorch') && !contains(fromJson(github.event.inputs.backend), 'turbomind')
+        run: |
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.gpu_num}} and not pr_test and not function and pytorch' --alluredir=${{env.ALLURE_REPORT_DIR}}
+      - name: Generate result
+        if: always()
+        run: |
+            cd /nvme/qa_test_models/feishu_upload
+            python3 test_benchmark.py --root ${{env.REPORT_DIR}} --output ${{env.REPORT_DIR}}/${{inputs.result_tag}}.txt --hardware A100 --infer-version ${{inputs.result_tag}}
+      - name: Async result
+        if: always() && inputs.result_tag != 'default'
+        env:
+          FEISHU_APP_ID: ${{secrets.FEISHU_APP_ID}}
+          FEISHU_APP_SECRET: ${{secrets.FEISHU_APP_SECRET}}
+          FEISHU_TABLE_TOKEN: ${{secrets.FEISHU_TABLE_TOKEN}}
+          FEISHU_TABLE_ID: ${{secrets.BENCHMARK_FEISHU_TABLE_ID}}
+        run: |
+            cd /nvme/qa_test_models/feishu_upload
+            python3 main.py --skip-duplicates ${{env.REPORT_DIR}}/${{inputs.result_tag}}.txt --config config-benchmark.py
       - name: Clear workfile
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
           mkdir $workdir
           chmod -R 777 $workdir
-
-
-  get_result_overview:
-    if: always() && !cancelled()
-    needs: [benchmark]
-    timeout-minutes: 5
-    runs-on: [self-hosted, linux-a100]
-    container:
-      image: openmmlab/lmdeploy:latest-cu12.8
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
-      volumes:
-        - /nvme/qa_test_models:/nvme/qa_test_models
-        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
-    steps:
-      - name: Clone repository
-        uses: actions/checkout@v2
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Get overview
-        run: |
-          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          pip install pandas fire mmengine
-          python3 .github/scripts/action_tools.py generate_benchmark_report $REPORT_DIR

@@ -4,7 +4,6 @@ import re
 import warnings
 from contextlib import contextmanager
 from functools import partial
-from typing import List
 
 import torch
 from torch import nn
@@ -12,7 +11,7 @@ from torch import nn
 from lmdeploy.lite.defaults import KV_CACHE_SIGNATURE, OFFLOAD_MOD
 
 
-def extract_return_values(module: nn.Module) -> List[str]:
+def extract_return_values(module: nn.Module) -> list[str]:
     """Extracts return values from given module's forward method.
 
     Args:
@@ -43,7 +42,7 @@ def find_kv_cache_idx(module: nn.Module) -> int:
     return signatures.index(KV_CACHE_SIGNATURE)
 
 
-def find_modules_by_return_value(model: nn.Module, value: str) -> List[nn.Module]:
+def find_modules_by_return_value(model: nn.Module, value: str) -> list[nn.Module]:
     """Finds modules in model that return given value.
 
     Args:

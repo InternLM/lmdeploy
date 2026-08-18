@@ -1,8 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
@@ -14,6 +15,16 @@ from .tokenizer import Tokenizer
 from .utils import get_logger
 
 logger = get_logger('lmdeploy')
+
+
+class QuantPolicy(enum.IntEnum):
+    """Quantization policy constants for KV cache."""
+    NONE = 0
+    INT4 = 4  # 4-bit KV cache
+    INT8 = 8  # 8-bit KV cache
+    FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale. DSA uses the fp8_ds_mla layout)
+    FP8_E5M2 = 17  # FP8 KV cache (float8_e5m2, per-tensor scale)
+    TURBO_QUANT = 42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
@@ -50,10 +61,10 @@ class GenerationConfig:
         random_seed: Seed used when sampling a token
         stop_words: Words that stop generating further tokens
         bad_words: Words that the engine will never generate
-        stop_token_ids: List of tokens that stop the generation
+        stop_token_ids: list of tokens that stop the generation
             when they are generated. The returned output will not contain
             the stop tokens.
-        bad_token_ids: List of tokens that the engine will never
+        bad_token_ids: list of tokens that the engine will never
             generate.
         min_new_tokens: The minimum numbers of tokens to generate,
             ignoring the number of tokens in the prompt.
@@ -95,6 +106,10 @@ class GenerationConfig:
                 }
 
         logits_processors: Custom logit processors.
+        repetition_ngram_size: The size of n-grams to consider for repetition early stop.
+            Must be non-negative; values below 0 are treated as 0.
+        repetition_ngram_threshold: The number of times an n-gram must be repeated to trigger early stop.
+            Must be non-negative; values below 0 are treated as 0.
     """
 
     n: int = 1
@@ -107,27 +122,34 @@ class GenerationConfig:
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None
-    stop_words: List[str] = None
-    bad_words: List[str] = None
-    stop_token_ids: List[int] = None
-    bad_token_ids: List[int] = None
+    stop_words: list[str] = None
+    bad_words: list[str] = None
+    stop_token_ids: list[int] = None
+    bad_token_ids: list[int] = None
     min_new_tokens: int = None
     skip_special_tokens: bool = True
     spaces_between_special_tokens: bool = True
     logprobs: int = None
-    response_format: Optional[Dict] = None
-    logits_processors: Optional[List[LogitsProcessor]] = None
+    response_format: dict | None = None
+    logits_processors: list[LogitsProcessor] | None = None
     output_logits: Literal['all', 'generation'] = None
     output_last_hidden_state: Literal['all', 'generation'] = None
     include_stop_str_in_output: bool = False
 
+    # return the perplexity (mean cross-entropy loss) of the input prompt,
+    return_ppl: bool = False
+
     # for disaggregation
     with_cache: bool = False
     preserve_cache: bool = False
-    migration_request: Optional[MigrationRequest] = None
+    migration_request: MigrationRequest | None = None
 
     # router replay
     return_routed_experts: bool = False
+
+    # ngram, generation would stop if latest [size] tokens are repeated for [threshold] times
+    repetition_ngram_size: int = 0
+    repetition_ngram_threshold: int = 0
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to
@@ -135,7 +157,7 @@ class GenerationConfig:
 
         def special_word_token_ids(words):
             if words is not None:
-                assert isinstance(words, List) and \
+                assert isinstance(words, list) and \
                     all(isinstance(elem, str) for elem in words), \
                     f'stop_words must be a list of str but got {type(words)}'
                 indexes = []
@@ -172,12 +194,15 @@ class GenerationConfig:
 
     def __post_init__(self):
         """Check input validation."""
-        assert type(self.n) == int and self.n > 0, 'n is not a positive integer'
+        assert type(self.n) is int and self.n > 0, 'n is not a positive integer'
         assert self.top_p >= 0 and self.top_p <= 1  # [0, 1]
         assert self.top_k >= 0, 'top_k can not be a negative integer'
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
+        if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:
+            self.repetition_ngram_size = 0
+            self.repetition_ngram_threshold = 0
 
 
 @pydantic_dataclass
@@ -190,10 +215,15 @@ class TurbomindEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         model_format: the layout of the deployed model. It can be one
-            of the following values [hf, awq, gptq],`hf` meaning
-            huggingface model(.bin, .safetensors), `awq` and `gptq` meaning
-            the quantized model by AWQ and GPTQ, respectively. If it is not
-            specified, i.e. None, it will be extracted from the input model
+            of the following values [hf, awq, gptq, compressed-tensors,
+            fp8, mxfp4]. `hf` means a Hugging Face model (.bin,
+            .safetensors), `awq` and `gptq` mean grouped 4-bit
+            weight-only checkpoints, `compressed-tensors` means
+            pack-quantized grouped int4 checkpoints and is usually
+            auto-detected from the input model config, `fp8` means
+            blocked fp8 checkpoints, and `mxfp4` means MXFP4 expert
+            weights. If it is not specified, i.e. None, it will be
+            extracted from the input model
         tp: the number of GPU cards used in tensor parallelism,
             default to 1
         session_len: the max session length of a sequence, default to
@@ -217,8 +247,31 @@ class TurbomindEngineConfig:
             a k/v block, default to 64
         enable_prefix_caching: enable cache prompts for block reuse,
             default to False
-        quant_policy: default to 0. When k/v is quantized into 4 or 8
-            bit, set it to 4 or 8, respectively
+        cache_checkpoint_interval: minimum token gap between reusable
+            recurrent-state checkpoints (CacheRegistry checkpoint_min_interval).
+            Must be > 0. Default 4096.
+        cache_prompt: partial prompt-boundary publication mode, one of
+            'all' | 'auto'. 'all' publishes the reusable partial fork_to node at
+            B = prompt_len - cache_prompt_boundary_skip whenever B is mid-block
+            (and arms a recurrent-state checkpoint clamp when B is block-aligned),
+            so a duplicate prompt skips prefill (costs one extra prefill forward +
+            a partial block). 'auto' (default) does that only when the partial
+            block holds image tokens (reusing vision-encoded KV) and is inert for
+            text-only prompts. Requires enable_prefix_caching.
+        cache_prompt_boundary_skip: number of trailing prompt tokens treated as
+            the volatile generation-prompt suffix (e.g. a chat template's
+            `<think>\n`) and excluded from the reusable prompt-boundary node, so
+            the node ends at prompt_len - cache_prompt_boundary_skip. Default 1
+            (exclude only the last token). Applies when cache_prompt is 'all' or
+            'auto'.
+        cache_generation: generated-block caching mode, one of
+            'all' | 'auto' | 'none'. 'all' indexes full generated blocks and the
+            terminal partial block, and adopts the terminal recurrent frontier
+            checkpoint (exact multi-turn resume, costs a partial block). 'auto'
+            (default) indexes full generated blocks only. 'none' indexes no
+            generated blocks at all. Requires enable_prefix_caching.
+        quant_policy: default to 0. For TurboMind, when k/v is quantized
+            into int4 or int8, set it to 4 or 8, respectively
         rope_scaling_factor: scaling factor used for dynamic ntk,
             default to 0. TurboMind follows the implementation of transformer
             LlamaAttention
@@ -239,16 +292,19 @@ class TurbomindEngineConfig:
         devices: the used devices
         empty_init: Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
+        language_model_only: Whether to run as text-only LLM without loading
+            vision/multimodal encoder modules.
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model
         enable_metrics: enable metrics system
     """
 
     dtype: str = 'auto'
-    model_format: Optional[str] = None
+    model_format: str | None = None
     tp: int = 1
     dp: int = 1
     cp: int = 1
+    ep: int = 1
     device_num: int = None
     attn_tp_size: int = None
     attn_cp_size: int = None
@@ -258,39 +314,56 @@ class TurbomindEngineConfig:
     outer_dp_size: int = None
     nnodes: int = 1
     node_rank: int = 0
-    dist_init_addr: Optional[str] = None
-    devices: List[int] = None
-    session_len: Optional[int] = None
+    dist_init_addr: str | None = None
+    devices: list[int] = None
+    session_len: int | None = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8
     cache_chunk_size: int = -1
     cache_block_seq_len: int = 64
     enable_prefix_caching: bool = False
+    cache_checkpoint_interval: int = 4096
+    cache_prompt: str = 'auto'
+    cache_prompt_boundary_skip: int = 1
+    cache_generation: str = 'auto'
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
-    download_dir: Optional[str] = None
-    revision: Optional[str] = None
+    download_dir: str | None = None
+    revision: str | None = None
     max_prefill_token_num: int = 8192
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
     async_: int = 1
-    devices: Optional[List[int]] = None
+    devices: list[int] | None = None
     empty_init: bool = False
+    language_model_only: bool = False
     communicator: str = 'nccl'
-    hf_overrides: Optional[Dict[str, Any]] = None
+    hf_overrides: dict[str, Any] | None = None
     enable_metrics: bool = True
 
     def __post_init__(self):
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
+        assert self.ep >= 1, 'ep must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
-        assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
+        try:
+            self.quant_policy = QuantPolicy(self.quant_policy)
+        except ValueError as e:
+            raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
+        assert self.quant_policy not in (
+            QuantPolicy.FP8,
+            QuantPolicy.FP8_E5M2,
+        ), 'invalid quant_policy for TurboMind, FP8 quantization is not supported'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
+        assert self.cache_prompt in ('all', 'auto'), 'invalid cache_prompt'
+        assert self.cache_generation in ('all', 'auto', 'none'), 'invalid cache_generation'
+        assert self.cache_checkpoint_interval > 0, 'invalid cache_checkpoint_interval'
+        assert self.cache_prompt_boundary_skip >= 1, 'invalid cache_prompt_boundary_skip'
         assert self.async_ in (0, 1), 'async_ must be 0 (disabled) or 1 (enabled)'
 
 
@@ -326,8 +399,22 @@ class PytorchEngineConfig:
             would be allocate according to current environment.
         adapters: The path configs to lora adapters.
         max_prefill_token_num: tokens per iteration.
+        cudagraph_capture_batch_sizes: Batch sizes to capture CUDA graphs for.
+            If not specified, the engine will infer them from max_batch_size.
+            max_batch_size is always captured.
         thread_safe: thread safe engine instance.
         enable_prefix_caching: Enable token match and sharing caches.
+        prefix_cache_state_budget: Extra SSM state-cache slots budgeted for
+            prefix-cache checkpoints. 0 adds no extra slots, but SSM
+            checkpoints may still borrow idle runtime state slots.
+        prefix_cache_decode_state_interval: Token interval for SSM decode
+            state checkpoints. 0 disables decode-state checkpoint saves; prefill
+            and chunk checkpoints may still be saved. Keep 0 unless the workload
+            has long SSM decoding and repeated continuations that can reuse
+            decode checkpoints. Smaller positive values create more hit points
+            but use more checkpoint memory and copy work; larger values reduce
+            overhead but make decode-prefix hits less likely. Positive values
+            must be multiples of the cache block size.
         device_type: The inference device type, options ['cuda']
         eager_mode: Enable "eager" mode or not
         custom_module_map: nn module map customized by users. Once
@@ -338,8 +425,9 @@ class PytorchEngineConfig:
         revision: The specific model version to use.
             It can be a branch name, a tag name, or a commit id.
             If unspecified, will use the default version.
-        quant_policy: default to 0. When k/v is quantized into 4 or 8
-            bit, set it to 4 or 8, respectively
+        quant_policy: default to 0. When k/v is quantized into int4,
+            int8, fp8, or fp8_e5m2, set it to 4, 8, 16, or 17,
+            respectively. For DSA models, fp8 selects the fp8_ds_mla layout.
         distributed_executor_backend: backend of distributed backend,
             options: ['uni', 'mp', 'ray']
         empty_init: Whether to load the model weights, you should set
@@ -357,8 +445,8 @@ class PytorchEngineConfig:
         model_format: weight quantization policy, options: ['fp8'].
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model,
-        disable_vision_encoder: Whether to disable loading vision
-            encoder. Default to False.
+        language_model_only: Whether to run as text-only LLM without loading
+            vision/multimodal encoder modules. Default to False.
         logprobs_mode: The mode of logprob, options: ['raw_logits', 'raw_logprobs']
         dllm_block_length: Block size of block diffusion model.
         dllm_unmasking_strategy: Dllm unmasking strategy, options:
@@ -380,18 +468,22 @@ class PytorchEngineConfig:
     cache_max_entry_count: float = 0.8
     prefill_interval: int = 16
     block_size: int = 64
+    kernel_block_size: int = -1
     num_cpu_blocks: int = 0
     num_gpu_blocks: int = 0
-    adapters: Dict[str, str] = None
-    max_prefill_token_num: int = 4096
+    adapters: dict[str, str] = None
+    max_prefill_token_num: int = 8192
+    cudagraph_capture_batch_sizes: list[int] | None = None
     thread_safe: bool = False
     enable_prefix_caching: bool = False
+    prefix_cache_state_budget: int = 0
+    prefix_cache_decode_state_interval: int = 0
     device_type: str = 'cuda'
     eager_mode: bool = False
-    custom_module_map: Dict[str, str] = None
+    custom_module_map: dict[str, str] = None
     download_dir: str = None
     revision: str = None
-    quant_policy: Literal[0, 4, 8] = 0
+    quant_policy: QuantPolicy = QuantPolicy.NONE
     distributed_executor_backend: str = None
     empty_init: bool = False
     enable_microbatch: bool = False
@@ -400,8 +492,8 @@ class PytorchEngineConfig:
     mp_engine_backend: str = 'mp'
     model_format: str = None
     enable_metrics: bool = True
-    hf_overrides: Optional[Dict[str, Any]] = None
-    disable_vision_encoder: bool = False
+    hf_overrides: dict[str, Any] | None = None
+    language_model_only: bool = False
     logprobs_mode: str = None
     # router replay
     enable_return_routed_experts: bool = False
@@ -418,6 +510,8 @@ class PytorchEngineConfig:
 
     def __post_init__(self):
         """Check input validation."""
+        if self.kernel_block_size == -1:
+            self.kernel_block_size = self.block_size
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'invalid tp'
         assert self.dp >= 1, 'invalid dp'
@@ -428,17 +522,32 @@ class PytorchEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
-        assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
+        assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
+        assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
+        try:
+            self.quant_policy = QuantPolicy(self.quant_policy)
+        except ValueError as e:
+            raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
-        assert self.block_size >= 16 and (self.block_size & (self.block_size - 1)) == 0, \
-            f'block_size must be >= 16 and a power of 2, but got {self.block_size}'
+        assert self.kernel_block_size >= 16 and \
+               (self.kernel_block_size & (self.kernel_block_size - 1)) == 0, \
+               f'kernel_block_size must be >= 16 and a power of 2, but got {self.kernel_block_size}'
+        assert self.block_size >= self.kernel_block_size and \
+               self.block_size % self.kernel_block_size == 0, \
+               (f'block_size must be >= kernel_block_size and an integer multiple '
+                f'of kernel_block_size, but got block_size {self.block_size} '
+                f'and kernel_block_size {self.kernel_block_size}')
+        if self.prefix_cache_decode_state_interval > 0:
+            assert self.prefix_cache_decode_state_interval % self.block_size == 0, (
+                'prefix_cache_decode_state_interval must be a multiple of block_size')
         if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
             assert False, \
                    'kv cache quantization only works for CUDA and ASCEND.'
         if self.device_type == 'camb' and self.block_size != 16:
             self.block_size = 16
-            logger.warning('Currently, camb device requires block size to be 16, \
-                    setting block size to 16')
+            self.kernel_block_size = 16
+            logger.warning('Currently, camb device requires block_size and kernel_block_size to be 16, '
+                           'setting both to 16.')
 
 
 class ResponseType(enum.Enum):
@@ -453,8 +562,10 @@ class ResponseType(enum.Enum):
     INPUT_LENGTH_ERROR = enum.auto()
     INTERNAL_ENGINE_ERROR = enum.auto()
     CANCEL = enum.auto()
-    PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE = enum.auto()
+    PREFIX_CACHE_CONFLICT = enum.auto()
     NO_QUEUE = enum.auto()
+    NOT_SUPPORTED = enum.auto()
+    OUT_OF_MEMORY = enum.auto()
 
 
 @dataclass
@@ -468,27 +579,27 @@ class Response:
         generate_token_len: the response token length.
         input_token_len: the input prompt token length. Note that it may
             contains chat template part.
-        session_id: the id for running the session.
         finish_reason: the reason the model stopped
             generating tokens. This will be 'stop' if the model hit a natural
             stop point or a provided stop sequence, 'length' if the maximum
             number of tokens specified in the request was reached.
-        token_ids:: the output token ids.
-        logprobs:: the top logprobs for each output
-            position.
-        index: it refers to the position index of the input request
-            batch
+        token_ids: the output token ids.
+        logprobs: the top logprobs for each output position.
+        index: it refers to the position index of the input request batch.
     """
     text: str
     generate_token_len: int
     input_token_len: int
-    finish_reason: Optional[Literal['stop', 'length']] = None
-    token_ids: List[int] = field(default_factory=list)
-    logprobs: List[Dict[int, float]] = None
+    finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
+    token_ids: list[int] = field(default_factory=list)
+    logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
     index: int = 0
     routed_experts: Any = None
+    cached_tokens: int = 0
+    error_code: str | None = None
+    error_message: str | None = None
 
     def __str__(self):
         return f'text={self.text}\n{self._format_none_text_fields()}'
@@ -505,7 +616,7 @@ class Response:
         fields.append(f'logprobs={self.logprobs}')
 
         # Helper function to format tensor information
-        def _format_tensor(name: str, tensor: Optional[torch.Tensor]) -> List[str]:
+        def _format_tensor(name: str, tensor: torch.Tensor | None) -> list[str]:
             if tensor is None:
                 return [f'{name}=None']
             try:
@@ -544,6 +655,8 @@ class Response:
             self.logprobs = self.logprobs or []
             self.logprobs += other.logprobs
         self.routed_experts = other.routed_experts
+        self.error_code = other.error_code
+        self.error_message = other.error_message
         return self
 
 
@@ -574,7 +687,7 @@ class EngineEvent:
     timestamp: float
 
     @classmethod
-    def new_event(cls, event_type: EventType, timestamp: Optional[float] = None) -> 'EngineEvent':
+    def new_event(cls, event_type: EventType, timestamp: float | None = None) -> 'EngineEvent':
         # Timestamps MUST use wall-clock time (time.time()) to maintain consistency
         # between csrc(std::chrono::system_clock) and python
         timestamp = time.time() if timestamp is None else timestamp
@@ -585,11 +698,9 @@ class EngineEvent:
 class ScheduleMetrics:
     active_seqs: int = 0
     waiting_seqs: int = 0
-    total_blocks: int = 0
-    active_blocks: int = 0
-    cached_blocks: int = 0
-    free_blocks: int = 0
+    cache_usage: float = 0.0
     prefix_cache_hit_rate: float = 0
+    scheduler_tick: int = 0
 
 
 @dataclass
@@ -598,11 +709,12 @@ class RequestMetrics:
 
     Attributes:
         token_timestamp: A wall-clock time when a token is generated.
-        engine_events: List of engine events during inference.
+        engine_events: list of engine events during inference.
     """
     token_timestamp: float = 0.0
-    engine_events: List[EngineEvent] = field(default_factory=list)
-    spec_info: Optional[Dict[str, Any]] = None
+    engine_events: list[EngineEvent] = field(default_factory=list)
+    spec_info: dict[str, Any] | None = None
+    cached_tokens: int = 0
 
 
 @dataclass
@@ -617,15 +729,18 @@ class EngineOutput:
         cache_block_ids: send cache blocks back for migration in
             Disaggregated LLM Serving when Prefill Engine is Done.
         req_metrics: request metrics information
+        ce_loss: the summed, unnormalized cross-entropy (NLL) of the input
+            prompt, available when ``GenerationConfig.return_ppl`` is set.
     """
     status: ResponseType
-    token_ids: List[int]
-    logprobs: List[Dict[int, float]] = None
+    token_ids: list[int]
+    logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
-    cache_block_ids: Optional[List[int]] = None
-    req_metrics: Optional[RequestMetrics] = None
+    cache_block_ids: list[int] | None = None
+    req_metrics: RequestMetrics | None = None
     routed_experts: torch.Tensor = None
+    ce_loss: float = None
 
 
 @dataclass

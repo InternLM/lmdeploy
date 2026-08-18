@@ -1,21 +1,20 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
 
+import numpy as np
 import torch
 from torch.profiler import record_function
 
-from lmdeploy.pytorch.engine.logits_process import SamplingInputs, SamplingInputsDelta
+from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
-from lmdeploy.pytorch.model_inputs import ModelInputsDelta
 
 from ..base.sampling import SamplingStrategy
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 def _gather_all_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs):
     """Gather history."""
-    if sampling_inputs.repetition_penalty is None and not any(sampling_inputs.logits_processors):
+    if not any(sampling_inputs.logits_processors):
         return None
     batch = len(seqs)
     max_len = max(seq.num_valid_ids for seq in seqs)
@@ -25,6 +24,22 @@ def _gather_all_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs)
         if h_len == 0:
             continue
         h_ids = torch.from_numpy(seq.valid_ids)
+        output[idx, -h_len:] = h_ids
+    return output
+
+
+def _gather_generated_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs) -> np.ndarray | None:
+    """Gather history."""
+    if sampling_inputs.repetition_penalty is None and sampling_inputs.max_repetition_ngram_size == 0:
+        return None
+    batch = len(seqs)
+    max_len = max(seq.num_new_tokens for seq in seqs)
+    output = np.full((batch, max_len), pad_id, dtype=np.int64)
+    for idx, seq in enumerate(seqs):
+        h_len = seq.num_new_tokens
+        if h_len == 0:
+            continue
+        h_ids = seq.generated_ids
         output[idx, -h_len:] = h_ids
     return output
 
@@ -54,13 +69,15 @@ class ARSamplingStrategy(SamplingStrategy):
         min_p = [None] * batch_size
         bad_words = [None] * batch_size
         stop_words = [None] * batch_size
-        random_seeds = [torch.seed() & 0xffffffff] * batch_size
+        random_seeds = [np.random.randint(0xffffffff)] * batch_size
         random_offsets = [None] * batch_size
         response_formats = [None] * batch_size
         logits_processors = [None] * batch_size
         num_logprobs = [None] * batch_size
         session_to_cleanup = self.session_to_cleanup
         self.session_to_cleanup = []
+        repetition_ngram_sizes = [None] * batch_size
+        repetition_ngram_thresholds = [None] * batch_size
 
         def __gather_params():
             """Gather params."""
@@ -84,6 +101,8 @@ class ARSamplingStrategy(SamplingStrategy):
                 stop_words[idx] = sw
                 logits_processors[idx] = param.logits_processors
                 num_logprobs[idx] = param.num_logprobs
+                repetition_ngram_sizes[idx] = param.repetition_ngram_size
+                repetition_ngram_thresholds[idx] = param.repetition_ngram_threshold
 
         def __get_topp(top_p):
             """Get topp."""
@@ -164,6 +183,18 @@ class ARSamplingStrategy(SamplingStrategy):
             'seq_id': seq.seq_id,
         } for seq in seqs]
 
+        # repetition ngram
+        max_repetition_ngram_size = max(repetition_ngram_sizes)
+        if max_repetition_ngram_size == 0:
+            repetition_ngram_sizes = None
+            repetition_ngram_thresholds = None
+        else:
+            repetition_ngram_sizes = torch.tensor(repetition_ngram_sizes)
+            repetition_ngram_thresholds = torch.tensor(repetition_ngram_thresholds)
+            repetition_ngram_same_n = (repetition_ngram_sizes == max_repetition_ngram_size).all().item()
+            if repetition_ngram_same_n:
+                repetition_ngram_sizes = None
+
         sampling_input = SamplingInputs(
             temperature=temperature,
             bad_words=bad_words,
@@ -184,87 +215,16 @@ class ARSamplingStrategy(SamplingStrategy):
             batch_size=batch_size,
             session_ctx=session_ctx,
             session_to_cleanup=session_to_cleanup,
+            repetition_ngram_size=repetition_ngram_sizes,
+            repetition_ngram_threshold=repetition_ngram_thresholds,
+            max_repetition_ngram_size=max_repetition_ngram_size,
         )
 
         pad_token_id = self.pad_token_id
         sampling_input.all_ids = _gather_all_ids(pad_token_id, seqs, sampling_input)
+        sampling_input.generated_ids_cpu = _gather_generated_ids(pad_token_id, seqs, sampling_input)
         sampling_input.num_ignore_eos = _get_num_ignore_eos(seqs)
         return sampling_input
 
     def on_session_end(self, session_id: int):
         self.session_to_cleanup.append(session_id)
-
-    def merge_sampling_delta(
-        self,
-        sampling_delta: 'SamplingInputsDelta',
-        other: 'SamplingInputsDelta',
-    ) -> 'SamplingInputsDelta':
-        """Merge two sampling deltas."""
-        num_ignore_eos = torch.cat([sampling_delta.num_ignore_eos, other.num_ignore_eos], 0)
-        random_offsets = torch.cat([sampling_delta.random_offsets, other.random_offsets], 0)
-
-        batch_size = num_ignore_eos.size(0)
-        all_ids0 = sampling_delta.all_ids
-        all_ids1 = other.all_ids
-        if all_ids0 is None and all_ids1 is None:
-            all_ids = None
-        else:
-            max_len0 = 0 if all_ids0 is None else all_ids0.size(1)
-            max_len1 = 0 if all_ids1 is None else all_ids1.size(1)
-            max_len = max(max_len0, max_len1)
-            all_ids = torch.full((batch_size, max_len),
-                                 self.pad_token_id,
-                                 dtype=torch.int64,
-                                 device=num_ignore_eos.device)
-            if all_ids0 is not None:
-                bs0 = all_ids0.size(0)
-                all_ids[:bs0, :max_len0] = all_ids0
-            if all_ids1 is not None:
-                bs1 = all_ids1.size(0)
-                all_ids[-bs1:, :max_len1] = all_ids1
-
-        return SamplingInputsDelta(
-            num_ignore_eos=num_ignore_eos,
-            random_offsets=random_offsets,
-            all_ids=all_ids,
-        )
-
-    def step_sampling_delta(
-        self,
-        sampling_delta: 'SamplingInputsDelta',
-        next_token_ids: torch.Tensor,
-        **kwargs,
-    ) -> 'SamplingInputsDelta':
-        """Step next delta."""
-        sampling_delta.num_ignore_eos = sampling_delta.num_ignore_eos - 1
-        if sampling_delta.random_offsets is not None:
-            # random offset is used to generate random numbers for multinomial sampling
-            # so we need to increase it by 1 at each step
-            sampling_delta.random_offsets += 1
-
-        all_ids = sampling_delta.all_ids
-        if all_ids is not None:
-            sampling_delta.all_ids = torch.cat([all_ids, next_token_ids[:, None]], 1)
-
-        return sampling_delta
-
-    def update_sampling_delta(
-        self,
-        sampling_delta: 'SamplingInputsDelta',
-        delta: 'ModelInputsDelta',
-    ) -> 'SamplingInputsDelta':
-        """Update sampling delta with model inputs delta."""
-        indices = delta.indices
-        num_ignore_eos = sampling_delta.num_ignore_eos[indices]
-        if sampling_delta.random_offsets is not None:
-            random_offsets = sampling_delta.random_offsets[indices]
-        else:
-            random_offsets = None
-        all_ids = sampling_delta.all_ids
-        if all_ids is not None:
-            all_ids = all_ids[indices]
-        return SamplingInputsDelta(
-            num_ignore_eos=num_ignore_eos,
-            random_offsets=random_offsets,
-            all_ids=all_ids,
-        )

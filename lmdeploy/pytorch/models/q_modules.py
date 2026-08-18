@@ -5,8 +5,12 @@ from dataclasses import dataclass, fields
 import torch
 import torch.nn as nn
 
-from ..kernels.w8a8_triton_kernels import (matmul_kernel_dynamic_quant, per_channel_quant, per_token_quant_int8,
-                                           rms_norm_dynamic_quant)
+from ..kernels.w8a8_triton_kernels import (
+    matmul_kernel_dynamic_quant,
+    per_channel_quant,
+    per_token_quant_int8,
+    rms_norm_dynamic_quant,
+)
 
 
 @dataclass
@@ -48,7 +52,7 @@ class QRMSNorm(nn.Module):
         `initialization = True` for real init. `initialization = False` for dummy init.
         """
         hidden_size = mod.weight.shape[0]
-        eps = mod.variance_epsilon
+        eps = getattr(mod, 'variance_epsilon', None) or getattr(mod, 'eps', 1e-6)
         q_mod = cls(hidden_size, eps, quant_dtype=quant_dtype)
         if initialization:
             q_mod.weight = nn.Parameter(mod.weight.detach())

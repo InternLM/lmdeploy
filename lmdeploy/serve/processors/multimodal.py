@@ -1,14 +1,32 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Any, Dict, List, Literal, Tuple
+from typing import Any, Literal
 
 import PIL
 
 from lmdeploy.model import MODELS, BaseChatTemplate
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
+from lmdeploy.vl.constants import Modality
+from lmdeploy.vl.media.audio import AudioMediaIO
+from lmdeploy.vl.media.connection import load_from_url
+from lmdeploy.vl.media.image import ImageMediaIO
+from lmdeploy.vl.media.time_series import TimeSeriesMediaIO
+from lmdeploy.vl.media.video import VideoMediaIO
 
 logger = get_logger('lmdeploy')
+
+MULTIMODAL_TYPES = (
+    'image_url',
+    'image_data',
+    'image',
+    'video_url',
+    'video',
+    'audio_url',
+    'audio',
+    'time_series_url',
+    'time_series',
+)
 
 
 class MultimodalProcessor:
@@ -19,7 +37,8 @@ class MultimodalProcessor:
                  tokenizer: Tokenizer,
                  chat_template: BaseChatTemplate,
                  vl_encoder=None,
-                 backend: str | None = None):
+                 backend: str | None = None,
+                 allowed_media_domains: list[str] | None = None):
         """Initialize MultimodalProcessor.
 
         Args:
@@ -27,14 +46,16 @@ class MultimodalProcessor:
             chat_template: Chat template instance for message processing.
             vl_encoder: Optional ImageEncoder instance for multimodal processing.
             backend: Optional backend name ('turbomind' or 'pytorch') for multimodal processing.
+            allowed_media_domains: Optional HTTP(S) media URL domain allowlist.
         """
         self.tokenizer = tokenizer
         self.chat_template = chat_template
         self.vl_encoder = vl_encoder
         self.backend = backend
+        self.allowed_media_domains = allowed_media_domains
 
     @staticmethod
-    def merge_message_content(msg: Dict) -> Dict:
+    def merge_message_content(msg: dict) -> dict:
         """Merge multimodal content blocks and ensure content field exists.
 
         This function normalizes message content to match vLLM's behavior:
@@ -85,106 +106,117 @@ class MultimodalProcessor:
         return result
 
     @staticmethod
-    async def async_convert_multimodal_data(messages: List[Dict]) -> List[Dict]:
-        """Convert user-input multimodal data into GPT4V message format."""
-        from lmdeploy.vl.utils import load_image
+    def _parse_multimodal_item(i: int,
+                               in_messages: list[dict],
+                               out_messages: list[dict],
+                               media_io_kwargs: dict[str, Any],
+                               allowed_media_domains: list[str] | None = None):
+        """Synchronous helper to parse a single multimodal message item."""
+        role = in_messages[i]['role']
+        content = in_messages[i]['content']
 
-        if isinstance(messages, Dict):
+        if role not in ('user', 'tool') or isinstance(content, str):
+            out_messages[i] = in_messages[i]
+            return
+
+        assert isinstance(content, list)
+        out_message = dict(in_messages[i])
+        out_message['content'] = []
+
+        for item in content:
+            item_type = item.get('type')
+            if item_type == 'text':
+                out_message['content'].append(item)
+                continue
+
+            item_val = item.get(item_type, {})
+            if isinstance(item_val, dict):
+                # value is a dict containing data and other params
+                # msg = {'type': 'image_url', 'image_url': {'url': xxx, ...}}
+                # msg = {'type': 'image', 'image': {'url': xxx, ...}}
+                # msg = {'type': 'image_data', 'image_data': {'data': PIL.Image.Image, ...}}
+                item_params = item_val.copy()
+                data_src = item_params.pop('url', None) or item_params.pop('data', None)
+            else:
+                # value is a direct data reference
+                # msg = {'type': 'image_url', 'image_url': 'xxx', ...}
+                # msg = {'type': 'image', 'image': 'xxx', ...}
+                item_params = {k: v for k, v in item.items() if k not in ('type', item_type)}
+                data_src = item_val
+
+            def _require_data_src():
+                if data_src is not None:
+                    return data_src
+                raise ValueError(f'Invalid multimodal item at index {i}: {item}. '
+                                 f'Expected "{item_type}" to be a direct value or a dict containing "url" or "data".')
+
+            if item_type == 'image_data':
+                modality = Modality.IMAGE
+                data = _require_data_src()
+            elif item_type in ('image_url', 'image'):
+                modality = Modality.IMAGE
+                data_src = _require_data_src()
+                if isinstance(data_src, PIL.Image.Image):
+                    data = data_src
+                elif isinstance(data_src, str):
+                    data = load_from_url(data_src,
+                                         ImageMediaIO(**media_io_kwargs.get('image', {})),
+                                         allowed_media_domains=allowed_media_domains)
+                else:
+                    raise ValueError(f'Invalid multimodal image item at index {i}: {item}. '
+                                     'Expected a str URL/path/data URL or PIL.Image.Image.')
+            elif item_type in ('video_url', 'video'):
+                modality = Modality.VIDEO
+                data, metadata = load_from_url(
+                    _require_data_src(),
+                    VideoMediaIO(image_io=ImageMediaIO(), **media_io_kwargs.get('video', {})),
+                    allowed_media_domains=allowed_media_domains)
+                item_params['video_metadata'] = metadata
+            elif item_type in ('audio_url', 'audio'):
+                modality = Modality.AUDIO
+                data = load_from_url(_require_data_src(),
+                                     AudioMediaIO(**media_io_kwargs.get('audio', {})),
+                                     allowed_media_domains=allowed_media_domains)
+            elif item_type in ('time_series_url', 'time_series'):
+                modality = Modality.TIME_SERIES
+                data = load_from_url(_require_data_src(),
+                                     TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {})),
+                                     allowed_media_domains=allowed_media_domains)
+            else:
+                raise NotImplementedError(f'unknown type: {item_type}')
+
+            out_message['content'].append({'type': modality.value, 'data': data, **item_params})
+
+        out_messages[i] = out_message
+
+    @staticmethod
+    async def async_parse_multimodal_item(messages: list[dict],
+                                          media_io_kwargs: dict[str, Any] | None = None,
+                                          allowed_media_domains: list[str] | None = None) -> list[dict]:
+        """Convert user-input multimodal data into GPT4V message format."""
+        if isinstance(messages, dict):
             messages = [messages]
-        assert isinstance(messages, List)
+        assert isinstance(messages, list)
 
         out_messages = [None] * len(messages)
-
-        def _inner_call(i, in_messages, out_messages):
-            role = in_messages[i]['role']
-            content = in_messages[i]['content']
-            assert role in ['system', 'user', 'assistant'], \
-                f'unsupported role "{role}"'
-            if role != 'user' or isinstance(content, str):
-                # the content is a user's prompt or an assistant's prompt,
-                # returning it directly
-                out_messages[i] = in_messages[i]
-                return
-            # the role is a user and the content is a list, in which there
-            # might be image_url or image_data
-            assert isinstance(content, List)
-            message = dict(role=role, content=[])
-            for item in content:
-                # image url or base64-encoded image data
-                if item['type'] == 'image_url':
-                    """
-                    convert the following item:
-                    {
-                        'type': 'image_url',
-                        'image_url': {
-                            'url': 'image url or base64-encoded image data',
-                            'key': 'value'  # parameters used in image processing
-                            ...
-                        }
-                    }
-                    to:
-                    {
-                        'type': 'image',
-                        'image': Pillow.Image,
-                        'key': 'value'   # parameters used in image processing
-                        ...
-                    }
-                    """  # noqa
-                    data = item['image_url'].copy()
-                    try:
-                        url = data.pop('url')
-                        image = load_image(url)
-                        data.update(type='image', image=image)
-                        message['content'].append(data)
-                    except KeyError:
-                        logger.error(f'invalid format {message}')
-                elif item['type'] == 'image_data':
-                    """
-                    convert the following item:
-                    {
-                        'type': 'image_data',
-                        'image_data': {
-                            'data': Pillow.Image,
-                            'key': 'value'  # parameters used in image processing
-                            ...
-                        }
-                    }
-                    to:
-                    {
-                        'type': 'image',
-                        'image': Pillow.Image,
-                        'key': 'value'   # parameters used in image processing
-                        ...
-                    }
-                    """  # noqa
-                    data = item['image_data'].copy()
-                    try:
-                        image = data.pop('data')
-                        data.update(type='image', image=image)
-                        message['content'].append(data)
-                    except KeyError:
-                        logger.error(f'invalid format {message}')
-                elif item['type'] in ['text', 'time_series']:
-                    message['content'].append(item)
-                else:
-                    logger.error(f'unexpected content type {message}')
-            out_messages[i] = message
+        media_io_kwargs = media_io_kwargs or {}
+        loop = asyncio.get_event_loop()
 
         await asyncio.gather(*[
-            asyncio.get_event_loop().run_in_executor(None, _inner_call, i, messages, out_messages)
-            for i in range(len(messages))
+            loop.run_in_executor(None, MultimodalProcessor._parse_multimodal_item, i, messages, out_messages,
+                                 media_io_kwargs, allowed_media_domains) for i in range(len(messages))
         ])
         return out_messages
 
     async def get_prompt_input(self,
-                               prompt: str | List[Dict],
+                               prompt: str | list[dict],
                                do_preprocess: bool,
-                               sequence_start: bool,
-                               adapter_name: str,
-                               tools: List[object] | None = None,
-                               reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
-                               chat_template_kwargs: Dict | None = None,
-                               mm_processor_kwargs: Dict[str, Any] | None = None,
+                               adapter_name: str | None = None,
+                               tools: list[object] | None = None,
+                               reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None,
+                               chat_template_kwargs: dict | None = None,
+                               media_io_kwargs: dict[str, Any] | None = None,
+                               mm_processor_kwargs: dict[str, Any] | None = None,
                                **kwargs):
         """Process prompt and return prompt string and input_ids.
 
@@ -194,23 +226,22 @@ class MultimodalProcessor:
         Args:
             prompt: Input prompt as string or list of message dicts.
             do_preprocess: Whether to apply chat template preprocessing.
-            sequence_start: Indicator for starting a sequence.
             adapter_name: Adapter name for selecting chat template.
             tools: Optional list of tools.
             reasoning_effort: Optional reasoning effort level.
             chat_template_kwargs: Optional kwargs for chat template.
+            media_io_kwargs: Optional kwargs for media IO operations.
             mm_processor_kwargs: Optional kwargs for multimodal processor.
             **kwargs: Additional keyword arguments.
 
         Returns:
-            Dict with 'prompt' (str) and 'input_ids' (List[int]) keys for text-only,
+            dict with 'prompt' (str) and 'input_ids' (list[int]) keys for text-only,
             or dict with multimodal data for multimodal prompts.
         """
         # Handle string input
         if isinstance(prompt, str):
             return await self._get_text_prompt_input(prompt=prompt,
                                                      do_preprocess=do_preprocess,
-                                                     sequence_start=sequence_start,
                                                      adapter_name=adapter_name,
                                                      tools=tools,
                                                      reasoning_effort=reasoning_effort,
@@ -226,7 +257,6 @@ class MultimodalProcessor:
             if not has_multimodal_input or self.vl_encoder is None:
                 return await self._get_text_prompt_input(prompt=prompt,
                                                          do_preprocess=do_preprocess,
-                                                         sequence_start=sequence_start,
                                                          adapter_name=adapter_name,
                                                          tools=tools,
                                                          reasoning_effort=reasoning_effort,
@@ -236,17 +266,17 @@ class MultimodalProcessor:
             # Process multimodal input
             return await self._get_multimodal_prompt_input(messages=prompt,
                                                            do_preprocess=do_preprocess,
-                                                           sequence_start=sequence_start,
                                                            adapter_name=adapter_name,
                                                            tools=tools,
                                                            chat_template_kwargs=chat_template_kwargs,
+                                                           media_io_kwargs=media_io_kwargs,
                                                            mm_processor_kwargs=mm_processor_kwargs,
                                                            **kwargs)
         else:
             raise RuntimeError(f'unsupported prompt type: {type(prompt)}')
 
     @staticmethod
-    def format_prompts(prompts: Any) -> List[Dict]:
+    def format_prompts(prompts: Any, allowed_media_domains: list[str] | None = None) -> list[dict]:
         """Format prompts."""
         if not isinstance(prompts, list):
             prompts = [prompts]
@@ -259,7 +289,8 @@ class MultimodalProcessor:
         if all(MultimodalProcessor._is_str_images_pair(prompt) for prompt in prompts):
             # batch of (prompt, image or [images]) or (image or [images], prompt) ->
             # [[openai_gpt4v_message], [openai_gpt4v_message], ...]
-            return [[MultimodalProcessor._re_format_prompt_images_pair(prompt)] for prompt in prompts]
+            return [[MultimodalProcessor._re_format_prompt_images_pair(prompt, allowed_media_domains)]
+                    for prompt in prompts]
         raise ValueError(f'Unsupported prompts: {prompts}. Only support str, openai message format, '
                          'or (prompt, image or [images]) or (image or [images], prompt) pair.')
 
@@ -290,10 +321,8 @@ class MultimodalProcessor:
         return isinstance(obj, list) and all(MultimodalProcessor._is_image(img) for img in obj)
 
     @staticmethod
-    def _re_format_prompt_images_pair(prompt: Tuple) -> Dict:
+    def _re_format_prompt_images_pair(prompt: tuple, allowed_media_domains: list[str] | None = None) -> dict:
         """Reformat the prompt to openai message format."""
-        from lmdeploy.vl.utils import load_image
-
         messages = {'role': 'user', 'content': []}
         prompt, images = prompt
         prompt_first = True
@@ -306,7 +335,7 @@ class MultimodalProcessor:
             # 'image_url': means url or local path to image.
             # 'image_data': means PIL.Image.Image object.
             if isinstance(image, str):
-                image = load_image(image)
+                image = load_from_url(image, ImageMediaIO(), allowed_media_domains=allowed_media_domains)
                 item = {'type': 'image_data', 'image_data': {'data': image}}
             elif isinstance(image, PIL.Image.Image):
                 item = {'type': 'image_data', 'image_data': {'data': image}}
@@ -322,21 +351,25 @@ class MultimodalProcessor:
             messages['content'].append({'type': 'text', 'text': prompt})
         return messages
 
-    def _has_multimodal_input(self, messages: List[Dict]) -> bool:
-        """Check if messages contain multimodal input (images)."""
-        return any(
-            isinstance(message.get('content'), list) and any(
-                item.get('type') in ['image_url', 'image_data', 'time_series'] for item in message['content'])
-            for message in messages)
+    def _has_multimodal_input(self, messages: list[dict]) -> bool:
+        """Check if messages contain multimodal input such as images, videos,
+        audios, or time series."""
+        for message in messages:
+            content = message.get('content')
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if isinstance(item, dict) and item.get('type') in MULTIMODAL_TYPES:
+                    return True
+        return False
 
     async def _get_text_prompt_input(self,
-                                     prompt: str | List[Dict],
+                                     prompt: str | list[dict],
                                      do_preprocess: bool,
-                                     sequence_start: bool,
                                      adapter_name: str,
-                                     tools: List[object] | None = None,
-                                     reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
-                                     chat_template_kwargs: Dict | None = None,
+                                     tools: list[object] | None = None,
+                                     reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None,
+                                     chat_template_kwargs: dict | None = None,
                                      **kwargs):
         """Process text-only prompt and return prompt string and input_ids."""
         # Change multimodal data to openai text messages
@@ -349,54 +382,73 @@ class MultimodalProcessor:
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
-        chat_template_kwargs = chat_template_kwargs or {}
+        chat_template_kwargs = dict(chat_template_kwargs or {})
+        template_reasoning_effort = reasoning_effort
+        if template_reasoning_effort is None:
+            template_reasoning_effort = chat_template_kwargs.pop('reasoning_effort', None)
+        else:
+            chat_template_kwargs.pop('reasoning_effort', None)
         prompt = chat_template.messages2prompt(prompt,
-                                               sequence_start,
                                                tools=tools,
-                                               reasoning_effort=reasoning_effort,
+                                               reasoning_effort=template_reasoning_effort,
                                                **chat_template_kwargs)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
             )
-        input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
+        input_ids = self.tokenizer.encode(prompt, add_bos=True)
         return {'prompt': prompt, 'input_ids': input_ids}
 
     async def _get_multimodal_prompt_input(self,
-                                           messages: List[Dict],
+                                           messages: list[dict],
                                            do_preprocess: bool,
-                                           sequence_start: bool,
                                            adapter_name: str,
-                                           tools: List[object] | None = None,
-                                           chat_template_kwargs: Dict | None = None,
-                                           mm_processor_kwargs: Dict[str, Any] | None = None,
+                                           tools: list[object] | None = None,
+                                           chat_template_kwargs: dict | None = None,
+                                           media_io_kwargs: dict[str, Any] | None = None,
+                                           mm_processor_kwargs: dict[str, Any] | None = None,
                                            **kwargs):
         """Process multimodal prompt and return processed data for inference
         engines."""
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
-        messages = await self.async_convert_multimodal_data(messages)
-        results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
+        messages = await self.async_parse_multimodal_item(messages,
+                                                          media_io_kwargs,
+                                                          allowed_media_domains=self.allowed_media_domains)
 
         if self.backend == 'turbomind':
-            # for tm engine, this module perform vision embedding after image
-            # preprocessing. It utilizes the hf model's vision embeddings
-            # functions and returns the input_ids, input_embeddings,
-            # embedding_ranges and so on. All the returned values are passed
-            # to tm engine for token generation
-            results = await self.vl_encoder.async_infer(results)
-            results = await self.vl_encoder.wrap_for_turbomind(results,
-                                                               chat_template,
-                                                               self.tokenizer,
-                                                               sequence_start,
-                                                               tools=tools,
-                                                               chat_template_kwargs=chat_template_kwargs)
+            if self.vl_encoder._uses_new_preprocess:
+                input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
+                                                                      chat_template=chat_template,
+                                                                      tools=tools,
+                                                                      chat_template_kwargs=chat_template_kwargs)
+                results = await self.vl_encoder.preprocess(messages,
+                                                           input_prompt=input_prompt,
+                                                           mm_processor_kwargs=mm_processor_kwargs)
+            else:
+                results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs=mm_processor_kwargs)
+                if not self.vl_encoder.model._turbomind_native_vision:
+                    results = await self.vl_encoder.async_infer(results)
+                results = await self.vl_encoder.wrap_for_turbomind(messages=results,
+                                                                chat_template=chat_template,
+                                                                tokenizer=self.tokenizer,
+                                                                tools=tools,
+                                                                chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
-            # for pt engine, this module only conduct the image preprocessing
-            # It leaves the vision embedding to the pt engine
-            results = await self.vl_encoder.wrap_for_pytorch(results,
-                                                             chat_template,
-                                                             self.tokenizer,
-                                                             sequence_start,
-                                                             tools=tools,
-                                                             chat_template_kwargs=chat_template_kwargs)
+            if self.vl_encoder._uses_new_preprocess:
+                input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
+                                                                      chat_template=chat_template,
+                                                                      tools=tools,
+                                                                      chat_template_kwargs=chat_template_kwargs)
+                results = await self.vl_encoder.preprocess(messages,
+                                                           input_prompt=input_prompt,
+                                                           mm_processor_kwargs=mm_processor_kwargs)
+            else:
+                results = await self.vl_encoder.preprocess(messages,
+                                                           mm_processor_kwargs=mm_processor_kwargs)
+                results = await self.vl_encoder.wrap_for_pytorch(messages=results,
+                                                                 chat_template=chat_template,
+                                                                 tokenizer=self.tokenizer,
+                                                                 tools=tools,
+                                                                 chat_template_kwargs=chat_template_kwargs)
+
         return results

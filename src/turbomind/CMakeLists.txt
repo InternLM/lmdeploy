@@ -14,6 +14,7 @@
 
 add_subdirectory(utils)
 add_subdirectory(core)
+add_subdirectory(memory)
 add_subdirectory(kernels)
 add_subdirectory(comm)
 add_subdirectory(generation)
@@ -28,12 +29,14 @@ add_library(turbomind STATIC turbomind.cc)
 set_property(TARGET turbomind PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(turbomind PUBLIC
         engine
-        models
+        "$<LINK_LIBRARY:WHOLE_ARCHIVE,models>"
         device_comm
         host_comm
         core
+        memory
+        copy
         memory_utils
         nvtx_utils
         CUDA::cublasLt
         CUDA::cudart
-        yaml-cpp::yaml-cpp)
+        )

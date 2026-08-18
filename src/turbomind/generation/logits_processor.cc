@@ -22,6 +22,7 @@
 
 #include "src/turbomind/kernels/ban_bad_words.h"
 #include "src/turbomind/kernels/sampling_penalty_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 #include "src/turbomind/generation/logits_processor.h"
 #include "src/turbomind/generation/utils.h"
@@ -64,9 +65,10 @@ LogitsProcessor::LogitsProcessor(const BaseGenerationParam& base, int phases): B
 
 void LogitsProcessor::Forward(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
     // apply repetition penalty -> ban bad words -> min length penalty -> temperature penalty
     // the order is same with transformerss
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("{} start", __PRETTY_FUNCTION__);
 
     Tensor_<float>      logits          = env.at("logits");
     const Buffer_<int*> token_ids_ptrs  = env.at("token_ids_ptrs").buffer();
@@ -81,51 +83,50 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
     // repetition penalty
     if (d.has_repetition_penalty) {
         ApplyRepetitionPenalty(logits, d.repetition_penalty_buf, token_ids_ptrs, sequence_length, stream);
-        sync_check_cuda_error();
     }
 
     // ban bad words
     if (auto& bad_words = d.bad_words_ten) {
         BanBadWords(logits, token_ids_ptrs, sequence_length, bad_words, stream);
-        sync_check_cuda_error();
     }
 
     // min length
     if (d.has_min_length_penalty) {
-        invokeMinLengthPenalty(logits.data(),
-                               d.min_lengths_buf.data(),
-                               sequence_length.data(),
-                               vocab_size_padded_,
-                               bsz,
-                               d.end_ids_ten.data(),
-                               d.end_ids_ten.shape(1),
-                               stream);
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(invokeMinLengthPenalty(logits.data(),
+                                             d.min_lengths_buf.data(),
+                                             sequence_length.data(),
+                                             vocab_size_padded_,
+                                             bsz,
+                                             d.end_ids_ten.data(),
+                                             d.end_ids_ten.shape(1),
+                                             stream));
     }
 
     // temperature
     if (d.has_temperature_penalty) {
-        invokeBatchApplyTemperaturePenalty_v2(logits.data(),  //
-                                              (float*)nullptr,
-                                              d.temperature_buf.data(),
-                                              bsz,
-                                              vocab_size_,
-                                              vocab_size_padded_,
-                                              stream);
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(invokeBatchApplyTemperaturePenalty_v2(logits.data(),  //
+                                                            (float*)nullptr,
+                                                            d.temperature_buf.data(),
+                                                            bsz,
+                                                            vocab_size_,
+                                                            vocab_size_padded_,
+                                                            stream));
     }
 
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("{} stop", __PRETTY_FUNCTION__);
 }
 
 void LogitsProcessor::Setup(int phase, TensorMap& env)
 {
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_FUNCTION_SCOPE();
+    TM_LOG_DEBUG("{} start", __PRETTY_FUNCTION__);
 
     auto& d = *data_.at(phase);
 
-    const auto& rs   = env.at("batch").data<BatchData*>()[0]->rc;
-    auto&       copy = *env.at("copy").data<BatchCopy*>()[0];
+    // const auto& rs   = env.at("batch").data<BatchData*>()[0]->rc;
+    Buffer_<Sequence*> rs = env.at("requests").buffer();
+
+    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
     const int bsz = rs.size();
 
@@ -155,7 +156,7 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
 
         // min_length
         min_lengths[i] = rs[i]->prompt_len + g.min_new_tokens;
-        if (rs[i]->seq_len + rs[i]->beta < min_lengths[i]) {
+        if (rs[i]->seq_len + rs[i]->inflight_new_tokens < min_lengths[i]) {
             d.has_min_length_penalty = true;
         }
     }
@@ -171,8 +172,6 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
     if (d.has_min_length_penalty) {
         copy(min_lengths, bsz, d.min_lengths_buf);
     }
-
-    sync_check_cuda_error();
 
     d.bad_words_ten = {};
     init_stop_bad_words(&GenerationConfig::bad_ids,  //
@@ -199,13 +198,13 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
                     continue;
                 }
                 if (TM_UNLIKELY(eos_ids.size() > kMaxEndIdsSize)) {
-                    TM_LOG_WARNING("[InitializeSampling] [%ld] eos length (%d) exceeds %d, truncated to %d",
-                                   (long)rs[i]->req->id,
-                                   (int)eos_ids.size(),
-                                   kMaxEndIdsSize,
-                                   kMaxEndIdsSize);
+                    TM_LOG_WARN("ID {}: eos length ({}) exceeds {}, truncated to {}",
+                                rs[i]->req->id,
+                                eos_ids.size(),
+                                kMaxEndIdsSize,
+                                kMaxEndIdsSize);
                 }
-                std::copy_n(eos_ids.begin(), std::min((int)eos_ids.size(), kMaxEndIdsSize), h_end_ids);
+                std::copy_n(eos_ids.begin(), std::min(static_cast<int>(eos_ids.size()), kMaxEndIdsSize), h_end_ids);
                 h_end_ids += max_length;
             }
             copy(buf_->end_ids_buf, bsz * max_length, d.end_ids_buf);
@@ -213,7 +212,7 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
         }
     }
 
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("{} stop", __PRETTY_FUNCTION__);
 }
 
 }  // namespace turbomind

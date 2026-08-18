@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 
@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
     from lmdeploy.pytorch.messages import SamplingParam, SchedulerSequence, SchedulerSession
     from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
-    SeqList = List[SchedulerSequence]
+    SeqList = list[SchedulerSequence]
 
 
 class SequenceStrategy(ABC):
@@ -19,7 +19,7 @@ class SequenceStrategy(ABC):
                       session: 'SchedulerSession',
                       sampling_param: 'SamplingParam' = None,
                       adapter_name: str = None,
-                      migration_request: Optional[MigrationRequest] = None,
+                      migration_request: MigrationRequest | None = None,
                       resp_cache: bool = False,
                       preserve_cache: bool = False) -> 'SchedulerSequence':
         """Make sequence."""

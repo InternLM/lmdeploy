@@ -6,6 +6,7 @@
 #include "src/turbomind/kernels/attention/impl_m16n8.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/layout.h"
+#include "src/turbomind/kernels/core/mma.h"
 #include "src/turbomind/kernels/core/smem.h"
 #include "src/turbomind/kernels/core/thread_map.h"
 
@@ -16,6 +17,8 @@ struct Impl<MMA_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
     Impl_m16k8<T_, WARP_H, WARP_Q, WARP_S, HeadDim> {
 
     using Base = Impl_m16k8<T_, WARP_H, WARP_Q, WARP_S, HeadDim>;
+
+    static constexpr bool MLA = HeadDim == 576;
 
     using Base::OP_M;
     using Base::OP_N;

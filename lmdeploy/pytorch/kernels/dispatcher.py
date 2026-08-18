@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import importlib
 import inspect
-from typing import Callable
+from collections.abc import Callable
 
 from lmdeploy.utils import get_logger
 

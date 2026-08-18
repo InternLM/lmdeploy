@@ -1,86 +1,28 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from collections.abc import Iterable, Sequence
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 
-from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import LayerNorm
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+from lmdeploy.pytorch.nn import LayerNorm, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
+from lmdeploy.vl.constants import Modality
 
+from .patch import add_prefix
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3VLVisionRotaryEmbedding
-from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3VLInputProcessor
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3VLVisionAttention
 from .qwen3 import Qwen3model
-from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
-from .utils.model import DeployModelMixin, vlm_model
-
-
-class Qwen3VLTextRotaryEmbedding(nn.Module):
-    inv_freq: torch.Tensor  # fix linting for `register_buffer`
-
-    def __init__(self, config: PretrainedConfig, device=None):
-        super().__init__()
-        if hasattr(config, 'rope_scaling') and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get('rope_type', 'default')
-        else:
-            self.rope_type = 'default'
-        self.max_seq_len_cached = config.max_position_embeddings
-        self.original_max_seq_len = config.max_position_embeddings
-
-        self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
-
-        inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
-        self.register_buffer('inv_freq', inv_freq, persistent=False)
-        self.original_inv_freq = self.inv_freq
-
-        self.mrope_section = config.rope_scaling.get('mrope_section', [24, 20, 20])
-
-    def apply_interleaved_mrope(self, freqs, mrope_section):
-        """Apply interleaved MRoPE to 3D rotary embeddings.
-
-        Reorganizes frequency layout from chunked [TTT...HHH...WWW] to
-        interleaved [THTHWHTHW...TT], preserving frequency continuity.
-        args:
-            x: (3, bs, seq_len, head_dim // 2)
-            mrope_section: (3,)
-        returns:
-            x_t: (bs, seq_len, head_dim // 2)
-        """
-        freqs_t = freqs[0]  # just overwrite the first dimension T
-        for dim, offset in enumerate((1, 2), start=1):  # H, W
-            length = mrope_section[dim] * 3
-            idx = slice(offset, length, 3)
-            freqs_t[..., idx] = freqs[dim, ..., idx]
-        return freqs_t
-
-    @torch.no_grad()
-    @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
-    def forward(self, x, position_ids):
-        # In contrast to other models, Qwen3VL has different position ids for the grids
-        # So we expand the inv_freq to shape (3, ...)
-        if position_ids.ndim == 2:
-            position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
-        inv_freq_expanded = self.inv_freq[None, None, :, None].float().expand(3, position_ids.shape[1], -1, 1)
-        position_ids_expanded = position_ids[:, :, None, :].float()  # shape (3, bs, 1, positions)
-
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != 'mps' else 'cpu'
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
-            freqs = self.apply_interleaved_mrope(freqs, self.mrope_section)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
-
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixinV1, vlm_model
 
 
 class Qwen3VLTextModel(Qwen3model):
@@ -89,33 +31,29 @@ class Qwen3VLTextModel(Qwen3model):
     not a pure text-only model, as DeepStack integrates visual features into the early hidden states.
     """
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
-        super().__init__(config=config, dtype=dtype, device=device)
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
+        super().__init__(config=config, dtype=dtype, device=device, prefix=prefix)
 
         # build rotary embedding
-        # TODO: zhouxinyu, add triton kernel for interleaved mrope
-        self.rotary_emb = Qwen3VLTextRotaryEmbedding(config, device=device)
+        self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
 
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
         mrope_position_ids: torch.LongTensor = None,
         # args for deepstack
-        visual_pos_masks: Optional[torch.Tensor] = None,
-        deepstack_visual_embeds: Optional[list[torch.Tensor]] = None,
+        visual_pos_masks: torch.Tensor | None = None,
+        deepstack_visual_embeds: list[torch.Tensor] | None = None,
     ):
-        """visual_pos_masks (`torch.Tensor` of shape `(batch_size, seqlen)`,
-        *optional*):
-
-        The mask of the visual positions. deepstack_visual_embeds (`list[torch.Tensor]`, *optional*):     The deepstack
-        visual embeddings. The shape is (num_layers, visual_seqlen, embed_dim).     The feature is extracted from the
-        different visual encoder layers, and fed to the decoder     hidden states. It's from the paper DeepStack (
-        https://arxiv.org/abs/2406.04)
-        """
+        """Rewrite of LlamaModel.forward."""
 
         # token embedding
         if inputs_embeds is None:
@@ -199,34 +137,40 @@ class Qwen3VLVisionPatchEmbed(nn.Module):
 class Qwen3VLVisionMLP(nn.Module):
     """Vision mlp."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         from transformers.activations import ACT2FN
         hidden_dim = config.hidden_size
         intermediate_size = config.intermediate_size
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
-        self.linear_fc1 = build_colwise_linear(
-            hidden_dim,
-            intermediate_size,
-            bias=True,
-            dtype=dtype,
-            device=device,
-            quant_config=quantization_config,
-            is_tp=True,
-        )
+        self.linear_fc1 = build_colwise_linear(hidden_dim,
+                                               intermediate_size,
+                                               bias=True,
+                                               dtype=dtype,
+                                               device=device,
+                                               quant_config=quantization_config,
+                                               is_tp=True,
+                                               prefix=add_prefix('linear_fc1', prefix))
 
         # gelu_pytorch_tanh
         self.act = ACT2FN[config.hidden_act]
 
         # down
-        self.linear_fc2 = build_rowwise_linear(intermediate_size,
-                                               hidden_dim,
-                                               bias=True,
-                                               dtype=dtype,
-                                               device=device,
-                                               quant_config=quantization_config,
-                                               is_tp=True)
+        self.linear_fc2 = build_rowwise_linear(
+            intermediate_size,
+            hidden_dim,
+            bias=True,
+            dtype=dtype,
+            device=device,
+            quant_config=quantization_config,
+            is_tp=True,
+            prefix=add_prefix('linear_fc2', prefix),
+        )
 
     def forward(self, x):
         """forward."""
@@ -236,24 +180,27 @@ class Qwen3VLVisionMLP(nn.Module):
 class Qwen3VLVisionBlock(nn.Module):
     """Vision block."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 layer_idx: int,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        layer_idx: int,
+        dtype: torch.dtype = None,
+        device: torch.device = None,
+        prefix: str = '',
+    ):
         super().__init__()
         self.layer_idx = layer_idx
         self.norm1 = LayerNorm(config.hidden_size, eps=1e-6, dtype=dtype, device=device)
         self.norm2 = LayerNorm(config.hidden_size, eps=1e-6, dtype=dtype, device=device)
 
-        self.attn = Qwen3VLVisionAttention(config, dtype=dtype, device=device)
+        self.attn = Qwen3VLVisionAttention(config, dtype=dtype, device=device, prefix=add_prefix('attn', prefix))
 
-        self.mlp = Qwen3VLVisionMLP(config, dtype=dtype, device=device)
+        self.mlp = Qwen3VLVisionMLP(config, dtype=dtype, device=device, prefix=add_prefix('mlp', prefix))
 
     def forward(self,
                 hidden_states: torch.Tensor,
                 cu_seqlens: torch.Tensor,
-                rotary_pos_emb: Optional[torch.Tensor] = None) -> torch.Tensor:
+                rotary_pos_emb: torch.Tensor | None = None) -> torch.Tensor:
         hidden_states = hidden_states + self.attn(
             self.norm1(hidden_states),
             cu_seqlens=cu_seqlens,
@@ -269,7 +216,8 @@ class Qwen3VLVisionPatchMerger(nn.Module):
                  config: PretrainedConfig,
                  use_postshuffle_norm=False,
                  dtype: torch.dtype = None,
-                 device: torch.device = None) -> None:
+                 device: torch.device = None,
+                 prefix: str = '') -> None:
         super().__init__()
         self.hidden_size = config.hidden_size * (config.spatial_merge_size**2)
         self.use_postshuffle_norm = use_postshuffle_norm
@@ -284,6 +232,7 @@ class Qwen3VLVisionPatchMerger(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=True,
+            prefix=add_prefix('linear_fc1', prefix),
         )
         self.act_fn = nn.GELU()
         self.linear_fc2 = build_rowwise_linear(
@@ -293,6 +242,7 @@ class Qwen3VLVisionPatchMerger(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=True,
+            prefix=add_prefix('linear_fc2', prefix),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -305,7 +255,11 @@ class Qwen3VLVisionPatchMerger(nn.Module):
 class Qwen3VLVisionModel(nn.Module):
     """Vision transformer."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         self.config = config
         self.spatial_merge_size = config.spatial_merge_size
@@ -318,15 +272,28 @@ class Qwen3VLVisionModel(nn.Module):
         head_dim = config.hidden_size // config.num_heads
         self.rotary_pos_emb = Qwen3VLVisionRotaryEmbedding(head_dim // 2, device=device)
 
-        self.blocks = nn.ModuleList(
-            [Qwen3VLVisionBlock(config, layer_idx, dtype=dtype, device=device) for layer_idx in range(config.depth)])
-        self.merger = Qwen3VLVisionPatchMerger(config=config, use_postshuffle_norm=False, dtype=dtype, device=device)
+        self.blocks = nn.ModuleList([
+            Qwen3VLVisionBlock(config,
+                               layer_idx,
+                               dtype=dtype,
+                               device=device,
+                               prefix=add_prefix(f'blocks.{layer_idx}', prefix)) for layer_idx in range(config.depth)
+        ])
+        self.merger = Qwen3VLVisionPatchMerger(config=config,
+                                               use_postshuffle_norm=False,
+                                               dtype=dtype,
+                                               device=device,
+                                               prefix=add_prefix('merger', prefix))
 
         if hasattr(config, 'deepstack_visual_indexes'):
             self.deepstack_visual_indexes = config.deepstack_visual_indexes
             self.deepstack_merger_list = nn.ModuleList([
-                Qwen3VLVisionPatchMerger(config=config, use_postshuffle_norm=True, dtype=dtype, device=device)
-                for _ in range(len(config.deepstack_visual_indexes))
+                Qwen3VLVisionPatchMerger(config=config,
+                                         use_postshuffle_norm=True,
+                                         dtype=dtype,
+                                         device=device,
+                                         prefix=add_prefix(f'deepstack_merger_list.{dvi}', prefix))
+                for dvi in range(len(config.deepstack_visual_indexes))
             ])
 
     @staticmethod
@@ -373,7 +340,7 @@ class Qwen3VLVisionModel(nn.Module):
         return rotary_pos_emb
 
     # copy from https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/qwen3_vl.py#L474
-    def fast_pos_embed_interpolate(self, grid_thw: List[List[int]]) -> torch.Tensor:
+    def fast_pos_embed_interpolate(self, grid_thw: list[list[int]]) -> torch.Tensor:
         num_grid_per_side = self.num_grid_per_side
         m_size = self.spatial_merge_size
         hidden_dim = self.pos_embed.embedding_dim
@@ -448,7 +415,7 @@ class Qwen3VLVisionModel(nn.Module):
         return hidden_states, deepstack_feature_lists
 
 
-class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
+class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -463,47 +430,54 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         ],
     }
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 ctx_mgr: StepContextManager,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        ctx_mgr: StepContextManager,
+        dtype: torch.dtype = None,
+        device: torch.device = None,
+        prefix: str = '',
+    ):
         super().__init__()
         self.config = config
         self.ctx_mgr = ctx_mgr
 
         # build preprocessor
-        self.input_processor = Qwen3VLInputProcessor(self.config)
+        self.input_processor = Qwen3VLInputProcessor(self.config, dtype)
 
         # build vision model
         self.visual = Qwen3VLVisionModel(
             config.vision_config,
             dtype=dtype,
             device=device,
+            prefix=add_prefix('visual', prefix),
         )
 
         # build text model
-        self.language_model = Qwen3VLTextModel(config.text_config, dtype=dtype, device=device)
+        self.language_model = Qwen3VLTextModel(config.text_config,
+                                               dtype=dtype,
+                                               device=device,
+                                               prefix=add_prefix('language_model', prefix))
 
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.text_config.hidden_size,
-                                            config.text_config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.text_config.hidden_size,
+                                          config.text_config.vocab_size,
+                                          bias=False,
+                                          dtype=dtype,
+                                          device=device)
 
     def forward(
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         mrope_position_ids: torch.Tensor = None,
         pixel_values: torch.Tensor = None,
         vis_cu_seqlens: torch.Tensor = None,
         vis_pos_emb: torch.Tensor = None,
-        image_mask: torch.Tensor = None,
+        multimodal_mask: torch.Tensor = None,
         pos_embeds: torch.Tensor = None,
         grid_thw: torch.Tensor = None,
         **kwargs,
@@ -532,10 +506,9 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
                 image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, dtype)
 
                 # mask and scatter to create final input embeddings
-                expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
-                inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
-
-                visual_pos_masks = expanded_image_mask
+                multimodal_mask = multimodal_mask.unsqueeze(-1).expand_as(inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(multimodal_mask, image_embeds)
+                visual_pos_masks = multimodal_mask
 
         hidden_states = self.language_model(
             input_ids=input_ids,
@@ -550,23 +523,14 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         )
         return hidden_states
 
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
-
-    def update_weights(self):
-        """Update weights."""
-        if self.config.tie_word_embeddings:
-            self.lm_head.weight = self.language_model.embed_tokens.weight
-
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.language_model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -579,18 +543,18 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         pixel_values = None
         vis_cu_seqlens = None
         vis_pos_emb = None
-        image_mask = None
+        multimodal_mask = None
         grid_thw = None
         pos_embeds = None
         if context.input_multimodals is not None:
-            image_data = [input_mm.get('image', []) for input_mm in context.input_multimodals]
-            if len(image_data) > 0:
-                # flatten batch
-                image_data = [data for im_data in image_data for data in im_data]
-                pixel_values = torch.cat([data.data for data in image_data])
-                image_token_id = image_data[0].meta['image_token_id']
-                image_mask = input_ids == image_token_id
-                grid_thw = torch.cat([data.meta['grid_thw'] for data in image_data]).cpu()
+            mm_inputs = [input_mm.get('mm_data', []) for input_mm in context.input_multimodals]
+            # flatten batch
+            mm_inputs = [item for sublist in mm_inputs for item in sublist]
+
+            if len(mm_inputs) > 0:
+                pixel_values = torch.cat([inp.data for inp in mm_inputs])
+                multimodal_mask = self.get_multimodal_mask(input_ids, mm_inputs)
+                grid_thw = torch.stack([data.meta['grid_thw'] for data in mm_inputs]).cpu()
                 vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
                 pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
                 vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
@@ -620,12 +584,13 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
             pixel_values=pixel_values,
             vis_cu_seqlens=vis_cu_seqlens,
             vis_pos_emb=vis_pos_emb,
-            image_mask=image_mask,
+            multimodal_mask=multimodal_mask,
             grid_thw=grid_thw,
             pos_embeds=pos_embeds,
         )
 
-    def rename_weight(self, name: str) -> str:
+    @classmethod
+    def rename_weight(cls, name: str) -> str:
         """Rename weight."""
         if name.startswith('model.language_model.'):
             return 'language_model.' + name[len('model.language_model.'):]
@@ -635,7 +600,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
             return name[len('model.'):]
         return name
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
@@ -673,127 +638,107 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
                     param = params_dict[name]
                     load_weight(param, loaded_weight)
 
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
-        """Make cudagraph buffers from forward inputs."""
-        max_tokens = graph_meta.max_tokens
-
-        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-        mrope_position_ids = kwargs.get('mrope_position_ids', None)
-        if mrope_position_ids is not None:
-            input_buffers['mrope_position_ids'] = mrope_position_ids.new_zeros(3, max_tokens)
-
-        return input_buffers
-
-    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
-        """Fill cudagraph buffers from forward inputs."""
-
-        new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-
-        input_ids = kwargs.get('input_ids')
-        num_tokens = input_ids.size(-1)
-        new_batch_size = graph_meta.max_batchs
-
-        is_decoding = graph_meta.is_decoding
-        input_buffers = graph_meta.input_buffers
-        mrope_position_ids = kwargs.get('mrope_position_ids', None)
-        if mrope_position_ids is not None:
-            input_buffers['mrope_position_ids'][:, :num_tokens] = mrope_position_ids
-            if is_decoding:
-                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids'][:, :new_batch_size]
-            else:
-                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids']
-
-        return new_inputs
-
-    def _get_model_metas(self, context: StepContext):
-        """Get model metas."""
-        model_metas = context.model_metas
-        if model_metas is None:
-            batch_size = context.q_seqlens.numel()
-            return [dict(mrope_delta=0)] * batch_size
-        return [dict(mrope_delta=0) if meta is None else meta for meta in model_metas]
-
-    def _update_model_meta_decoding(self, context: StepContext):
-        """Update model meta for decoding."""
-        model_metas = self._get_model_metas(context)
-        position_ids = context.position_ids
-
-        mrope_deltas = [meta['mrope_delta'] for meta in model_metas]
-        mrope_deltas = position_ids.new_tensor(mrope_deltas)
-        mrope_position_ids = position_ids + mrope_deltas[None]
-        mrope_position_ids = mrope_position_ids.expand(3, -1)
-
-        context.mrope_position_ids = mrope_position_ids
-        return model_metas
-
-    def _get_multimodal_pos_ids(self, grid_thw: list, device: torch.device):
-        """Get mrope ids."""
-        t, h, w = grid_thw
-        h //= 2
-        w //= 2
-        stride = torch.tensor([h * w, w, 1], device=device)[:, None]
-        size = torch.tensor([t, h, w], device=device)[:, None]
-        pos_ids = torch.arange(t * h * w, device=device)[None].expand(3, -1)
-        pos_ids = pos_ids // stride % size
-        return pos_ids
-
-    def _update_model_meta_prefilling(self, context: StepContext):
-        """Update model meta for prefilling."""
-        model_metas = self._get_model_metas(context)
-        input_multimodals = context.input_multimodals
-        if input_multimodals is None:
-            input_multimodals = [None] * len(model_metas)
-        position_ids = context.position_ids
-        batched_pos_ids = position_ids[0].split(context.q_seqlens.tolist())
-        mrope_position_ids = []
-        new_model_metas = []
-        for pos_ids, model_meta, input_mm in zip(batched_pos_ids, model_metas, input_multimodals):
-            images = []
-            if input_mm is not None:
-                images = input_mm.get('image', [])
-            if model_meta is None or 'mrope_delta' not in model_meta:
-                mrope_delta = 0
-            else:
-                mrope_delta = model_meta['mrope_delta']
-
-            pos_start = pos_ids[0].item()
-            mrope_pos_ids = pos_ids + mrope_delta
-            mrope_pos_ids = mrope_pos_ids[None].expand(3, -1).clone()
-            for img in images:
-                grid_thw = img.meta['grid_thw'][0].tolist()
-                _, h, w = grid_thw
-                h //= 2
-                w //= 2
-                num_pad = img.end - img.start - max(h, w)
-                mrope_delta -= num_pad
-                fill_start = img.start - pos_start
-                fill_end = img.end - pos_start
-                img_pos_ids = self._get_multimodal_pos_ids(grid_thw, pos_ids.device)
-                img_pos_ids += mrope_pos_ids[:, fill_start:fill_start + 1]
-                mrope_pos_ids[:, fill_end:] -= num_pad
-                mrope_pos_ids[:, fill_start:fill_end] = img_pos_ids
-
-            mrope_position_ids.append(mrope_pos_ids)
-            new_model_metas.append(dict(mrope_delta=mrope_delta))
-
-        mrope_position_ids = torch.cat(mrope_position_ids, dim=1)
-        context.mrope_position_ids = mrope_position_ids
-
-        return new_model_metas
-
-    def update_model_metas(self,
-                           past_key_values: List[List[torch.Tensor]],
-                           inputs_embeds: Optional[torch.Tensor] = None,
-                           context: StepContext = None):
-        """Update model meta."""
-        if context.is_decoding:
-            return self._update_model_meta_decoding(context)
-        else:
-            return self._update_model_meta_prefilling(context)
-
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
         return self.input_processor
 
 
-InputMultiModalType = List[Dict[str, Any]]
+class Qwen3VLInputProcessor(BaseModelInputProcessor):
+    """Qwen3 input processor."""
+
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype) -> None:
+        self.config = config
+        self.dtype = dtype
+
+    @classmethod
+    def _get_multimodal_pos_ids(cls, grid_thw: Sequence[int]) -> np.ndarray:
+        """Get mrope ids."""
+        t, h, w = grid_thw
+        h = h // 2
+        w = w // 2
+        stride = np.array([h * w, w, 1])[None]
+        size = np.array([t, h, w])[None]
+        pos_ids = np.arange(t * h * w)[:, None].repeat(3, axis=1)
+        pos_ids = pos_ids // stride % size
+        return pos_ids
+
+    @classmethod
+    def make_mrope(cls, grid_thw: torch.Tensor):
+        grid_thw = grid_thw.tolist() if grid_thw.dim() == 1 else grid_thw[0].tolist()
+        img_pos_ids = cls._get_multimodal_pos_ids(grid_thw)
+        return img_pos_ids
+
+    def _make_image_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
+        """Make image MultiModalData."""
+        pixel_values = input_mm['pixel_values']
+        image_grid_thw = input_mm['image_grid_thw']
+        offset = input_mm['offset']
+        image_token_id = input_mm['image_token_id']
+
+        mrope_pos_ids = self.make_mrope(image_grid_thw)
+
+        mm_data = MultiModalData(modality=Modality.IMAGE,
+                                 data=pixel_values,
+                                 start=offset[0],
+                                 end=offset[1],
+                                 mrope_pos_ids=mrope_pos_ids,
+                                 meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+        return mm_data
+
+    def _make_video_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
+        """Make video MultiModalData."""
+        pixel_values_videos = input_mm['pixel_values_videos']
+        video_grid_thw = input_mm['video_grid_thw']
+        offset = input_mm['offset']
+        video_token_id = input_mm['video_token_id']
+
+        mrope_pos_ids = self.make_mrope(video_grid_thw)
+
+        mm_data = MultiModalData(modality=Modality.VIDEO,
+                                 data=pixel_values_videos,
+                                 start=offset[0],
+                                 end=offset[1],
+                                 mrope_pos_ids=mrope_pos_ids,
+                                 meta=dict(
+                                     grid_thw=video_grid_thw,
+                                     video_token_id=video_token_id,
+                                 ))
+        return mm_data
+
+    def _make_time_series_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
+        """Make time series MultiModalData."""
+        ts_values = input_mm['ts_values'].to(self.dtype)
+        offset = input_mm['offset']
+        ts_token_id = input_mm['ts_token_id']
+        ts_lens = input_mm['ts_lens']
+        ts_sr = input_mm['ts_sr']
+
+        mm_data = MultiModalData(modality=Modality.TIME_SERIES,
+                                 data=ts_values,
+                                 start=offset[0],
+                                 end=offset[1],
+                                 meta=dict(ts_lens=ts_lens, ts_sr=ts_sr, ts_token_id=ts_token_id))
+        return mm_data
+
+    def preprocess_input(self,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
+                         **kwargs) -> PreprocessInputResult:
+        """Prepare multimodal input."""
+        if input_multimodals is None or len(input_multimodals) == 0:
+            return input_ids, input_multimodals
+
+        input_mm_data = []
+        for input_mm in input_multimodals:
+            modality = input_mm.get('modality')
+            if modality == Modality.IMAGE:
+                mm_data = self._make_image_mm_data(input_mm)
+            elif modality == Modality.VIDEO:
+                mm_data = self._make_video_mm_data(input_mm)
+            elif modality == Modality.TIME_SERIES:
+                mm_data = self._make_time_series_mm_data(input_mm)
+            input_mm_data.append(mm_data)
+
+        result = PreprocessInputResult(input_ids=input_ids, input_multimodals=dict(mm_data=input_mm_data))
+
+        return result

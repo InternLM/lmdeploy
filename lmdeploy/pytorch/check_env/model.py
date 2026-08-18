@@ -19,7 +19,7 @@ class ModelChecker(BaseChecker):
         model_path = self.model_path
         trust_remote_code = self.trust_remote_code
         try:
-            from lmdeploy.pytorch.transformers import config_from_pretrained
+            from lmdeploy.hf_configs import config_from_pretrained
             config = config_from_pretrained(model_path, trust_remote_code=trust_remote_code)
         except Exception as e:
             message = (f'Load model config with transformers=={trans_version}'
@@ -52,7 +52,10 @@ class ModelChecker(BaseChecker):
 
             from lmdeploy.pytorch.config import ModelConfig
             from lmdeploy.utils import is_bf16_supported
-            model_config = ModelConfig.from_hf_config(config, model_path=model_path, dtype=dtype)
+            model_config = ModelConfig.from_hf_config(config,
+                                                      model_path=model_path,
+                                                      dtype=dtype,
+                                                      device_type=device_type)
             if model_config.dtype == torch.bfloat16:
                 if not is_bf16_supported(device_type):
                     logger.warning('Device does not support bfloat16.')

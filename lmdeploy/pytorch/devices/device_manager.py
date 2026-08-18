@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from lmdeploy.pytorch.utils import CtxMgrBase, singleton
 

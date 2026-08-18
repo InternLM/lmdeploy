@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
 
 from ...messages import SchedulerSequence
 from ..scheduler import Scheduler
@@ -17,7 +16,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
         else:
             self.evict_for_seq = self._evict_for_ssm
 
-    def _evict_for_seq_default(self, seq: SchedulerSequence, evictable_seqs: List[SchedulerSequence],
+    def _evict_for_seq_default(self, seq: SchedulerSequence, evictable_seqs: list[SchedulerSequence],
                                prealloc_size: int):
         """Evict seqs."""
         block_manager = self.block_manager
@@ -35,6 +34,8 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             if evict_seq.num_blocks == 0:
                 continue
 
+            if block_trie.enabled:
+                evict_seq.prefix_cache.suppress_match_stats = True
             evict_seq.state.free()
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
@@ -56,13 +57,22 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
 
         return success
 
-    def _evict_for_ssm(self, seq: SchedulerSequence, evictable_seqs: List[SchedulerSequence], prealloc_size: int):
-        """Evict seqs."""
+    def _evict_for_ssm(self, seq: SchedulerSequence, evictable_seqs: list[SchedulerSequence], prealloc_size: int):
+        """Evict blocks and checkpoint states for an SSM sequence.
+
+        SSM scheduling needs both KV blocks and a runtime state slot.  Before evicting live sequences, try dropping old
+        unpinned checkpoints because they are cheaper to recompute than an active request.
+        """
         block_manager = self.block_manager
         state_manager = self.state_manager
         block_trie = self.block_trie
         num_required_blocks = block_manager.num_required_blocks(seq, prealloc_size)
-        has_free_state = state_manager.get_num_free() > 0
+        # avoid requiring free state when already allocated.
+        has_runtime_state = state_manager.is_allocated(seq)
+        has_free_state = has_runtime_state or state_manager.get_num_free_runtime() > 0
+        if not has_free_state:
+            block_trie.state_checkpoints.evict(1)
+            has_free_state = state_manager.get_num_free_runtime() > 0
 
         if has_free_state and block_manager.get_num_free_gpu_blocks() >= num_required_blocks:
             return True
@@ -76,8 +86,13 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
                 continue
 
             # free sequence
+            if block_trie.enabled:
+                evict_seq.prefix_cache.suppress_match_stats = True
             evict_seq.state.free()
-            has_free_state = True
+            has_free_state = has_runtime_state or state_manager.get_num_free_runtime() > 0
+            if not has_free_state:
+                block_trie.state_checkpoints.evict(1)
+                has_free_state = state_manager.get_num_free_runtime() > 0
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
                 success = True

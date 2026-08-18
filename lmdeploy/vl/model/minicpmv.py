@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import itertools
 import warnings
-from typing import Dict, List
 
 import torch
 from PIL.Image import Image
@@ -23,10 +22,11 @@ class MiniCPMVModel(VisionModel):
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
+                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
-                 backend: str = ''):
-        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
+                 backend: str = '',
+                 trust_remote_code: bool = False):
+        super().__init__(model_path, with_llm, max_memory, hf_config, backend, trust_remote_code=trust_remote_code)
         if not hasattr(self.hf_config, 'version'):
             raise ValueError('Can not find `version` in config.json. '
                              'Please checkout the latest model')
@@ -35,13 +35,13 @@ class MiniCPMVModel(VisionModel):
             raise ValueError(f'Only support v2.5 and v2.6, but got version {version}')
         self.version = version
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         from transformers import AutoProcessor
-        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         self.image_processor = self.processor.image_processor
         self._preprocess_func = (self._preprocess_v2_5 if self.version == '2.5' else self._preprocess_v2_6)
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
@@ -50,7 +50,7 @@ class MiniCPMVModel(VisionModel):
             config = self.hf_config
             assert config.slice_mode is True, 'only support slice mode'
             config.quantization_config = {}  # disable vision part quantization
-            model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(config, trust_remote_code=trust_remote_code)
         self.vl_model = model
         if not self.with_llm:
             del model.llm
@@ -94,7 +94,7 @@ class MiniCPMVModel(VisionModel):
             tgt_sizes.append(torch.Tensor([H, W]).type(torch.int32))
         return patches, tgt_sizes
 
-    def _preprocess_v2_5(self, image: Image, params: Dict = None) -> Dict:
+    def _preprocess_v2_5(self, image: Image, params: dict = None) -> dict:
         """Image preprocessing for MiniCPM-Llama3-V-2_5."""
         slice_images, best_grid = self._get_slice_image(image)
         # pixel_values, tgt_sizes are list of torch tensors
@@ -108,7 +108,7 @@ class MiniCPMVModel(VisionModel):
             image_tokens=1,
             image_token_id=self.image_token_id)
 
-    def _preprocess_v2_6(self, image: Image, params: Dict = None) -> Dict:
+    def _preprocess_v2_6(self, image: Image, params: dict = None) -> dict:
         """Image preprocessing for MiniCPM-V-2_6."""
         max_slice_nums = self.image_processor.max_slice_nums
         use_image_id = self.image_processor.use_image_id
@@ -130,28 +130,26 @@ class MiniCPMVModel(VisionModel):
             image_token_id=self.image_token_id,
             use_image_id=use_image_id)
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess() for spec."""
-        outputs = []
         for i, message in enumerate(messages):
-            if message['role'] != 'user' or not isinstance(message['content'], List):
+            if message['role'] != 'user' or not isinstance(message['content'], list):
                 continue
-            for item in message['content']:
-                if item['type'] == 'image':
-                    image = item['image'].convert('RGB')
-                    params = {k: v for k, v in item.items() if k not in {'type', 'image'}}
+            outputs = []
+            for modality, image, params in self.collect_multimodal_items([message]):
+                if modality == 'image':
                     result = self._preprocess_func(image, params)
                     outputs.append(result)
             messages[i].update(dict(preprocess=outputs))
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -199,8 +197,9 @@ class MiniCPMVModel(VisionModel):
         messages.append(dict(role='forward', content=outputs))
         return messages
 
-    def proc_messages(self, messages, chat_template, sequence_start):
+    def proc_messages(self, messages, chat_template, tools=None, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         idx = 0
@@ -231,13 +230,13 @@ class MiniCPMVModel(VisionModel):
             content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
             prompt = ''.join(prompts) + content[0]
             prompt_messages.append(dict(role='user', content=prompt))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+        prompt = chat_template.messages2prompt(prompt_messages, tools=tools, **chat_template_kwargs)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_pytorch(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_turbomind(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer)

@@ -8,7 +8,7 @@ class InterS1ProModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.model_type == 'interns1_pro'
+        return hf_config.model_type in ['interns1_pro', 'interns1_1']
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):

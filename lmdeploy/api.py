@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Literal
+from typing import TYPE_CHECKING, Literal
 
 from typing_extensions import deprecated
 
@@ -13,13 +13,16 @@ if TYPE_CHECKING:
 
 
 def pipeline(model_path: str,
-             backend_config: 'TurbomindEngineConfig' | 'PytorchEngineConfig' | None = None,
-             chat_template_config: 'ChatTemplateConfig' | None = None,
+             backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
+             chat_template_config: ChatTemplateConfig | None = None,
              log_level: str = 'WARNING',
              max_log_len: int | None = None,
-             speculative_config: 'SpeculativeConfig' | None = None,
+             trust_remote_code: bool = False,
+             speculative_config: SpeculativeConfig | None = None,
+             allowed_media_domains: list[str] | None = None,
              **kwargs):
-    """
+    """Create a pipeline for inference.
+
     Args:
         model_path: the path of a model. It could be one of the following options:
 
@@ -28,20 +31,24 @@ def pipeline(model_path: str,
               ii) and iii).
             - ii) The model_id of a lmdeploy-quantized model hosted
               inside a model repo on huggingface.co, such as
-              ``InternLM/internlm-chat-20b-4bit``,
               ``lmdeploy/llama2-chat-70b-4bit``, etc.
             - iii) The model_id of a model hosted inside a model repo
-              on huggingface.co, such as ``internlm/internlm-chat-7b``,
-              ``Qwen/Qwen-7B-Chat``, ``baichuan-inc/Baichuan2-7B-Chat``
+              on huggingface.co, such as ``internlm/internlm2-chat-7b``,
+              ``Qwen/Qwen2.5-7B-Instruct``
               and so on.
-        backend_config: backend
-            config instance. Default to None.
-        chat_template_config: chat template configuration.
-            Default to None.
+        backend_config: backend config instance. Default to None.
+        chat_template_config: chat template configuration. Default to None.
         log_level: set log level whose value among [``CRITICAL``, ``ERROR``,
             ``WARNING``, ``INFO``, ``DEBUG``]
         max_log_len: Max number of prompt characters or prompt tokens
-            being printed in log
+            being printed in log.
+        trust_remote_code: whether to trust remote code from model repositories.
+        speculative_config: speculative decoding configuration.
+        allowed_media_domains: Optional HTTP(S) media URL domain allowlist.
+        **kwargs: additional keyword arguments passed to the pipeline.
+
+    Returns:
+        Pipeline: a pipeline instance for inference.
 
     Examples:
 
@@ -49,7 +56,7 @@ def pipeline(model_path: str,
 
             # LLM
             import lmdeploy
-            pipe = lmdeploy.pipeline('internlm/internlm-chat-7b')
+            pipe = lmdeploy.pipeline('internlm/internlm2-chat-7b')
             response = pipe(['hi','say this is a test'])
             print(response)
 
@@ -62,15 +69,16 @@ def pipeline(model_path: str,
             im = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg')
             response = pipe([('describe this image', [im])])
             print(response)
-
-    """ # noqa E501
+    """  # noqa E501
 
     return Pipeline(model_path,
                     backend_config=backend_config,
                     chat_template_config=chat_template_config,
                     log_level=log_level,
                     max_log_len=max_log_len,
+                    trust_remote_code=trust_remote_code,
                     speculative_config=speculative_config,
+                    allowed_media_domains=allowed_media_domains,
                     **kwargs)
 
 
@@ -78,12 +86,12 @@ def pipeline(model_path: str,
 def serve(model_path: str,
           model_name: str | None = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-          backend_config: 'TurbomindEngineConfig' | 'PytorchEngineConfig' | None = None,
-          chat_template_config: 'ChatTemplateConfig' | None = None,
+          backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
+          chat_template_config: ChatTemplateConfig | None = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
           log_level: str = 'ERROR',
-          api_keys: List[str] | str | None = None,
+          api_keys: list[str] | str | None = None,
           ssl: bool = False,
           **kwargs):
     """This function is deprecated and no longer available.
@@ -106,11 +114,13 @@ def client(api_server_url: str = 'http://0.0.0.0:23333', api_key: str | None = N
 
     Args:
         api_server_url: communicating address ``http://<ip>:<port>`` of
-            api_server
+            api_server.
         api_key: api key. Default to None, which means no
             api key will be used.
-    Return:
-        Chatbot for LLaMA series models with turbomind as inference engine.
+
+    Raises:
+        NotImplementedError: This function has been deprecated and removed.
+            Use ``from lmdeploy.serve import APIClient`` instead.
     """
     raise NotImplementedError("The 'client' function is no longer available. This function has been deprecated. "
                               ' Please use "from lmdeploy.serve import APIClient" instead.')

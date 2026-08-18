@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
 
 import torch
 
@@ -30,6 +29,10 @@ NORM_FCS_MAP = {
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
     'Qwen3DecoderLayer': {
+        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
+    },
+    'Qwen3MoeDecoderLayer': {
         'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
@@ -122,15 +125,20 @@ FC_FCS_MAP = {
     }
 }
 
-SKIPPED_MODULE = ['lora', 'block_sparse_moe.gate']
+SKIPPED_MODULE = ['lora']
 
 
-def skipped_module(name: str):
-    """Whether the module should be skipped from quantization."""
-    for m in SKIPPED_MODULE:
-        if m in name:
-            return True
-    return False
+def skipped_module(name: str, patterns: list[str]):
+    """Whether the module should be skipped from quantization.
+
+    Args:
+        name: The fully-qualified module name.
+        patterns: The list of patterns for modules to skip.
+    """
+
+    patterns.extend(SKIPPED_MODULE)
+
+    return next(((True, pattern) for pattern in patterns if pattern in name), (False, None))
 
 
 @torch.no_grad()
@@ -151,7 +159,7 @@ def get_weight_scale(weight, q_group_size=-1):
 
 @torch.no_grad()
 def smooth_ln_fcs(ln: torch.nn.Module,
-                  fcs: List[torch.nn.Module],
+                  fcs: list[torch.nn.Module],
                   act_scales: torch.Tensor,
                   group_size: int = -1,
                   alpha: float = 0.5) -> torch.Tensor:
@@ -204,7 +212,7 @@ def smooth_ln_fcs(ln: torch.nn.Module,
 
 @torch.no_grad()
 def smooth_fc_fcs(pre_fc: torch.nn.Module,
-                  fcs: List[torch.nn.Module],
+                  fcs: list[torch.nn.Module],
                   act_scales: torch.Tensor,
                   group_size: int = -1,
                   alpha: float = 0.5) -> torch.Tensor:
@@ -236,7 +244,9 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
               'clamping w_scales.pow(1 - alpha) to 1e-4')
         w_scales_pow = w_scales_pow.clamp(min=1e-4)
     scales = (act_scales.pow(alpha) / w_scales_pow).clamp(min=1e-4).to(device).to(dtype)
-    scales = scales / (scales.max() * scales.min()).sqrt()
+    # prevent scales.max() * scales.min() == inf
+    denom = (scales.max().float() * scales.min().float()).sqrt()
+    scales = (scales.float() / denom).to(dtype=dtype)
 
     # (for qwen&baichuan) pre_fc is packed QKV, only V needs to scale
     # phi3 fused qkv and gate_up
@@ -293,19 +303,33 @@ def check_awq_supported(layer_type):
         raise NotImplementedError
 
 
-def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
-    """Quantize the weights of the target model's linear layers."""
+def quant_weights(model, fcs, bits, symmetry, arch, group_size=-1, device='cuda'):
+    """Quantize the weights of the target model's linear layers.
+
+    Returns:
+        Matched skip patterns.
+    """
+    from lmdeploy.lite.model import MODELS
     from lmdeploy.lite.quantization import WeightQuantizer
     from lmdeploy.lite.quantization.modules import WeightOnlyQLinear
     from lmdeploy.lite.utils import QParams
+    patterns = []
+    skipped_modules = []
+    rebuilder = MODELS.get(arch)
+    if rebuilder:
+        patterns = rebuilder.skipped_modules()
+        skipped_modules.extend(patterns)
     for name, fc in fcs.items():
         fc.to(device)
         parent_name, _, child_name = name.rpartition('.')
         parent = model.get_submodule(parent_name)
         pack_or_skip = 'packed'
-        if skipped_module(name):
+        skipped, skipped_pattern = skipped_module(name, patterns)
+        if skipped:
             q_linear = fc
             pack_or_skip = 'skipped'
+            if skipped_pattern and skipped_pattern not in skipped_modules:
+                skipped_modules.append(skipped_pattern)
         else:
             quantizer = WeightQuantizer(bits, symmetry, 'per_group', group_size)
             fc.weight.data, scales, zeros = pseudo_quantize_tensor(fc.weight.data,
@@ -318,6 +342,8 @@ def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
         torch.cuda.empty_cache()
 
         print(f'{name} weight {pack_or_skip}.')
+
+    return skipped_modules
 
 
 def smooth_layers(layers, fc2fcs, norm2fcs, a_scales, group_size=-1, device='cuda'):

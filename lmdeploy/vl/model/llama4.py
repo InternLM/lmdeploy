@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List
 
 import torch
 from transformers import AutoConfig
@@ -35,13 +34,14 @@ class LLama4VisionModel(VisionModel):
         arch = config.architectures[0]
         return arch == cls._arch
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         check_trans_version()
         from transformers.models.llama4 import Llama4Processor
         from transformers.models.llama4.processing_llama4 import Llama4ProcessorKwargs
         self.processor = Llama4Processor.from_pretrained(
             self.model_path,
             padding_side='left',
+            trust_remote_code=trust_remote_code,
         )
         img_patch_token = self.processor.img_patch_token
         self.image_token_id = self.processor.tokenizer.encode(img_patch_token, add_special_tokens=False)[0]
@@ -52,21 +52,21 @@ class LLama4VisionModel(VisionModel):
             add_special_tokens=False,
         )['images_kwargs']
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         # TODO, implement for tubomind engine
         raise NotImplementedError()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
         processor = self.processor
         patch_size = processor.patch_size
         downsample_ratio = processor.downsample_ratio
         images_kwargs = self.images_kwargs
-        for image, params in images:
+        for modality, image, params in images:
             image_inputs = processor.image_processor(images=[image], **images_kwargs)
             pixel_values = image_inputs['pixel_values']
             image_height, image_width = image_inputs['pixel_values'][0].shape[-2:]
@@ -84,12 +84,12 @@ class LLama4VisionModel(VisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -99,8 +99,9 @@ class LLama4VisionModel(VisionModel):
         raise NotImplementedError()
 
     @staticmethod
-    def proc_messages(messages, chat_template, sequence_start):
+    def proc_messages(messages, chat_template, tools=None, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
@@ -115,20 +116,19 @@ class LLama4VisionModel(VisionModel):
             if IMAGE_TOKEN not in prompt:
                 prompt = f'{IMAGE_TOKEN * n_images}' + prompt
             prompt_messages.append(dict(role='user', content=prompt))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+        prompt = chat_template.messages2prompt(prompt_messages, tools=tools, **chat_template_kwargs)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
+    def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer):
         """Auxiliary function to pack the preprocessing results in a format
         compatible with what is required by pytorch engine.
 
         Args:
-            messages(List[Dict]): the output of `preprocess`
+            messages(list[dict]): the output of `preprocess`
             prompt(str): the prompt after applying chat template
             IMAGE_TOKEN(str): a placeholder where image tokens will be
                 inserted
             tokenzer: the tokenizer model
-            sequence_start: starting flag of a sequence
         """
         # collect all preprocessing result from messages
         preps = [x['content'] for x in messages if x['role'] == 'preprocess']
@@ -149,14 +149,14 @@ class LLama4VisionModel(VisionModel):
                 prep.update(offset=len(input_ids) + 1)
                 assert self.image_token_id == prep['image_token_id']
                 seg = image_prompts + seg
-            token_ids = tokenizer.encode(seg, add_bos=((i == 0) and sequence_start))
+            token_ids = tokenizer.encode(seg, add_bos=(i == 0))
             input_ids.extend(token_ids)
         return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_pytorch(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_turbomind(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer)

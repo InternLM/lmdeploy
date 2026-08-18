@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
 from abc import ABC, abstractmethod
-from typing import Callable, List, Optional
+from collections.abc import Callable
 
 import torch
 import torch.distributed as dist
@@ -52,7 +52,7 @@ class FusedMoEImpl(ABC):
                 down_weights: torch.Tensor,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
-                expert_list: List[int] = None,
+                expert_list: list[int] = None,
                 act_func: Callable = None):
         """forward."""
         raise NotImplementedError
@@ -70,7 +70,8 @@ class FusedMoEBuilder(ABC):
               ep_size: int = 1,
               ep_group: dist.ProcessGroup = None,
               layer_idx: int = 0,
-              out_dtype: torch.dtype = torch.bfloat16):
+              out_dtype: torch.dtype = torch.bfloat16,
+              num_max_dispatch_tokens_per_rank: int = 128):
         """Build from mlp."""
         raise NotImplementedError
 
@@ -97,7 +98,7 @@ class FusedMoEW8A8Impl(ABC):
                 gate_up_scale: torch.Tensor,
                 down_weights: torch.Tensor,
                 down_scale: torch.Tensor,
-                expert_list: List[int] = None):
+                expert_list: list[int] = None):
         """forward."""
         raise NotImplementedError
 
@@ -115,12 +116,66 @@ class FusedMoEW8A8Builder(ABC):
         """Build from mlp."""
         raise NotImplementedError
 
+class FusedMoEStaticF8Impl(ABC):
+    """Fused MoE static FP8 implementation."""
+
+    def update_weights(
+        self,
+        gate_up_weights: torch.Tensor,
+        gate_up_weight_scale: torch.Tensor,
+        gate_up_input_scale: torch.Tensor,
+        down_weights: torch.Tensor,
+        down_weight_scale: torch.Tensor,
+        down_input_scale: torch.Tensor,
+    ):
+        """Update weights and scales."""
+        return (
+            gate_up_weights,
+            gate_up_weight_scale,
+            gate_up_input_scale,
+            down_weights,
+            down_weight_scale,
+            down_input_scale,
+        )
+
+    @abstractmethod
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        topk_weights: torch.Tensor,
+        topk_ids: torch.LongTensor,
+        gate_up_weights: torch.Tensor,
+        gate_up_weight_scale: torch.Tensor,
+        gate_up_input_scale: torch.Tensor,
+        down_weights: torch.Tensor,
+        down_weight_scale: torch.Tensor,
+        down_input_scale: torch.Tensor,
+        expert_list: list[int] = None,
+    ):
+        """Forward."""
+        raise NotImplementedError
+
+
+class FusedMoEStaticF8Builder(ABC):
+    """Fused MoE static FP8 builder."""
+
+    @staticmethod
+    @abstractmethod
+    def build(
+        top_k: int,
+        num_experts: int,
+        renormalize: bool = False,
+        out_dtype: torch.dtype = torch.float16,
+        quant_dtype: torch.dtype = torch.float8_e4m3fn,
+    ):
+        """Build static FP8 MoE implementation."""
+        raise NotImplementedError
 
 class FusedMoEBlockedF8Impl(ABC):
     """Fused moe blocked f8 implementation."""
 
     def __init__(self):
-        self.scale_fmt: Optional[str] = None
+        self.scale_fmt: str | None = None
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
                        down_scale: torch.Tensor):
@@ -131,7 +186,7 @@ class FusedMoEBlockedF8Impl(ABC):
         """Experts list of current rank."""
         raise NotImplementedError('Not Implemented.')
 
-    def set_scale_fmt(self, scale_fmt: Optional[str]):
+    def set_scale_fmt(self, scale_fmt: str | None):
         """Set scale fmt."""
         self.scale_fmt = scale_fmt
 
@@ -147,7 +202,7 @@ class FusedMoEBlockedF8Impl(ABC):
                 down_scale: torch.Tensor,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
-                expert_list: List[int] = None,
+                expert_list: list[int] = None,
                 act_func: Callable = None):
         """forward."""
         raise NotImplementedError
@@ -166,6 +221,8 @@ class FusedMoEBlockedF8Builder(ABC):
               ep_size: int = 1,
               ep_group: dist.ProcessGroup = None,
               out_dtype: torch.dtype = torch.float16,
+              fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+              num_max_dispatch_tokens_per_rank: int = 128,
               layer_idx: int = 0,
               custom_gateup_act: bool = False):
         """Build from mlp."""

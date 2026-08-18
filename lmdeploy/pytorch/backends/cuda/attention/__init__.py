@@ -7,14 +7,16 @@ from lmdeploy.pytorch.backends.attention import AttentionBuilder
 from lmdeploy.utils import get_logger
 
 from .default import TritonAttentionImpl, TritonAttentionMetadata
+from .v4 import TritonV4AttentionBuilder  # noqa: F401
 
 logger = get_logger('lmdeploy')
 
 use_fa3 = False
 try:
-    # Now flash-attention only support FA3 for sm90a && cuda >= 12.3
-    if (torch.cuda.get_device_capability()[0] == 9) and (torch.version.cuda >= '12.3'):
-        import flash_attn_interface  # noqa: F401
+    # flash-attention supports FA3 for sm80+ (Ampere and above) && cuda >= 12.3
+    _cuda_ver = tuple(int(x) for x in torch.version.cuda.split('.')[:2]) if torch.version.cuda else (0, 0)
+    if (torch.cuda.get_device_capability()[0] >= 8) and _cuda_ver >= (12, 3):
+        import lmdeploy.pytorch.third_party.flash_attn_interface  # noqa: F401
         assert torch.ops.flash_attn_3 is not None
         use_fa3 = True
 except Exception:
@@ -32,7 +34,7 @@ def use_fa3_warning():
 
 
 @functools.lru_cache
-def _enable_fa3(alibi: bool, learnable_sink: bool, block_sparse_size: int):
+def _enable_fa3(alibi: bool, learnable_sink: bool, block_sparse_size: int, head_size: int) -> bool:
     """Check if FA3 should be enabled.
 
     FA3 is enabled when:
@@ -44,7 +46,7 @@ def _enable_fa3(alibi: bool, learnable_sink: bool, block_sparse_size: int):
     Returns:
         True if FA3 should be enabled, False otherwise.
     """
-    enable = not alibi and not learnable_sink and block_sparse_size == 1
+    enable = not alibi and not learnable_sink and block_sparse_size == 1 and head_size <= 256
     if enable and not use_fa3_warning():
         enable = False
     return enable
@@ -127,8 +129,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
             causal=causal,
             **kwargs,
         )
-
-        enable_fa3 = _enable_fa3(alibi, learnable_sink, block_sparse_size)
+        enable_fa3 = _enable_fa3(alibi, learnable_sink, block_sparse_size, head_size)
 
         if use_flash_mla is True:
             logger.debug('Build FlashMLAImpl Attention')

@@ -21,6 +21,74 @@ In summary, LMDeploy kv quantization has the following advantages:
 3. KV int8 quantization has almost lossless accuracy, and KV int4 quantization accuracy is within an acceptable range
 4. Efficient inference, with int8/int4 kv quantization applied to llama2-7b, RPS is improved by round 30% and 40% respectively compared to fp16
 
+## TurboQuant
+
+LMDeploy supports KV quantization based on [Google Research's TurboQuant technology](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/) (to be presented at ICLR 2026), achieving higher compression ratio with near-zero accuracy loss through K=4bit QJL4 + V=2bit MSE combination.
+
+### Principles
+
+TurboQuant achieves efficient compression through two key steps:
+
+1. **High-quality compression (PolarQuant method)**: First randomly rotates the data vectors (using orthogonal transforms like Hadamard transform). This clever step simplifies the data's geometry, making it easy to apply a standard, high-quality quantizer to each part of the vector individually. This stage uses most of the compression power (the majority of the bits) to capture the main concept and strength of the original vector.
+
+2. **Eliminating hidden errors (QJL method)**: Uses a small, residual amount of compression power (just 1 bit) to apply the QJL (Quantized Johnson-Lindenstrauss) algorithm to the tiny amount of error left over from the first stage. The QJL stage acts as a mathematical error-checker that eliminates bias, leading to more accurate attention scores.
+
+### K/V Quantization Scheme
+
+- **K Path - QJL4 Quantization**:
+
+  - Uses 3-bit Lloyd-Max codebook for MSE quantization (captures main information)
+  - Uses 1-bit QJL to store residual sign (eliminates error bias)
+  - Each token's K is compressed to 4-bit
+
+- **V Path - MSE int2 Quantization**:
+
+  - Uses 2-bit Lloyd-Max codebook for MSE quantization
+  - Each token's V is compressed to 2-bit
+  - Stores normalization coefficients for dequantization
+
+### Advantages
+
+- **Zero accuracy loss**: Through PolarQuant + QJL combination, achieves high compression rate while maintaining model accuracy
+- **Higher compression ratio**: K 4bit + V 2bit = average 3bit, further compression compared to int4's 4bit
+- **Eliminates quantization bias**: QJL algorithm acts as error-checker, effectively eliminating quantization-induced bias
+
+### Performance Benchmark
+
+Tested on H200 with Qwen3-30B-A3B-Base model and ShareGPT dataset:
+
+| Metric             | Baseline (quant_policy=0) | TurboQuant (quant_policy=42) | Change     |
+| ------------------ | ------------------------- | ---------------------------- | ---------- |
+| Input throughput   | 2368.8 tok/s              | 2195.8 tok/s                 | -7.3%      |
+| Output throughput  | 2186.7 tok/s              | 2027.0 tok/s                 | -7.3%      |
+| Request throughput | 10.74 req/s               | 9.96 req/s                   | -7.3%      |
+| Mean E2E latency   | 5.888s                    | 6.348s                       | +7.8%      |
+| Mean TTFT          | 1.139s                    | 1.235s                       | +8.4%      |
+| Mean TPOT          | 0.024s                    | 0.026s                       | +8.3%      |
+| Mean ITL           | 0.059s                    | 0.059s                       | ~unchanged |
+
+**Test configuration**: GPU: H200, Model: Qwen3-30B-A3B-Base, Dataset: ShareGPT, Concurrency: 64, Requests: 5000
+
+**Takeaway**: TurboQuant K4V2 achieves ~5x KV cache memory reduction with about 7%-8% end-to-end performance overhead, which looks like a reasonable trade-off for memory-bound serving scenarios.
+
+### Limitations
+
+- **PytorchEngine only**: TurboQuant currently only supports PyTorch engine, not Turbomind engine
+- **MLA not supported**: Does not support Multi-head Latent Attention architecture
+- **Speculative decoding not supported**: Does not support speculative decoding
+- Requires head_dim to be a power of 2
+- Requires `fast_hadamard_transform` package for best performance (optional)
+
+### Optional Dependency
+
+TurboQuant uses Hadamard transform to accelerate the quantization process. Installing `fast_hadamard_transform` provides better performance:
+
+```shell
+pip install fast_hadamard_transform
+```
+
+Without this dependency, TurboQuant still works correctly, but performance may be slightly reduced.
+
 In the next section, we will take `internlm2-chat-7b` model as an example, introducing the usage of kv quantization and inference of lmdeploy. But before that, please ensure that lmdeploy is installed.
 
 ```shell
@@ -31,7 +99,7 @@ pip install lmdeploy
 
 Applying kv quantization and inference via LMDeploy is quite straightforward. Simply set the `quant_policy` parameter.
 
-**LMDeploy specifies that `quant_policy=4` stands for 4-bit kv, whereas `quant_policy=8` indicates 8-bit kv.**
+**LMDeploy specifies that `quant_policy=4` stands for 4-bit kv, `quant_policy=8` indicates 8-bit kv, and `quant_policy=42` indicates TurboQuant.**
 
 ### Offline inference
 
@@ -47,6 +115,22 @@ print(response)
 
 ```shell
 lmdeploy serve api_server internlm/internlm2_5-7b-chat --quant-policy 8
+```
+
+### TurboQuant
+
+TurboQuant uses `quant_policy=42`, **PytorchEngine only**:
+
+```python
+from lmdeploy import pipeline, PytorchEngineConfig
+engine_config = PytorchEngineConfig(
+    tp=1,
+    cache_max_entry_count=0.8,
+    quant_policy=42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
+)
+pipe = pipeline("Qwen/Qwen3-8B", backend_config=engine_config)
+response = pipe.infer("Hello, how are you?", max_new_tokens=30)
+print(response.text)
 ```
 
 ## Evaluation

@@ -161,6 +161,14 @@ for item in api_client.completions_v1(model=model_name, prompt='hi'):
 
 参考 [api_server_tools](./api_server_tools.md)。
 
+### Anthropic 兼容接口
+
+参考 [api_server_anthropic](./api_server_anthropic.md)。
+
+### OpenAI Responses 兼容接口
+
+参考 [api_server_responses](./api_server_responses.md)。
+
 ### 使用 Java/Golang/Rust
 
 可以使用代码生成工具 [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) 将 `http://{server_ip}:{server_port}/openapi.json` 转成 java/rust/golang 客户端。
@@ -196,7 +204,7 @@ curl http://{server_ip}:{server_port}/v1/models
 curl http://{server_ip}:{server_port}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "internlm-chat-7b",
+    "model": "intern-s2-preview",
     "messages": [{"role": "user", "content": "Hello! How are you?"}]
   }'
 ```

@@ -1,0 +1,41 @@
+# HF model id: Qwen/Qwen2.5-VL-7B-Instruct
+a100:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  deps:
+    transformers: 4.57.6
+h:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  test_coverage:
+  - func

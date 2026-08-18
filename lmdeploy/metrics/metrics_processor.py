@@ -11,7 +11,7 @@ logger = get_logger('lmdeploy')
 
 
 @singleton
-class MetricsProcessor():
+class MetricsProcessor:
     """Metrics processor."""
 
     def __init__(self):
@@ -52,6 +52,7 @@ class MetricsProcessor():
 
                 # update request stats
                 if outputs and outputs.req_metrics:
+                    req_stats.cached_tokens = outputs.req_metrics.cached_tokens
                     # when users visit "/abort_request" endpoint, `req_metrics` might be None
                     req_stats.update_from_events(outputs.req_metrics.engine_events)
 
@@ -93,13 +94,30 @@ class MetricsProcessor():
             return
         self.metrics_queue.put_nowait(update_data)
 
-    def increment_total_requests(self):
-        """Increment total requests."""
+    def increase_total_requests(self):
+        """Increase total requests."""
         self.scheduler_stats.num_total_reqs += 1
 
-    def increment_finished_requests(self):
-        """Increment finished requests."""
-        self.scheduler_stats.num_finished_reqs += 1
+    def increase_succeeded_requests(self):
+        """Increase succeeded requests."""
+        self.scheduler_stats.num_succeeded_reqs += 1
+
+    def increase_failed_requests(self, failure_type: str = 'error'):
+        """Increase failed requests."""
+        if failure_type == 'cancel':
+            self.scheduler_stats.num_cancelled_reqs += 1
+        elif failure_type == 'abort':
+            self.scheduler_stats.num_aborted_reqs += 1
+        elif failure_type == 'error':
+            self.scheduler_stats.num_errored_reqs += 1
+
+    def increase_api_routed_requests(self):
+        """Increase API routed requests."""
+        self.scheduler_stats.num_api_routed_reqs += 1
+
+    def decrease_api_routed_requests(self):
+        """Decrease API routed requests."""
+        self.scheduler_stats.num_api_routed_reqs -= 1
 
 
 metrics_processor = MetricsProcessor()

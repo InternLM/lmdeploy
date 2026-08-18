@@ -25,6 +25,7 @@ struct Communicators {
     comm::DeviceComm d_comm;
     int              d_tp_group;
     int              d_cp_group;
+    int              d_dp_group;
 };
 
 // Execution context for the model
@@ -46,7 +47,7 @@ struct Context {
     {
         core::ContextGuard guard{core_stream};
         linear = std::make_unique<LlamaLinear>();
-        check_cuda_error(cudaGetDeviceProperties(&device_prop, device_id));
+        TM_CUDA_CHECK(cudaGetDeviceProperties(&device_prop, device_id));
     }
 };
 

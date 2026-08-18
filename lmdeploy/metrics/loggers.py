@@ -4,7 +4,6 @@
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List
 
 import numpy as np
 
@@ -73,10 +72,10 @@ class LoggingStatLogger(StatLoggerBase):
     def record_finish(self, stats: RequestStats):
         pass
 
-    def log_spec_msg(self):
+    def get_spec_msg(self):
         """Get spec decoding logging msg."""
         if self.num_drafts == 0:
-            return
+            return None
 
         draft_acceptance_rate = (self.num_accepted_tokens / self.num_draft_tokens *
                                  100 if self.num_draft_tokens > 0 else float('nan'))
@@ -97,7 +96,6 @@ class LoggingStatLogger(StatLoggerBase):
 
     def log(self):
         now = time.perf_counter()
-        spec_msg = self.log_spec_msg()
 
         # skip logging if no tokens were processed
         if self.total_prompt_tokens == 0 and self.total_generation_tokens == 0:
@@ -108,23 +106,26 @@ class LoggingStatLogger(StatLoggerBase):
         prompt_throughput = self.total_prompt_tokens / (now - self.last_log_time)
         generation_throughput = self.total_generation_tokens / (now - self.last_log_time)
         scheduler_stats = self.last_scheduler_stats
-        self._reset(now)
+        spec_msg = self.get_spec_msg()
 
         # format and print
-        log_msg = (f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} "
-                   f'DP{self.dp_rank}] '
-                   f'Avg prompt throughput: {prompt_throughput:.1f} tokens/s, '
-                   f'Avg generation throughput: {generation_throughput:.1f} tokens/s, '
-                   f'Finished: {scheduler_stats.num_finished_reqs} reqs, '
-                   f'Unfinished: {scheduler_stats.num_total_reqs-scheduler_stats.num_finished_reqs} reqs, '
-                   f'Running: {scheduler_stats.num_running_reqs} reqs, '
-                   f'Waiting: {scheduler_stats.num_waiting_reqs} reqs, '
-                   f'GPU KV cache usage: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, '
-                   f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%')
+        log_msg = (f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} DP{self.dp_rank}] "
+                   f'Avg thr (in/out): {prompt_throughput:.1f} / {generation_throughput:.1f} tokens/s, '
+                   f'Server (succeeded/failed/routed/waiting): '
+                   f'{scheduler_stats.num_succeeded_reqs} / {scheduler_stats.num_failed_reqs} / '
+                   f'{scheduler_stats.num_api_routed_reqs} / {scheduler_stats.num_api_waiting_reqs}, '
+                   f'Engine (running/waiting): '
+                   f'{scheduler_stats.num_running_reqs} / {scheduler_stats.num_waiting_reqs}, '
+                   f'KV cache: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, ')
+
+        if scheduler_stats.prefix_cache_hit_rate != 0:
+            log_msg += f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%, '
 
         if spec_msg is not None:
-            log_msg += ', ' + spec_msg
+            log_msg += spec_msg
+
         print(log_msg, flush=True)
+        self._reset(now)
 
 
 class PrometheusStatLogger(StatLoggerBase):
@@ -154,13 +155,22 @@ class PrometheusStatLogger(StatLoggerBase):
         #
         # Scheduler stats
         #
-        self.gauge_scheduler_finished = prometheus_client.Gauge(name='lmdeploy:num_requests_finished',
-                                                                documentation='Number of current finished requests.',
-                                                                labelnames=labelnames).labels(*labelvalues)
+        self.gauge_scheduler_succeeded = prometheus_client.Gauge(name='lmdeploy:num_requests_succeeded',
+                                                                 documentation='Number of current succeeded requests.',
+                                                                 labelnames=labelnames).labels(*labelvalues)
 
-        self.gauge_scheduler_unfinished = prometheus_client.Gauge(
-            name='lmdeploy:num_requests_unfinished',
-            documentation='Number of current unfinished requests.',
+        self.gauge_scheduler_failed = prometheus_client.Gauge(name='lmdeploy:num_requests_failed',
+                                                              documentation='Number of current failed requests.',
+                                                              labelnames=labelnames).labels(*labelvalues)
+
+        self.gauge_scheduler_api_routed = prometheus_client.Gauge(
+            name='lmdeploy:num_api_requests_routed',
+            documentation='Number of requests routed to request handles.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.gauge_scheduler_api_waiting = prometheus_client.Gauge(
+            name='lmdeploy:num_api_requests_waiting',
+            documentation='Number of requests waiting for free request handles.',
             labelnames=labelnames).labels(*labelvalues)
 
         self.gauge_scheduler_running = prometheus_client.Gauge(
@@ -181,6 +191,11 @@ class PrometheusStatLogger(StatLoggerBase):
             documentation='GPU KV-cache usage. 1 means 100 percent usage.',
             labelnames=labelnames).labels(*labelvalues)
 
+        self.gauge_prefix_cache_hit_rate = prometheus_client.Gauge(
+            name='lmdeploy:prefix_cache_hit_rate',
+            documentation='Prefix-cache hit rate. 1 means 100 percent of queried prefix tokens hit.',
+            labelnames=labelnames).labels(*labelvalues)
+
         #
         # Counters
         #
@@ -192,6 +207,48 @@ class PrometheusStatLogger(StatLoggerBase):
             name='lmdeploy:generation_tokens_total',
             documentation='Number of generation tokens processed.',
             labelnames=labelnames).labels(*labelvalues)
+
+        # Speculative decoding counters. Acceptance rate and mean acceptance
+        # length are derived in PromQL from these raw counters.
+        #   rate(accepted_tokens) / rate(draft_tokens)
+        #   1 + rate(accepted_tokens) / rate(drafts)
+        self.counter_spec_decode_num_drafts = prometheus_client.Counter(
+            name='lmdeploy:spec_decode_num_drafts_total',
+            documentation='Number of speculative decoding drafts.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.counter_spec_decode_num_draft_tokens = prometheus_client.Counter(
+            name='lmdeploy:spec_decode_num_draft_tokens_total',
+            documentation='Number of speculative decoding draft tokens.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.counter_spec_decode_num_accepted_tokens = prometheus_client.Counter(
+            name='lmdeploy:spec_decode_num_accepted_tokens_total',
+            documentation='Number of speculative decoding accepted tokens.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.counter_spec_decode_num_accepted_tokens_per_pos_base = prometheus_client.Counter(
+            name='lmdeploy:spec_decode_num_accepted_tokens_per_pos_total',
+            documentation='Number of accepted speculative decoding tokens per draft position.',
+            labelnames=labelnames + ['position'])
+        self.counter_spec_decode_num_accepted_tokens_per_pos: dict[int, prometheus_client.Counter] = {}
+        self.spec_decode_labelvalues = labelvalues
+
+        self.gauge_spec_decode_mean_accept_rate = prometheus_client.Gauge(
+            name='lmdeploy:spec_decode_mean_accept_rate',
+            documentation='Mean speculative decoding acceptance rate. 1 means 100 percent accepted.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.gauge_spec_decode_mean_accept_length = prometheus_client.Gauge(
+            name='lmdeploy:spec_decode_mean_accept_length',
+            documentation='Mean speculative decoding acceptance length, including the bonus token.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.gauge_spec_decode_per_position_accept_rate_base = prometheus_client.Gauge(
+            name='lmdeploy:spec_decode_per_position_accept_rate',
+            documentation='Speculative decoding acceptance rate per draft position. 1 means 100 percent accepted.',
+            labelnames=labelnames + ['position'])
+        self.gauge_spec_decode_per_position_accept_rate: dict[int, prometheus_client.Gauge] = {}
 
         from lmdeploy.messages import ResponseType
         self.counter_request_success: dict[ResponseType, prometheus_client.Counter] = {}
@@ -217,6 +274,26 @@ class PrometheusStatLogger(StatLoggerBase):
                 name='lmdeploy:request_generation_tokens',
                 documentation='Number of generation tokens processed.',
                 buckets=build_1_2_5_buckets(max_model_len),
+                labelnames=labelnames).labels(*labelvalues)
+
+        self.histogram_num_cached_tokens_request = \
+            prometheus_client.Histogram(
+                name='lmdeploy:request_cached_tokens',
+                documentation='Number of prefix-cached input tokens per request.',
+                buckets=build_1_2_5_buckets(max_model_len),
+                labelnames=labelnames).labels(*labelvalues)
+
+        self.histogram_cache_hit_ratio_request = \
+            prometheus_client.Histogram(
+                name='lmdeploy:request_cache_hit_ratio',
+                documentation='Prefix cache hit ratio (cached_tokens / prompt_tokens) per request.',
+                buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+                labelnames=labelnames).labels(*labelvalues)
+
+        self.counter_cached_tokens_total = \
+            prometheus_client.Counter(
+                name='lmdeploy:cached_tokens_total',
+                documentation='Total prefix-cached input tokens served.',
                 labelnames=labelnames).labels(*labelvalues)
 
         self.histogram_iteration_tokens = \
@@ -300,11 +377,14 @@ class PrometheusStatLogger(StatLoggerBase):
 
     def record_schedule(self, stats: SchedulerStats) -> None:
         """Report schedule metrics to prometheus."""
-        self.gauge_scheduler_finished.set(stats.num_finished_reqs)
-        self.gauge_scheduler_unfinished.set(stats.num_total_reqs - stats.num_finished_reqs)
+        self.gauge_scheduler_succeeded.set(stats.num_succeeded_reqs)
+        self.gauge_scheduler_failed.set(stats.num_failed_reqs)
+        self.gauge_scheduler_api_routed.set(stats.num_api_routed_reqs)
+        self.gauge_scheduler_api_waiting.set(stats.num_api_waiting_reqs)
         self.gauge_scheduler_running.set(stats.num_running_reqs)
         self.gauge_scheduler_waiting.set(stats.num_waiting_reqs)
         self.gauge_gpu_cache_usage.set(stats.gpu_cache_usage)
+        self.gauge_prefix_cache_hit_rate.set(stats.prefix_cache_hit_rate)
 
     def record_iteration(self, stats: IterationStats) -> None:
         """Report token-related metrics to prometheus."""
@@ -331,16 +411,53 @@ class PrometheusStatLogger(StatLoggerBase):
         self.histogram_decode_time_request.observe(stats.decode_time_interval)
         self.histogram_num_prompt_tokens_request.observe(stats.prompt_tokens)
         self.histogram_num_generation_tokens_request.observe(stats.generation_tokens)
+        self.histogram_num_cached_tokens_request.observe(stats.cached_tokens)
+        if stats.prompt_tokens > 0:
+            self.histogram_cache_hit_ratio_request.observe(stats.cached_tokens / stats.prompt_tokens)
+        self.counter_cached_tokens_total.inc(stats.cached_tokens)
+
+    @staticmethod
+    def _get_counter_value(counter) -> float:
+        """Get the current value from a prometheus counter child."""
+        return counter._value.get()
 
     def record_specdecode(self, stats: SpeculativeDecodingStats) -> None:
-        pass
+        """Report speculative decoding metrics to prometheus."""
+        if stats.num_drafts <= 0:
+            return
+
+        self.counter_spec_decode_num_drafts.inc(stats.num_drafts)
+        self.counter_spec_decode_num_draft_tokens.inc(stats.num_draft_tokens)
+        self.counter_spec_decode_num_accepted_tokens.inc(stats.num_accepted_tokens)
+
+        num_drafts = self._get_counter_value(self.counter_spec_decode_num_drafts)
+        num_draft_tokens = self._get_counter_value(self.counter_spec_decode_num_draft_tokens)
+        num_accepted_tokens = self._get_counter_value(self.counter_spec_decode_num_accepted_tokens)
+        mean_accept_rate = num_accepted_tokens / num_draft_tokens if num_draft_tokens > 0 else 0.0
+        mean_accept_length = 1 + num_accepted_tokens / num_drafts
+        self.gauge_spec_decode_mean_accept_rate.set(mean_accept_rate)
+        self.gauge_spec_decode_mean_accept_length.set(mean_accept_length)
+
+        for pos, num_accepted_tokens in enumerate(stats.num_accepted_tokens_per_pos):
+            num_accepted_tokens = float(num_accepted_tokens)
+            if pos not in self.counter_spec_decode_num_accepted_tokens_per_pos:
+                labelvalues = self.spec_decode_labelvalues + [str(pos)]
+                counter = self.counter_spec_decode_num_accepted_tokens_per_pos_base.labels(*labelvalues)
+                self.counter_spec_decode_num_accepted_tokens_per_pos[pos] = counter
+                gauge = self.gauge_spec_decode_per_position_accept_rate_base.labels(*labelvalues)
+                self.gauge_spec_decode_per_position_accept_rate[pos] = gauge
+            self.counter_spec_decode_num_accepted_tokens_per_pos[pos].inc(num_accepted_tokens)
+            per_pos_accepted_tokens = self._get_counter_value(
+                self.counter_spec_decode_num_accepted_tokens_per_pos[pos])
+            self.gauge_spec_decode_per_position_accept_rate[pos].set(
+                per_pos_accepted_tokens / num_drafts)
 
 
-def build_buckets(mantissa_lst: List[int], max_value: int) -> List[int]:
+def build_buckets(mantissa_lst: list[int], max_value: int) -> list[int]:
     """Builds a list of buckets with increasing powers of 10 multiplied by
     mantissa values until the value exceeds the specified maximum."""
     exponent = 0
-    buckets: List[int] = []
+    buckets: list[int] = []
     while True:
         for m in mantissa_lst:
             value = m * 10**exponent
@@ -351,7 +468,7 @@ def build_buckets(mantissa_lst: List[int], max_value: int) -> List[int]:
         exponent += 1
 
 
-def build_1_2_5_buckets(max_value: int) -> List[int]:
+def build_1_2_5_buckets(max_value: int) -> list[int]:
     """
     Example:
     >>> build_1_2_5_buckets(100)

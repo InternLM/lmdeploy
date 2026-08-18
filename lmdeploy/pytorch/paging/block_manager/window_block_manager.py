@@ -42,7 +42,13 @@ class WindowBlockManager(DefaultBlockManager):
         if obj.num_history_ids <= self.window_size:
             return super().num_required_blocks(obj, prealloc_size)
 
-        return super().num_required_blocks(obj, prealloc_size) - obj.num_ignored_history // obj.block_size
+        # DefaultBlockManager applies kv_token_limit to the absolute token
+        # count. Sliding-window accounting then subtracts already-dropped
+        # history blocks so chunk-limited allocation grows only the retained
+        # window.
+        num_required_blocks = super().num_required_blocks(obj, prealloc_size)
+        num_required_blocks -= obj.num_ignored_history // obj.block_size
+        return max(0, num_required_blocks)
 
     def can_allocate(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Return if physical block can be allocated for given message."""

@@ -2,7 +2,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import List
 
 import torch
 
@@ -32,8 +31,8 @@ class YarnParameters:
 @dataclass
 class LongRoPEScalingParameters:
     """Long Ropescaling parameters."""
-    short_factor: List[int]
-    long_factor: List[int]
+    short_factor: list[int]
+    long_factor: list[int]
     original_max_position_embeddings: int
     long_mscale: float = None
     short_mscale: float = None
@@ -54,6 +53,13 @@ class FopeParameters:
     num_key_value_heads: int = 1
     fope_sep_head: bool = False
     inv_freq: torch.Tensor = None
+
+
+@dataclass
+class MropeParameters:
+    """MRoPE parameters."""
+    mrope_section: list[int]
+    mrope_interleaved: bool = False
 
 
 class RotaryEmbeddingImpl(ABC):

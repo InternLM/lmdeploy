@@ -2,7 +2,7 @@
 import enum
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -10,8 +10,21 @@ from torch import Tensor
 
 from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
-from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
+from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs, make_multimodal_content_hash
+
+# Re-export prefix-cache state types from their state-only owner.
+from lmdeploy.pytorch.prefix_cache_state import (  # noqa: F401
+    MultimodalSpan,
+    PrefixCacheBlockExtraIdentity,
+    PrefixCacheExtraIdentity,
+    PrefixCacheState,
+    PrefixRecomputeOverlap,
+    StateCheckpointProducerPin,
+    StateCheckpointRestore,
+    StateCheckpointSaveReservation,
+)
 from lmdeploy.utils import get_logger
+from lmdeploy.vl.constants import Modality
 
 from .block import LogicalTokenBlocks
 
@@ -24,8 +37,8 @@ if TYPE_CHECKING:
 logger = get_logger('lmdeploy')
 
 # vlm input type from pipeline
-InputEmbeddingType = List[np.ndarray]
-InputEmbeddingRangeType = List[List[int]]
+InputEmbeddingType = list[np.ndarray]
+InputEmbeddingRangeType = list[list[int]]
 
 
 @dataclass
@@ -52,16 +65,21 @@ class SamplingParam:
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None
-    stop_words: List[int] = field(default_factory=list)
-    bad_words: List[int] = field(default_factory=list)
+    stop_words: list[int] = field(default_factory=list)
+    bad_words: list[int] = field(default_factory=list)
     max_new_tokens: int = 512
     min_new_tokens: int = 0
-    response_format: Optional[str] = None
-    logits_processors: Optional[List[LogitsProcessor]] = None
+    response_format: None | str = None
+    logits_processors: None | list[LogitsProcessor] = None
     out_logits: bool = False
     out_last_hidden_states: bool = False
+    out_ce_loss: bool = False
     num_logprobs: int = -1
     return_routed_experts: bool = False
+
+    # ngram
+    repetition_ngram_size: int = 0
+    repetition_ngram_threshold: int = 0
 
     @classmethod
     def from_gen_config(cls, gen_config: GenerationConfig):
@@ -119,6 +137,16 @@ class SamplingParam:
                            'a int >=0 and <= `max_new_tokens`,'
                            f' but is {min_new_tokens}')
             min_new_tokens = 0
+        repetition_ngram_size = gen_config.repetition_ngram_size
+        repetition_ngram_threshold = gen_config.repetition_ngram_threshold
+        if repetition_ngram_size < 0:
+            logger.warning('`repetition_ngram_size` must be >= 0, got %s; using 0.',
+                           repetition_ngram_size)
+            repetition_ngram_size = 0
+        if repetition_ngram_threshold < 0:
+            logger.warning('`repetition_ngram_threshold` must be >= 0, got %s; using 0.',
+                           repetition_ngram_threshold)
+            repetition_ngram_threshold = 0
         logprobs = gen_config.logprobs
         if logprobs is None:
             logprobs = -1
@@ -142,8 +170,11 @@ class SamplingParam:
             min_new_tokens=min_new_tokens,
             logits_processors=gen_config.logits_processors,
             out_logits=(output_logits is not None),
+            out_ce_loss=gen_config.return_ppl,
             num_logprobs=logprobs,
             return_routed_experts=gen_config.return_routed_experts,
+            repetition_ngram_size=repetition_ngram_size,
+            repetition_ngram_threshold=repetition_ngram_threshold,
         )
 
 
@@ -167,7 +198,7 @@ class MessageStatus(enum.Enum):
     MIGRATION_DONE = enum.auto()
 
 
-SeqMap = Dict[int, 'SchedulerSequence']
+SeqMap = dict[int, 'SchedulerSequence']
 
 
 @dataclass
@@ -176,6 +207,7 @@ class SequenceMeta:
     block_size: int
     strategy: 'SequenceStrategy' = None
     sampling_strategy: 'SamplingStrategy' = None
+    use_mrope: bool = False
 
 
 class SequenceManager:
@@ -183,7 +215,7 @@ class SequenceManager:
 
     def __init__(self, seq_meta: SequenceMeta) -> None:
         self._seq_map: SeqMap = dict()
-        self._status_seq_map: Dict[MessageStatus, SeqMap] = defaultdict(dict)
+        self._status_seq_map: dict[MessageStatus, SeqMap] = defaultdict(dict)
 
         self.seq_meta = seq_meta
         self._seq_count = 0
@@ -261,8 +293,8 @@ class SchedulerSession:
                      sampling_param: SamplingParam = None,
                      adapter_name: str = None,
                      multimodals: MultiModalInputs = None,
-                     input_embeddings: List[InputEmbeddings] = None,
-                     migration_request: Optional[MigrationRequest] = None,
+                     input_embeddings: list[InputEmbeddings] = None,
+                     migration_request: None | MigrationRequest = None,
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
@@ -319,12 +351,12 @@ def _round_up(x, n):
 class HistoryEmbeddings:
     """History embeddings."""
 
-    def __init__(self, embeddings: List[InputEmbeddings] = None):
-        self._embeddings: List[InputEmbeddings] = []
+    def __init__(self, embeddings: list[InputEmbeddings] = None):
+        self._embeddings: list[InputEmbeddings] = []
         if embeddings is not None:
             self._embeddings.extend(embeddings)
 
-    def append(self, embeddings: List[InputEmbeddings]):
+    def append(self, embeddings: list[InputEmbeddings]):
         self._embeddings.extend(embeddings)
 
     def clone(self):
@@ -532,6 +564,25 @@ class HistoryLogits(_HistoryDataBase):
         return ret
 
 
+class HistoryMropePosIds(_HistoryDataBase):
+    """History mrope position ids."""
+    ALLOC_SIZE = 64
+
+    def __init__(self, pos_ids: np.ndarray | None = None, dtype: np.dtype = np.int64):
+        super().__init__(pos_ids, dtype)
+
+    def _create_empty_array(self, dtype):
+        """Create empty array.
+
+        Override in subclass for different shapes.
+        """
+        return np.empty((self.ALLOC_SIZE, 3), dtype=dtype)
+
+    def _get_pad_width(self, reserve_size: int):
+        """Get pad width for multi-dimensional array."""
+        return ((0, reserve_size), (0, 0))
+
+
 class HistoryMultiModals:
 
     def __init__(self, multimodals: MultiModalInputs = None):
@@ -546,7 +597,7 @@ class HistoryMultiModals:
         for modal_type, modal_datas in self.multimodals.items():
             data = []
             for modal_data in modal_datas:
-                if (modal_data.start not in test_range and modal_data.end - 1 not in test_range):
+                if (modal_data.start not in test_range or modal_data.end - 1 not in test_range):
                     continue
                 data.append(modal_data)
             if len(data) > 0:
@@ -592,30 +643,46 @@ class SchedulerSequence:
     history_cache: HistoryTokenIds = field(default_factory=HistoryTokenIds)
     history_embeddings: HistoryEmbeddings = field(default_factory=HistoryEmbeddings)
     history_multimodals: HistoryMultiModals = field(default_factory=HistoryMultiModals)
+    prefix_cache: PrefixCacheState = field(default_factory=PrefixCacheState)
     num_new_tokens: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     logical_blocks: LogicalTokenBlocks = field(default_factory=LogicalTokenBlocks)
     logical_state: int = -1
     adapter_name: str = None
     arrive_time: float = 0.0
+    input_start_pos: int = 0
+    input_end_pos: int = 0
     output_start_pos: int = 0
     meta: Any = None
     num_ignored_history: int = 0
-    model_meta: Dict[str, Any] = None
+    model_meta: dict[str, Any] = None
+    # Exclusive absolute token limit for temporary KV ownership. Non-final
+    # long-context chunks use this to allocate only the computed prefix.
+    kv_token_limit: int | None = None
 
     # For Disaggregation
-    migration_request: Optional[MigrationRequest] = None
+    migration_request: None | MigrationRequest = None
     resp_cache: bool = False
     preserve_cache: bool = False
 
     # For logging
-    engine_events: List[EngineEvent] = field(default_factory=list)
+    engine_events: list[EngineEvent] = field(default_factory=list)
 
     # for router replay
     all_routed_experts: HistoryRouterExperts = field(default_factory=HistoryRouterExperts)
 
     # logits
     all_logits: HistoryLogits = field(default_factory=HistoryLogits)
+
+    # accumulated, unnormalized cross-entropy (NLL) of the input prompt
+    ce_loss: float = 0.0
+    ce_loss_finished: bool = False
+
+    # mrope
+    history_mrope_pos_ids: HistoryMropePosIds = field(default_factory=HistoryMropePosIds)
+
+    # Prefix-cache tokens accepted by the scheduler that are present in the current request prompt.
+    cached_tokens: int = 0
 
     def __post_init__(self):
         """Post init."""
@@ -656,7 +723,7 @@ class SchedulerSequence:
         return self.history_cache[start:end]
 
     @property
-    def input_embeddings(self) -> List[InputEmbeddings]:
+    def input_embeddings(self) -> list[InputEmbeddings]:
         """Get current embeddings."""
         start = self.history_image_num
         end = start + self._num_images
@@ -692,13 +759,13 @@ class SchedulerSequence:
         if (not self.return_routed_experts) or self.all_routed_experts is None:
             return None
 
-        end = max(0, self.num_all_ids - 1)
+        end = max(0, self.num_valid_ids - 1)
         if 0 < end <= len(self.all_routed_experts):
             return self.all_routed_experts.get_real()[:end]
         else:
             return None
 
-    def append_routed_experts(self, routed_experts: Union[Tensor, np.ndarray]):
+    def append_routed_experts(self, routed_experts: Tensor | np.ndarray):
         """Append routed experts."""
         if not self.return_routed_experts:
             return
@@ -756,7 +823,14 @@ class SchedulerSequence:
         """Get logits."""
         return self.all_logits.get_logits()
 
-    def append_logits(self, logits: Union[Tensor, np.ndarray]):
+    @property
+    def mrope_pos_ids(self):
+        """Get mrope pos ids."""
+        start = self.num_history_ids
+        end = start + self._num_token_ids
+        return self.history_mrope_pos_ids[start:end]
+
+    def append_logits(self, logits: Tensor | np.ndarray):
         """Append logits."""
         if not self.return_logits:
             return
@@ -767,20 +841,113 @@ class SchedulerSequence:
             logits = logits.view(torch.int16).numpy()
         self.all_logits.append(logits)
 
+    @property
+    def return_ce_loss(self):
+        return self.sampling_param.out_ce_loss
+
+    def append_ce_loss(self, ce_loss, finish: bool = False):
+        """Accumulate the summed cross-entropy (NLL) of the input prompt."""
+        if not self.return_ce_loss or self.ce_loss_finished or ce_loss is None:
+            return
+        if isinstance(ce_loss, Tensor):
+            ce_loss = ce_loss.item()
+        self.ce_loss += float(ce_loss)
+        self.ce_loss_finished = finish
+
     def get_input_multimodals(self):
         """Get input multimodals."""
         start = self.num_history_ids
         end = self.num_all_ids
         return self.history_multimodals.get_datas(start, end)
 
+    def get_chunk_limit_multimodals(self):
+        """Get multimodals that should affect long-context chunk size."""
+        input_multimodals = self.get_input_multimodals()
+        match_start = self.prefix_cache.match_start_step
+        if match_start >= 0 and self.num_history_ids > match_start:
+            return self.history_multimodals.get_datas(match_start, self.num_all_ids)
+        return input_multimodals
+
+    def get_prefix_cache_extra_identity(self, start: int, end: int) -> PrefixCacheExtraIdentity:
+        """Get canonical multimodal identity entries for a token range.
+
+        The common caller asks for a full block, but partial ranges are used when verifying sparse SSM checkpoint
+        candidates.  Returning only overlapping spans keeps text-only blocks unchanged while making blocks that touch
+        multimodal placeholders content-aware.
+        """
+        prefix_cache = self.prefix_cache
+        if len(prefix_cache.multimodal_spans) == 0:
+            return ()
+
+        if prefix_cache.num_indexed_spans != len(prefix_cache.multimodal_spans):
+            self._index_prefix_cache_spans()
+        start_block_idx = start // self.block_size
+        end_block_idx = (max(start, end - 1)) // self.block_size
+        if start_block_idx == end_block_idx:
+            extras = prefix_cache.block_extra_identity.get(start_block_idx, ())
+            if start % self.block_size == 0 and end - start == self.block_size:
+                # Full-block lookup is the hot path; the indexed tuple already
+                # contains exactly the spans that overlap this block.
+                return extras
+            return tuple(extra for extra in extras if extra.start < end and start < extra.end)
+
+        extras = []
+        for block_idx in range(start_block_idx, end_block_idx + 1):
+            extras.extend(prefix_cache.block_extra_identity.get(block_idx, ()))
+        extras = [extra for extra in set(extras) if extra.start < end and start < extra.end]
+        return tuple(sorted(extras))
+
+    def clamp_prefix_cache_match_step(self, step: int):
+        """Clamp a prefix-cache match so forward never starts inside a span.
+
+        Multimodal processors expect an image/video span to be consumed as a whole.  If a candidate cache hit would stop
+        in the middle of such a span, rewind to the span start and then to a block boundary.  Rounding a later span
+        start down can itself land inside an earlier span when multimodal spans are close together, so keep rewinding
+        until the final block boundary is outside every span.
+        """
+        if step <= 0:
+            return step
+
+        spans = [(span.start, span.end) for span in self.prefix_cache.multimodal_spans]
+        spans.extend((emb.start, emb.end) for emb in self.history_embeddings.embeddings)
+        if len(spans) == 0:
+            return (step // self.block_size) * self.block_size
+
+        clamped = step
+        while clamped > 0:
+            next_step = clamped
+            for start, end in spans:
+                if start < next_step < end:
+                    next_step = min(next_step, start)
+            next_step = (next_step // self.block_size) * self.block_size
+            if next_step == clamped:
+                break
+            clamped = next_step
+        return clamped
+
+    def is_prefix_cache_boundary_safe(self, step: int):
+        """Check that an exact cache boundary is outside multimodal spans."""
+        if any(span.start < step < span.end for span in self.prefix_cache.multimodal_spans):
+            return False
+        return not any(emb.start < step < emb.end for emb in self.history_embeddings.embeddings)
+
+    def get_prefix_cache_max_match_step(self):
+        """Get the deepest prefix step allowed for a cache hit."""
+        block_size = self.block_size
+        max_step = ((self.num_valid_ids - 1) // block_size) * block_size
+        recompute_blocks = max(0, self.prefix_cache.recompute_overlap.recompute_blocks)
+        if recompute_blocks > 0:
+            max_step = max(0, max_step - recompute_blocks * block_size)
+        return self.clamp_prefix_cache_match_step(max_step)
+
     def record_event(
         self,
         event_type: EventType,
-        timestamp: Optional[float] = None,
+        timestamp: None | float = None,
     ) -> None:
         self.engine_events.append(EngineEvent.new_event(event_type, timestamp))
 
-    def _update_embeddings(self, embeddings: List[InputEmbeddings]):
+    def _update_embeddings(self, embeddings: list[InputEmbeddings]):
         """Update input embeddings."""
         self._num_history_images += self._num_images
         if embeddings is None:
@@ -795,13 +962,114 @@ class SchedulerSequence:
         if multimodals is None:
             return
         multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
+        if self.session.scheduler.cache_config.enable_prefix_caching:
+            self._update_prefix_cache_spans(multimodals)
         self.history_multimodals.add_inputs(multimodals)
+
+    def _update_prefix_cache_spans(self, multimodals: MultiModalInputs):
+        """Record multimodal span identities for future trie keying."""
+        for modal_datas in multimodals.values():
+            for modal_data in modal_datas:
+                modality = modal_data.modality
+                if isinstance(modality, enum.Enum):
+                    modality = modality.value
+                content_hash = modal_data.content_hash
+                if content_hash is None:
+                    # Most request paths precompute the hash after model
+                    # preprocessing.  Keep this fallback for unit tests and
+                    # defensive correctness if a processor omits it.
+                    content_hash = make_multimodal_content_hash(modal_data.data, modal_data.meta,
+                                                                modal_data.mrope_pos_ids)
+                self.prefix_cache.multimodal_spans.append(
+                    MultimodalSpan(start=modal_data.start,
+                                   end=modal_data.end,
+                                   modality=str(modality),
+                                   content_hash=str(content_hash)))
+
+    def _index_prefix_cache_spans(self):
+        """Build the lazy block -> multimodal identity index.
+
+        The trie asks for block keys many times during match/allocation, so we pay the span-to-block indexing cost once
+        per newly appended metadata entry instead of scanning all multimodal spans for every block.
+        """
+        prefix_cache = self.prefix_cache
+        block_size = self.block_size
+        new_spans = prefix_cache.multimodal_spans[prefix_cache.num_indexed_spans:]
+        if len(new_spans) == 0:
+            return
+
+        for span in new_spans:
+            if span.end <= span.start:
+                continue
+            start_block_idx = span.start // block_size
+            end_block_idx = (span.end - 1) // block_size
+            for block_idx in range(start_block_idx, end_block_idx + 1):
+                extras = list(prefix_cache.block_extra_identity.get(block_idx, ()))
+                extras.append(span)
+                prefix_cache.block_extra_identity[block_idx] = tuple(sorted(extras))
+        prefix_cache.num_indexed_spans = len(prefix_cache.multimodal_spans)
+
+    def _update_mrope_pos_ids(self):
+        """Update mrope pos ids."""
+        if not self._seq_meta.use_mrope:
+            return
+
+        num_rope_pos = len(self.history_mrope_pos_ids)
+        num_appends = self.num_all_ids - num_rope_pos
+
+        if num_appends == 0:
+            return
+
+        if num_rope_pos == 0:
+            next_pos = 0
+        else:
+            next_pos = self.history_mrope_pos_ids[-1].max() + 1
+
+        multimodals = self.history_multimodals.get_datas(num_rope_pos, self.num_all_ids)
+        if multimodals is None or len(multimodals) == 0:
+            if num_appends == 1:
+                pos_ids = np.array([[next_pos] * 3], dtype=np.int64)
+            else:
+                pos_ids = np.arange(next_pos, next_pos + num_appends, dtype=np.int64)
+                pos_ids = pos_ids[:, None].repeat(3, axis=1)
+        else:
+            pos_ids = []
+            assert len(multimodals) == 1
+            modal_datas = list(multimodals.values())[0]
+            mm_offset = next_pos
+            for modal_data in modal_datas:
+                # InternS2Preview uses mrope for image / video, except time series
+                if modal_data.modality == Modality.TIME_SERIES:
+                    continue
+
+                mm_start = modal_data.start + mm_offset
+
+                # tokens
+                if next_pos < mm_start:
+                    text_pos_ids = np.arange(next_pos, mm_start, dtype=np.int64)
+                    pos_ids.append(text_pos_ids[:, None].repeat(3, axis=1))
+
+                # imgs
+                mm_pos_ids = modal_data.mrope_pos_ids
+                assert mm_pos_ids is not None, (
+                    'MROPE position ids is required for multimodal inputs when use_mrope is True.')
+                new_pos = mm_pos_ids[-1].max() + 1
+                next_pos = mm_start + new_pos
+                mm_offset = mm_offset + new_pos - mm_pos_ids.shape[0]
+                pos_ids.append(mm_pos_ids + mm_start)
+
+            # add final text part
+            text_pos_ids = np.arange(next_pos, num_appends + mm_offset, dtype=np.int64)
+            pos_ids.append(text_pos_ids[:, None].repeat(3, axis=1))
+            pos_ids = np.concatenate(pos_ids, axis=0)
+
+        self.history_mrope_pos_ids.append(pos_ids)
 
     def update_token_ids(self,
                          token_ids: Tensor,
                          multimodals: MultiModalInputs = None,
-                         embeddings: List[InputEmbeddings] = None,
-                         model_meta: Dict[str, Any] = None,
+                         embeddings: list[InputEmbeddings] = None,
+                         model_meta: dict[str, Any] = None,
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
                          **kwargs):
         """Update token ids, old token ids will be added to history."""

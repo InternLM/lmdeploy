@@ -23,16 +23,13 @@ HF_MODELS_WITH_CHAT_TEMPLATES = [
     'OpenGVLab/InternVL2-4B',
     'OpenGVLab/InternVL2-8B',
     'OpenGVLab/InternVL2_5-2B',
-    'OpenGVLab/InternVL2_5-4B',
     'OpenGVLab/InternVL2_5-8B',
     'OpenGVLab/InternVL3-2B',
     'OpenGVLab/InternVL3-8B',
-    'OpenGVLab/InternVL3-9B',
     'OpenGVLab/InternVL3_5-1B',
     'OpenGVLab/InternVL3_5-4B',
     'OpenGVLab/InternVL3_5-8B',
     'OpenGVLab/InternVL3_5-GPT-OSS-20B-A4B-Preview',
-    'AI4Chem/ChemVLM-8B',
     'deepseek-ai/DeepSeek-V2-Lite',
     'deepseek-ai/DeepSeek-V3',
     'deepseek-ai/DeepSeek-R1',
@@ -59,32 +56,32 @@ HF_MODELS_WITH_CHAT_TEMPLATES = [
 
 
 @pytest.mark.parametrize('model_path', HF_MODELS_WITH_CHAT_TEMPLATES)
-def test_HFChatTemplate_get_prompt_sequence_start_True(model_path):
-    model = MODELS.get('hf')(model_path=model_path)
+def test_HFChatTemplate_get_prompt(model_path):
+    model = MODELS.get('hf')(model_path=model_path, trust_remote_code=True)
     prompt = 'How to apply chat template using transformers?'
     messages = [{'role': 'user', 'content': prompt}]
 
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     expected = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    assert model.get_prompt(prompt, sequence_start=True) == expected
+    assert model.get_prompt(prompt) == expected
 
 
 @pytest.mark.parametrize('model_path', HF_MODELS_WITH_CHAT_TEMPLATES)
-def test_HFChatTemplate_message2prompt_sequence_start_True(model_path):
-    model = MODELS.get('hf')(model_path=model_path)
+def test_HFChatTemplate_message2prompt(model_path):
+    model = MODELS.get('hf')(model_path=model_path, trust_remote_code=True)
     prompt = 'How to apply chat template using transformers?'
     messages = [{'role': 'user', 'content': prompt}]
 
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     expected = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    assert model.messages2prompt(prompt, sequence_start=True) == expected
-    assert model.messages2prompt(messages, sequence_start=True) == expected
+    assert model.messages2prompt(prompt) == expected
+    assert model.messages2prompt(messages) == expected
 
 
 def test_base_model():
-    model = MODELS.get('internlm')(capability='completion')
+    model = MODELS.get('base')(capability='completion')
     assert model.capability == 'completion'
     assert model.get_prompt('hi') == 'hi'
     assert model.messages2prompt('test') == 'test'
@@ -93,18 +90,16 @@ def test_base_model():
 def test_vicuna():
     prompt = 'hello, can u introduce yourself'
     model = MODELS.get('vicuna')(capability='completion')
-    assert model.get_prompt(prompt, sequence_start=True) == prompt
-    assert model.get_prompt(prompt, sequence_start=False) == prompt
+    assert model.get_prompt(prompt) == prompt
 
     model = MODELS.get('vicuna')(capability='chat', system='Provide answers in Python')
-    assert model.get_prompt(prompt, sequence_start=True) != prompt
-    assert model.get_prompt(prompt, sequence_start=False) != prompt
+    assert model.get_prompt(prompt) != prompt
     assert model.system == 'Provide answers in Python'
 
     model = MODELS.get('vicuna')(capability='voice')
     _prompt = None
     with pytest.raises(AssertionError):
-        _prompt = model.get_prompt(prompt, sequence_start=True)
+        _prompt = model.get_prompt(prompt)
         assert _prompt is None
 
 
@@ -115,55 +110,21 @@ def test_prefix_response():
     assert prompt[-len('prefix test'):] == 'prefix test'
 
 
-def test_internlm_chat():
-    prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('internlm')(capability='completion')
-    assert model.get_prompt(prompt, sequence_start=True) == prompt
-    assert model.get_prompt(prompt, sequence_start=False) == prompt
-    assert model.stop_words is not None
-    assert model.system == '<|System|>:'
-
-    model = MODELS.get('internlm')(capability='chat', system='Provide answers in Python')
-    assert model.get_prompt(prompt, sequence_start=True) != prompt
-    assert model.get_prompt(prompt, sequence_start=False) != prompt
-    assert model.system == 'Provide answers in Python'
-
-    model = MODELS.get('internlm')(capability='voice')
-    _prompt = None
-    with pytest.raises(AssertionError):
-        _prompt = model.get_prompt(prompt, sequence_start=True)
-        assert _prompt is None
-
-
-def test_baichuan():
-    prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('baichuan2')(capability='completion')
-    assert model.get_prompt(prompt, sequence_start=True) == prompt
-    assert model.get_prompt(prompt, sequence_start=False) == prompt
-    assert model.stop_words is None
-
-    model = MODELS.get('baichuan2')(capability='chat')
-    _prompt = model.get_prompt(prompt, sequence_start=True)
-    assert _prompt == '<reserved_106>' + prompt + '<reserved_107>'
-
-
 def test_llama2():
     prompt = 'hello, can u introduce yourself'
     model = MODELS.get('llama2')(capability='completion')
-    assert model.get_prompt(prompt, sequence_start=True) == prompt
-    assert model.get_prompt(prompt, sequence_start=False) == prompt
+    assert model.get_prompt(prompt) == prompt
     assert model.stop_words is None
     assert model.meta_instruction is not None
 
     model = MODELS.get('llama2')(capability='chat', meta_instruction='Provide answers in Python')
-    assert model.get_prompt(prompt, sequence_start=True) != prompt
-    assert model.get_prompt(prompt, sequence_start=False) != prompt
+    assert model.get_prompt(prompt) != prompt
     assert model.meta_instruction == 'Provide answers in Python'
 
     model = MODELS.get('llama2')(capability='voice')
     _prompt = None
     with pytest.raises(AssertionError):
-        _prompt = model.get_prompt(prompt, sequence_start=True)
+        _prompt = model.get_prompt(prompt)
         assert _prompt is None
 
 
@@ -174,7 +135,6 @@ import socket
 
 def ping_exponential_backoff(host: str):"""
     assert model.get_prompt(prompt) == prompt
-    assert model.get_prompt(prompt, sequence_start=False) == prompt
     assert model.stop_words is None
 
 
@@ -196,11 +156,8 @@ def test_codellama_infilling():
 def test_codellama_chat():
     model = MODELS.get('codellama')(capability='chat', system='Provide answers in Python')
     prompt = 'Write a function that computes the set of sums of all contiguous sublists of a given list.'  # noqa: E501
-    _prompt = model.get_prompt(prompt, sequence_start=True)
+    _prompt = model.get_prompt(prompt)
     assert _prompt.find('Provide answers in Python') != -1
-
-    _prompt = model.get_prompt(prompt, sequence_start=False)
-    assert _prompt.find('Provide answers in Python') == -1
     assert model.stop_words is None
 
 
@@ -209,8 +166,7 @@ def test_codellama_python_specialist():
     prompt = """
     def remove_non_ascii(s: str) -> str:
 """
-    assert model.get_prompt(prompt, sequence_start=True) == prompt
-    assert model.get_prompt(prompt, sequence_start=False) == prompt
+    assert model.get_prompt(prompt) == prompt
     assert model.stop_words is None
 
 
@@ -221,33 +177,7 @@ def test_codellama_others():
     assert model is None
 
 
-@pytest.mark.parametrize(
-    'model_path_or_name',
-    ['deepseek-ai/deepseek-vl2-tiny', 'deepseek-ai/deepseek-vl2-small', 'deepseek-ai/deepseek-vl2'])
-def test_deepseek_vl2(model_path_or_name):
-    chat_template = MODELS.get('deepseek-vl2')()
-    messages = [{
-        'role': 'user',
-        'content': 'This is image_1: <image>\n'
-        'This is image_2: <image>\n'
-        'This is image_3: <image>\n Can you tell me what are in the images?',
-        'images': [
-            'images/multi_image_1.jpeg',
-            'images/multi_image_2.jpeg',
-            'images/multi_image_3.jpeg',
-        ],
-    }, {
-        'role': 'assistant',
-        'content': ''
-    }]
-
-    ref = '<|User|>: This is image_1: <image>\nThis is image_2: <image>\nThis is image_3: <image>' + \
-          '\n Can you tell me what are in the images?\n\n<|Assistant|>:'
-    lm_res = chat_template.messages2prompt(messages)
-    assert ref == lm_res
-
-
-@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen2.5-7B-Instruct'])
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen3.5-35B-A3B'])
 @pytest.mark.parametrize('enable_thinking', [True, False, None])
 def test_qwen3(model_path, enable_thinking):
     from transformers import AutoTokenizer
@@ -279,90 +209,113 @@ def test_qwen3(model_path, enable_thinking):
     assert ref == lm_res
 
 
-@pytest.mark.parametrize('model_path', ['internlm/Intern-S1'])
-@pytest.mark.parametrize('enable_thinking', [None, True, False])
-@pytest.mark.parametrize('has_user_sys', [True, False])
-def test_interns1(model_path, enable_thinking, has_user_sys):
+@pytest.mark.parametrize('preserve_thinking', ['unset', True, False])
+def test_qwen38_preserve_thinking(preserve_thinking):
     from transformers import AutoTokenizer
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    except OSError:
-        pytest.skip(reason=f'{model_path} not exists')
 
+    model_path = 'Qwen/Qwen3.8-27B'
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     chat_template = MODELS.get('hf')(model_path)
-
+    reasoning_sentinel = 'historical reasoning sentinel'
     messages = [{
-        'role': 'system',
-        'content': 'you are a helpful assistant'
-    }, {
         'role': 'user',
-        'content': 'who are you'
+        'content': 'What is 2 + 2?'
     }, {
         'role': 'assistant',
-        'content': 'I am an AI'
+        'reasoning_content': reasoning_sentinel,
+        'content': '4'
     }, {
         'role': 'user',
-        'content': 'AGI is?'
+        'content': 'Now add 3.'
     }]
-    if not has_user_sys:
-        messages = messages[1:]
+    kwargs = {} if preserve_thinking == 'unset' else {'preserve_thinking': preserve_thinking}
 
-    if enable_thinking is None:
-        ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    else:
-        ref = tokenizer.apply_chat_template(messages,
-                                            tokenize=False,
-                                            add_generation_prompt=True,
-                                            enable_thinking=enable_thinking)
-    lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
+    ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kwargs)
+    lm_res = chat_template.messages2prompt(messages, **kwargs)
+
     assert ref == lm_res
+    assert (reasoning_sentinel in lm_res) is (preserve_thinking is not False)
 
 
-@pytest.mark.parametrize('model_path', ['Qwen/Qwen1.5-7B-Chat', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen3-8B'])
-def test_HFChatTemplate_get_prompt_sequence_start_False_Qwen(model_path):
-    model = MODELS.get('hf')(model_path=model_path)
-    assert model.stop_words == ['<|im_end|>']
+def test_qwen38_preserve_current_tool_turn_thinking():
+    from transformers import AutoTokenizer
 
-    prompt = 'How to apply chat template using transformers?'
-    assert model.get_prompt(prompt,
-                            sequence_start=False) == f'<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n'
+    model_path = 'Qwen/Qwen3.8-27B'
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    chat_template = MODELS.get('hf')(model_path)
+    reasoning_sentinel = 'current tool reasoning sentinel'
+    messages = [{
+        'role': 'user',
+        'content': 'What is the weather?'
+    }, {
+        'role': 'assistant',
+        'reasoning_content': reasoning_sentinel,
+        'content': '',
+        'tool_calls': [{
+            'type': 'function',
+            'function': {
+                'name': 'get_weather',
+                'arguments': {
+                    'city': 'Shanghai'
+                }
+            }
+        }]
+    }, {
+        'role': 'tool',
+        'content': 'Sunny'
+    }]
 
+    ref = tokenizer.apply_chat_template(messages,
+                                        tokenize=False,
+                                        add_generation_prompt=True,
+                                        preserve_thinking=False)
+    lm_res = chat_template.messages2prompt(messages, preserve_thinking=False)
 
-@pytest.mark.parametrize('model_path', ['internlm/Intern-S1', 'internlm/Intern-S1-mini'])
-def test_InternS1_thinking(model_path):
-    pass
-
-
-@pytest.mark.parametrize('model_path', [''])
-def test_InternVL(model_path):
-    pass
-
-
-@pytest.mark.parametrize('model_path', [''])
-def test_HFChatTemplate_llama(model_path):
-    # TODO: add a huggingface token to github
-    pass
-
-
-@pytest.mark.parametrize('model_path', ['deepseek-ai/DeepSeek-V3'])
-def test_HFChatTemplate_DeepSeek_V3(model_path):
-    model = MODELS.get('hf')(model_path=model_path)
-    assert model.stop_words == ['<｜end▁of▁sentence｜>']
-
-    prompt = 'How to apply chat template using transformers?'
-    assert model.get_prompt(prompt, sequence_start=False) == f'<｜User｜>{prompt}<｜Assistant｜>'
-
-
-@pytest.mark.parametrize('model_path', ['deepseek-ai/DeepSeek-R1'])
-def test_HFChatTemplate_DeepSeek_thinking(model_path):
-    model = MODELS.get('hf')(model_path=model_path)
-    assert model.stop_words == ['<｜end▁of▁sentence｜>']
-
-    prompt = 'How to apply chat template using transformers?'
-    assert model.get_prompt(prompt, sequence_start=False) == f'<｜User｜>{prompt}<｜Assistant｜><think>\n'
+    assert ref == lm_res
+    assert reasoning_sentinel in lm_res
 
 
-@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-VL-8B-Instruct'])
+# TODO(lvhan): bring this case back when internlm/Intern-S1 fix tokenizer
+# @pytest.mark.parametrize('model_path', ['internlm/Intern-S1'])
+# @pytest.mark.parametrize('enable_thinking', [None, True, False])
+# @pytest.mark.parametrize('has_user_sys', [True, False])
+# def test_interns1(model_path, enable_thinking, has_user_sys):
+#     from transformers import AutoTokenizer
+#     try:
+#         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+#     except OSError:
+#         pytest.skip(reason=f'{model_path} not exists')
+
+#     chat_template = MODELS.get('hf')(model_path)
+
+#     messages = [{
+#         'role': 'system',
+#         'content': 'you are a helpful assistant'
+#     }, {
+#         'role': 'user',
+#         'content': 'who are you'
+#     }, {
+#         'role': 'assistant',
+#         'content': 'I am an AI'
+#     }, {
+#         'role': 'user',
+#         'content': 'AGI is?'
+#     }]
+#     if not has_user_sys:
+#         messages = messages[1:]
+
+#     if enable_thinking is None:
+#         ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+#     else:
+#         ref = tokenizer.apply_chat_template(messages,
+#                                             tokenize=False,
+#                                             add_generation_prompt=True,
+#                                             enable_thinking=enable_thinking)
+#     lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
+#     assert ref == lm_res
+
+
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-VL-8B-Instruct', 'Qwen/Qwen3.5-35B-A3B'])
 def test_HFChatTemplate_Qwen3_VL_with_vision_id(model_path):
     model = MODELS.get('hf')(model_path=model_path)
 
@@ -423,27 +376,3 @@ def test_HFChatTemplate_Qwen3_VL_with_vision_id(model_path):
     chat_template_kwargs = dict(add_vision_id=True)
     lm_res = model.messages2prompt(messages, **chat_template_kwargs)
     assert expected == lm_res
-
-
-@pytest.mark.parametrize('model_path', ['google/gemma-2-9b-it', 'google/gemma-3-12b-it'])
-def test_gemma_chat_template(model_path):
-    messages = [{'role': 'user', 'content': 'who are you'}]
-
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    expected = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-    model = MODELS.get('hf')(model_path=model_path)
-    lm_res = model.messages2prompt(messages)
-    assert expected == lm_res
-
-    messages += [{'role': 'assistant', 'content': 'I am an AI'}, {'role': 'user', 'content': 'AGI is?'}]
-    lm_res = model.messages2prompt(messages, sequence_start=False)
-    assert lm_res == """<start_of_turn>user
-who are you<end_of_turn>
-<start_of_turn>model
-I am an AI<end_of_turn>
-<start_of_turn>user
-AGI is?<end_of_turn>
-<start_of_turn>model
-"""

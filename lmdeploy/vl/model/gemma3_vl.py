@@ -1,8 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Optional
 
 import torch
-from transformers import AutoConfig, AutoProcessor
+from transformers import AutoProcessor
 from transformers.processing_utils import ImagesKwargs, ProcessingKwargs
 
 from lmdeploy.utils import get_logger
@@ -12,11 +11,11 @@ logger = get_logger('lmdeploy')
 
 
 class Gemma3ImagesKwargs(ImagesKwargs):
-    do_pan_and_scan: Optional[bool]
-    pan_and_scan_min_crop_size: Optional[int]
-    pan_and_scan_max_num_crops: Optional[int]
-    pan_and_scan_min_ratio_to_activate: Optional[float]
-    do_convert_rgb: Optional[bool]
+    do_pan_and_scan: bool | None
+    pan_and_scan_min_crop_size: int | None
+    pan_and_scan_max_num_crops: int | None
+    pan_and_scan_min_ratio_to_activate: float | None
+    do_convert_rgb: bool | None
 
 
 class Gemma3ProcessorKwargs(ProcessingKwargs, total=False):
@@ -40,28 +39,20 @@ class Gemma3VisionModel(VisionModel):
 
     _arch = 'Gemma3ForConditionalGeneration'
 
-    def __init__(self,
-                 model_path: str,
-                 with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
-                 hf_config: AutoConfig = None,
-                 backend: str = ''):
-        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
-
-    def build_preprocessor(self):
-        self.processor = AutoProcessor.from_pretrained(self.model_path)
+    def build_preprocessor(self, trust_remote_code: bool = False):
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         tokenizer = self.processor.tokenizer
         self.image_token_id = tokenizer.encode(tokenizer.image_token)[-1]
         self.image_tokens = self.processor.image_seq_length
         self.tokenizer_init_kwargs = tokenizer.init_kwargs
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         # TODO, implement for tubomind engine
         raise NotImplementedError()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""
         from transformers.image_utils import make_nested_list_of_images
         output_kwargs = self.processor._merge_kwargs(
@@ -72,8 +63,8 @@ class Gemma3VisionModel(VisionModel):
                 'add_special_tokens': False
             },
         )
-        images = self.collect_images(messages)
-        images = [image.convert('RGB') for image, _ in images]
+        images = self.collect_multimodal_items(messages)
+        images = [image for modality, image, _ in images]
         num_image = len(images)
         images = make_nested_list_of_images(images)
         image_inputs = self.processor.image_processor(images, **output_kwargs['images_kwargs'])
@@ -91,12 +82,12 @@ class Gemma3VisionModel(VisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -106,8 +97,9 @@ class Gemma3VisionModel(VisionModel):
         raise NotImplementedError()
 
     @staticmethod
-    def proc_messages(messages, chat_template, sequence_start):
+    def proc_messages(messages, chat_template, tools=None, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
@@ -120,13 +112,13 @@ class Gemma3VisionModel(VisionModel):
             content = [item['text'] for item in message['content'] if item['type'] == 'text']
             prompt = ('\n\n' + IMAGE_TOKEN + '\n\n') * n_images + content[0]
             prompt_messages.append(dict(role='user', content=prompt))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+        prompt = chat_template.messages2prompt(prompt_messages, tools=tools, **chat_template_kwargs)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_pytorch(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_turbomind(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer)

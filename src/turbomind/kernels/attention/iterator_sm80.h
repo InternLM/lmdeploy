@@ -3,6 +3,7 @@
 #pragma once
 
 #include "iterator.h"
+#include "src/turbomind/kernels/core/smem.h"
 #include <cassert>
 #include <type_traits>
 

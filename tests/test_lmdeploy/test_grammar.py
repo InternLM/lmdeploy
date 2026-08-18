@@ -9,12 +9,12 @@ from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEn
 
 MODEL_IDS = [
     'Qwen/Qwen3-0.6B',
-    'OpenGVLab/InternVL3_5-1B',
+    'Qwen/Qwen3-VL-2B-Instruct'
 ]
 
 BACKEND_FACTORIES = [
-    ('tm', lambda: TurbomindEngineConfig(max_batch_size=2, session_len=1024)),
-    ('pt', lambda: PytorchEngineConfig(max_batch_size=1, session_len=1024)),
+    ('tm', lambda: TurbomindEngineConfig(max_batch_size=2, session_len=1024, cache_max_entry_count=0.1)),
+    ('pt', lambda: PytorchEngineConfig(max_batch_size=1, session_len=1024, cache_max_entry_count=0.1)),
 ]
 
 SCHEMA_MAP = {
@@ -55,6 +55,20 @@ SCHEMA_MAP = {
     'json_object': None,
 }
 
+MIXED_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'name': {
+            'type': 'string'
+        },
+        'age': {
+            'type': 'integer'
+        },
+    },
+    'required': ['name', 'age'],
+    'additionalProperties': False,
+}
+
 
 @pytest.mark.parametrize('model_id', MODEL_IDS)
 @pytest.mark.parametrize('backend_name,backend_factory', BACKEND_FACTORIES)
@@ -64,6 +78,7 @@ def test_guided_matrix(model_id, backend_name, backend_factory, schema_type):
         model_id,
         backend_config=backend_factory(),
         log_level='INFO',
+        trust_remote_code=True,
     )
 
     if schema_type is None:
@@ -93,5 +108,53 @@ def test_guided_matrix(model_id, backend_name, backend_factory, schema_type):
                 validate(instance=json.loads(response[0].text), schema={'type': 'object', 'additionalProperties': True})
             elif schema_type == 'regex_schema':
                 assert re.fullmatch(schema, response[0].text)
+    finally:
+        pipe.close()
+
+
+@pytest.mark.parametrize('model_id', MODEL_IDS)
+@pytest.mark.parametrize('backend_name,backend_factory', BACKEND_FACTORIES)
+def test_mix_guided_matrix(model_id, backend_name, backend_factory):
+    pipe = pipeline(
+        model_id,
+        backend_config=backend_factory(),
+        log_level='INFO',
+        trust_remote_code=True,
+    )
+
+    schema_type = 'json_schema'
+    response_format = {'type': schema_type}
+    schema = MIXED_SCHEMA
+    response_format[schema_type] = dict(name='test', schema=schema)
+
+    prompts = ['Make a self introduction please.'] * 4
+    try:
+        gen_config = [
+            GenerationConfig(max_new_tokens=128, response_format=response_format)
+            if idx % 3 == 0 else None for idx in range(4)
+        ]
+
+        responses = pipe.batch_infer(prompts, gen_config=gen_config)
+
+        for resp, c in zip(responses, gen_config):
+            if c is None:
+                # Unguided generation: ensure we get some text, and that it does not
+                # accidentally produce JSON that conforms to the guided schema.
+                assert resp and resp.text
+                try:
+                    data = json.loads(resp.text)
+                except json.JSONDecodeError:
+                    # Not valid JSON, so it cannot conform to the schema.
+                    continue
+                else:
+                    try:
+                        validate(instance=data, schema=schema)
+                    except Exception:
+                        # JSON is present but does not satisfy the schema.
+                        continue
+                    else:
+                        pytest.fail('Unguided generation unexpectedly produced schema-conformant JSON')
+            else:
+                validate(instance=json.loads(resp.text), schema=schema)
     finally:
         pipe.close()

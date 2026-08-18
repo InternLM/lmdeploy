@@ -49,8 +49,9 @@ struct Mainloop<arch::Sm70, Impl_> {
         cp_rank_ = cp_rank;
     }
 
-    template<class CacheIter, class StoreS>
-    __device__ void operator()(FragQ&         frag_Q,
+    template<bool Causal, class CacheIter, class StoreS>
+    __device__ void operator()(std::integral_constant<bool, Causal>,
+                               FragQ&         frag_Q,
                                CacheIter&     cache_iter,
                                FragO&         frag_O,
                                FragM&         frag_M,
@@ -103,7 +104,7 @@ struct Mainloop<arch::Sm70, Impl_> {
             }
 
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K, window_size);
+                ApplyMask<Causal>(frag_S, offset_Q, offset_K, max_step, window_size);
             }
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
@@ -134,12 +135,17 @@ struct Mainloop<arch::Sm70, Impl_> {
         }
     }
 
-    __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K, int window_size)
+    template<bool Causal>
+    __device__ void ApplyMask(FragS& frag_S, int offset_Q, int offset_K, int max_step, int window_size)
     {
         Impl::ForeachS(frag_S, [&](int hi, int qi, int si, int ri, float& score) {
-            int w = (offset_Q + qi) - ((offset_K + si) * cp_size_ + cp_rank_);
-            if (0 <= w && w < window_size) {}
-            else {
+            const int local_k = offset_K + si;
+            bool      valid   = local_k < max_step;
+            if constexpr (Causal) {
+                const int w = (offset_Q + qi) - (local_k * cp_size_ + cp_rank_);
+                valid       = valid && 0 <= w && w < window_size;
+            }
+            if (!valid) {
                 score -= std::numeric_limits<float>::infinity();
             }
         });

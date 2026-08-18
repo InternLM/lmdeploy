@@ -15,9 +15,9 @@ on:
         default: 'main'
       base_models:
         required: true
-        description: 'Tested TurboMind models list. eg. [turbomind_qwen2_5_1_5b, turbomind_qwen2_5_7b, turbomind_qwen2_5_32b, turbomind_internlm2_5_7b, turbomind_glm_4_9b, turbomind_llama_3_1_8b, turbomind_llama_3_70b, pytorch_qwen2_5_1_5b, pytorch_qwen2_5_7b, pytorch_qwen2_5_32b, pytorch_internlm2_5_7b, pytorch_gemma_2_9b, pytorch_llama_3_70b, pytorch_llama_3_1_8b]'
+        description: 'Tested TurboMind models list. eg. [turbomind_qwen2_5_1_5b, turbomind_qwen2_5_7b, turbomind_qwen2_5_32b, turbomind_glm_4_9b, turbomind_llama_3_1_8b, turbomind_llama_3_70b, turbomind_qwen3_0_6b_base, turbomind_qwen3_8b_base, turbomind_qwen3_30b_A3B_base, pytorch_qwen2_5_1_5b, pytorch_qwen2_5_7b, pytorch_qwen2_5_32b, pytorch_gemma_2_9b, pytorch_llama_3_70b, pytorch_llama_3_1_8b, pytorch_qwen3_0_6b_base, pytorch_qwen3_8b_base, pytorch_qwen3_30b_A3B_base]'
         type: string
-        default: '[turbomind_qwen2_5_1_5b, turbomind_qwen2_5_7b, turbomind_qwen2_5_32b, turbomind_internlm2_5_7b, turbomind_glm_4_9b, turbomind_llama_3_1_8b, turbomind_llama_3_70b, pytorch_qwen2_5_1_5b, pytorch_qwen2_5_7b, pytorch_qwen2_5_32b, pytorch_internlm2_5_7b, pytorch_gemma_2_9b, pytorch_llama_3_70b, pytorch_llama_3_1_8b]'
+        default: '[turbomind_qwen2_5_1_5b, turbomind_qwen2_5_7b, turbomind_qwen2_5_32b, turbomind_glm_4_9b, turbomind_llama_3_1_8b, turbomind_llama_3_70b, turbomind_qwen3_0_6b_base, turbomind_qwen3_8b_base, turbomind_qwen3_30b_A3B_base, pytorch_qwen2_5_1_5b, pytorch_qwen2_5_7b, pytorch_qwen2_5_32b, pytorch_gemma_2_9b, pytorch_llama_3_70b, pytorch_llama_3_1_8b, pytorch_qwen3_0_6b_base, pytorch_qwen3_8b_base, pytorch_qwen3_30b_A3B_base]'
       baes_datasets:
         required: true
         description: 'Tested datasets list. eg. [*mmlu_datasets, *gsm8k_datasets]'
@@ -38,6 +38,11 @@ on:
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
         type: boolean
         default: false
+      docker_tag:
+        required: true
+        description: 'Docker tag'
+        type: string
+        default: 'nightly-test-cu12.8'
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
@@ -48,16 +53,16 @@ jobs:
     if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py310]
+        pyver: [py312]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
-      PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.8
+      PLAT_NAME: manylinux_2_28_x86_64
+      DOCKER_TAG: manylinux_2_28-cuda12.8
       OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
     steps:
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main
         with:
           # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
           tool-cache: false
@@ -69,7 +74,7 @@ jobs:
           large-packages: true
           swap-storage: false
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
@@ -101,13 +106,13 @@ jobs:
       matrix:
         evaluate_type: ['base']
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/github-actions/resources:/root/resources
-        - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
+        - /nvme/qa_test_models/evaluation_report:/root/evaluation_report
         - /nvme/qa_test_models:/root/models
         - /mnt/121:/mnt/121
         - /mnt/104:/mnt/104
@@ -119,7 +124,7 @@ jobs:
           export TIME_STAMP="$(date +'%Y%m%d-%H%M%S')"
           echo "TIME_STAMP=$TIME_STAMP" >> $GITHUB_ENV
       - name: Clone repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
@@ -131,7 +136,7 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py310
+          name: my-artifact-${{ github.run_id }}-py312
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r /root/models/offline_pkg/requirements.txt
@@ -143,7 +148,7 @@ jobs:
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install /root/models/offline_pkg/py310/lmdeploy-*.whl --no-deps
+          python3 -m pip install /root/models/offline_pkg/py312/lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Install opencompass
         run: |
@@ -166,7 +171,7 @@ jobs:
           echo ${{github.event.inputs.base_models}}
           echo ${{github.event.inputs.baes_datasets}}
           export LMDEPLOY_DIR=$(pwd)
-          python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.base_models}}" "${{github.event.inputs.baes_datasets}}" /root/evaluation-reports/${{ github.run_id }} base
+          python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.base_models}}" "${{github.event.inputs.baes_datasets}}" /root/evaluation_report/${{ github.run_id }} base
       - name: Clear workspace
         if: always()
         run: |

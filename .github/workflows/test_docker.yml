@@ -21,10 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        cuda_version: [cu13, cu12]
+        cuda_build_target: [cu130, cu128]
         python_version: ['3.10', '3.11', '3.12', '3.13']
     env:
-      CUDA_VERSION: ${{ matrix.cuda_version }}
+      CUDA_BUILD_TARGET: ${{ matrix.cuda_build_target }}
       PYTHON_VERSION: ${{ matrix.python_version }}
     steps:
       - name: Checkout repository
@@ -32,7 +32,7 @@ jobs:
         with:
           ref: ${{github.event.inputs.repo_ref}}
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main
         with:
           # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
           tool-cache: false
@@ -50,13 +50,13 @@ jobs:
           git config --local --unset "http.https://github.com/.extraheader"
       - name: Build Docker image
         run: |
-          docker build . -t lmdeploy:latest -f docker/Dockerfile --build-arg CUDA_VERSION=${CUDA_VERSION} --build-arg PYTHON_VERSION=${PYTHON_VERSION}
+          docker build . -t lmdeploy:latest -f docker/Dockerfile --build-arg CUDA_VERSION=${CUDA_BUILD_TARGET} --build-arg PYTHON_VERSION=${PYTHON_VERSION}
       - name: Test image with lmdeploy check_env
         run: |
           docker images
           docker run --rm lmdeploy:latest lmdeploy check_env
       - name: Dive
-        if: ${{ matrix.cuda_version == 'cu12' }}
+        if: ${{ matrix.cuda_build_target == 'cu128' }}
         uses: MaxymVlasov/dive-action@v1.5.0
         with:
           image: lmdeploy:latest
@@ -72,7 +72,7 @@ jobs:
         with:
           ref: ${{github.event.inputs.repo_ref}}
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main
         with:
           # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
           tool-cache: false
@@ -113,7 +113,7 @@ jobs:
         with:
           ref: ${{github.event.inputs.repo_ref}}
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main
         with:
           # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
           tool-cache: false

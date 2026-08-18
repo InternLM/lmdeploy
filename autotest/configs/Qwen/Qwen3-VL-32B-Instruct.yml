@@ -1,0 +1,13 @@
+# HF model id: Qwen/Qwen3-VL-32B-Instruct
+
+ascend:
+- model_type: vl
+  engine_config:
+    tp: 4
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - mllm_evaluate

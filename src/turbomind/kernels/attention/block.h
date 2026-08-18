@@ -12,7 +12,7 @@ namespace turbomind {
 
 namespace block {
 
-template<class T, class Tkv, int HeadDim>
+template<class T, class Tkv, int HeadDim, bool ShareKV = false>
 struct Config {
     int head_num_;
     int block_len_;
@@ -46,46 +46,48 @@ struct Config {
     {
         return block_len_;
     }
+
+    TM_HOST_DEVICE constexpr bool is_share_kv() const
+    {
+        return ShareKV;
+    }
 };
 
-// Layout -> LayerId -> HeadId -> Timestep -> [Block] -> (k_data, v_data, k_param, v_param)
+// Layout -> byte offset -> head id -> token id -> [block] -> (k_data, v_data, k_param, v_param)
 
 template<class T, class Tkv, class Layout>
 class Head {
 public:
-    TM_HOST_DEVICE Head(Layout layout, int layer_id, int head_id):
-        layout_{layout}, layer_id_{layer_id}, head_id_{head_id}
-    {
-    }
+    TM_HOST_DEVICE Head(Layout layout, int offset, int head_id): layout_{layout}, offset_{offset}, head_id_{head_id} {}
 
     TM_HOST_DEVICE auto k_data(char* block, int ti) const
     {
         if constexpr (std::is_same_v<Tkv, uint4_t>) {
-            return SubBytePtr<Tkv>{block + layout_.k_data(layer_id_, head_id_, ti)};
+            return SubBytePtr<Tkv>{block + offset_ + layout_.k_data(head_id_, ti)};
         }
         else {
-            return reinterpret_cast<Tkv*>(block + layout_.k_data(layer_id_, head_id_, ti));
+            return reinterpret_cast<Tkv*>(block + offset_ + layout_.k_data(head_id_, ti));
         }
     }
 
     TM_HOST_DEVICE auto v_data(char* block, int ti) const
     {
         if constexpr (std::is_same_v<Tkv, uint4_t>) {
-            return SubBytePtr<Tkv>{block + layout_.v_data(layer_id_, head_id_, ti)};
+            return SubBytePtr<Tkv>{block + offset_ + layout_.v_data(head_id_, ti)};
         }
         else {
-            return reinterpret_cast<Tkv*>(block + layout_.v_data(layer_id_, head_id_, ti));
+            return reinterpret_cast<Tkv*>(block + offset_ + layout_.v_data(head_id_, ti));
         }
     }
 
     TM_HOST_DEVICE T* k_param(char* block, int ti) const
     {
-        return reinterpret_cast<T*>(block + layout_.k_param(layer_id_, head_id_, ti));
+        return reinterpret_cast<T*>(block + offset_ + layout_.k_param(head_id_, ti));
     }
 
     TM_HOST_DEVICE T* v_param(char* block, int ti) const
     {
-        return reinterpret_cast<T*>(block + layout_.v_param(layer_id_, head_id_, ti));
+        return reinterpret_cast<T*>(block + offset_ + layout_.v_param(head_id_, ti));
     }
 
     TM_HOST_DEVICE void get_block_coord(int seq_ti, int& block_idx, int& block_ti) const
@@ -115,7 +117,7 @@ public:
 private:
     Layout layout_;
 
-    int layer_id_;
+    int offset_;
     int head_id_;
 };
 
@@ -135,6 +137,18 @@ struct Layout {
         return config_;
     }
 
+    TM_HOST_DEVICE constexpr bool is_share_kv() const
+    {
+        // return 0;
+        return config().is_share_kv();
+    }
+
+    TM_HOST_DEVICE constexpr int kv_num() const
+    {
+        // return 2;
+        return is_share_kv() ? 1 : 2;
+    }
+
     TM_HOST_DEVICE int token_data_size() const
     {
         return config().q_bits() * config().head_dim() / 8;
@@ -142,7 +156,7 @@ struct Layout {
 
     TM_HOST_DEVICE int token_param_size() const
     {
-        return config().t_bits() * 2 / 8;
+        return config().t_bits() * 2 / 8;  // 2 for scales/zeros
     }
 
     TM_HOST_DEVICE int head_data_size() const
@@ -158,52 +172,39 @@ struct Layout {
     TM_HOST_DEVICE int layer_size() const
     {
         // TODO: enforce alignment
-        return config().head_num() * 2 * head_data_size() + config().head_num() * 2 * head_param_size();
+        return config().head_num() * kv_num() * head_data_size() + config().head_num() * kv_num() * head_param_size();
     }
 
-    TM_HOST_DEVICE int block_size(int layer_num) const
+    TM_HOST_DEVICE int k_data(int head, int token) const
     {
-        return layer_size() * layer_num;
+        return head_data(head) + token_data(token);
     }
 
-    TM_HOST_DEVICE int k_data(int layer, int head, int token) const
+    TM_HOST_DEVICE int v_data(int head, int token) const
     {
-        return layer_data(layer) + head_data(head) + token_data(token);
+        return k_data(head, token) + (is_share_kv() ? 0 : head_data_size());
     }
 
-    TM_HOST_DEVICE int v_data(int layer, int head, int token) const
+    TM_HOST_DEVICE int k_param(int head, int token) const
     {
-        return k_data(layer, head, token) + head_data_size();
+        // Params follow the full K/V data region for all heads (same as pre-#4717
+        // layer_param = layer_data + head_data(head_num)).
+        return head_data(config().head_num()) + head_param(head) + token_param(token);
     }
 
-    TM_HOST_DEVICE int k_param(int layer, int head, int token) const
+    TM_HOST_DEVICE int v_param(int head, int token) const
     {
-        return layer_param(layer) + head_param(head) + token_param(token);
-    }
-
-    TM_HOST_DEVICE int v_param(int layer, int head, int token) const
-    {
-        return k_param(layer, head, token) + head_param_size();
-    }
-
-    TM_HOST_DEVICE int layer_data(int layer) const
-    {
-        return layer * layer_size();
-    }
-
-    TM_HOST_DEVICE int layer_param(int layer) const
-    {
-        return layer_data(layer) + head_data(config_.head_num());
+        return k_param(head, token) + (is_share_kv() ? 0 : head_param_size());
     }
 
     TM_HOST_DEVICE int head_data(int head) const
     {
-        return head * 2 * head_data_size();
+        return head * kv_num() * head_data_size();
     }
 
     TM_HOST_DEVICE int head_param(int head) const
     {
-        return head * 2 * head_param_size();
+        return head * kv_num() * head_param_size();
     }
 
     TM_HOST_DEVICE int token_data(int ti) const

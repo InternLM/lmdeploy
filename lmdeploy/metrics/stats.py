@@ -3,7 +3,6 @@
 
 import time
 from dataclasses import dataclass
-from typing import List, Optional
 
 import numpy as np
 
@@ -13,27 +12,75 @@ from lmdeploy.messages import EngineEvent, EngineOutput, ResponseType, ScheduleM
 @dataclass
 class SchedulerStats:
     """Stats associated with the scheduler.
+    Desc:
+        Dataflow: client --> API server --> Engine core
+
+        API server request states (axis view):
+        |<──────────────────────────────── total ────────────────────────────────>|
+        |<──────────── completed ─────────────>|<────── uncompleted ─────────────>|
+        |<─ success ─>|<──────── fail ────────>|<─ routed ─>|<───── waiting ─────>|
+                      |<cancel>|<abort>|<error>|
+
+        Engine core request states (axis view):
+        |<────────────────── routed ──────────────────>|
+        |<───── running ──────>|<────── waiting ──────>|
 
     Attributes:
-        num_total_reqs: The number of all requests received since server start.
-        num_finished_reqs: The number of successfully completed requests since server start.
-        num_running_reqs: Currently executing requests.
-        num_waiting_reqs: Requests queued waiting for execution.
-        gpu_cache_usage: Fraction of GPU KV blocks utilized (0.0 to 1.0).
+        # API server
+        num_total_reqs: the number of all requests received since server start.
+        num_succeeded_reqs: the number of successfully completed requests since server start.
+        num_cancelled_reqs: the number of cancelled requests since server start.
+        num_aborted_reqs: the number of aborted requests since server start.
+        num_errored_reqs: the number of requests that end with errors since server start.
+        num_api_routed_reqs: the number of requests routed to request handles.
+
+        # Engine core
+        num_running_reqs: Engine core, currently executing requests.
+        num_waiting_reqs: Engine core, requests queued waiting for execution.
+        gpu_cache_usage: Fraction of GPU KV cache utilized (0.0 to 1.0).
         prefix_cache_hit_rate: Prefix caching hit rate.
     """
 
+    # api server
     num_total_reqs: int = 0
-    num_finished_reqs: int = 0
+    num_succeeded_reqs: int = 0
+    num_cancelled_reqs: int = 0
+    num_aborted_reqs: int = 0
+    num_errored_reqs: int = 0
+    num_api_routed_reqs: int = 0
+
+    # engine core
     num_running_reqs: int = 0
     num_waiting_reqs: int = 0
     gpu_cache_usage: float = 0.0
     prefix_cache_hit_rate: float = 0.0
 
+    @property
+    def num_failed_reqs(self) -> int:
+        return self.num_cancelled_reqs + self.num_aborted_reqs + self.num_errored_reqs
+
+    @property
+    def num_completed_reqs(self) -> int:
+        return self.num_succeeded_reqs + self.num_failed_reqs
+
+    @property
+    def num_uncompleted_reqs(self) -> int:
+        return self.num_total_reqs - self.num_completed_reqs
+
+    @property
+    def num_api_waiting_reqs(self) -> int:
+        """The number of requests waiting for free request handles."""
+        return self.num_uncompleted_reqs - self.num_api_routed_reqs
+
     def __repr__(self):
         return ('SchedulerStats(\n'
                 f'  num_total_reqs={self.num_total_reqs},\n'
-                f'  num_finished_reqs={self.num_finished_reqs},\n'
+                f'  num_succeeded_reqs={self.num_succeeded_reqs},\n'
+                f'  num_cancelled_reqs={self.num_cancelled_reqs},\n'
+                f'  num_aborted_reqs={self.num_aborted_reqs},\n'
+                f'  num_errored_reqs={self.num_errored_reqs},\n'
+                f'  num_api_routed_reqs={self.num_api_routed_reqs},\n'
+                f'  num_api_waiting_reqs={self.num_api_waiting_reqs},\n'
                 f'  num_running_reqs={self.num_running_reqs},\n'
                 f'  num_waiting_reqs={self.num_waiting_reqs},\n'
                 f'  gpu_cache_usage={self.gpu_cache_usage:.6f},\n'
@@ -43,7 +90,7 @@ class SchedulerStats:
     def update_from_schedule_metrics(self, scheduled_metrics: ScheduleMetrics):
         self.num_running_reqs = scheduled_metrics.active_seqs
         self.num_waiting_reqs = scheduled_metrics.waiting_seqs
-        self.gpu_cache_usage = 1.0 - (scheduled_metrics.free_blocks / scheduled_metrics.total_blocks)
+        self.gpu_cache_usage = scheduled_metrics.cache_usage
         self.prefix_cache_hit_rate = scheduled_metrics.prefix_cache_hit_rate
 
 
@@ -77,6 +124,7 @@ class RequestStats:
         self.prompt_tokens = prompt_tokens
 
         self.generation_tokens: int = 0
+        self.cached_tokens: int = 0
         self.queued_time: float = 0.0
         self.scheduled_time: float = 0.0
         self.first_token_time: float = 0.0
@@ -95,7 +143,7 @@ class RequestStats:
                 f'  latest_token_time={self.lastest_token_time:.6f},\n'
                 ')')
 
-    def update_from_events(self, engine_events: List[EngineEvent]):
+    def update_from_events(self, engine_events: list[EngineEvent]):
         # avoid circular dependency
         from lmdeploy.messages import EventType
 
@@ -161,9 +209,9 @@ class IterationStats:
         self.iteration_timestamp = time.time()
         self.new_generation_tokens = 0
         self.prompt_tokens = 0
-        self.ttft: Optional[float] = None
-        self.tpot: Optional[float] = None
-        self.itl: Optional[float] = None
+        self.ttft: float | None = None
+        self.tpot: float | None = None
+        self.itl: float | None = None
 
     def __repr__(self):
         return ('IterationStats(\n'

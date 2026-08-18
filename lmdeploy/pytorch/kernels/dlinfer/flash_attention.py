@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dlinfer.ops as ext_ops
-from dlinfer.utils.type_annotation import Tensor
+from torch import Tensor
 
 
 def flash_attention_fwd(

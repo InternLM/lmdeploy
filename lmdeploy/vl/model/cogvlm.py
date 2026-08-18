@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
@@ -13,7 +12,7 @@ class CogVLMVisionModel(VisionModel):
 
     _arch = 'CogVLMForCausalLM'
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         from torchvision import transforms
         self.image_transform = transforms.Compose([
             transforms.Resize((self.hf_config.vision_config['image_size'], ) * 2,
@@ -30,21 +29,20 @@ class CogVLMVisionModel(VisionModel):
             # cogvlm2, https://huggingface.co/THUDM/cogvlm2-llama3-chinese-chat-19B/blob/2c2226281325649d49b8aa237a932367c7da4f26/modeling_cogvlm.py#L819 # noqa E501
             self.n_token_per_image = 2 + (image_size // patch_size // 2)**2
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         if self.with_llm:
             from transformers import AutoModelForCausalLM
             self.vl_model = AutoModelForCausalLM.from_pretrained(self.model_path,
                                                                  device_map='cpu',
-                                                                 trust_remote_code=True)
+                                                                 trust_remote_code=trust_remote_code)
         else:
             raise NotImplementedError('turbomind has not supported cogvlm yet')
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to the spec of `super().preprocess`"""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, _ in images:
-            image = image.convert('RGB')
+        for modality, image, _ in images:
             pixel_values = self.image_transform(image)
             outputs.append(
                 dict(pixel_values=pixel_values,
@@ -55,10 +53,13 @@ class CogVLMVisionModel(VisionModel):
         return messages
 
     @staticmethod
-    def proc_messages(messages, chat_template, sequence_start):
+    def proc_messages(messages, chat_template, tools=None, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
-        for message in messages:
+        image_prefixes = {}
+        IMAGE_TOKEN = '<IMAGE_TOKEN>'
+        for idx, message in enumerate(messages):
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
                 continue
@@ -66,25 +67,18 @@ class CogVLMVisionModel(VisionModel):
                 continue
             content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
             n_images = len([1 for x in message['content'] if x['type'] == 'image'])
+            prompt = content[0]
+            if n_images > 0:
+                sentinel = f'__LMDEPLOY_COGVLM_IMAGE_{idx}__'
+                image_prefixes[sentinel] = IMAGE_TOKEN * n_images
+                prompt = f'{sentinel}{prompt}'
+            prompt_messages.append(dict(role='user', content=prompt))
 
-            prompt_messages.append(dict(role='user', content=content[0], num_images=n_images))
-
-        from lmdeploy.model import Vicuna
-        llm_chat_template = Vicuna(eoa=chat_template.eoa, stop_words=chat_template.stop_words)
-        prompt = ''
-        IMAGE_TOKEN = '<IMAGE_TOKEN>'
-        for i, msg in enumerate(prompt_messages):
-            num_images = msg.pop('num_images', 0)
-            if num_images == 0:
-                role = msg['role']
-                msg = llm_chat_template.messages2prompt([msg], sequence_start and i == 0)
-                msg = dict(role=role, content=msg)
-            prompt_i = chat_template.messages2prompt([msg], sequence_start and i == 0)
-            if num_images > 0:
-                prompt_i = (IMAGE_TOKEN * num_images) + prompt_i
-            prompt += prompt_i
+        prompt = chat_template.messages2prompt(prompt_messages, tools=tools, **chat_template_kwargs)
+        for sentinel, image_prefix in image_prefixes.items():
+            prompt = prompt.replace(f'{chat_template.user}{sentinel}', f'{image_prefix}{chat_template.user}', 1)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_pytorch(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)

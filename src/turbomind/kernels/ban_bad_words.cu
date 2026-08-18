@@ -17,7 +17,7 @@
 #include "src/turbomind/kernels/ban_bad_words.h"
 #include <cfloat>
 // #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
-// #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 
@@ -122,6 +122,7 @@ void BanBadWords(Tensor&             logits,
     };
 
     invoke(float{});
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 }  // namespace turbomind

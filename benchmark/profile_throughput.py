@@ -5,14 +5,13 @@ import json
 import os
 import random
 from queue import Queue
-from typing import List, Optional, Tuple, Union
 
 import numpy as np
 from tqdm import tqdm
 from transformers import PreTrainedTokenizerBase
 
-from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
-from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, get_speculative_config
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, SpeculativeConfig, TurbomindEngineConfig
 from lmdeploy.profiler import Profiler, Session
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
@@ -25,8 +24,8 @@ def sample_sharegpt_requests(
     dataset_path: str,
     num_requests: int,
     tokenizer: PreTrainedTokenizerBase,
-    fixed_output_len: Optional[int] = None,
-) -> List[Tuple[str, int, int]]:
+    fixed_output_len: int | None = None,
+) -> list[tuple[str, int, int]]:
     if fixed_output_len is not None and fixed_output_len < 4:
         raise ValueError('output_len too small')
     # Load the dataset.
@@ -41,7 +40,7 @@ def sample_sharegpt_requests(
     random.shuffle(dataset)
 
     # Filter out sequences that are too long or too short
-    filtered_dataset: List[Tuple[str, int, int]] = []
+    filtered_dataset: list[tuple[str, int, int]] = []
     for i in range(len(dataset)):
         if len(filtered_dataset) == num_requests:
             break
@@ -73,7 +72,7 @@ def sample_random_requests(
     range_ratio: float,
     tokenizer: PreTrainedTokenizerBase,
     dataset_path: str,
-) -> List[Tuple[str, int, int]]:
+) -> list[tuple[str, int, int]]:
 
     input_lens = np.random.randint(
         max(int(input_len * range_ratio), 1),
@@ -104,7 +103,7 @@ def sample_random_requests(
         random.shuffle(dataset)
 
         # Filter out sequences that are too long or too short
-        input_requests: List[Tuple[str, int, int]] = []
+        input_requests: list[tuple[str, int, int]] = []
         for i in range(num_prompts):
             # Tokenize the prompts and completions.
             prompt = dataset[i][0]
@@ -134,15 +133,22 @@ def sample_random_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, engine_config: Union[PytorchEngineConfig, TurbomindEngineConfig]):
+    def __init__(self, model_path: str,
+                 engine_config: PytorchEngineConfig | TurbomindEngineConfig,
+                 speculative_config: SpeculativeConfig,
+                 trust_remote_code: bool = False):
         self.tokenizer = Tokenizer(model_path)
         if isinstance(engine_config, TurbomindEngineConfig):
             from lmdeploy.turbomind import TurboMind
-            tm_model = TurboMind.from_pretrained(model_path, engine_config=engine_config)
+            tm_model = TurboMind.from_pretrained(model_path, engine_config=engine_config,
+                                                 trust_remote_code=trust_remote_code)
             self.backend = 'turbomind'
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine
-            tm_model = PytorchEngine.from_pretrained(model_path, engine_config=engine_config)
+            tm_model = PytorchEngine.from_pretrained(model_path,
+                                                     engine_config=engine_config,
+                                                     speculative_config=speculative_config,
+                                                     trust_remote_code=trust_remote_code)
             self.backend = 'pytorch'
 
         self.tm_model = tm_model
@@ -173,8 +179,6 @@ class Engine:
                                                                                   top_p=top_p,
                                                                                   top_k=top_k,
                                                                                   ignore_eos=True),
-                                                      sequence_start=True,
-                                                      sequence_end=True,
                                                       stream_output=stream_output)
             try:
                 async for outputs in generator:
@@ -188,10 +192,6 @@ class Engine:
                 sess.finish(Session.SUCCESS)
             finally:
                 await generator.aclose()
-
-            # for pytorch engine to restart a session
-            if self.backend == 'pytorch':
-                await model_inst.async_end(session_id)
 
             self.pbar.update(1)
             session_id += concurrency
@@ -292,6 +292,12 @@ def parse_args():
         help='Range of sampled ratio of input/output length, '
         'used only for random dataset.',
     )
+    parser.add_argument(
+        '--trust-remote-code',
+        action='store_true',
+        default=False,
+        help='Trust remote code.',
+    )
     # other args
     ArgumentHelper.top_p(parser)
     ArgumentHelper.temperature(parser)
@@ -300,11 +306,15 @@ def parse_args():
 
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
+    ArgumentHelper.device(pt_group)
     ArgumentHelper.eager_mode(pt_group)
     ArgumentHelper.dllm_block_length(pt_group)
     ArgumentHelper.dllm_unmasking_strategy(pt_group)
     ArgumentHelper.dllm_denoising_steps(pt_group)
     ArgumentHelper.dllm_confidence_threshold(pt_group)
+
+    # spec decode
+    ArgumentHelper.add_spec_group(parser)
 
     tp_act = ArgumentHelper.tp(pt_group)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
@@ -337,6 +347,7 @@ def parse_args():
 def main():
     args = parse_args()
     random.seed(args.seed)
+    np.random.seed(args.seed)
     if args.backend == 'turbomind':
         engine_config = TurbomindEngineConfig(
             max_batch_size=args.concurrency // args.dp,
@@ -360,6 +371,7 @@ def main():
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
+            device_type=args.device,
             eager_mode=args.eager_mode,
             enable_prefix_caching=args.enable_prefix_caching,
             quant_policy=args.quant_policy,
@@ -375,7 +387,8 @@ def main():
         import uvloop
         asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
-    engine = Engine(args.model_path, engine_config)
+    speculative_config = get_speculative_config(args)
+    engine = Engine(args.model_path, engine_config, speculative_config, trust_remote_code=args.trust_remote_code)
 
     if args.dataset_name == 'sharegpt':
         assert args.random_input_len is None and args.random_output_len is None

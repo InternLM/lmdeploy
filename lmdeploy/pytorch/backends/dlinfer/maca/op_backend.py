@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
 
 import torch
 
@@ -26,7 +25,7 @@ class MacaOpsBackend(DlinferOpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         return (block_size, num_heads, head_size)
 
     @staticmethod
@@ -35,7 +34,7 @@ class MacaOpsBackend(DlinferOpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         return (block_size, num_heads, head_size)
 
     @classmethod
@@ -53,9 +52,9 @@ class MacaOpsBackend(DlinferOpsBackend):
         kv_start_indices, attention_mask = [], []
         block_num, block_size, _, _ = step_context.kv_caches[0][1].shape
 
-        is_unpaged_prefill = False
+        is_prefill_no_cache = False
         if not step_context.is_decoding:
-            is_unpaged_prefill = \
+            is_prefill_no_cache = \
                all((step_context.q_seqlens ==
                     step_context.kv_seqlens).tolist())
         q_start_loc = step_context.q_start_loc
@@ -100,7 +99,7 @@ class MacaOpsBackend(DlinferOpsBackend):
             kv_start_indices=kv_start_indices,
             block_size=block_size,
             attention_mask=attention_mask,
-            is_unpaged_prefill=is_unpaged_prefill,
+            is_prefill_no_cache=is_prefill_no_cache,
             max_q_seq_len=max_q_seq_len,
             max_kv_seq_len=max_kv_seq_len,
         )

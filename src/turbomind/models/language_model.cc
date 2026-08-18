@@ -2,6 +2,7 @@
 #include "src/turbomind/models/language_model.h"
 
 #include <memory>
+#include <numeric>
 
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/core/allocator.h"
@@ -9,17 +10,19 @@
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/interval.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/core/state.h"
 #include "src/turbomind/engine/batch.h"
+#include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/generation/generation.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/models/input_processor.h"
-#include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
+#include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/output_processor.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -33,16 +36,17 @@ using std::unique_ptr;
 using std::shared_ptr;
 
 struct LanguageModel::Impl {
-    const DataType       dtype_;
-    const ModelParam     param_;
-    const AttentionParam attn_param_;
     const Communicators& comm_;
-    const LlamaWeight&   weights_;
+    const ModelWeight&   weights_;
     LlamaLinear&         linear_;
 
     const int  tp_size_;
     const int  tp_rank_;
     const bool use_ag2d_;
+
+    const int attn_dp_size_;
+    const int attn_dp_rank_;
+    const int max_batch_size_;
 
     const bool debug_;
 
@@ -58,14 +62,25 @@ struct LanguageModel::Impl {
     // Symmetric buffer for holding global hidden states or logits
     Buffer_<uint8_t> symm_buf_;
 
+    // Global (all attention DP ranks) per-token validity mask, built at Forward time;
+    // consumed by the attention layers (their DP-local slice) and, eventually, the MoE router.
+    Buffer_<bool> token_mask_;
+
+    // Symmetric gather buffer for the per-rank `[q_offsets | finished]` metadata blocks
+    // ([attn_dp_size, meta_bytes], 16B-aligned rows for the in-place AllGather).
+    // Only allocated when attn_dp > 1.
+    Tensor_<uint8_t> symm_token_meta_;
+
     // Max chunk size for compute / output full logits
     int max_logits_len_ = 0;
 
     Buffer_<int>  sequence_length_buf_;
+    Buffer_<int>  readonly_block_num_buf_;  // {max_batch_size}, kCPUpinned
     Buffer_<bool> finished_buf_;
 
     struct Data {
         Buffer_<int>  sequence_length;
+        Buffer_<int>  readonly_block_num;
         Buffer_<bool> finished;
 
         Buffer_<bool> autoregres;
@@ -102,17 +117,14 @@ struct LanguageModel::Impl {
         }
     }
 
-    Impl(DataType              dtype,
-         const ModelParam&     model,
-         const EngineParam&    engine,
-         const AttentionParam& attn,
-         const MoeParam&       moe,
-         const Context&        ctx,
-         const LlamaWeight&    weights,
-         int                   phases);
+    Impl(
+        CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases);
 
     Tensor LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf);
     Tensor PostEmbedding(const Tensor& features, Buffer symm_buf);
+
+    // Build the global per-token validity mask for this pass (see `token_mask_`).
+    void BuildTokenMask(const bool* finished, const int* q_offsets, const BatchData& b);
 
     void Setup(int phase, TensorMap& env);
     void Prepare(int phase, TensorMap& env);
@@ -121,23 +133,17 @@ struct LanguageModel::Impl {
     void Fetch(int phase, TensorMap& env);
 };
 
-LanguageModel::Impl::Impl(DataType              dtype,
-                          const ModelParam&     model,
-                          const EngineParam&    engine,
-                          const AttentionParam& attn,
-                          const MoeParam&       moe,
-                          const Context&        ctx,
-                          const LlamaWeight&    weights,
-                          int                   phases):
-    dtype_{dtype},
-    param_{model},
-    attn_param_{attn},
+LanguageModel::Impl::Impl(
+    CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases):
     comm_{ctx.comm},
     weights_{weights},
     linear_{*ctx.linear},
     tp_size_{comm_.h_tp_group->n_ranks()},
     tp_rank_{comm_.h_tp_group->rank()},
     use_ag2d_{comm_.d_comm && comm_.d_comm->Query(comm::kHasAllGather2D)},
+    attn_dp_size_{engine.attn_dp_size},
+    attn_dp_rank_{engine.attn_dp_rank},
+    max_batch_size_{engine.max_batch_size},
     debug_{isDebug()}
 {
 
@@ -151,29 +157,27 @@ LanguageModel::Impl::Impl(DataType              dtype,
     // autoreg_ids_offsets_ = {engine.max_batch_size + 1, kCPU};
     // std::fill_n(autoreg_ids_offsets_.data(), autoreg_ids_offsets_.size(), 0);
 
-    sequence_length_buf_ = {engine.max_batch_size, kCPUpinned};
-    sequence_length_     = {{engine.max_batch_size}, kInt, kDEVICE};
+    sequence_length_buf_    = {engine.max_batch_size, kCPUpinned};
+    readonly_block_num_buf_ = {engine.max_batch_size, kCPUpinned};
+    sequence_length_        = {{engine.max_batch_size}, kInt, kDEVICE};
     for (int i = 0; i < phases; ++i) {
-        auto& d           = data_.emplace_back();
-        d.sequence_length = empty_like(sequence_length_buf_, kDEVICE);
-        d.finished        = empty_like(finished_buf_, kDEVICE);
-        d.autoregres      = {engine.max_batch_size, kCPU};
-        d.generating      = {engine.max_batch_size, kCPU};
+        auto& d              = data_.emplace_back();
+        d.sequence_length    = empty_like(sequence_length_buf_, kDEVICE);
+        d.readonly_block_num = empty_like(readonly_block_num_buf_, kDEVICE);
+        d.finished           = empty_like(finished_buf_, kDEVICE);
+        d.autoregres         = {engine.max_batch_size, kCPU};
+        d.generating         = {engine.max_batch_size, kCPU};
     }
 
-    input_processor_.emplace(engine, param_, phases);
+    input_processor_.emplace(engine, weights_.hidden_units, weights_.data_type, phases);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, attn, moe, ctx, phases);
+    unified_decoder_ = std::make_unique<UnifiedDecoder>(registry, engine, ctx, phases, weights_);
 
-    generation_ = std::make_unique<Generation>(kFloat32,
-                                               engine.max_batch_size,
-                                               engine.session_len,
-                                               model.vocab_size,
-                                               weights.post_decoder_embedding.output_dim * tp_size_,
-                                               comm_.h_tp_group,
-                                               phases);
+    const int vocab_size = weights_.output->output_dim * tp_size_;
 
-    const int     vocab_size     = weights_.post_decoder_embedding.output_dim * tp_size_;
+    generation_ = std::make_unique<Generation>(
+        kFloat32, engine.max_batch_size, engine.session_len, weights_.vocab_size, vocab_size, comm_.h_tp_group, phases);
+
     const ssize_t max_fwd_tokens = engine.max_forward_token_num;
 
     if (ctx.comm.d_comm) {
@@ -182,34 +186,44 @@ LanguageModel::Impl::Impl(DataType              dtype,
         TM_CHECK(engine.max_forward_token_num % tp_size_ == 0);
 
         ssize_t bytes{};
-        bytes = std::max(bytes, byte_size(dtype_, max_fwd_tokens * engine.attn_dp_size * model.hidden_units));
-        bytes = std::max(bytes, byte_size(dtype_, engine.max_batch_size * vocab_size));
+        bytes = std::max(bytes,
+                         byte_size(weights_.data_type, max_fwd_tokens * engine.attn_dp_size * weights_.hidden_units));
+        bytes = std::max(bytes, byte_size(weights_.data_type, engine.max_batch_size * vocab_size));
 
         symm_buf_ = {bytes, symm_alloc};
         // Compute max logits length based on symm buffer size
-        max_logits_len_ = symm_buf_.view(dtype_).size() / vocab_size;
+        max_logits_len_ = symm_buf_.view(weights_.data_type).size() / vocab_size;
+
+        if (attn_dp_size_ > 1) {
+            const int q_bytes    = (max_batch_size_ + 1) * (int)sizeof(int);
+            const int meta_bytes = (q_bytes + max_batch_size_ + 15) / 16 * 16;
+            symm_token_meta_     = {{attn_dp_size_, meta_bytes}, symm_alloc};
+        }
     }
     else {
-        max_logits_len_ = std::max<int>(max_fwd_tokens * model.hidden_units / vocab_size, engine.max_batch_size);
+        max_logits_len_ = std::max<int>(max_fwd_tokens * weights_.hidden_units / vocab_size, engine.max_batch_size);
     }
 
-    output_processor_.emplace(param_, max_logits_len_, tp_rank_, phases, [this](const Tensor& hstate) {
+    token_mask_ = {max_fwd_tokens * attn_dp_size_, kDEVICE};
+
+    output_processor_.emplace(weights_.vocab_size, max_logits_len_, tp_rank_, phases, [this](const Tensor& hstate) {
         return PostEmbedding(hstate, symm_buf_);
     });
 }
 
 Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf)
 {
+    TM_FUNCTION_SCOPE();
     const auto st = core::Context::stream().handle();
 
-    const int hidden_units = param_.hidden_units;
+    const int hidden_units = weights_.hidden_units;
 
-    const auto& embedding_table = weights_.pre_decoder_embedding.weight;
+    const auto& embedding_table = weights_.tok_embeddings;
     TM_CHECK_EQ(embedding_table.shape(1) * tp_size_, hidden_units);
 
     const int token_num = input_ids.size();
 
-    Tensor input_embeds{{token_num, hidden_units}, dtype_, kDEVICE};
+    Tensor input_embeds{{token_num, hidden_units}, weights_.data_type, kDEVICE};
 
     if (token_num == 0) {
         return input_embeds;
@@ -217,16 +231,16 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
 
     if (tp_size_ == 1) {
         invokeEmbeddingLookup(input_embeds, input_ids, embedding_table, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
     }
     else if (use_ag2d_) {
         const auto local_hidden_units = embedding_table.shape(1);
 
-        Tensor temp{symm_buf.view(dtype_), {token_num, tp_size_, local_hidden_units}};
+        Tensor temp{symm_buf.view(weights_.data_type), {token_num, tp_size_, local_hidden_units}};
         Tensor local{temp.slice({0, tp_rank_, 0}, {-1, 1, -1}).squeeze(1)};
 
         invokeEmbeddingLookup(local, input_ids, embedding_table, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         comm_.d_comm->AllGather2D(local.raw_data(),
                                   temp.raw_data(),
@@ -238,21 +252,22 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
                                   {true, true},
                                   comm_.d_tp_group,
                                   st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         Copy(temp.buffer(), input_embeds.buffer());
     }
     else {
         const auto local_hidden_units = embedding_table.shape(1);
 
-        Tensor temp{symm_buf.view(dtype_), {tp_size_, token_num, local_hidden_units}};
+        Tensor temp{symm_buf.view(weights_.data_type), {tp_size_, token_num, local_hidden_units}};
         Tensor local{temp.slice(tp_rank_).squeeze(0)};
 
         invokeEmbeddingLookup(local, input_ids, embedding_table, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
-        comm_.d_comm->AllGather(local.raw_data(), temp.raw_data(), local.size(), dtype_, comm_.d_tp_group, st);
-        sync_check_cuda_error();
+        comm_.d_comm->AllGather(
+            local.raw_data(), temp.raw_data(), local.size(), weights_.data_type, comm_.d_tp_group, st);
+        TM_CUDA_CHECK(cudaGetLastError());
 
         invokeInPlaceTranspose102((uint16_t*)input_embeds.raw_data(),
                                   (uint16_t*)temp.raw_data(),
@@ -261,7 +276,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
                                   local_hidden_units,
                                   false,
                                   st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
     }
 
     return input_embeds;
@@ -269,30 +284,29 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
 
 Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_buf)
 {
+    TM_FUNCTION_SCOPE();
     NvtxScope scope("postDecodeEmbedding");
 
     const auto st = core::Context::stream().handle();
 
     const int bsz              = features.shape(0);
-    const int local_vocab_size = weights_.post_decoder_embedding.output_dim;
+    const int local_vocab_size = weights_.output->output_dim;
     const int vocab_size       = local_vocab_size * tp_size_;
 
     if (bsz == 0) {
-        return Tensor{{0, vocab_size}, dtype_, kDEVICE};
+        return Tensor{{0, vocab_size}, weights_.data_type, kDEVICE};
     }
 
     if (tp_size_ == 1) {
-        Tensor logits{{bsz, vocab_size}, dtype_, kDEVICE};
-        linear_.Forward(features, weights_.post_decoder_embedding, logits);
-        sync_check_cuda_error();
+        Tensor logits{{bsz, vocab_size}, weights_.data_type, kDEVICE};
+        TM_SCOPE_CALL(linear_.Forward(features, *weights_.output, logits));
         TM_DEBUG_TENSOR(logits, "logits", 1);
         return logits;
     }
     else if (use_ag2d_) {
-        Tensor logits{symm_buf.view(dtype_), {bsz, tp_size_, local_vocab_size}};
+        Tensor logits{symm_buf.view(weights_.data_type), {bsz, tp_size_, local_vocab_size}};
         Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
-        linear_.Forward(features, weights_.post_decoder_embedding, local.squeeze(1));
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(linear_.Forward(features, *weights_.output, local.squeeze(1)));
         comm_.d_comm->AllGather2D(local.raw_data(),
                                   logits.raw_data(),
                                   vocab_size,
@@ -303,20 +317,19 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
                                   {true, true},
                                   comm_.d_tp_group,
                                   st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
         return logits.view({bsz, -1});
     }
     else {
-        Tensor logits{symm_buf.view(dtype_), {tp_size_, bsz, local_vocab_size}};
+        Tensor logits{symm_buf.view(weights_.data_type), {tp_size_, bsz, local_vocab_size}};
         Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
-        linear_.Forward(features, weights_.post_decoder_embedding, local.squeeze(0));
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(linear_.Forward(features, *weights_.output, local.squeeze(0)));
         comm_.d_comm->AllGather(local.raw_data(), logits.raw_data(), local.size(), local.dtype(), comm_.d_tp_group, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
         Tensor out{{bsz, vocab_size}, features.dtype(), features.device()};
         invokeTransposeAxis01(
             (uint16_t*)out.raw_data(), (uint16_t*)logits.raw_data(), tp_size_, bsz, local_vocab_size, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
         return out;
     }
 }
@@ -328,7 +341,7 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
     auto& d    = data_.at(phase);
     auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
-    const auto& rc = env.at("batch").data<BatchData*>()[0]->rc;
+    Buffer_<Sequence*> rc = env.at("requests").buffer();
 
     d.n_generating = 0;
 
@@ -338,11 +351,13 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
         d.generating[i] = c.generating;
         d.n_generating += c.generating;
         if (TM_UNLIKELY(!c.autoregres)) {
-            sequence_length_buf_[i] = c.history_len + c.alpha + c.input_len;
+            sequence_length_buf_[i] = c.history_len + c.inflight_input_len + c.input_len;
         }
+        readonly_block_num_buf_[i] = c.readonly_block_num;  // all rows, batch order
     }
 
     copy(sequence_length_buf_, rc.size(), d.sequence_length);
+    copy(readonly_block_num_buf_, rc.size(), d.readonly_block_num);
 
     unified_decoder_->Run(BatchOp::kSetup, phase, env);
     generation_->Run(BatchOp::kSetup, phase, env);
@@ -375,7 +390,9 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
     }
 
     if (auto group = copy.group()) {
-        // sequence_length = history_len + input_len
+        // Non-autoregressive rows use the submitted prefix length:
+        // sequence_length = history_len + inflight_input_len + input_len.
+        // Existing autoregressive rows carry the previous sequence_length forward.
         for (int i = 0; i < b.bsz; ++i) {
             if (const int j = b.perm[i]; j < b.bs0 && d.autoregres[i]) {
                 copy(sequence_length_.front().data<int>() + j, 1, sequence_length_.back().data<int>() + i);
@@ -403,18 +420,87 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
 
     env.produce("finished", finished_.front());
     env.produce("sequence_length", sequence_length_.front());
+    env.produce("readonly_block_num", d.readonly_block_num);
     env.produce("k_offsets", k_offsets);
+    if (symm_buf_) {
+        env.produce("symm_buf", symm_buf_);
+    }
+
+    // Produced here so consumers may borrow the pointer at kPrepare; the content is
+    // only built at Forward time (`BuildTokenMask`).
+    env.produce("token_mask", token_mask_);
 
     unified_decoder_->Run(BatchOp::kPrepare, phase, env);
     generation_->Run(BatchOp::kPrepare, phase, env);
     output_processor_->Run(BatchOp::kPrepare, phase, env);
 }
 
+void LanguageModel::Impl::BuildTokenMask(const bool* finished, const int* q_offsets, const BatchData& b)
+{
+    TM_FUNCTION_SCOPE();
+
+    if (b.global_token_num == 0) {
+        return;
+    }
+
+    TM_CHECK_EQ((int)b.local_token_num.size(), attn_dp_size_);
+    TM_CHECK_LE(attn_dp_size_, kMaxAttnDPSize);
+
+    const auto st = core::Context::stream().handle();
+
+    // Byte stride between per-rank metadata blocks (0 when attn_dp == 1).
+    size_t rank_stride = 0;
+
+    if (attn_dp_size_ > 1) {
+        const int q_bytes    = (max_batch_size_ + 1) * (int)sizeof(int);
+        const int meta_bytes = symm_token_meta_.shape(1);
+
+        // Stage this rank's metadata into its row of the symmetric buffer; the finished
+        // tail is zeroed so padding slots never invalidate tokens.
+        TM_CHECK_LE(b.bsz, max_batch_size_);
+        char* slot = (char*)symm_token_meta_.data() + (ssize_t)attn_dp_rank_ * meta_bytes;
+        core::Copy(q_offsets, b.bsz + 1, (int*)slot);
+        core::Copy(finished, b.bsz, (bool*)(slot + q_bytes));
+        TM_CUDA_CHECK(cudaMemsetAsync(slot + q_bytes + b.bsz, 0, max_batch_size_ - b.bsz, st));
+
+        // In-place all-gather: the peers read this rank's contribution from its own row.
+        comm_.d_comm->AllGather(slot, symm_token_meta_.data(), meta_bytes, kUint8, comm_.d_dp_group, st);
+
+        q_offsets   = (const int*)symm_token_meta_.data();
+        finished    = (const bool*)(symm_token_meta_.data() + q_bytes);
+        rank_stride = meta_bytes;
+    }
+
+    // Rank r's tokens occupy [token_base[r], token_base[r] + local_token_num[r]) of the mask.
+    int token_base[kMaxAttnDPSize];
+    token_base[0] = 0;
+    std::partial_sum(b.local_token_num.begin(), b.local_token_num.end() - 1, token_base + 1);
+
+    invokeBuildTokenMask(token_mask_.data(),
+                         finished,
+                         q_offsets,
+                         rank_stride,
+                         token_base,
+                         attn_dp_size_,
+                         // DP > 1 scans all gathered slots (the finished tail is zeroed);
+                         // DP == 1 scans only the active batch — beyond it the local
+                         // `finished`/`q_offsets` hold stale data from previous passes.
+                         attn_dp_size_ > 1 ? max_batch_size_ : b.bsz,
+                         b.global_token_num,
+                         st);
+}
+
 void LanguageModel::Impl::Forward(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
 
     auto& d = data_.at(phase);
     auto& b = *env.at("batch").data<BatchData*>()[0];
+
+    // Must run at Forward time: the `finished`/`q_offsets` H2D copies are only flushed
+    // after kPrepare returns. The mask is ready before the decoder (its consumers) runs.
+    BuildTokenMask(
+        (const bool*)env.at("finished").buffer().raw_data(), (const int*)env.at("q_offsets").buffer().raw_data(), b);
 
     {
         Buffer_<int> k_offsets = env.at("k_offsets").buffer();
@@ -428,20 +514,16 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
         TM_DEBUG_TENSOR(input_embeds, "embeddings", 1);
 
         auto& copy = *env.at("copy").data<BatchCopy*>()[0];
-        input_processor_->PatchEmbedding(phase, input_embeds, copy);
+        input_processor_->PatchEmbedding(phase, input_embeds, copy, env);
         copy.Run();
 
         env.produce("input_embeds", std::move(input_embeds));
         // dbg(env);
     }
 
-    if (symm_buf_) {
-        env.produce("symm_buf", symm_buf_);
-    }
+    env.produce("output_norm_weight", weights_.norm->weight);
 
-    env.produce("output_norm_weight", weights_.output_norm_weight);
-
-    unified_decoder_->Forward(phase, env, weights_.decoder_layer_weights);
+    unified_decoder_->Forward(phase, env, weights_.layers_list());
 
     // env.at("batch").data<BatchData*>()[0]->Notify();
 
@@ -468,6 +550,7 @@ void LanguageModel::Impl::Unprep(int phase, TensorMap& env)
 
     copy(finished_.front().buffer(), d.finished.size(), d.finished);
 
+    unified_decoder_->Run(BatchOp::kUnprep, phase, env);
     generation_->Run(BatchOp::kUnprep, phase, env);
 }
 
@@ -491,31 +574,15 @@ LanguageModel::~LanguageModel() = default;
 
 LanguageModel::LanguageModel(LanguageModel&&) noexcept = default;
 
-LanguageModel::LanguageModel(DataType              dtype,
-                             const ModelParam&     model,
-                             const EngineParam&    engine,
-                             const AttentionParam& attn,
-                             const MoeParam&       moe,
-                             const Context&        ctx,
-                             const LlamaWeight&    weights,
-                             int                   phases)
+LanguageModel::LanguageModel(
+    CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases)
 {
-    impl_ = std::make_unique<Impl>(dtype, model, engine, attn, moe, ctx, weights, phases);
+    impl_ = std::make_unique<Impl>(registry, engine, ctx, weights, phases);
 }
 
 void LanguageModel::Run(BatchOp op, int phase, TensorMap& env)
 {
     return TM_CHECK_NOTNULL(impl_)->Run(op, phase, env);
-}
-
-const ModelParam& LanguageModel::model_param() const noexcept
-{
-    return TM_CHECK_NOTNULL(impl_)->param_;
-}
-
-const AttentionParam& LanguageModel::attn_param() const noexcept
-{
-    return TM_CHECK_NOTNULL(impl_)->attn_param_;
 }
 
 }  // namespace turbomind

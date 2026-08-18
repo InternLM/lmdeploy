@@ -1,0 +1,15 @@
+# HF model id: Qwen/Qwen3-30B-A3B-GPTQ-Int4
+
+a100:
+- model_type: chat
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  quantization:
+    turbomind:
+    - kvint8

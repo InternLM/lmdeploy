@@ -22,7 +22,7 @@ def write_log(config, result, msg, is_new: bool = True, case_path_tag: str = 'de
 def assert_log(config, case_path_tag: str = 'default'):
     log_path = os.path.join(config.get('log_path'), case_path_tag)
 
-    with open(log_path, 'r') as f:
+    with open(log_path) as f:
         lines = f.readlines()
 
         for line in lines:
@@ -33,6 +33,6 @@ def assert_log(config, case_path_tag: str = 'default'):
             if 'result:True, reason:' in line and not result:
                 result = True
 
-    allure.attach.file(log_path, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(log_path, name=log_path, attachment_type=allure.attachment_type.TEXT)
     with assume:
         assert result, msg

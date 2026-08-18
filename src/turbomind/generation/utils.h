@@ -24,7 +24,7 @@ void init_stop_bad_words(G getter, const char* key, const Rs& rs, T* h_buf, T* d
         if (offsets.size() == 0 || token_ids.size() == 0) {
             continue;
         }
-        FT_CHECK(offsets.back() == token_ids.size());
+        TM_CHECK(offsets.back() == token_ids.size());
         if (offsets.back() <= kMaxStopBadWordsLen) {
             copy_tokens[i]  = std::make_pair(token_ids.data(), (int)token_ids.size());
             copy_offsets[i] = std::make_pair(offsets.data(), (int)offsets.size());
@@ -36,12 +36,12 @@ void init_stop_bad_words(G getter, const char* key, const Rs& rs, T* h_buf, T* d
                                  offsets.begin() + std::min(kMaxStopBadWordsLen, (int)offsets.size()),
                                  kMaxStopBadWordsLen)
                 - offsets.begin();
-            TM_LOG_WARNING("[InitializeSampling] [%ld] %s length (%d) exceeds %d, truncated to %d",
-                           rs[i]->req->id,
-                           key,
-                           offsets.back(),
-                           kMaxStopBadWordsLen,
-                           trunc_offset_size);
+            TM_LOG_WARN("ID {}: {} length ({}) exceeds {}, truncated to {}",
+                        rs[i]->req->id,
+                        key,
+                        offsets.back(),
+                        kMaxStopBadWordsLen,
+                        trunc_offset_size);
             if (trunc_offset_size > 0) {
                 int trunc_token_size = offsets[trunc_offset_size - 1];
                 copy_tokens[i]       = std::make_pair(token_ids.data(), trunc_token_size);

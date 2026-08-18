@@ -1,15 +1,17 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "reference.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/attention/rotary_embedding.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
 template<class T>
-__global__ void
-createCausalMasks(T* mask, const int* q_lens, const int* k_lens, int64_t max_q_len, int64_t max_k_len, int window_size)
+__global__ void createAttentionMasks(
+    T* mask, const int* q_lens, const int* k_lens, int64_t max_q_len, int64_t max_k_len, int window_size, bool causal)
 {
     const int     bi      = blockIdx.x;
     const int64_t q_len   = q_lens ? q_lens[bi] : max_q_len;
@@ -19,9 +21,12 @@ createCausalMasks(T* mask, const int* q_lens, const int* k_lens, int64_t max_q_l
     for (int64_t i = threadIdx.x; i < max_q_len * max_k_len; i += blockDim.x) {
         const int q = i / max_k_len;
         const int k = i % max_k_len;
-        const int w = q - (k - history);
 
-        const bool is_valid = q < q_len && k < k_len && 0 <= w && w < window_size;
+        bool is_valid = q < q_len && k < k_len;
+        if (causal) {
+            const int w = q - (k - history);
+            is_valid    = is_valid && 0 <= w && w < window_size;
+        }
 
         mask[i] = is_valid ? T{1.} : T{0.};
     }
@@ -69,6 +74,7 @@ void invokeApplyRotaryEmbedding(T*           k_cache,
     dim3 blocks(max_k_len, head_num, batch_size);
 
     applyRotaryEmbedding<<<blocks, threads, 0, stream>>>(k_cache, max_k_len, head_num, head_dim, rope_base, rope_dim);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void invokeApplyRotaryEmbedding(half*        k_cache,
@@ -210,7 +216,8 @@ void Reference<T>::Reshape(size_t max_q_len,
                            size_t head_dim,
                            size_t kv_head_num,
                            size_t batch_size,
-                           int    window_size)
+                           int    window_size,
+                           bool   causal)
 {
     std::cout << max_q_len << " " << max_k_len << " " << head_num << " " << head_dim << " " << batch_size << "\n";
 
@@ -228,8 +235,8 @@ void Reference<T>::Reshape(size_t max_q_len,
 
     cudaStreamSynchronize(0);
 
-    createCausalMasks<<<batch_size, 512, 0, stream_>>>(
-        mask_.data().get(), nullptr, nullptr, max_q_len, max_k_len, window_size);
+    createAttentionMasks<<<batch_size, 512, 0, stream_>>>(
+        mask_.data().get(), nullptr, nullptr, max_q_len, max_k_len, window_size, causal);
 
     max_q_len_   = max_q_len;
     max_k_len_   = max_k_len;
@@ -238,6 +245,8 @@ void Reference<T>::Reshape(size_t max_q_len,
     kv_head_num_ = kv_head_num;
     batch_size_  = batch_size;
     window_size_ = window_size;
+    causal_      = causal;
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<class T>
@@ -315,7 +324,7 @@ void Reference<T>::Execute(
     params.k_length        = max_k_len_;
     params.num_heads       = head_num_;
     params.sinks           = sinks;
-    invokeMaskedSoftmax(params, stream_);
+    TM_SCOPE_CALL(invokeMaskedSoftmax(params, stream_));
 
     alpha = 1.f;
     cublasGemmStridedBatchedEx(cublas_,
@@ -343,17 +352,18 @@ void Reference<T>::Execute(
                                CUBLAS_GEMM_DEFAULT);
 
     // [B, H, Q, D] -> [B, Q, H, D]
-    invokeTransposeAttentionOutRemovePadding(out_.data().get(),
-                                             output,
-                                             batch_size_ * max_q_len_,
-                                             batch_size_,
-                                             max_q_len_,
-                                             head_num_,
-                                             head_dim_,
-                                             nullptr,
-                                             nullptr,
-                                             0,
-                                             stream_);
+    TM_SCOPE_CALL(invokeTransposeAttentionOutRemovePadding(out_.data().get(),
+                                                           output,
+                                                           batch_size_ * max_q_len_,
+                                                           batch_size_,
+                                                           max_q_len_,
+                                                           head_num_,
+                                                           head_dim_,
+                                                           nullptr,
+                                                           nullptr,
+                                                           0,
+                                                           stream_));
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template class Reference<half>;

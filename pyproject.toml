@@ -3,3 +3,20 @@ requires = [
     "cmake_build_extension",
 ]
 build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [
+  "third_party",
+  "src/turbomind",
+]
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "I", "W",
+  "UP",
+]
+ignore = [
+  "E231", "E741"
+]

@@ -51,7 +51,7 @@ api_models = {
 
 ```shell
 cd VLMEvalKit
-python run.py --data OCRBench --model <task_name> --api-nproc 16 --reuse --verbose --api 123
+python run.py --data OCRBench --model <task_name> --api-nproc 16 --reuse --verbose
 ```
 
 The `<task_name>` should match the one used in the above config file.

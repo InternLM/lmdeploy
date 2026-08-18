@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
-from typing import Tuple
 
 import torch
 
@@ -63,7 +62,7 @@ class TokenDispatcherImpl(ABC):
 
     @abstractmethod
     def dispatch(self, hidden_states: torch.Tensor, probs: torch.Tensor, topk_ids: torch.Tensor,
-                 local_expert_indices) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+                 local_expert_indices) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """dispatch."""
         raise NotImplementedError
 

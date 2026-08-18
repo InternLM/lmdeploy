@@ -2,15 +2,29 @@
 # Inspired by vLLM: https://github.com/vllm-project/vllm
 import asyncio
 import contextlib
-from typing import Any, Dict, List, Optional
+from typing import Any, NamedTuple
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
+
+
+class _CacheBlockSize(NamedTuple):
+    """Memory size of one logical cache block."""
+
+    target: int
+    spec: int = 0
+    memory: int = 0
+
+    @property
+    def total(self) -> int:
+        """Total cache block size."""
+        return self.target + self.spec + self.memory
 
 
 class ExecutorBase:
@@ -23,15 +37,12 @@ class ExecutorBase:
                  backend_config: BackendConfig,
                  dist_config: DistConfig,
                  misc_config: MiscConfig,
-                 adapters: Dict[str, str] = None,
+                 adapters: dict[str, str] = None,
                  specdecode_config: SpecDecodeConfig = None,
-                 device_type: str = 'cuda'):
+                 device_type: str = 'cuda',
+                 trust_remote_code: bool = False):
         """Initialize Executor."""
         cache_config.window_size = model_config.sliding_window
-        if cache_config.window_size is not None and cache_config.window_size > 0:
-            # do not support sliding window prefix caching
-            logger.warning('Sliding window prefix caching is not supported.')
-            cache_config.enable_prefix_caching = False
         self.model_config = model_config
         self.cache_config = cache_config
         self.backend_config = backend_config
@@ -41,6 +52,24 @@ class ExecutorBase:
         self.world_size = dist_config.world_size
         self.device_type = device_type
         self.specdecode_config = specdecode_config
+        self._maybe_disable_unsupported_prefix_caching(check_window=not self._has_cache_update_hook())
+
+    def _has_cache_update_hook(self):
+        """Return whether the model may normalize cache config later."""
+        return getattr(self.model_config, 'update_cache_config_func', None) is not None
+
+    def _maybe_disable_unsupported_prefix_caching(self, *, check_window: bool = True):
+        """Disable prefix caching for unsupported executor/cache modes."""
+        if not getattr(self.cache_config, 'enable_prefix_caching', False):
+            return
+        if check_window and self.cache_config.window_size is not None and self.cache_config.window_size > 0:
+            # do not support generic sliding window prefix caching
+            logger.warning('Sliding window prefix caching is not supported.')
+            self.cache_config.enable_prefix_caching = False
+            return
+        if self.cache_config.role != EngineRole.Hybrid:
+            logger.warning('PD prefix caching is not supported.')
+            self.cache_config.enable_prefix_caching = False
 
     def download_models(self):
         """Download model."""
@@ -78,12 +107,24 @@ class ExecutorBase:
         """Sleep."""
         raise NotImplementedError('Not Implemented.')
 
-    def wakeup(self, tags: Optional[List[str]] = None):
+    def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
         raise NotImplementedError('Not Implemented.')
 
     def update_params(self, request: Any):
         """Update params."""
+        raise NotImplementedError('Not Implemented.')
+
+    def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        raise NotImplementedError('Not Implemented.')
+
+    def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        raise NotImplementedError('Not Implemented.')
+
+    def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
         raise NotImplementedError('Not Implemented.')
 
     def get_input_processor(self):
@@ -120,7 +161,7 @@ class ExecutorBase:
         """Init rdma link."""
         raise NotImplementedError('Not implemented')
 
-    def p2p_connect(self, conn_request: List[DistServeKVTransferEndpointInfo]):
+    def p2p_connect(self, conn_request: list[DistServeKVTransferEndpointInfo]):
         """rdma_connect."""
         raise NotImplementedError('Not Implemented')
 
@@ -130,113 +171,279 @@ class ExecutorBase:
 
     """ PD Disaggregation API End """
 
-    def _get_runtime_size(self, num_free_gpu_mem: int, cache_block_size: int, vocal_size: int):
+    @staticmethod
+    def _get_num_gpu_blocks(available_mem: int, cache_block_size: int, spec_cache_block_size: int = 0) -> int:
+        """Get the number of GPU blocks fitting in available memory."""
+        total_cache_block_size = cache_block_size + spec_cache_block_size
+        if total_cache_block_size <= 0:
+            raise RuntimeError('No enough gpu memory for kv cache.')
+        # `available_mem` is already an integer byte budget. Keep the division
+        # integral as well so cache sizing never depends on float rounding.
+        num_gpu_blocks = available_mem // total_cache_block_size
+        if num_gpu_blocks <= 2:
+            raise RuntimeError('No enough gpu memory for kv cache.')
+        return num_gpu_blocks
+
+    @staticmethod
+    def _get_min_num_gpu_blocks(available_mems: list[int], cache_block_sizes: list[int]) -> int:
+        """Get the minimum GPU blocks fitting on all ranks."""
+        # All ranks must use the same logical num_gpu_blocks, even if their
+        # per-rank cache footprint differs. The smallest rank capacity wins.
+        num_gpu_blocks = [
+            ExecutorBase._get_num_gpu_blocks(available_mem, cache_block_size)
+            for available_mem, cache_block_size in zip(available_mems, cache_block_sizes)
+        ]
+        return min(num_gpu_blocks)
+
+    def _get_spec_attn_tp(self) -> int:
+        """Get draft/spec attention TP."""
+        specdecode_config = getattr(self, 'specdecode_config', None)
+        spec_dist_config = getattr(specdecode_config, 'dist_config', None)
+        return getattr(spec_dist_config, 'attn_tp', 1)
+
+    def _get_rank_cache_block_sizes(self, num_ranks: int, cache_block_size: _CacheBlockSize) -> list[int]:
+        """Get per-rank KV cache block sizes."""
+        if cache_block_size.spec == 0:
+            return [cache_block_size.target + cache_block_size.memory] * num_ranks
+
+        attn_tp = self.dist_config.attn_tp
+        draft_tp = self._get_spec_attn_tp()
+        if draft_tp > 1:
+            # Draft/spec cache is sharded across the same TP ranks as the
+            # target, so every participating rank carries the sharded footprint.
+            return [cache_block_size.total] * num_ranks
+
+        # Draft TP=1 only builds the draft/spec cache on one rank in each
+        # attention-TP group. Other ranks can use the memory that would have
+        # gone to spec cache for additional target KV blocks.
+        return [
+            cache_block_size.total if rank % attn_tp == 0 else cache_block_size.target + cache_block_size.memory
+            for rank in range(num_ranks)
+        ]
+
+    def _get_runtime_size(self, free_mems: list[int], cache_block_size: _CacheBlockSize,
+                          vocab_size: int) -> tuple[int, int]:
         """Find best prefill num."""
         cache_max_entry_count = self.cache_config.cache_max_entry_count
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         max_batches = self.cache_config.max_batches
+        rank_cache_block_sizes = self._get_rank_cache_block_sizes(len(free_mems), cache_block_size)
         runtime_cache_size = 0
         while max_prefill_token_num > 0:
-            # estimate runtime mem size
-            runtime_cache_size = int((max_prefill_token_num + max_batches * 2) * vocal_size * 2)
-            num_available = (num_free_gpu_mem - runtime_cache_size) * cache_max_entry_count
-            if cache_block_size == 0 or int(num_available) // cache_block_size >= 16:
+            # Runtime buffers scale mostly with the prefill token budget and
+            # logits/vocab size. They are not pageable KV cache, so reserve
+            # them before applying the KV cache memory ratio.
+            runtime_cache_size = int((max_prefill_token_num + max_batches * 2) * vocab_size * 2)
+            available_mems = [int((free_mem - runtime_cache_size) * cache_max_entry_count) for free_mem in free_mems]
+            # Keep at least a small number of KV blocks after runtime reserve.
+            # If not possible, reduce the prefill token budget and try again.
+            if self._get_min_num_gpu_blocks(available_mems, rank_cache_block_sizes) >= 16:
                 break
             max_prefill_token_num = max_prefill_token_num // 2
         return runtime_cache_size, max_prefill_token_num
 
     def _adjust_block_size(self):
         """Adjust block_size."""
+        if self.model_config.update_cache_config_func is not None:
+            self.model_config.update_cache_config_func(self.cache_config)
+            return
         if self.model_config.use_flash_mla is True:
             if self.cache_config.block_size != 64:
                 raise ValueError('Please set block_size to 64 for flash_mla.')
             return
+        # head_dim=256 requires block_size=128 on ascend.
+        # Other models keep the user-provided block size.
+        if (self.cache_config.device_type == 'ascend' and self.model_config.k_head_dim == 256 and
+                (self.cache_config.block_size != 128 or self.cache_config.kernel_block_size != 128)):
+            logger.warning(
+                'Force `block_size=128` and `kernel_block_size=128` '
+                f'(was block_size={self.cache_config.block_size}, '
+                f'kernel_block_size={self.cache_config.kernel_block_size}) '
+                'for head_dim=256 on ascend.')
+            self.cache_config.block_size = 128
+            self.cache_config.kernel_block_size = 128
+            return
         # TODO: support kernel with both large head dim and large block size.
         if self.model_config.k_head_dim >= 512 and self.cache_config.block_size > 32:
             self.cache_config.block_size = 32
+            self.cache_config.kernel_block_size = 32
             logger.warning(
                 f'Update `block_size={self.cache_config.block_size}` for large `head_dim={self.model_config.k_head_dim}`.'  # noqa
             )
 
-    def _get_state_cache_mem(self):
+    def _get_state_cache_mem(self, states_shapes=None, cache_config=None, model_config=None):
         """Get state cache mem usage."""
-        cache_config = self.cache_config
-        if len(cache_config.states_shapes) == 0:
+        cache_config = cache_config or self.cache_config
+        states_shapes = states_shapes if states_shapes is not None else cache_config.states_shapes
+        if len(states_shapes) == 0:
             return 0
 
         from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
 
         num_state_caches = cache_config.num_state_caches
         if num_state_caches is None:
-            # add more caches for eviction
+            # One state slot is reserved for system use. Active sequences need
+            # max_batches runtime slots plus one spare for rolling prefill;
+            # prefix-cache checkpoints use an explicitly configured extra budget.
             # TODO: Share memory between state cache and pageable cache
-            num_state_caches = int(cache_config.max_batches + 8)
+            num_state_caches = int(cache_config.max_batches + 2 + cache_config.prefix_cache_state_budget)
             cache_config.num_state_caches = num_state_caches
 
-        mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes)
+        if model_config is None:
+            model_config = getattr(self, 'model_config', None)
+        state_specs = getattr(model_config, 'state_cache_specs', None)
+        num_layers = getattr(model_config, 'num_layers', None)
+        mems = StateCacheEngine.get_cache_state_size(states_shapes,
+                                                     state_specs=state_specs,
+                                                     num_layers=num_layers)
         mems *= num_state_caches
-
-        if cache_config.enable_prefix_caching:
-            cache_config.enable_prefix_caching = False
-            logger.warning('Prefix caching has not been support for state space model.')
 
         return mems
 
-    def update_configs(self):
-        """Update cache config."""
-        self._adjust_block_size()
-        # spec
+    def _get_mem_state_cache_mem(self) -> int:
+        """Get memory-model state cache mem usage for memdecode."""
+        memdecode_config = self.misc_config.memdecode_config
+        if memdecode_config is None:
+            return 0
+        memory_model_config = memdecode_config.memory_model_config
+        if len(memory_model_config.states_shapes) == 0:
+            return 0
+        return self._get_state_cache_mem(memory_model_config.states_shapes, self.cache_config, memory_model_config)
+
+    def _validate_memdecode_configs(self):
+        """Validate MemDecode config compatibility."""
+        memdecode_config = self.misc_config.memdecode_config
+        if memdecode_config is None:
+            return
+        memory_model_config = memdecode_config.memory_model_config
+
+        if self.specdecode_config is not None:
+            raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
+
+        base_has_states = bool(self.model_config.states_shapes)
+        memory_has_states = bool(memory_model_config.states_shapes)
+        if base_has_states != memory_has_states:
+            raise ValueError('Base and memory model must both use SSM state caches or both not use them.')
+
+        base_vocab_size = self.model_config.vocab_size
+        memory_vocab_size = memory_model_config.vocab_size
+        if memory_vocab_size != base_vocab_size:
+            logger.warning(
+                f'Memory model vocab_size ({memory_vocab_size}) differs from base vocab_size ({base_vocab_size}); '
+                'fusion logits will be aligned to the base vocab before sampling.'
+            )
+
+    def _sync_spec_cache_block_size(self) -> None:
+        """Keep spec cache block sizes aligned with target cache."""
         if self.specdecode_config and self.specdecode_config.cache_config:
-            self.specdecode_config.cache_config.block_size = self.cache_config.block_size
-        cache_config = self.cache_config
-        model_config = self.model_config
-        cache_config.states_shapes = model_config.states_shapes
+            # The executor may adjust target block sizes after engine config
+            # construction. Keep spec cache layout compatible with that final
+            # target layout before estimating or allocating caches.
+            spec_cache_config = self.specdecode_config.cache_config
+            spec_cache_config.block_size = self.cache_config.block_size
+            spec_cache_config.kernel_block_size = self.cache_config.kernel_block_size
 
-        # get free mems
+    def _get_free_gpu_mems(self) -> list[int]:
+        """Get free GPU memory across workers."""
         free_mems = self.gather_free_mem()
-        free_mem = min(free_mems)
-        logger.debug(f'minimal free gpu memory: {free_mem >> 20} mb')
+        logger.debug(f'minimal free gpu memory: {min(free_mems) >> 20} mb')
+        return free_mems
 
-        # get state cache size
-        state_cache_mem = self._get_state_cache_mem()
-        free_mem = free_mem - state_cache_mem
-        assert free_mem > 0, 'No enough gpu memory for state cache. Please reduce max_batch_size.'
+    def _reserve_state_cache_mem(self, free_mems: list[int]) -> list[int]:
+        """Reserve non-pageable state cache memory from free memory."""
+        state_cache_mem = self._get_state_cache_mem() + self._get_mem_state_cache_mem()
+        # State cache is allocated as a separate pool and is not governed by
+        # cache_max_entry_count, so subtract it from every rank first.
+        free_mems = [free_mem - state_cache_mem for free_mem in free_mems]
+        assert min(free_mems) > 0, 'No enough gpu memory for state cache. Please reduce max_batch_size.'
+        return free_mems
 
-        vocal_size = self.model_config.vocab_size
-        tp = self.dist_config.attn_tp
-        cache_block_size = CacheEngine.get_cache_block_size(cache_config, model_config, tp)
-        spec_cache_config = None
-        spec_model_config = None
+    def _get_spec_configs(self) -> tuple[CacheConfig | None, ModelConfig | None]:
+        """Get spec model and cache configs if enabled."""
+        if self.specdecode_config is None:
+            return None, None
+        return self.specdecode_config.cache_config, self.specdecode_config.model_config
+
+    def _get_cache_block_sizes(self, spec_cache_config: CacheConfig | None,
+                               spec_model_config: ModelConfig | None) -> _CacheBlockSize:
+        """Get per-block KV cache memory for target and spec models."""
+        cache_block_size = CacheEngine.get_cache_block_size(self.cache_config, self.model_config,
+                                                            self.dist_config.attn_tp)
+        memory_cache_block_size = 0
+        memdecode_config = self.misc_config.memdecode_config
+        if memdecode_config is not None:
+            memory_model_config = memdecode_config.memory_model_config
+            memory_cache_block_size = CacheEngine.get_cache_block_size(
+                self.cache_config,
+                memory_model_config,
+                self.dist_config.attn_tp,
+            )
+
         spec_cache_block_size = 0
-        if self.specdecode_config:
-            spec_model_config = self.specdecode_config.model_config
-            if spec_cache_config := self.specdecode_config.cache_config:
-                spec_cache_block_size = CacheEngine.get_cache_block_size(spec_cache_config, spec_model_config, 1)
+        if spec_cache_config is not None:
+            draft_tp = self._get_spec_attn_tp()
+            spec_cache_block_size = CacheEngine.get_cache_block_size(spec_cache_config, spec_model_config, draft_tp)
 
-        runtime_mem, max_prefill_token_num = self._get_runtime_size(free_mem, cache_block_size + spec_cache_block_size,
-                                                                    vocal_size)
-        if cache_config.max_prefill_token_num != max_prefill_token_num:
+        return _CacheBlockSize(
+            target=cache_block_size,
+            spec=spec_cache_block_size,
+            memory=memory_cache_block_size,
+        )
+
+    def _reserve_runtime_mem(self, free_mems: list[int], cache_block_size: _CacheBlockSize,
+                             spec_cache_config: CacheConfig | None) -> list[int]:
+        """Reserve runtime memory and update prefill token limit if needed."""
+        runtime_mem, max_prefill_token_num = self._get_runtime_size(free_mems, cache_block_size,
+                                                                    self.model_config.vocab_size)
+        if self.cache_config.max_prefill_token_num != max_prefill_token_num:
             if max_prefill_token_num <= 0:
                 raise RuntimeError('No enough gpu memory for runtime.')
-            cache_config.max_prefill_token_num = max_prefill_token_num
+            self.cache_config.max_prefill_token_num = max_prefill_token_num
             logger.warning(f'No enough memory. Update max_prefill_token_num={max_prefill_token_num}')
 
         if spec_cache_config is not None:
             spec_cache_config.max_prefill_token_num = max_prefill_token_num
 
-        free_mem -= runtime_mem
+        free_mems = [free_mem - runtime_mem for free_mem in free_mems]
         logger.debug(f'estimated max runtime memory: {runtime_mem >> 20} mb')
-        available_mem = free_mem * cache_config.cache_max_entry_count
+        return free_mems
 
-        if cache_config.num_gpu_blocks == 0:
-            cache_config.num_gpu_blocks = int(available_mem / cache_block_size)
-            if cache_config.num_gpu_blocks <= 0:
-                raise RuntimeError('No enough gpu memory for kv cache.')
+    def _update_num_gpu_blocks(self, free_mems: list[int], cache_block_size: _CacheBlockSize,
+                               spec_cache_config: CacheConfig | None) -> None:
+        """Update target and spec GPU block counts from remaining memory."""
+        if self.cache_config.num_gpu_blocks != 0:
+            # User supplied an explicit block count. Do not resize it from the
+            # current free-memory snapshot.
             if spec_cache_config is not None:
-                spec_cache_config.num_gpu_blocks = cache_config.num_gpu_blocks
+                spec_cache_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
+            return
 
-        self.set_cache_config(cache_config, spec_cache_config)
-        self.set_model_config(model_config, spec_model_config)
+        available_mems = [int(free_mem * self.cache_config.cache_max_entry_count) for free_mem in free_mems]
+        rank_cache_block_sizes = self._get_rank_cache_block_sizes(len(free_mems), cache_block_size)
+        self.cache_config.num_gpu_blocks = self._get_min_num_gpu_blocks(available_mems, rank_cache_block_sizes)
+        if self.cache_config.num_gpu_blocks <= 2:
+            raise RuntimeError('No enough gpu memory for kv cache.')
+        if spec_cache_config is not None:
+            spec_cache_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
+
+    def update_configs(self) -> None:
+        """Update cache config."""
+        self._adjust_block_size()
+        self._maybe_disable_unsupported_prefix_caching()
+        self._sync_spec_cache_block_size()
+        self._validate_memdecode_configs()
+        self.cache_config.states_shapes = self.model_config.states_shapes
+
+        spec_cache_config, spec_model_config = self._get_spec_configs()
+        cache_block_size = self._get_cache_block_sizes(spec_cache_config, spec_model_config)
+
+        free_mems = self._get_free_gpu_mems()
+        free_mems = self._reserve_state_cache_mem(free_mems)
+        free_mems = self._reserve_runtime_mem(free_mems, cache_block_size, spec_cache_config)
+        self._update_num_gpu_blocks(free_mems, cache_block_size, spec_cache_config)
+
+        self.set_cache_config(self.cache_config, spec_cache_config)
+        self.set_model_config(self.model_config, spec_model_config)
 
     def init(self):
         """init."""
@@ -250,7 +457,12 @@ class ExecutorBase:
         if self.specdecode_config:
             if spec_cache_config := self.specdecode_config.cache_config:
                 logger.info(f'Building Spec CacheEngine with config: \n{spec_cache_config}.')
+        if self.misc_config.memdecode_config is not None:
+            logger.info('Building MemDecode memory KV/state cache engines.')
         self.build_cache_engine()
+        if self.misc_config.empty_init:
+            logger.info('Skip warming up model during empty init.')
+            return
         logger.info('Warming up model.')
         self.warmup()
 

@@ -2,8 +2,9 @@
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 import torch
@@ -55,9 +56,16 @@ class CounterEvent(asyncio.Event):
 class RunableEventAsync:
     """Awaitable async runable event."""
 
-    def __init__(self, scheduler: 'Scheduler'):
+    def __init__(self, scheduler: 'Scheduler', extra_runable_checker: Callable[[], bool] | None = None):
         self.scheduler = scheduler
+        self.extra_runable_checker = extra_runable_checker
         self.event = asyncio.Event()
+
+    def has_unfinished(self):
+        """Check whether scheduler or engine-local state has runnable work."""
+        if self.scheduler.has_unfinished():
+            return True
+        return self.extra_runable_checker is not None and self.extra_runable_checker()
 
     async def wait(self):
         """Wait event."""
@@ -65,15 +73,15 @@ class RunableEventAsync:
 
     def set(self):
         """Set event."""
-        if self.scheduler.has_unfinished():
+        if self.has_unfinished():
             self.event.set()
         else:
             self.event.clear()
 
 
-def build_runable_event(scheduler: 'Scheduler'):
+def build_runable_event(scheduler: 'Scheduler', extra_runable_checker: Callable[[], bool] | None = None):
     """Build runable event."""
-    return RunableEventAsync(scheduler)
+    return RunableEventAsync(scheduler, extra_runable_checker)
 
 
 @dataclass
@@ -83,7 +91,7 @@ class EngineLoopConfig:
     This config is added for Dependency Injection
     """
     role: EngineRole
-    num_speculative_tokens: Optional[int] = None
+    num_speculative_tokens: int | None = None
     enable_metrics: bool = False
     enable_transfer_obj_ref: bool = False
 
@@ -123,12 +131,26 @@ class EngineLoop:
         self.engine_conn = engine_conn
 
         # tasks and control events
-        self.tasks: Set[asyncio.Task] = set()
+        self.tasks: set[asyncio.Task] = set()
         self.stop_event = asyncio.Event()
         self.resp_queue = asyncio.Queue()
         self.forward_event = CounterEvent()
         self.migration_event = asyncio.Event()
-        self.has_runable_event = RunableEventAsync(self.scheduler)
+        # Active long-context chunks are owned by InputsMaker, not the
+        # scheduler WAITING/READY queues, so include them in the runnable gate.
+        self.has_runable_event = RunableEventAsync(self.scheduler, self.inputs_maker.has_pending_long_context_chunk)
+        # Sleep uses a small handshake with the scheduling loops:
+        # 1. sleep() sets _sleep_requested and waits for main/migration drain events.
+        # 2. main_loop and migration_loop reach safe boundaries, acknowledge
+        #    drain, then wait on _sleep_resume_event.
+        # 3. wakeup() sets _sleep_resume_event so scheduling can continue.
+        self._sleep_requested = False
+        self._main_sleep_drain_event = asyncio.Event()
+        self._main_sleep_drain_event.set()
+        self._migration_sleep_drain_event = asyncio.Event()
+        self._migration_sleep_drain_event.set()
+        self._sleep_resume_event = asyncio.Event()
+        self._sleep_resume_event.set()
 
         # check init
         if self.config.role != EngineRole.Hybrid:
@@ -140,22 +162,63 @@ class EngineLoop:
             await self.req_manager.step()
             self.has_runable_event.set()
 
+    async def drain_for_sleep(self):
+        """Pause scheduling after the current forward step drains."""
+        if self._sleep_requested:
+            logger.info('EngineLoop sleep drain already requested; waiting for drain point.')
+            await self._main_sleep_drain_event.wait()
+            if self.config.role != EngineRole.Hybrid:
+                await self._migration_sleep_drain_event.wait()
+            return
+        logger.info('EngineLoop sleep drain requested.')
+        self._sleep_requested = True
+        self._main_sleep_drain_event.clear()
+        if self.config.role != EngineRole.Hybrid:
+            self._migration_sleep_drain_event.clear()
+        self._sleep_resume_event.clear()
+        # Wake main_loop if it is idle waiting for runnable work, so it can
+        # observe _sleep_requested and acknowledge the drain.
+        self.has_runable_event.event.set()
+        # Wake migration_loop if it is idle on migration_event; it has its own
+        # drain acknowledgement because migration can also touch KV resources.
+        if self.config.role != EngineRole.Hybrid:
+            self.migration_event.set()
+        await self._main_sleep_drain_event.wait()
+        if self.config.role != EngineRole.Hybrid:
+            await self._migration_sleep_drain_event.wait()
+        logger.info('EngineLoop reached sleep drain point.')
+
+    def resume_from_sleep(self):
+        """Resume scheduling after wakeup restores engine resources."""
+        logger.info('EngineLoop resumes scheduling after wakeup.')
+        self._sleep_requested = False
+        self._sleep_resume_event.set()
+        # On resume, respect scheduler state instead of forcing the runnable
+        # event. If sleep ended every session, this should remain cleared.
+        self.has_runable_event.set()
+
+    def reset_runtime_state(self):
+        """Discard request-local scheduling state after sleep cancels
+        sessions."""
+        self.inputs_maker.reset_runtime_state()
+
     @staticmethod
-    def _log_resps(outputs: List[InferOutput]):
+    def _log_resps(outputs: list[InferOutput]):
         """Log resps."""
         if logger.level <= logging.DEBUG:
             session_ids = [out.session_id for out in outputs]
             logger.debug(f'Response sessions: {session_ids}')
-        elif logger.level <= logging.INFO:
-            logger.info(f'Response: num_outputs={len(outputs)}.')
+            logger.debug(f'Response: num_outputs={len(outputs)}.')
 
     def _send_resp(self, out: InferOutput):
         """Send response."""
-        # skip cancelled response
-        if out.resp.is_done:
-            return
-        resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
         logprobs = None if out.resp.data is None else out.resp.data.get('logprobs', None)
+        if out.finish:
+            resp_type = ResponseType.FINISH
+        elif out.resp.is_done:
+            resp_type = out.resp.type
+        else:
+            resp_type = ResponseType.SUCCESS
         response_reqs(self.req_manager,
                       out.resp,
                       resp_type,
@@ -164,10 +227,11 @@ class EngineLoop:
                                 cache_block_ids=out.cache_block_ids,
                                 req_metrics=out.req_metrics,
                                 routed_experts=out.routed_experts,
-                                logprobs=logprobs))
+                                logprobs=logprobs,
+                                ce_loss=out.ce_loss))
 
     @staticmethod
-    def _update_logprobs(step_outputs: List[InferOutput]):
+    def _update_logprobs(step_outputs: list[InferOutput]):
         for out in step_outputs:
             cur_logprobs = out.logprobs
             if cur_logprobs is None:
@@ -176,15 +240,12 @@ class EngineLoop:
             if out.resp.data is None:
                 out.resp.data = dict()
             out.resp.data.setdefault('logprobs', [])
-
             # logprobs to dict
-            vals = cur_logprobs[0]
-            indices = cur_logprobs[1]
-            cur_logprobs = dict(zip(indices, vals))
+            cur_logprobs = [dict(zip(indices, vals)) for vals, indices in cur_logprobs]
             logprobs = out.resp.data['logprobs']
-            logprobs.append(cur_logprobs)
+            logprobs.extend(cur_logprobs)
 
-    def _send_resps(self, step_outputs: List[InferOutput]):
+    def _send_resps(self, step_outputs: list[InferOutput]):
         """Send response callback."""
         self._log_resps(step_outputs)
         self._update_logprobs(step_outputs)
@@ -219,7 +280,7 @@ class EngineLoop:
     ):
         """Make infer output."""
 
-        def __get_logit(msg, logits: torch.Tensor, seq_length: List[int], idx: int):
+        def __get_logit(msg, logits: torch.Tensor, seq_length: list[int], idx: int):
             logit = logits.split(seq_length)[idx]
             if len(msg.all_logits) > 0:
                 # for chunked long context
@@ -229,22 +290,46 @@ class EngineLoop:
 
             return logit
 
+        def __get_logprobs(batched_outputs: 'BatchedOutputs'):
+            """Get valid logprobs."""
+            batch_size = batched_outputs.stop_pos.size(0)
+            logprobs = batched_outputs.logprobs
+            if logprobs is None:
+                return [None for _ in range(batch_size)]
+            num_decode_tokens = logprobs.indices.shape[0] // batch_size
+            results = [[] for _ in range(batch_size)]
+            range_tensor = torch.arange(num_decode_tokens, device=logprobs.indices.device)
+
+            for idx in range(batch_size):
+                start = idx * num_decode_tokens
+                end = (idx + 1) * num_decode_tokens
+                mask = logprobs.indices[start:end][:, 0] >= 0
+                stop_pos = batched_outputs.stop_pos[idx]
+                # only apply when stopped
+                if stop_pos > -1:
+                    mask = torch.logical_and(mask, stop_pos >= range_tensor)
+                indices = logprobs.indices[start:end][mask].tolist()
+                vals = logprobs.vals[start:end][mask].tolist()
+                results[idx] = list(zip(vals, indices))
+            return results
+
         logits = batched_outputs.logits
         all_routed_experts = batched_outputs.all_routed_experts
+        ce_loss = batched_outputs.ce_loss
 
-        if model_inputs is not None and model_inputs.is_chunk:
+        if model_inputs is not None and (model_inputs.is_chunk and not model_inputs.is_last_chunk):
             # chunk long context does not need to update seqs and outputs
             seq = running[0]
             seq.append_routed_experts(all_routed_experts)
             seq.append_logits(logits)
+            seq.append_ce_loss(ce_loss, finish=False)
+            self.scheduler.block_trie.cache_routed_experts_for_seq(seq)
             return dict()
 
         new_token_timestamp = batched_outputs.new_token_timestamp
         logprobs = batched_outputs.logprobs
 
-        if logprobs is not None:
-            logprobs.vals = logprobs.vals.tolist()
-            logprobs.indices = logprobs.indices.tolist()
+        all_logprobs = __get_logprobs(batched_outputs)
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
@@ -252,9 +337,10 @@ class EngineLoop:
                                          batched_outputs=batched_outputs,
                                          model_inputs=model_inputs,
                                          delta=delta)
+        self.scheduler.block_trie.cache_routed_experts(running)
 
         # generate output
-        outputs: Dict[int, InferOutput] = dict()
+        outputs: dict[int, InferOutput] = dict()
         for idx, msg in enumerate(running):
             if not is_run[idx]:
                 continue
@@ -276,14 +362,19 @@ class EngineLoop:
             num_logprobs = msg.sampling_param.num_logprobs
             cur_logprobs = None
             if logprobs is not None and num_logprobs > 0:
-                cur_logprobs = (logprobs.vals[idx][:num_logprobs + 1], logprobs.indices[idx][:num_logprobs + 1])
+                cur_logprobs = list([_dat[:num_logprobs + 1] for _dat in vals_indices]
+                                    for vals_indices in all_logprobs[idx])
+
             # get spec stats info
             spec_info = None
             num_draft_tokens = self.config.num_speculative_tokens
             if num_draft_tokens is not None and model_inputs is None and self.config.enable_metrics:
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens.item())
-            req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events, spec_info=spec_info)
+            req_metrics = RequestMetrics(new_token_timestamp,
+                                         msg.engine_events,
+                                         spec_info=spec_info,
+                                         cached_tokens=msg.cached_tokens)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
@@ -294,6 +385,12 @@ class EngineLoop:
                               routed_experts=msg.routed_experts)
             outputs[session_id] = out
 
+            if msg.return_ce_loss:
+                if ce_loss is not None:
+                    msg.append_ce_loss(ce_loss[idx], finish=True)
+                if finish:
+                    outputs[session_id].ce_loss = msg.ce_loss
+
             if msg.return_logits:
                 logit = __get_logit(msg, logits, seq_length, idx)
                 outputs[session_id].logits = logit
@@ -301,32 +398,67 @@ class EngineLoop:
 
     async def _main_loop_try_send_next_inputs(self):
         """Try send next inputs."""
-        scheduler = self.scheduler
-        if not scheduler.has_unfinished():
+        if not self.has_runable_event.has_unfinished():
             await self.has_runable_event.wait()
+        if self._sleep_requested:
+            return None, None
 
-        scheduler.collect_migration_done()
+        self.scheduler.collect_migration_done()
         return await self.inputs_maker.send_next_inputs()
+
+    async def _prefetch_next_inputs(self):
+        """Collect migration completions before prefetching the next batch."""
+        if self._sleep_requested:
+            return None, None
+        self.scheduler.collect_migration_done()
+        return await self.inputs_maker.prefetch_next_inputs()
+
+    def _publish_forward_checkpoints(self, running: 'SeqList', has_state_checkpoint_save: bool):
+        """Publish per-forward prefix-cache ownership before prefetching."""
+        state_checkpoints = self.scheduler.block_trie.state_checkpoints
+        if has_state_checkpoint_save:
+            state_checkpoints.publish_saves(running, pin_saves=True)
+        state_checkpoints.unpin_restores(running)
+
+    def _release_forward_save_pins(self, running: 'SeqList'):
+        """Unpin producers after the forward output/event boundary."""
+        self.scheduler.block_trie.state_checkpoints.unpin_saves(running)
+
+    def _finish_forward_output(self,
+                               out: 'BatchedOutputs | None',
+                               running: 'SeqList',
+                               model_inputs: 'ModelInputs | None',
+                               delta: 'ModelInputsDelta | None'):
+        """Publish outputs."""
+        if out is None:
+            return
+        step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
+        self.resp_queue.put_nowait(step_outputs)
 
     async def _main_loop_get_outputs(
         self,
         running: 'SeqList',
-        forward_inputs: Dict[str, Any],
+        forward_inputs: dict[str, Any],
     ):
         """Get outputs and prefetch."""
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
+        cache_inputs = forward_inputs['cache_inputs']
         self.inputs_maker.update_running_seqs(running, model_inputs)
+        has_state_checkpoint_save = (cache_inputs is not None
+                                     and cache_inputs.state_save_plan is not None)
 
-        # try prefetch inputs
-        self.scheduler.collect_migration_done()
-        forward_inputs, next_running = await self.inputs_maker.prefetch_next_inputs()
-
-        # send output
+        # ModelAgent executes queued forwards in send order.  Once the current
+        # input is queued, matched checkpoints can be published before waiting
+        # for GPU output; save checkpoints keep a producer pin until the output
+        # event boundary so prefetch cannot evict/reuse their destination slots.
+        self._publish_forward_checkpoints(running, has_state_checkpoint_save)
+        forward_inputs, next_running = await self._prefetch_next_inputs()
         out = await self.executor.get_output_async()
-        if out is not None:
-            step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
-            self.resp_queue.put_nowait(step_outputs)
+        self._release_forward_save_pins(running)
+        self._finish_forward_output(out, running, model_inputs, delta)
+        # out might come from shared memory, need to explicitly delete to release memory in time
+        del out
 
         return forward_inputs, next_running
 
@@ -349,9 +481,23 @@ class EngineLoop:
             await asyncio.sleep(0.1)
 
         while not self.stop_event.is_set():
+            if self._sleep_requested:
+                # Drop prefetched work from before sleep. Sleep ends scheduler
+                # sessions and releases KV cache, so any saved next batch is
+                # stale after the drain point.
+                forward_inputs = None
+                next_running = None
+                # Acknowledge that no new forward input will be scheduled until
+                # wakeup resumes this loop.
+                self._main_sleep_drain_event.set()
+                await self._sleep_resume_event.wait()
+                continue
+
             if next_running is None:
                 forward_inputs, next_running = await self._main_loop_try_send_next_inputs()
                 if next_running is None:
+                    if self._sleep_requested:
+                        continue
                     await __no_running_warning()
                     continue
 
@@ -364,7 +510,7 @@ class EngineLoop:
             has_runable_event.set()
 
     def update_running_migration(self, running: 'SeqList', next_token_ids: np.ndarray, stopped: torch.Tensor,
-                                 model_metas: List[Dict[str, Any]]):
+                                 model_metas: list[dict[str, Any]]):
         """Update scheduler."""
         if model_metas is None:
             model_metas = [None] * len(running)
@@ -387,7 +533,7 @@ class EngineLoop:
             if msg.migration_request.is_dummy_prefill:
                 continue
 
-            migration_execution_requests: List[Tuple[int, List[Tuple[int, int]]]] = []
+            migration_execution_requests: list[tuple[int, list[tuple[int, int]]]] = []
             migration_request = msg.migration_request
             prefill_block_ids = migration_request.remote_block_ids
             decode_block_ids = list(self.scheduler.block_manager.get_block_table(msg=msg))
@@ -410,7 +556,7 @@ class EngineLoop:
 
     async def _migration_loop_get_outputs(self, migration_ready: 'SeqList'):
         """Migration loop get outputs."""
-        outputs: Dict[int, InferOutput] = dict()
+        outputs: dict[int, InferOutput] = dict()
         for _, msg in enumerate(migration_ready):
             session_id = msg.session_id
             msg.resp.type = ResponseType.SUCCESS
@@ -441,6 +587,12 @@ class EngineLoop:
     async def migration_loop(self):
         """Async loop migration."""
         while not self.stop_event.is_set():
+            if self._sleep_requested:
+                self.migration_event.clear()
+                self._migration_sleep_drain_event.set()
+                await self._sleep_resume_event.wait()
+                continue
+
             migration_ready = self.scheduler._schedule_migration()
             if not migration_ready and not self.scheduler.has_migration_waiting():
                 await self.migration_event.wait()

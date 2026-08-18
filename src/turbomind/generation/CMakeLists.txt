@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 3.11)
+cmake_minimum_required(VERSION 3.25)
 
 add_library(guided_decoding STATIC guided_decoding.cc)
-target_link_libraries(guided_decoding PRIVATE
-    apply_token_bitmask_inplace_cuda
-    xgrammar
-    core)
+target_link_libraries(guided_decoding
+    PUBLIC xgrammar core
+    PRIVATE apply_token_bitmask_inplace_cuda)
 set_property(TARGET guided_decoding PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 add_library(generation STATIC

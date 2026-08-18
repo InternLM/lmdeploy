@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import itertools
 import warnings
-from typing import Dict, List
 
 import torch
 
@@ -18,20 +17,21 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
 
     _arch = 'LlavaNextForConditionalGeneration'
 
-    def build_preprocessor(self):
-        super().build_preprocessor()
+    def build_preprocessor(self, trust_remote_code: bool = False):
+        super().build_preprocessor(trust_remote_code=trust_remote_code)
         # build the model with empty weights. The model will be used in
         # `preprocess` to get the image token number
         from accelerate import init_empty_weights
         with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
             from transformers import LlavaNextForConditionalGeneration
-            self.model = LlavaNextForConditionalGeneration._from_config(self.hf_config)
+            self.model = LlavaNextForConditionalGeneration._from_config(self.hf_config,
+                                                                        trust_remote_code=trust_remote_code)
             self.vl_model = self.model
             if not self.with_llm:
                 del self.model.language_model
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import load_checkpoint_and_dispatch
@@ -63,13 +63,12 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
                                          dtype=torch.half)
         self.model.eval()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to the spec of `super.preprocess()"""
         from transformers.models.llava_next.modeling_llava_next import image_size_to_num_patches
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, params in images:
-            image = image.convert('RGB')
+        for modality, image, params in images:
             result = self.processor(image, return_tensors='pt', input_data_format='channels_last')
             # ! infer image_num_patches from image_sizes
             image_num_patches = [
@@ -99,12 +98,12 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:

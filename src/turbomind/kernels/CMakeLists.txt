@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 3.11)
+cmake_minimum_required(VERSION 3.25)
 
 add_library(ban_bad_words STATIC ban_bad_words.cu)
 set_property(TARGET ban_bad_words PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -34,12 +34,20 @@ add_library(quantization_kernels STATIC quantization.cu)
 set_property(TARGET quantization_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET quantization_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
+if (BUILD_TEST)
 add_executable(test_quantization test_quantization.cc gemm/test/test_utils.cu)
 target_link_libraries(test_quantization PRIVATE quantization_kernels core)
+endif ()
 
-add_library(logprob_kernels STATIC logprob_kernels.cu)
-set_property(TARGET logprob_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET logprob_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+add_library(cross_entropy_kernels STATIC cross_entropy_kernels.cu)
+set_property(TARGET cross_entropy_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET cross_entropy_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+if (BUILD_TEST)
+add_executable(test_cross_entropy test_cross_entropy.cu)
+set_property(TARGET test_cross_entropy PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_link_libraries(test_cross_entropy PRIVATE cross_entropy_kernels core)
+endif ()
 
 add_library(unfused_attention_kernels STATIC unfused_attention_kernels.cu)
 set_property(TARGET unfused_attention_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -76,3 +84,5 @@ set_property(TARGET apply_token_bitmask_inplace_cuda PROPERTY CUDA_RESOLVE_DEVIC
 add_subdirectory(attention)
 add_subdirectory(gemm)
 add_subdirectory(norm)
+add_subdirectory(copy)
+add_subdirectory(linear_attn)

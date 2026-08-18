@@ -10,7 +10,7 @@ struct SamplingData;
 
 class Sampling: public BaseGenerationParam {
 public:
-    explicit Sampling(const BaseGenerationParam& base, int phases);
+    explicit Sampling(const BaseGenerationParam& base, int phases, int tp_rank);
 
     void Setup(int phase, TensorMap& env);
 
@@ -21,6 +21,8 @@ public:
     void Update(int phase, TensorMap& env);
 
 private:
+    const int tp_rank_;
+
     std::vector<std::shared_ptr<SamplingData>> data_;
 
     // host buffer

@@ -1,26 +1,46 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
+from typing import Any
 
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.messages import PytorchEngineConfig, QuantPolicy
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
+from lmdeploy.utils import get_logger, is_bf16_supported
+
+logger = get_logger('lmdeploy')
 
 
-def _update_torch_dtype(config: 'ModelConfig', dtype: str):
+def normalize_cudagraph_capture_batch_sizes(capture_sizes: list[int] | None, max_batches: int) -> list[int] | None:
+    """Normalize configured cudagraph capture batch sizes."""
+    if capture_sizes is None:
+        return None
+
+    assert len(capture_sizes) > 0, 'cudagraph_capture_batch_sizes should not be empty'
+    assert all(isinstance(size, int) and size > 0 for size in capture_sizes), (
+        'cudagraph_capture_batch_sizes should be positive integers')
+
+    capture_sizes = sorted({size for size in capture_sizes if size <= max_batches})
+    assert len(capture_sizes) > 0, (
+        'cudagraph_capture_batch_sizes should contain at least one value '
+        f'<= max_batch_size ({max_batches})')
+    if capture_sizes[-1] != max_batches:
+        capture_sizes.append(max_batches)
+    return capture_sizes
+
+
+def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'auto'):
     """Update the torch dtype from the model config.
 
     Args:
         config (ModelConfig): The input model config.
         dtype (str): user specified data type. Refer to
             `PyTorchEngineConfig.dtype` for detailed info
+        device_type (str): The device type. Refer to `PyTorchEngineConfig.device_type` for detailed info
     """
-    from lmdeploy.utils import get_logger
-    logger = get_logger('lmdeploy')
-
     quantization_config = getattr(config.hf_config, 'quantization_config', dict())
     quant_method = quantization_config.get('quant_method', None)
     if quant_method == 'awq':
@@ -30,6 +50,9 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         return config
 
     torch_dtype = getattr(config.hf_config, 'dtype', None)
+    if torch_dtype is None and hasattr(config.hf_config, 'text_config'):
+        torch_dtype = getattr(config.hf_config.text_config, 'dtype', None)
+
     if torch_dtype is None:
         torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
 
@@ -45,12 +68,20 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         # update hf_config as well
         setattr(config.hf_config, 'torch_dtype', torch_dtype)
     else:
+        if torch_dtype == 'bfloat16' and not is_bf16_supported(device_type):
+            torch_dtype = 'float16'
         # change to user specified data type if it is not 'auto'
         if dtype == 'auto':
             torch_dtype = torch_dtype if torch_dtype in ['float16', 'bfloat16'] else 'float16'
         else:
             torch_dtype = dtype
-    config.dtype = eval(f'torch.{torch_dtype}')
+
+    resolved_dtype = getattr(torch, torch_dtype, None)
+    if not isinstance(resolved_dtype, torch.dtype):
+        raise ValueError(f'Invalid torch dtype "{torch_dtype}" resolved from model config; '
+                         'expected a torch.dtype attribute on torch.')
+    config.dtype = resolved_dtype
+
     return config
 
 
@@ -81,14 +112,18 @@ class CacheConfig:
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
+    kernel_block_size: int = -1
     window_size: int = -1
     cache_max_entry_count: float = 0.8
-    max_prefill_token_num: int = 4096
+    max_prefill_token_num: int = 8192
+    cudagraph_capture_batch_sizes: list[int] | None = None
     enable_prefix_caching: bool = False
-    quant_policy: Literal[0, 4, 8] = 0
+    quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
     num_state_caches: int = None
-    states_shapes: List[Tuple] = field(default_factory=list)
+    prefix_cache_state_budget: int = 0
+    prefix_cache_decode_state_interval: int = 0
+    states_shapes: list[tuple] = field(default_factory=list)
 
     # reserved blocks for dummy inputs, init to 0 for unit test.
     num_reserved_gpu_blocks: int = 0
@@ -99,11 +134,18 @@ class CacheConfig:
 
     def __post_init__(self):
         """Post init."""
-        from lmdeploy.utils import get_logger
-        logger = get_logger('lmdeploy')
+        assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
+        assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
+        if self.kernel_block_size == -1:
+            self.kernel_block_size = self.block_size
+        if self.prefix_cache_decode_state_interval > 0:
+            assert self.prefix_cache_decode_state_interval % self.block_size == 0, (
+                'prefix_cache_decode_state_interval must be a multiple of block_size')
+        self.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+            self.cudagraph_capture_batch_sizes, self.max_batches)
 
 
 class TPMode(enum.Enum):
@@ -253,7 +295,7 @@ def _override_hf_config(hf_config: Any, key: str, hf_overrides):
         _overide_hf_config_cfg(hf_config, key, hf_overrides)
 
 
-def override_hf_config(hf_config: Any, hf_overrides: Dict[str, Any]):
+def override_hf_config(hf_config: Any, hf_overrides: dict[str, Any]):
     """Override HF config."""
     for k, v in hf_overrides.items():
         _override_hf_config(hf_config, k, v)
@@ -261,6 +303,80 @@ def override_hf_config(hf_config: Any, hf_overrides: Dict[str, Any]):
 
 def _default_check_env(device: str):
     pass
+
+
+def _patch_quantization_config(hf_config: Any, model_format: str = None):
+    """Patch quantization config."""
+    if model_format is None:
+        return hf_config
+
+    # skip the quantized llm and vlm models
+    if hasattr(hf_config, 'quantization_config') or \
+        (hasattr(hf_config, 'llm_config') and hasattr(hf_config.llm_config, 'quantization_config')) \
+            or (hasattr(hf_config, 'text_config') and hasattr(hf_config.text_config, 'quantization_config')):
+        logger.warning('Can not perform weight quantization on quantized model.')
+        return hf_config
+
+    if model_format == 'fp8':
+        logger.debug('Patch quantization config for fp8.')
+        from lmdeploy.pytorch.envs import scale_fmt
+        quantization_config = dict(quant_method='fp8',
+                                   fmt='e4m3',
+                                   weight_block_size=[128, 128],
+                                   scale_fmt=scale_fmt,
+                                   lmdeploy_patched=True)
+    else:
+        raise RuntimeError(f'Unsupported weight quantization method: {model_format}')
+
+    hf_config.quantization_config = quantization_config
+    # for vlm models
+    if hasattr(hf_config, 'text_config'):
+        hf_config.text_config.quantization_config = quantization_config
+    elif hasattr(hf_config, 'llm_config'):
+        hf_config.llm_config.quantization_config = quantization_config
+
+    return hf_config
+
+
+@dataclass
+class MemDecodeConfig:
+    """Configuration for MemDecode auxiliary memory model and fusion."""
+
+    memory_model_path: str
+    memory_model_config: 'ModelConfig'
+    lambda_value: float = 1.0
+    adaptive_router: bool = True
+    router_path: str | None = None
+    lambda_base_only_threshold: float = -1.0
+
+    def __post_init__(self):
+        self.lambda_value = float(self.lambda_value)
+        self.lambda_base_only_threshold = float(self.lambda_base_only_threshold)
+        if not 0.0 <= self.lambda_value <= 1.0:
+            raise ValueError(f'lambda_value must be in [0, 1], got {self.lambda_value}')
+        if self.adaptive_router and self.router_path is None:
+            raise ValueError('router_path is required when adaptive_router is enabled.')
+
+
+@dataclass
+class BlockCacheSpec:
+    """Spec for a named block-scoped cache (e.g. compressed KV)."""
+    name: str
+    layer_ids: list[int]
+    shape: tuple[int, ...]
+    dtype: torch.dtype
+    alignment: int = 256
+
+
+@dataclass
+class StateCacheSpec:
+    """Spec for a named sequence-scoped state cache (e.g. compressor
+    scratch)."""
+    name: str
+    shape: tuple[int, ...]
+    dtype: torch.dtype
+    layer_ids: list[int] | None = None
+    alignment: int = 256
 
 
 @dataclass
@@ -272,7 +388,7 @@ class ModelConfig:
     num_attention_heads: int
     num_key_value_heads: int
     bos_token_id: int
-    eos_token_id: List[int]
+    eos_token_id: list[int]
     head_dim: int
     k_head_dim: int = None
     v_head_dim: int = None
@@ -281,13 +397,14 @@ class ModelConfig:
     vocab_size: int = 40000
     hf_config: Any = None
     llm_config: Any = None
+    dist_config: DistConfig = None
     cogvlm_style: bool = False
-    custom_module_map: Dict[str, setattr] = None
+    custom_module_map: dict[str, setattr] = None
 
     # flash mla
     use_flash_mla: bool = False
-    use_mla_fp8_cache: bool = False
-    mla_index_topk: Optional[int] = None
+    mla_kv_cache_dtype: str | None = None
+    mla_index_topk: int | None = None
 
     # dllm
     model_paradigm: str = 'ar'
@@ -296,28 +413,73 @@ class ModelConfig:
 
     # Added for deepseekv3.2 nsa index
     # caches would be added after kv cache
-    cache_shapes: List[Tuple[List[int], torch.dtype]] = field(default_factory=list)
+    cache_shapes: list[tuple[list[int], torch.dtype]] = field(default_factory=list)
     # added for qwen3_next
     # could used for any SSM model.
-    states_shapes: List[Tuple[Tuple[int], torch.dtype]] = field(default_factory=list)
+    states_shapes: list[tuple[tuple[int], torch.dtype]] = field(default_factory=list)
+    # flag to indicate that the model uses gated delta rule layers
+    # and requires prepare_chunk_indices during prefill
+    is_gated_delta: bool = False
+
+    # Named cache specs for models that need multiple block/state caches.
+    # V4 uses these instead of cache_shapes/states_shapes for formal resource declaration.
+    block_cache_specs: list[BlockCacheSpec] = field(default_factory=list)
+    state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
+    use_standard_kv_cache: bool = True
+    post_build_func: Callable[['ModelConfig', int], None] | None = None
 
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
+
+    # fp32 lm head
+    fp32_lm_head: bool = False
+    tie_word_embeddings: bool = False
+
+    # quant config
+    quant_config: 'QuantizationConfig' = None
+
+    # flags mark if this model use mrope
+    use_mrope: bool = False
+
+    # update cache config
+    update_cache_config_func: Any = None
+
+    @property
+    def use_mla_fp8_cache(self):
+        """Whether MLA uses the DeepSeek-V3.2 FP8 cache layout."""
+        return self.mla_kv_cache_dtype == 'fp8_ds_mla'
 
     def get_head_size(self):
         """Get head size."""
         return self.head_dim
 
+    def get_num_qkv_head_by_tp(self):
+        """Get q and kv heads per TP rank."""
+        dist_config = self.dist_config or DistConfig()
+        tp = dist_config.attn_tp
+        assert self.num_attention_heads % tp == 0
+        if self.num_key_value_heads >= tp:
+            assert self.num_key_value_heads % tp == 0
+        else:
+            assert tp % self.num_key_value_heads == 0
+        num_q_heads = self.num_attention_heads // tp
+        num_kv_heads = max(self.num_key_value_heads // tp, 1)
+        return num_q_heads, num_kv_heads
+
     @classmethod
     def from_pretrained(
         cls,
         pretrained_model_name_or_path: str,
-        trust_remote_code: bool = True,
+        trust_remote_code: bool = False,
         dtype: str = 'auto',
         dist_config: DistConfig = None,
-        hf_overrides: Dict[str, Any] = None,
+        hf_overrides: dict[str, Any] = None,
         is_draft_model: bool = False,
         spec_method: str = None,
+        num_spec_tokens: int = 0,
+        model_format: str = None,
+        device_type: str = 'auto',
+        block_size: int = 64,
     ):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
@@ -328,16 +490,19 @@ class ModelConfig:
                 models defined on the Hub in their own modeling files.
             dtype (str): user specified data type for model weights and
                 activations. Refer to `PyTorchEngineConfig` for details
-            hf_overrides (Dict[str, Any]): overrides for the HF config.
+            hf_overrides (dict[str, Any]): overrides for the HF config.
+            model_format (str): the quantization format of the model.
         """
         from transformers import AutoConfig
 
         from lmdeploy.pytorch.transformers import config_from_pretrained
-        from lmdeploy.utils import get_logger
         hf_config = config_from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.
             hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
+
+        # update quantization config
+        hf_config = _patch_quantization_config(hf_config, model_format=model_format)
 
         model_config = cls.from_hf_config(
             hf_config,
@@ -346,16 +511,27 @@ class ModelConfig:
             dist_config=dist_config,
             is_draft_model=is_draft_model,
             spec_method=spec_method,
+            num_spec_tokens=num_spec_tokens,
+            device_type=device_type,
         )
-
+        fp32_lm_head = False
         if hf_overrides is not None:
-            logger = get_logger('lmdeploy')
             logger.warning(f'Overriding HF config with {hf_overrides}')
+            fp32_lm_head = hf_overrides.get('fp32_lm_head', False)
             override_hf_config(model_config.hf_config, hf_overrides)
+
+        # for fp32 head
+        model_config.fp32_lm_head = fp32_lm_head
+        model_config.tie_word_embeddings = getattr(hf_config, 'tie_word_embeddings', False)
 
         # for serialization of transformers modules
         maybe_register_config_serialize_by_value(trust_remote_code)
 
+        # add quant_config
+        model_config.quant_config = QuantizationConfig.from_config(hf_config)
+        model_config.block_size = block_size
+        if model_config.post_build_func is not None:
+            model_config.post_build_func(model_config, block_size)
         return model_config
 
     @classmethod
@@ -367,6 +543,8 @@ class ModelConfig:
         dist_config: DistConfig = None,
         is_draft_model: bool = False,
         spec_method: str = None,
+        device_type: str = 'auto',
+        num_spec_tokens: int = 0,
     ):
         """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
@@ -374,11 +552,15 @@ class ModelConfig:
             dist_config = DistConfig()
         tp = dist_config.attn_tp
 
-        model_config = AutoModelConfigBuilder.build(hf_config,
-                                                    model_path,
-                                                    tp=tp,
-                                                    is_draft_model=is_draft_model,
-                                                    spec_method=spec_method)
+        model_config = AutoModelConfigBuilder.build(
+            hf_config,
+            model_path,
+            tp=tp,
+            is_draft_model=is_draft_model,
+            spec_method=spec_method,
+            num_spec_tokens=num_spec_tokens,
+            device_type=device_type,
+        )
 
         if model_config.k_head_dim is None:
             assert model_config.head_dim is not None
@@ -393,9 +575,10 @@ class ModelConfig:
             assert model_config.num_key_value_heads % tp == 0
         else:
             assert tp % model_config.num_key_value_heads == 0
+        model_config.dist_config = dist_config
 
         # should after setting `hf_config` and `model_arch` attributes
-        model_config = _update_torch_dtype(model_config, dtype)
+        model_config = _update_torch_dtype(model_config, dtype, device_type=device_type)
 
         # update eos_token_id to list
         if isinstance(model_config.eos_token_id, int):
@@ -442,12 +625,13 @@ class MiscConfig:
     custom_module_map: str = None
     empty_init: bool = False
     model_format: str = None
-    hf_overrides: Dict[str, Any] = None
-    disable_vision_encoder: bool = False
+    hf_overrides: dict[str, Any] = None
+    language_model_only: bool = False
     logprobs_mode: str = None
     dllm_config: DLLMConfig = None
     enable_return_routed_experts: bool = False
     enable_chunked_prefill: bool = False
+    memdecode_config: MemDecodeConfig = None
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
@@ -463,7 +647,7 @@ class MiscConfig:
             prefill_interval=engine_config.prefill_interval,
             model_format=engine_config.model_format,
             hf_overrides=engine_config.hf_overrides,
-            disable_vision_encoder=engine_config.disable_vision_encoder,
+            language_model_only=engine_config.language_model_only,
             logprobs_mode=engine_config.logprobs_mode,
             dllm_config=dllm_config,
             enable_return_routed_experts=engine_config.enable_return_routed_experts,
@@ -479,6 +663,7 @@ class SpecDecodeConfig:
     cache_config: CacheConfig = None
     num_speculative_tokens: int = 1
     model_config: ModelConfig = None
+    dist_config: DistConfig = field(default_factory=DistConfig)
 
     @classmethod
     def from_config(
@@ -489,30 +674,152 @@ class SpecDecodeConfig:
         target_cache_cfg: CacheConfig,
         target_model: str = None,
         dtype: str = 'auto',
+        trust_remote_code: bool = False,
+        model_format: str = None,
+        hf_overrides: dict[str, Any] = None,
+        dist_config: DistConfig = None,
     ):
         model = model or target_model
+        dist_config = dist_config or DistConfig()
         model_config = ModelConfig.from_pretrained(model,
-                                                   trust_remote_code=True,
+                                                   trust_remote_code=trust_remote_code,
                                                    dtype=dtype,
+                                                   dist_config=dist_config,
                                                    is_draft_model=True,
-                                                   spec_method=method)
+                                                   spec_method=method,
+                                                   block_size=target_cache_cfg.block_size,
+                                                   model_format=model_format,
+                                                   hf_overrides=hf_overrides,
+                                                   device_type=target_cache_cfg.device_type,
+                                                   )
         cache_config = None
         # include medusa
         no_caches = ['medusa']
         if method not in no_caches:
             cache_config = CacheConfig(max_batches=target_cache_cfg.max_batches,
                                        block_size=target_cache_cfg.block_size,
+                                       kernel_block_size=target_cache_cfg.kernel_block_size,
                                        num_cpu_blocks=target_cache_cfg.num_cpu_blocks,
                                        num_gpu_blocks=target_cache_cfg.num_gpu_blocks,
                                        cache_max_entry_count=target_cache_cfg.cache_max_entry_count,
                                        max_prefill_token_num=target_cache_cfg.max_prefill_token_num,
+                                       cudagraph_capture_batch_sizes=target_cache_cfg.cudagraph_capture_batch_sizes,
                                        device_type=target_cache_cfg.device_type,
+                                       quant_policy=target_cache_cfg.quant_policy,
                                        migration_backend=target_cache_cfg.migration_backend)
         obj = cls(
             model=model,
             method=method,
             cache_config=cache_config,
             model_config=model_config,
+            dist_config=dist_config,
             num_speculative_tokens=num_speculative_tokens,
         )
         return obj
+
+
+@dataclass
+class QuantizationConfig:
+    quant_method: str = None
+    quant_dtype: torch.dtype = None
+    scale_fmt: str = None
+    bits: int = None
+    group_size: int = None
+    weight_block_size: tuple[int] = None
+    activation_scheme: str = None
+    ignored_layers: list[str] = field(default_factory=list)
+    fp8_quant_scope: str | None = None
+    hf_quant_config: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Validate quantization scope."""
+        if self.fp8_quant_scope not in {None, 'moe_only'}:
+            raise ValueError(f'Unsupported fp8 quant scope: {self.fp8_quant_scope}')
+        if self.fp8_quant_scope is not None and self.quant_method != 'fp8':
+            raise ValueError('fp8_quant_scope is only supported for fp8 quantization.')
+
+    @classmethod
+    def from_config(cls, hf_config: Any):
+        quant_config = getattr(hf_config, 'quantization_config', None)
+
+        if quant_config is None:
+            if hasattr(hf_config, 'llm_config') and hasattr(hf_config.llm_config, 'quantization_config'):
+                quant_config = hf_config.llm_config.quantization_config
+            elif hasattr(hf_config, 'text_config') and hasattr(hf_config.text_config, 'quantization_config'):
+                quant_config = hf_config.text_config.quantization_config
+
+        # no quant config found in hf config
+        if quant_config is None:
+            return cls()
+
+        quant_method = quant_config['quant_method']
+        quant_dtype = quant_config.get('quant_dtype', None)
+        scale_fmt = quant_config.get('scale_fmt', None)
+        weight_block_size = quant_config.get('weight_block_size', None)
+        activation_scheme = quant_config.get('activation_scheme', None)
+        fp8_quant_scope = quant_config.get('fp8_quant_scope', None)
+
+        bits = None
+        group_size = None
+
+        if quant_method == 'awq':
+            bits = quant_config.get('bits', 4)
+            group_size = quant_config.get('group_size', 128)
+            if quant_dtype is None:
+                # awq does not need a quant dtype, this is just a placeholder
+                quant_dtype = 'bfloat16'
+        elif quant_method == 'smooth_quant':
+            if quant_dtype is None:
+                quant_dtype = 'int8'
+        elif quant_method == 'fp8':
+            fmt = quant_config.get('fmt', 'e4m3')
+            if fmt == 'e4m3':
+                quant_dtype = 'float8_e4m3fn'
+            elif fmt == 'e5m2':
+                quant_dtype = 'float8_e5m2'
+            else:
+                raise TypeError(f'Unsupported fp8 fmt: {fmt}')
+        else:
+            raise TypeError(f'Unsupported quant method: {quant_method}')
+
+        resolved_quant_dtype = getattr(torch, quant_dtype, None)
+        if not isinstance(resolved_quant_dtype, torch.dtype):
+            raise ValueError(f'Invalid quant dtype "{quant_dtype}" resolved from model config; '
+                             'expected a torch.dtype attribute on torch.')
+        quant_dtype = resolved_quant_dtype
+
+        ignored_layers = quant_config.get('ignored_layers', [])
+        if not ignored_layers:
+            ignored_layers = quant_config.get('modules_to_not_convert', [])
+
+        return cls(
+            quant_method=quant_method,
+            quant_dtype=quant_dtype,
+            scale_fmt=scale_fmt,
+            bits=bits,
+            group_size=group_size,
+            weight_block_size=weight_block_size,
+            activation_scheme=activation_scheme,
+            ignored_layers=ignored_layers,
+            fp8_quant_scope=fp8_quant_scope,
+            hf_quant_config=quant_config,
+        )
+
+    def get_quant_method(self, prefix: str = '', module_kind: str = 'linear'):
+        """Get quant method for module."""
+        if module_kind not in {'linear', 'moe', 'norm'}:
+            raise ValueError(f'Unsupported quant module kind: {module_kind}')
+        if self.quant_method == 'fp8' and self.fp8_quant_scope == 'moe_only' and module_kind != 'moe':
+            quant_method = None
+            return quant_method
+        if not prefix or not self.ignored_layers:
+            quant_method = self.quant_method
+            return quant_method
+
+        is_ignore = any([prefix in layer_name for layer_name in self.ignored_layers])
+        quant_method = None if is_ignore else self.quant_method
+        return quant_method
+
+    def get(self, key, default=None):
+        """Get extra key from hf quant config."""
+        return self.hf_quant_config.get(key, default)

@@ -10,12 +10,6 @@ def _check_env_qwen3_next(device: str):
     if device != 'cuda':
         return
 
-    # check cuda
-    try:
-        import causal_conv1d  # noqa: F401
-    except ImportError:
-        raise ImportError('Qwen3-Next cuda support requires https://github.com/Dao-AILab/causal-conv1d.')
-
     try:
         import fla  # noqa: F401
     except ImportError:
@@ -51,8 +45,9 @@ class Qwen3NextModelConfigBuilder(AutoModelConfigBuilder):
         conv_kernel_size = hf_config.linear_conv_kernel_dim
 
         conv_state_shape = (num_delta_layers, conv_dim, conv_kernel_size)
-        recurrent_state_shape = (num_delta_layers, num_v_heads, head_k_dim, head_v_dim)
+        recurrent_state_shape = (num_delta_layers, num_v_heads, head_v_dim, head_k_dim)
         dtype = torch.bfloat16
         cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, dtype)]
+        cfg.is_gated_delta = True
         cfg.check_env_func = _check_env_qwen3_next
         return cfg

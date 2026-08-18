@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 import triton
@@ -27,6 +27,7 @@ def get_cuda_autotune_config():
         },
                       num_stages=4,
                       num_warps=4),
+        # SM8
         triton.Config({
             'BLOCK_SIZE_M': 128,
             'BLOCK_SIZE_N': 128,
@@ -51,18 +52,115 @@ def get_cuda_autotune_config():
         },
                       num_stages=4,
                       num_warps=4),
+        # SM7-
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 128,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=4,
+                      num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 128,
+            'BLOCK_SIZE_N': 32,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=4,
+                      num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 32,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=5,
+                      num_warps=2),
     ]
 
 
-def _config_prune_func(config: dict, *args, **kwargs):
+def _config_prune_func(config: list, *args, **kwargs):
     """Fused moe config prune."""
     device_cap = torch.cuda.get_device_capability()
     num_sm9x = 2
+    cum_num_sm8x = 5
 
     if device_cap[0] >= 9:
         return config[:num_sm9x]
+    elif device_cap[0] >= 8:
+        return config[num_sm9x:cum_num_sm8x]
     else:
-        return config[num_sm9x:]
+        return config[cum_num_sm8x:]
+
+
+@triton.jit
+def _sorted_idx_phase1_kernel(
+    ExpertIds,
+    Counts,
+    LocalPos,
+    N,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Phase 1: sort within CTA, atomic-count per expert, store local position."""
+    pid = tl.program_id(0)
+    lane = tl.arange(0, BLOCK_SIZE)
+    offs = pid * BLOCK_SIZE + lane
+    mask = offs < N
+
+    # Pack (expert_id, local_lane) into one int32 for key-value sort
+    expert_ids = tl.load(ExpertIds + offs, mask=mask, other=0).to(tl.int32)
+    packed = tl.where(mask, expert_ids * BLOCK_SIZE + lane, 0x7FFFFFFF)
+
+    # Sort groups same-expert threads for atomic coalescing
+    sorted_packed = tl.sort(packed)
+    sorted_expert = (sorted_packed // BLOCK_SIZE).to(tl.int64)
+    sorted_local_idx = sorted_packed % BLOCK_SIZE
+    sorted_valid = sorted_packed < 0x7FFFFFFF
+
+    # Atomic count: Counts starts at 0, each thread adds 1, gets back local position
+    local_pos = tl.atomic_add(Counts + sorted_expert, 1, mask=sorted_valid)
+
+    # Store local_pos at original global index for phase 2
+    orig = (pid * BLOCK_SIZE + sorted_local_idx).to(tl.int64)
+    tl.store(LocalPos + orig, local_pos, mask=sorted_valid)
+
+
+@triton.jit
+def _sorted_idx_phase2_kernel(
+    ExpertIds,
+    LocalPos,
+    ExpEnd,
+    Counts,
+    Out,
+    ExpStart,
+    N,
+    num_experts,
+    BLOCK_SIZE: tl.constexpr,
+    BLOCK_E: tl.constexpr,
+):
+    """Phase 2: scatter sorted_idx using cumsum result + compute exp_start."""
+    pid = tl.program_id(0)
+    lane = tl.arange(0, BLOCK_SIZE)
+    offs = pid * BLOCK_SIZE + lane
+    mask = offs < N
+
+    # Compute exp_start = exp_end - counts (only first block writes it)
+    if pid == 0:
+        e_offs = tl.arange(0, BLOCK_E)
+        e_mask = e_offs < num_experts
+        end_val = tl.load(ExpEnd + e_offs, mask=e_mask)
+        cnt_val = tl.load(Counts + e_offs, mask=e_mask)
+        tl.store(ExpStart + e_offs, end_val - cnt_val, mask=e_mask)
+
+    # Scatter: sorted_idx[exp_start[e] + local_pos] = orig_idx
+    expert_ids = tl.load(ExpertIds + offs, mask=mask, other=0).to(tl.int64)
+    local_pos = tl.load(LocalPos + offs, mask=mask, other=0)
+    end_val = tl.load(ExpEnd + expert_ids, mask=mask)
+    cnt_val = tl.load(Counts + expert_ids, mask=mask)
+    dst = end_val - cnt_val + local_pos
+
+    tl.store(Out + dst, offs, mask=mask)
 
 
 @triton.autotune(
@@ -230,168 +328,272 @@ def fused_moe_kernel_launcher(
 
 
 @triton.jit
-def _get_exp_mask_kernel(
-    a_ptr,
-    o_mask_ptr,
-    o_k_ptr,
-    stride_a_token: tl.constexpr,
-    stride_a_exp: tl.constexpr,
-    stride_o_exp,
-    stride_o_token: tl.constexpr,
-    topk: tl.constexpr,
-    num_experts: tl.constexpr,
-    BLOCK_NA: tl.constexpr,
-    BLOCK_NO: tl.constexpr,
+def _fill_block_meta_kernel(
+    ExpStart,
+    Counts,
+    BlockEnd,
+    BlockExpertIds,
+    BlockOffsets,
+    expert_offset: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_B: tl.constexpr,
 ):
-    token_id = tl.program_id(0)
+    """Build compact routed-block metadata from per-expert token counts."""
+    local_exp = tl.program_id(0)
+    actual_exp = local_exp + expert_offset
+    count = tl.load(Counts + actual_exp)
+    n_blocks = tl.cdiv(count, BLOCK_SIZE_M)
+    block_end = tl.load(BlockEnd + local_exp)
+    block_base = block_end - n_blocks
+    exp_start = tl.load(ExpStart + actual_exp)
 
-    offs_n = tl.arange(0, BLOCK_NA)
-    mask_n = offs_n < topk
-    a_ptrs = a_ptr + token_id * stride_a_token + offs_n * stride_a_exp
-    a = tl.load(a_ptrs, mask=mask_n)
-
-    # fill zeros
-    offs_no = tl.arange(0, BLOCK_NO)
-    mask_no = offs_no < num_experts
-    o_ptrs = o_mask_ptr + token_id * stride_o_token + offs_no * stride_o_exp
-    tl.store(o_ptrs, 0, mask=mask_no)
-
-    # fill a
-    o_ptrs = o_mask_ptr + token_id * stride_o_token + a * stride_o_exp
-    tl.store(o_ptrs, 1, mask=mask_n)
-
-    # fill kid
-    ok_ptrs = o_k_ptr + token_id * stride_o_token + a * stride_o_exp
-    tl.store(ok_ptrs, offs_n, mask=mask_n)
-
-
-def _get_exp_mask(topk_ids: torch.Tensor, num_experts: int):
-    """Get exp mask."""
-    assert topk_ids.dim() == 2
-    M, topk = topk_ids.shape
-    assert topk <= num_experts
-
-    out_mask = topk_ids.new_empty((num_experts, M))
-    out_k = topk_ids.new_empty((num_experts, M))
-    BLOCK_NA = triton.next_power_of_2(topk)
-    BLOCK_NO = triton.next_power_of_2(num_experts)
-
-    grid = (M, )
-    _get_exp_mask_kernel[grid](
-        topk_ids,
-        out_mask,
-        out_k,
-        stride_a_token=topk_ids.stride(0),
-        stride_a_exp=topk_ids.stride(1),
-        stride_o_exp=out_mask.stride(0),
-        stride_o_token=out_mask.stride(1),
-        topk=topk,
-        num_experts=num_experts,
-        BLOCK_NA=BLOCK_NA,
-        BLOCK_NO=BLOCK_NO,
-        num_warps=1,
-    )
-    return out_mask, out_k
+    offs = tl.arange(0, BLOCK_B)
+    mask = offs < n_blocks
+    tl.store(BlockExpertIds + block_base + offs, local_exp, mask=mask)
+    tl.store(BlockOffsets + block_base + offs, exp_start + offs * BLOCK_SIZE_M, mask=mask)
 
 
 @triton.jit
-def _get_start_end_kernel(
-    exp_cum_ptr,
-    exp_topk_ptr,
-    exp_out_ptr,
-    start_ptr,
-    end_ptr,
-    stride_cum_exp,
-    stride_cum_token: tl.constexpr,
-    stride_out: tl.constexpr,
-    num_tokens,
-    num_experts: tl.constexpr,
-    topk: tl.constexpr,
-    BLOCK_N: tl.constexpr,
+def fused_moe_compact_kernel(
+    A,
+    B,
+    bias,
+    C,
+    SortedIdx,
+    ExpEnd,
+    BlockEnd,
+    BlockExpertIds,
+    BlockOffsets,
+    N: tl.constexpr,
+    K: tl.constexpr,
+    stride_am: tl.constexpr,
+    stride_ak: tl.constexpr,
+    stride_be: tl.constexpr,
+    stride_bn: tl.constexpr,
+    stride_bk: tl.constexpr,
+    stride_cm: tl.constexpr,
+    stride_cn: tl.constexpr,
+    stride_bie: tl.constexpr,
+    stride_bin: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    top_k: tl.constexpr,
+    expert_offset: tl.constexpr,
+    num_local_experts: tl.constexpr,
+    reindex_a: tl.constexpr,
+    reindex_c: tl.constexpr,
 ):
-    """Get start end kernel."""
-    token_start = tl.program_id(0)
+    """Compact routed-block MoE GEMM."""
+    block_id = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    total_blocks = tl.load(BlockEnd + num_local_experts - 1)
+    if block_id >= total_blocks:
+        return
 
-    offs_exp = tl.arange(0, BLOCK_N)
-    off_cum = offs_exp * stride_cum_exp + token_start * stride_cum_token
-    cum_ptrs = exp_cum_ptr + off_cum
-    val_k_ptrs = exp_topk_ptr + off_cum
+    local_exp = tl.load(BlockExpertIds + block_id)
+    actual_exp = local_exp + expert_offset
+    block_sorted_start = tl.load(BlockOffsets + block_id)
+    exp_end = tl.load(ExpEnd + actual_exp)
 
-    mask_exp = offs_exp < num_experts
+    offs_sid = block_sorted_start + tl.arange(0, BLOCK_SIZE_M)
+    mask_sid = offs_sid < exp_end
+    sid = tl.load(SortedIdx + offs_sid, mask=mask_sid, other=0)
 
-    # get prev and cur cum
-    token_id = token_start
-    prev_cum_mask = mask_exp
-    if token_start == 0:
-        prev_cum_mask = mask_exp & (tl.arange(0, BLOCK_N) > 0)
-    prev_cum = tl.load(cum_ptrs - stride_cum_token, mask=prev_cum_mask, other=0)
-    cur_cum = tl.load(cum_ptrs, mask=mask_exp)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
+    if reindex_a:
+        offs_am = sid // top_k
+    else:
+        offs_am = offs_sid
+    a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N), BLOCK_SIZE_N)
 
-    # store sorted idx
-    mask_out = mask_exp & (cur_cum > prev_cum)
-    val_k = tl.load(val_k_ptrs, mask=mask_exp)
-    val = token_id * topk + val_k
-    out_ptrs = exp_out_ptr + prev_cum * stride_out
-    tl.store(out_ptrs, val, mask=mask_out)
+    exp_off = stride_be * local_exp.to(tl.int64)
+    b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
-    # fill start
-    if token_id == 0:
-        cur_start_ptrs = start_ptr + offs_exp
-        tl.store(cur_start_ptrs, prev_cum, mask=mask_exp)
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    # fill end
-    if token_id == num_tokens - 1:
-        cur_end_ptrs = end_ptr + offs_exp
-        tl.store(cur_end_ptrs, cur_cum, mask=mask_exp)
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+        a = tl.load(a_ptrs, mask=mask_sid[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K), other=0.0)
+        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+        accumulator = tl.dot(a, b, acc=accumulator)
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
+
+    if bias is not None:
+        bias_ptrs = bias + local_exp * stride_bie + offs_bn * stride_bin
+        bias_val = tl.load(bias_ptrs).to(accumulator.dtype)
+        accumulator += bias_val[None, :]
+
+    c = accumulator.to(A.dtype.element_ty)
+
+    if reindex_c:
+        offs_cm = sid
+    else:
+        offs_cm = offs_sid
+    c_ptrs = C + stride_cm * offs_cm[:, None] + stride_cn * offs_bn[None, :]
+    tl.store(c_ptrs, c, mask=mask_sid[:, None])
 
 
-def get_start_end(exp_cum: torch.Tensor, exp_topk: torch.Tensor, topk: int):
-    """Get start end."""
-    num_experts, num_tokens = exp_cum.shape
+def fused_moe_compact_kernel_launcher(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    C: torch.Tensor,
+    sorted_idx: torch.Tensor,
+    exp_end: torch.Tensor,
+    block_end: torch.Tensor,
+    block_expert_ids: torch.Tensor,
+    block_offsets: torch.Tensor,
+    bias: torch.Tensor = None,
+    top_k: int = 1,
+    expert_offset: int = 0,
+    reindex_a: bool = True,
+    reindex_c: bool = True,
+    block_m: int = 64,
+    block_n: int = 256,
+    block_k: int = 64,
+    num_warps: int = 4,
+    num_stages: int = 3,
+):
+    """Launch compact routed-block MoE kernel."""
+    E, N, K = B.shape
+    max_blocks = block_expert_ids.numel()
 
-    start_end = exp_cum.new_empty(2, num_experts)
-    exp_start = start_end[0, :]
-    exp_end = start_end[1, :]
+    A = A.flatten(0, -2)
+    C = C.flatten(0, -2)
+    enable_bias = bias is not None
 
-    out = exp_cum.new_empty((num_tokens * topk))
-
-    num_warps = 1
-
-    BLOCK_N = triton.next_power_of_2(num_experts)
-    grid = (num_tokens, )
-
-    _get_start_end_kernel[grid](
-        exp_cum,
-        exp_topk,
-        out,
-        exp_start,
+    grid = (max_blocks, triton.cdiv(N, block_n))
+    fused_moe_compact_kernel[grid](
+        A,
+        B,
+        bias,
+        C,
+        sorted_idx,
         exp_end,
-        stride_cum_exp=exp_cum.stride(0),
-        stride_cum_token=exp_cum.stride(1),
-        stride_out=out.stride(0),
-        num_tokens=num_tokens,
-        num_experts=num_experts,
-        topk=topk,
-        BLOCK_N=BLOCK_N,
+        block_end,
+        block_expert_ids,
+        block_offsets,
+        N=N,
+        K=K,
+        stride_am=A.stride(0),
+        stride_ak=A.stride(1),
+        stride_be=B.stride(0),
+        stride_bn=B.stride(1),
+        stride_bk=B.stride(2),
+        stride_cm=C.stride(0),
+        stride_cn=C.stride(1),
+        stride_bie=bias.stride(0) if enable_bias else 0,
+        stride_bin=bias.stride(1) if enable_bias else 0,
+        top_k=top_k,
+        expert_offset=expert_offset,
+        num_local_experts=E,
+        reindex_a=reindex_a,
+        reindex_c=reindex_c,
+        BLOCK_SIZE_M=block_m,
+        BLOCK_SIZE_N=block_n,
+        BLOCK_SIZE_K=block_k,
         num_warps=num_warps,
+        num_stages=num_stages,
     )
-    return out, exp_start, exp_end
 
 
-def _get_sorted_idx(topk_ids: torch.Tensor, num_experts: int):
-    """Get sorted idx."""
-    assert topk_ids.dim() == 2
-    _, topk = topk_ids.shape
 
-    # get expert mask   (num_experts, num_tokens)
-    exp_mask, exp_topk = _get_exp_mask(topk_ids, num_experts)
-    # get cumsum   (num_experts, num_tokens)
-    exp_cum = exp_mask.flatten().cumsum(0).view_as(exp_mask)
+def _get_sorted_idx_triton(topk_ids: torch.Tensor, num_experts: int):
+    """Get sorted idx with 2-phase Triton kernels (4 kernel launches total)."""
+    if topk_ids.dim() != 2:
+        raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
+    if topk_ids.size(1) > num_experts:
+        raise ValueError(
+            f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
+            f'and num_experts={num_experts}')
 
-    # get sort idx and start/end
-    sorted_idx, start, end = get_start_end(exp_cum, exp_topk, topk)
+    topk_ids = topk_ids.flatten()
+    N = topk_ids.numel()
 
-    return sorted_idx, start, end
+    BLOCK_SIZE = triton.next_power_of_2(min(num_experts, 256))
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
+
+    # Phase 1: sort + atomic histogram + store local positions
+    # counts starts at 0; after phase1, counts[e] = number of tokens for expert e
+    counts = torch.zeros(num_experts, dtype=topk_ids.dtype, device=topk_ids.device)
+    local_pos = torch.empty(N, dtype=topk_ids.dtype, device=topk_ids.device)
+    _sorted_idx_phase1_kernel[grid](topk_ids, counts, local_pos, N, BLOCK_SIZE=BLOCK_SIZE)
+
+    # cumsum to get exp_end
+    exp_end = torch.cumsum(counts, dim=0)
+
+    # Phase 2: scatter sorted_idx + compute exp_start
+    sorted_idx = torch.empty(N, dtype=topk_ids.dtype, device=topk_ids.device)
+    exp_start = torch.empty(num_experts, dtype=topk_ids.dtype, device=topk_ids.device)
+    BLOCK_E = triton.next_power_of_2(num_experts)
+    _sorted_idx_phase2_kernel[grid](
+        topk_ids, local_pos, exp_end, counts,
+        sorted_idx, exp_start, N, num_experts,
+        BLOCK_SIZE=BLOCK_SIZE, BLOCK_E=BLOCK_E,
+    )
+
+    return sorted_idx, exp_start, exp_end
+
+
+def _get_sorted_idx_blocks(topk_ids: torch.Tensor,
+                           num_experts: int,
+                           local_num_experts: int,
+                           expert_offset: int,
+                           block_m: int):
+    """Get sorted route indices plus compact routed-block metadata."""
+    if topk_ids.dim() != 2:
+        raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
+    if topk_ids.size(1) > num_experts:
+        raise ValueError(
+            f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
+            f'and num_experts={num_experts}')
+
+    flatten_topk_ids = topk_ids.flatten()
+    num_routes = flatten_topk_ids.numel()
+
+    BLOCK_SIZE = triton.next_power_of_2(min(num_experts, 256))
+    grid = (triton.cdiv(num_routes, BLOCK_SIZE),)
+
+    counts = torch.zeros(num_experts, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
+    local_pos = torch.empty(num_routes, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
+    _sorted_idx_phase1_kernel[grid](flatten_topk_ids, counts, local_pos, num_routes, BLOCK_SIZE=BLOCK_SIZE)
+
+    exp_end = torch.cumsum(counts, dim=0)
+
+    sorted_idx = torch.empty(num_routes, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
+    exp_start = torch.empty(num_experts, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
+    BLOCK_E = triton.next_power_of_2(num_experts)
+    _sorted_idx_phase2_kernel[grid](
+        flatten_topk_ids, local_pos, exp_end, counts,
+        sorted_idx, exp_start, num_routes, num_experts,
+        BLOCK_SIZE=BLOCK_SIZE, BLOCK_E=BLOCK_E,
+    )
+
+    local_counts = counts[expert_offset:expert_offset + local_num_experts]
+    local_block_counts = torch.div(local_counts + block_m - 1, block_m, rounding_mode='floor')
+    block_end = torch.cumsum(local_block_counts, dim=0)
+
+    max_blocks = triton.cdiv(num_routes, block_m) + local_num_experts
+    block_expert_ids = torch.empty(max_blocks, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
+    block_offsets = torch.empty(max_blocks, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
+    block_b = triton.next_power_of_2(max(1, triton.cdiv(num_routes, block_m)))
+    _fill_block_meta_kernel[(local_num_experts,)](
+        exp_start,
+        counts,
+        block_end,
+        block_expert_ids,
+        block_offsets,
+        expert_offset=expert_offset,
+        BLOCK_SIZE_M=block_m,
+        BLOCK_B=block_b,
+    )
+
+    return sorted_idx, exp_start, exp_end, block_end, block_expert_ids, block_offsets
+
+
+_get_sorted_idx = _get_sorted_idx_triton
 
 
 def _renormalize(topk_weights: torch.Tensor, renormalize: bool):
@@ -408,6 +610,63 @@ def _make_intermediate(shape: tuple, dtype: torch.dtype, device: torch.device, z
         return torch.zeros(shape, dtype=dtype, device=device)
     else:
         return torch.empty(shape, dtype=dtype, device=device)
+
+
+def _compact_moe_config(num_tokens: int, num_experts: int, local_ffn_size: int):
+    """Choose a compact MoE config for the profiled TP bf16 shapes."""
+    if num_experts >= 1024 and num_tokens >= 8192:
+        return dict(block_m=64, block_n=512, block_k=64, num_warps=8, num_stages=3)
+    if num_tokens <= 1024:
+        return dict(block_m=64, block_n=256, block_k=32, num_warps=4, num_stages=4)
+    return dict(block_m=64, block_n=512, block_k=64, num_warps=8, num_stages=3)
+
+
+def _supports_compact_moe(hidden_states: torch.Tensor,
+                          w1: torch.Tensor,
+                          w2: torch.Tensor,
+                          topk_ids: torch.Tensor,
+                          num_experts: int,
+                          expert_offset: int = 0):
+    """Return whether this MoE call can use compact routed-block kernels."""
+    if not hidden_states.is_cuda:
+        return False
+    if hidden_states.dtype not in (torch.float16, torch.bfloat16):
+        return False
+    if w1.dtype != hidden_states.dtype or w2.dtype != hidden_states.dtype:
+        return False
+    if topk_ids.dim() != 2 or topk_ids.numel() == 0:
+        return False
+    if topk_ids.size(1) > num_experts:
+        return False
+    if w1.size(0) != w2.size(0):
+        return False
+    if expert_offset < 0:
+        return False
+    if w1.size(0) > num_experts:
+        return False
+    if expert_offset + w1.size(0) > num_experts:
+        return False
+    if torch.cuda.get_device_capability(hidden_states.device)[0] < 9:
+        return False
+    return True
+
+
+def _should_use_compact_moe(hidden_states: torch.Tensor,
+                            w1: torch.Tensor,
+                            w2: torch.Tensor,
+                            topk_ids: torch.Tensor,
+                            num_experts: int,
+                            expert_offset: int = 0):
+    """Return whether both MoE projections should use compact scheduling."""
+    if not _supports_compact_moe(hidden_states, w1, w2, topk_ids, num_experts, expert_offset):
+        return False
+
+    local_experts = w1.size(0)
+    if local_experts >= 1024:
+        return True
+
+    avg_routes_per_expert = topk_ids.numel() / num_experts
+    return avg_routes_per_expert >= 32
 
 
 @triton.jit
@@ -514,27 +773,56 @@ def fused_moe(hidden_states: torch.Tensor,
     full_exp = num_experts == E
 
     topk_weights = _renormalize(topk_weights, renormalize)
-    sorted_idx, exp_start, exp_end = _get_sorted_idx(topk_ids, num_experts)
+    use_compact = _should_use_compact_moe(hidden_states, w1, w2, topk_ids, num_experts, expert_offset)
+    if use_compact:
+        compact_cfg = _compact_moe_config(M, num_experts, w2.shape[2])
+        sorted_idx, _, exp_end, block_end, block_expert_ids, block_offsets = _get_sorted_idx_blocks(
+            topk_ids,
+            num_experts,
+            E,
+            expert_offset,
+            compact_cfg['block_m'],
+        )
+    else:
+        sorted_idx, exp_start, exp_end = _get_sorted_idx(topk_ids, num_experts)
 
     intermediate_cache1 = _make_intermediate((M, topk, N),
                                              dtype=hidden_states.dtype,
                                              device=hidden_states.device,
                                              zeros=not full_exp)
     # gate and up
-    fused_moe_kernel_launcher(
-        hidden_states,
-        w1,
-        intermediate_cache1,
-        sorted_idx=sorted_idx,
-        exp_start=exp_start,
-        exp_end=exp_end,
-        bias=w1_bias,
-        top_k=topk,
-        num_tokens=M,
-        expert_offset=expert_offset,
-        reindex_a=True,
-        reindex_c=False,
-    )
+    if use_compact:
+        fused_moe_compact_kernel_launcher(
+            hidden_states,
+            w1,
+            intermediate_cache1,
+            sorted_idx=sorted_idx,
+            exp_end=exp_end,
+            block_end=block_end,
+            block_expert_ids=block_expert_ids,
+            block_offsets=block_offsets,
+            bias=w1_bias,
+            top_k=topk,
+            expert_offset=expert_offset,
+            reindex_a=True,
+            reindex_c=False,
+            **compact_cfg,
+        )
+    else:
+        fused_moe_kernel_launcher(
+            hidden_states,
+            w1,
+            intermediate_cache1,
+            sorted_idx=sorted_idx,
+            exp_start=exp_start,
+            exp_end=exp_end,
+            bias=w1_bias,
+            top_k=topk,
+            num_tokens=M,
+            expert_offset=expert_offset,
+            reindex_a=True,
+            reindex_c=False,
+        )
 
     # activate
     unflat_size = intermediate_cache1.shape[:-1]
@@ -551,20 +839,38 @@ def fused_moe(hidden_states: torch.Tensor,
                                              device=hidden_states.device,
                                              zeros=not full_exp)
     # down
-    fused_moe_kernel_launcher(
-        gate_cache,
-        w2,
-        intermediate_cache2,
-        sorted_idx=sorted_idx,
-        exp_start=exp_start,
-        exp_end=exp_end,
-        bias=w2_bias,
-        top_k=1,
-        num_tokens=M,
-        expert_offset=expert_offset,
-        reindex_a=False,
-        reindex_c=True,
-    )
+    if use_compact:
+        fused_moe_compact_kernel_launcher(
+            gate_cache,
+            w2,
+            intermediate_cache2,
+            sorted_idx=sorted_idx,
+            exp_end=exp_end,
+            block_end=block_end,
+            block_expert_ids=block_expert_ids,
+            block_offsets=block_offsets,
+            bias=w2_bias,
+            top_k=1,
+            expert_offset=expert_offset,
+            reindex_a=False,
+            reindex_c=True,
+            **compact_cfg,
+        )
+    else:
+        fused_moe_kernel_launcher(
+            gate_cache,
+            w2,
+            intermediate_cache2,
+            sorted_idx=sorted_idx,
+            exp_start=exp_start,
+            exp_end=exp_end,
+            bias=w2_bias,
+            top_k=1,
+            num_tokens=M,
+            expert_offset=expert_offset,
+            reindex_a=False,
+            reindex_c=True,
+        )
 
     ret = moe_reduce(intermediate_cache2, topk_weights)
     return ret

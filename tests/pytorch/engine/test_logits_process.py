@@ -1,9 +1,43 @@
 # yapf: disable
 import torch
-from transformers.generation.logits_process import (MinPLogitsWarper, RepetitionPenaltyLogitsProcessor,
-                                                    TemperatureLogitsWarper, TopKLogitsWarper, TopPLogitsWarper)
+from transformers.generation.logits_process import (
+    MinPLogitsWarper,
+    RepetitionPenaltyLogitsProcessor,
+    TemperatureLogitsWarper,
+    TopKLogitsWarper,
+    TopPLogitsWarper,
+)
 
 # yapf: enable
+
+
+def test_sampling_inputs_record_stream_records_only_tensor_fields():
+    from lmdeploy.pytorch.engine.logits_process import SamplingInputs
+
+    recorded = []
+
+    class _CudaTensor(torch.Tensor):
+
+        @staticmethod
+        def __new__(cls):
+            return torch.Tensor._make_subclass(cls, torch.empty(1), False)
+
+        @property
+        def is_cuda(self):
+            return True
+
+        def record_stream(self, stream):
+            recorded.append((id(self), stream))
+
+    stream = object()
+    temperature = _CudaTensor()
+    nested_session_tensor = _CudaTensor()
+    inputs = SamplingInputs(temperature=temperature,
+                            session_ctx=[{'persistent': nested_session_tensor}])
+
+    inputs.record_stream(stream)
+
+    assert recorded == [(id(temperature), stream)]
 
 
 def test_process_temperature():
@@ -124,3 +158,66 @@ def test_filter_minp_sorted():
 
     out = _filter_minp_sorted_(scores, min_p)
     torch.testing.assert_close(out, gt)
+
+
+def test_filter_ngram():
+    from lmdeploy.pytorch.engine.logits_process import _filter_repetition_ngram_
+    vocab_size = 100
+
+    def _get_emtas(n, window_size):
+        batch_size = generated_ids.size(0)
+        max_n = int(n.max().item())
+        same_n = n.eq(max_n).all().item()
+        max_window_size = window_size
+        if same_n:
+            n = None
+        return batch_size, max_n, max_window_size, n
+
+    # base test
+    generated_ids = torch.tensor([
+        [2, 3, 4, 1, 2, 3, 4, 2, 3, 4],
+        [9, 8, 7, 3, 8, 7, 5, 9, 8, 7],
+        [9, 8, 7, 3, 8, 7, 5, 9, 8, 7],
+    ],
+                                 dtype=torch.int64)
+    n = torch.tensor([3, 3, 2], dtype=torch.int64)
+    threshold = torch.tensor([3, 3, 3], dtype=torch.int64)
+
+    batch_size, max_n, max_window_size, n = _get_emtas(n, 10)
+    scores = torch.rand(batch_size, vocab_size)
+    stop_words = torch.randint(0, vocab_size, (batch_size, 3), dtype=torch.int64)
+    _filter_repetition_ngram_(scores, stop_words, generated_ids, n, threshold, max_n, max_window_size)
+
+    assert not scores[1].isinf().any().item()
+    assert scores[0].isinf().sum().item() == vocab_size - 1
+    assert scores[2].isinf().sum().item() == vocab_size - 1
+    assert scores[0, stop_words[0, 0]] == 0
+    assert scores[2, stop_words[2, 0]] == 0
+
+    # test no ngram
+    generated_ids = torch.tensor([
+        [2, 3, 4, 1, 2, 3, 4, 2, 3, 4],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    ])
+    n = torch.tensor([3, 0], dtype=torch.int64)
+    threshold = torch.tensor([3, 0], dtype=torch.int64)
+    batch_size, max_n, max_window_size, n = _get_emtas(n, 10)
+
+    scores = torch.rand(batch_size, vocab_size)
+    stop_words = torch.randint(0, vocab_size, (batch_size, 3), dtype=torch.int64)
+    _filter_repetition_ngram_(scores, stop_words, generated_ids, n, threshold, max_n, max_window_size)
+    assert not scores[1].isinf().any().item()
+    assert scores[0].isinf().sum().item() == vocab_size - 1
+
+    # test ids all 0
+    generated_ids = torch.tensor([
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    ])
+    n = torch.tensor([3], dtype=torch.int64)
+    threshold = torch.tensor([3], dtype=torch.int64)
+    batch_size, max_n, max_window_size, n = _get_emtas(n, 10)
+
+    scores = torch.rand(batch_size, vocab_size)
+    stop_words = torch.randint(0, vocab_size, (batch_size, 3), dtype=torch.int64)
+    _filter_repetition_ngram_(scores, stop_words, generated_ids, n, threshold, max_n, max_window_size)
+    assert scores[0].isinf().sum().item() == vocab_size - 1

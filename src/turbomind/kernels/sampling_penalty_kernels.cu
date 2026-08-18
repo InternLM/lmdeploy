@@ -118,6 +118,7 @@ void invokeBatchApplyTemperaturePenalty_v2(T*           logits,
     else {
         invoke(std::integral_constant<int, 1>{});
     }
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #define INSTANTIATE_INVOKE_BATCH_APPLY_TEMPERATURE_PENALTY_V2(T)                                                       \
@@ -187,11 +188,12 @@ void ApplyRepetitionPenalty(Tensor&               logits,
         if (smem_size > (48 << 10)) {
             TM_CHECK_EQ(cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size), 0);
         }
-        TM_LOG_ERROR("smem_size = %d", smem_size);
+        TM_LOG_DEBUG("smem_size = {}", smem_size);
         func<<<bsz, 1024, smem_size, stream>>>(
             logits.data<T>(), penalties.data(), token_ids_ptrs.data(), sequence_length.data(), vocab_size, mask_size);
     };
     invoke(float{});
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<typename T>
@@ -229,6 +231,7 @@ void invokeMinLengthPenalty(T*           logits,
     const dim3 grid((batch_size * end_ids_size + block.x - 1) / block.x);
     batchApplyMinLengthPenalty<<<block, grid, 0, stream>>>(
         logits, min_lengths, sequnece_lengths, vocab_size_padded, batch_size, end_ids, end_ids_size);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #define INSTANTIATE_INVOKE_MIN_LENGTH_PENALTY(T)                                                                       \

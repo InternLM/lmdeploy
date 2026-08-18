@@ -1,12 +1,20 @@
 import os
 import random
+import re
 import socket
 import subprocess
 import time
 from time import time as time_time
-from typing import Any, Dict
+from typing import Any
 
 import requests
+from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_multinode_env, resolve_hccl_if_ip
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_cli_common_param,
+    get_model_path_from_config,
+    resolve_extra_params,
+)
 
 # Default constants
 LM_DEPLOY_API_PORT = 8000
@@ -14,6 +22,12 @@ RAY_PORT = 6379
 HEALTH_CHECK_TIMEOUT = 30
 CONNECTION_CHECK_TIMEOUT = 5
 WORKER_WAIT_INTERVAL = 30
+
+
+def ascend_multinode_enabled() -> bool:
+    if int(os.getenv('NODE_COUNT', '1')) <= 1:
+        return False
+    return os.getenv('DEVICE', '') == 'ascend'
 
 
 def wait_for_model_service_ready(
@@ -98,6 +112,18 @@ def verify_service_functionality(host: str, api_port: int, model_name: str, chec
         return False
 
 
+def _ray_alive_node_count() -> int:
+    proc = subprocess.run(['ray', 'status'], capture_output=True, text=True, check=False)
+    out = f'{proc.stdout}\n{proc.stderr}'
+    node_ids = set(re.findall(r'node_[a-f0-9]+', out, flags=re.IGNORECASE))
+    if node_ids:
+        return len(node_ids)
+    match = re.search(r'(\d+)\s+node', out, flags=re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return 0
+
+
 class RayLMDeployManager:
 
     def __init__(
@@ -126,65 +152,94 @@ class RayLMDeployManager:
         self.node_count = int(os.getenv('NODE_COUNT', '1'))
         self.job_id = os.getenv('JOB_ID', 'unknown')
         print(f'🎯 Node {self.node_rank} cluster information:')
-        print(f'  - Total nodes: {self.node_count}')
-        print(f"  - Role: {'Master node' if self.is_master else 'Worker node'}")
-        print(f'  - Master address: {self.master_addr}')
-        print(f'  - Ray port: {self.ray_port}')
-        print(f'  - API port: {self.api_port}')
-        print(f'  - Job ID: {self.job_id}')
+        print(f'- Total nodes: {self.node_count}')
+        print(f"- Role: {'Master node' if self.is_master else 'Worker node'}")
+        print(f'- Master address: {self.master_addr}')
+        print(f'- Ray port: {self.ray_port}')
+        print(f'- API port: {self.api_port}')
+        print(f'- Job ID: {self.job_id}')
 
     def start_ray_cluster(self):
         """Start or join Ray cluster."""
+        local_ip = resolve_hccl_if_ip() if ascend_multinode_enabled() else None
+
         if self.is_master:
             cmd = ['ray', 'start', '--head', '--port', str(self.ray_port)]
-            print(f'🚀 Master node starting Ray cluster (Port: {self.ray_port})')
+            print(f'🚀 Master node starting Ray cluster (port: {self.ray_port})')
         else:
             cmd = ['ray', 'start', '--address', f'{self.master_addr}:{self.ray_port}']
             print(f'🔌 Worker node {self.node_rank} joining Ray cluster: {self.master_addr}:{self.ray_port}')
 
+        if local_ip:
+            cmd += ['--node-ip-address', local_ip]
+
+        ray_env = os.environ.copy()
         try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            subprocess.run(cmd, capture_output=True, text=True, check=True, env=ray_env)
             print('✅ Ray started successfully')
         except subprocess.CalledProcessError as e:
             print(f'💥 Ray startup failed: {e.stderr}')
             raise
 
-    def start_lmdeploy_api_server(self, model_path: str, model_param: dict):
+        if self.is_master and ascend_multinode_enabled():
+            self._wait_ray_cluster_nodes(self.node_count)
+
+    def _wait_ray_cluster_nodes(self, expected_nodes: int, timeout_seconds: int = 600) -> None:
+        print(f'⏳ Waiting for Ray cluster to reach {expected_nodes} node(s)...')
+        deadline = time_time() + timeout_seconds
+        while time_time() < deadline:
+            alive = _ray_alive_node_count()
+            if alive >= expected_nodes:
+                print(f'✅ Ray cluster ready ({alive} node(s))')
+                return
+            time.sleep(10)
+
+        raise RuntimeError(f'Ray cluster did not reach {expected_nodes} node(s) within {timeout_seconds}s')
+
+    def start_lmdeploy_api_server(self, config: dict[str, Any], run_config: dict[str, Any]) -> None:
         """
         Master node: Start LMDeploy API Server and wait for it to be ready.
         Worker nodes: Do not start the service, only verify that the master node's API Server is ready.
         """
+        # Derive model_path from config and run_config
+        model_path = get_model_path_from_config(config, run_config['model'])
+
+        extra_params = run_config.get('extra_params', {})
+        resolve_extra_params(extra_params, config)
+        ensure_ascend_multinode_env(config, run_config)
+
+        # Get model-name: use extra_params['model-name'] if specified, otherwise use case_name
+        case_name = get_case_str_by_config(run_config)
+        extra_params = run_config.get('extra_params', {})
+        model_name = case_name if extra_params.get('model-name', None) is None else extra_params.get('model-name')
+
         if self.is_master:
             # === Master node logic: Start service ===
             timestamp = time.strftime('%Y%m%d_%H%M%S')
-            log_path = os.path.join(self.log_dir, f'lmdeploy_api_{timestamp}.log')
-            tp = model_param.get('tp_num', 1)
-            backend = model_param.get('backend', 'turbomind')
-            communicator = model_param.get('communicator', 'nccl')
-            quant_policy = model_param.get('quant_policy', 0)
+            log_path = os.path.join(self.log_dir, f'log_{model_name}_{timestamp}.log')
 
-            with open(log_path, 'w') as log_file:
-                cmd = [
-                    'lmdeploy', 'serve', 'api_server', model_path, '--server-port',
-                    str(self.api_port), '--tp',
-                    str(tp), '--backend', backend
-                ]
+            cmd = [
+                'lmdeploy',
+                'serve',
+                'api_server',
+                model_path,
+                '--server-port',
+                str(self.api_port),
+                '--model-name',
+                model_name,
+            ] + get_cli_common_param(run_config).split()
 
-                if quant_policy != 0:
-                    cmd += ['--quant-policy', str(self.quant_policy)]
-
-                if backend == 'turbomind':
-                    cmd.extend(['--communicator', str(communicator)])
-
-                print(f"🚀 Master node starting LMDeploy API Server: {' '.join(cmd)}")
-                self._api_process = subprocess.Popen(cmd, stdout=log_file, stderr=log_file)
+            print(f"🚀 Master node starting LMDeploy API Server: {' '.join(cmd)}")
+            self._log_file = open(log_path, 'w')
+            env = build_ascend_multinode_env(config, run_config)
+            self._api_process = subprocess.Popen(cmd, stdout=self._log_file, stderr=self._log_file, env=env)
             print(f'📝 API Server log: {log_path}')
 
             # Wait for service to be ready
             if self.health_check:
                 ready = wait_for_model_service_ready(host=self.master_addr,
                                                      api_port=self.api_port,
-                                                     model_name=model_path,
+                                                     model_name=model_name,
                                                      timeout_seconds=1000)
                 if not ready:
                     print('❌ API Server failed to be ready, terminating process')
@@ -201,7 +256,7 @@ class RayLMDeployManager:
             if self.health_check:
                 ready = wait_for_model_service_ready(host=self.master_addr,
                                                      api_port=self.api_port,
-                                                     model_name=model_path,
+                                                     model_name=model_name,
                                                      timeout_seconds=1000)
                 if not ready:
                     raise RuntimeError(f'Worker node {self.node_rank}: Master node API Server not ready '
@@ -233,6 +288,8 @@ class RayLMDeployManager:
                 self._api_process.kill()
             print('✅ LMDeploy API Server stopped')
             # Note: We don't clear the _api_process attribute here so it can be checked later
+        if hasattr(self, '_log_file') and self._log_file and not self._log_file.closed:
+            self._log_file.close()
 
         # Stop Ray (only when force=True)
         if force:
@@ -243,7 +300,7 @@ class RayLMDeployManager:
                 print(f'⚠️ Ray stop exception: {e}')
             self._cleaned = True  # Only mark as "fully cleaned" when force=True
 
-    def get_cluster_info(self) -> Dict[str, Any]:
+    def get_cluster_info(self) -> dict[str, Any]:
         return {
             'node_rank': self.node_rank,
             'node_count': self.node_count,

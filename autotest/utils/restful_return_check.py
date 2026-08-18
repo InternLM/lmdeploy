@@ -1,5 +1,44 @@
 import re
 
+# Preprocess rejects oversize input with this OpenAI error substring.
+CONTEXT_LENGTH_ERROR = 'context length'
+
+
+def get_chat_message_text(choice):
+    msg = choice.get('message') or {}
+    texts = []
+    for key in ('reasoning_content', 'content'):
+        value = msg.get(key)
+        if isinstance(value, str):
+            texts.append(value)
+    return ''.join(texts)
+
+
+def get_chat_delta_text(choice):
+    delta = choice.get('delta') or {}
+    texts = []
+    for key in ('reasoning_content', 'content'):
+        value = delta.get(key)
+        if isinstance(value, str):
+            texts.append(value)
+    return ''.join(texts)
+
+
+def assert_chat_message_error(output, message_substr=CONTEXT_LENGTH_ERROR):
+    """Assert OpenAI preprocess/validation error envelope."""
+    assert output.get('object') == 'error'
+    assert output.get('type') == 'invalid_request_error'
+    assert output.get('code') == 400
+    assert message_substr.lower() in output.get('message').lower()
+
+
+def assert_chat_message_empty(choice):
+    assert not get_chat_message_text(choice)
+
+
+def assert_chat_delta_empty(choice):
+    assert not get_chat_delta_text(choice)
+
 
 def assert_chat_completions_batch_return(output, model_name, check_logprobs: bool = False, logprobs_num: int = 5):
     assert_usage(output.get('usage'))
@@ -11,8 +50,12 @@ def assert_chat_completions_batch_return(output, model_name, check_logprobs: boo
     for message in output_message:
         assert message.get('finish_reason') in ['stop', 'length']
         assert message.get('index') == 0
-        assert len(message.get('message').get('content')) > 0
-        assert message.get('message').get('role') == 'assistant'
+        msg = message.get('message') or {}
+        content = msg.get('content')
+        reasoning = msg.get('reasoning_content')
+        assert (isinstance(content, str) and len(content) > 0) or (
+            isinstance(reasoning, str) and len(reasoning) > 0)
+        assert msg.get('role') == 'assistant'
         if check_logprobs:
             len(message.get('logprobs').get('content')) == output.get('usage').get('completion_tokens')
             for logprob in message.get('logprobs').get('content'):
@@ -46,16 +89,16 @@ def assert_usage(usage):
 def assert_logprobs(logprobs, logprobs_num):
     assert_logprob_element(logprobs)
     assert len(logprobs.get('top_logprobs')) >= 0
-    assert type(logprobs.get('top_logprobs')) == list
+    assert type(logprobs.get('top_logprobs')) is list
     assert len(logprobs.get('top_logprobs')) <= logprobs_num
     for logprob_element in logprobs.get('top_logprobs'):
         assert_logprob_element(logprob_element)
 
 
 def assert_logprob_element(logprob):
-    assert len(logprob.get('token')) > 0 and type(logprob.get('token')) == str
-    assert len(logprob.get('bytes')) > 0 and type(logprob.get('bytes')) == list
-    assert type(logprob.get('logprob')) == float
+    assert len(logprob.get('token')) > 0 and type(logprob.get('token')) is str
+    assert len(logprob.get('bytes')) > 0 and type(logprob.get('bytes')) is list
+    assert type(logprob.get('logprob')) is float
 
 
 def assert_chat_completions_stream_return(output,
@@ -72,7 +115,8 @@ def assert_chat_completions_stream_return(output,
     for message in output_message:
         assert message.get('delta').get('role') == 'assistant'
         assert message.get('index') == 0
-        assert len(message.get('delta').get('content')) >= 0
+        delta = message.get('delta') or {}
+        assert isinstance(delta.get('content'), str) or isinstance(delta.get('reasoning_content'), str)
         if not is_last:
             assert message.get('finish_reason') is None
             if check_logprobs:
@@ -80,7 +124,10 @@ def assert_chat_completions_stream_return(output,
                 for content in message.get('logprobs').get('content'):
                     assert_logprobs(content, logprobs_num)
         if is_last is True:
-            assert len(message.get('delta').get('content')) == 0 or 'error' in message.get('delta').get('content')
+            content = delta.get('content')
+            reasoning = delta.get('reasoning_content')
+            assert content is None or len(content) == 0 or 'error' in content
+            assert reasoning is None or len(reasoning) == 0 or 'error' in reasoning
             assert message.get('finish_reason') in ['stop', 'length', 'error']
             if check_logprobs is True:
                 assert message.get('logprobs') is None
@@ -116,7 +163,7 @@ def assert_completions_stream_return(output,
 
 def has_repeated_fragment(text, repeat_count=5):
     pattern = r'(.+?)\1{' + str(repeat_count - 1) + ',}'
-    match = re.search(pattern, text)
+    match = re.search(pattern, text.replace('\n', ''))
     if match:
         repeated_fragment = match.group(1)
         start_pos = match.start()

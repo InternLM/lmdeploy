@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import warnings
-from typing import Dict, List
 
 import torch
 from transformers import AutoModelForCausalLM
@@ -28,21 +27,21 @@ class DeepSeekVisionModel(VisionModel):
 
     _arch = 'MultiModalityCausalLM'
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         check_deepseek_vl_install()
         from deepseek_vl.models import VLChatProcessor
-        vl_chat_processor = VLChatProcessor.from_pretrained(self.model_path)
+        vl_chat_processor = VLChatProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         tokenizer = vl_chat_processor.tokenizer
         self.image_token_id = tokenizer.vocab.get(vl_chat_processor.image_tag)
         self.image_processor = vl_chat_processor.image_processor
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights():
             warnings.simplefilter('ignore')
-            model = AutoModelForCausalLM.from_pretrained(self.model_path)
+            model = AutoModelForCausalLM.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
             self.vl_model = model
             if not self.with_llm:
                 del model.language_model
@@ -86,12 +85,11 @@ class DeepSeekVisionModel(VisionModel):
         self.vision_model = model.vision_model.eval()
         self.aligner = model.aligner.eval()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to the spec of `super.preprocess()"""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, _ in images:
-            image = image.convert('RGB')
+        for modality, image, _ in images:
             pixel_values = self.image_processor([image], return_tensors='pt').pixel_values
             outputs.append(
                 dict(
@@ -105,12 +103,12 @@ class DeepSeekVisionModel(VisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -132,8 +130,9 @@ class DeepSeekVisionModel(VisionModel):
         return messages
 
     @staticmethod
-    def proc_messages(messages, chat_template, sequence_start):
+    def proc_messages(messages, chat_template, tools=None, chat_template_kwargs=None):
         # apply chat template to get the prompt
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
@@ -161,13 +160,13 @@ class DeepSeekVisionModel(VisionModel):
                 else:
                     content = ''.join([f'{IMAGE_TOKEN} is Figure {str(i)}.\n' for i in range(n_image)]) + content
             prompt_messages.append(dict(role='user', content=content))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+        prompt = chat_template.messages2prompt(prompt_messages, tools=tools, **chat_template_kwargs)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_pytorch(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_turbomind(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer)

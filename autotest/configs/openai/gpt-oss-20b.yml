@@ -1,0 +1,19 @@
+# HF model id: openai/gpt-oss-20b
+
+h:
+- model_type: chat
+  engine_config:
+    tp: 2
+    extra:
+      model-format: mxfp4
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  test_coverage:
+  - benchmark
+  - func
+  - prefix_cache
+  gen_config:
+    reasoning-effort: high

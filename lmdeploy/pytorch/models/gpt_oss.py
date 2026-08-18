@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import functools
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Callable, Iterable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -10,12 +11,13 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, build_rotary_embedding_from_config
-from lmdeploy.pytorch.nn.linear import build_o_proj, build_qkv_proj, build_rowwise_linear
+from lmdeploy.pytorch.nn.linear import build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import get_build_model_context
 from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixinV1, build_embedding
 
 
 class GptOssAttention(nn.Module):
@@ -103,8 +105,8 @@ class GptOssAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """Rewrite of forward."""
@@ -159,7 +161,7 @@ class GateupAct:
         return (up + 1) * glu
 
     @staticmethod
-    @functools.lru_cache(maxsize=None)
+    @functools.cache
     def build(limit: float, alpha: float):
         return GateupAct(limit, alpha)
 
@@ -305,9 +307,9 @@ class GptOssDecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
         all_routed_experts: torch.Tensor = None,
     ):
@@ -338,11 +340,14 @@ class GptOssModel(nn.Module):
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         config.pad_token_id,
-                                         dtype=dtype,
-                                         device=device)
+
+        self.embed_tokens = build_embedding(
+            config.vocab_size,
+            config.hidden_size,
+            config.pad_token_id,
+            dtype=dtype,
+            device=device,
+        )
 
         # build all decode layers
         self.layers = nn.ModuleList([
@@ -359,10 +364,10 @@ class GptOssModel(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
         all_routed_experts: torch.Tensor = None,
     ):
         """Rewrite of forward."""
@@ -401,7 +406,7 @@ class GptOssModel(nn.Module):
         return self.embed_tokens
 
 
-class GptOssForCausalLM(nn.Module, CudaGraphMixin):
+class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -423,11 +428,7 @@ class GptOssForCausalLM(nn.Module, CudaGraphMixin):
         # build model
         self.model = GptOssModel(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
         # for router replay
         bm_ctx = get_build_model_context()
@@ -437,7 +438,7 @@ class GptOssForCausalLM(nn.Module, CudaGraphMixin):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
@@ -466,23 +467,14 @@ class GptOssForCausalLM(nn.Module, CudaGraphMixin):
             return hidden_states
         return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
 
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
-
-    def update_weights(self):
-        """Update weights."""
-        if self.config.tie_word_embeddings:
-            self.lm_head.weight = self.model.embed_tokens.weight
-
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -508,7 +500,7 @@ class GptOssForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
-    def _load_weight_experts_gate_up(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str,
+    def _load_weight_experts_gate_up(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str,
                                                                                                      nn.Parameter]):
         """Load weight of experts gate up."""
         num_experts = self.config.num_local_experts
@@ -526,7 +518,7 @@ class GptOssForCausalLM(nn.Module, CudaGraphMixin):
             load_weight(param, w1, expert_id=expert_id, shard_id='gate')
             load_weight(param, w3, expert_id=expert_id, shard_id='up')
 
-    def _load_weight_experts_down(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter]):
+    def _load_weight_experts_down(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter]):
         """Load weight of experts down."""
         num_experts = self.config.num_local_experts
 
@@ -541,7 +533,7 @@ class GptOssForCausalLM(nn.Module, CudaGraphMixin):
             w2 = loaded_weight[expert_id]
             load_weight(param, w2, expert_id=expert_id, shard_id='down')
 
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter]):
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter]):
         """Load weight of fused expert weights."""
         if 'gate_up' in name:
             self._load_weight_experts_gate_up(name, loaded_weight, params_dict)
@@ -549,7 +541,7 @@ class GptOssForCausalLM(nn.Module, CudaGraphMixin):
         elif 'down' in name:
             self._load_weight_experts_down(name, loaded_weight, params_dict)
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [

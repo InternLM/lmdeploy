@@ -1,0 +1,1062 @@
+import pytest
+from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS
+from utils.tool_reasoning_definitions import (
+    ALL_OPTIONAL_TOOL,
+    CALCULATOR_TOOL,
+    NESTED_PARAM_TOOL,
+    SEARCH_TOOL,
+    WEATHER_TOOL,
+    RoutedExpertsNotSupported,
+    assert_arguments_parseable,
+    assert_no_parser_drop,
+    assert_parallel_mixed_tools_isolated,
+    assert_parallel_weather_cities_isolated,
+    assert_tool_call_dict_fields,
+    assert_tool_call_fields,
+    build_messages_with_parallel_tool_responses,
+    build_messages_with_tool_response,
+    collect_stream_parallel_tool_calls,
+    collect_stream_tool_call,
+    validate_output_ids_match_usage,
+    validate_output_ids_present,
+    validate_routed_experts_length,
+    validate_stream_tool_call_result,
+    validate_stream_tool_call_with_tokens,
+)
+
+from .conftest import (
+    MESSAGES_ASKING_FOR_CALCULATION,
+    MESSAGES_ASKING_FOR_WEATHER,
+    MESSAGES_ASKING_FOR_WEATHER_CN,
+    MESSAGES_NO_TOOL_NEEDED,
+    MESSAGES_PARALLEL_MIXED,
+    MESSAGES_PARALLEL_WEATHER,
+    MULTI_TURN_WEATHER_CITIES,
+    _apply_marks,
+    _ToolCallTestBase,
+)
+
+# ===========================================================================
+# Model should pick the right tool from a multi-tool list
+# ===========================================================================
+
+
+@_apply_marks
+class TestToolCallMultipleTools(_ToolCallTestBase):
+    """Model should pick the right tool from a multi-tool list."""
+
+    def test_selects_weather_tool(self, backend, model_case):
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_ASKING_FOR_WEATHER,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL, SEARCH_TOOL, CALCULATOR_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected finish_reason tool_calls for weather prompt with multi-tool list; '
+            f'got finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}, '
+            f'finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert tc.function.name == 'get_current_weather'
+
+    def test_selects_calculator_tool(self, backend, model_case):
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_ASKING_FOR_CALCULATION,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL, SEARCH_TOOL, CALCULATOR_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected finish_reason tool_calls for math prompt with calculate in tool list; '
+            f'got finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}, '
+            f'finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert tc.function.name == 'calculate'
+        parsed = assert_arguments_parseable(tc.function.arguments)
+        assert 'expression' in parsed
+
+    def test_no_tool_when_not_needed(self, backend, model_case):
+        """Unrelated question + tool_choice=auto → prefer text."""
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_NO_TOOL_NEEDED,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL, SEARCH_TOOL],
+            tool_choice='auto',
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        assert choice.message.role == 'assistant'
+        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
+            for tc in choice.message.tool_calls:
+                assert_tool_call_fields(tc)
+        else:
+            assert choice.message.content is not None
+            assert len(choice.message.content) > 0
+
+    def test_large_number_of_tools(self, backend, model_case):
+        """Model should still pick the right tool among 10+ definitions."""
+        client, model_name = self._get_client()
+
+        tools = [WEATHER_TOOL]
+        for i in range(10):
+            tools.append({
+                'type': 'function',
+                'function': {
+                    'name': f'dummy_tool_{i}',
+                    'description': f'A dummy tool number {i} (does nothing).',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'input': {
+                                'type': 'string',
+                                'description': f'Input for dummy tool {i}',
+                            },
+                        },
+                        'required': ['input'],
+                    },
+                },
+            })
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_ASKING_FOR_WEATHER,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=tools,
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected finish_reason tool_calls for weather prompt among many dummy tools; '
+            f'got finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}, '
+            f'finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert_arguments_parseable(tc.function.arguments)
+        assert tc.function.name == 'get_current_weather', (f'Expected weather tool, got "{tc.function.name}"')
+
+
+# ===========================================================================
+# Parallel tool calls in a single response
+# ===========================================================================
+
+
+@_apply_marks
+class TestToolCallParallel(_ToolCallTestBase):
+    """Parallel tool calls in a single response."""
+
+    def test_parallel_same_tool(self, backend, model_case):
+        """Two cities → two weather tool calls."""
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_PARALLEL_WEATHER,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
+            logprobs=False,
+        )
+
+        tool_calls = response.choices[0].message.tool_calls
+
+        # Hard assertion: two cities asked → must get ≥ 2 tool calls
+        assert tool_calls is not None and len(tool_calls) >= 2, (f'Expected ≥2 parallel tool calls for two cities, '
+                                                                 f'got {len(tool_calls) if tool_calls else 0}')
+
+        parsed_list = []
+        for tc in tool_calls:
+            assert_tool_call_fields(tc)
+            assert tc.function.name == 'get_current_weather'
+            parsed = assert_arguments_parseable(tc.function.arguments)
+            assert 'city' in parsed and 'state' in parsed
+            parsed_list.append(parsed)
+        assert_parallel_weather_cities_isolated(parsed_list)
+
+        ids = [tc.id for tc in tool_calls]
+        assert len(set(ids)) == len(ids), (f'IDs should be unique, got {ids}')
+        assert response.choices[0].finish_reason == 'tool_calls'
+
+    def test_parallel_same_tool_streaming(self, backend, model_case):
+        """Streaming: parallel tool calls indexed correctly."""
+        client, model_name = self._get_client()
+
+        stream = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_PARALLEL_WEATHER,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
+            logprobs=False,
+            stream=True,
+        )
+
+        tc_data, fr_count = collect_stream_parallel_tool_calls(stream)
+        assert fr_count == 1
+
+        # Hard assertion: must receive ≥ 2 distinct tool call indices
+        assert len(tc_data) >= 2, (f'Expected ≥2 parallel streaming tool calls, '
+                                   f'got {len(tc_data)} indices: {list(tc_data.keys())}')
+
+        parsed_list = []
+        for idx, data in tc_data.items():
+            assert data['name'], (f'Index {idx}: missing function name')
+            assert data['name'] == 'get_current_weather', (
+                f'Index {idx}: expected get_current_weather, got {data["name"]!r}')
+            assert len(data['args_str']) > 0, (f'Index {idx}: missing arguments')
+            parsed = assert_arguments_parseable(data['args_str'])
+            assert 'city' in parsed and 'state' in parsed
+            parsed_list.append(parsed)
+        assert_parallel_weather_cities_isolated(parsed_list)
+
+    def test_parallel_mixed_tools(self, backend, model_case):
+        """Weather + calculator in one request."""
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_PARALLEL_MIXED,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL, CALCULATOR_TOOL],
+            logprobs=False,
+        )
+
+        tool_calls = response.choices[0].message.tool_calls
+
+        # Hard assertion: weather + calculation asked → ≥ 2 tool calls
+        assert tool_calls is not None and len(tool_calls) >= 2, (f'Expected ≥2 parallel tool calls (weather+calc), '
+                                                                 f'got {len(tool_calls) if tool_calls else 0}')
+
+        named_args = []
+        for tc in tool_calls:
+            assert_tool_call_fields(tc)
+            parsed = assert_arguments_parseable(tc.function.arguments)
+            named_args.append((tc.function.name, parsed))
+        assert_parallel_mixed_tools_isolated(named_args)
+
+        ids = [tc.id for tc in tool_calls]
+        assert len(set(ids)) == len(ids), (f'Tool call IDs should be unique, got {ids}')
+
+        names = {tc.function.name for tc in tool_calls}
+        assert len(names) >= 2, (f'Expected ≥2 distinct tool names, got {names}')
+        assert 'get_current_weather' in names, (f'Expected get_current_weather in tool calls, got {names}')
+        assert 'calculate' in names, (f'Expected calculate in tool calls, got {names}')
+
+    def test_parallel_mixed_tools_streaming(self, backend, model_case):
+        """Streaming: weather + calculator parallel tool calls indexed correctly."""
+        client, model_name = self._get_client()
+
+        stream = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_PARALLEL_MIXED,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL, CALCULATOR_TOOL],
+            logprobs=False,
+            stream=True,
+        )
+
+        tc_data, fr_count = collect_stream_parallel_tool_calls(stream)
+        assert fr_count == 1
+
+        assert len(tc_data) >= 2, (f'Expected ≥2 parallel streaming tool calls (weather+calc), '
+                                   f'got {len(tc_data)} indices: {list(tc_data.keys())}')
+
+        ids = []
+        names = set()
+        named_args = []
+        for idx, data in tc_data.items():
+            assert data['name'], (f'Index {idx}: missing function name')
+            assert len(data['args_str']) > 0, (f'Index {idx}: missing arguments')
+            assert_tool_call_dict_fields(data)
+            parsed = assert_arguments_parseable(data['args_str'])
+            named_args.append((data['name'], parsed))
+            ids.append(data['id'])
+            names.add(data['name'])
+
+        assert_parallel_mixed_tools_isolated(named_args)
+
+        assert len(set(ids)) == len(ids), (f'Tool call IDs should be unique, got {ids}')
+        assert len(names) >= 2, (f'Expected ≥2 distinct tool names, got {names}')
+        assert 'get_current_weather' in names, (f'Expected get_current_weather in tool calls, got {names}')
+        assert 'calculate' in names, (f'Expected calculate in tool calls, got {names}')
+
+
+# ===========================================================================
+# Feed tool results back; model should reply with text
+# ===========================================================================
+
+
+@_apply_marks
+class TestToolCallWithResults(_ToolCallTestBase):
+    """Feed tool results back; model should reply with text."""
+
+    def test_single_result(self, backend, model_case):
+        client, model_name = self._get_client()
+        messages = build_messages_with_tool_response()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL, SEARCH_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        assert choice.finish_reason in ('stop', 'length')
+        assert choice.message.role == 'assistant'
+        assert (choice.message.tool_calls is None or len(choice.message.tool_calls) == 0)
+        assert choice.message.content and len(choice.message.content) > 0
+        assert '98' in choice.message.content or 'Dallas' in choice.message.content
+
+    def test_multiple_results(self, backend, model_case):
+        """Feed two parallel tool results back at once."""
+        client, model_name = self._get_client()
+        messages = build_messages_with_parallel_tool_responses()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        assert choice.message.role == 'assistant'
+        assert choice.finish_reason in ('stop', 'length')
+        assert choice.message.content and len(choice.message.content) > 0
+
+        content = choice.message.content
+        has_dallas = 'Dallas' in content or '98' in content
+        has_sf = 'San Francisco' in content or '65' in content
+        assert has_dallas or has_sf
+
+
+# ===========================================================================
+# Multilingual tool calls (WEATHER_TOOL only; no WEATHER_TOOL_CN)
+# ===========================================================================
+
+
+@_apply_marks
+class TestToolCallMultilingual(_ToolCallTestBase):
+
+    def test_chinese_description(self, backend, model_case):
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_ASKING_FOR_WEATHER_CN,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        assert choice.message.role == 'assistant'
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for CN weather prompt; got finish_reason={choice.finish_reason!r}, '
+            f'content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert tc.function.name == 'get_current_weather'
+        parsed = assert_arguments_parseable(tc.function.arguments)
+        assert 'city' in parsed
+        assert isinstance(parsed['city'], str) and len(parsed['city']) > 0
+
+    def test_chinese_description_streaming(self, backend, model_case):
+        client, model_name = self._get_client()
+
+        stream = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_ASKING_FOR_WEATHER_CN,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
+            logprobs=False,
+            stream=True,
+        )
+
+        r = collect_stream_tool_call(stream)
+        validate_stream_tool_call_result(
+            r,
+            expected_function_name='get_current_weather',
+            **self._parser_validation_kwargs([WEATHER_TOOL]),
+        )
+        parsed = assert_arguments_parseable(r['args_str'])
+        assert 'city' in parsed
+        assert isinstance(parsed['city'], str) and len(parsed['city']) > 0
+
+    def test_mixed_language_tools(self, backend, model_case):
+        """Chinese user prompt with English tool definitions."""
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_ASKING_FOR_WEATHER_CN,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL, SEARCH_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        assert choice.message.role == 'assistant'
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for CN weather with mixed tool defs; '
+            f'got finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        names = {tc.function.name for tc in tool_calls}
+        assert 'get_current_weather' in names, (
+            f'Expected get_current_weather for Beijing weather question; got {names}')
+        for tc in tool_calls:
+            assert_tool_call_fields(tc)
+            assert_arguments_parseable(tc.function.arguments)
+
+    def test_unicode_arguments(self, backend, model_case):
+        """Chinese query → tool arguments with Unicode chars."""
+        client, model_name = self._get_client()
+
+        messages = [
+            {
+                'role': 'system',
+                'content': 'You are a helpful assistant. Use the search tool.'
+            },
+            {
+                'role': 'user',
+                'content': '请搜索一下"人工智能最新进展"'
+            },
+        ]
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[SEARCH_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for search prompt; got finish_reason={choice.finish_reason!r}, '
+            f'content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert tc.function.name == 'web_search'
+        parsed = assert_arguments_parseable(tc.function.arguments)
+        assert 'query' in parsed
+        assert isinstance(parsed['query'], str) and len(parsed['query']) > 0
+
+
+# ===========================================================================
+# Nested objects, arrays, enum constraints, all-optional params
+# ===========================================================================
+
+
+@_apply_marks
+class TestToolCallComplexParams(_ToolCallTestBase):
+    """Nested objects, arrays, enum constraints, all-optional params."""
+
+    def test_nested_object_parameters(self, backend, model_case):
+        client, model_name = self._get_client()
+
+        messages = [
+            {
+                'role': 'system',
+                'content': 'You are a helpful assistant. Use the create_event '
+                'tool when asked to schedule events.'
+            },
+            {
+                'role':
+                'user',
+                'content':
+                'Schedule a team meeting titled "Sprint Review" at '
+                'the Conference Room in New York with attendees '
+                'alice@example.com and bob@example.com, high priority.'
+            },
+        ]
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[NESTED_PARAM_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
+            tc = choice.message.tool_calls[0]
+            assert_tool_call_fields(tc)
+            assert tc.function.name == 'create_event'
+
+            parsed = assert_arguments_parseable(tc.function.arguments)
+            assert 'title' in parsed
+
+            if 'location' in parsed:
+                assert isinstance(parsed['location'], dict)
+            if 'attendees' in parsed:
+                assert isinstance(parsed['attendees'], list)
+            if 'priority' in parsed:
+                assert parsed['priority'] in ('low', 'medium', 'high')
+
+    def test_all_optional_parameters(self, backend, model_case):
+        client, model_name = self._get_client()
+
+        messages = [
+            {
+                'role': 'system',
+                'content': 'You are a logging assistant. '
+                'Use the log_message tool to log messages.'
+            },
+            {
+                'role': 'user',
+                'content': 'Log an info message saying '
+                '"System started successfully".'
+            },
+        ]
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[ALL_OPTIONAL_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
+            tc = choice.message.tool_calls[0]
+            assert_tool_call_fields(tc)
+            parsed = assert_arguments_parseable(tc.function.arguments)
+
+            if 'message' in parsed:
+                assert isinstance(parsed['message'], str)
+            if 'level' in parsed:
+                assert parsed['level'] in ('debug', 'info', 'warning', 'error')
+
+
+# ===========================================================================
+# Validate response-level fields when tool calls are returned
+# ===========================================================================
+
+
+@_apply_marks
+class TestToolCallResponseValidation(_ToolCallTestBase):
+    """Validate response-level fields when tool calls are returned."""
+
+    def test_content_null_when_tool_calls_present(self, backend, model_case):
+        """Per OpenAI spec, content should be null or empty when tool_calls
+        exist."""
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_ASKING_FOR_WEATHER,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
+            tool_choice={
+                'type': 'function',
+                'function': {
+                    'name': 'get_current_weather'
+                },
+            },
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        assert choice.message.tool_calls is not None
+        assert len(choice.message.tool_calls) >= 1
+
+        # Per OpenAI spec: content should be null or empty when tool_calls
+        # are present.
+        if choice.message.content is not None:
+            assert choice.message.content.strip() == '', (f'content should be null/empty when tool_calls are '
+                                                          f'present, got: {choice.message.content!r}')
+
+    def test_usage_field_present(self, backend, model_case):
+        """usage.prompt_tokens / completion_tokens / total_tokens."""
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_ASKING_FOR_WEATHER,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
+            logprobs=False,
+        )
+
+        assert response.usage is not None
+        assert response.usage.prompt_tokens > 0
+        assert response.usage.total_tokens > 0
+
+        choice = response.choices[0]
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for weather prompt when checking usage; '
+            f'got finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        assert response.usage.completion_tokens > 0
+        assert response.usage.total_tokens == (response.usage.prompt_tokens + response.usage.completion_tokens)
+
+    def test_model_and_metadata_fields(self, backend, model_case):
+        """Response must contain model, id, and created."""
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_ASKING_FOR_WEATHER,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
+            logprobs=False,
+        )
+
+        assert response.model is not None
+        assert isinstance(response.model, str) and len(response.model) > 0
+        assert response.id is not None
+        assert response.created is not None
+
+    def test_choices_structure(self, backend, model_case):
+        """choices[0].index should be 0."""
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_ASKING_FOR_WEATHER,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
+            logprobs=False,
+            n=1,
+        )
+
+        assert len(response.choices) >= 1
+        assert response.choices[0].index == 0
+
+
+# ===========================================================================
+# return_token_ids + routed_experts
+# ===========================================================================
+
+
+@_apply_marks
+@pytest.mark.experts
+class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
+    """Streaming tool calls with return_token_ids and routed_experts
+    validation.
+
+    Marked ``experts`` so proxy interface runs can exclude these (large
+    output_ids / routed_experts payloads).
+    """
+
+    def test_streaming_return_token_ids(self, backend, model_case):
+        """return_token_ids=True must yield one output_ids entry per completion
+        token."""
+        r = self._stream_tool_call_with_tokens(
+            MESSAGES_ASKING_FOR_WEATHER,
+            tools=[WEATHER_TOOL],
+        )
+        validate_stream_tool_call_result(
+            r,
+            expected_function_name=WEATHER_TOOL['function']['name'],
+            **self._parser_validation_kwargs([WEATHER_TOOL]),
+        )
+        assert r['stream_complete'], 'stream ended before data: [DONE]'
+        validate_output_ids_present(r)
+        validate_output_ids_match_usage(r)
+
+    def test_streaming_routed_experts_length(self, backend, model_case):
+        """routed_experts length must equal prompt_tokens + len(output_ids) - 1."""
+        r = self._stream_tool_call_with_tokens(
+            MESSAGES_ASKING_FOR_WEATHER,
+            tools=[WEATHER_TOOL],
+        )
+        validate_stream_tool_call_result(
+            r,
+            expected_function_name=WEATHER_TOOL['function']['name'],
+            **self._parser_validation_kwargs([WEATHER_TOOL]),
+        )
+        assert r['stream_complete']
+        validate_output_ids_present(r)
+        validate_output_ids_match_usage(r)
+        try:
+            validate_routed_experts_length(r)
+        except RoutedExpertsNotSupported as exc:
+            pytest.skip(str(exc))
+
+    def test_streaming_routed_experts_max_tokens_cap_followup(self, backend, model_case):
+        """Hit DEFAULT max_completion_tokens with routed_experts; no overshoot;
+        follow-up OK.
+
+        Does not require a tool call — forces length finish via ignore_eos so experts length stays correct when
+        completion hits the default cap (8192).
+        """
+        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
+        overshoot_slack = 1
+        messages = [
+            {
+                'role': 'user',
+                'content': 'Continue writing forever without stopping.',
+            },
+        ]
+        r = self._stream_tool_call_with_tokens(
+            messages,
+            tools=None,
+            ignore_eos=True,
+            max_completion_tokens=max_tokens,
+        )
+        assert r['stream_complete'], 'stream ended before data: [DONE]'
+        assert r['finish_reason'] == 'length', (
+            f'Expected finish_reason length, got {r["finish_reason"]!r}')
+        validate_output_ids_present(r)
+        validate_output_ids_match_usage(r)
+        try:
+            validate_routed_experts_length(r)
+        except RoutedExpertsNotSupported as exc:
+            pytest.skip(str(exc))
+
+        completion_tokens = r.get('completion_tokens') or len(r['output_ids'])
+        assert completion_tokens <= max_tokens + overshoot_slack, (
+            f'Length cap overshoot: completion_tokens={completion_tokens} > '
+            f'max_tokens={max_tokens}+{overshoot_slack}')
+
+        followup = self._stream_tool_call_with_tokens(
+            [
+                {
+                    'role': 'user',
+                    'content': 'Say hi in one word.',
+                },
+            ],
+            tools=None,
+            max_completion_tokens=8,
+        )
+        assert followup['stream_complete'], 'follow-up stream ended before data: [DONE]'
+        validate_output_ids_present(followup)
+        try:
+            validate_routed_experts_length(followup)
+        except RoutedExpertsNotSupported as exc:
+            pytest.skip(str(exc))
+
+    def test_streaming_tool_call_with_tokens_full_validation(self, backend, model_case):
+        """Single-turn: tool call + output_ids + routed_experts + parser checks."""
+        r = self._stream_tool_call_with_tokens(
+            MESSAGES_ASKING_FOR_WEATHER,
+            tools=[WEATHER_TOOL, SEARCH_TOOL],
+        )
+        try:
+            validate_stream_tool_call_with_tokens(
+                r,
+                expected_function_name=WEATHER_TOOL['function']['name'],
+                **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
+            )
+        except RoutedExpertsNotSupported as exc:
+            pytest.skip(str(exc))
+
+
+# ===========================================================================
+# Multi-turn streaming
+# ===========================================================================
+
+
+@_apply_marks
+class TestToolCallMultiTurnStreaming(_ToolCallTestBase):
+    """Multi-turn user → tool_call → tool_result loop over streaming API."""
+
+    def test_multi_turn_streaming_tool_loop(self, backend, model_case):
+        """Three turns: each user question must yield a valid streamed tool call."""
+        messages = [
+            {
+                'role': 'system',
+                'content': 'You are a helpful assistant that can use tools. '
+                'When asked about weather, use the get_current_weather tool.',
+            },
+        ]
+        num_turns = 3
+
+        for turn in range(num_turns):
+            city = MULTI_TURN_WEATHER_CITIES[turn % len(MULTI_TURN_WEATHER_CITIES)]
+            messages.append({
+                'role': 'user',
+                'content': f'What is the weather in {city}?',
+            })
+            r = self._stream_tool_call(messages, tools=[WEATHER_TOOL])
+            validate_stream_tool_call_result(
+                r,
+                expected_function_name=WEATHER_TOOL['function']['name'],
+                **self._parser_validation_kwargs([WEATHER_TOOL]),
+            )
+            parsed = assert_arguments_parseable(r['args_str'])
+            assert isinstance(parsed['city'], str) and len(parsed['city']) > 0
+            self._append_assistant_and_tool_messages(messages, r)
+
+        assert len(messages) == 1 + num_turns * 3, (
+            f'Expected system + {num_turns}×(user+assistant+tool) messages')
+
+    @pytest.mark.experts
+    def test_multi_turn_streaming_with_token_ids_and_experts(self, backend, model_case):
+        """Multi-turn loop with per-turn output_ids and routed_experts
+        checks."""
+        messages = [
+            {
+                'role': 'system',
+                'content': 'You are a helpful assistant that can use tools. '
+                'When asked about weather, use the get_current_weather tool.',
+            },
+        ]
+        num_turns = 3
+
+        for turn in range(num_turns):
+            city = MULTI_TURN_WEATHER_CITIES[turn % len(MULTI_TURN_WEATHER_CITIES)]
+            messages.append({
+                'role': 'user',
+                'content': f'What is the weather in {city}?',
+            })
+            try:
+                r = self._stream_tool_call_with_tokens(messages, tools=[WEATHER_TOOL])
+                prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
+                validate_stream_tool_call_with_tokens(
+                    r,
+                    prompt_tokens=prompt_tokens,
+                    expected_function_name=WEATHER_TOOL['function']['name'],
+                    **self._parser_validation_kwargs([WEATHER_TOOL]),
+                )
+            except RoutedExpertsNotSupported as exc:
+                pytest.skip(f'turn {turn + 1}: {exc}')
+            self._append_assistant_and_tool_messages(messages, r)
+
+
+# ===========================================================================
+# Edge cases and robustness tests
+# ===========================================================================
+
+
+@_apply_marks
+class TestToolCallEdgeCases(_ToolCallTestBase):
+    """Edge cases and robustness tests."""
+
+    def test_empty_tools_list(self, backend, model_case):
+        """Empty tools list should behave like no tools."""
+        from openai import BadRequestError
+        client, model_name = self._get_client()
+
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=MESSAGES_NO_TOOL_NEEDED,
+                temperature=0,
+                max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+                tools=[],
+                logprobs=False,
+            )
+        except BadRequestError:
+            pytest.skip('Backend rejects empty tools list')
+
+        choice = response.choices[0]
+        assert choice.message.role == 'assistant'
+        assert choice.message.content is not None
+        assert (choice.message.tool_calls is None or len(choice.message.tool_calls) == 0)
+
+    def test_tool_call_with_max_tokens(self, backend, model_case):
+        """With sufficient max_tokens, tool call structure must be valid."""
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_ASKING_FOR_WEATHER,
+            temperature=0,
+            max_completion_tokens=500,
+            tools=[WEATHER_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        assert choice.message.role == 'assistant'
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for weather prompt; got finish_reason={choice.finish_reason!r}, '
+            f'content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert_arguments_parseable(tc.function.arguments)
+
+    def test_tool_call_id_format(self, backend, model_case):
+        """ID should be a non-empty string with no leading/trailing spaces."""
+        client, model_name = self._get_client()
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=MESSAGES_ASKING_FOR_WEATHER,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for weather prompt; got finish_reason={choice.finish_reason!r}, '
+            f'content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        tc = tool_calls[0]
+        assert isinstance(tc.id, str)
+        assert len(tc.id) >= 1
+        assert tc.id.strip() == tc.id
+
+    def test_multi_turn_conversation(self, backend, model_case):
+        """Tool call → result → follow-up question → possible second call."""
+        client, model_name = self._get_client()
+
+        messages = build_messages_with_tool_response()
+        messages.append({
+            'role': 'user',
+            'content': 'Now search the web for how to stay cool in hot weather.',
+        })
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[WEATHER_TOOL, SEARCH_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        assert choice.message.role == 'assistant'
+        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
+            tc = choice.message.tool_calls[0]
+            assert_tool_call_fields(tc)
+            if tc.function.name == 'web_search':
+                parsed = assert_arguments_parseable(tc.function.arguments)
+                assert 'query' in parsed
+        else:
+            assert choice.message.content and len(choice.message.content) > 0
+
+    def test_multi_turn_conversation_streaming(self, backend, model_case):
+        """Streaming follow-up after tool result must not drop parser
+        output."""
+        messages = build_messages_with_tool_response()
+        messages.append({
+            'role': 'user',
+            'content': 'Now search the web for how to stay cool in hot weather.',
+        })
+
+        r = self._stream_tool_call(
+            messages,
+            tools=[WEATHER_TOOL, SEARCH_TOOL],
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+        )
+        assert r['finish_reason'] in ('stop', 'length', 'tool_calls')
+        if r['finish_reason'] == 'tool_calls':
+            validate_stream_tool_call_result(
+                r,
+                expected_function_name=None,
+                **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
+            )
+            if r['function_name'] == 'web_search':
+                parsed = assert_arguments_parseable(r['args_str'])
+                assert 'query' in parsed
+        else:
+            assert len(r['content'].strip()) > 0
+            assert_no_parser_drop(
+                r['raw_text'],
+                r['tool_calls'],
+                r['decoded_str'],
+                **self._parser_validation_kwargs([SEARCH_TOOL]),
+            )
+
+    def test_special_characters_in_query(self, backend, model_case):
+        """Quotes, angle brackets, Unicode → JSON args still parseable."""
+        client, model_name = self._get_client()
+
+        messages = [
+            {
+                'role': 'system',
+                'content': 'You are a helpful assistant that can use tools.'
+            },
+            {
+                'role':
+                'user',
+                'content':
+                'Search for "what\'s the latest on AI & ML?" '
+                '(include results with special chars: <>, "quotes", '
+                'and unicode: café, naïve, résumé)'
+            },
+        ]
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0,
+            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            tools=[SEARCH_TOOL],
+            logprobs=False,
+        )
+
+        choice = response.choices[0]
+        assert choice.message.role == 'assistant'
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for search prompt with special chars; '
+            f'got finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert tc.function.name == 'web_search'
+        parsed = assert_arguments_parseable(tc.function.arguments)
+        assert 'query' in parsed
+        assert isinstance(parsed['query'], str) and len(parsed['query']) > 0

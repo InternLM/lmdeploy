@@ -1,6 +1,5 @@
 import os
 import subprocess
-from typing import Dict, List
 
 import fire
 import yaml
@@ -48,9 +47,9 @@ def benchmark(model_path, backend, engine_config, data_config):
     tp = engine_config.get('tp', 1)
     output_file = f'benchmark_pipeline_{model_name}_{backend}_bs{bs}_tp{tp}_cache{cach_ratio}.csv'
     try:
-        if isinstance(data_config, Dict):
+        if isinstance(data_config, dict):
             data_config = [data_config]
-        assert isinstance(data_config, List) and all(isinstance(d, Dict) for d in data_config)
+        assert isinstance(data_config, list) and all(isinstance(d, dict) for d in data_config)
         for _data_config in data_config:
             _data_config['csv'] = output_file
             cmd = get_cmd(model_path, backend, engine_config, _data_config)
@@ -61,13 +60,13 @@ def benchmark(model_path, backend, engine_config, data_config):
 
 
 def main(model_path=None, backend=None, config_path=None):
-    with open(config_path, 'r') as f:
+    with open(config_path) as f:
         config = yaml.safe_load(f)
         engine_configs = config['engine']
         data_config = config['data']
-        if isinstance(engine_configs, Dict):
+        if isinstance(engine_configs, dict):
             engine_configs = [engine_configs]
-        assert isinstance(engine_configs, List) and all(isinstance(s, Dict) for s in engine_configs)
+        assert isinstance(engine_configs, list) and all(isinstance(s, dict) for s in engine_configs)
         for engine_config in engine_configs:
             # The model_path provided by the user will override the model_path in the config file.
             model_path = model_path or engine_config.pop('model_path')

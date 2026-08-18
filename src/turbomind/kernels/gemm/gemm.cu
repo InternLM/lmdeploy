@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/kernels/gemm/context.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/dispatch_cache.h"
@@ -11,6 +12,7 @@
 #include "src/turbomind/kernels/gemm/tuner/sampler.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include <algorithm>
+#include <iostream>
 #include <iterator>
 #include <memory>
 #include <numeric>
@@ -193,6 +195,15 @@ struct Gemm::Impl {
 
         specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
 
+        if (std::getenv("TM_GEMM_TUNE_VERBOSE")) {
+            for (const auto& s : specs) {
+                std::cout << "[tune] " << to_string(ctx.desc()) << " " << s.kernel->name()  //
+                          << " swizzle=" << s.swizzle                                       //
+                          << " splits=" << s.splits                                         //
+                          << " measured=" << s.measured << "\n";
+            }
+        }
+
         // for (const auto& s : specs) {
         //     std::cout << s.kernel->name()          //
         //               << " swizzle=" << s.swizzle  //
@@ -258,6 +269,8 @@ int Gemm::Run(const Operation&    operation,
               const MatrixLayout& Cdesc,
               void*               D,
               const MatrixLayout& Ddesc,
+              void*               W,
+              const MatrixLayout& Wdesc,
               const Workspace&    workspace,
               cudaStream_t        stream)
 {
@@ -267,8 +280,7 @@ int Gemm::Run(const Operation&    operation,
     const auto desc = context.Init(operation, Adesc, Udesc, Bdesc, Vdesc, Cdesc, Ddesc);
 
     if (!desc) {
-        fprintf(stderr, "invalid argument.\n");
-        TM_CHECK(0);
+        TM_LOG_FATAL("invalid argument");
         return -1;
     }
 
@@ -289,6 +301,8 @@ int Gemm::Run(const Operation&    operation,
                                    Cdesc,
                                    D,
                                    Ddesc,
+                                   W,
+                                   Wdesc,
                                    spec.swizzle,
                                    spec.splits,
                                    _workspace,
@@ -324,7 +338,7 @@ int Gemm::Run(const Operation&    operation,
         return launch(spec, stream);
     }
 
-    TM_CHECK(0) << "No feasible kernel found for the problem: " << to_string(context.desc());
+    TM_LOG_FATAL("No feasible kernel found for the problem: {}", to_string(context.desc()));
 
     return -1;
 }

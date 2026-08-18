@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -98,7 +97,7 @@ class DistServeEngineConfig(BaseModel):
     tp_size: int
     ep_size: int
     dp_size: int
-    pp_size: Optional[int]
+    pp_size: int | None
 
     # Rank of DP
     dp_rank: int

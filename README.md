@@ -26,6 +26,8 @@ ______________________________________________________________________
 <details open>
 <summary><b>2026</b></summary>
 
+- \[2026/04\] PyPI has expanded the storage quota for LMDeploy and wheel uploads have resumed. `v0.12.3` is now available on PyPI, so you can install it directly via `pip install lmdeploy`.
+- \[2026/02\] Support [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35)
 - \[2026/02\] Support [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) 4bit symmetric/asymmetric quantization. Refer [here](./docs/en/quantization/llm_compressor.md) for detailed guide
 
 </details>
@@ -50,7 +52,7 @@ ______________________________________________________________________
 - \[2024/09\] LMDeploy PyTorchEngine achieves 1.3x faster on Llama3-8B inference by introducing CUDA graph
 - \[2024/08\] LMDeploy is integrated into [modelscope/swift](https://github.com/modelscope/swift) as the default accelerator for VLMs inference
 - \[2024/07\] Support Llama3.1 8B, 70B and its TOOLS CALLING
-- \[2024/07\] Support [InternVL2](docs/en/multi_modal/internvl.md) full-series models, [InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md) and [function call](docs/en/llm/api_server_tools.md) of InternLM2.5
+- \[2024/07\] Support [InternVL2](docs/en/multi_modal/internvl.md) full-series models, InternLM-XComposer2.5 and [function call](docs/en/llm/api_server_tools.md) of InternLM2.5
 - \[2024/06\] PyTorch engine support DeepSeek-V2 and several VLMs, such as CogVLM2, Mini-InternVL, LlaVA-Next
 - \[2024/05\] Balance vision model when deploying VLMs with multiple GPUs
 - \[2024/05\] Support 4-bits weight-only quantization and inference on VLMs, such as InternVL v1.5, LLaVa, InternLMXComposer2
@@ -126,11 +128,9 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Llama3 (8B, 70B)</li>
   <li>Llama3.1 (8B, 70B)</li>
   <li>Llama3.2 (1B, 3B)</li>
-  <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
   <li>InternLM3 (8B)</li>
   <li>InternLM2.5 (7B)</li>
-  <li>Qwen (1.8B - 72B)</li>
   <li>Qwen1.5 (0.5B - 110B)</li>
   <li>Qwen1.5 - MoE (0.5B - 72B)</li>
   <li>Qwen2 (0.5B - 72B)</li>
@@ -138,8 +138,6 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Qwen2.5 (0.5B - 32B)</li>
   <li>Qwen3, Qwen3-MoE</li>
   <li>Qwen3-Next(80B)</li>
-  <li>Baichuan (7B)</li>
-  <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
   <li>ChatGLM2 (6B)</li>
   <li>GLM-4 (9B)</li>
@@ -152,9 +150,10 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>DeepSeek-V2.5 (236B)</li>
   <li>DeepSeek-V3 (685B)</li>
   <li>DeepSeek-V3.2 (685B)</li>
+  <li>DeepSeek-V4 (284B, 1.6T)</li>
+  <li>Hy3 (295B-A21B)</li>
   <li>Mixtral (8x7B, 8x22B)</li>
   <li>Gemma (2B - 7B)</li>
-  <li>StarCoder2 (3B - 15B)</li>
   <li>Phi-3-mini (3.8B)</li>
   <li>Phi-3.5-mini (3.8B)</li>
   <li>Phi-3.5-MoE (16x3.8B)</li>
@@ -162,17 +161,19 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>MiniCPM3 (4B)</li>
   <li>SDAR (1.7B-30B)</li>
   <li>gpt-oss (20B, 120B)</li>
+  <li>GLM-4.7-Flash (30B)</li>
+  <li>GLM-5 (754B)</li>
+  <li>GLM-5.2 (754B)</li>
 </ul>
 </td>
 <td>
 <ul>
   <li>LLaVA(1.5,1.6) (7B-34B)</li>
-  <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
-  <li>InternLM-XComposer2.5 (7B)</li>
-  <li>Qwen-VL (7B)</li>
   <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>Qwen2.5-VL (3B, 7B, 72B)</li>
   <li>Qwen3-VL (2B - 235B)</li>
+  <li>Qwen3.5 (0.8B - 397B)</li>
+  <li>Qwen3-Omni (30B-A3B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
@@ -183,7 +184,8 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Intern-S1 (241B)</li>
   <li>Intern-S1-mini (8.3B)</li>
   <li>Intern-S1-Pro (1TB)</li>
-  <li>Mono-InternVL (2B)</li>
+  <li>Intern-S2-Preview (35B-A3B, 397B)</li>
+  <li>Intern-S2-Mobius (35B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
@@ -193,7 +195,6 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
   <li>GLM-4.1V-Thinking (9B)</li>
-  <li>Llama3.2-vision (11B, 90B)</li>
   <li>Molmo (7B-D,72B)</li>
   <li>Gemma3 (1B - 27B)</li>
   <li>Llama4 (Scout, Maverick)</li>
@@ -214,22 +215,12 @@ They differ in the types of supported models and the inference data type. Please
 It is recommended installing lmdeploy using pip in a conda environment (python 3.10 - 3.13):
 
 ```shell
-conda create -n lmdeploy python=3.10 -y
+conda create -n lmdeploy python=3.12 -y
 conda activate lmdeploy
 pip install lmdeploy
 ```
 
-The default prebuilt package is compiled on **CUDA 12** since v0.3.0.
-
-For the GeForce RTX 50 series, please install the LMDeploy prebuilt package complied with **CUDA 12.8**
-
-```shell
-export LMDEPLOY_VERSION=0.12.0
-export PYTHON_VERSION=310
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
-```
-
-For more information on installing on CUDA 11+ platform, or for instructions on building from source, please refer to the [installation guide](docs/en/get_started/installation.md).
+Starting from **v0.13.0**, the default prebuilt wheels published on **PyPI** are built against **CUDA 12.8**, so `pip install lmdeploy` is sufficient for typical setups including GeForce RTX 50 series.
 
 ## Offline Batch Inference
 

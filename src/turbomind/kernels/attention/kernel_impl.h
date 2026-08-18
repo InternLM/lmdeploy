@@ -1,0 +1,95 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
+#pragma once
+
+#include <type_traits>
+
+#include "src/turbomind/core/check.h"
+#include "src/turbomind/core/data_type.h"
+#include "src/turbomind/kernels/attention/attention_template.h"
+#include "src/turbomind/kernels/attention/cta_map.h"
+#include "src/turbomind/kernels/attention/decoding_template.h"
+#include "src/turbomind/kernels/attention/kernel.h"
+#include "src/turbomind/kernels/core/common.h"
+
+namespace turbomind::attention {
+
+template<class Tkv>
+constexpr int kv_quant_from_type()
+{
+    if constexpr (std::is_same_v<Tkv, uint8_t>) {
+        return 8;
+    }
+    else if constexpr (std::is_same_v<Tkv, uint4_t>) {
+        return 4;
+    }
+    else {
+        return 0;
+    }
+}
+
+template<class K>
+class KernelImpl: public Kernel {
+    static constexpr bool kIsDecoding = std::is_same_v<typename K::CtaMap, DecodingCtaMap>;
+
+public:
+    KernelImpl()
+    {
+        desc_.mode      = kIsDecoding ? AttnDesc::kDecoding : AttnDesc::kPrefill;
+        desc_.arch      = K::Arch::value;
+        desc_.head_dim  = K::kHeadDim;
+        desc_.data_type = data_type_v<typename K::T>;
+        desc_.causal    = K::kCausal;
+
+        if constexpr (kIsDecoding) {
+            desc_.kv_quant = kv_quant_from_type<typename K::Tkv>();
+            desc_.qh       = K::CTA_H;
+            desc_.causal   = true;
+        }
+        else {
+            desc_.kv_quant = 0;
+            desc_.qh       = 1;
+        }
+
+        auto func               = &attention_kernel<K>;
+        info_.dynamic_smem_size = sizeof(typename K::SharedStorage);
+        info_.num_warps         = K::kWarpCount;
+        info_.name              = to_string(desc_);
+
+        // cudaErrorInvalidDeviceFunction here means `func` is not registered
+        // with the CUDA runtime — almost always a link issue where the per-arch
+        // kernel's .obj got stripped (e.g. whole-archive missing on Windows).
+        // Fail loud with the kernel name instead of letting it surface later
+        // as an opaque "invalid argument" at kernel launch.
+        TM_CHECK(cudaFuncGetAttributes(&info_.attr, func) == cudaSuccess)
+            << "cudaFuncGetAttributes failed for attention kernel '" << info_.name
+            << "'; the kernel is not registered with the CUDA runtime ";
+
+        // Opt-in for >48KB dynamic smem.  May legitimately fail when the
+        // kernel exceeds the device's per-block optin; Registry::Add will
+        // filter such kernels out later.  Swallow any sticky error so it
+        // doesn't poison subsequent CUDA calls.
+        if (info_.dynamic_smem_size > (48 << 10)) {
+            cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, info_.dynamic_smem_size);
+            (void)cudaGetLastError();
+        }
+
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+            &info_.max_active_ctas, func, info_.num_warps * WARP_SIZE, info_.dynamic_smem_size);
+        (void)cudaGetLastError();
+    }
+
+    bool Launch(const void* params, int sm_count) const override
+    {
+        const auto& p = *static_cast<const typename K::ParamType*>(params);
+        if constexpr (kIsDecoding) {
+            return invokeDecoding<K>(p, sm_count, info_.max_active_ctas);
+        }
+        else {
+            invokeAttention<K>(p, sm_count, info_.max_active_ctas);
+            return true;
+        }
+    }
+};
+
+}  // namespace turbomind::attention

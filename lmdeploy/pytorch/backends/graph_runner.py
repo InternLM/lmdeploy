@@ -1,11 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
 from dataclasses import dataclass
-from typing import List
 
 import torch
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    ModelConfig,
+    normalize_cudagraph_capture_batch_sizes,
+)
 from lmdeploy.pytorch.model_inputs import StepContext
 
 
@@ -55,7 +59,7 @@ class GraphRunner:
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -68,7 +72,7 @@ class GraphRunner:
 
     def update_model_metas(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -91,7 +95,7 @@ class GraphRunner:
 
     def reset(self):
         """Remove all graphs to prevent hanging on exit."""
-        pass
+        self._runner_meta.padding_batch_size = None
 
     def get_meta(self):
         """Get graphrunner meta."""
@@ -100,6 +104,10 @@ class GraphRunner:
     def update_inputs(self, inputs):
         return inputs
 
-    def get_capture_batch_sizes(self) -> List[int]:
+    def get_capture_batch_sizes(self) -> list[int]:
         """Capture batch sizes."""
+        if self.cache_config.cudagraph_capture_batch_sizes is not None:
+            self.cache_config.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+                self.cache_config.cudagraph_capture_batch_sizes, self.cache_config.max_batches)
+            return self.cache_config.cudagraph_capture_batch_sizes
         return _get_capture_batch_size_impl(self.cache_config.max_batches)

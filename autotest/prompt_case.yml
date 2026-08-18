@@ -1,0 +1,83 @@
+identity:
+    - 你好，你叫什么名字#hi, what's your name:
+memory_test:
+    - 简要介绍乌鲁木齐的景点#A brief introduction to Urumqi’s attractions:
+        - contain:
+            - urumqi
+            - 乌鲁木齐
+            - 乌市
+            - xinjiang
+            - 新疆
+            - uwumqi
+            - Ürümqi
+            - uyghur
+    - 介绍它的相应美食#please introduce some delicious foods:
+        - contain:
+            - urumqi
+            - 乌鲁木齐
+            - 乌市
+            - xinjiang
+            - 新疆
+            - uwumqi
+            - Ürümqi
+            - uyghur
+
+chinese_poem_case:
+    - 给我一首中文诗，需要添加标点符号，请用中文回答Give me a Chinese poem in Chinese:
+        - contain:
+            - "，"
+            - "。"
+            - poem
+            - poetry
+            - \n
+        - len_g:
+            5
+english_poem_case:
+    - write a romantic English poem in English:
+        - contain:
+            - " "
+        - contain:
+            - "."
+            - ","
+        - len_g:
+            30
+emoji_case:
+    - 请输出👍赞的emoji#print output the emoji of good👍:
+        - contain:
+            - 👍
+            - 😊
+            - 😀
+            - 🎉
+            - 👏
+            - 👌
+            - good
+            - like
+            - 赞
+            - 好
+            - '!'
+            - u1f44d
+            - 🌟
+traditional_chinese_case:
+    - 介紹澳門景點，使用繁體:
+        - contain:
+            - 澳門
+            - 景點
+            - 澳门
+            - macau
+code_testcase:
+    - 使用python编写一个int数组的冒泡排序代码:
+        - contain:
+            - def
+            - bubble
+            - 冒泡
+            - code
+            - python
+        - llama2:
+            - contain:
+                - def
+                - bubble
+                - 冒泡
+                - code
+                - python
+                - assist
+                - however

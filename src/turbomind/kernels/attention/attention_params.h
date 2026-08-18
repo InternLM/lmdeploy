@@ -20,7 +20,7 @@ struct LinearIteratorParams {
 struct BlockIteratorParams {
     char**     block_ptrs;
     const int* cu_block_nums;
-    int        layer_id;
+    int        offset;  //  cache block offset
     int        block_len;
 };
 
@@ -44,8 +44,13 @@ struct AttentionParams {
     // sequence-level buffers
     const int*   cu_q_len;
     const int*   cu_k_len;
+    const int*   readonly_block_num;  // per-batch read-only leading block count
     const bool*  finished;
     const float* rope_theta;
+
+    // per-token validity mask [token_num], owned by the language model (global over
+    // attention DP ranks); consumed by the reduce (invalid rows are skipped and zeroed)
+    const bool* token_mask{nullptr};
 
     const T* sinks;
     float    scale_sinks;
@@ -65,6 +70,7 @@ struct AttentionParams {
     int   size_per_head;
     float inv_sqrt_dh;
     int   window_size;
+    bool  causal{true};
     int   layer_id;  // for debugging
 
     // rotary embedding

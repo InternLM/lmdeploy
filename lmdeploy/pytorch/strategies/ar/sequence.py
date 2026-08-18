@@ -1,20 +1,28 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 from torch import Tensor
 
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
-from lmdeploy.pytorch.messages import (InputEmbeddings, MessageStatus, MultiModalInputs, SamplingParam,
-                                       SchedulerSequence, SchedulerSession, UpdateTokenMode, _to_ndarray)
+from lmdeploy.pytorch.messages import (
+    InputEmbeddings,
+    MessageStatus,
+    MultiModalInputs,
+    SamplingParam,
+    SchedulerSequence,
+    SchedulerSession,
+    UpdateTokenMode,
+    _to_ndarray,
+)
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..base.sequence import SequenceStrategy
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 @dataclass
@@ -23,8 +31,8 @@ class SchedulerSequenceDefault(SchedulerSequence):
     def update_token_ids(self,
                          token_ids: Tensor,
                          multimodals: MultiModalInputs = None,
-                         embeddings: List[InputEmbeddings] = None,
-                         model_meta: Dict[str, Any] = None,
+                         embeddings: list[InputEmbeddings] = None,
+                         model_meta: dict[str, Any] = None,
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
                          routed_experts: np.ndarray = None,
                          **kwargs):
@@ -42,8 +50,13 @@ class SchedulerSequenceDefault(SchedulerSequence):
         self.append_routed_experts(routed_experts)
 
         if mode == UpdateTokenMode.INPUTS:
+            self.cached_tokens = 0
+            self.prefix_cache.suppress_match_stats = False
+            self.prefix_cache.match_start_step = -1
+            self.input_start_pos = self.num_all_ids
+            self.input_end_pos = self.input_start_pos + num_valid
             self.arrive_time = time.perf_counter()
-            self.output_start_pos = self.num_all_ids + len(token_ids)
+            self.output_start_pos = self.input_end_pos
             self._num_token_ids += num_valid
             self.num_new_tokens = 0
         else:
@@ -56,6 +69,8 @@ class SchedulerSequenceDefault(SchedulerSequence):
 
         if model_meta is not None:
             self.model_meta = model_meta
+
+        self._update_mrope_pos_ids()
 
     def set_step(self, step: int):
         """Set step."""
@@ -77,6 +92,10 @@ class SchedulerSequenceDefault(SchedulerSequence):
             if len(self.all_routed_experts) > step:
                 self.all_routed_experts.resize(step)
 
+    def cleanup(self):
+        """Setup history meta after sequence stopped or cancelled."""
+        pass
+
 
 class ARSequenceStrategy(SequenceStrategy):
 
@@ -85,7 +104,7 @@ class ARSequenceStrategy(SequenceStrategy):
                       session: 'SchedulerSession',
                       sampling_param: 'SamplingParam' = None,
                       adapter_name: str = None,
-                      migration_request: Optional[MigrationRequest] = None,
+                      migration_request: MigrationRequest | None = None,
                       resp_cache: bool = False,
                       preserve_cache: bool = False) -> 'SchedulerSequence':
         """Make sequence."""

@@ -1,13 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Tuple, Union
 
 from torch import nn
 
 
 def collect_target_modules(model: nn.Module,
-                           target: Union[str, type],
-                           skip_names: List[str] = [],
-                           prefix: str = '') -> Dict[str, nn.Module]:
+                           target: str | type,
+                           skip_names: list[str] = [],
+                           prefix: str = '') -> dict[str, nn.Module]:
     """Collects the specific target modules from the model.
 
     Args:
@@ -38,7 +37,7 @@ def collect_target_modules(model: nn.Module,
     return name2mod
 
 
-def collect_target_weights(model: nn.Module, target: Union[str, type], skip_names: List[str]) -> Dict[str, nn.Module]:
+def collect_target_weights(model: nn.Module, target: str | type, skip_names: list[str]) -> dict[str, nn.Module]:
     """Collects weights of the specific target modules from the model.
 
     Args:
@@ -61,7 +60,7 @@ def collect_target_weights(model: nn.Module, target: Union[str, type], skip_name
     return mod2weight
 
 
-def bimap_name_mod(name2mod_mappings: List[Dict[str, nn.Module]]) -> Tuple[Dict[str, nn.Module], Dict[nn.Module, str]]:
+def bimap_name_mod(name2mod_mappings: list[dict[str, nn.Module]]) -> tuple[dict[str, nn.Module], dict[nn.Module, str]]:
     """Generates bidirectional maps from module names to module instances and
     vice versa.
 

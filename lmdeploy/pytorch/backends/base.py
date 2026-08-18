@@ -1,9 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from:
 # https://github.com/vllm-project/vllm/blob/main/vllm/attention/backends/abstract.py
+import contextlib
 from abc import ABC, abstractmethod
 from enum import Enum, auto
-from typing import Tuple
 
 import torch
 
@@ -29,10 +29,25 @@ class OpType(Enum):
     SoftmaxTopK = auto()
     FusedMoE = auto()
     FusedMoEW8A8 = auto()
+    FusedMoEStaticF8 = auto()
     LinearBlockedF8 = auto()
+    LinearStaticF8 = auto()
     FusedMoEBlockedF8 = auto()
+    FusedMoEV4FP4 = auto()
     NSAIndexFP8 = auto()
+    V4Attention = auto()
+    V4Indexer = auto()
+    V4Compressor = auto()
+    HcPrePost = auto()
     Embedding = auto()
+    CacheBlockCopy = auto()
+
+    # MoE router
+    RouterNoauxTC = auto()
+
+    # Gated Delta
+    CausalConv1d = auto()
+    GatedDeltaRule = auto()
 
 
 class OpsBackend(ABC):
@@ -57,13 +72,23 @@ class OpsBackend(ABC):
         raise NotImplementedError
 
     @staticmethod
+    def get_v4_attention_metadata_cls():
+        """Get V4 attention metadata class.
+
+        Returns ``V4AttentionMetadata`` by default; backends with V4-specific
+        pre-computation should override this to return their subclass.
+        """
+        from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
+        return V4AttentionMetadata
+
+    @staticmethod
     @abstractmethod
     def get_k_block_shape(
         block_size: int,
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         """Get block shape of k."""
         raise NotImplementedError
 
@@ -74,7 +99,7 @@ class OpsBackend(ABC):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         """Get block shape of v."""
         raise NotImplementedError
 
@@ -85,6 +110,12 @@ class OpsBackend(ABC):
         attention meta should be built here.
         """
         return step_context
+
+    @staticmethod
+    @contextlib.contextmanager
+    def model_build_context(ctx_mgr):
+        """Open an optional backend-owned scope around model construction."""
+        yield
 
     @staticmethod
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,

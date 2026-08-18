@@ -1,0 +1,14 @@
+# HF model id: Qwen/Qwen2-57B-A14B-Instruct-GPTQ-Int4
+
+a100:
+- model_type: chat
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  deps:
+    transformers: 4.57.6

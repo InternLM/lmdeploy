@@ -7,8 +7,15 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from ..rotary_embedding import (FopeParameters, Llama3Parameters, LongRoPEScalingParameters, RopeType,
-                                RotaryEmbeddingBuilder, RotaryEmbeddingImpl, YarnParameters)
+from ..rotary_embedding import (
+    FopeParameters,
+    Llama3Parameters,
+    LongRoPEScalingParameters,
+    RopeType,
+    RotaryEmbeddingBuilder,
+    RotaryEmbeddingImpl,
+    YarnParameters,
+)
 
 
 def safe_torch_compile(**compile_kwargs):
@@ -28,6 +35,7 @@ def safe_torch_compile(**compile_kwargs):
             if compiled_func is None:
                 try:
                     compiled_func = torch.compile(func, **compile_kwargs)
+                    return compiled_func(*args, **kwargs)
                 except Exception:
                     compile_failed = True
                     return func(*args, **kwargs)

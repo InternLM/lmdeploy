@@ -8,6 +8,7 @@
 #include "src/turbomind/kernels/sampling_kernels.h"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
 #include "src/turbomind/utils/constant.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -17,6 +18,7 @@ __global__ void sampling(const T*       logits,
                          const int*     indices,
                          const int*     kept,
                          curandState_t* curandstate,
+                         const int*     curandstate_indices,
                          int*           output_ids,
                          int*           sequence_length,
                          T*             sampled_logprobs,
@@ -33,7 +35,8 @@ __global__ void sampling(const T*       logits,
     __shared__ float rand_num_s;
     __shared__ int   selected;
     if (tid == 0) {
-        rand_num_s = curand_uniform(curandstate + batch_id);
+        const int state_row = curandstate_indices[batch_id];
+        rand_num_s          = curand_uniform(curandstate + state_row);
     }
     __syncthreads();
 
@@ -90,11 +93,13 @@ void invokeSampling(SamplingParams& params, cudaStream_t stream)
                                                    params.indices,
                                                    params.kept,
                                                    params.curandstate,
+                                                   params.curandstate_indices,
                                                    params.output_ids,
                                                    params.sequence_length,
                                                    (T*)params.sampled_logprobs,
                                                    params.sampled_indexes,
                                                    params.sampled_nums);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void invokeSampling<float>(SamplingParams& params, cudaStream_t stream);

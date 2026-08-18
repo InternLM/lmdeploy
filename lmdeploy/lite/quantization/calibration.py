@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from functools import partial
-from typing import Union
 
 import torch
 from torch import nn
@@ -9,11 +8,15 @@ from transformers import PreTrainedTokenizer
 
 from lmdeploy.lite.quantization.activation import ActivationObserver
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP
-from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules, concat_decoder_layer_outputs,
-                                 split_decoder_layer_inputs)
+from lmdeploy.lite.utils import (
+    bimap_name_mod,
+    collect_target_modules,
+    concat_decoder_layer_outputs,
+    split_decoder_layer_inputs,
+)
 
 
-class CalibrationContext():
+class CalibrationContext:
     """Calibration context manager for model quantization.
 
     Parameters:
@@ -30,8 +33,8 @@ class CalibrationContext():
     def __init__(self,
                  model: nn.Module,
                  tokenizer: PreTrainedTokenizer,
-                 layer_type: Union[str, type],
-                 norm_type: Union[str, type],
+                 layer_type: str | type,
+                 norm_type: str | type,
                  batch_size: int = 1,
                  device: str = 'cuda',
                  **kwargs) -> None:
@@ -40,8 +43,8 @@ class CalibrationContext():
         Args:
             model (nn.Module): Model to be calibrated.
             tokenizer (PreTrainedTokenizer): Tokenizer of the given model.
-            layer_type (Union[str, type]): Type of the layers to be observed.
-            norm_type (Union[str, type]): Norm type used in the model.
+            layer_type (str | type): Type of the layers to be observed.
+            norm_type (str | type): Norm type used in the model.
             batch_size (int): The batch size for running the calib samples.
                 Low GPU mem requires small batch_size. Large batch_size
                 reduces the calibration time while costs more VRAM.
@@ -53,9 +56,9 @@ class CalibrationContext():
         self.norm_type = norm_type
         self.batch_size = batch_size
 
-        num_kv_heads, num_attn_heads = self._guess_num_heads(model)
+        num_kv_heads, num_attn_heads, text_config = self._guess_num_heads(model)
         self.num_kv_heads = num_kv_heads
-        self.head_dim = model.config.hidden_size // num_attn_heads
+        self.head_dim = text_config.hidden_size // num_attn_heads
         self.model = model
 
         self.tokenizer = tokenizer
@@ -80,14 +83,21 @@ class CalibrationContext():
 
     def _guess_num_heads(self, model):
 
-        if hasattr(model.config, 'num_key_value_heads'):
-            num_kv_heads = model.config.num_key_value_heads
+        if hasattr(model.config, 'text_config'):
+            text_config = model.config.text_config
+        elif hasattr(model.config, 'llm_config'):
+            text_config = model.config.llm_config
         else:
-            num_kv_heads = model.config.num_attention_heads
+            text_config = model.config
 
-        num_attn_heads = model.config.num_attention_heads
+        if hasattr(text_config, 'num_key_value_heads'):
+            num_kv_heads = text_config.num_key_value_heads
+        else:
+            num_kv_heads = text_config.num_attention_heads
 
-        return num_kv_heads, num_attn_heads
+        num_attn_heads = text_config.num_attention_heads
+
+        return num_kv_heads, num_attn_heads, text_config
 
     def _init_input_observers(self, name2mod):
         """Initialize input observers for given modules."""
@@ -201,7 +211,7 @@ class CalibrationContext():
         to specified directory.
 
         Args:
-            out_dir (Union[str, Path]): The directory path where the stats
+            out_dir (str | Path): The directory path where the stats
                 will be saved.
         """
 
@@ -216,7 +226,7 @@ class CalibrationContext():
     def calibrate(self, data):
         """Forward pass through the model in inference mode with given data."""
 
-        if type(self.model).__name__ in ('QWenLMHeadModel', 'ChatGLMForConditionalGeneration'):
+        if type(self.model).__name__ == 'ChatGLMForConditionalGeneration':
             model = self.model.transformer
         else:
             model = self.model.model
@@ -255,7 +265,9 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat, mod
         module_kwargs.pop('use_cache')
 
     # find the best scale ratio
-    def _search_module_scale(block, linears2scale: list, x, kwargs={}):
+    def _search_module_scale(block, linears2scale: list, x, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
         x = x.to(next(block.parameters()).device)
         with torch.no_grad():
             org_out = block(x, **kwargs)
@@ -303,18 +315,14 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat, mod
             raise Exception
         return best_ratio
 
-    def _auto_get_scale(layers, inp, module2inspect=None, kwargs={}):
+    def _auto_get_scale(layers, inp, module2inspect=None, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
         # module2inspect: if given, we will check the output diff of
         #  this module instead of layers
         if module2inspect is None:
             assert len(layers) == 1
             module2inspect = layers[0]
-        # internlm-xcomposer2-vl applies plora, which requires im_mask arg
-        if module2inspect._get_name() == 'InternLM2MLP':
-            from inspect import signature
-            if 'im_mask' in signature(module2inspect.forward).parameters:
-                kwargs['im_mask'] = None
-
         best_ratio = _search_module_scale(module2inspect, layers, inp.value, kwargs)
         inp.save_ratio(best_ratio)
 
@@ -339,8 +347,8 @@ class CalibrationContextV2(CalibrationContext):
     def __init__(self,
                  model: nn.Module,
                  tokenizer: PreTrainedTokenizer,
-                 layer_type: Union[str, type],
-                 norm_type: Union[str, type],
+                 layer_type: str | type,
+                 norm_type: str | type,
                  batch_size: int = 1,
                  device: str = 'cuda',
                  search_scale: bool = True,
@@ -374,7 +382,7 @@ class CalibrationContextV2(CalibrationContext):
         to specified directory.
 
         Args:
-            out_dir (Union[str, Path]): The directory path where the stats
+            out_dir (str | Path): The directory path where the stats
                 will be saved.
         """
         inputs_stats = {

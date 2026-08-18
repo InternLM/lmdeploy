@@ -5,12 +5,13 @@ from lmdeploy.pytorch.config import ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
 if TYPE_CHECKING:
+    from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
     from lmdeploy.pytorch.strategies.base.cudagraph import CudagraphStrategy
+    from lmdeploy.pytorch.strategies.base.engine import EngineStrategy
+    from lmdeploy.pytorch.strategies.base.model_agent import ModelAgentStrategy
     from lmdeploy.pytorch.strategies.base.model_inputs import ModelInputsStrategy
     from lmdeploy.pytorch.strategies.base.sampling import SamplingStrategy
-    from lmdeploy.pytorch.strategies.base.model_agent import ModelAgentStrategy
-    from lmdeploy.pytorch.strategies.base.engine import EngineStrategy
-    from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+    from lmdeploy.pytorch.strategies.base.step_inputs import StepInputs
 
 from ..base import StrategyFactoryBase
 
@@ -26,14 +27,15 @@ class ARSpecStrategyFactory(StrategyFactoryBase):
     def build_cudagraph_strategy(self) -> 'CudagraphStrategy':
         """Build cudagraph strategy."""
         from .cudagraph import ARSpecCudagraphStrategy
-        return ARSpecCudagraphStrategy(self.specdecode_config.num_speculative_tokens)
+        return ARSpecCudagraphStrategy(self.specdecode_config.num_speculative_tokens, self.specdecode_config.method)
 
     def build_sampling_strategy(self) -> 'SamplingStrategy':
         """Build sampling strategy."""
         from .sampling import ARSpecSamplingStrategy
         pad_token_id = self.model_config.bos_token_id
         pad_token_id = 0 if pad_token_id is None else pad_token_id
-        return ARSpecSamplingStrategy(pad_token_id)
+        num_spec_tokens = self.specdecode_config.num_speculative_tokens
+        return ARSpecSamplingStrategy(pad_token_id, num_spec_tokens=num_spec_tokens)
 
     def build_model_inputs_strategy(self) -> 'ModelInputsStrategy':
         """Build model inputs strategy."""
@@ -56,3 +58,13 @@ class ARSpecStrategyFactory(StrategyFactoryBase):
     def build_sequence_strategy(self) -> SequenceStrategy:
         from .sequence import ARSpecSequenceStrategy
         return ARSpecSequenceStrategy()
+
+    def build_step_inputs(self) -> 'StepInputs':
+        """Build step inputs for the decoding loop."""
+        from .step_inputs import ARSpecStepInputs
+        pad_token_id = self.model_config.bos_token_id
+        pad_token_id = 0 if pad_token_id is None else pad_token_id
+        return ARSpecStepInputs(
+            _pad_token_id=pad_token_id,
+            _num_spec_tokens=self.specdecode_config.num_speculative_tokens,
+        )

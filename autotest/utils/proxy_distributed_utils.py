@@ -3,10 +3,22 @@ import random
 import socket
 import subprocess
 import time
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import requests
-from utils.ray_distributed_utils import verify_service_functionality
+from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_multinode_env
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_cli_common_param,
+    get_model_path_from_config,
+    resolve_extra_params,
+)
+from utils.ray_distributed_utils import (
+    RAY_PORT,
+    RayLMDeployManager,
+    ascend_multinode_enabled,
+    verify_service_functionality,
+)
 
 time_time = time.time
 
@@ -21,13 +33,13 @@ def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         try:
             s.connect((host, port))
             return True
-        except (socket.timeout, ConnectionRefusedError, OSError):
+        except (TimeoutError, ConnectionRefusedError, OSError):
             return False
 
 
 def check_nodes_status(host: str, proxy_port: int, model_name: str, expected_instances: int, check_count: int,
                        current_time: float, last_progress_print: float,
-                       progress_print_interval: int) -> Tuple[bool, int]:
+                       progress_print_interval: int) -> tuple[bool, int]:
     try:
         nodes_url = f'http://{host}:{proxy_port}/nodes/status'
         resp = requests.get(nodes_url, timeout=10)
@@ -51,8 +63,8 @@ def check_nodes_status(host: str, proxy_port: int, model_name: str, expected_ins
         if should_print:
             basename = os.path.basename(model_name)
             print(f'📊 Check {check_count}: Model registration progress: '
-                  f'{ready_instances}/{expected_instances} instances ready '
-                  f'(Total reported: {total_instances})')
+                  f'{ready_instances}/{expected_instances} nodes with model, '
+                  f'{total_instances}/{expected_instances} nodes seen by proxy')
             for node_url, node_info in nodes_data.items():
                 models = node_info.get('models', [])
                 if model_name in models:
@@ -60,14 +72,21 @@ def check_nodes_status(host: str, proxy_port: int, model_name: str, expected_ins
                 else:
                     print(f'   ⏳ Instance {node_url} has not registered target model')
 
-        if ready_instances >= expected_instances:
+        if total_instances != expected_instances:
             if should_print:
-                print(f'🎯 All {expected_instances} API server instances have registered the target model')
-            return True, ready_instances
-        else:
-            if should_print:
-                print(f'⏳ Waiting for more instances to register... ({ready_instances}/{expected_instances})')
+                print(f'⏳ Waiting for proxy to see exactly {expected_instances} nodes '
+                      f'(dp-sized cluster); currently {total_instances}')
             return False, ready_instances
+
+        if ready_instances == expected_instances:
+            if should_print:
+                print(f'🎯 All {expected_instances} nodes registered the target model '
+                      f'(matches /nodes/status count)')
+            return True, ready_instances
+
+        if should_print:
+            print(f'⏳ Waiting for all nodes to register model... ({ready_instances}/{expected_instances})')
+        return False, ready_instances
 
     except Exception as e:
         if current_time - last_progress_print >= progress_print_interval:
@@ -184,12 +203,25 @@ class ProxyDistributedManager:
     def __init__(self):
         self.master_addr = os.getenv('MASTER_ADDR', '127.0.0.1')
         self.node_rank = int(os.getenv('NODE_RANK', '0'))
+        self.node_count = int(os.getenv('NODE_COUNT', '1'))
         self.proxy_port = int(os.getenv('PROXY_PORT', str(DEFAULT_PROXY_PORT)))
+        self.ray_port = int(os.getenv('RAY_PORT', str(RAY_PORT)))
 
         self.is_master = (self.node_rank == 0)
         self.proxy_process = None
+        self._ray_manager = None
+        if ascend_multinode_enabled():
+            self._ray_manager = RayLMDeployManager(
+                master_addr=self.master_addr,
+                ray_port=self.ray_port,
+                api_port=self.proxy_port,
+                health_check=False,
+            )
 
     def start(self):
+        if self._ray_manager is not None:
+            self._ray_manager.start_ray_cluster()
+
         if not self.is_master:
             return
 
@@ -211,13 +243,19 @@ class ProxyDistributedManager:
             except subprocess.TimeoutExpired:
                 self.proxy_process.kill()
 
+        if self._ray_manager is not None:
+            self._ray_manager.cleanup(force=True)
+
 
 class ApiServerPerTest:
 
-    def __init__(self, proxy_manager: ProxyDistributedManager, model_path: str, model_param: Dict[str, Any]):
+    def __init__(self, proxy_manager: ProxyDistributedManager, config: dict[str, Any], run_config: dict[str, Any]):
         self.proxy_manager = proxy_manager
-        self.model_path = model_path
-        self.model_param = model_param or {}
+        self.config = config
+        self.run_config = run_config
+
+        model_name = run_config['model']
+        self.model_path = get_model_path_from_config(config, model_name)
 
         self.master_addr = proxy_manager.master_addr
         self.proxy_port = proxy_manager.proxy_port
@@ -225,62 +263,65 @@ class ApiServerPerTest:
         self.node_count = int(os.getenv('NODE_COUNT', '1'))
         self.proc_per_node = int(os.getenv('PROC_PER_NODE', '1'))
 
-        self.backend = self.model_param.get('backend', 'turbomind')
-        self.communicator = self.model_param.get('communicator', 'nccl')
-        self.quant_policy = self.model_param.get('quant_policy', 0)
-        self.tp = int(self.model_param.get('tp', 1))
-        parallel_config = self.model_param.get('parallel_config', {})
-        self.ep = int(parallel_config.get('ep', 1))
-        self.dp = int(parallel_config.get('dp', 1))
-        self.extra = self.model_param.get('extra', '')
-
-        self.expected_instances = self.node_count * self.proc_per_node
+        _pc = run_config.get('parallel_config') or {}
+        _dp = int(_pc.get('dp', 0) or 0)
+        # turbomind's dp is handled inside a single api_server process, which registers
+        # with the proxy once regardless of dp; only ray/pytorch spawn dp separate
+        # processes that each register independently.
+        _backend = run_config.get('backend')
+        self.expected_instances = _dp if (_dp > 1 and _backend != 'turbomind') else 1
         self.is_master = (self.node_rank == 0)
         self.api_process = None
 
     def start(self):
         proxy_url = f'http://{self.master_addr}:{self.proxy_port}'
+
+        extra_params = self.run_config.get('extra_params', {})
+        resolve_extra_params(extra_params, self.config)
+        ensure_ascend_multinode_env(self.config, self.run_config)
+
+        # Get model-name: use extra_params['model-name'] if specified, otherwise use case_name
+        case_name = get_case_str_by_config(self.run_config)
+        self.model_name = case_name if extra_params.get('model-name', None) is None else extra_params.get('model-name')
+
         cmd = [
             'lmdeploy',
             'serve',
             'api_server',
             self.model_path,
-            '--backend',
-            str(self.backend),
+            '--model-name',
+            self.model_name,
+        ] + get_cli_common_param(self.run_config).split() + [
             '--proxy-url',
             proxy_url,
         ]
         if self.node_count > 1:
             cmd += ['--nnodes', str(self.node_count), '--node-rank', str(self.node_rank)]
-        if self.quant_policy != 0:
-            cmd += ['--quant-policy', str(self.quant_policy)]
-
-        if self.backend == 'turbomind':
-            cmd += ['--communicator', str(self.communicator)]
-
-        if self.ep != 1:
-            cmd += ['--ep', str(self.ep)]
-        if self.dp != 1:
-            cmd += ['--dp', str(self.dp)]
-        if self.tp != 1:
-            cmd += ['--tp', str(self.tp)]
-        if self.extra.strip() != '':
-            extra_args = self.extra.strip().split()
-            cmd.extend(extra_args)
 
         print(f"[API Server] Starting: {' '.join(cmd)}")
-        self.api_process = subprocess.Popen(cmd)
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        log_dir = self.config.get('server_log_path', '/tmp/lmdeploy_test')
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, f'log_{case_name}_{timestamp}.log')
+        self._log_file = open(log_path, 'w')
+        env = build_ascend_multinode_env(self.config, self.run_config)
+        env['MASTER_PORT'] = os.getenv('MASTER_PORT', '29500')
+        self.api_process = subprocess.Popen(cmd,
+                                            stdout=self._log_file,
+                                            stderr=self._log_file,
+                                            env=env)
+        print(f'📝 API Server log: {log_path}')
 
     def wait_until_ready(self):
         if not self.is_master:
             return
         success = wait_for_model_service_ready(host=self.master_addr,
                                                proxy_port=self.proxy_port,
-                                               model_name=self.model_path,
+                                               model_name=self.model_name,
                                                timeout_seconds=2000,
                                                expected_instances=self.expected_instances)
         if not success:
-            raise RuntimeError(f'API Server failed to register model: {self.model_path}')
+            raise RuntimeError(f'API Server failed to register model: {self.model_name}')
 
     def cleanup(self):
         if self.api_process and self.api_process.poll() is None:
@@ -290,3 +331,5 @@ class ApiServerPerTest:
                 self.api_process.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 self.api_process.kill()
+        if hasattr(self, '_log_file') and self._log_file and not self._log_file.closed:
+            self._log_file.close()

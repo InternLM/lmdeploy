@@ -231,11 +231,10 @@ template<class T>
 void invokeTranspose2D(T* dst, const T* src, int rows, int cols, cudaStream_t st)
 {
     if constexpr (sizeof(T) == 4) {
-        // FT_CHECK(0);
         invokeTranspose2D_((uint32_t*)dst, (const uint32_t*)src, rows, cols, st);
     }
     else {
-        FT_CHECK(0);
+        TM_LOG_FATAL("unreachable");
     }
 }
 

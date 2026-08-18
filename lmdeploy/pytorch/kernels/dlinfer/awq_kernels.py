@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional
 
 import dlinfer.ops as ext_ops
 from torch import Tensor
@@ -9,7 +8,7 @@ def awq_linear(x: Tensor,
                qweight: Tensor,
                scales: Tensor,
                qzeros: Tensor,
-               bias: Optional[Tensor] = None,
+               bias: Tensor | None = None,
                all_reduce: bool = False,
                group_size: int = 0):
     return ext_ops.weight_quant_matmul(x.squeeze(0),

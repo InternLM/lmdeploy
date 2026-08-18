@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import List
 
 import torch
 
@@ -43,7 +42,7 @@ class TritonFusedMoEW8A8Impl(FusedMoEW8A8Impl):
                 gate_up_scale: torch.Tensor,
                 down_weights: torch.Tensor,
                 down_scale: torch.Tensor,
-                expert_list: List[int] = None):
+                expert_list: list[int] = None):
         """forward."""
 
         if isinstance(hidden_states, torch.Tensor):

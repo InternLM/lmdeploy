@@ -13,15 +13,15 @@
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/string_utils.h"
 
 #include "src/turbomind/kernels/norm/rms_norm.h"
 
 #define NCCLCHECK(e)                                                                                                   \
     if (auto ec = e; ec != ncclSuccess) {                                                                              \
-        auto msg = fmtstr("NCCL error %s:%d '%s'", __FILE__, __LINE__, ncclGetErrorString(ec));                        \
+        auto msg = fmt::format("NCCL error {}:{} '{}'", __FILE__, __LINE__, ncclGetErrorString(ec));                   \
         throw std::runtime_error(msg.c_str());                                                                         \
     }
 
@@ -44,6 +44,8 @@ static inline ncclDataType_t to_nccl_dtype(DataType type)
             return ncclBfloat16;
         case kUint8:
             return ncclUint8;
+        case kInt64:
+            return ncclInt64;
         default:
             throw std::runtime_error("not supported");
     }
@@ -76,16 +78,15 @@ static NcclApis& nccl_apis()
         };
         if (version >= NCCL_VERSION(2, 27, 0)) {
             if (version < NCCL_VERSION(2, 28, 0)) {
-                TM_LOG_WARNING(
-                    "[NCCL] Window registration may cause memory leaks in NCCL 2.27, use NCCL 2.28+ or disable the feature by setting NCCL_WIN_ENABLE=0.");
+                TM_LOG_WARN(
+                    "Window registration may cause memory leaks in NCCL 2.27, use NCCL 2.28+ or disable the feature by setting NCCL_WIN_ENABLE=0.");
             }
             load_symbol(apis.ncclCommWindowRegister, "ncclCommWindowRegister");
             load_symbol(apis.ncclCommWindowDeregister, "ncclCommWindowDeregister");
         }
         else {
-            TM_LOG_WARNING(
-                "[NCCL] Window registration is not supported by NCCL %d, use NCCL 2.28+ for better performance.",
-                version);
+            TM_LOG_WARN("Window registration is not supported by NCCL {}, use NCCL 2.28+ for better performance.",
+                        version);
         }
         if (version >= NCCL_VERSION(2, 19, 0)) {
             load_symbol(apis.ncclMemAlloc, "ncclMemAlloc");
@@ -97,8 +98,7 @@ static NcclApis& nccl_apis()
             load_symbol(apis.ncclCommSplit, "ncclCommSplit");
         }
         else {
-            TM_LOG_WARNING("[NCCL] Splitting communicators is not supported by NCCL %d, use NCCL 2.18+ if needed.",
-                           version);
+            TM_LOG_WARN("Splitting communicators is not supported by NCCL {}, use NCCL 2.18+ if needed.", version);
         }
         return apis;
     }();
@@ -116,16 +116,16 @@ public:
     ~NcclCommImpl()
     {
         for (const auto& [ptr, _] : handles_.at(0)) {
-            TM_LOG_WARNING("[NCCL][%d] Buffer %p is not deregistered", global_rank_, ptr);
+            TM_LOG_WARN("Rank {}: Buffer {} is not deregistered", global_rank_, ptr);
         }
 
         for (const auto& [ptr, size] : buffers_) {
-            TM_LOG_WARNING("[NCCL][%d] Allocation (%p, %lu) is not freed", global_rank_, ptr, size);
+            TM_LOG_WARN("Rank {}: Allocation ({}, {}) is not freed", global_rank_, ptr, size);
         }
 
         for (auto& c : groups_) {
             if (auto ec = ncclCommDestroy(c); ec != ncclSuccess) {
-                TM_LOG_ERROR("[NCCL][%d] Failed to destroy communicator: %s", global_rank_, ncclGetErrorString(ec));
+                TM_LOG_ERROR("Rank {}: Failed to destroy communicator: {}", global_rank_, ncclGetErrorString(ec));
             }
         }
     }
@@ -151,7 +151,7 @@ public:
             NCCLCHECK(alloc_fn(&ptr, size));
         }
         else {
-            check_cuda_error(cudaMalloc(&ptr, size));
+            TM_CUDA_CHECK(cudaMalloc(&ptr, size));
         }
         buffers_.emplace(ptr, size);
         return ptr;
@@ -164,12 +164,12 @@ public:
                 NCCLCHECK(free_fn(ptr));
             }
             else {
-                check_cuda_error(cudaFree(ptr));
+                TM_CUDA_CHECK(cudaFree(ptr));
             }
             buffers_.erase(ptr);
         }
         else {
-            TM_LOG_WARNING("[NCCL][%d] Freeing %p which is not allocated by NcclComm", global_rank_, ptr);
+            TM_LOG_WARN("Rank {}: Freeing {} which is not allocated by NcclComm", global_rank_, ptr);
         }
     }
 
@@ -181,7 +181,7 @@ public:
             }
         }
         else {
-            TM_LOG_WARNING("[NCCL][%d] Duplicated registration on (%p, %lu)", global_rank_, ptr, size);
+            TM_LOG_WARN("Rank {}: Duplicated registration on ({}, {})", global_rank_, ptr, size);
         }
     }
 
@@ -193,7 +193,7 @@ public:
             }
         }
         else {
-            TM_LOG_WARNING("[NCCL][%d] Deregistering non-registered address %p", global_rank_, ptr);
+            TM_LOG_WARN("Rank {}: Deregistering non-registered address {}", global_rank_, ptr);
         }
     }
 
@@ -264,6 +264,46 @@ public:
         NCCLCHECK(ncclGroupEnd());
     }
 
+    void AllGatherV(const void*                sendbuff,
+                    void*                      recvbuff,
+                    const std::vector<size_t>& counts,
+                    DataType                   type,
+                    int                        group,
+                    cudaStream_t               stream) override
+    {
+        const size_t         elem_size = byte_size(type);
+        const ncclDataType_t nccl_type = to_nccl_dtype(type);
+        const int            n_ranks   = this->n_ranks(group);
+        const int            rank      = this->rank(group);
+        ncclComm_t           comm      = groups_.at(group);
+
+        TM_CHECK_EQ((int)counts.size(), n_ranks);
+
+        bool equal_counts = true;
+        for (auto i = 1; i < counts.size(); ++i) {
+            if (counts[i] != counts[0]) {
+                equal_counts = false;
+                break;
+            }
+        }
+        if (equal_counts) {
+            return AllGather(sendbuff, recvbuff, counts[0], type, group, stream);
+        }
+
+        NCCLCHECK(ncclGroupStart());
+        size_t offset = 0;
+        for (int i = 0; i < n_ranks; ++i) {
+            const size_t count = counts[i];
+            if (count) {
+                auto*       recv = static_cast<char*>(recvbuff) + elem_size * offset;
+                const void* send = i == rank ? sendbuff : recv;
+                NCCLCHECK(ncclBroadcast(send, recv, count, nccl_type, i, comm, stream));
+            }
+            offset += count;
+        }
+        NCCLCHECK(ncclGroupEnd());
+    }
+
     void ReduceScatter(
         const void* sendbuff, void* recvbuff, size_t recvcount, DataType type, int group, cudaStream_t stream) override
     {
@@ -273,11 +313,52 @@ public:
         NCCLCHECK(ncclGroupEnd());
     }
 
+    void ReduceScatterV(const void*                sendbuff,
+                        void*                      recvbuff,
+                        const std::vector<size_t>& counts,
+                        DataType                   type,
+                        int                        group,
+                        cudaStream_t               stream) override
+    {
+        const size_t         elem_size = byte_size(type);
+        const ncclDataType_t nccl_type = to_nccl_dtype(type);
+        const int            n_ranks   = this->n_ranks(group);
+        const int            rank      = this->rank(group);
+        ncclComm_t           comm      = groups_.at(group);
+
+        TM_CHECK_EQ((int)counts.size(), n_ranks);
+
+        bool equal_counts = true;
+        for (auto i = 1; i < counts.size(); ++i) {
+            if (counts[i] != counts[0]) {
+                equal_counts = false;
+                break;
+            }
+        }
+        if (equal_counts) {
+            return ReduceScatter(sendbuff, recvbuff, counts[0], type, group, stream);
+        }
+
+        NCCLCHECK(ncclGroupStart());
+        size_t offset = 0;
+        for (int i = 0; i < n_ranks; ++i) {
+            const size_t count = counts[i];
+            if (count) {
+                const auto* send = static_cast<const char*>(sendbuff) + elem_size * offset;
+                auto*       recv = i == rank ? recvbuff : const_cast<char*>(send);
+                NCCLCHECK(ncclReduce(send, recv, count, nccl_type, ncclSum, i, comm, stream));
+            }
+            offset += count;
+        }
+        NCCLCHECK(ncclGroupEnd());
+    }
+
     void AllreduceResidualBiasRMSnorm(void*        hidden,
                                       void*        residual,
                                       const void*  bias,
                                       const void*  weights,
                                       float        eps,
+                                      bool         zero_centered,
                                       int          dim,
                                       int          token_num,
                                       DataType     dtype,
@@ -287,15 +368,16 @@ public:
         const auto elem_size = byte_size(dtype);
 
         auto rms_norm = [&](int64_t first, int64_t count) {
-            invokeResidualBiasRMSNorm((char*)hidden + elem_size * first * dim,
-                                      (char*)residual + elem_size * first * dim,
-                                      weights,
-                                      bias,
-                                      dtype,
-                                      dim,
-                                      count,
-                                      eps,
-                                      stream);
+            TM_SCOPE_CALL(invokeResidualBiasRMSNorm((char*)hidden + elem_size * first * dim,
+                                                    (char*)residual + elem_size * first * dim,
+                                                    weights,
+                                                    bias,
+                                                    dtype,
+                                                    dim,
+                                                    count,
+                                                    eps,
+                                                    zero_centered,
+                                                    stream));
         };
 
         if (1) {
@@ -320,6 +402,7 @@ public:
                                         const void*  bias,
                                         const void*  weights,
                                         float        eps,
+                                        bool         zero_centered,
                                         int          dim,
                                         DataType     type,
                                         int          group0,
@@ -330,7 +413,7 @@ public:
         const size_t         elem_size = byte_size(type);
         const ncclDataType_t nccl_type = to_nccl_dtype(type);
 
-        FT_CHECK(group0 == 0 || group1 == 0);
+        TM_CHECK(group0 == 0 || group1 == 0);
 
         ncclComm_t comm0 = groups_.at(group0);
         ncclComm_t comm1 = groups_.at(group1);
@@ -341,7 +424,7 @@ public:
 
         const int inner_tp = std::min(tp0, tp1);
 
-        FT_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
+        TM_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
 
         std::vector<std::tuple<int, int, int>> tasks;
         tasks.reserve(global_n_ranks_);
@@ -366,14 +449,20 @@ public:
                 }
             }
             NCCLCHECK(ncclGroupEnd());
-            sync_check_cuda_error();
         }
 
         if (auto& [offset, first, num] = tasks[global_rank_]; num > 0) {
             char* buff = (char*)hidden + elem_size * (offset + first) * dim;
-            invokeResidualBiasRMSNorm(
-                buff, (char*)residual + elem_size * first * dim, weights, bias, type, dim, num, eps, stream);
-            sync_check_cuda_error();
+            TM_SCOPE_CALL(invokeResidualBiasRMSNorm(buff,
+                                                    (char*)residual + elem_size * first * dim,
+                                                    weights,
+                                                    bias,
+                                                    type,
+                                                    dim,
+                                                    num,
+                                                    eps,
+                                                    zero_centered,
+                                                    stream));
         }
 
         if (tp1 > 1) {
@@ -385,7 +474,6 @@ public:
                 }
             }
             NCCLCHECK(ncclGroupEnd());
-            sync_check_cuda_error();
         }
     }
 
@@ -397,7 +485,7 @@ public:
                    int          group,
                    cudaStream_t stream) override
     {
-        NCCLCHECK(ncclBroadcast(recvbuff, recvbuff, count, to_nccl_dtype(type), root, groups_.at(group), stream));
+        NCCLCHECK(ncclBroadcast(sendbuff, recvbuff, count, to_nccl_dtype(type), root, groups_.at(group), stream));
     }
 
 private:

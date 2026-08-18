@@ -1,0 +1,374 @@
+import gc
+from types import SimpleNamespace
+
+import pytest
+import torch
+
+from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy.messages import Response
+from lmdeploy.pipeline import Pipeline, _EventLoopThread
+from lmdeploy.serve.core.async_engine import GenOut
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
+from lmdeploy.serve.managers.session_manager import Session
+from lmdeploy.serve.processors import MultimodalProcessor
+
+MODEL_ID = 'Qwen/Qwen3-8B'
+
+
+def test_history_to_messages_wraps_plain_strings_as_user_messages():
+    messages = Pipeline._history_to_messages([('My favorite color is blue.', 'OK')], 'What is my favorite color?')
+
+    assert messages == [
+        {
+            'role': 'user',
+            'content': 'My favorite color is blue.'
+        },
+        {
+            'role': 'assistant',
+            'content': 'OK'
+        },
+        {
+            'role': 'user',
+            'content': 'What is my favorite color?'
+        },
+    ]
+    assert MultimodalProcessor.format_prompts(messages) == messages
+
+
+def test_chat_clears_response_before_streaming_and_records_history():
+    class DummySessionManager:
+        pass
+
+    pipe = Pipeline.__new__(Pipeline)
+    pipe.allowed_media_domains = None
+    pipe.seen_prompts = []
+    pipe.response_at_stream_start = None
+
+    def stream_infer(prompts, sessions, **kwargs):
+        pipe.seen_prompts.append(prompts)
+        pipe.response_at_stream_start = sessions.response
+        yield Response(text='blue', generate_token_len=1, input_token_len=1)
+
+    pipe.stream_infer = stream_infer
+    session = Session(session_id=0, session_mgr=DummySessionManager())
+
+    pipe.chat(prompt='My favorite color is blue.', session=session, stream_response=False)
+    session.response = Response(text='stale', generate_token_len=1, input_token_len=1)
+    pipe.chat(prompt='What is my favorite color?', session=session, stream_response=False)
+
+    assert pipe.response_at_stream_start is None
+    assert pipe.seen_prompts[-1] == [
+        {
+            'role': 'user',
+            'content': 'My favorite color is blue.'
+        },
+        {
+            'role': 'assistant',
+            'content': 'blue'
+        },
+        {
+            'role': 'user',
+            'content': 'What is my favorite color?'
+        },
+    ]
+    assert session.response.text == 'blue'
+    assert session.history == [
+        ('My favorite color is blue.', 'blue'),
+        ('What is my favorite color?', 'blue'),
+    ]
+
+
+def test_pipeline_batch_keeps_siblings_when_preprocess_fails():
+
+    class _AsyncEngine:
+
+        async def preprocess(self, messages, **kwargs):
+            if messages == 'bad':
+                raise RequestError(ErrorCode.PREPROCESS_FAILED)
+            return SimpleNamespace(
+                inputs={'input_ids': [1]}, input_token_len=1, text=messages)
+
+        async def generate(self, request, stream_response=True):
+            yield GenOut(request.text, 1, 1, 'stop', [2])
+
+    pipe = Pipeline.__new__(Pipeline)
+    pipe.async_engine = _AsyncEngine()
+    pipe.backend_config = SimpleNamespace(max_batch_size=3)
+    pipe.limiter = None
+    loop_thread = _EventLoopThread()
+    try:
+        requests = iter([
+            {'messages': 'first'},
+            {'messages': 'bad'},
+            {'messages': 'third'},
+        ])
+        responses = list(
+            pipe._infer(requests, multiplex=True, loop=loop_thread.loop))
+    finally:
+        loop_thread.close()
+
+    responses_by_index = {response.index: response for response in responses}
+    assert responses_by_index[0].text == 'first'
+    assert responses_by_index[1].finish_reason == 'error'
+    assert responses_by_index[1].error_code == 'preprocess_failed'
+    assert responses_by_index[2].text == 'third'
+
+
+@pytest.mark.parametrize('backend', ['pytorch', 'turbomind'], scope='class')
+class TestBackendInference:
+    """Test class grouping all tests for each backend."""
+
+    @pytest.fixture(scope='class', autouse=True)
+    def backend_config(self, backend):
+        """Parametrized backend configuration for all tests."""
+
+        if backend == 'pytorch':
+            return PytorchEngineConfig(session_len=4096, max_batch_size=4, tp=1, cache_max_entry_count=0.1)
+        elif backend == 'turbomind':
+            return TurbomindEngineConfig(session_len=4096, max_batch_size=4, tp=1, cache_max_entry_count=0.1)
+        else:
+            raise ValueError(f'Unknown backend type: {backend}')
+
+    @pytest.fixture(scope='class', autouse=True)
+    def pipe(self, backend_config):
+        """Shared pipeline instance across all tests in class."""
+        pipe = pipeline(MODEL_ID, backend_config=backend_config)
+        yield pipe
+        pipe.close()
+        del pipe
+        gc.collect()
+        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.synchronize()
+
+    def test_infer_single_string(self, pipe):
+        """Test infer with single string prompt."""
+        prompt = 'Hello, how are you?'
+        response = pipe.infer(prompt)
+
+        assert isinstance(response, Response)
+        assert hasattr(response, 'text')
+        assert hasattr(response, 'generate_token_len')
+        assert hasattr(response, 'input_token_len')
+        assert len(response.text) > 0
+
+    def test_infer_batch_strings(self, pipe):
+        """Test infer with batch of string prompts."""
+        prompts = ['What is AI?', 'Explain quantum computing', 'Tell me a joke']
+        responses = pipe.infer(prompts)
+
+        assert isinstance(responses, list)
+        assert len(responses) == len(prompts)
+        for resp in responses:
+            assert isinstance(resp, Response)
+            assert len(resp.text) > 0
+
+    def test_infer_openai_format(self, pipe):
+        """Test infer with OpenAI-style message format."""
+        prompts = [[{
+            'role': 'user',
+            'content': 'What is machine learning?'
+        }], [{
+            'role': 'user',
+            'content': 'Define deep learning'
+        }]]
+        responses = pipe.infer(prompts)
+
+        assert len(responses) == 2
+        for resp in responses:
+            assert isinstance(resp, Response)
+
+    def test_infer_with_generation_config(self, pipe):
+        """Test infer with custom GenerationConfig."""
+        gen_config = GenerationConfig(max_new_tokens=50, temperature=0.5, top_p=0.9, top_k=40, do_sample=True)
+        prompt = 'Write a haiku about nature'
+        response = pipe.infer(prompt, gen_config=gen_config)
+
+        assert isinstance(response, Response)
+        assert response.generate_token_len <= 50
+
+    def test_call_method(self, pipe):
+        """Test __call__ method as shortcut for infer."""
+        prompt = 'What is Python?'
+        response = pipe(prompt)
+
+        assert isinstance(response, Response)
+        assert len(response.text) > 0
+
+    def test_stream_infer_single(self, pipe):
+        """Test stream_infer with single prompt."""
+        prompt = 'Count from 1 to 5'
+        generator = pipe.stream_infer(prompt)
+
+        chunks = []
+        for chunk in generator:
+            chunks.append(chunk)
+            assert isinstance(chunk, Response)
+
+        assert len(chunks) > 0
+        full_text = ''.join([c.text for c in chunks])
+        assert len(full_text) > 0
+
+    def test_stream_infer_batch(self, pipe):
+        """Test stream_infer with batch prompts."""
+        prompts = ['First prompt', 'Second prompt']
+        generator = pipe.stream_infer(prompts)
+
+        responses = {}
+        for chunk in generator:
+            chunks = responses.setdefault(chunk.index, [])
+            chunks.append(chunk)
+            assert isinstance(chunk, Response)
+
+        assert len(responses) == len(prompts)
+        for chunks in responses.values():
+            full_text = ''.join([c.text for c in chunks])
+            assert len(full_text) > 0
+
+    def test_stream_infer_with_session(self, pipe):
+        """Test stream_infer accepts a request session without KV continuation
+        state."""
+        session = pipe.session()
+        prompt = 'Hello! My name is Alice.'
+
+        generator = pipe.stream_infer(prompts=prompt,
+                                      sessions=session,
+                                      gen_config=GenerationConfig(max_new_tokens=30),
+                                      enable_thinking=False)
+        resp = None
+        for out in generator:
+            resp = resp.extend(out) if resp else out
+
+        assert resp.text
+        assert not hasattr(session, 'step')
+
+    def test_chat_streaming(self, pipe):
+        """Test chat method with streaming output."""
+        prompt = 'Tell me a short story'
+        session = pipe.session()
+
+        generator = pipe.chat(prompt=prompt,
+                              session=session,
+                              stream_response=True,
+                              gen_config=GenerationConfig(max_new_tokens=50))
+
+        chunks = []
+        for chunk in generator:
+            chunks.append(chunk)
+            assert isinstance(chunk, Response)
+
+        assert len(chunks) > 0
+        assert session.response is not None
+        assert not hasattr(session, 'step')
+        assert len(session.history) == 1
+
+    def test_chat_non_streaming(self, pipe):
+        """Test chat method with non-streaming output."""
+        prompt = 'What is 2+2?'
+        session = pipe.chat(prompt=prompt,
+                            stream_response=False,
+                            gen_config=GenerationConfig(max_new_tokens=20),
+                            enable_thinking=False)
+
+        assert session is not None
+        assert hasattr(session, 'response')
+        assert hasattr(session, 'history')
+        assert len(session.history) == 1
+        assert '4' in session.response.text or 'four' in session.response.text.lower()
+
+    def test_chat_multi_turn(self, pipe):
+        """Test chat method with multi-turn conversation."""
+        # First turn
+        session = pipe.chat(prompt='My favorite color is blue.',
+                            stream_response=False,
+                            gen_config=GenerationConfig(max_new_tokens=80),
+                            enable_thinking=False)
+
+        # Second turn should remember context
+        session = pipe.chat(prompt='What is my favorite color?',
+                            session=session,
+                            stream_response=False,
+                            gen_config=GenerationConfig(max_new_tokens=80),
+                            enable_thinking=False)
+
+        assert 'blue' in session.response.text.lower()
+        assert len(session.history) == 2
+
+    def test_session_creation(self, pipe):
+        """Test session method to create new sessions."""
+        session1 = pipe.session()
+        session2 = pipe.session()
+
+        assert session1 is not None
+        assert session2 is not None
+        assert session1 != session2
+
+    def test_get_ppl_single(self, pipe):
+        """Test get_ppl with single input."""
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
+
+        text = 'This is a test sentence.'
+        input_ids = tokenizer.encode(text, return_tensors='pt')[0].tolist()
+
+        ppl = pipe.get_ppl(input_ids)
+
+        assert isinstance(ppl, list)
+        assert len(ppl) == 1
+        assert isinstance(ppl[0], float)
+        assert ppl[0] > 0
+
+    def test_get_ppl_batch(self, pipe):
+        """Test get_ppl with batch inputs."""
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
+
+        texts = ['First text.', 'Second text.']
+        input_ids_list = [tokenizer.encode(text, return_tensors='pt')[0].tolist() for text in texts]
+
+        ppl = pipe.get_ppl(input_ids_list)
+
+        assert isinstance(ppl, list)
+        assert len(ppl) == len(texts)
+        for score in ppl:
+            assert isinstance(score, float)
+            assert score > 0
+
+    def test_stream_infer_stream_response_parameter(self, pipe):
+        """Test stream_infer stream_response parameter."""
+        prompt = 'Test'
+        gen = pipe.stream_infer(prompt, stream_response=True)
+        assert hasattr(gen, '__iter__')
+
+        results = list(gen)
+        assert len(results) > 0
+
+    @pytest.mark.parametrize('max_new_tokens', [10, 50, 100])
+    def test_infer_different_max_tokens(self, pipe, max_new_tokens):
+        """Parametrized test for different max_new_tokens values."""
+        gen_config = GenerationConfig(max_new_tokens=max_new_tokens)
+        prompt = 'Continue: Once upon a time'
+        response = pipe.infer(prompt, gen_config=gen_config)
+
+        assert response.generate_token_len <= max_new_tokens + 5
+
+    def test_batch_infer_different_gen_configs(self, pipe):
+        """Test batch infer with different GenerationConfig per prompt."""
+        prompts = ['Short answer: What is AI?', 'Long answer: Explain ML']
+        gen_configs = [GenerationConfig(max_new_tokens=20), GenerationConfig(max_new_tokens=50)]
+
+        responses = pipe.infer(prompts, gen_config=gen_configs)
+
+        assert len(responses) == 2
+        assert responses[0].generate_token_len <= responses[1].generate_token_len + 10
+
+    def test_infer_zero_tokens(self, pipe):
+        """Test that max_new_tokens=0 produces a standard request error."""
+        gen_config = GenerationConfig(max_new_tokens=0)
+        prompt = 'This prompt should not generate any response'
+        response = pipe.infer(prompt, gen_config=gen_config, enable_thinking=False)
+        assert isinstance(response, Response)
+        assert response.finish_reason == 'error'
+        assert response.generate_token_len == 0
+        assert response.error_code == ErrorCode.INVALID_REQUEST.value
+        assert response.error_message == 'max_new_tokens must be at least 1, got 0.'

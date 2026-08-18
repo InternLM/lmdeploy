@@ -1,0 +1,102 @@
+# HF model id: Qwen/Qwen3-4B
+a100:
+- model_type: chat
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - quantization
+  quantization:
+    turbomind:
+    - awq
+    pytorch:
+    - awq
+h:
+- model_type: chat
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - quantization
+  quantization:
+    turbomind:
+    - awq
+    pytorch:
+    - awq
+- model_type: base
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  interface:
+    pytorch:
+      suites:
+      - base
+    turbomind:
+      suites:
+      - base
+'3090':
+- model_type: chat
+  engine_config:
+    tp: 1
+    extra:
+      cache-max-entry-count: 0.5
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - quantization
+  quantization:
+    turbomind:
+    - awq
+    pytorch:
+    - awq
+'5080':
+- model_type:
+  - chat
+  - base
+  engine_config:
+    tp: 1
+    extra:
+      cache-max-entry-count: 0.5
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - quantization
+  quantization:
+    turbomind:
+    - awq
+    pytorch:
+    - awq

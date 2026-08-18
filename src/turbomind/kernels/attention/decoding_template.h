@@ -6,11 +6,12 @@
 #include "attention_universal.h"
 #include "reduce.h"
 #include "src/turbomind/kernels/core/thread_map.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "utils.h"
 namespace turbomind {
 
 template<class Kernel>
-bool invokeDecoding(const typename Kernel::ParamType& params)
+bool invokeDecoding(const typename Kernel::ParamType& params, int sm_count, int max_active_ctas)
 {
     static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
 
@@ -34,21 +35,6 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
 
     auto kernel_func = &attention_kernel<Kernel>;
 
-    thread_local const int2 caps = [&] {
-        auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
-        if (err) {
-            std::cout << cudaGetErrorString(err) << "\n";
-            std::abort();
-        }
-        int device_id{};
-        cudaGetDevice(&device_id);
-        int sm_count{};
-        cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device_id);
-        int max_active_ctas{};
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_active_ctas, kernel_func, block.x, kSmemSize);
-        return int2{sm_count, max_active_ctas};
-    }();
-
     const int q_group_size   = params.num_heads / params.num_kv_heads;
     const int q_head_per_cta = std::min(q_group_size, Kernel::CTA_H);
 
@@ -61,7 +47,7 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
     dim3 grid = CtaMap::get_grid_shape(params.num_kv_heads, params.batch_size, 1, cta_per_q_group);
 
     const int grid_size = grid.x * grid.y * grid.z;
-    const int split_cnt = GetSplitCount(max_split_count, grid_size, caps.y, caps.x, 4);
+    const int split_cnt = GetSplitCount(max_split_count, grid_size, max_active_ctas, sm_count, 4);
 
     grid = CtaMap::get_grid_shape(params.num_kv_heads, params.batch_size, split_cnt, cta_per_q_group);
 
@@ -74,10 +60,9 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
     kernel_func<<<grid, block, kSmemSize, params.stream>>>(
         params, cache_iter_factory, CtaMap{}, q_group_size, q_head_per_cta, cta_per_q_group);
 
-    if (auto err = cudaGetLastError(); err != cudaSuccess) {
-        std::cout << cudaGetErrorString(err) << "\n";
-        std::abort();
-    }
+    // TM_CUDA_CHECK(cudaErrorAssert);
+
+    TM_CUDA_CHECK(cudaGetLastError());
 
     if (params.cp_fn) {
         params.cp_fn(params.cp_fn_ctx);
@@ -88,6 +73,7 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
                                                     params.partial_ML,
                                                     params.partial_O,
                                                     split_cnt > 1 ? params.split_cnt : nullptr,
+                                                    params.token_mask,
                                                     params.max_split_k,
                                                     split_cnt,
                                                     params.cp_size,

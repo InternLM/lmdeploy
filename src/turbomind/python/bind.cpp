@@ -1,5 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <array>
+#include <cstring>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -14,9 +16,32 @@
 
 #include "xgrammar/compiler.h"
 
+#include "src/turbomind/core/data_format.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/module.h"
 #include "src/turbomind/core/tensor.h"
+#include "src/turbomind/engine/engine_config.h"
+#include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/model_request.h"
+#include "src/turbomind/engine/multimodal_input.h"
+#include "src/turbomind/kernels/copy/copy.h"
+#include "src/turbomind/kernels/norm/norm.h"
+#include "src/turbomind/models/attention_weight.h"
+#include "src/turbomind/models/decoder_layer_weight.h"
+#include "src/turbomind/models/delta_net_weight.h"
+#include "src/turbomind/models/ffn_weight.h"
+#include "src/turbomind/models/internvit/internvit_block_weight.h"
+#include "src/turbomind/models/internvit/internvit_input.h"
+#include "src/turbomind/models/internvit/internvit_weight.h"
+#include "src/turbomind/models/layer_norm_weight.h"
+#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/moe_weight.h"
+#include "src/turbomind/models/norm_weight.h"
+#include "src/turbomind/models/qwenvit/qwenvit_block_weight.h"
+#include "src/turbomind/models/qwenvit/qwenvit_input.h"
+#include "src/turbomind/models/qwenvit/qwenvit_weight.h"
+#include "src/turbomind/models/vision_model_weight.h"
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/turbomind.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -25,6 +50,14 @@
 namespace py = pybind11;
 namespace ft = turbomind;
 using namespace pybind11::literals;
+
+namespace turbomind::linear_attn::delta_rule {
+void bind_delta_rule(pybind11::module_& m);
+}
+
+namespace turbomind::python_linear {
+void bind_linear(pybind11::module_& m);
+}
 
 using ft::core::Tensor;
 
@@ -118,6 +151,11 @@ DLManagedTensor* TritonTensorToDLManagedTensor(Tensor& tensor)
         case data_type_v<turbomind::bfloat16_t>:
             data_type.code = DLDataTypeCode::kDLBfloat;
             data_type.bits = 16;
+            break;
+        case data_type_v<turbomind::fp8_e4m3_t>:
+            // Export as opaque uint8; consumers reinterpret (torch float8 via uint8 view).
+            data_type.code = DLDataTypeCode::kDLUInt;
+            data_type.bits = 8;
             break;
         default:
             break;
@@ -219,7 +257,8 @@ std::shared_ptr<Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* tensor)
     assert(dl_tensor.ndim > 0);
     std::vector<ft::core::ssize_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
 
-    std::shared_ptr<void> ptr{dl_tensor.data, [tensor](void* p) {
+    auto*                 data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
+    std::shared_ptr<void> ptr{data, [tensor](void* p) {
                                   if (tensor->deleter) {
                                       tensor->deleter(tensor);
                                   }
@@ -227,37 +266,103 @@ std::shared_ptr<Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* tensor)
     return std::make_shared<Tensor>(ptr, std::move(shape), dtype, where);
 }
 
+ft::core::ssize_t TorchStorageCapacityElements(py::handle source, ft::DataType dtype, ft::core::ssize_t fallback)
+{
+    if (!source || !py::hasattr(source, "untyped_storage") || !py::hasattr(source, "storage_offset")) {
+        return fallback;
+    }
+
+    try {
+        const auto elem_bytes = ft::byte_size(dtype);
+        if (elem_bytes <= 0) {
+            return fallback;
+        }
+        auto storage       = source.attr("untyped_storage")();
+        auto storage_bytes = py::cast<ft::core::ssize_t>(storage.attr("nbytes")());
+        auto offset        = py::cast<ft::core::ssize_t>(source.attr("storage_offset")());
+        if (storage_bytes < 0 || offset < 0) {
+            return fallback;
+        }
+        const auto offset_bytes = offset * elem_bytes;
+        if (offset_bytes < 0 || offset_bytes > storage_bytes) {
+            return fallback;
+        }
+        const auto capacity = (storage_bytes - offset_bytes) / elem_bytes;
+        return capacity > fallback ? capacity : fallback;
+    }
+    catch (py::error_already_set& e) {
+        e.restore();
+        PyErr_Clear();
+        return fallback;
+    }
+}
+
+std::shared_ptr<Tensor> DLManagedTensorToTritonTensorWithStrides(DLManagedTensor* tensor, py::handle source = {})
+{
+    auto& dl_tensor = tensor->dl_tensor;
+    auto  where     = getMemoryType(dl_tensor.device);
+    auto  dtype     = getDataType(dl_tensor.dtype);
+    assert(dl_tensor.ndim > 0);
+    std::vector<ft::core::ssize_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
+
+    // Compute row-major strides if DLPack strides are NULL (contiguous tensor)
+    std::vector<ft::core::ssize_t> strides;
+    if (dl_tensor.strides) {
+        strides.assign(dl_tensor.strides, dl_tensor.strides + dl_tensor.ndim);
+    }
+    else {
+        strides.resize(dl_tensor.ndim, 1);
+        for (int i = dl_tensor.ndim - 2; i >= 0; --i) {
+            strides[i] = strides[i + 1] * shape[i + 1];
+        }
+    }
+
+    ft::core::Layout layout(std::move(shape), std::move(strides));
+
+    auto*                 data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
+    std::shared_ptr<void> ptr{data, [tensor](void* p) {
+                                  if (tensor->deleter) {
+                                      tensor->deleter(tensor);
+                                  }
+                              }};
+
+    const auto capacity =
+        layout.is_contiguous() ? layout.cosize() : TorchStorageCapacityElements(source, dtype, layout.cosize());
+    auto buffer = ft::core::Buffer{ptr, capacity, dtype, where};
+    return std::make_shared<Tensor>(std::move(buffer), std::move(layout), Tensor::PreserveBufferCapacity{});
+}
+
 static void safe_memcpy(void* dst, const void* src, size_t size)
 {
     cudaPointerAttributes dat{};
     cudaPointerAttributes sat{};
-    ft::check_cuda_error(cudaPointerGetAttributes(&dat, dst));
-    ft::check_cuda_error(cudaPointerGetAttributes(&sat, src));
+    TM_CUDA_CHECK(cudaPointerGetAttributes(&dat, dst));
+    TM_CUDA_CHECK(cudaPointerGetAttributes(&sat, src));
     try {
         if (dat.devicePointer && sat.devicePointer) {
             // Both can be accessed from current context
-            ft::check_cuda_error(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
+            TM_CUDA_CHECK(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
         }
         else if (dat.type == cudaMemoryTypeDevice && sat.type == cudaMemoryTypeDevice) {
             if (dat.device != sat.device) {
                 // On different devices, try peer memcpy
-                ft::check_cuda_error(cudaMemcpyPeer(dst, dat.device, src, sat.device, size));
+                TM_CUDA_CHECK(cudaMemcpyPeer(dst, dat.device, src, sat.device, size));
             }
             else {
                 // Same device, switch to the device first (this is unlikely)
                 ft::CudaDeviceGuard guard(dat.device);
-                ft::check_cuda_error(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
+                TM_CUDA_CHECK(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
             }
         }
         else {
             // Unknown case, give it a try anyway
-            ft::check_cuda_error(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
+            TM_CUDA_CHECK(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
         }
     }
     catch (...) {
         int device_id{-1};
         cudaGetDevice(&device_id);
-        TM_LOG_ERROR("cudaMemcpy failed: dst=(%d, %d, %p, %p), src=(%d, %d, %p, %p), size=%s, device=%d",
+        TM_LOG_ERROR("cudaMemcpy failed: dst=({}, {}, {}, {}), src=({}, {}, {}, {}), size={}, device={}",
                      (int)dat.type,
                      dat.device,
                      dat.devicePointer,
@@ -266,7 +371,7 @@ static void safe_memcpy(void* dst, const void* src, size_t size)
                      sat.device,
                      sat.devicePointer,
                      sat.hostPointer,
-                     std::to_string(size).c_str(),
+                     size,
                      device_id);
         throw;
     }
@@ -292,45 +397,156 @@ struct ScopedGIL {
 
 }  // namespace
 
+// --- Generic config binding helper ---
+
+template<typename Config>
+void bind_config(py::module_& m, const char* name)
+{
+    py::class_<Config, turbomind::core::ModuleConfig> cls(m, name);
+    cls.def(py::init<>());
+    Config::for_each([&](const char* fname, auto member_ptr) { cls.def_readwrite(fname, member_ptr); });
+    cls.def("clone", [](const Config& c) { return Config(c); });
+}
+
+template<typename T>
+void bind_struct(py::module_& m, const char* name)
+{
+    py::class_<T> cls(m, name);
+    cls.def(py::init<>());
+    T::for_each([&](const char* fname, auto member_ptr) { cls.def_readwrite(fname, member_ptr); });
+}
+
+namespace turbomind {
+void bind_moe_gate_v2(pybind11::module_& m);
+}
+
 PYBIND11_MODULE(_turbomind, m)
 {
+    py::module_ multimodal = m.def_submodule("multimodal");
+
+    using MMInput        = ft::multimodal::Input;
+    using MMModality     = ft::multimodal::Modality;
+    using InternVitItem  = ft::multimodal::InternVitItem;
+    using InternVitInput = ft::multimodal::InternVitInput;
+    using QwenVitItem    = ft::multimodal::QwenVitItem;
+    using QwenVitInput   = ft::multimodal::QwenVitInput;
+    py::class_<MMInput, std::shared_ptr<MMInput>>(multimodal, "Input");
+    py::enum_<MMModality>(multimodal, "Modality")
+        .value("IMAGE", MMModality::kImage)
+        .value("VIDEO", MMModality::kVideo)
+        .value("AUDIO", MMModality::kAudio)
+        .value("TIME_SERIES", MMModality::kTimeSeries)
+        .export_values();
+    auto fp_from_bytes = [](const py::bytes& b) -> ft::Fingerprint {
+        ft::Fingerprint fp{};
+        char*           buf = nullptr;
+        Py_ssize_t      len = 0;
+        if (PyBytes_AsStringAndSize(b.ptr(), &buf, &len) != 0) {
+            throw py::error_already_set();
+        }
+        if (len == 0) {
+            return fp;  // empty sentinel
+        }
+        if (len != 32) {
+            throw std::invalid_argument("fingerprint must be 0 or 32 bytes (SHA-256)");
+        }
+        std::memcpy(fp.words.data(), buf, 32);
+        return fp;
+    };
+    auto fp_to_bytes = [](const ft::Fingerprint& fp) -> py::bytes {
+        return py::bytes(reinterpret_cast<const char*>(fp.words.data()), 32);
+    };
+    py::class_<QwenVitItem>(multimodal, "QwenVitItem")
+        .def(py::init<>())
+        .def(py::init([fp_from_bytes](MMModality              modality,
+                                      std::shared_ptr<Tensor> data,
+                                      int                     token_begin,
+                                      int                     token_end,
+                                      std::array<int, 3>      grid_thw,
+                                      py::bytes               fingerprint) {
+                 return QwenVitItem{modality, *data, token_begin, token_end, grid_thw, fp_from_bytes(fingerprint)};
+             }),
+             "modality"_a,
+             "data"_a,
+             "token_begin"_a,
+             "token_end"_a,
+             "grid_thw"_a,
+             "fingerprint"_a = py::bytes())
+        .def_readwrite("modality", &QwenVitItem::modality)
+        .def_property(
+            "data",
+            [](const QwenVitItem& self) { return std::make_shared<Tensor>(self.data); },
+            [](QwenVitItem& self, std::shared_ptr<Tensor> data) { self.data = *data; })
+        .def_readwrite("token_begin", &QwenVitItem::token_begin)
+        .def_readwrite("token_end", &QwenVitItem::token_end)
+        .def_readwrite("grid_thw", &QwenVitItem::grid_thw)
+        .def_property(
+            "fingerprint",
+            [fp_to_bytes](const QwenVitItem& self) { return fp_to_bytes(self.fingerprint); },
+            [fp_from_bytes](QwenVitItem& self, py::bytes b) { self.fingerprint = fp_from_bytes(b); });
+    py::class_<QwenVitInput, MMInput, std::shared_ptr<QwenVitInput>>(multimodal, "QwenVitInput")
+        .def(py::init<>())
+        .def(py::init<std::vector<QwenVitItem>>(), "items"_a)
+        .def_readwrite("items", &QwenVitInput::items);
+    py::class_<InternVitItem>(multimodal, "InternVitItem")
+        .def(py::init<>())
+        .def(py::init([fp_from_bytes](MMModality              modality,
+                                      std::shared_ptr<Tensor> data,
+                                      int                     token_begin,
+                                      int                     token_end,
+                                      py::bytes               fingerprint) {
+                 return InternVitItem{modality, *data, token_begin, token_end, fp_from_bytes(fingerprint)};
+             }),
+             "modality"_a,
+             "data"_a,
+             "token_begin"_a,
+             "token_end"_a,
+             "fingerprint"_a = py::bytes())
+        .def_readwrite("modality", &InternVitItem::modality)
+        .def_property(
+            "data",
+            [](const InternVitItem& self) { return std::make_shared<Tensor>(self.data); },
+            [](InternVitItem& self, std::shared_ptr<Tensor> data) { self.data = *data; })
+        .def_readwrite("token_begin", &InternVitItem::token_begin)
+        .def_readwrite("token_end", &InternVitItem::token_end)
+        .def_property(
+            "fingerprint",
+            [fp_to_bytes](const InternVitItem& self) { return fp_to_bytes(self.fingerprint); },
+            [fp_from_bytes](InternVitItem& self, py::bytes b) { self.fingerprint = fp_from_bytes(b); });
+    py::class_<InternVitInput, MMInput, std::shared_ptr<InternVitInput>>(multimodal, "InternVitInput")
+        .def(py::init<>())
+        .def(py::init<std::vector<InternVitItem>>(), "items"_a)
+        .def_readwrite("items", &InternVitInput::items);
+
     py::class_<ft::RequestMetrics, std::shared_ptr<ft::RequestMetrics>>(m, "RequestMetrics")
         .def(py::init())
         .def_property_readonly("enqueue_time",
                                [](ft::RequestMetrics& m) { return m.enqueue_time.load(std::memory_order_relaxed); })
         .def_property_readonly("scheduled_time",
-                               [](ft::RequestMetrics& m) { return m.scheduled_time.load(std::memory_order_relaxed); });
+                               [](ft::RequestMetrics& m) { return m.scheduled_time.load(std::memory_order_relaxed); })
+        .def_property_readonly("cached_tokens",
+                               [](ft::RequestMetrics& m) { return m.cached_tokens.load(std::memory_order_relaxed); });
 
     py::class_<ft::ScheduleMetrics, std::shared_ptr<ft::ScheduleMetrics>>(m, "ScheduleMetrics")
         .def(py::init())
         .def_readonly("total_seqs", &ft::ScheduleMetrics::total_seqs)
         .def_readonly("active_seqs", &ft::ScheduleMetrics::active_seqs)
         .def_readonly("waiting_seqs", &ft::ScheduleMetrics::waiting_seqs)
-        .def_readonly("total_blocks", &ft::ScheduleMetrics::total_blocks)
-        .def_readonly("active_blocks", &ft::ScheduleMetrics::active_blocks)
-        .def_readonly("cached_blocks", &ft::ScheduleMetrics::cached_blocks)
-        .def_readonly("free_blocks", &ft::ScheduleMetrics::free_blocks);
+        .def_readonly("cache_usage", &ft::ScheduleMetrics::cache_usage)
+        .def_readonly("prefix_cache_hit_rate", &ft::ScheduleMetrics::prefix_cache_hit_rate)
+        .def_readonly("scheduler_tick", &ft::ScheduleMetrics::scheduler_tick);
 
     py::class_<ft::SessionParam>(m, "SessionParam")
-        .def(py::init([](uint64_t id, int step, bool start, bool end) {
-                 if (!start && end) {
-                     throw std::logic_error("unsupported arguments: start=false, end=true");
-                 }
+        .def(py::init([](uint64_t id, int step) {
                  ft::SessionParam param{};
-                 param.id         = id;
-                 param.step       = step;
-                 param.start_flag = start;
-                 param.end_flag   = end;
+                 param.id   = id;
+                 param.step = step;
                  return param;
              }),
              "id"_a,
-             "step"_a,
-             "start"_a,
-             "end"_a)
+             "step"_a)
         .def_readwrite("id", &ft::SessionParam::id)
-        .def_readwrite("step", &ft::SessionParam::step)
-        .def_readwrite("start", &ft::SessionParam::start_flag)
-        .def_readwrite("end", &ft::SessionParam::end_flag);
+        .def_readwrite("step", &ft::SessionParam::step);
 
     py::class_<ft::GenerationConfig>(m, "GenerationConfig")
         .def(py::init())
@@ -346,6 +562,7 @@ PYBIND11_MODULE(_turbomind, m)
         .def_readwrite("repetition_penalty", &ft::GenerationConfig::repetition_penalty)
         .def_readwrite("random_seed", &ft::GenerationConfig::random_seed)
         .def_readwrite("output_logprobs", &ft::GenerationConfig::output_logprobs)
+        .def_readwrite("return_ppl", &ft::GenerationConfig::return_ppl)
         .def_readwrite("output_last_hidden_state", &ft::GenerationConfig::output_last_hidden_state)
         .def_readwrite("output_logits", &ft::GenerationConfig::output_logits)
         .def("__repr__", [](const ft::GenerationConfig& c) {
@@ -361,9 +578,9 @@ PYBIND11_MODULE(_turbomind, m)
     py::class_<ft::AtomicRequestState, std::shared_ptr<ft::AtomicRequestState>>(m, "AtomicRequestState")
         .def("consume", [](ft::AtomicRequestState& s) { return s.exchange(nullptr); });
 
-    // data type
     {
         using namespace turbomind;
+        // data type
         py::enum_<ft::DataType>(m, "DataType")
             .value("TYPE_INVALID", kNull)
             .value("TYPE_BOOL", kBool)
@@ -378,14 +595,67 @@ PYBIND11_MODULE(_turbomind, m)
             .value("TYPE_FP16", kFloat16)
             .value("TYPE_FP32", kFloat32)
             .value("TYPE_FP64", kFloat64)
-            .value("TYPE_BF16", kBfloat16);
+            .value("TYPE_BF16", kBfloat16)
+            .value("TYPE_FP8_E4M3", kFloat8_e4m3)
+            .value("TYPE_FP4_E2M1", kFloat4_e2m1)
+            .value("TYPE_UINT4", kUint4);
 
         // memory type
         py::enum_<ft::DeviceType>(m, "MemoryType")
             .value("MEMORY_CPU", ft::DeviceType::kCPU)
             .value("MEMORY_CPU_PINNED", ft::DeviceType::kCPUpinned)
             .value("MEMORY_GPU", ft::DeviceType::kDEVICE);
+
+        // norm type
+        py::enum_<ft::NormType>(m, "NormType")
+            .value("NONE", ft::NormType::kNone)
+            .value("LAYER_NORM", ft::NormType::kLayerNorm)
+            .value("RMS_NORM", ft::NormType::kRMSNorm);
     }
+
+    // DataFormat descriptors
+    py::class_<turbomind::QuantParamDesc>(m, "QuantParamDesc")
+        .def_readwrite("dtype", &turbomind::QuantParamDesc::dtype)
+        .def_readwrite("transposed", &turbomind::QuantParamDesc::transposed)
+        .def("present", &turbomind::QuantParamDesc::present);
+
+    py::class_<turbomind::DataFormat>(m, "DataFormat")
+        .def_readwrite("dtype", &turbomind::DataFormat::dtype)
+        .def_readwrite("block_sizes", &turbomind::DataFormat::block_sizes)
+        .def_readwrite("scales", &turbomind::DataFormat::scales)
+        .def_readwrite("zeros", &turbomind::DataFormat::zeros)
+        .def("is_quantized", &turbomind::DataFormat::is_quantized)
+        .def("rank", &turbomind::DataFormat::rank);
+
+    m.def("ResolveLinearWeightFormat",
+          &turbomind::ResolveLinearWeightFormat,
+          py::arg("data_type"),
+          py::arg("weight_dtype"),
+          py::arg("block_in"),
+          py::arg("block_out"));
+
+    // --- Config struct bindings ---
+    py::class_<turbomind::core::ModuleConfig>(m, "ModuleConfig")
+        .def_property_readonly("module_type", [](const turbomind::core::ModuleConfig& c) -> std::string {
+            return std::string(c.module_type);
+        });
+
+    bind_config<turbomind::core::LinearConfig>(m, "LinearConfig");
+    bind_struct<turbomind::core::RopeConfig>(m, "RopeConfig");
+    bind_struct<turbomind::EngineConfig>(m, "EngineConfig");
+    bind_config<turbomind::core::AttentionConfig>(m, "AttentionConfig");
+    bind_config<turbomind::core::FfnConfig>(m, "FfnConfig");
+    bind_config<turbomind::core::MoeConfig>(m, "MoeConfig");
+    bind_config<turbomind::core::DeltaNetConfig>(m, "DeltaNetConfig");
+    bind_config<turbomind::core::ModuleListConfig>(m, "ModuleListConfig");
+    bind_config<turbomind::core::NormConfig>(m, "NormConfig");
+    bind_config<turbomind::core::DecoderLayerConfig>(m, "DecoderLayerConfig");
+    bind_config<turbomind::core::ModelWeightConfig>(m, "ModelWeightConfig");
+    bind_config<turbomind::core::LayerNormConfig>(m, "LayerNormConfig");
+    bind_config<turbomind::core::QwenVitConfig>(m, "QwenVitConfig");
+    bind_config<turbomind::core::QwenVitBlockConfig>(m, "QwenVitBlockConfig");
+    bind_config<turbomind::core::InternVitConfig>(m, "InternVitConfig");
+    bind_config<turbomind::core::InternVitBlockConfig>(m, "InternVitBlockConfig");
 
     // tensor
     py::class_<Tensor, std::shared_ptr<Tensor>>(m, "Tensor")
@@ -393,6 +663,8 @@ PYBIND11_MODULE(_turbomind, m)
         .def_property_readonly("type", [](const Tensor& t) { return t.dtype(); })
         .def_property_readonly("shape", [](const Tensor& t) { return t.shape(); })
         .def_property_readonly("data", [](const Tensor& t) { return t.raw_data(); })
+        .def_property_readonly("byte_size", [](const Tensor& t) { return t.byte_size(); })
+        .def("__bool__", [](const Tensor& t) { return t.byte_size() > 0; })
         .def(
             "copy_from",
             [](Tensor& self, py::object obj) {
@@ -425,10 +697,12 @@ PYBIND11_MODULE(_turbomind, m)
                 });
             },
             "stream"_a = 0)
-        .def("__dlpack_device__", [](const Tensor& self) {
-            auto device = getDLDevice(self);
-            return std::tuple<int, int>(int(device.device_type), device.device_id);
-        });
+        .def("__dlpack_device__",
+             [](const Tensor& self) {
+                 auto device = getDLDevice(self);
+                 return std::tuple<int, int>(int(device.device_type), device.device_id);
+             })
+        .def("t", [](const Tensor& self) { return std::make_shared<Tensor>(self.t()); });
     m.def(
         "from_dlpack",
         [](py::object obj) {
@@ -441,6 +715,27 @@ PYBIND11_MODULE(_turbomind, m)
             return ret;
         },
         "dl_managed_tensor"_a);
+    m.def(
+        "from_dlpack_with_strides",
+        [](py::object obj) {
+            py::capsule      cap = obj.attr("__dlpack__")();
+            DLManagedTensor* dlmt =
+                static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
+            auto ret = DLManagedTensorToTritonTensorWithStrides(dlmt, obj);
+            // take ownership of capsule's payload
+            cap.set_name("used_dltensor");
+            return ret;
+        },
+        "dl_managed_tensor"_a);
+    m.def(
+        "generic_copy_on_stream",
+        [](std::shared_ptr<Tensor> src, std::shared_ptr<Tensor> dst, std::uintptr_t stream_ptr) {
+            using ft::core::GenericCopy;
+            GenericCopy(*src, *dst, reinterpret_cast<cudaStream_t>(stream_ptr));
+        },
+        "src"_a,
+        "dst"_a,
+        "stream_ptr"_a);
 
     py::bind_map<TensorMap, std::shared_ptr<TensorMap>>(m, "TensorMap");
 
@@ -450,6 +745,7 @@ PYBIND11_MODULE(_turbomind, m)
             "forward",
             [](ModelRequest*               model_request,
                std::shared_ptr<TensorMap>  input_tensors,
+               std::shared_ptr<MMInput>    mm_inputs,
                const ft::SessionParam&     session,
                const ft::GenerationConfig& gen_cfg,
                bool                        stream_output,
@@ -457,6 +753,7 @@ PYBIND11_MODULE(_turbomind, m)
                std::function<void()>       cb) {
                 ModelRequest::InputParam param{};
                 param.tensors        = std::move(input_tensors);
+                param.mm_inputs      = std::move(mm_inputs);
                 param.session        = session;
                 param.gen_cfg        = gen_cfg;
                 param.stream_output  = stream_output;
@@ -474,6 +771,7 @@ PYBIND11_MODULE(_turbomind, m)
             },
             py::call_guard<py::gil_scoped_release>(),
             "input_tensors"_a,
+            "mm_inputs"_a,
             "session"_a,
             "gen_cfg"_a,
             "stream_output"_a,
@@ -486,14 +784,6 @@ PYBIND11_MODULE(_turbomind, m)
             },
             py::call_guard<py::gil_scoped_release>())
         .def(
-            "end",
-            [](ModelRequest* model_request, std::function<void(int)> cb, uint64_t session_id) {
-                model_request->End(std::move(cb), session_id);  //
-            },
-            py::call_guard<py::gil_scoped_release>(),
-            "cb"_a,
-            "session_id"_a)
-        .def(
             "set_grammar",
             [](ModelRequest* model_request, const xgrammar::CompiledGrammar& grammar) {
                 TM_LOG_INFO("Set grammar for model_request");
@@ -502,12 +792,153 @@ PYBIND11_MODULE(_turbomind, m)
             py::call_guard<py::gil_scoped_release>(),
             "grammar"_a);
 
+    // Python context manager wrapper for ContextGuard.
+    // Stores copies of Stream + Allocator(s); constructs the real guard
+    // in-place on __enter__ and destroys it on __exit__.
+    struct PyContextGuard {
+        ft::core::Stream                        stream;
+        ft::core::Allocator                     host;
+        ft::core::Allocator                     device;
+        bool                                    has_device{false};
+        std::unique_ptr<ft::core::ContextGuard> guard;
+
+        // existing TurboMind path: stream + single allocator
+        PyContextGuard(ft::core::Stream s, ft::core::Allocator a):
+            stream(std::move(s)), host(std::move(a)), device{}, has_device(false)
+        {
+        }
+
+        // harness / standalone path: stream + host + device (test_gemm_v2 shape)
+        PyContextGuard(ft::core::Stream s, ft::core::Allocator h, ft::core::Allocator d):
+            stream(std::move(s)), host(std::move(h)), device(std::move(d)), has_device(true)
+        {
+        }
+
+        void enter()
+        {
+            if (has_device) {
+                guard = std::make_unique<ft::core::ContextGuard>(stream, host, device);
+            }
+            else {
+                guard = std::make_unique<ft::core::ContextGuard>(stream, host);
+            }
+        }
+        void exit()
+        {
+            guard.reset();
+        }
+    };
+
+    py::class_<PyContextGuard>(m, "ContextGuard")
+        .def("__enter__",
+             [](PyContextGuard& g) -> PyContextGuard& {
+                 g.enter();
+                 return g;
+             })
+        .def("__exit__", [](PyContextGuard& g, py::object, py::object, py::object) { g.exit(); })
+        .def_property_readonly(
+            "stream_ptr",
+            [](const PyContextGuard& g) { return reinterpret_cast<std::uintptr_t>(g.stream.handle()); },
+            "Underlying cudaStream_t as an integer (for torch.cuda.ExternalStream).");
+
+    m.def(
+        "create_device_context",
+        []() {
+            auto stream = ft::core::Stream::create();
+            return std::make_unique<PyContextGuard>(
+                stream, ft::core::Allocator{ft::kCPU}, ft::core::Allocator{stream, false});
+        },
+        "Create a ContextGuard with stream + host + device allocators.\n\n"
+        "Objects that use core::Context::stream() in their constructor or destructor "
+        "(notably LlamaLinear) must be destroyed before this context exits.");
+
+    // Param — lightweight handle to a Module parameter slot
+    py::class_<ft::core::Param>(m, "Param")
+        .def(
+            "alloc",
+            [](ft::core::Param& p, std::vector<size_t> shape, ft::DataType dtype) {
+                return std::make_shared<Tensor>(p.alloc(shape, dtype));
+            },
+            "shape"_a,
+            "dtype"_a)
+        .def("get", [](ft::core::Param& p) { return std::make_shared<Tensor>(p.get()); })
+        .def(
+            "set", [](ft::core::Param& p, std::shared_ptr<Tensor> t) { p.set(t ? *t : Tensor{}); }, "tensor"_a)
+        .def("__bool__", [](ft::core::Param& p) { return static_cast<bool>(p); });
+
+    // Module class — navigation and allocation interface
+    py::class_<ft::core::Module>(m, "Module")
+        .def(
+            "get",
+            [](ft::core::Module& m, const std::string& segment) -> ft::core::Module* { return m.get(segment); },
+            py::return_value_policy::reference,
+            "segment"_a)
+        .def(
+            "param",
+            [](ft::core::Module& m, const std::string& name) -> ft::core::Param { return m.param(name); },
+            "name"_a)
+        .def("prepare", [](ft::core::Module& m) { m.prepare(); })
+        .def(
+            "child",
+            [](ft::core::Module& m, const std::string& name) -> ft::core::Module* { return m.child(name); },
+            py::return_value_policy::reference,
+            "name"_a)
+        // Config-based create_child: accepts any ModuleConfig subclass
+        .def(
+            "create_child",
+            [](ft::core::Module&              m,
+               const std::string&             name,
+               turbomind::core::ModuleConfig& config) -> ft::core::Module* { return m.create_child(name, config); },
+            py::return_value_policy::reference,
+            "name"_a,
+            "config"_a)
+        .def("type", [](ft::core::Module& m) -> const char* { return m.type(); })
+        .def("full_path", [](ft::core::Module& m) -> std::string { return m.full_path(); })
+        .def(
+            "__getitem__",
+            [](ft::core::Module& m, const std::string& key) -> ft::core::Module* { return m.get(key); },
+            py::return_value_policy::reference)
+        .def(
+            "__getitem__",
+            [](ft::core::Module& m, int idx) -> ft::core::Module* { return m.get(std::to_string(idx)); },
+            py::return_value_policy::reference)
+        // Deferred parent binding — transfer ownership of a previously created module
+        .def(
+            "add_child_raw",
+            [](ft::core::Module& parent, const std::string& name, ft::core::Module* child) -> ft::core::Module* {
+                auto owned = std::unique_ptr<ft::core::Module>(child);
+                return parent.add_child(name, std::move(owned));
+            },
+            py::return_value_policy::reference,
+            "name"_a,
+            "child"_a)
+        // Wire a meta-MoE layer weight to its shared routed pack (non-owning)
+        .def(
+            "set_meta_pack",
+            [](ft::core::Module& m, ft::core::Module* pack) {
+                auto& moe = dynamic_cast<ft::MoeWeight&>(m);
+                moe.set_meta_pack(dynamic_cast<ft::MoeWeight*>(pack));
+            },
+            "pack"_a);
+
+    // Standalone module creation (no parent needed)
+    m.def(
+        "create_module",
+        [](turbomind::core::ModuleConfig& config) -> ft::core::Module* {
+            auto mod = ft::core::Module::create(config);
+            return mod.release();
+        },
+        py::return_value_policy::reference,
+        "config"_a);
+
+    // LinearWeight is fully bound in bind_linear() (after Module is registered).
+
     // transformer model
     using ft::TurboMind;
     py::class_<TurboMind, std::shared_ptr<TurboMind>>(m, "TurboMind")
         .def_static(
             "create",
-            [](std::string model_dir, std::string config, std::string weight_type) -> std::shared_ptr<TurboMind> {
+            [](std::string model_dir, turbomind::EngineConfig config) -> std::shared_ptr<TurboMind> {
                 auto gil_factory = [] {  //
                     // erase the type
                     return std::static_pointer_cast<void>(std::make_shared<ScopedGIL>());
@@ -517,21 +948,34 @@ PYBIND11_MODULE(_turbomind, m)
                     delete ptr;
                 };
 
-                std::shared_ptr<TurboMind> model(new TurboMind(model_dir, config, gil_factory), no_gil_deleter);
+                std::shared_ptr<TurboMind> model(new TurboMind(model_dir, std::move(config), gil_factory),
+                                                 no_gil_deleter);
                 return model;
             },
             "model_dir"_a,
-            "config"_a      = "",
-            "weight_type"_a = "half")
+            "engine_config"_a)
         .def(
             "create_request",
             [](TurboMind* model) { return model->CreateRequest(); },
             py::call_guard<py::gil_scoped_release>())
-        .def("create_weights", &TurboMind::CreateWeights, py::call_guard<py::gil_scoped_release>(), "index"_a)
+        .def("create_context", &TurboMind::CreateContext, py::call_guard<py::gil_scoped_release>(), "index"_a)
         .def(
-            "get_weights",
-            [](TurboMind* model, int index) { return model->GetWeights(index); },
+            "create_root",
+            [](TurboMind* model, int index) -> ft::core::Module* { return model->CreateRoot(index); },
+            py::return_value_policy::reference,
             py::call_guard<py::gil_scoped_release>(),
+            "index"_a)
+        .def(
+            "root",
+            [](TurboMind* model, int index) -> ft::core::Module* { return model->root(index); },
+            py::return_value_policy::reference,
+            "index"_a)
+        .def(
+            "context",
+            [](ft::TurboMind* model, int index) -> std::unique_ptr<PyContextGuard> {
+                auto [stream, alloc] = model->weight_context(index);
+                return std::make_unique<PyContextGuard>(std::move(stream), std::move(alloc));
+            },
             "index"_a)
         .def(
             "process_weight",
@@ -548,17 +992,13 @@ PYBIND11_MODULE(_turbomind, m)
             [](TurboMind* model, int index) { return model->GetScheduleMetrics(index); },
             py::call_guard<py::gil_scoped_release>(),
             "index"_a)
-        .def(
-            "sleep",
-            [](TurboMind* model, int index, int level) { model->Sleep(index, level); },
-            py::call_guard<py::gil_scoped_release>(),
-            "index"_a,
-            "level"_a)
-        .def(
-            "wakeup",
-            [](TurboMind* model, int index, const std::vector<std::string>& tags) { model->WakeUp(index, tags); },
-            py::call_guard<py::gil_scoped_release>(),
-            "index"_a,
-            "tags"_a)
-        .def("is_dummy_node", [](TurboMind* model) { return model->is_dummy_node(); });
+        .def("is_dummy_node", [](TurboMind* model) { return model->is_dummy_node(); })
+        .def("attn_tp_rank", &TurboMind::GetAttnTpRank, "index"_a)
+        .def("mlp_tp_rank", &TurboMind::GetMlpTpRank, "index"_a)
+        .def("ep_rank", &TurboMind::GetEpRank, "index"_a)
+        .def("model_tp_rank", &TurboMind::GetModelTpRank, "index"_a);
+
+    turbomind::linear_attn::delta_rule::bind_delta_rule(m);
+    turbomind::python_linear::bind_linear(m);
+    turbomind::bind_moe_gate_v2(m);
 }

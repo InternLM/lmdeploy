@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -9,9 +10,10 @@ from torch.profiler import record_function
 
 # from torch import distributed as dist
 import lmdeploy.pytorch.distributed as dist
+from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig, QuantizationConfig
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.utils import CtxMgrBase, singleton
 
 if TYPE_CHECKING:
@@ -20,11 +22,15 @@ if TYPE_CHECKING:
 
 @dataclass
 class DPMeta:
-    tp_sizes: List[int] = None
-    moe_tp_sizes: List[int] = None
+    tp_sizes: list[int] = None
+    moe_tp_sizes: list[int] = None
+    # added extra info for spec decoding
+    dp_is_decoding: bool = False
+    dp_batches: list[int] = None
+    dp_draft_num_tokens: list[int] = None
 
     @staticmethod
-    def _gather_tp_sizes(tp: int, seqlen: int, num_tokens: List[int], dist_ctx: dist.DistContext, layer_type: str):
+    def _gather_tp_sizes(tp: int, seqlen: int, num_tokens: list[int], dist_ctx: dist.DistContext, layer_type: str):
         """Gather tp size."""
         attn_tp = dist_ctx.dist_config.attn_tp
         if tp > 1 and tp != attn_tp:
@@ -38,7 +44,7 @@ class DPMeta:
         return tp_sizes
 
     @classmethod
-    def build(cls, seqlen: int, num_tokens: List[int]):
+    def build(cls, seqlen: int, num_tokens: list[int]):
         """Get dp meta."""
         dist_ctx = dist.get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config
@@ -63,10 +69,10 @@ class DPMeta:
 class VisionModelInputs:
     """Vision model inputs."""
     history_lengths: torch.LongTensor = None
-    input_embeddings: List[List[torch.Tensor]] = None
-    input_embedding_ranges: List[torch.LongTensor] = None
+    input_embeddings: list[list[torch.Tensor]] = None
+    input_embedding_ranges: list[torch.LongTensor] = None
     input_embedding_indexing: torch.BoolTensor = None
-    input_multimodals: List[MultiModalTensor] = None
+    input_multimodals: list[MultiModalData] = None
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
@@ -94,6 +100,29 @@ class VisionModelInputs:
             out_dict[k] = v
 
         return VisionModelInputs(**out_dict)
+
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of vision tensor fields."""
+        for f in fields(self):
+            key = f.name
+            value = getattr(self, key)
+            if isinstance(value, torch.Tensor):
+                if value.is_cuda:
+                    value.record_stream(stream)
+            elif key == 'input_embedding_ranges':
+                for tensor in value or ():
+                    if tensor.is_cuda:
+                        tensor.record_stream(stream)
+            elif key == 'input_embeddings':
+                for tensors in value or ():
+                    for tensor in tensors:
+                        if tensor.is_cuda:
+                            tensor.record_stream(stream)
+            elif key == 'input_multimodals':
+                for multimodals in value or ():
+                    for items in multimodals.values():
+                        for item in items:
+                            item.record_stream(stream)
 
     def get_inputs(self, history_lengths: torch.Tensor, seq_lengths: torch.Tensor):
         """Get vision embedding inputs."""
@@ -125,7 +154,7 @@ class VisionModelInputs:
 class ModelInputsDelta:
     """Delta of ModelInputs."""
     # valid indices
-    indices: Optional[torch.Tensor]
+    indices: torch.Tensor | None
     # new block offsets
     block_offsets: torch.Tensor
     # cpu copy of indices
@@ -135,7 +164,7 @@ class ModelInputsDelta:
     sum_kv_seqlen: int
     is_decoding: bool = True
     # sliding window
-    num_ignored_history: Optional[torch.Tensor] = None
+    num_ignored_history: torch.Tensor | None = None
 
     @property
     def seq_length(self):
@@ -163,6 +192,13 @@ class ModelInputsDelta:
 
         return ModelInputsDelta(**out_dict)
 
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of tensor fields."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, torch.Tensor) and value.is_cuda:
+                value.record_stream(stream)
+
     def log_info(self):
         """Get log info."""
         ret = (f'num_tokens={self.indices.numel()}, batch_size={self.indices.numel()}'
@@ -182,30 +218,45 @@ class ModelInputs:
     max_q_seqlen: int
     max_kv_seqlen: int
     sum_kv_seqlen: int
-    local_adapter_ids: torch.Tensor = None
-    vision_inputs: VisionModelInputs = None
-    model_metas: List[Dict[str, Any]] = None
-    dp_meta: 'DPMeta' = None
+    local_adapter_ids: torch.Tensor | None = None
+    vision_inputs: VisionModelInputs | None = None
+    model_metas: list[dict[str, Any]] | None = None
+    dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
     is_dummy: bool = False
-    state_offsets: torch.Tensor = None
-    target_hidden_states: torch.Tensor = None
-    target_position_ids: torch.Tensor = None
+    # Runtime SSM state slot ids for each sequence in the batch.
+    state_offsets: torch.Tensor | None = None
+    target_hidden_states: torch.Tensor | None = None
+    target_position_ids: torch.Tensor | None = None
+    target_inputs_embeds: torch.Tensor | None = None
     is_chunk: bool = False
-    is_first_chunk: bool = True
+    is_first_chunk: bool = False
+    is_last_chunk: bool = False
+    is_chunk_multimodal: bool = False
+    # mrope, shape(3, sum_seqlens)
+    mrope_pos_ids: torch.Tensor | None = None
 
     def step(self, input_ids: torch.Tensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
         assert self.is_decoding
         if step_seqlens is None:
             step_seqlens = self.seq_length
-        self.history_lengths += step_seqlens
-        self.max_kv_seqlen += self.max_q_seqlen
-        self.sum_kv_seqlen += self.max_q_seqlen * self.seq_length.numel()
+
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
-        self.input_ids = input_ids
-        return self
+
+        mrope_pos_ids = self.mrope_pos_ids
+        if mrope_pos_ids is not None:
+            mrope_pos_ids = mrope_pos_ids.unflatten(1, (-1, self.max_q_seqlen)) + step_seqlens[None, :, None]
+            mrope_pos_ids = mrope_pos_ids.flatten(1, 2)
+
+        return self.clone(
+            input_ids=input_ids,
+            history_lengths=self.history_lengths + step_seqlens,
+            max_kv_seqlen=self.max_kv_seqlen + self.max_q_seqlen,
+            sum_kv_seqlen=self.sum_kv_seqlen + self.max_q_seqlen * self.seq_length.numel(),
+            mrope_pos_ids=mrope_pos_ids,
+        )
 
     @torch.inference_mode()
     def to_device(self, device: str, non_blocking: bool = False):
@@ -222,15 +273,37 @@ class ModelInputs:
 
         return ModelInputs(**out_dict)
 
-    def build_dp_meta(self, num_tokens: List[int]):
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of model tensor fields."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, torch.Tensor):
+                if value.is_cuda:
+                    value.record_stream(stream)
+            elif isinstance(value, VisionModelInputs):
+                value.record_stream(stream)
+
+    def build_dp_meta(self, num_tokens: list[int]):
         """Build dp meta."""
         self.dp_meta = DPMeta.build(self.input_ids.numel(), num_tokens)
+
+    def global_is_decoding(self) -> bool:
+        """Check whether all DP ranks are decoding."""
+        if self.dp_meta is None:
+            return self.is_decoding
+        return self.dp_meta.dp_is_decoding
 
     def log_info(self):
         """Get log info."""
         ret = (f'num_tokens={self.input_ids.numel()}, batch_size={self.seq_length.numel()}'
                f', is_decoding={self.is_decoding}, has_vision={self.vision_inputs is not None}')
         return ret
+
+    def clone(self, **kwargs):
+        """Get new ModelInputs with updated fields."""
+        out_dict = {f.name: getattr(self, f.name) for f in fields(self)}
+        out_dict.update(kwargs)
+        return ModelInputs(**out_dict)
 
 
 @dataclass
@@ -248,28 +321,44 @@ class StepContext:
     q_seqlens: torch.LongTensor
     kv_seqlens: torch.IntTensor
     q_start_loc: torch.LongTensor
-    kv_caches: List
+    kv_caches: list
     is_decoding: bool
     sum_kv_seqlen: int
-    max_kv_seqlen: int = None
-    local_adapter_ids: torch.LongTensor = None
-    input_embeddings: torch.Tensor = None
-    input_embedding_indexing: torch.Tensor = None
-    input_multimodals: List[MultiModalTensor] = None
-    vision_inputs: VisionModelInputs = None
+    max_kv_seqlen: int | None = None
+    max_q_seqlen: int | None = None
+    local_adapter_ids: torch.LongTensor | None = None
+    input_embeddings: torch.Tensor | None = None
+    input_embedding_indexing: torch.Tensor | None = None
+    input_multimodals: list[MultiModalData] | None = None
+    vision_inputs: VisionModelInputs | None = None
     attn_metadata: Any = None
-    kv_quant_policy: Literal[0, 4, 8] = 0
-    model_metas: List[Dict[str, Any]] = None
-    dp_meta: DPMeta = None
+    kv_quant_policy: QuantPolicy = QuantPolicy.NONE
+    model_metas: list[dict[str, Any]] | None = None
+    dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
     # for draft model
-    target_hidden_states: torch.Tensor = None
+    target_hidden_states: torch.Tensor | None = None
+    target_inputs_embeds: torch.Tensor | None = None
 
     # states for ssm
-    state_caches: List = None
-    state_offsets: torch.LongTensor = None
+    state_caches: list | None = None
+    state_offsets: torch.LongTensor | None = None
 
-    _outputs: Dict = field(default_factory=dict)
+    # named cache views for models with block_cache_specs / state_cache_specs
+    block_caches: Mapping[str, torch.Tensor] | None = None
+    named_state_caches: Mapping[str, torch.Tensor] | None = None
+
+    # mrope
+    mrope_position_ids: torch.Tensor | None = None
+
+    _outputs: dict = field(default_factory=dict)
+
+    # chunk with multimodal
+    is_chunk_multimodal: bool = False
+    is_dummy: bool = False
+    is_chunk: bool = False
+    is_first_chunk: bool = False
+    is_last_chunk: bool = False
 
     @classmethod
     def new(
@@ -277,9 +366,9 @@ class StepContext:
         inputs: ModelInputs,
         model_config: ModelConfig,
         cache_config: CacheConfig,
-        kv_caches: List = None,
-        state_caches: List = None,
-        kv_quant_policy: Literal[0, 4, 8] = 0,
+        kv_caches: list | None = None,
+        state_caches: list | None = None,
+        kv_quant_policy: QuantPolicy = QuantPolicy.NONE,
     ):
         """Build step context.
 
@@ -325,6 +414,7 @@ class StepContext:
             is_decoding=inputs.is_decoding,
             sum_kv_seqlen=inputs.sum_kv_seqlen,
             max_kv_seqlen=inputs.max_kv_seqlen,
+            max_q_seqlen=inputs.max_q_seqlen,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,
@@ -334,10 +424,23 @@ class StepContext:
             state_caches=state_caches,
             state_offsets=inputs.state_offsets,
             target_hidden_states=inputs.target_hidden_states,
+            target_inputs_embeds=inputs.target_inputs_embeds,
+            mrope_position_ids=inputs.mrope_pos_ids,
+            is_chunk_multimodal=inputs.is_chunk_multimodal,
+            is_dummy=inputs.is_dummy,
+            is_chunk=inputs.is_chunk,
+            is_first_chunk=inputs.is_first_chunk,
+            is_last_chunk=inputs.is_last_chunk,
         )
 
         ret = get_backend().update_step_context(ret)
         return ret
+
+    def global_is_decoding(self) -> bool:
+        """Check whether all DP ranks are decoding."""
+        if self.dp_meta is None:
+            return self.is_decoding
+        return self.dp_meta.dp_is_decoding
 
     @classmethod
     def get_mask_and_position_ids(cls, inputs: ModelInputs):
@@ -362,6 +465,9 @@ class StepContext:
         # batch with same seqlens
         if max_q_seqlen * batch_size == num_tokens:
             attention_mask = None
+            if target_position_ids is not None:
+                return attention_mask, target_position_ids
+
             ranges = torch.arange(0, max_q_seqlen, device=device)
             position_ids = history_seqlens[:, None] + ranges[None, :]
             position_ids = position_ids.flatten()
@@ -386,10 +492,22 @@ class StepContext:
 @dataclass
 class BuildModelContext:
     """Context for building model."""
-    disable_vision_encoder: bool = False
+    language_model_only: bool = False
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False
+    quant_config: QuantizationConfig = field(default_factory=QuantizationConfig)
+    fp32_lm_head: bool = False
+    tie_word_embeddings: bool = False
+    num_spec_tokens: int = 0
+    max_batch_size: int = 0
+
+    @property
+    def deep_ep_max_tokens_per_rank(self) -> int:
+        """Infer DeepEP low-latency max dispatch tokens per rank."""
+        if self.max_batch_size <= 0:
+            return 128
+        return self.max_batch_size * (1 + self.num_spec_tokens)
 
 
 class StepContextManager(CtxMgrBase[StepContext]):
@@ -398,6 +516,7 @@ class StepContextManager(CtxMgrBase[StepContext]):
         super().__init__(None)
         build_ctx = build_ctx or BuildModelContext()
         self.build_ctx = build_ctx
+        self.backend_step_meta_plan: object | None = None
 
     @record_function('build_step_context')
     def build_context(
@@ -405,9 +524,9 @@ class StepContextManager(CtxMgrBase[StepContext]):
         inputs: ModelInputs,
         model_config: ModelConfig,
         cache_config: CacheConfig,
-        kv_caches: List = None,
-        state_caches: List = None,
-        kv_quant_policy: Literal[0, 4, 8] = 0,
+        kv_caches: list | None = None,
+        state_caches: list | None = None,
+        kv_quant_policy: QuantPolicy = QuantPolicy.NONE,
     ):
         """Build context."""
         return StepContext.new(

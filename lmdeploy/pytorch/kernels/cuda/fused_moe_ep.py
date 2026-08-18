@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from dlblas: https://github.com/DeepLink-org/DLBlas
-from typing import List, Optional
 
 import torch
 import triton
@@ -221,7 +220,7 @@ def fused_moe_v3(
     topk_weights,
     w13_weight: torch.Tensor,
     w2_weight: torch.Tensor,
-    num_recv_tokens_per_expert: Optional[List[int]],
+    num_recv_tokens_per_expert: list[int] | None,
 ):
     if num_recv_tokens_per_expert is None:
         return hidden_states

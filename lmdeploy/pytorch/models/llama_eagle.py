@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 from torch import nn
@@ -62,11 +63,11 @@ class EagleLlamaModel(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        previous_hidden_states: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        previous_hidden_states: torch.FloatTensor | None = None,
     ):
         """Rewrite of LlamaModel.forward."""
         # token embedding
@@ -126,7 +127,7 @@ class EagleLlamaForCausalLM(nn.Module, CudaGraphMixin):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         target_hidden_states: torch.Tensor = None,
@@ -145,8 +146,8 @@ class EagleLlamaForCausalLM(nn.Module, CudaGraphMixin):
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -205,7 +206,7 @@ class EagleLlamaForCausalLM(nn.Module, CudaGraphMixin):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)

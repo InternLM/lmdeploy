@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import List, Optional
 
 import torch
 from torch import distributed as dist
@@ -18,8 +17,8 @@ class DistGroup:
     rank: int = 0
     cpu_group: dist.ProcessGroup = None
     gpu_group: dist.ProcessGroup = None
-    cpu_groups: List[dist.ProcessGroup] = None
-    gpu_groups: List[dist.ProcessGroup] = None
+    cpu_groups: list[dist.ProcessGroup] = None
+    gpu_groups: list[dist.ProcessGroup] = None
     gpu_gather_group: dist.ProcessGroup = None
 
     def close(self):
@@ -197,7 +196,7 @@ class DistContext:
 
     cpu_group: dist.ProcessGroup = None
     ep_gpu_group: dist.ProcessGroup = None
-    ep_gpu_groups: List[dist.ProcessGroup] = None
+    ep_gpu_groups: list[dist.ProcessGroup] = None
     dist_config: DistConfig = None
 
     @classmethod
@@ -303,7 +302,7 @@ def get_world_rank():
     return world_size, rank
 
 
-def get_tp_world_rank(layer_type: Optional[str] = None):
+def get_tp_world_rank(layer_type: str | None = None):
     ctx = get_dist_manager().current_context()
     if layer_type is None:
         return ctx.dist_config.tp, ctx.tp_group.rank
@@ -416,8 +415,8 @@ def reduce_scatter(output, input_list, op=ReduceOp.SUM, group='tp', async_op=Fal
 
 
 def gather_by_tp_sizes(x: torch.Tensor,
-                       tp_sizes: List[int],
-                       group: Optional[dist.ProcessGroup] = None,
+                       tp_sizes: list[int],
+                       group: dist.ProcessGroup | None = None,
                        async_op: bool = False):
     """Gather input."""
     assert all(size >= 0 for size in tp_sizes), f'Invalid tp sizes: {tp_sizes}'
@@ -430,7 +429,7 @@ def gather_by_tp_sizes(x: torch.Tensor,
     return new_x
 
 
-def reduce_scatter_by_tp_sizes(out: torch.Tensor, rank: int, tp_sizes: List[int], group: dist.ProcessGroup):
+def reduce_scatter_by_tp_sizes(out: torch.Tensor, rank: int, tp_sizes: list[int], group: dist.ProcessGroup):
     """Reduce scatter."""
     attn_tp = get_dist_manager().current_config().attn_tp
     outs = list(out.split(tp_sizes, -2))

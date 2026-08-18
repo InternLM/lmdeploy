@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
+import torch.distributed as dist
 from torch import nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
@@ -16,15 +17,18 @@ def pad_vocab_size(vocab_size: int, pad_to: int = DEFAULT_VOCAB_PADDING_SIZE) ->
 
 class ParallelEmbedding(nn.Module):
 
-    def __init__(self,
-                 vocab_size: int,
-                 hidden_size: int,
-                 padding_idx: int,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None,
-                 is_tp: bool = False,
-                 padding_size: int = DEFAULT_VOCAB_PADDING_SIZE,
-                 layer_type: str = 'attn'):
+    def __init__(
+        self,
+        vocab_size: int,
+        hidden_size: int,
+        padding_idx: int,
+        dtype: torch.dtype = None,
+        device: torch.device = None,
+        is_tp: bool = False,
+        padding_size: int = DEFAULT_VOCAB_PADDING_SIZE,
+        layer_type: str = 'attn',
+        force_dtype: torch.dtype = None,
+    ):
         self.dist_ctx = get_dist_manager().current_context()
         super().__init__()
 
@@ -52,9 +56,11 @@ class ParallelEmbedding(nn.Module):
         else:
             self.vocab_size_padded = self.vocab_size
 
+        self.out_dtype = dtype
         self.start_index = self.rank * self.vocab_size_padded
         self.end_index = (self.rank + 1) * self.vocab_size_padded
-        self.register_parameter('weight', self.create_weight(self.vocab_size_padded, hidden_size, dtype, device))
+        weight_dtype = force_dtype or dtype
+        self.register_parameter('weight', self.create_weight(self.vocab_size_padded, hidden_size, weight_dtype, device))
         self.weight.weight_loader = self.weight_loader
 
         backend = get_backend()
@@ -76,14 +82,14 @@ class ParallelEmbedding(nn.Module):
 
     def _weight_loader_tp_rowwise(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader for rowwise embedding."""
-        loaded_weight = loaded_weight.to(param.device)
-
         shard_size = self.vocab_size_padded
         if self.end_index > loaded_weight.shape[0]:
             shard_size = loaded_weight.shape[0] - self.start_index
 
         loaded_weight = loaded_weight.narrow(0, self.start_index, shard_size)
+        loaded_weight = loaded_weight.to(param.device)
         param[:loaded_weight.shape[0]].data.copy_(loaded_weight)
+        param[loaded_weight.shape[0]:].data.fill_(0)
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
@@ -98,4 +104,72 @@ class ParallelEmbedding(nn.Module):
                 self.weight[self.padding_idx - self.start_index] = 0
 
     def forward(self, x: torch.Tensor):
-        return self.impl.forward(x, self.weight, all_reduce=self.all_reduce, group=self.tp_group)
+        embeddings = self.impl.forward(x, self.weight, all_reduce=self.all_reduce, group=self.tp_group)
+        if self.out_dtype is not None and embeddings.dtype != self.out_dtype:
+            embeddings = embeddings.to(dtype=self.out_dtype)
+        return embeddings
+
+
+class ParallelLMHead(ParallelEmbedding):
+    """LM head sharded along the vocabulary dimension."""
+
+    def __init__(
+        self,
+        vocab_size: int,
+        hidden_size: int,
+        bias: bool = False,
+        dtype: torch.dtype = None,
+        device: torch.device = None,
+        is_tp: bool = True,
+        padding_size: int = DEFAULT_VOCAB_PADDING_SIZE,
+        layer_type: str = 'attn',
+    ):
+        super().__init__(vocab_size=vocab_size,
+                         hidden_size=hidden_size,
+                         padding_idx=None,
+                         dtype=dtype,
+                         device=device,
+                         is_tp=is_tp,
+                         padding_size=padding_size,
+                         layer_type=layer_type)
+
+        if bias:
+            bias_param = self.weight.new_zeros(self.vocab_size_padded)
+            self.register_parameter('bias', nn.Parameter(bias_param, requires_grad=False))
+            self.bias.weight_loader = self.weight_loader
+        else:
+            self.register_parameter('bias', None)
+
+        builder = get_backend().get_layer_impl_builder(OpType.Linear)
+        self.impl = builder.build(hidden_size, self.vocab_size_padded, bias, dtype=dtype)
+
+    def tie_weights(self, embedding: ParallelEmbedding):
+        """Tie the local LM-head shard to a parallel embedding shard."""
+        self.weight = embedding.weight
+
+    def get_local_logits(self, hidden_states: torch.Tensor):
+        """Compute logits for the vocabulary shard owned by this rank."""
+        if hidden_states.dtype != self.weight.dtype:
+            hidden_states = hidden_states.to(self.weight.dtype)
+        return self.impl.forward(hidden_states, self.weight, self.bias)
+
+    def all_gather_logits(self, local_logits: torch.Tensor) -> torch.Tensor:
+        """All-gather full logits on every TP rank."""
+        if not self.all_reduce:
+            return local_logits[..., :self.vocab_size]
+
+        input_size = local_logits.size()
+        output_size = (input_size[0] * self.tp, ) + input_size[1:]
+        logits = local_logits.new_empty(output_size)
+        dist.all_gather_into_tensor(logits, local_logits, group=self.tp_group)
+        # The collective concatenates dim 0. Move its rank dimension beside
+        # the vocabulary shard before reconstructing the full last dimension.
+        logits = logits.reshape((self.tp, ) + input_size)
+        logits = logits.movedim(0, local_logits.dim() - 1)
+        logits = logits.reshape(input_size[:-1] + (self.tp * input_size[-1], ))
+        return logits[..., :self.vocab_size]
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Compute TP-local logits and all-gather them on every rank."""
+        local_logits = self.get_local_logits(hidden_states)
+        return self.all_gather_logits(local_logits)

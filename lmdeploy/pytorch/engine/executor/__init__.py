@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from logging import Logger
-from typing import Dict
 
 from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
@@ -59,11 +58,12 @@ def build_executor(
     backend_config: BackendConfig,
     dist_config: DistConfig,
     misc_config: MiscConfig,
-    adapters: Dict[str, str] = None,
+    adapters: dict[str, str] = None,
     device_type: str = 'cuda',
     distributed_executor_backend: str = None,
     dtype: str = 'auto',
     specdecode_config: SpecDecodeConfig = None,
+    trust_remote_code: bool = False,
 ) -> ExecutorBase:
     """Build model agent executor."""
     logger = get_logger('lmdeploy')
@@ -72,12 +72,16 @@ def build_executor(
 
     model_config = ModelConfig.from_pretrained(
         model_path,
-        trust_remote_code=True,
+        trust_remote_code=trust_remote_code,
         dtype=dtype,
         hf_overrides=misc_config.hf_overrides,
         dist_config=dist_config,
         is_draft_model=False,
         spec_method=None if specdecode_config is None else specdecode_config.method,
+        num_spec_tokens=0 if specdecode_config is None else specdecode_config.num_speculative_tokens,
+        model_format=misc_config.model_format,
+        device_type=device_type,
+        block_size=cache_config.block_size,
     )
 
     if distributed_executor_backend is None:
@@ -107,6 +111,7 @@ def build_executor(
             adapters=adapters,
             device_type=device_type,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code
         )
     elif distributed_executor_backend == 'mp':
         from .mp_executor import MPExecutor
@@ -121,6 +126,7 @@ def build_executor(
             adapters=adapters,
             device_type=device_type,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code
         )
     elif distributed_executor_backend == 'ray':
         from .ray_executor import RayExecutor
@@ -135,6 +141,7 @@ def build_executor(
             device_type=device_type,
             dtype=dtype,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code
         )
     else:
         raise RuntimeError(f'Unsupported distributed_executor_backend: {distributed_executor_backend}.')

@@ -1,21 +1,24 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 import asyncio
 import atexit
 import concurrent.futures
 import os
+from collections.abc import Iterator
 from contextlib import closing
 from functools import partial
 from queue import Queue
 from threading import Thread
-from typing import TYPE_CHECKING, Dict, Iterator, List, Tuple
+from typing import TYPE_CHECKING
 
-import torch
 import tqdm
 from typing_extensions import deprecated
 
 from .archs import autoget_backend_config, get_task
 from .messages import GenerationConfig, PytorchEngineConfig, Response, SpeculativeConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
+from .serve.core.exceptions import ErrorCode, RequestError
 from .serve.processors import MultimodalProcessor
 from .utils import get_logger, get_model
 
@@ -36,7 +39,9 @@ class Pipeline:
                  chat_template_config: ChatTemplateConfig | None = None,
                  log_level: str = 'WARNING',
                  max_log_len: int | None = None,
+                 trust_remote_code: bool = False,
                  speculative_config: SpeculativeConfig | None = None,
+                 allowed_media_domains: list[str] | None = None,
                  **kwargs):
         """Initialize Pipeline.
 
@@ -46,7 +51,9 @@ class Pipeline:
             chat_template_config: Chat template configuration.
             log_level: Log level.
             max_log_len: Max number of prompt characters or prompt tokens being printed in log.
+            trust_remote_code: whether to trust remote code from model repositories.
             speculative_config: Speculative decoding configuration.
+            allowed_media_domains: Optional HTTP(S) media URL domain allowlist.
             **kwargs: Additional keyword arguments.
         """
 
@@ -65,24 +72,31 @@ class Pipeline:
             speculative_config.model = get_model(speculative_config.model, download_dir)
 
         # Create inference engine
-        _, pipeline_class = get_task(model_path)
-        backend, backend_config = autoget_backend_config(model_path, backend_config)
+        backend, backend_config = autoget_backend_config(model_path, backend_config,
+                                                         trust_remote_code=trust_remote_code)
+        _, pipeline_class = get_task(backend,
+                                     model_path,
+                                     trust_remote_code=trust_remote_code,
+                                     backend_config=backend_config)
         self.async_engine = pipeline_class(model_path,
                                            backend=backend,
                                            backend_config=backend_config,
                                            chat_template_config=chat_template_config,
                                            max_log_len=max_log_len,
+                                           trust_remote_code=trust_remote_code,
                                            speculative_config=speculative_config,
+                                           allowed_media_domains=allowed_media_domains,
                                            **kwargs)
         self.internal_thread = _EventLoopThread(daemon=True)
         self.limiter: asyncio.Semaphore = None
         self.session_mgr = self.async_engine.session_mgr
         self.backend_config = self.async_engine.backend_config
+        self.allowed_media_domains = allowed_media_domains
         self.async_engine.start_loop(self.internal_thread.loop, use_async_api=False)
 
     def infer(self,
-              prompts: List[str] | str | List[Dict] | List[List[Dict]] | Tuple | List[Tuple],
-              gen_config: GenerationConfig | List[GenerationConfig] | None = None,
+              prompts: list[str] | str | list[dict] | list[list[dict]] | tuple | list[tuple],
+              gen_config: GenerationConfig | list[GenerationConfig] | None = None,
               do_preprocess: bool = True,
               adapter_name: str | None = None,
               use_tqdm: bool = False,
@@ -90,17 +104,20 @@ class Pipeline:
         """Inference prompts.
 
         Args:
-            prompts: Prompts to inference. It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
-                Tuple can be (prompt, image or [images]) or (image or [images], prompt).
-            gen_config(GenerationConfig | List[GenerationConfig] | None): Generation configuration(s).
-            do_preprocess(bool): Whether to pre-process messages.
-            adapter_name(str | None): Adapter name.
-            use_tqdm(bool): Whether to use progress bar.
-            **kwargs(dict): Additional keyword arguments.
+            prompts: Prompts for inference. It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
+                tuple can be (prompt, image or [images]) or (image or [images], prompt).
+            gen_config: Generation configuration(s).
+            do_preprocess: Whether to pre-process messages.
+            adapter_name: Adapter name.
+            use_tqdm: Whether to use progress bar.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            Response | list[Response]: A single response or a list of responses.
         """
         is_single = self._is_single(prompts)
         # format prompts to openai message format, which is a list of dicts
-        prompts = MultimodalProcessor.format_prompts(prompts)
+        prompts = MultimodalProcessor.format_prompts(prompts, allowed_media_domains=self.allowed_media_domains)
         pbar = tqdm.tqdm(total=len(prompts)) if use_tqdm else None
         outputs = []
         try:
@@ -126,9 +143,9 @@ class Pipeline:
         return self.infer(*args, **kwargs)
 
     def stream_infer(self,
-                     prompts: List[str] | str | List[Dict] | List[List[Dict]] | Tuple | List[Tuple],
-                     sessions: 'Session' | List['Session'] | None = None,
-                     gen_config: GenerationConfig | List[GenerationConfig] | None = None,
+                     prompts: list[str] | str | list[dict] | list[list[dict]] | tuple | list[tuple],
+                     sessions: Session | list[Session] | None = None,
+                     gen_config: GenerationConfig | list[GenerationConfig] | None = None,
                      do_preprocess: bool = True,
                      adapter_name: str | None = None,
                      stream_response: bool = True,
@@ -136,22 +153,21 @@ class Pipeline:
         """Stream inference.
 
         Args:
-            prompts(List[str] | str | List[Dict] | List[List[Dict]] | Tuple | List[Tuple]): Prompts to inference.
-                It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
-                Tuple can be (prompt, image or [images]) or (image or [images], prompt).
-            sessions(Session | List[Session] | None): Sessions. Each of which corresponds to a prompt.
-            gen_config(GenerationConfig | List[GenerationConfig] | None): Generation configuration(s).
-            do_preprocess(bool): Whether to pre-process messages.
-            adapter_name(str | None): Adapter name.
-            stream_response(bool): Whether to stream the response. If True, the generator will stream the response.
+            prompts: Prompts to inference. It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
+                tuple can be (prompt, image or [images]) or (image or [images], prompt).
+            sessions: Sessions. Each of which corresponds to a prompt.
+            gen_config: Generation configuration(s).
+            do_preprocess: Whether to pre-process messages.
+            adapter_name: Adapter name.
+            stream_response: Whether to stream the response. If True, the generator will stream the response.
                 Otherwise, the generator will run until finish and return the final response. This argument
                 is introduced to support the streaming and non-streaming modes of Pipeline.chat.
-            **kwargs(dict): Additional keyword arguments.
+            **kwargs: Additional keyword arguments.
 
         Returns:
-            Generator: A generator that yields the output (i.e. instance of class `Response`) of the inference.
+            Iterator: A generator that yields the output (i.e. instance of class ``Response``) of the inference.
         """
-        prompts = MultimodalProcessor.format_prompts(prompts)
+        prompts = MultimodalProcessor.format_prompts(prompts, allowed_media_domains=self.allowed_media_domains)
         requests = self._request_generator(prompts,
                                            sessions=sessions,
                                            gen_config=gen_config,
@@ -166,40 +182,60 @@ class Pipeline:
         self.internal_thread.close()
         self.async_engine.close()
 
+    @staticmethod
+    def _history_to_messages(history, prompt, allowed_media_domains=None):
+        def _messages(prompt):
+            messages = []
+            for item in MultimodalProcessor.format_prompts(
+                    prompt, allowed_media_domains=allowed_media_domains):
+                if isinstance(item, str):
+                    messages.append({'role': 'user', 'content': item})
+                elif isinstance(item, dict):
+                    messages.append(item)
+                else:
+                    messages.extend(item)
+            return messages
+
+        messages = []
+        for user_prompt, assistant_text in history:
+            messages.extend(_messages(user_prompt))
+            messages.append({'role': 'assistant', 'content': assistant_text})
+        messages.extend(_messages(prompt))
+        return messages
+
     def chat(self,
-             prompt: str | Tuple[str, 'Image' | List['Image']],
+             prompt: str | tuple[str, Image | list[Image]],
              session=None,
              gen_config: GenerationConfig | None = None,
              stream_response=False,
              adapter_name=None,
-             **kwargs) -> 'Session' | Iterator:
+             **kwargs) -> Session | Iterator:
         """Chat.
 
         Args:
-            prompt (str): prompt
-            session (Session): the chat session
-            gen_config (GenerationConfig | None): a instance of
-                GenerationConfig. Default to None.
-            stream_response (bool): whether to stream the response.
-            adapter_name (str): adapter name.
-            **kwargs (dict): additional keyword arguments.
+            prompt: prompt string or a tuple of (prompt, image or [images]).
+            session: the chat session.
+            gen_config: an instance of GenerationConfig. Default to None.
+            stream_response: whether to stream the response.
+            adapter_name: adapter name.
+            **kwargs: additional keyword arguments.
+
+        Returns:
+            Session | Iterator: the updated session, or a streaming iterator if stream_response is True.
         """
         if session is None:
             session = self.session_mgr.get()
         session.update(prompt=prompt, response=None)
 
-        prompt = MultimodalProcessor.format_prompts(prompt)
-
-        sequence_start = session.step == 0
-        generator = self.stream_infer(prompts=prompt,
+        messages = self._history_to_messages(
+            session.history, prompt, allowed_media_domains=self.allowed_media_domains)
+        generator = self.stream_infer(prompts=messages,
                                       sessions=session,
                                       gen_config=gen_config,
                                       stream_response=stream_response,
                                       adapter_name=adapter_name,
                                       multiplex=True,
-                                      sequence_start=sequence_start,
-                                      sequence_end=False,
-                                      step=session.step)
+                                      **kwargs)
 
         def _gen():
             resp = None
@@ -212,7 +248,6 @@ class Pipeline:
                 raise
             else:
                 session.response = resp
-                session.step += resp.generate_token_len + resp.input_token_len
                 session.history.append((session.prompt, resp.text))
 
         if stream_response:
@@ -226,25 +261,26 @@ class Pipeline:
 
         return session
 
-    def session(self) -> 'Session':
+    def session(self) -> Session:
         """Create a new session."""
         return self.session_mgr.get()
 
-    def get_reward_score(self, input_ids: List) -> List[float]:
+    def get_reward_score(self, input_ids: list) -> list[float]:
         """Get reward score.
 
         Args:
-            input_ids(List): a list of token_id or a list of token_id list or token_id tensor
-        Return:
-            reward score in a list. If the input_ids is a list of token_id, the return value
-            is still a list with length 1.
+            input_ids: a list of token_id or a list of token_id list or token_id tensor.
+
+        Returns:
+            list[float]: reward score in a list. If the input_ids is a list of token_id,
+                the return value is still a list with length 1.
         """
         supported_reward_models = ['InternLM2ForRewardModel', 'Qwen2ForRewardModel']
         arch = self.async_engine.arch
         if arch not in supported_reward_models:
             raise ValueError(f'{arch} is not in reward model list: {supported_reward_models}')
-        assert isinstance(input_ids, List)
-        assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, List) for x in input_ids)
+        assert isinstance(input_ids, list)
+        assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, list) for x in input_ids)
         # Make input_ids a list of token_id list
         input_ids = [input_ids] if isinstance(input_ids[0], int) else input_ids
         logits = self._run(coro=self.async_engine.async_get_logits(input_ids=input_ids)).result()
@@ -252,59 +288,35 @@ class Pipeline:
         scores = [x[-1].cpu().item() for x in logits]
         return scores
 
-    def get_ppl(self, input_ids: List[int] | List[List[int]]) -> List[float]:
-        """Get perplexity scores given a list of input tokens that have to be
-        of the same length.
+    def get_ppl(self, input_ids: list[int] | list[list[int]]) -> list[float]:
+        """Get perplexity scores given a list of input tokens.
 
         Args:
-            input_ids (List[int] | List[List[int]]): the batch of input token ids
+            input_ids: the batch of input token ids.
 
         Returns:
-            List[float]: A list of perplexity scores.
+            list[float]: A list of perplexity scores.
         """
-        assert isinstance(input_ids, List)
+        assert isinstance(input_ids, list)
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
         assert all(len(_) > 1 for _ in input_ids)
 
-        # TODO: a better way to determine `max_input_len`, at most allocate
-        # 2G mem for logits with shape [bs, max_input_len, vocab_size]
-        vocab_size = self.async_engine.hf_cfg.vocab_size
-        max_input_len = 2 * 1024**3 // (vocab_size * 4)
-        sizes = [len(_) for _ in input_ids]
-        result = []
-        sorted_index_values = sorted(list(enumerate(sizes)), key=lambda x: x[1], reverse=True)
-        sizes = [value for index, value in sorted_index_values]
-        indices = [index for index, value in sorted_index_values]
-        logger.info(f'sorted sizes: {sizes}')
-        logger.info(f'sorted indices: {indices}')
-        for (start, end) in self._batch_iterator(sizes, max_input_len):
-            logger.info(f'start: {start}, end: {end}')
-            if start == end:
-                _input_ids = input_ids[indices[start]]
-                session = self.session_mgr.get()
-                res = self._get_long_text_ppl(session, input_ids=_input_ids, max_input_len=max_input_len)
-                result.append(res)
-                self.session_mgr.remove(session)
-            else:
-                _input_ids = [input_ids[indices[i]] for i in range(start, end)]
-                sessions = [self.session_mgr.get() for _ in range(start, end)]
-                res = self._get_ppl(
-                    sessions=sessions,
-                    input_ids=_input_ids,
-                    max_input_len=max_input_len,
-                )
-                result.extend(res)
-                for session in sessions:
-                    self.session_mgr.remove(session)
-        output = list(range(len(result)))
-        for index, sorted_index in enumerate(indices):
-            output[sorted_index] = result[index]
-        return output
+        engine = self.async_engine
+
+        async def _get_one(ids):
+            async with self._get_limiter():
+                return await engine.async_get_ppl(ids)
+
+        async def _gather():
+            return await asyncio.gather(*[_get_one(ids) for ids in input_ids])
+
+        results = self._run(coro=_gather()).result()
+        return results
 
     def __call__(self,
-                 prompts: List[str] | str | List[Dict] | List[List[Dict]],
-                 gen_config: GenerationConfig | List[GenerationConfig] | None = None,
+                 prompts: list[str] | str | list[dict] | list[list[dict]],
+                 gen_config: GenerationConfig | list[GenerationConfig] | None = None,
                  **kwargs):
         return self.infer(prompts, gen_config=gen_config, **kwargs)
 
@@ -318,21 +330,23 @@ class Pipeline:
     async def generate(self, *args, **kwargs):
         """Generate responses as an async generator.
 
-        This method delegates to async_engine.generate and forwards all yielded values.
+        This method preprocesses the input and forwards generated values.
         """
-        async for item in self.async_engine.generate(*args, **kwargs):
+        stream_response = kwargs.pop('stream_response', True)
+        request = await self.async_engine.preprocess(*args, **kwargs)
+        async for item in self.async_engine.generate(request, stream_response=stream_response):
             yield item
 
     @staticmethod
     def _is_single(prompts):
         """Check if prompts is a single prompt."""
         return (isinstance(prompts, str) or (isinstance(prompts, tuple) and len(prompts) == 2)
-                or (isinstance(prompts, list) and len(prompts) > 0 and isinstance(prompts[0], Dict)))
+                or (isinstance(prompts, list) and len(prompts) > 0 and isinstance(prompts[0], dict)))
 
     def _request_generator(self,
-                           prompts: List[str] | str | List[Dict] | List[List[Dict]],
-                           sessions: List['Session'] | 'Session' | None = None,
-                           gen_config: GenerationConfig | List[GenerationConfig] | None = None,
+                           prompts: list[str] | str | list[dict] | list[list[dict]],
+                           sessions: list[Session] | Session | None = None,
+                           gen_config: GenerationConfig | list[GenerationConfig] | None = None,
                            **kwargs):
         """Generate requests."""
         is_single = self._is_single(prompts)
@@ -362,8 +376,7 @@ class Pipeline:
 
         for prompt, gen_cfg, session in zip(prompts, gen_configs, sessions):
             # Use session_id is for backward compatibility. We will remove it in the future.
-            # Since AsyncEngine.generate defines session_id in the argument lists, here we
-            # use session_id to pass the session to the AsyncEngine.generate. It's
+            # AsyncEngine.preprocess accepts session_id, so use that name to pass the session.
             yield dict(session_id=session, messages=prompt, gen_config=gen_cfg, **kwargs)
 
     def _get_limiter(self):
@@ -371,16 +384,45 @@ class Pipeline:
             self.limiter = asyncio.Semaphore(self.backend_config.max_batch_size)
         return self.limiter
 
-    def _infer(self, requests: Iterator[Dict], multiplex: bool, pbar=None, loop=None) -> Iterator[Iterator[Response]]:
+    def _infer(self, requests: Iterator[dict], multiplex: bool, pbar=None, loop=None) -> Iterator[Iterator[Response]]:
 
-        async def _sync_resp(g, que: Queue, idx: int, sem: asyncio.Semaphore):
-            async for out in g:
-                que.put(out.to_response(idx))
-            sem.release()
-            if not multiplex:
-                que.put(None)  # sentinel of inner generator
-            if pbar:
-                pbar.update(1)
+        async def _sync_resp(req: dict, que: Queue, idx: int, sem: asyncio.Semaphore):
+            input_token_len = 0
+            try:
+                req = dict(req)
+                stream_response = req.pop('stream_response', True)
+                request = await self.async_engine.preprocess(**req)
+                input_token_len = request.input_token_len
+                async for out in self.async_engine.generate(request, stream_response=stream_response):
+                    que.put(out.to_response(idx))
+            except RequestError as e:
+                que.put(
+                    Response(text='',
+                             generate_token_len=0,
+                             input_token_len=input_token_len,
+                             finish_reason='error',
+                             token_ids=[],
+                             index=idx,
+                             error_code=e.code.value,
+                             error_message=e.message))
+            except Exception:
+                logger.exception('Unexpected Pipeline inference error')
+                error = RequestError(ErrorCode.INTERNAL_ERROR)
+                que.put(
+                    Response(text='',
+                             generate_token_len=0,
+                             input_token_len=input_token_len,
+                             finish_reason='error',
+                             token_ids=[],
+                             index=idx,
+                             error_code=error.code.value,
+                             error_message=error.message))
+            finally:
+                sem.release()
+                if not multiplex:
+                    que.put(None)  # sentinel of inner generator
+                if pbar:
+                    pbar.update(1)
 
         que = Queue()
 
@@ -389,12 +431,11 @@ class Pipeline:
             tasks = []
             for idx, req in enumerate(requests):
                 await sem.acquire()
-                gen = self.async_engine.generate(**req)
                 dst = que if multiplex else Queue()
                 if not multiplex:
                     que.put(iter(dst.get, None))
                 # create a task to send the responses
-                task = asyncio.create_task(_sync_resp(gen, dst, idx, sem))
+                task = asyncio.create_task(_sync_resp(req, dst, idx, sem))
                 tasks.append(task)
             if not multiplex:  # sentinel of outer generator
                 que.put(None)
@@ -419,104 +460,6 @@ class Pipeline:
 
             coro = _coro()
         return asyncio.run_coroutine_threadsafe(coro, loop)
-
-    def _batch_iterator(self, sizes, max_value):
-        """Return an iterator that calculates intervals (start, end) of a
-        descend-order list, in which the sum of values in the range is the
-        maximum number not less than max_value. By "the sum of values",
-
-        here it means $$len(sizes[start:end]) * sizes[start]$$
-        """
-        i = 0
-        while i < len(sizes):
-            current_sum = 0
-            start_index = i
-
-            while i < len(sizes) and current_sum + sizes[start_index] <= max_value:
-                current_sum += sizes[start_index]
-                i += 1
-
-            yield (start_index, i)
-            if i > start_index:
-                continue
-            else:
-                i += 1
-
-    def _get_long_text_ppl(self, session, input_ids, max_input_len):
-        assert all(isinstance(_, int) for _ in input_ids)
-        seq_len = len(input_ids)
-        assert seq_len > max_input_len
-        logger.info(f'get long text ppl: seq_len {seq_len}')
-
-        losses = []
-        target_counts = []
-        for i in range(0, seq_len, max_input_len):
-            token_ids = input_ids[i:i + max_input_len]
-            session.update(step=i)
-            # shift token_ids by 1 to the left
-            target_ids = input_ids[i + 1:i + 1 + max_input_len]
-            loss = self._get_ppl(sessions=[session],
-                                 input_ids=[token_ids],
-                                 max_input_len=len(token_ids),
-                                 target_ids=[target_ids],
-                                 sequence_start=(i == 0),
-                                 sequence_end=False)
-            losses.extend(loss)
-            target_counts.append(len(target_ids))
-        losses = [loss * target_count for loss, target_count in zip(losses, target_counts)]
-        loss_sum = sum(losses)
-        target_count = sum(target_counts)
-        return loss_sum / target_count
-
-    def _get_ppl(self,
-                 sessions: List['Session'],
-                 input_ids: List[List[int]],
-                 max_input_len: int,
-                 target_ids=None,
-                 sequence_start: bool = True,
-                 sequence_end: bool = True):
-        assert (isinstance(input_ids, List) and all(isinstance(_, List) for _ in input_ids))
-        assert target_ids is None or len(target_ids) == len(input_ids)
-        assert len(sessions) == len(input_ids)
-
-        lens = [len(_) for _ in input_ids]
-        total_len = sum(lens)
-        assert sum(lens) <= max_input_len
-
-        logger.info(f'get_ppl: bs: {len(input_ids)}, lens: {lens}, '
-                    f'total_len: {total_len}')
-        torch.cuda.empty_cache()
-
-        logits = self._run(coro=self.async_engine.async_get_logits(
-            input_ids=input_ids, sessions=sessions, sequence_start=sequence_start, sequence_end=sequence_end)).result()
-        padding_token_id = -100
-        if target_ids is None:
-            target_ids = [x[1:] + [padding_token_id] for x in input_ids]
-        else:
-            target_ids = [
-                target_ids[i] + [padding_token_id] if len(target_ids[i]) < len(input_ids[i]) else target_ids[i]
-                for i in range(len(input_ids))
-            ]
-        target_ids = [torch.Tensor(torch.LongTensor(_target_ids)) for _target_ids in target_ids]
-
-        result = []
-        for _logits, _target_ids in zip(logits, target_ids):
-            _logits = _logits.float()
-            vocab_size = _logits.shape[-1]
-            _target_ids = _target_ids.to(_logits.device)
-            target_mask = _target_ids != padding_token_id
-            # compute cross entropy loss
-            flat_logits = _logits.contiguous().view(-1, vocab_size)
-            flat_target_ids = _target_ids.contiguous().view(-1)
-            flat_loss_matrix = torch.nn.functional.cross_entropy(flat_logits,
-                                                                 flat_target_ids,
-                                                                 reduction='none',
-                                                                 ignore_index=padding_token_id)
-            loss = flat_loss_matrix.sum()
-            target_count = target_mask.sum()
-            result.append(loss.item() / target_count.item())
-        logger.info(f'ppl result: {result}')
-        return result
 
 
 class _EventLoopThread:

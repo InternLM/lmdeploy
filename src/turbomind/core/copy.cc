@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <type_traits>
 #include <variant>
+#include <vector>
 
 #include <cuda_runtime.h>
 
@@ -45,23 +46,63 @@ typedef CUresult(CUDAAPI* PFN_cuMemcpyBatchAsync_v12080)(CUdeviceptr_v2*        
                                                          size_t*                failIdx,
                                                          CUstream               hStream);
 
-/// TODO: add `PFN_cuMemcpyBatchAsync_v13000`
+typedef CUresult(CUDAAPI* PFN_cuMemcpyBatchAsync_v13000)(CUdeviceptr_v2*        dsts,
+                                                         CUdeviceptr_v2*        srcs,
+                                                         size_t*                sizes,
+                                                         size_t                 count,
+                                                         CUmemcpyAttributes_v1* attrs,
+                                                         size_t*                attrIdxs,
+                                                         size_t                 numAttrs,
+                                                         CUstream               hStream);
 
 namespace {
 
-const auto& GetCopyAPI()
+using MemcpyBatchAsync = std::variant<std::monostate, PFN_cuMemcpyBatchAsync_v12080, PFN_cuMemcpyBatchAsync_v13000>;
+
+template<class F>
+F QueryDriverEntryPoint(const char* symbol, unsigned cuda_version)
 {
-    static auto inst = []() -> std::variant<std::monostate, PFN_cuMemcpyBatchAsync_v12080> {
-        const auto                      symbol = "cuMemcpyBatchAsync";
-        cudaDriverEntryPointQueryResult status{};
-        void*                           fpn{};
-        TM_CHECK_EQ(cudaGetDriverEntryPoint(symbol, &fpn, cudaEnableDefault, &status), 0);
-        if (fpn && status == cudaDriverEntryPointSuccess) {
-            return (PFN_cuMemcpyBatchAsync_v12080)fpn;
+    cudaDriverEntryPointQueryResult status = cudaDriverEntryPointSymbolNotFound;
+    void*                           fpn{};
+#if CUDA_VERSION >= 13000
+    if (cudaGetDriverEntryPointByVersion(symbol, &fpn, cuda_version, cudaEnableDefault, &status) != cudaSuccess) {
+        return {};
+    }
+#else
+    (void)cuda_version;
+    if (cudaGetDriverEntryPoint(symbol, &fpn, cudaEnableDefault, &status) != cudaSuccess) {
+        return {};
+    }
+#endif
+    if (status != cudaDriverEntryPointSuccess || !fpn) {
+        return {};
+    }
+    return reinterpret_cast<F>(fpn);
+}
+
+const MemcpyBatchAsync& GetMemcpyBatchAsync()
+{
+    static thread_local const MemcpyBatchAsync inst = []() -> MemcpyBatchAsync {
+        // cuMemcpyBatchAsync crashes on sm_100 (Blackwell); use serialized Copy().
+        int device = 0;
+        TM_CUDA_CHECK(cudaGetDevice(&device));
+        int compute_capability_major = 0;
+        TM_CUDA_CHECK(cudaDeviceGetAttribute(&compute_capability_major, cudaDevAttrComputeCapabilityMajor, device));
+        if (compute_capability_major >= 10) {
+            return std::monostate{};
         }
-        else {
-            return {};
+
+#if CUDA_VERSION >= 13000
+        // CUDA 13.0 removed failIdx from batched memcpy APIs.
+        if (auto copy = QueryDriverEntryPoint<PFN_cuMemcpyBatchAsync_v13000>("cuMemcpyBatchAsync", 13000)) {
+            return copy;
         }
+#endif
+
+        if (auto copy = QueryDriverEntryPoint<PFN_cuMemcpyBatchAsync_v12080>("cuMemcpyBatchAsync", 12080)) {
+            return copy;
+        }
+        return std::monostate{};
     }();
     return inst;
 }
@@ -82,36 +123,54 @@ void BatchCopy::Run()
     }
 
     std::visit(
-        [&](auto&& copy) {
-            using T = std::decay_t<decltype(copy)>;
-            if constexpr (std::is_same_v<T, PFN_cuMemcpyBatchAsync_v12080>) {
-                CUmemcpyAttributes_v1 attr{};
-                attr.srcAccessOrder = CU_MEMCPY_SRC_ACCESS_ORDER_STREAM;
-                attr.flags          = CU_MEMCPY_FLAG_PREFER_OVERLAP_WITH_COMPUTE;
-                std::vector<size_t> ais(src_.size(), 0);
-                size_t              fail_idx{SIZE_MAX};
-
-                auto status = copy((CUdeviceptr_v2*)dst_.data(),
-                                   (CUdeviceptr_v2*)src_.data(),
-                                   size_.data(),
-                                   src_.size(),
-                                   &attr,
-                                   ais.data(),
-                                   1,
-                                   &fail_idx,
-                                   core::Context::stream().handle());
-
-                if (auto i = fail_idx; i != SIZE_MAX) {
-                    TM_CHECK(0) << (void*)src_[i] << " " << size_[i] << " " << (void*)dst_[i] << " code " << status;
-                }
-            }
-            else {
-                for (unsigned i = 0; i < src_.size(); ++i) {
+        [&](auto copy) {
+            using T = decltype(copy);
+            if constexpr (std::is_same_v<T, std::monostate>) {
+                for (size_t i = 0; i < src_.size(); ++i) {
                     core::Copy(src_[i], size_[i], dst_[i]);
                 }
             }
+            else {
+                CUmemcpyAttributes_v1 attr{};
+                attr.srcAccessOrder = CU_MEMCPY_SRC_ACCESS_ORDER_STREAM;
+                attr.flags          = CU_MEMCPY_FLAG_PREFER_OVERLAP_WITH_COMPUTE;
+                std::vector<size_t> attr_idxs(src_.size(), 0);
+                size_t              fail_idx{SIZE_MAX};
+
+                CUresult status;
+                if constexpr (std::is_same_v<T, PFN_cuMemcpyBatchAsync_v13000>) {
+                    status = copy(reinterpret_cast<CUdeviceptr_v2*>(dst_.data()),
+                                  reinterpret_cast<CUdeviceptr_v2*>(src_.data()),
+                                  size_.data(),
+                                  src_.size(),
+                                  &attr,
+                                  attr_idxs.data(),
+                                  1,
+                                  core::Context::stream().handle());
+                }
+                else {
+                    status = copy(reinterpret_cast<CUdeviceptr_v2*>(dst_.data()),
+                                  reinterpret_cast<CUdeviceptr_v2*>(src_.data()),
+                                  size_.data(),
+                                  src_.size(),
+                                  &attr,
+                                  attr_idxs.data(),
+                                  1,
+                                  &fail_idx,
+                                  core::Context::stream().handle());
+                }
+
+                if (status != CUDA_SUCCESS || fail_idx != SIZE_MAX) {
+                    const size_t i = fail_idx != SIZE_MAX ? fail_idx : 0;
+                    TM_LOG_FATAL("copy failed: src={} size={} dst={} code={}",
+                                 static_cast<const void*>(src_[i]),
+                                 size_[i],
+                                 static_cast<void*>(dst_[i]),
+                                 static_cast<int>(status));
+                }
+            }
         },
-        GetCopyAPI());
+        GetMemcpyBatchAsync());
 
     Reset();
 }

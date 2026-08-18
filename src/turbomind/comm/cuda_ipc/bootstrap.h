@@ -8,6 +8,7 @@
 
 #include "src/turbomind/comm/barrier.h"
 #include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/core/check.h"
 
 namespace turbomind::comm {
 
@@ -76,7 +77,7 @@ public:
             {
                 std::lock_guard lock{state_->mutexes[rank_]};
                 if (!que.empty()) {
-                    FT_CHECK(que.front().size() == (size_t)size);
+                    TM_CHECK(que.front().size() == (size_t)size);
                     std::copy_n(que.front().begin(), size, (uint8_t*)data);
                     que.pop();
                     return;

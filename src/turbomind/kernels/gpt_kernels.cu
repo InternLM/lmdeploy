@@ -72,9 +72,12 @@ void invokeEmbeddingLookup(Ref<Tensor>         out_,
     };
 
     if (byte_size(out.dtype()) == byte_size<uint16_t>()) {
-        return invoke(uint16_t{});
+        invoke(uint16_t{});
+        TM_CUDA_CHECK(cudaGetLastError());
     }
-    TM_CHECK(0) << "not implemented";
+    else {
+        TM_LOG_FATAL("not implemented");
+    }
 }
 
 // TODO Add half2 implementation
@@ -100,6 +103,7 @@ void invokeTransposeAxis01(T* out, T* in, const int dim0, const int dim1, const 
     dim3 block(512);
     dim3 grid((int)(ceil(dim0 * dim1 * dim2 / 512.)));
     transposeAxis01<<<grid, block, 0, stream>>>(out, in, dim0, dim1, dim2);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void
@@ -147,6 +151,7 @@ void invokeTransposeAxis01(
     dim3 block(512);
     dim3 grid((int)(ceil(dim0 * dim1 / 512.)));
     transposeAxis01<<<grid, block, 0, stream>>>(out, in, in_skipping_dim1, dim0, dim1);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void invokeTransposeAxis01(
@@ -205,6 +210,7 @@ void invokeTranspose2D_(T* dst, const T* src, int rows, int cols, cudaStream_t s
     }
 
     transpose_2d_kernel<TILE_DIM, BLOCK_ROWS><<<grid, block, 0, st>>>(dst, src, rows, cols, swap_xy);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void invokeTranspose2D_(uint32_t*, const uint32_t*, int, int, cudaStream_t);

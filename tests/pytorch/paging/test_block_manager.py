@@ -1,4 +1,5 @@
 # yapf: disable
+import numpy as np
 import pytest
 import torch
 
@@ -142,6 +143,33 @@ class TestDefaultBlockManager:
         token_ids = torch.zeros((num_gpu_blocks * block_size + 1, ), dtype=torch.int64)
         msg = sess.add_sequence(token_ids)
         assert not block_mgr.can_allocate(msg)
+
+    def test_resolve_gpu_block_offsets(self, block_mgr):
+        allocator = block_mgr.allocator
+        logical_ids = allocator.allocate(3, 'gpu')
+        expected = allocator.get_physical_blocks(logical_ids)
+
+        block_offsets = block_mgr.resolve_gpu_block_offsets(logical_ids[[0, 2, 0]])
+
+        assert np.array_equal(block_offsets, expected[[0, 2, 0]])
+
+    @pytest.mark.parametrize(
+        ('logical_ids', 'error'),
+        [
+            pytest.param(np.array([-1]), 'out-of-range', id='negative'),
+            pytest.param(np.array([8]), 'out-of-range', id='too-large'),
+            pytest.param(np.array([0]), 'unallocated', id='unallocated'),
+        ],
+    )
+    def test_resolve_gpu_block_offsets_rejects_invalid_logical_ids(self, block_mgr, logical_ids, error):
+        with pytest.raises(ValueError, match=error):
+            block_mgr.resolve_gpu_block_offsets(logical_ids)
+
+    def test_resolve_gpu_block_offsets_rejects_cpu_resident_blocks(self, block_mgr):
+        logical_ids = block_mgr.allocator.allocate(1, 'cpu')
+
+        with pytest.raises(ValueError, match='not GPU-resident'):
+            block_mgr.resolve_gpu_block_offsets(logical_ids)
 
     def test_num_required_blocks(self, scheduler, block_mgr):
         from lmdeploy.pytorch.messages import InputEmbeddings
@@ -343,3 +371,29 @@ class TestWindowBlockManager:
         block_table = block_mgr.get_block_table(msg)
         assert block_table is None or len(block_table) == 2
         block_mgr.free(msg)
+
+    def test_win_alloc_respects_kv_token_limit(self, scheduler, block_mgr, num_gpu_blocks, window_size):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+
+        token_ids = torch.tensor([1] * (window_size * 3))
+        msg = sess.add_sequence(token_ids)
+
+        msg.kv_token_limit = window_size
+        block_mgr.allocate(msg)
+        assert len(block_mgr.get_block_table(msg)) == 2
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 2
+
+        msg.set_step(window_size)
+        msg.kv_token_limit = window_size + block_size
+        block_mgr.allocate(msg)
+        assert len(block_mgr.get_block_table(msg)) == 3
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 3
+
+        msg.set_step(window_size + block_size)
+        msg.kv_token_limit = window_size + block_size * 2
+        assert block_mgr.num_required_blocks(msg) == 1
+        block_mgr.allocate(msg)
+        assert len(block_mgr.get_block_table(msg)) == 3
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 3
+        assert msg.num_ignored_history == block_size

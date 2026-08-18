@@ -1,0 +1,220 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
+#include "src/turbomind/models/moe_weight.h"
+
+#include "src/turbomind/core/check.h"
+#include "src/turbomind/core/registry.h"
+#include "src/turbomind/kernels/gemm/convert.h"
+#include "src/turbomind/utils/cuda_utils.h"
+
+namespace turbomind {
+
+MoeWeight::MoeWeight(const core::MoeConfig& cfg)
+{
+    experts_per_token = cfg.experts_per_token;
+    norm_topk_prob    = cfg.norm_topk_prob;
+    routed_scale      = static_cast<float>(cfg.routed_scale);
+    topk_group        = cfg.topk_group;
+    topk_method       = cfg.topk_method;
+    n_group           = cfg.n_group;
+    scoring_func      = cfg.scoring_func;
+    router_n_groups   = cfg.router_n_groups;
+    data_type_        = cfg.data_type;
+    act_type_         = static_cast<ActivationType>(cfg.act_type);
+    fuse_silu_act_    = cfg.fuse_silu;
+    expert_num        = cfg.expert_num;
+    ep_size           = cfg.ep_size;
+    ep_rank           = cfg.ep_rank;
+}
+
+// Shallow alias of an already-prepared linear: shares its tensors and
+// copies its metadata. The alias is never prepared itself (MoeWeight::prepare
+// aliases only after its own Module::prepare() pass).
+static std::unique_ptr<LinearWeight> AliasLinear(const LinearWeight& src)
+{
+    auto dst    = std::make_unique<LinearWeight>();
+    dst->weight = src.weight;
+    dst->bias   = src.bias;
+    dst->scales = src.scales;
+    dst->zeros  = src.zeros;
+    src.copy_metadata_to(*dst);
+    return dst;
+}
+
+static std::unique_ptr<FfnWeight> AliasFfn(const FfnWeight& src)
+{
+    auto dst           = std::make_unique<FfnWeight>();
+    dst->hidden_dim    = src.hidden_dim;
+    dst->inter_size    = src.inter_size;
+    dst->act_type      = src.act_type;
+    dst->is_fused_silu = src.is_fused_silu;
+    dst->tp_size       = src.tp_size;
+    dst->tp_rank       = src.tp_rank;
+    if (src.w1w3) {
+        dst->add_child("w1w3", AliasLinear(*src.w1w3));
+    }
+    else {
+        dst->add_child("w1", AliasLinear(*TM_CHECK_NOTNULL(src.w1.get())));
+        dst->add_child("w3", AliasLinear(*TM_CHECK_NOTNULL(src.w3.get())));
+    }
+    dst->add_child("w2", AliasLinear(*TM_CHECK_NOTNULL(src.w2.get())));
+    return dst;
+}
+
+void MoeWeight::AliasRouted(const MoeWeight& meta_pack)
+{
+    TM_CHECK(meta_pack.gate && meta_pack.experts);
+    TM_CHECK(!gate && !experts);
+    TM_CHECK_NOTNULL(meta_pack.expert(0));
+
+    add_child("gate", AliasLinear(*meta_pack.gate));
+
+    // Experts are EP-sharded; iterate the local slice and keep global
+    // expert indices as child names (see MoeWeight::expert()).
+    TM_CHECK_EQ(ep_size, meta_pack.ep_size);
+    TM_CHECK_EQ(ep_rank, meta_pack.ep_rank);
+    const int local_num = meta_pack.num_local_experts();
+    const int offset    = meta_pack.local_expert_offset();
+    create_child("experts", core::ModuleListConfig{});
+    for (int e = 0; e < local_num; ++e) {
+        experts->add_child(std::to_string(offset + e), AliasFfn(*TM_CHECK_NOTNULL(meta_pack.expert(e))));
+    }
+    // never touch shared_gate
+}
+
+// Adapted from LinkExperts for LinearWeight
+static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, LinearWeight& d)
+{
+    const auto& e0 = *experts(0);
+
+    e0.copy_metadata_to(d);
+
+    d.k_desc.num = d.q_desc.num = n;
+
+    if (e0.bias) {
+        d.bias = Tensor{{n, e0.output_dim}, e0.bias.dtype(), kDEVICE};
+    }
+
+    std::vector<std::pair<void*, int>> weights;
+    std::vector<std::pair<void*, int>> scales;
+
+    for (int i = 0; i < n; ++i) {
+        auto& e = *experts(i);
+        weights.emplace_back(e.weight.raw_data(), e.k_desc.ld);
+        if (e.scales) {
+            scales.emplace_back(e.scales.raw_data(), e.q_desc.ld);
+        }
+        if (e.bias) {
+            Copy(e.bias, d.bias.slice(i, 1).squeeze(0));
+        }
+    }
+
+    auto stream = core::Context::stream().handle();
+
+    auto make_strided_ptr = [&](const auto& ptrs) {
+        return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
+    };
+    d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_format.dtype, kDEVICE};
+    if (e0.scales) {
+        d.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
+    }
+    // MatrixLayout.ld == 0 identifies the StridedPtr expert table.
+    d.k_desc.ld = d.q_desc.ld = 0;
+    d.k_desc.offsets = d.q_desc.offsets = nullptr;
+}
+
+FfnWeight* MoeWeight::expert(int i) const
+{
+    if (!experts) {
+        return nullptr;
+    }
+    return static_cast<FfnWeight*>(experts->child(std::to_string(local_expert_offset() + i)));
+}
+
+void MoeWeight::prepare()
+{
+    Module::prepare();
+
+    if (meta_pack_) {
+        // Meta-MoE layer weight: alias the routed gate/experts from the
+        // shared pack. ModelWeight::prepare() prepares meta_experts before
+        // the layers, so the pack is already prepared at this point.
+        AliasRouted(*meta_pack_);
+    }
+
+    if (experts) {
+        link_block();
+    }
+}
+
+void MoeWeight::link_block()
+{
+    const int local_expert_num = num_local_experts();
+
+    // Create batched block view for fused MoE path
+    auto e0 = TM_CHECK_NOTNULL(expert(0));  // exemplar expert
+
+    core::FfnConfig block_cfg;
+    block_cfg.hidden_dim = e0->hidden_dim;
+    block_cfg.inter_size = e0->inter_size;
+    // tp_size=1: expert weights are already TP-sharded — the block
+    // just batches them and must not divide inter_size a second time.
+    block_cfg.tp_size   = 1;
+    block_cfg.tp_rank   = 0;
+    block_cfg.data_type = data_type_;
+    block_cfg.act_type  = static_cast<int>(act_type_);
+    block_cfg.fuse_silu = fuse_silu_act_;
+    block_              = std::make_unique<FfnWeight>(block_cfg);
+
+    // Link each linear in the block to the corresponding expert linears
+    auto get_expert_w1w3 = [this](int i) -> LinearWeight* {
+        auto* exp = expert(i);
+        return exp ? exp->w1w3.get() : nullptr;
+    };
+    auto get_expert_w1 = [this](int i) -> LinearWeight* {
+        auto* exp = expert(i);
+        return exp ? exp->w1.get() : nullptr;
+    };
+    auto get_expert_w3 = [this](int i) -> LinearWeight* {
+        auto* exp = expert(i);
+        return exp ? exp->w3.get() : nullptr;
+    };
+    auto get_expert_w2 = [this](int i) -> LinearWeight* {
+        auto* exp = expert(i);
+        return exp ? exp->w2.get() : nullptr;
+    };
+
+    if (get_expert_w1w3(0)) {
+        // Fused w1w3 path: experts have a single fused gate+up projection
+        block_->add_child("w1w3", std::make_unique<LinearWeight>());
+        LinkLinearExperts(get_expert_w1w3, local_expert_num, *block_->w1w3);
+    }
+    else {
+        // Separate w1/w3 path: link individually
+        block_->add_child("w1", std::make_unique<LinearWeight>());
+        block_->add_child("w3", std::make_unique<LinearWeight>());
+        if (get_expert_w1(0)) {
+            LinkLinearExperts(get_expert_w1, local_expert_num, *block_->w1);
+        }
+        if (get_expert_w3(0)) {
+            LinkLinearExperts(get_expert_w3, local_expert_num, *block_->w3);
+        }
+    }
+
+    block_->add_child("w2", std::make_unique<LinearWeight>());
+    if (get_expert_w2(0)) {
+        LinkLinearExperts(get_expert_w2, local_expert_num, *block_->w2);
+    }
+
+    // Propagate the actual fused-silu state from the first expert to
+    // the block.  Each expert's prepare() has already run above, so
+    // is_fused_silu() now reflects whether the GEMM epilogue applies
+    // SiLU.
+    block_->is_fused_silu = e0->is_fused_silu;
+}
+
+TM_MODULE_REGISTER(MoeWeight, core::MoeConfig);
+
+TM_MODULE_METHODS(MoeWeight, MOE_WEIGHT_CHILDREN, MOE_WEIGHT_PARAMS)
+
+}  // namespace turbomind

@@ -3,92 +3,47 @@ import time
 
 import pytest
 import utils.constant as constant
-from utils.config_utils import get_evaluate_pytorch_model_list, get_evaluate_turbomind_model_list, get_workerid
-from utils.evaluate_utils import eval_test
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_eval_preset_config,
+    get_func_config_list,
+    get_model_path_from_config,
+    get_workerid,
+    resolve_eval_config_name,
+)
+from utils.evaluate_utils import build_eval_judge_run_config, eval_test
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.ray_distributed_utils import ray_worker_node_wait
-from utils.run_restful_chat import start_proxy_server, start_restful_api, stop_restful_api, terminate_restful_api
-
-
-@pytest.fixture(scope='function')
-def prepare_environment(request, config, worker_id):
-    param = request.param
-    model = param['model']
-    backend = param['backend']
-    model_path = config.get('model_path') + '/' + model
-    pid, startRes = start_restful_api(config, param, model, model_path, backend, worker_id)
-    try:
-        yield param
-    finally:
-        if pid > 0:
-            terminate_restful_api(worker_id, param)
-
-
-@pytest.fixture(scope='function')
-def prepare_environment_judge_evaluate(request, config, worker_id):
-    if get_workerid(worker_id) is None:
-        port = constant.PROXY_PORT
-    else:
-        port = constant.PROXY_PORT + get_workerid(worker_id)
-    judge_config = {
-        'model': 'Qwen/Qwen2.5-32B-Instruct',
-        'backend': 'turbomind',
-        'param': {
-            'tp_num':
-            2,
-            'extra':
-            '--server-name 127.0.0.1 --proxy-url http://127.0.0.1:{} --session-len 76000 '
-            '--cache-max-entry-count 0.7 '.format(port),
-            'cuda_prefix':
-            None
-        },
-        'log_path': config.get('log_path'),
-    }
-
-    param = judge_config['param']
-    model = judge_config['model']
-    backend = judge_config['backend']
-    model_path = config.get('model_path') + '/' + model
-
-    proxy_pid, proxy_process = start_proxy_server(config, worker_id)
-
-    judge_pid, judge_start_res = start_restful_api(config, param, model, model_path, backend, worker_id)
-
-    try:
-        yield request.param
-    finally:
-        terminate_restful_api(worker_id, request.param)
-        stop_restful_api(proxy_pid, proxy_process, request.param)
+from utils.run_restful_chat import start_openai_service, start_proxy_server, stop_restful_api, terminate_restful_api
 
 
 def _run_ray_distributed_test(
         config,
-        run_id,
-        model_param,
+        run_config,
         worker_id,
         test_type='infer',
         manager=None,  # ← New parameter: pass in shared manager
         eval_config_name='default'):
     """Universal distributed test executor (using shared Ray cluster)"""
     assert manager is not None, 'Manager instance must be provided'
-    if 'gpt' in model_param.get('model', '').lower():
-        eval_config_name = 'gpt'
-        preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+    eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
+
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name)
 
     if manager.is_master:
-        model_name = model_param['model']
-        model_path = os.path.join(config['model_path'], model_name)
-        preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+        model_path = get_model_path_from_config(config, run_config['model'])
+        eval_path = config.get('eval_path')
 
         # Start API Server for current model (master node starts/stops, worker nodes verify)
-        manager.start_lmdeploy_api_server(model_path=model_path, model_param=model_param)
+        manager.start_lmdeploy_api_server(config=config, run_config=run_config)
 
         try:
             print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
-            result, msg = eval_test(config,
-                                    run_id,
-                                    model_param,
-                                    worker_id=worker_id,
+            case_name = get_case_str_by_config(run_config)
+
+            result, msg = eval_test(model_path,
+                                    eval_path,
+                                    case_name,
                                     port=constant.PROXY_PORT,
                                     test_type=test_type,
                                     **preset_config)
@@ -104,35 +59,43 @@ def _run_ray_distributed_test(
 
 
 def _run_proxy_distributed_test(config,
-                                run_id,
-                                model_param,
+                                run_config,
                                 worker_id,
                                 test_type='infer',
                                 manager=None,
-                                eval_config_name='default'):
+                                eval_config_name='default',
+                                eval_subpath=None):
     assert manager is not None, 'Manager instance must be provided'
 
-    if 'gpt' in model_param.get('model', '').lower():
-        eval_config_name = 'gpt'
+    if eval_subpath is None:
+        eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
 
-    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
-    model_name = model_param['model']
-    model_path = os.path.join(config['model_path'], model_name)
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name)
+    model_name = run_config['model']
+    model_path = get_model_path_from_config(config, model_name)
 
-    api_server = ApiServerPerTest(proxy_manager=manager, model_path=model_path, model_param=model_param)
+    api_server = ApiServerPerTest(proxy_manager=manager, config=config, run_config=run_config)
     api_server.start()
 
     try:
         if manager.is_master:
             api_server.wait_until_ready()
             print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
+            eval_path = config.get('eval_path')
+            if eval_subpath:
+                eval_path = os.path.join(eval_path, eval_subpath)
+                os.makedirs(eval_path, exist_ok=True)
+            case_name = get_case_str_by_config(run_config)
 
-            result, msg = eval_test(config,
-                                    run_id,
-                                    model_param,
-                                    worker_id=worker_id,
+            extra_config = {'max-num-workers': 16}
+
+            result, msg = eval_test(model_path,
+                                    eval_path,
+                                    case_name,
                                     port=constant.PROXY_PORT,
                                     test_type=test_type,
+                                    extra_config=extra_config,
+                                    eval_config_name=eval_config_name,
                                     **preset_config)
             assert result, f'❌ {test_type} test failed: {msg}'
             print(f'✅ {test_type} test passed')
@@ -147,112 +110,154 @@ def _run_proxy_distributed_test(config,
             time.sleep(1)
 
 
-def get_turbomind_model_list(tp_num):
-    model_list = get_evaluate_turbomind_model_list(tp_num, kvint_list=[4, 8])
-    new_model_list = []
-    for model in model_list:
-        if 'Qwen3-235B-A22B-Thinking-2507' in model['model']:
-            model['extra'] += '--session-len 65536 --cache-max-entry-count 0.9 --max-batch-size 1024 '
-        else:
-            model['extra'] += '--session-len 65536 --cache-max-entry-count 0.9 '
-        model['cuda_prefix'] = None
-        new_model_list.append(model)
-    return new_model_list
-
-
-def get_pytorch_model_list(tp_num):
-    model_list = get_evaluate_pytorch_model_list(tp_num, kvint_list=[4, 8])
-    new_model_list = []
-    for model in model_list:
-        if 'Qwen3-235B-A22B-Thinking-2507' in model['model']:
-            model['extra'] += '--session-len 65536 --cache-max-entry-count 0.9 --max-batch-size 1024 '
-        else:
-            model['extra'] += '--session-len 65536 --cache-max-entry-count 0.9 '
-        model['cuda_prefix'] = None
-        new_model_list.append(model)
-    return new_model_list
-
-
-def run_test(config, run_id, prepare_environment, worker_id, test_type='infer', eval_config_name='default'):
+def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_name='default', eval_subpath=None):
     """Run test with specified evaluation configuration."""
-    if 'gpt' in prepare_environment.get('model', '').lower():
-        eval_config_name = 'gpt'
-    if str(config.get('env_tag')) == 'a100':
-        eval_config_name = f'{eval_config_name}-32k'
-    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+    eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
+    preset_config = get_eval_preset_config(config, run_config, eval_config_name)
+    eval_path = config.get('eval_path')
+    if eval_subpath:
+        eval_path = os.path.join(eval_path, eval_subpath)
+        os.makedirs(eval_path, exist_ok=True)
+
+    total_gpus = int(os.environ.get('TOTAL_GPU_COUNT', '8'))
+    work_num = int(total_gpus / run_config.get('parallel_config', {}).get('tp', 1))
+
+    extra_config = {'max-num-workers': min(work_num * 16, 64)}
+
+    case_name = get_case_str_by_config(run_config)
 
     if test_type == 'infer':
-        port = constant.DEFAULT_PORT
+        proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), constant.PROXY_PORT,
+                                                      f'{case_name}_infer')
+        run_config_new = run_config.copy()
+        if 'extra_params' not in run_config_new:
+            run_config_new['extra_params'] = {}
+        run_config_new['extra_params']['proxy-url'] = f'http://{constant.DEFAULT_SERVER}:{constant.PROXY_PORT}'
+        run_config_new['extra_params']['server-name'] = constant.DEFAULT_SERVER
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        def run_openai_service_start(i):
+            return start_openai_service(config, run_config_new, f'gw{i}')
+
+        with ThreadPoolExecutor(max_workers=work_num) as executor:
+            futures = [executor.submit(run_openai_service_start, i) for i in range(int(work_num))]
+        results = []
+        for future in futures:
+            pid, content = future.result()
+            results.append((pid, content))
+
+        try:
+            model_path = get_model_path_from_config(config, run_config.get('model'))
+            eval_test(model_path,
+                      eval_path,
+                      case_name,
+                      port=constant.PROXY_PORT,
+                      test_type=test_type,
+                      extra_config=extra_config,
+                      eval_config_name=eval_config_name,
+                      **preset_config)
+        finally:
+            for i in range(work_num):
+                terminate_restful_api(f'gw{i}')
+            stop_restful_api(proxy_pid, proxy_process)
     else:  # eval
-        port = constant.PROXY_PORT
+        model_path = get_model_path_from_config(config, run_config.get('model'))
+        # Longtext suites (needlebench / ruler / niah) use rule-based metrics;
+        # skip judge api_server + proxy startup.
+        if eval_config_name in ('longtext-256k', 'longtext-512k'):
+            eval_test(model_path,
+                      eval_path,
+                      case_name,
+                      port=constant.PROXY_PORT,
+                      test_type=test_type,
+                      extra_config=extra_config,
+                      eval_config_name=eval_config_name,
+                      **preset_config)
+            return
 
-    if get_workerid(worker_id) is None:
-        result, msg = eval_test(config,
-                                run_id,
-                                prepare_environment,
-                                worker_id=worker_id,
-                                port=port,
-                                test_type=test_type,
-                                **preset_config)
-    else:
-        result, msg = eval_test(config,
-                                run_id,
-                                prepare_environment,
-                                worker_id=worker_id,
-                                port=port + get_workerid(worker_id),
-                                test_type=test_type,
-                                **preset_config)
-    return result, msg
+        port = constant.PROXY_PORT + get_workerid(worker_id)
+        proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), port, f'{case_name}_eval')
+        eval_run_config = build_eval_judge_run_config(
+            config, f'http://{constant.DEFAULT_SERVER}:{port}')
+
+        pid, content = start_openai_service(config, eval_run_config, worker_id)
+        try:
+            if pid > 0:
+                model_path = get_model_path_from_config(config, eval_run_config.get('model'))
+                eval_test(model_path,
+                          eval_path,
+                          case_name,
+                          port=port,
+                          test_type=test_type,
+                          extra_config=extra_config,
+                          eval_config_name=eval_config_name,
+                          **preset_config)
+            else:
+                assert False, f'Failed to start RESTful API server: {content}'
+        finally:
+            if pid > 0:
+                terminate_restful_api(worker_id)
+            stop_restful_api(proxy_pid, proxy_process)
 
 
 @pytest.mark.infer
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_turbomind_model_list(tp_num=1), indirect=True)
-def test_turbomind_restful_tp1(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('turbomind', {'tp': 1}, func_type='evaluate'))
+def test_turbomind_infer_tp1(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_turbomind_model_list(tp_num=2), indirect=True)
-def test_turbomind_restful_tp2(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('turbomind', {'tp': 2}, func_type='evaluate'))
+def test_turbomind_infer_tp2(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_4
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_turbomind_model_list(tp_num=4), indirect=True)
-def test_turbomind_restful_tp4(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('turbomind', {'tp': 4}, func_type='evaluate'))
+def test_turbomind_infer_tp4(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_turbomind_model_list({'cp': 2, 'tp': 8}), indirect=True)
-def test_turbomind_restful_cp2tp8(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('turbomind', {'tp': 8}, func_type='evaluate'))
+def test_turbomind_infer_tp8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
 @pytest.mark.turbomind
-@pytest.mark.gpu_num_8
+@pytest.mark.gpu_num_distributed_cp2tp8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_turbomind_model_list(tp_num=8), indirect=True)
-def test_turbomind_restful_tp8(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('turbomind', {'cp': 2, 'tp': 8}, func_type='evaluate'))
+def test_turbomind_infer_cp2tp8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer')
+
+
+@pytest.mark.infer
+@pytest.mark.turbomind
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'turbomind',
+        {'tp': 2, 'dp': 4, 'ep': 8},
+        func_type='evaluate'))
+def test_turbomind_infer_tp2dp4ep8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
@@ -260,10 +265,9 @@ def test_turbomind_restful_tp8(config, run_id, prepare_environment, worker_id):
 @pytest.mark.gpu_num_1
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_pytorch_model_list(tp_num=1), indirect=True)
-def test_pytorch_restful_tp1(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 1}, func_type='evaluate'))
+def test_pytorch_restful_tp1(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
@@ -271,10 +275,94 @@ def test_pytorch_restful_tp1(config, run_id, prepare_environment, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_pytorch_model_list(tp_num=2), indirect=True)
-def test_pytorch_restful_tp2(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 2}, func_type='evaluate'))
+def test_pytorch_restful_tp2(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer')
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_2
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'tp': 2},
+        func_type='longtext_evaluate',
+        extra={'session_len': 400000},
+    ),
+)
+def test_pytorch_restful_tp2_longtext(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='longtext', eval_config_name='longtext-256k')
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'tp': 2, 'dp': 4, 'ep': 8},
+        func_type='longtext_evaluate',
+        extra={'session_len': 400000},
+    ),
+)
+def test_pytorch_restful_distributed_tp2dp4ep8_longtext(shared_proxy_manager, config, run_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
+                                worker_id=worker_id,
+                                test_type='infer',
+                                manager=shared_proxy_manager,
+                                eval_config_name='longtext-256k',
+                                eval_subpath='longtext')
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'tp': 2, 'dp': 4, 'ep': 8},
+        func_type='longtext_evaluate',
+        extra={'session_len': 700000},
+    ),
+)
+def test_pytorch_restful_distributed_tp2dp4ep8_longtext_512k(shared_proxy_manager, config, run_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
+                                worker_id=worker_id,
+                                test_type='infer',
+                                manager=shared_proxy_manager,
+                                eval_config_name='longtext-512k',
+                                eval_subpath='longtext-512k')
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_2
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'tp': 2},
+        func_type='longtext_evaluate',
+        extra={'session_len': 700000},
+    ),
+)
+def test_pytorch_restful_tp2_longtext_512k(config, run_config, worker_id):
+    run_eval_test(config,
+                  run_config,
+                  worker_id,
+                  'infer',
+                  eval_subpath='longtext-512k',
+                  eval_config_name='longtext-512k')
 
 
 @pytest.mark.infer
@@ -282,10 +370,9 @@ def test_pytorch_restful_tp2(config, run_id, prepare_environment, worker_id):
 @pytest.mark.gpu_num_4
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_pytorch_model_list(tp_num=4), indirect=True)
-def test_pytorch_restful_tp4(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 4}, func_type='evaluate'))
+def test_pytorch_restful_tp4(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
@@ -293,10 +380,9 @@ def test_pytorch_restful_tp4(config, run_id, prepare_environment, worker_id):
 @pytest.mark.gpu_num_8
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_pytorch_model_list(tp_num=8), indirect=True)
-def test_pytorch_restful_tp8(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 8}, func_type='evaluate'))
+def test_pytorch_restful_tp8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
@@ -304,21 +390,19 @@ def test_pytorch_restful_tp8(config, run_id, prepare_environment, worker_id):
 @pytest.mark.gpu_num_16
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_pytorch_model_list(tp_num=16), indirect=True)
-def test_pytorch_restful_tp16(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 16}, func_type='evaluate'))
+def test_pytorch_restful_tp16(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_tp16
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model_param', get_pytorch_model_list(tp_num=16))
-def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_id, model_param, worker_id):
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 16}, func_type='evaluate'))
+def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_config, worker_id):
     _run_ray_distributed_test(config=config,
-                              run_id=run_id,
-                              model_param=model_param,
+                              run_config=run_config,
                               worker_id=worker_id,
                               test_type='infer',
                               manager=shared_ray_manager)
@@ -326,13 +410,44 @@ def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_id, mo
 
 @pytest.mark.infer
 @pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dpep32
+@pytest.mark.test_ascend
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 32, 'ep': 32}, func_type='evaluate'))
+def test_pytorch_restful_distributed_dpep32(shared_proxy_manager, config, run_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
+                                worker_id=worker_id,
+                                test_type='infer',
+                                manager=shared_proxy_manager)
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_dpep8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model_param', get_pytorch_model_list({'dp': 8, 'ep': 8}))
-def test_pytorch_restful_distributed_dpep8(shared_proxy_manager, config, run_id, model_param, worker_id):
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 8, 'ep': 8}, func_type='evaluate'))
+def test_pytorch_restful_distributed_dpep8(shared_proxy_manager, config, run_config, worker_id):
     _run_proxy_distributed_test(config=config,
-                                run_id=run_id,
-                                model_param=model_param,
+                                run_config=run_config,
+                                worker_id=worker_id,
+                                test_type='infer',
+                                manager=shared_proxy_manager)
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'tp': 2, 'dp': 4, 'ep': 8},
+        func_type='evaluate'))
+def test_pytorch_restful_distributed_tp2dp4ep8(shared_proxy_manager, config, run_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
                                 worker_id=worker_id,
                                 test_type='infer',
                                 manager=shared_proxy_manager)
@@ -342,25 +457,59 @@ def test_pytorch_restful_distributed_dpep8(shared_proxy_manager, config, run_id,
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_dpep16
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model_param', get_pytorch_model_list({'dp': 16, 'ep': 16}))
-def test_pytorch_restful_distributed_dpep16(shared_proxy_manager, config, run_id, model_param, worker_id):
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 16, 'ep': 16}, func_type='evaluate'))
+def test_pytorch_restful_distributed_dpep16(shared_proxy_manager, config, run_config, worker_id):
     _run_proxy_distributed_test(config=config,
-                                run_id=run_id,
-                                model_param=model_param,
+                                run_config=run_config,
                                 worker_id=worker_id,
                                 test_type='infer',
                                 manager=shared_proxy_manager)
 
 
 @pytest.mark.eval
+@pytest.mark.turbomind
+@pytest.mark.gpu_num_1
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('turbomind', {'tp': 1}, func_type='evaluate'))
+def test_turbomind_eval_tp1(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.eval
+@pytest.mark.turbomind
+@pytest.mark.gpu_num_2
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('turbomind', {'tp': 2}, func_type='evaluate'))
+def test_turbomind_eval_tp2(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.eval
+@pytest.mark.turbomind
+@pytest.mark.gpu_num_4
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('turbomind', {'tp': 4}, func_type='evaluate'))
+def test_turbomind_eval_tp4(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.eval
+@pytest.mark.turbomind
+@pytest.mark.gpu_num_8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('turbomind', {'tp': 8}, func_type='evaluate'))
+def test_turbomind_eval_tp8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.eval
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_1
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=1), indirect=True)
-def test_pytorch_judgeeval_tp1(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 1}, func_type='evaluate'))
+def test_pytorch_eval_tp1(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
@@ -368,120 +517,282 @@ def test_pytorch_judgeeval_tp1(config, run_id, prepare_environment_judge_evaluat
 @pytest.mark.gpu_num_2
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=2), indirect=True)
-def test_pytorch_judgeeval_tp2(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 2}, func_type='evaluate'))
+def test_pytorch_eval_tp2(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
 @pytest.mark.pytorch
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_4
 @pytest.mark.test_ascend
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=4), indirect=True)
-def test_pytorch_judgeeval_tp4(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 4}, func_type='evaluate'))
+def test_pytorch_eval_tp4(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
 @pytest.mark.pytorch
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_8
 @pytest.mark.test_ascend
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=8), indirect=True)
-def test_pytorch_judgeeval_tp8(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 8}, func_type='evaluate'))
+def test_pytorch_eval_tp8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
 @pytest.mark.pytorch
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_16
 @pytest.mark.test_ascend
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=16), indirect=True)
-def test_pytorch_judgeeval_tp16(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 16}, func_type='evaluate'))
+def test_pytorch_eval_tp16(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_tp16
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=16), indirect=True)
-def test_pytorch_judgeeval_distributed_tp16(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 16}, func_type='evaluate'))
+def test_pytorch_eval_distributed_tp16(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dpep32
+@pytest.mark.test_ascend
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 32, 'ep': 32}, func_type='evaluate'))
+def test_pytorch_eval_distributed_dpep32(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_dpep8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate',
-                         get_pytorch_model_list({
-                             'dp': 8,
-                             'ep': 8
-                         }),
-                         indirect=True)
-def test_pytorch_judgeeval_distributed_dpep8(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 8, 'ep': 8}, func_type='evaluate'))
+def test_pytorch_eval_distributed_dpep8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
-@pytest.mark.turbomind
-@pytest.mark.gpu_num_1
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_turbomind_model_list(tp_num=1), indirect=True)
-def test_turbomind_judgeeval_tp1(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'tp': 2, 'dp': 4, 'ep': 8},
+        func_type='evaluate'))
+def test_pytorch_eval_distributed_tp2dp4ep8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
-@pytest.mark.turbomind
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dpep16
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'dp': 16, 'ep': 16}, func_type='evaluate'))
+def test_pytorch_eval_distributed_dpep16(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_turbomind_model_list(tp_num=2), indirect=True)
-def test_turbomind_judgeeval_tp2(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'tp': 2},
+        func_type='longtext_evaluate',
+        extra={'session_len': 400000},
+    ),
+)
+def test_pytorch_eval_tp2_longtext(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='longtext', eval_config_name='longtext-256k')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'tp': 2, 'dp': 4, 'ep': 8},
+        func_type='longtext_evaluate',
+        extra={'session_len': 400000},
+    ),
+)
+def test_pytorch_eval_distributed_tp2dp4ep8_longtext(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='longtext', eval_config_name='longtext-256k')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'tp': 2, 'dp': 4, 'ep': 8},
+        func_type='longtext_evaluate',
+        extra={'session_len': 700000},
+    ),
+)
+def test_pytorch_eval_distributed_tp2dp4ep8_longtext_512k(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='longtext-512k', eval_config_name='longtext-512k')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_2
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'pytorch',
+        {'tp': 2},
+        func_type='longtext_evaluate',
+        extra={'session_len': 700000},
+    ),
+)
+def test_pytorch_eval_tp2_longtext_512k(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='longtext-512k', eval_config_name='longtext-512k')
 
 
 @pytest.mark.eval
 @pytest.mark.turbomind
-@pytest.mark.gpu_num_4
+@pytest.mark.gpu_num_distributed_cp2tp8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_turbomind_model_list(tp_num=4), indirect=True)
-def test_turbomind_judgeeval_tp4(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_func_config_list('turbomind', {'cp': 2, 'tp': 8}, func_type='evaluate'))
+def test_turbomind_eval_cp2tp8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
 @pytest.mark.turbomind
-@pytest.mark.gpu_num_8
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_turbomind_model_list(tp_num=8), indirect=True)
-def test_turbomind_judgeeval_tp8(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(
+        'turbomind',
+         {'tp': 2, 'dp': 4, 'ep': 8},
+        func_type='evaluate'))
+def test_turbomind_eval_tp2dp4ep8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
+
+
+_PREFIX_CACHE_EXTRA = {'enable-prefix-caching': True}
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_1
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('pytorch', {'tp': 1}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_pytorch_restful_prefix_cache_tp1(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='prefix_cache')
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_2
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('pytorch', {'tp': 2}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_pytorch_restful_prefix_cache_tp2(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='prefix_cache')
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('pytorch', {'tp': 2, 'dp': 4, 'ep': 8}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_pytorch_restful_prefix_cache_tp2dp4ep8(shared_proxy_manager, config, run_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_config=run_config,
+                                worker_id=worker_id,
+                                test_type='infer',
+                                manager=shared_proxy_manager,
+                                eval_subpath='prefix_cache')
+
+
+@pytest.mark.infer
+@pytest.mark.turbomind
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('turbomind', {'tp': 2, 'dp': 4, 'ep': 8}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_turbomind_infer_prefix_cache_tp2dp4ep8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='prefix_cache')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_1
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('pytorch', {'tp': 1}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_pytorch_eval_prefix_cache_tp1(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='prefix_cache')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_2
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('pytorch', {'tp': 2}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_pytorch_eval_prefix_cache_tp2(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='prefix_cache')
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('pytorch', {'tp': 2, 'dp': 4, 'ep': 8}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_pytorch_eval_prefix_cache_tp2dp4ep8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='prefix_cache')
 
 
 @pytest.mark.eval
 @pytest.mark.turbomind
-@pytest.mark.gpu_num_8
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate',
-                         get_turbomind_model_list({
-                             'cp': 2,
-                             'tp': 8
-                         }),
-                         indirect=True)
-def test_turbomind_judgeeval_cp2tp8(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list('turbomind', {'tp': 2, 'dp': 4, 'ep': 8}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_turbomind_eval_prefix_cache_tp2dp4ep8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval', eval_subpath='prefix_cache')

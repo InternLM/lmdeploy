@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import time
-from typing import Dict
 
 import numpy as np
 
@@ -213,7 +212,7 @@ class BaseBlockManager:
 
         self.allocator = LogicalAllocator(num_cpu_blocks, num_gpu_blocks, num_gpu_reserved)
 
-        self.block_tables: Dict[int, BlockTable] = {}
+        self.block_tables: dict[int, BlockTable] = {}
 
     @classmethod
     def num_required_blocks(cls, obj: SchedulerSequence, prealloc_size: int = 0):
@@ -249,6 +248,20 @@ class BaseBlockManager:
         """
         logical_blocks = msg.logical_blocks
         return self.allocator.get_physical_blocks(logical_blocks.get_real_blocks())
+
+    def resolve_gpu_block_offsets(self, logical_block_ids: np.ndarray):
+        """Resolve allocated logical ids to resident GPU block offsets."""
+        allocator = self.allocator
+        num_logical_blocks = self.num_gpu_blocks + self.num_cpu_blocks
+        if np.any(logical_block_ids < 0) or np.any(logical_block_ids >= num_logical_blocks):
+            raise ValueError('logical_block_ids contains an out-of-range allocator id.')
+        if np.any(allocator.get_ref_count(logical_block_ids) <= 0):
+            raise ValueError('logical_block_ids contains an unallocated allocator id.')
+
+        block_offsets = allocator.get_physical_blocks(logical_block_ids)
+        if np.any(block_offsets < 0) or np.any(block_offsets >= self.num_gpu_blocks):
+            raise ValueError('logical_block_ids contains a block that is not GPU-resident.')
+        return block_offsets
 
     def allocate(self, data: SchedulerSequence, prealloc_size: int = 0):
         """Allocate stuff."""

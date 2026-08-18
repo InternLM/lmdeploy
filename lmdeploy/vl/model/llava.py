@@ -5,7 +5,6 @@ import ast
 import math
 import warnings
 from contextlib import contextmanager
-from typing import Dict, List
 
 import torch
 from PIL import Image
@@ -210,28 +209,21 @@ class LlavaVisionModel(LlavaHfVisionModel):
         """Check whether the config match the model."""
         arch = config.architectures[0] if config.architectures else None
         if arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
-            # internvl-llava has vision_tower of OpenGVLab/xxx
-            mm_vision_tower = getattr(config, 'mm_vision_tower', '')
-            # yi-vl has projector type of xxx_Norm
-            projector_type = getattr(config, 'mm_projector_type', 'linear')
-            if '_Norm' in projector_type:
-                return False
-            if 'OpenGVLab' in mm_vision_tower:
-                return False
             return True
         return False
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         from transformers import CLIPImageProcessor
-        self.image_processor = CLIPImageProcessor.from_pretrained(self.hf_config.mm_vision_tower)
-        config = AutoConfig.from_pretrained(self.hf_config.mm_vision_tower)
+        self.image_processor = CLIPImageProcessor.from_pretrained(self.hf_config.mm_vision_tower,
+                                                                  trust_remote_code=trust_remote_code)
+        config = AutoConfig.from_pretrained(self.hf_config.mm_vision_tower, trust_remote_code=trust_remote_code)
         image_size = config.vision_config.image_size
         patch_size = config.vision_config.patch_size
         self.n_token_per_image = (image_size // patch_size)**2
         if self.hf_config.mm_vision_select_feature == 'cls_patch':
             self.n_token_per_image += 1
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         check_llava_install()
@@ -240,13 +232,13 @@ class LlavaVisionModel(LlavaHfVisionModel):
         model = None
         if self.arch == 'LlavaLlamaForCausalLM':
             from llava.model.language_model.llava_llama import LlavaConfig
-            self.config = LlavaConfig.from_pretrained(self.model_path)
+            self.config = LlavaConfig.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
             assert self.config.model_type in ['llava', 'llava_llama'], \
                 f'expect model_type llava and llava_llama '\
                 f'but got {self.config.model_type}'
         elif self.arch == 'LlavaMistralForCausalLM':
             from llava.model.language_model.llava_mistral import LlavaMistralConfig
-            self.config = LlavaMistralConfig.from_pretrained(self.model_path)
+            self.config = LlavaMistralConfig.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         else:
             assert 0, f'unsupported arch {self.arch}'
 
@@ -257,7 +249,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
                 init_llava_vision_tower(self.config):
             warnings.simplefilter('ignore')
             self.config.quantization_config = {}  # disable vision part quantization
-            model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=trust_remote_code)
 
         self.vl_model = model
         if not self.with_llm:
@@ -295,12 +287,11 @@ class LlavaVisionModel(LlavaHfVisionModel):
         image_features = self.mm_projector(image_features)
         return image_features
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess() for spec."""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, params in images:
-            image = image.convert('RGB')
+        for modality, image, params in images:
             pixel_values = process_images([image], self.image_processor, self.config)
             outputs.append(
                 dict(pixel_values=pixel_values,
@@ -311,12 +302,12 @@ class LlavaVisionModel(LlavaHfVisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:

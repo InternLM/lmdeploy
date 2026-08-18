@@ -2,7 +2,7 @@
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import torch
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.engine.logits_process import SamplingInputs
     from lmdeploy.pytorch.messages import SchedulerSequence
     from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
-    SeqList = List[SchedulerSequence]
+    SeqList = list[SchedulerSequence]
 
 
 def to_device(self, device: str, non_blocking: bool = False):
@@ -34,6 +34,13 @@ class ExtraInputs(ABC):
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
         return to_device(self, device, non_blocking)
+
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of tensor fields."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, torch.Tensor) and value.is_cuda:
+                value.record_stream(stream)
 
     def broadcast(self, src: int, group, async_op=False):
         """Broadcast extra inputs."""
@@ -103,13 +110,20 @@ class StoppingCriteria(ABC):
              token_ids: torch.Tensor,
              stop_words: torch.Tensor,
              inputs: Optional['ModelInputs'] = None,
-             extra_inputs: Optional[ExtraInputs] = None):
+             extra_inputs: ExtraInputs | None = None):
         """Check whether to stop generation."""
         pass
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
         return to_device(self, device, non_blocking)
+
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of tensor fields."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, torch.Tensor) and value.is_cuda:
+                value.record_stream(stream)
 
 
 class ModelAgentStrategy(ABC):
@@ -122,7 +136,7 @@ class ModelAgentStrategy(ABC):
 
     @abstractmethod
     def slice_extra_inputs(self, extra_inputs: ExtraInputs, model_inputs: 'ModelInputs',
-                           model_outputs: Dict[str, torch.Tensor], **kwargs) -> ExtraInputs:
+                           model_outputs: dict[str, torch.Tensor], **kwargs) -> ExtraInputs:
         """Slice outputs."""
         pass
 
@@ -135,10 +149,6 @@ class ModelAgentStrategy(ABC):
     def make_extra_inputs(self, seqs: 'SeqList', model_inputs: 'ModelInputs') -> ExtraInputs:
         """Create extra inputs."""
         pass
-
-    def update_extra_inputs(self, extra_inputs: ExtraInputs, delta: 'ModelInputsDelta') -> ExtraInputs:
-        """Update extra inputs with model inputs delta."""
-        return extra_inputs
 
     @abstractmethod
     def make_extra_outputs(self, extra_inputs: ExtraInputs) -> ExtraOutputs:
@@ -153,25 +163,6 @@ class ModelAgentStrategy(ABC):
         extra_inputs: ExtraInputs,
     ):
         """step."""
-        pass
-
-    @abstractmethod
-    def update_prefill_for_next_step(
-        self,
-        model_inputs: 'ModelInputs',
-        extra_inputs: ExtraInputs,
-        next_token_ids: torch.Tensor,
-        model_metas: Any,
-        extra_outputs: ExtraOutputs,
-    ) -> Tuple['ModelInputs', ExtraInputs]:
-        """Step next decoding."""
-        pass
-
-    @abstractmethod
-    def update_decoding_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
-                                      extra_inputs: ExtraInputs,
-                                      extra_outputs: ExtraOutputs) -> Tuple['ModelInputs', ExtraInputs]:
-        """Step next inputs."""
         pass
 
     @abstractmethod
@@ -190,3 +181,8 @@ class ModelAgentStrategy(ABC):
     @contextmanager
     def broadcast_next_token(self, next_token_ids: torch.Tensor, extra_inputs: ExtraInputs, dist_ctx: 'DistContext'):
         """Broadcast next token ids and extra inputs."""
+
+    @contextmanager
+    def post_broadcast(self, extra_inputs: ExtraInputs, dist_ctx: 'DistContext'):
+        """Post broadcast extra inputs."""
+        pass

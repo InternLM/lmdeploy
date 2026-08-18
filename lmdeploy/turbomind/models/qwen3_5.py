@@ -1,0 +1,629 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+"""Qwen3.5 source models for the TurboMind pipeline.
+
+This module hosts the full Qwen3.5 family in one place using composition
+instead of inheritance (mirrors ``InternVLModel``):
+
+* ``Qwen3_5TextModel`` -- text-only weight model (dense + linear-attn +
+  optional MoE). Not registered on its own; used directly by the aggregate.
+* ``Qwen3_5VisionModel`` -- the vision sub-tree rooted at
+  ``ModelRoot.vision_model``.
+* ``Qwen3_5Model`` -- a thin aggregate holding a ``text_model`` and an
+  optional ``vision_model``, registered as ``qwen3_5`` / ``qwen3_5-moe``. It
+  delegates the two-phase ``__init__`` / ``bind_runtime`` / ``model(pfx)``
+  lifecycle to its children, and skips the vision encoder when
+  ``language_model_only`` is set.
+
+The patcher and position embedding are replicated across TP ranks. Vision
+transformer blocks and merger linears shard with the model TP group.
+"""
+from __future__ import annotations
+
+import hashlib
+import math
+import re
+import struct
+from typing import TYPE_CHECKING, Any
+
+import _turbomind as _tm
+import torch
+
+from lmdeploy.vl.constants import Modality
+
+from ..builders import (
+    AttentionBuilder,
+    Builder,
+    DecoderLayerBuilder,
+    DecoderLayerConfig,
+    DeltaNetBuilder,
+    FfnBuilder,
+    LayerNormBuilder,
+    ModuleListBuilder,
+    ModuleListConfig,
+    MoeBuilder,
+    SplitSide,
+    TextModelBuilder,
+    VisionModelBuilder,
+    _act_type_id,
+    make_layer_norm_config,
+)
+from ..builders._base import ParallelGroup
+from ..builders.attention import split_output_gate
+from ..linear import Linear
+from ..text_model import TextModel
+from ..vision_model import VisionModel
+from ..weight_format import TrivialFormat
+from .base import INPUT_MODELS
+from .utils import (
+    make_attention_config,
+    make_ffn_config,
+    make_model_weight_config,
+    make_moe_config,
+    read_packed_moe_expert,
+    reorder_rotary_emb,
+)
+from .vision_utils import (
+    pad_attn_head_dim,
+    split_packed_qkv,
+    to_tm_tensor,
+)
+
+if TYPE_CHECKING:
+    from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config, Qwen3_5TextConfig
+    from transformers.models.qwen3_5_moe.configuration_qwen3_5_moe import Qwen3_5MoeConfig, Qwen3_5MoeTextConfig
+
+
+def map_packed_qwen35_experts(name: str) -> str:
+    """Map packed expert names to weight names so parameter.py can classify."""
+    return re.sub(r'(mlp\.experts\.(?:gate_up|down)_proj)$', r'\1.weight', name)
+
+
+class Qwen3_5TextModel(TextModel):
+    """Weight model for Qwen3.5 (dense + linear-attn + optional MoE)."""
+
+    _loader_mappings = [map_packed_qwen35_experts]
+    cfg: Qwen3_5TextConfig | Qwen3_5MoeTextConfig
+
+    def __init__(self, cfg: Qwen3_5TextConfig | Qwen3_5MoeTextConfig, *, resolver):
+        super().__init__(cfg, resolver=resolver)
+
+        self._attn_cfg = make_attention_config(cfg)
+        self._attn_cfg.output_gate = True
+        self._attn_cfg.rope.mrope_interleaved = True
+
+        self._n_experts = getattr(cfg, 'num_experts', 0)
+
+        # ---- DeltaNet template ----
+        ln_key_heads = cfg.linear_num_key_heads
+        ln_val_heads = cfg.linear_num_value_heads
+        ln_key_dim   = cfg.linear_key_head_dim
+        ln_val_dim   = cfg.linear_value_head_dim
+
+        self._dn_cfg = _tm.DeltaNetConfig()
+        self._dn_cfg.hidden_dim      = self.cfg.hidden_size
+        self._dn_cfg.num_k_heads     = ln_key_heads
+        self._dn_cfg.num_v_heads     = ln_val_heads
+        self._dn_cfg.key_head_dim    = ln_key_dim
+        self._dn_cfg.value_head_dim  = ln_val_dim
+        self._dn_cfg.d_conv          = cfg.linear_conv_kernel_dim or 4
+
+        # ---- MoE template ----
+        if self._n_experts > 0:
+            self._moe_cfg = make_moe_config(
+                cfg,
+                experts_per_token=cfg.num_experts_per_tok)
+            self._moe_cfg.expert_num = self._n_experts
+            inter_size=cfg.moe_intermediate_size
+        else:
+            inter_size=cfg.intermediate_size
+
+        # ---- FFN template ----
+        self._ffn_cfg = make_ffn_config(
+            cfg,
+            act_type=_act_type_id('silu'), inter_size=inter_size)
+
+    # ------------------------------------------------------------------
+    # model() — same topology as old code
+    # ------------------------------------------------------------------
+
+    def model(self, pfx):
+        root_cfg = make_model_weight_config(self.cfg)
+        builder = TextModelBuilder(
+            root_cfg, self._ctx,
+            root_handles=self._root_handles,
+            tp=self._model_tp,
+            vocab_size=self.cfg.vocab_size)
+        builder.add_token_embeds(pfx.get('model.language_model.embed_tokens.weight'))
+        builder.norm = self.norm(
+            pfx + 'model.language_model.norm',
+            zero_centered=True,
+        )
+        lm_pfx = (pfx + 'model.language_model.embed_tokens'
+                  if self.cfg.tie_word_embeddings
+                  else pfx + 'lm_head')
+        builder.add_lm_head(self._linear(lm_pfx))
+        builder.layers = self.layers(pfx + 'model.language_model.layers')
+        builder.build()
+
+    # ------------------------------------------------------------------
+    # Attention / linear-attention factories
+    # ------------------------------------------------------------------
+
+    def attn(self, pfx):
+        q, k, v, o = [self._linear(pfx + f'{x}_proj') for x in 'qkvo']
+
+        cfg = self._attn_cfg.clone()
+        q, gate = split_output_gate(q, head_num=cfg.head_num)
+
+        def reorder(x):
+            return reorder_rotary_emb(x, cfg.head_dim, cfg.rope.dim, resolver=self._resolver)
+
+        q, k = [reorder(x) for x in (q, k)]
+
+        m = AttentionBuilder(cfg, self._ctx, tp=self._attn_tp)
+
+        m.add_qkv_proj(q, k, v, gate=gate)
+        m.add_o_proj(o)
+
+        m.q_norm = self.norm(
+            pfx + 'q_norm',
+            reorder,
+            zero_centered=True,
+        )
+        m.k_norm = self.norm(
+            pfx + 'k_norm',
+            reorder,
+            zero_centered=True,
+        )
+
+        return m.build()
+
+    def linear_attn(self, pfx):
+        cfg = self._dn_cfg.clone()
+        builder = DeltaNetBuilder(cfg, self._ctx, tp=self._model_tp)
+
+        builder.add_input_projections(
+            in_proj_qkv=self._linear(pfx + 'in_proj_qkv'),
+            in_proj_z=self._linear(pfx + 'in_proj_z'),
+            in_proj_b=self._linear(pfx + 'in_proj_b'),
+            in_proj_a=self._linear(pfx + 'in_proj_a'),
+            out_proj=self._linear(pfx + 'out_proj'))
+        builder.add_scalar_params(
+            a_log=pfx.pop('A_log'),
+            dt_bias=pfx.pop('dt_bias'))
+        builder.add_conv1d(
+            pfx.pop('conv1d.weight'))
+        builder.norm = self.norm(pfx + 'norm')  # not zero-centered
+        return builder.build()
+
+    # ------------------------------------------------------------------
+    # FFN / MoE factories
+    # ------------------------------------------------------------------
+
+    def ffn(self, pfx, inter_size, is_expert=False):
+        try:
+            w1, w3, w2 = [self._linear(pfx + f'{x}_proj')
+                          for x in ('gate', 'up', 'down')]
+        except KeyError:
+            return None
+
+        cfg = self._ffn_cfg.clone()
+        cfg.inter_size = inter_size
+        cfg.is_expert  = is_expert
+
+        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp)
+        m.add_ffn(w1, w2, w3)
+        return m.build()
+
+    def moe(self, pfx):
+        cfg = self._moe_cfg.clone()
+
+        m = MoeBuilder(cfg, self._ctx, ep=self._ep)
+
+        m.add_gate('gate', self._linear(pfx + 'gate'))
+
+        experts_pfx = pfx + 'experts'
+        experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
+        for e in m.range(self._n_experts):
+            experts[e] = self._moe_expert_ffn(
+                experts_pfx, e, self.cfg.moe_intermediate_size)
+        m.experts = experts.build()
+
+        m.add_gate('shared_gate', self._linear(pfx + 'shared_expert_gate'))
+        shared = self.ffn(pfx + 'shared_expert', self.cfg.shared_expert_intermediate_size)
+
+        return m.build(), shared
+
+    def _packed_moe_ffn(self, experts_pfx, expert_idx, inter_size):
+        w1, w2, w3 = read_packed_moe_expert(
+            experts_pfx + 'gate_up_proj',
+            experts_pfx + 'down_proj',
+            expert_idx,
+            resolver=self._resolver,
+        )
+        cfg = self._ffn_cfg.clone()
+        cfg.inter_size = inter_size
+        cfg.is_expert  = True
+        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp)
+        m.add_ffn(w1, w2, w3)
+        return m.build()
+
+    def _moe_expert_ffn(self, experts_pfx, expert_idx, inter_size):
+        expert_pfx = experts_pfx + expert_idx
+        return (self.ffn(expert_pfx, inter_size, is_expert=True)
+                or self._packed_moe_ffn(experts_pfx, expert_idx, inter_size))
+
+    # ------------------------------------------------------------------
+    # layers() — dispatch by layer type
+    # ------------------------------------------------------------------
+
+    def layers(self, pfx):
+        layers = ModuleListBuilder(ModuleListConfig(), self._ctx)
+        for i, p in pfx.slices(0, self.cfg.num_hidden_layers):
+            d = DecoderLayerBuilder(DecoderLayerConfig(), self._ctx)
+            if self.cfg.layer_types[i] == 'linear_attention':
+                d.linear_attn = self.linear_attn(p + 'linear_attn')
+            else:
+                d.attention = self.attn(p + 'self_attn')
+            if self._n_experts > 0:
+                d.moe_ffn, d.feed_forward = self.moe(p + 'mlp')
+            else:
+                d.feed_forward = self.ffn(p + 'mlp', self.cfg.intermediate_size)
+            d.attention_norm = self.norm(
+                p + 'input_layernorm',
+                zero_centered=True,
+            )
+            d.ffn_norm = self.norm(
+                p + 'post_attention_layernorm',
+                zero_centered=True,
+            )
+            layers[i] = d.build()
+        return layers.build()
+
+
+# Explicit map: ViT head_dim -> kernel-supported head_dim. The attention
+# kernel only ships {64,128,192,256,576} and impl_16816.h requires
+# head_dim % 16 == 0, so head_dim=72 (Qwen3.5-27B ViT) is zero-padded
+# per-head to 128. Other dims must be added here deliberately — we don't
+# auto-round-up because the next-supported jump can be large.
+_VIT_HEAD_DIM_PADDED = {
+    64:  64,    # <=2B: native
+    72:  128,   # >=9B: pad to nearest kernel-supported dim
+}
+
+
+def _padded_vit_head_dim(real_hd: int) -> int:
+    if real_hd not in _VIT_HEAD_DIM_PADDED:
+        raise NotImplementedError(
+            f'Qwen3.5 ViT head_dim={real_hd} not supported; '
+            f'known: {sorted(_VIT_HEAD_DIM_PADDED)}')
+    return _VIT_HEAD_DIM_PADDED[real_hd]
+
+
+def _image_fingerprint(input_mm: dict) -> bytes:
+    """SHA-256 over the Qwen3.5 ViT-forward inputs plus the mRoPE scalar.
+
+    Post-preprocess (phase A): every input is already on the item dict. Two requests hash equal iff their ViT embeddings
+    and cached LM KV for the image span are identical -- i.e. reuse is correct.
+    """
+    modality = input_mm['modality']
+    is_video = modality in (Modality.VIDEO, Modality.VIDEO.value)
+    pv   = input_mm['pixel_values_videos'] if is_video else input_mm['pixel_values']
+    gthw = input_mm['video_grid_thw']      if is_video else input_mm['image_grid_thw']
+    if isinstance(gthw, torch.Tensor):
+        values = gthw.flatten().tolist()
+    else:
+        values = list(gthw)
+    t, h, w = int(values[0]), int(values[1]), int(values[2])
+    spg = input_mm.get('second_per_grid')          # video only; float | None
+
+    h_obj = hashlib.sha256()
+    h_obj.update(struct.pack('<B', 1 if is_video else 0))
+    h_obj.update(struct.pack('<3i', t, h, w))
+    h_obj.update(struct.pack('<B', 0 if spg is None else 1))
+    if spg is not None:
+        h_obj.update(struct.pack('<d', float(spg)))
+    # Reinterpret the raw storage as uint8 so the digest is dtype-agnostic and
+    # works for bfloat16 (numpy cannot consume bfloat16 directly). Same dtype +
+    # same values -> same bytes; the dtype is constant per engine instance.
+    h_obj.update(pv.contiguous().cpu().view(torch.uint8).numpy().tobytes())
+    return h_obj.digest()                          # 32 bytes; never all-zero
+
+
+def _resolve_fingerprint(input_mm: dict) -> bytes:
+    """Use a pre-placed fingerprint if present (future pre-preprocess
+    generator, or a test forcing empty/dormant); otherwise derive it from the
+    ViT inputs.
+
+    `is not None` (not `or`) so an explicit b'' stays empty rather than falling
+    through to compute -- the empty-fingerprint sentinel must be preserved
+    (empty never compares equal -> image-span reuse stays dormant).
+    """
+    fp = input_mm.get('fingerprint')
+    return fp if fp is not None else _image_fingerprint(input_mm)
+
+
+class Qwen3_5VisionModel(VisionModel):
+    """Vision sub-tree for Qwen3.5 VLM, rooted at ModelRoot.vision_model."""
+
+    def __init__(self, vision_cfg, *, resolver):
+        super().__init__(vision_cfg, resolver=resolver)
+
+        self._vis_depth = int(vision_cfg.depth)
+        self._vis_hidden = int(vision_cfg.hidden_size)
+        self._vis_inter = int(vision_cfg.intermediate_size)
+        self._vis_heads = int(vision_cfg.num_heads)
+        self._vis_out_hidden = int(vision_cfg.out_hidden_size)
+        self._vis_in_chans = int(vision_cfg.in_channels)
+        self._vis_patch = int(vision_cfg.patch_size)
+        self._vis_temporal = int(vision_cfg.temporal_patch_size)
+        self._vis_pos_n = int(vision_cfg.num_position_embeddings)
+        self._vis_spatial_merge = int(vision_cfg.spatial_merge_size)
+        self._vis_norm_eps = 1e-6
+
+        # in_dim of the patcher when the Conv3d is reinterpreted as a
+        # Linear over flattened patches: C * T * H * W.
+        self._patch_in_dim = (self._vis_in_chans
+                              * self._vis_temporal
+                              * self._vis_patch
+                              * self._vis_patch)
+
+    @staticmethod
+    def _offset_pair(offset) -> tuple[int, int]:
+        if isinstance(offset, torch.Tensor):
+            values = offset.flatten().tolist()
+        else:
+            values = list(offset)
+        if len(values) != 2:
+            raise ValueError(f'Qwen3.5 ViT offset should contain 2 values, got {values!r}')
+        return int(values[0]), int(values[1])
+
+    @staticmethod
+    def _grid_thw(grid_thw) -> tuple[int, int, int]:
+        if isinstance(grid_thw, torch.Tensor):
+            values = grid_thw.flatten().tolist()
+        else:
+            values = list(grid_thw)
+        if len(values) != 3:
+            raise ValueError(f'Qwen3.5 ViT grid_thw should contain 3 values, got {values!r}')
+        return int(values[0]), int(values[1]), int(values[2])
+
+    def to_turbomind_multimodal(self, multimodal: list[dict[str, Any]]):
+        """Convert Qwen3.5 VL preprocessor outputs to typed TurboMind input."""
+        items = []
+        for input_mm in multimodal:
+            modality = input_mm.get('modality')
+            if modality == Modality.IMAGE or modality == Modality.IMAGE.value:
+                data = to_tm_tensor(input_mm['pixel_values'])
+                grid_thw = self._grid_thw(input_mm['image_grid_thw'])
+                tm_modality = _tm.multimodal.Modality.IMAGE
+            elif modality == Modality.VIDEO or modality == Modality.VIDEO.value:
+                data = to_tm_tensor(input_mm['pixel_values_videos'])
+                grid_thw = self._grid_thw(input_mm['video_grid_thw'])
+                tm_modality = _tm.multimodal.Modality.VIDEO
+            else:
+                raise ValueError(f'Qwen3.5 TurboMind does not support modality {modality!r}')
+
+            token_begin, token_end = self._offset_pair(input_mm['offset'])
+            fingerprint = _resolve_fingerprint(input_mm)
+            items.append(
+                _tm.multimodal.QwenVitItem(
+                    modality=tm_modality,
+                    data=data,
+                    token_begin=token_begin,
+                    token_end=token_end,
+                    grid_thw=grid_thw,
+                    fingerprint=fingerprint,
+                ))
+
+        return _tm.multimodal.QwenVitInput(items)
+
+    # ------------------------------------------------------------------
+    # model() — build the vision sub-tree
+    # ------------------------------------------------------------------
+
+    def model(self, pfx):
+        self._build_vision_model(pfx + 'model.visual')
+
+    def _build_vision_model(self, pfx):
+        cfg = self._make_vision_root_cfg()
+        root = self._restore_dtype(VisionModelBuilder(
+            cfg, self._ctx,
+            root_handles=self._root_handles,
+            tp=self._model_tp))
+
+        root._add_tensor('pos_embed', (pfx + 'pos_embed').pop('weight'))
+        root._add_linear('patch_embed', self._patch_embed(pfx + 'patch_embed.proj'))
+
+        root.blocks = self.vit_blocks(pfx + 'blocks')
+
+        root._add_linear('merger_fc1', self._linear(pfx + 'merger.linear_fc1'), SplitSide.OUTPUT)
+        root._add_linear('merger_fc2', self._linear(pfx + 'merger.linear_fc2'), SplitSide.INPUT)
+        root.merger_norm = self._layer_norm(pfx + 'merger.norm', dim=self._vis_hidden)
+
+        root.build()
+
+    def _make_vision_root_cfg(self):
+        cfg = _tm.QwenVitConfig()
+        cfg.data_type = self._resolver.data_type
+        cfg.hidden_dim = self._vis_hidden
+        cfg.out_hidden_dim = self._vis_out_hidden
+        cfg.depth = self._vis_depth
+        cfg.head_num = self._vis_heads
+        cfg.intermediate_size = self._vis_inter
+        cfg.patch_in_dim = self._patch_in_dim
+        cfg.in_channels = self._vis_in_chans
+        cfg.patch_size = self._vis_patch
+        cfg.temporal_patch_size = self._vis_temporal
+        cfg.num_position_embeddings = self._vis_pos_n
+        cfg.spatial_merge_size = self._vis_spatial_merge
+        # Qwen3.5 ViT MLP uses the tanh-approximation GELU.
+        cfg.gelu_tanh = True
+        cfg.norm_eps = self._vis_norm_eps
+        return cfg
+
+    def _patch_embed(self, pfx):
+        weight = pfx.pop('weight')
+        weight = weight.reshape(weight.shape[0], -1).t().contiguous()
+        tensors = {'weight': weight}
+        if pfx.has('bias'):
+            tensors['bias'] = pfx.pop('bias')
+        return Linear(tensors=tensors, weight_format=TrivialFormat())
+
+    def vit_blocks(self, pfx):
+        blocks = ModuleListBuilder(ModuleListConfig(), self._ctx)
+
+        for i, p in pfx.slices(0, self._vis_depth):
+            blocks[i] = self.vit_block(p)
+
+        return blocks.build()
+
+    def vit_block(self, pfx):
+        cfg = _tm.QwenVitBlockConfig()
+        cfg.data_type = self._resolver.data_type
+        cfg.hidden_dim = self._vis_hidden
+        cfg.head_num = self._vis_heads
+        cfg.intermediate_size = self._vis_inter
+        cfg.norm_eps = self._vis_norm_eps
+
+        b = self._restore_dtype(Builder(cfg, self._ctx))
+        b.tp = self._model_tp
+
+        b.norm1 = self._layer_norm(pfx + 'norm1', dim=self._vis_hidden)
+        b.norm2 = self._layer_norm(pfx + 'norm2', dim=self._vis_hidden)
+
+        b.attention = self.vit_attn(pfx + 'attn')
+        b._add_linear('mlp_fc1', self._linear(pfx + 'mlp.linear_fc1'), SplitSide.OUTPUT)
+        b._add_linear('mlp_fc2', self._linear(pfx + 'mlp.linear_fc2'), SplitSide.INPUT)
+        return b.build()
+
+    def _make_vision_attn_cfg(self):
+        real_hd = self._vis_hidden // self._vis_heads
+        padded_hd = _padded_vit_head_dim(real_hd)
+        cfg = _tm.AttentionConfig()
+        cfg.data_type = self._resolver.data_type
+        cfg.hidden_dim = self._vis_hidden
+        cfg.head_dim = padded_hd
+        cfg.head_num = self._vis_heads
+        cfg.kv_head_num = self._vis_heads
+        cfg.window_size = 0
+        cfg.causal = False
+        # When we pad head_dim, the softmax scale must stay tied to the
+        # real head_dim — the padded slice contributes zero to QK^T, so the
+        # math is equivalent to head_dim=real_hd. Setting softmax_scale != 0
+        # bypasses the runtime's `1/sqrt(attn.head_dim)` fallback.
+        cfg.softmax_scale = (1.0 / math.sqrt(real_hd)
+                             if padded_hd != real_hd else 0.0)
+        return cfg
+
+    def vit_attn(self, pfx):
+        cfg = self._make_vision_attn_cfg()
+        real_hd = self._vis_hidden // self._vis_heads
+        padded_hd = cfg.head_dim
+        H = cfg.head_num
+
+        q, k, v = split_packed_qkv(self._linear(pfx + 'qkv'))
+
+        # Qwen3.5 ViT applies RoPE before invoking the attention kernel.
+        # Reorder Q/K once at export time so the runtime can use the same
+        # adjacent-pair RoPE layout as TurboMind's attention kernels.
+        # RoPE is computed at the real head_dim regardless of padding.
+        q = reorder_rotary_emb(q, real_hd, real_hd, resolver=self._resolver)
+        k = reorder_rotary_emb(k, real_hd, real_hd, resolver=self._resolver)
+
+        proj = self._linear(pfx + 'proj')
+
+        # Only force TrivialFormat on the padded path; the native-head_dim
+        # path keeps the existing quantized/non-quantized behavior intact.
+        q, k, v, proj = pad_attn_head_dim(
+            q,
+            k,
+            v,
+            proj,
+            num_heads=H,
+            src_head_dim=real_hd,
+            dst_head_dim=padded_hd,
+        )
+
+        attn_tp = self._model_tp if self._vis_heads % self._model_tp.size == 0 else ParallelGroup(1, None)
+        m = self._restore_dtype(
+            AttentionBuilder(cfg, self._ctx, tp=attn_tp))
+        m.add_qkv_proj(q, k, v)
+        m.add_o_proj(proj)
+        return m.build()
+
+    # ------------------------------------------------------------------
+    # Helper: build a LayerNorm child
+    # ------------------------------------------------------------------
+
+    def _layer_norm(self, pfx, *, dim: int):
+        weight = pfx.pop('weight')
+        bias = pfx.pop('bias') if pfx.has('bias') else None
+        cfg = make_layer_norm_config(dim=dim,
+                                     data_type=self._resolver.data_type,
+                                     norm_eps=self._vis_norm_eps)
+        m = self._restore_dtype(LayerNormBuilder(cfg, self._ctx))
+        m.set_weight(weight, bias=bias)
+        return m.build()
+
+
+@INPUT_MODELS.register_module(name='qwen3_5-moe')
+@INPUT_MODELS.register_module(name='qwen3_5')
+class Qwen3_5Model:
+    """Aggregate source model for Qwen3.5 checkpoints (text + optional
+    vision)."""
+
+    _vision = True
+
+    def __init__(self, cfg: Qwen3_5Config | Qwen3_5MoeConfig, *, resolver,
+                 vision_resolver=None,
+                 language_model_only: bool = False):
+        text_cfg = getattr(cfg, 'text_config', cfg)
+        if text_cfg is None:
+            raise ValueError(
+                'Qwen3_5Model requires a checkpoint with text_config.')
+        self.text_model = Qwen3_5TextModel(text_cfg, resolver=resolver)
+
+        vision_cfg = getattr(cfg, 'vision_config', None)
+        if language_model_only or vision_cfg is None:
+            self.vision_model = None
+        else:
+            self.vision_model = Qwen3_5VisionModel(
+                vision_cfg, resolver=vision_resolver or resolver)
+
+    def bind_runtime(self, *, ctx, root_handles,
+                     attn_tp, mlp_tp, ep, model_tp):
+        self.text_model.bind_runtime(
+            ctx=ctx,
+            root_handles=root_handles,
+            attn_tp=attn_tp,
+            mlp_tp=mlp_tp,
+            ep=ep,
+            model_tp=model_tp,
+        )
+        if self.vision_model is not None:
+            self.vision_model.bind_runtime(
+                ctx=ctx,
+                root_handles=root_handles,
+                model_tp=model_tp,
+            )
+
+    @property
+    def _vocab_size(self):
+        return self.text_model.cfg.vocab_size
+
+    @property
+    def _loader_mappings(self):
+        return list(getattr(type(self.text_model), '_loader_mappings', []))
+
+    def to_turbomind_multimodal(self, multimodal: list[dict[str, Any]]):
+        if self.vision_model is None:
+            raise ValueError('Qwen3.5 TurboMind vision encoder is not available.')
+        return self.vision_model.to_turbomind_multimodal(multimodal)
+
+    def model(self, pfx):
+        # Text root child must be attached before the vision one, since both
+        # use the shared root_handles.
+        self.text_model.model(pfx)
+        if self.vision_model is not None:
+            self.vision_model.model(pfx)

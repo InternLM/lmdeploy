@@ -23,12 +23,21 @@ ______________________________________________________________________
 
 ## 最新ニュース 🎉
 
+<details open>
+<summary><b>2026</b></summary>
+
+- \[2026/04\] PyPI で LMDeploy のストレージ枠が拡張され、wheel のアップロードが再開されました。`v0.12.3` はすでに PyPI で公開されており、`pip install lmdeploy` で直接インストールできます。
+- \[2026/02\] [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35) をサポート
+- \[2026/02\] [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) の 4 ビット対称／非対称量子化をサポート。詳細な手順は[こちら](docs/en/quantization/llm_compressor.md)を参照してください
+
+</details>
+
 <details close>
 <summary><b>2024</b></summary>
 
 - \[2024/08\] 🔥🔥 LMDeployは[modelscope/swift](https://github.com/modelscope/swift)に統合され、VLMs推論のデフォルトアクセラレータとなりました
 - \[2024/07\] 🎉🎉 Llama3.1 8B、70Bおよびそのツールコールをサポート
-- \[2024/07\] [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e)全シリーズモデル、[InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md)およびInternLM2.5の[ファンクションコール](docs/en/llm/api_server_tools.md)をサポート
+- \[2024/07\] [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e)全シリーズモデル、InternLM-XComposer2.5およびInternLM2.5の[ファンクションコール](docs/en/llm/api_server_tools.md)をサポート
 - \[2024/06\] PyTorchエンジンはDeepSeek-V2およびいくつかのVLMs、例えばCogVLM2、Mini-InternVL、LlaVA-Nextをサポート
 - \[2024/05\] 複数のGPUでVLMsをデプロイする際にビジョンモデルをバランスさせる
 - \[2024/05\] InternVL v1.5、LLaVa、InternLMXComposer2などのVLMsで4ビットの重みのみの量子化と推論をサポート
@@ -106,11 +115,9 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Llama3 (8B, 70B)</li>
   <li>Llama3.1 (8B, 70B)</li>
   <li>Llama3.2 (1B, 3B)</li>
-  <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
   <li>InternLM3 (8B)</li>
   <li>InternLM2.5 (7B)</li>
-  <li>Qwen (1.8B - 72B)</li>
   <li>Qwen1.5 (0.5B - 110B)</li>
   <li>Qwen1.5 - MoE (0.5B - 72B)</li>
   <li>Qwen2 (0.5B - 72B)</li>
@@ -118,8 +125,6 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Qwen2.5 (0.5B - 32B)</li>
   <li>Qwen3, Qwen3-MoE</li>
   <li>Qwen3-Next(80B)</li>
-  <li>Baichuan (7B)</li>
-  <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
   <li>ChatGLM2 (6B)</li>
   <li>GLM-4 (9B)</li>
@@ -134,24 +139,24 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>DeepSeek-V3.2 (685B)</li>
   <li>Mixtral (8x7B, 8x22B)</li>
   <li>Gemma (2B - 7B)</li>
-  <li>StarCoder2 (3B - 15B)</li>
   <li>Phi-3-mini (3.8B)</li>
   <li>Phi-3.5-mini (3.8B)</li>
   <li>Phi-3.5-MoE (16x3.8B)</li>
   <li>Phi-4-mini (3.8B)</li>
   <li>MiniCPM3 (4B)</li>
   <li>SDAR (1.7B-30B)</li>
+  <li>gpt-oss (20B, 120B)</li>
+  <li>GLM-4.7-Flash (30B)</li>
+  <li>GLM-5 (754B)</li>
 </ul>
 </td>
 <td>
 <ul>
   <li>LLaVA(1.5,1.6) (7B-34B)</li>
-  <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
-  <li>InternLM-XComposer2.5 (7B)</li>
-  <li>Qwen-VL (7B)</li>
   <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>Qwen2.5-VL (3B, 7B, 72B)</li>
   <li>Qwen3-VL (2B - 235B)</li>
+  <li>Qwen3.5 (0.8B - 397B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
@@ -161,7 +166,6 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>InternVL3.5 (1B-241BA28B)</li>
   <li>Intern-S1 (241B)</li>
   <li>Intern-S1-mini (8.3B)</li>
-  <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
@@ -171,7 +175,6 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
   <li>GLM-4.1V-Thinking (9B)</li>
-  <li>Llama3.2-vision (11B, 90B)</li>
   <li>Molmo (7B-D,72B)</li>
   <li>Gemma3 (1B - 27B)</li>
   <li>Llama4 (Scout, Maverick)</li>
@@ -197,7 +200,10 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-v0.3.0から、デフォルトの事前構築済みパッケージはCUDA 12でコンパイルされています。
+**v0.13.0** 以降、**PyPI** に公開される既定の事前構築wheelは **CUDA 12.8** 向けにビルドされています。v0.10.2以降、LMDeployはCUDA 11系をサポートしません。
+
+GeForce RTX 50シリーズを含む一般的な用途でも、上記の `pip install lmdeploy` で問題ありません。
+
 CUDA 11+プラットフォームでのインストールに関する情報、またはソースからのビルド手順については、[インストールガイドを](docs/en/get_started/installation.md)参照してください。
 
 ## オフラインバッチ推論

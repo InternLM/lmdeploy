@@ -10,6 +10,8 @@ LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单�
 
 使用 pipeline 接口推理其他 VLM 模型，大同小异，主要区别在于模型依赖的配置和安装。你可以阅读[此处](https://lmdeploy.readthedocs.io/zh-cn/latest/multi_modal/)，查看不同模型的环境安装和配置方式
 
+> **另请参阅：** [多模态输入](multimodal_inputs.md) — 涵盖所有模态（图像、视频、音频、时序数据）的消息格式参考，包含 OpenAI 风格示例。
+
 ## "Hello, world" 示例
 
 ```python
@@ -235,3 +237,27 @@ import gc
 torch.cuda.empty_cache()
 gc.collect()
 ```
+
+## 纯语言模型模式（language-model-only）
+
+对于同时支持视觉和文本的混合模型（如 Qwen3-VL、Qwen3.5、InternVL），可以只加载语言模型部分，不加载视觉/多模态编码器，从而释放更多 GPU 显存给 KV cache。
+
+**CLI（serve）：**
+
+```bash
+lmdeploy serve api_server Qwen/Qwen3-VL-8B-Instruct --backend pytorch --language-model-only
+```
+
+**Python API：**
+
+```python
+from lmdeploy import pipeline
+from lmdeploy.messages import PytorchEngineConfig
+
+pipe = pipeline(
+    'Qwen/Qwen3-VL-8B-Instruct',
+    backend_config=PytorchEngineConfig(language_model_only=True),
+)
+```
+
+此模式下，多模态输入会被忽略并打印警告。

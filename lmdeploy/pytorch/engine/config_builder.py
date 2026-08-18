@@ -1,10 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import copy
+import json
 import os
+from pathlib import Path
 
 from lmdeploy.messages import PytorchEngineConfig, SpeculativeConfig
-from lmdeploy.pytorch.config import (BackendConfig, CacheConfig, DistConfig, MiscConfig, SchedulerConfig,
-                                     SpecDecodeConfig)
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    DistConfig,
+    MemDecodeConfig,
+    MiscConfig,
+    ModelConfig,
+    SchedulerConfig,
+    SpecDecodeConfig,
+    normalize_cudagraph_capture_batch_sizes,
+)
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
 
@@ -33,6 +44,11 @@ class ConfigBuilder:
                                f'since dllm_block_length({engine_config.dllm_block_length}) * max_batch_size '
                                f'({max_batch_size}) > max_prefill_token_num ({max_prefill_token_num}).')
 
+        capture_sizes = engine_config.cudagraph_capture_batch_sizes
+        if capture_sizes is not None:
+            engine_config.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+                capture_sizes, engine_config.max_batch_size)
+
         if engine_config.dp != 1:
             if engine_config.tp == 1 and engine_config.ep == 1:
                 logger.warning('Data parallelism is enabled but tensor parallelism and '
@@ -56,11 +72,15 @@ class ConfigBuilder:
         cache_config = CacheConfig(
             max_batches=engine_config.max_batch_size,
             block_size=engine_config.block_size,
+            kernel_block_size=engine_config.kernel_block_size,
             num_cpu_blocks=engine_config.num_cpu_blocks,
             num_gpu_blocks=engine_config.num_gpu_blocks,
             cache_max_entry_count=engine_config.cache_max_entry_count,
             max_prefill_token_num=engine_config.max_prefill_token_num,
+            cudagraph_capture_batch_sizes=engine_config.cudagraph_capture_batch_sizes,
             enable_prefix_caching=engine_config.enable_prefix_caching,
+            prefix_cache_state_budget=engine_config.prefix_cache_state_budget,
+            prefix_cache_decode_state_interval=engine_config.prefix_cache_decode_state_interval,
             quant_policy=engine_config.quant_policy,
             device_type=engine_config.device_type,
             migration_backend=engine_config.migration_backend,
@@ -91,11 +111,122 @@ class ConfigBuilder:
         return misc_config
 
     @staticmethod
-    def build_specdecode_config(target_model, speculative_config: SpeculativeConfig, engine_config: PytorchEngineConfig,
-                                cache_config: CacheConfig):
+    def build_memdecode_config(target_model,
+                               engine_config: PytorchEngineConfig,
+                               cache_config: CacheConfig,
+                               dist_config: DistConfig,
+                               trust_remote_code: bool = False,
+                               ):
+        """Build MemDecode config from engine HF overrides."""
+        hf_overrides = engine_config.hf_overrides
+        if hf_overrides is None:
+            return None
+
+        memory_model_path = hf_overrides.pop('memory_model_path', None)
+        if memory_model_path is None:
+            return None
+
+        memdecode_keys = (
+            'lambda_value',
+            'adaptive_router',
+            'router_name',
+            'lambda_base_only_threshold',
+        )
+        explicit_options = {key: hf_overrides.pop(key) for key in memdecode_keys if key in hf_overrides}
+
+        if not os.path.exists(memory_model_path):
+            memory_model_path = get_model(memory_model_path, engine_config.download_dir, engine_config.revision)
+
+        fusion_dir = Path(memory_model_path) / 'memory_fusion'
+        fusion_config_path = fusion_dir / 'config.json'
+        packaged_options = {}
+        packaged_keys = set(memdecode_keys) | {'default_router', 'routers'}
+        if fusion_config_path.exists():
+            with fusion_config_path.open() as f:
+                packaged_options = json.load(f)
+            if not isinstance(packaged_options, dict):
+                raise ValueError(f'{fusion_config_path} must contain a JSON object.')
+            unknown_keys = set(packaged_options) - packaged_keys
+            if unknown_keys:
+                unknown_keys = ', '.join(sorted(unknown_keys))
+                raise ValueError(f'{fusion_config_path} contains unsupported keys: {unknown_keys}')
+
+        fusion_options = {
+            'lambda_value': 1.0,
+            'adaptive_router': True,
+            'lambda_base_only_threshold': -1.0,
+            'default_router': None,
+            'routers': {},
+        }
+        fusion_options.update(packaged_options)
+        fusion_options.update(explicit_options)
+
+        lambda_value = fusion_options['lambda_value']
+        adaptive_router = fusion_options['adaptive_router']
+        lambda_base_only_threshold = fusion_options['lambda_base_only_threshold']
+        router_name = fusion_options.get('router_name')
+        routers = fusion_options.get('routers')
+        if not isinstance(routers, dict):
+            raise ValueError(f'{fusion_config_path} field "routers" must be a JSON object.')
+
+        selected_router_dir = None
+        if adaptive_router:
+            router_name = router_name or fusion_options.get('default_router')
+            if router_name is None:
+                raise ValueError(
+                    'router_name or default_router is required when multiple MemDecode routers are packaged.')
+            if router_name not in routers:
+                raise ValueError(f'unknown MemDecode router_name: {router_name}')
+            router_entry = routers[router_name]
+            if not isinstance(router_entry, dict) or 'path' not in router_entry:
+                raise ValueError(f'{fusion_config_path} routers.{router_name} must contain a path field.')
+            selected_router_dir = Path(router_entry['path'])
+            if not selected_router_dir.is_absolute():
+                selected_router_dir = fusion_dir / selected_router_dir
+            selected_router_dir = str(selected_router_dir)
+
+        memory_model_config = ModelConfig.from_pretrained(
+            memory_model_path,
+            trust_remote_code=trust_remote_code,
+            dtype=engine_config.dtype,
+            dist_config=dist_config,
+            model_format=None,
+            device_type=engine_config.device_type,
+            block_size=cache_config.block_size,
+        )
+        return MemDecodeConfig(
+            memory_model_path=memory_model_path,
+            memory_model_config=memory_model_config,
+            lambda_value=lambda_value,
+            adaptive_router=adaptive_router,
+            router_path=selected_router_dir,
+            lambda_base_only_threshold=lambda_base_only_threshold,
+        )
+
+    @staticmethod
+    def build_specdecode_config(target_model,
+                                speculative_config: SpeculativeConfig,
+                                engine_config: PytorchEngineConfig,
+                                cache_config: CacheConfig,
+                                dist_config: DistConfig,
+                                trust_remote_code: bool = False,
+                                ):
         """Build spec decode config."""
+        def _build_draft_dist_ctx(dist_config):
+            # TODO support tp > 1, ep > 1 for other methods
+            if speculative_config.method in ('qwen3_5_mtp', 'hy3_mtp'):
+                draft_dist_config = dist_config
+            elif speculative_config.method == 'deepseek_mtp':
+                from lmdeploy.pytorch.transformers import config_from_pretrained
+                hf_config = config_from_pretrained(target_model, trust_remote_code=trust_remote_code)
+                draft_dist_config = dist_config if hf_config.model_type == 'glm_moe_dsa' else DistConfig()
+            else:
+                draft_dist_config = DistConfig()
+            return draft_dist_config
+
         specdecode_config = None
         if speculative_config is not None:
+            draft_dist_config = _build_draft_dist_ctx(dist_config)
             draft_model = speculative_config.model
             if draft_model and not os.path.exists(speculative_config.model):
                 draft_model = get_model(draft_model, engine_config.download_dir, engine_config.revision)
@@ -107,5 +238,9 @@ class ConfigBuilder:
                 target_model=target_model,
                 target_cache_cfg=cache_config,
                 dtype=engine_config.dtype,
+                trust_remote_code=trust_remote_code,
+                model_format=engine_config.model_format,
+                hf_overrides=engine_config.hf_overrides,
+                dist_config=draft_dist_config,
             )
         return specdecode_config

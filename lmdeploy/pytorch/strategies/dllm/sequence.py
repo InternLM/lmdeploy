@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 from torch import Tensor
@@ -9,14 +9,22 @@ from torch import Tensor
 from lmdeploy.pytorch import consts
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
-from lmdeploy.pytorch.messages import (HistoryTokenIds, InputEmbeddings, MessageStatus, MultiModalInputs, SamplingParam,
-                                       SchedulerSession, UpdateTokenMode, _to_ndarray)
+from lmdeploy.pytorch.messages import (
+    HistoryTokenIds,
+    InputEmbeddings,
+    MessageStatus,
+    MultiModalInputs,
+    SamplingParam,
+    SchedulerSession,
+    UpdateTokenMode,
+    _to_ndarray,
+)
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..ar.sequence import SchedulerSequenceDefault
 from ..base.sequence import SequenceStrategy
 
-SeqList = List['SchedulerSequenceDLLM']
+SeqList = list['SchedulerSequenceDLLM']
 
 DLLM_MASKED = consts.DLLM_MASKED
 DLLM_UNMASKED = consts.DLLM_UNMASKED
@@ -165,8 +173,8 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
     def update_token_ids(self,
                          token_ids: Tensor,
                          multimodals: MultiModalInputs = None,
-                         embeddings: List[InputEmbeddings] = None,
-                         model_meta: Dict[str, Any] = None,
+                         embeddings: list[InputEmbeddings] = None,
+                         model_meta: dict[str, Any] = None,
                          dllm_mask: Tensor = None,
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
                          **kwargs):
@@ -185,6 +193,11 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
         dllm_mask: np.ndarray = _to_ndarray(dllm_mask)
 
         if mode == UpdateTokenMode.INPUTS:
+            self.cached_tokens = 0
+            self.prefix_cache.suppress_match_stats = False
+            self.prefix_cache.match_start_step = -1
+            self.input_start_pos = self.num_valid_ids
+            self.input_end_pos = self.input_start_pos + len(token_ids)
             self._update_token_ids_inputs(token_ids, dllm_mask)
         elif mode == UpdateTokenMode.PREFILL:
             self._update_token_ids_prefill(token_ids, dllm_mask)
@@ -200,7 +213,8 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
         start = min(step, self.num_history_ids)
         end = self.num_history_ids
         if end > start:
-            self.history_dllm_mask[start:end] = DLLM_MASKED
+            to_change_mask = self.history_dllm_mask[start:]
+            to_change_mask[to_change_mask == DLLM_CACHED] = DLLM_UNMASKED
         super().set_step(step)
 
 
@@ -215,7 +229,7 @@ class DLLMSequenceStrategy(SequenceStrategy):
                       session: 'SchedulerSession',
                       sampling_param: 'SamplingParam' = None,
                       adapter_name: str = None,
-                      migration_request: Optional[MigrationRequest] = None,
+                      migration_request: MigrationRequest | None = None,
                       resp_cache: bool = False,
                       preserve_cache: bool = False) -> 'SchedulerSequenceDLLM':
         """Make sequence."""

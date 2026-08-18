@@ -1,0 +1,40 @@
+# HF model id: Qwen/Qwen3-30B-A3B-Base
+
+a100:
+- model_type: base
+  engine_config:
+    tp: 2
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  quantization:
+    turbomind:
+    - kvint8
+    pytorch:
+    - kvint8
+h:
+- model_type: base
+  engine_config:
+    tp: 2
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+    - cuda-ipc
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  quantization:
+    turbomind:
+    - kvint8
+    pytorch:
+    - kvint8

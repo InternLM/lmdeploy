@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import gc
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
@@ -28,10 +28,11 @@ class WorkerWrapperBase:
         model_config: ModelConfig,
         dist_config: DistConfig,
         misc_config: MiscConfig,
-        adapters: Dict[str, str] = None,
+        adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         log_level: int = 30,
         specdecode_config: SpecDecodeConfig = None,
+        trust_remote_code: bool = False
     ):
         self.model_path = model_path
         self.model_config = model_config
@@ -47,6 +48,7 @@ class WorkerWrapperBase:
         self.world_size = dist_config.world_size
         self.device_type = device_type
         self.specdecode_config = specdecode_config
+        self.trust_remote_code = trust_remote_code
         logger.setLevel(log_level)
         self.out_que: asyncio.Queue = None
 
@@ -66,7 +68,7 @@ class WorkerWrapperBase:
         ccl_backend = get_backend(self.device_type).ccl_backend()
         self.dist_ctx = DistContext.build(self.rank, self.dist_config, ccl_backend)
 
-    def pack_output(self, output: Dict):
+    def pack_output(self, output: dict):
         """Pack output."""
         return output
 
@@ -88,6 +90,7 @@ class WorkerWrapperBase:
             dist_ctx=self.dist_ctx,
             adapters=self.adapters,
             specdecode_config=self.specdecode_config,
+            trust_remote_code=self.trust_remote_code
         )
         self.model_agent.build_model()
 
@@ -115,6 +118,18 @@ class WorkerWrapperBase:
         """Update params."""
         self.model_agent.update_params(request)
 
+    def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        return self.model_agent.init_weights_update_group(request)
+
+    def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        return self.model_agent.update_weights_from_distributed(request)
+
+    def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        return self.model_agent.destroy_weights_update_group(request)
+
     def warmup(self):
         """warmup."""
         self.model_agent.warmup()
@@ -123,7 +138,7 @@ class WorkerWrapperBase:
         """Sleep."""
         await self.model_agent.sleep(level)
 
-    def wakeup(self, tags: Optional[List[str]] = None):
+    def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
         self.model_agent.wakeup(tags)
 
@@ -175,7 +190,7 @@ class WorkerWrapperBase:
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.model_agent.cache_engine.p2p_initialize(init_request)
 
-    def p2p_connect(self, remote_engine_id: str, conn_request: List[DistServeKVTransferEndpointInfo]):
+    def p2p_connect(self, remote_engine_id: str, conn_request: list[DistServeKVTransferEndpointInfo]):
         return self.model_agent.cache_engine.p2p_connect(remote_engine_id, conn_request)
 
     async def migrate(self, inputs: MigrationExecutionBatch):

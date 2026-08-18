@@ -16,6 +16,7 @@
 
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/stop_criteria_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -70,6 +71,7 @@ void invokeStopWordsCriterion_v2(const int**  token_ids_ptrs,
 
     stop_words_criterion_v2<<<grid, block, 0, stream>>>(
         token_ids_ptrs, sequence_length, stop_words, finished, stop_words_len, batch_size);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 __global__ void length_criterion_v2(bool*      finished,  //
@@ -98,6 +100,7 @@ void invokeLengthCriterion_v2(bool*        finished,  //
     const int     grid  = cdiv(batch_size, block);
 
     length_criterion_v2<<<grid, block, 0, stream>>>(finished, sequence_length, sequence_length_limit, batch_size);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 }  // namespace turbomind

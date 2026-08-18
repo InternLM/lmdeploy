@@ -5,11 +5,7 @@ import json
 import re
 import sys
 from collections import defaultdict
-from typing import Any, List
-
-from lmdeploy.utils import get_logger
-
-logger = get_logger('lmdeploy')
+from typing import Any
 
 
 class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
@@ -39,14 +35,14 @@ def convert_args(args):
     return kwargs
 
 
-def get_lora_adapters(adapters: List[str]):
+def get_lora_adapters(adapters: list[str]):
     """Parse lora adapers from cli input.
 
     Args:
-        adapters (List[str]): CLI input string of lora adapter path(s).
+        adapters (list[str]): CLI input string of lora adapter path(s).
 
     Returns:
-        Dict[str,str] or None: Parsed lora adapter path(s).
+        dict[str, str] | None: Parsed lora adapter path(s).
     """
     if not adapters:
         return None
@@ -68,12 +64,12 @@ def get_lora_adapters(adapters: List[str]):
     return output
 
 
-def get_chat_template(chat_template: str, model_path: str = None):
+def get_chat_template(chat_template: str | None, model_path: str | None = None):
     """Get chat template config.
 
     Args:
-        chat_template(str): it could be a builtin chat template name, or a chat template json file
-        model_path(str): the model path, used to check deprecated chat template names
+        chat_template(str | None): it could be a builtin chat template name, or a chat template json file
+        model_path(str | None): the model path, passed through to the chat template config
     """
     import os
 
@@ -82,14 +78,7 @@ def get_chat_template(chat_template: str, model_path: str = None):
         if os.path.isfile(chat_template):
             return ChatTemplateConfig.from_json(chat_template)
         else:
-            from lmdeploy.model import DEPRECATED_CHAT_TEMPLATE_NAMES, MODELS, REMOVED_CHAT_TEMPLATE_NAMES
-            if chat_template in REMOVED_CHAT_TEMPLATE_NAMES:
-                raise ValueError(f"The chat template '{chat_template}' has been removed. "
-                                 f'Please refer to the latest chat templates in '
-                                 f'https://lmdeploy.readthedocs.io/en/latest/advance/chat_template.html')
-            if chat_template in DEPRECATED_CHAT_TEMPLATE_NAMES:
-                logger.warning(f"The chat template '{chat_template}' is deprecated and fallback to hf chat template.")
-                chat_template = 'hf'
+            from lmdeploy.model import MODELS
             assert chat_template in MODELS.module_dict.keys(), \
                 f"chat template '{chat_template}' is not " \
                 f'registered. The builtin chat templates are: ' \
@@ -152,10 +141,12 @@ class ArgumentHelper:
         return parser.add_argument('--model-format',
                                    type=str,
                                    default=default,
-                                   choices=['hf', 'awq', 'gptq', 'fp8', 'mxfp4'],
+                                   choices=['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4'],
                                    help='The format of input model. `hf` means `hf_llama`, '
-                                   '`awq` represents the quantized model by AWQ,'
-                                   ' and `gptq` refers to the quantized model by GPTQ')
+                                   '`awq` and `gptq` refer to 4-bit grouped quantization, '
+                                   '`compressed-tensors` refers to pack-quantized grouped int4 checkpoints and is '
+                                   'usually auto-detected from the model config, `fp8` refers to blocked fp8 '
+                                   'checkpoints, and `mxfp4` refers to MXFP4 expert weights.')
 
     @staticmethod
     def revision(parser, default: str = None):
@@ -265,11 +256,26 @@ class ArgumentHelper:
     def quant_policy(parser, default: int = 0):
         """Add argument quant_policy to parser."""
 
+        from lmdeploy.messages import QuantPolicy
+
+        _aliases = {p.name.lower(): p.value for p in QuantPolicy}
+        _aliases['fp8_e4m3'] = QuantPolicy.FP8.value
+
+        def _parse(x):
+            key = x.lower()
+            if key in _aliases:
+                return _aliases[key]
+            v = int(x)
+            if v not in list(QuantPolicy):
+                raise ValueError(f'invalid quant_policy: {x!r}')
+            return v
+
         return parser.add_argument('--quant-policy',
-                                   type=int,
-                                   default=0,
-                                   choices=[0, 4, 8],
-                                   help='Quantize kv or not. 0: no quant; 4: 4bit kv; 8: 8bit kv')
+                                   type=_parse,
+                                   default=default,
+                                   help='KV cache quant policy: none/int4/int8/fp8/fp8_e5m2/'
+                                   'turbo_quant (or 0/4/8/16/17/42). For DSA models, fp8 uses the '
+                                   'fp8_ds_mla layout.')
 
     @staticmethod
     def rope_scaling_factor(parser):
@@ -284,6 +290,18 @@ class ArgumentHelper:
                                    type=json.loads,
                                    default=None,
                                    help='Extra arguments to be forwarded to the HuggingFace config.')
+
+    @staticmethod
+    def generation_config(parser):
+        """Add argument generation_config to parser."""
+        return parser.add_argument(
+            '--generation-config',
+            type=str,
+            default='auto',
+            help='The folder path to the generation config. Defaults to "auto", the '
+            'generation config will be loaded from model path. If set to "lmdeploy", no '
+            'generation config is loaded, lmdeploy defaults will be used. If set to a folder '
+            'path, the generation config will be loaded from the specified folder path.')
 
     @staticmethod
     def use_logn_attn(parser):
@@ -402,7 +420,8 @@ class ArgumentHelper:
         return parser.add_argument('--calib-samples',
                                    type=int,
                                    default=128,
-                                   help='The number of samples for calibration')
+                                   help='The number of samples for calibration. '
+                                        'Define 0 to indicate the data free quantization.')
 
     @staticmethod
     def calib_seqlen(parser):
@@ -435,7 +454,7 @@ class ArgumentHelper:
         )
 
     @staticmethod
-    def device(parser, default: str = 'cuda', choices: List[str] = ['cuda', 'ascend', 'maca', 'camb']):
+    def device(parser, default: str = 'cuda', choices: list[str] = ['cuda', 'ascend', 'maca', 'camb']):
         """Add argument device to parser."""
 
         return parser.add_argument('--device',
@@ -460,18 +479,19 @@ class ArgumentHelper:
     @staticmethod
     def reasoning_parser(parser):
         """Add reasoning parser to parser."""
-        from lmdeploy.serve.openai.reasoning_parser import ReasoningParserManager
+        from lmdeploy.serve.parsers.reasoning_parser import LEGACY_REASONING_PARSER_NAMES, ReasoningParserManager
         return parser.add_argument(
             '--reasoning-parser',
             type=str,
             default=None,
-            help=f'The registered reasoning parser name from {ReasoningParserManager.module_dict.keys()}. '
+            help=f'The registered reasoning parser name: {ReasoningParserManager.module_dict.keys()}. '
+            f'Legacy names: {list(LEGACY_REASONING_PARSER_NAMES)}. '
             'Default to None.')
 
     @staticmethod
     def tool_call_parser(parser):
         """Add tool call parser to parser."""
-        from lmdeploy.serve.openai.tool_parser import ToolParserManager
+        from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 
         return parser.add_argument(
             '--tool-call-parser',
@@ -545,6 +565,19 @@ class ArgumentHelper:
                                    'be ignored')
 
     @staticmethod
+    def kernel_block_size(parser):
+        """Add argument kernel_block_size to parser."""
+
+        return parser.add_argument('--kernel-block-size',
+                                   type=int,
+                                   default=-1,
+                                   help='The length of the token sequence in a k/v block for kernels. '
+                                   'Only supported by Pytorch Engine. '
+                                   'When set to a different value than --cache-block-seq-len, '
+                                   'memory allocators and prefix cache use --cache-block-seq-len '
+                                   'as the block size, while kernels use --kernel-block-size.')
+
+    @staticmethod
     def enable_prefix_caching(parser):
         """Add argument enable_prefix_caching to parser."""
 
@@ -552,6 +585,30 @@ class ArgumentHelper:
                                    action='store_true',
                                    default=False,
                                    help='Enable cache and match prefix')
+
+    @staticmethod
+    def prefix_cache_state_budget(parser):
+        """Add argument prefix_cache_state_budget to parser."""
+
+        return parser.add_argument('--prefix-cache-state-budget',
+                                   type=int,
+                                   default=0,
+                                   help='Extra SSM state-cache slots budgeted for prefix-cache checkpoints. '
+                                   '0 adds no extra slots, but checkpoints may borrow idle runtime state slots. '
+                                   'Only used by the PyTorch engine.')
+
+    @staticmethod
+    def prefix_cache_decode_state_interval(parser):
+        """Add argument prefix_cache_decode_state_interval to parser."""
+
+        return parser.add_argument('--prefix-cache-decode-state-interval',
+                                   type=int,
+                                   default=0,
+                                   help='Token interval for SSM decode-state prefix-cache checkpoints. '
+                                   '0 disables decode checkpoint saves while keeping prefill/chunk checkpoints. '
+                                   'Use a positive multiple of block size only for long SSM decoding where later '
+                                   'requests can reuse decode prefixes; smaller values improve hit granularity '
+                                   'but use more checkpoint memory and copy work. Only used by the PyTorch engine.')
 
     @staticmethod
     def num_tokens_per_iter(parser):
@@ -583,6 +640,16 @@ class ArgumentHelper:
                                    type=int,
                                    default=8192,
                                    help='the max number of tokens per iteration during prefill')
+
+    @staticmethod
+    def cudagraph_capture_batch_sizes(parser):
+        return parser.add_argument('--cudagraph-capture-batch-sizes',
+                                   type=int,
+                                   nargs='+',
+                                   default=None,
+                                   help='Batch sizes to capture CUDA graphs for in the PyTorch engine. '
+                                   'If not specified, the engine infers them from max_batch_size. '
+                                   'max_batch_size is always captured')
 
     @staticmethod
     def vision_max_batch_size(parser):
@@ -665,12 +732,12 @@ class ArgumentHelper:
                                    help='kvcache migration management backend when PD disaggregation')
 
     @staticmethod
-    def disable_vision_encoder(parser):
-        """Disable loading vision encoder."""
-        return parser.add_argument('--disable-vision-encoder',
+    def language_model_only(parser):
+        """Run as text-only LLM without loading vision/multimodal encoder."""
+        return parser.add_argument('--language-model-only',
                                    action='store_true',
                                    default=False,
-                                   help='disable multimodal encoder')
+                                   help='Run as text-only LLM: do not load vision/multimodal encoder modules.')
 
     @staticmethod
     def logprobs_mode(parser):
@@ -726,7 +793,7 @@ class ArgumentHelper:
         spec_group.add_argument('--speculative-algorithm',
                                 type=str,
                                 default=None,
-                                choices=['eagle', 'eagle3', 'deepseek_mtp'],
+                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'hy3_mtp', 'qwen3_5_mtp'],
                                 help='The speculative algorithm to use. `None` means speculative decoding is disabled')
 
         spec_group.add_argument('--speculative-draft-model',
@@ -749,6 +816,14 @@ class ArgumentHelper:
                                    default=None,
                                    choices=['uni', 'mp', 'ray'],
                                    help='The distributed executor backend for pytorch engine.')
+
+    @staticmethod
+    def trust_remote_code(parser):
+        """Add argument trust_remote_code to parser."""
+        return parser.add_argument('--trust-remote-code',
+                                   action='store_true',
+                                   default=False,
+                                   help='Whether to trust remote code from model repositories.')
 
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py

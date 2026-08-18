@@ -1,11 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Hashable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any
 
 import torch
 
+from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends.attention import AttentionImpl, AttentionMetadata
 from lmdeploy.utils import get_logger
+
+from ..step_metadata import CudaAttentionMetaBuilder, CudaSequenceMetadata, register_step_metadata_impl
 
 logger = get_logger('lmdeploy')
 
@@ -24,7 +28,7 @@ class TritonAttentionMetadata(AttentionMetadata):
         q_seqlens: Length of each query sequence [batch_size].
         kv_start_loc: Start location of each KV sequence [batch_size].
         kv_seqlens: Length of each KV sequence [batch_size].
-        quant_policy: Quantization policy (0=none, 4=int4, 8=int8/fp8).
+        quant_policy: Quantization policy (0=none, 4=int4, 8=int8, 16/17=per-tensor fp8).
         kv_flatten_size: Total size of flattened KV cache.
         tile_scheduler_metadata: Scheduler metadata for Flash MLA.
         num_splits: Number of splits for Flash MLA.
@@ -40,7 +44,7 @@ class TritonAttentionMetadata(AttentionMetadata):
     q_seqlens: torch.Tensor = None
     kv_start_loc: torch.Tensor = None
     kv_seqlens: torch.Tensor = None
-    quant_policy: Literal[0, 4, 8] = 0
+    quant_policy: QuantPolicy = QuantPolicy.NONE
     kv_flatten_size: int = None
     # flash mla
     tile_scheduler_metadata: torch.Tensor = None
@@ -51,6 +55,25 @@ class TritonAttentionMetadata(AttentionMetadata):
     scheduler_metadata: torch.Tensor = None
     max_kv_seqlen: int = None
     max_q_seqlen: int = None
+    kernel_metadata: tuple[Any, ...] = ()
+
+
+def build_triton_attention_metadata(attn_meta_cls, step_context,
+                                    sequence_metadata: CudaSequenceMetadata) -> TritonAttentionMetadata:
+    """Project CUDA sequence layout into compatible attention metadata."""
+    return attn_meta_cls(
+        is_decoding=step_context.is_decoding,
+        block_offsets=sequence_metadata.block_offsets,
+        q_start_loc=sequence_metadata.q_start_loc,
+        q_seqlens=sequence_metadata.q_seqlens,
+        kv_start_loc=sequence_metadata.kv_start_loc,
+        kv_seqlens=sequence_metadata.kv_seqlens,
+        kv_flatten_size=sequence_metadata.kv_flatten_size,
+        quant_policy=step_context.kv_quant_policy,
+        cu_seqlens_q=sequence_metadata.cu_seqlens_q,
+        cu_seqlens_k=sequence_metadata.cu_seqlens_k,
+        max_kv_seqlen=sequence_metadata.max_kv_seqlen,
+    )
 
 
 def _cdiv(a, b):
@@ -64,6 +87,28 @@ def _cdiv(a, b):
         Ceiling of a / b.
     """
     return (a + b - 1) // b
+
+
+@dataclass(frozen=True)
+class TritonAttentionMetaBuilder(CudaAttentionMetaBuilder[None, None]):
+    """Describe the default attention implementation's common-only metadata."""
+
+    @property
+    def key(self) -> Hashable:
+        return type(self)
+
+    def build(self, step_context, sequence_metadata) -> None:
+        return None
+
+    def apply_legacy_metadata(self, attn_metadata, metadata: None) -> None:
+        pass
+
+    def make_cudagraph_buffer(self, graph_meta, input_buffers, step_context) -> None:
+        return None
+
+    def fill_cudagraph_buffer(self, graph_meta, input_buffers, step_context,
+                              buffer: None) -> None:
+        return None
 
 
 class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
@@ -98,8 +143,12 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         self.logit_softcapping = -1 if self.logit_softcapping <= 0.0 else self.logit_softcapping
         assert not (alibi and not causal)
 
-        from lmdeploy.pytorch.kernels.cuda import (fill_kv_cache, flash_attn_varlen_func, flash_attn_with_kvcache,
-                                                   flatten_kv_cache)
+        from lmdeploy.pytorch.kernels.cuda import (
+            fill_kv_cache,
+            flash_attn_varlen_func,
+            flash_attn_with_kvcache,
+            flatten_kv_cache,
+        )
 
         self.fill_kv_cache = fill_kv_cache
         self.paged_attention_fwd = flash_attn_with_kvcache
@@ -107,6 +156,30 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         self.flash_attention_fwd = flash_attn_varlen_func
 
         self.block_sparse_size = block_sparse_size
+        self._step_meta_group: int | None = None
+
+        register_step_metadata_impl(self)
+
+    def get_step_metadata_provider(self):
+        """Describe metadata required by this selected implementation."""
+        # Unknown subclasses keep the legacy model-config-driven path unless
+        # they explicitly provide their own metadata contract.
+        if type(self) is not TritonAttentionImpl:
+            return None
+
+        return TritonAttentionMetaBuilder()
+
+    def bind_step_meta_group(self, group_id: int) -> None:
+        """Bind this implementation to its deduplicated metadata group."""
+        self._step_meta_group = group_id
+
+    def get_step_kernel_metadata(self, attn_metadata: TritonAttentionMetadata) -> Any | None:
+        """Return group-specific metadata when a model uses multiple groups."""
+        kernel_metadata = getattr(attn_metadata, 'kernel_metadata', ())
+        group_id = getattr(self, '_step_meta_group', None)
+        if len(kernel_metadata) <= 1 or group_id is None:
+            return None
+        return kernel_metadata[group_id]
 
     def _get_max_q_seqlen(
         self,
@@ -275,6 +348,15 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             flatten_kv_layout=kv_layout,
         )
 
+        # For quant_policy==QuantPolicy.TURBO_QUANT, flattened K/V are in rotated domain.
+        # Rotate Q to match, and inverse-rotate output afterwards.
+        if quant_policy == QuantPolicy.TURBO_QUANT:
+            from lmdeploy.pytorch.kernels.cuda.turbo_quant import (
+                hadamard_rotate,
+                hadamard_rotate_inv,
+            )
+            query = hadamard_rotate(query)
+
         attn_output = self.flash_attention_fwd(
             query,
             flatten_k,
@@ -293,6 +375,11 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             block_sparse_size=self.block_sparse_size,
             kv_layout=kv_layout,
         )
+
+        # Inverse-rotate output back to original domain
+        if quant_policy == QuantPolicy.TURBO_QUANT:
+            attn_output = hadamard_rotate_inv(attn_output)
+
         return attn_output
 
     def forward(

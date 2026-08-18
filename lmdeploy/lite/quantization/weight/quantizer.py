@@ -1,12 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Callable, Dict, Optional
+from collections.abc import Callable
 
 import torch
 
-from lmdeploy.lite.utils import (QParams, cal_qparams_per_channel_absmax, cal_qparams_per_channel_minmax,
-                                 cal_qparams_per_group_absmax, cal_qparams_per_group_minmax,
-                                 cal_qparams_per_tensor_absmax, cal_qparams_per_tensor_minmax, precise_round)
+from lmdeploy.lite.utils import (
+    QParams,
+    cal_qparams_per_channel_absmax,
+    cal_qparams_per_channel_minmax,
+    cal_qparams_per_group_absmax,
+    cal_qparams_per_group_minmax,
+    cal_qparams_per_tensor_absmax,
+    cal_qparams_per_tensor_minmax,
+    precise_round,
+)
 from lmdeploy.lite.utils.global_avail import GlobalAvailMixin
 
 
@@ -24,7 +31,7 @@ class WeightQuantizer(GlobalAvailMixin):
             use min-max scaling.
         granularity (str): The granularity of quantization. Available options
             are 'per_channel', 'per_tensor', and 'per_group'.
-        group_size (Optional[int]): If using 'per_group' quantization, this is
+        group_size (int | None): If using 'per_group' quantization, this is
             the number of channels in each group.
 
     Example:
@@ -41,7 +48,7 @@ class WeightQuantizer(GlobalAvailMixin):
         quantized_weights = quantizer.fake_quant(weights, qparams)
     """
 
-    CAL_FUNC_MAP: Dict[str, Dict[str, Callable]] = {
+    CAL_FUNC_MAP: dict[str, dict[str, Callable]] = {
         'per_group': {
             'absmax': cal_qparams_per_group_absmax,
             'minmax': cal_qparams_per_group_minmax,
@@ -56,7 +63,7 @@ class WeightQuantizer(GlobalAvailMixin):
         },
     }
 
-    def __init__(self, bits: int, symmetry: bool, granularity: str, group_size: Optional[int] = -1):
+    def __init__(self, bits: int, symmetry: bool, granularity: str, group_size: int | None = -1):
 
         assert bits in [4, 8], "The 'bits' argument must be either 4 or 8."
         self.bits = bits
@@ -95,13 +102,13 @@ class WeightQuantizer(GlobalAvailMixin):
         else:
             return cal_func(weight, self.bits)
 
-    def quant(self, weight: torch.Tensor, qparams: Optional[QParams] = None, real: bool = False) -> torch.Tensor:
+    def quant(self, weight: torch.Tensor, qparams: QParams | None = None, real: bool = False) -> torch.Tensor:
         """Perform fake quantization on the given weight tensor.
 
         Args:
             weight (torch.Tensor): The weight tensor with shape
                 (out_features, in_features).
-            qparams (Optional[QParams]): A namedtuple containing 'scales'
+            qparams (QParams | None): A namedtuple containing 'scales'
                 and 'zero_points'.
             real (bool): If True, return the tensor with quantized type.
 

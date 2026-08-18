@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-cmake_minimum_required(VERSION 3.11)
+cmake_minimum_required(VERSION 3.25)
 project(_turbomind LANGUAGES CXX CUDA)
 
 find_package(pybind11 CONFIG)
@@ -12,7 +12,11 @@ if(NOT pybind11_FOUND)
     find_package(pybind11 CONFIG)
 endif()
 
-pybind11_add_module(${PROJECT_NAME} bind.cpp)
+pybind11_add_module(${PROJECT_NAME}
+    bind.cpp
+    linear_bind.cpp
+    ../kernels/linear_attn/python_bind.cpp
+    ../kernels/gemm/moe_gate_python_bind.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE turbomind xgrammar)
 
 pybind11_add_module(_xgrammar xgrammar_bind.cpp)

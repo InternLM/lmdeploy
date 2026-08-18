@@ -17,6 +17,8 @@ struct Impl<MMA_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, He
 
     using Base = Impl_m16k8<T_, WARP_H, WARP_Q, WARP_S, HeadDim>;
 
+    static constexpr bool MLA = HeadDim == 576;
+
     using Base::OP_M;
     using Base::OP_N;
     using Base::K_M;

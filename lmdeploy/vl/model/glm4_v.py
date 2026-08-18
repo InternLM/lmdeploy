@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List
 
 from transformers import AutoConfig
 
@@ -23,7 +22,7 @@ class GLM4VisionModel(VisionModel):
             return True
         return False
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         from torchvision import transforms
         self.image_transform = transforms.Compose([
             transforms.Resize((self.hf_config.vision_config['image_size'], ) * 2,
@@ -35,28 +34,29 @@ class GLM4VisionModel(VisionModel):
         patch_size = self.hf_config.vision_config['patch_size']
         self.n_token_per_image = 2 + (image_size // patch_size // 2)**2
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         if self.with_llm:
             from transformers import AutoModelForCausalLM
             self.vl_model = AutoModelForCausalLM.from_pretrained(self.model_path,
                                                                  device_map='cpu',
-                                                                 trust_remote_code=True)
+                                                                 trust_remote_code=trust_remote_code)
         else:
             raise NotImplementedError('turbomind has not supported glm4v yet')
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to the spec of `super.preprocess()"""
         outputs = []
         for message in messages:
-            if not isinstance(message['content'], List):
+            if not isinstance(message['content'], list):
                 continue
-            images = [x['image'] for x in message['content'] if x['type'] == 'image']
+            mm_items = self.collect_multimodal_items([message])
+            images = [data for modality, data, _ in mm_items if modality == 'image']
             if len(images) > 1:
                 logger.warning(f'glm4v does not support the input of multiple images'
                                f' in a single chat round, but got {len(images)} images.')
             # we still pass all the images to the model and let the
             # model decide what to do
-            images = [x.convert('RGB') for x in images]
+            images = [x for x in images]
             pixel_values = [self.image_transform(x) for x in images]
             outputs.extend([
                 dict(pixel_values=_2,
@@ -68,8 +68,9 @@ class GLM4VisionModel(VisionModel):
         return messages
 
     @staticmethod
-    def proc_messages(messages, chat_template, sequence_start):
+    def proc_messages(messages, chat_template, tools=None, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
@@ -83,9 +84,9 @@ class GLM4VisionModel(VisionModel):
             n_images = len([1 for x in content if x['type'] == 'image'])
             prompt = ''.join([f'{IMAGE_TOKEN}\n'] * n_images) + prompt[0]
             prompt_messages.append(dict(role='user', content=prompt))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+        prompt = chat_template.messages2prompt(prompt_messages, tools=tools, **chat_template_kwargs)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    def to_pytorch(self, messages, chat_template, tokenizer, tools=None, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)

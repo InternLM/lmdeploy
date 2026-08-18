@@ -1,7 +1,6 @@
 import os
 import subprocess
 import time
-from typing import Dict, List, Optional, Tuple
 
 import fire
 import yaml
@@ -55,7 +54,7 @@ def get_output_file(model_path, backend, server_config):
     return f'benchmark_{model_name}_{backend}_{params_str}.csv'
 
 
-def get_server_ip_port(backend: str, server_config: Dict) -> Tuple[str, int]:
+def get_server_ip_port(backend: str, server_config: dict) -> tuple[str, int]:
     if backend in ['turbomind', 'pytorch']:
         if server_config.get('proxy_url'):
             # If proxy_url is set, we use the proxy server's IP and port
@@ -90,7 +89,7 @@ def wait_server_ready(server_ip: str, server_port: int) -> bool:
             time.sleep(5)
 
 
-def get_client_cmd(backend: str, server_ip: str, server_port: int, client_config: Dict) -> List[str]:
+def get_client_cmd(backend: str, server_ip: str, server_port: int, client_config: dict) -> list[str]:
     """Generate the client benchmark command."""
     current_dir = os.path.dirname(os.path.abspath(__file__))
     if backend in ['turbomind', 'pytorch']:
@@ -112,7 +111,7 @@ def get_client_cmd(backend: str, server_ip: str, server_port: int, client_config
     return cmd
 
 
-def benchmark(model_path: str, backend: str, server_config: Dict, data_config: Dict | List[Dict]):
+def benchmark(model_path: str, backend: str, server_config: dict, data_config: dict | list[dict]):
     """Benchmark the server with the given configuration.
 
     Args:
@@ -121,9 +120,9 @@ def benchmark(model_path: str, backend: str, server_config: Dict, data_config: D
         server_config: Configuration for the server and the inference engine.
         data_config: Configuration for the data.
     """
-    if isinstance(data_config, Dict):
+    if isinstance(data_config, dict):
         data_config = [data_config]
-    if not (isinstance(data_config, List) and all(isinstance(d, Dict) for d in data_config)):
+    if not (isinstance(data_config, list) and all(isinstance(d, dict) for d in data_config)):
         raise ValueError('data_config must be a dict or list of dicts')
 
     server_cmd = get_launching_server_cmd(model_path, backend, server_config)
@@ -166,7 +165,7 @@ def benchmark(model_path: str, backend: str, server_config: Dict, data_config: D
                 proc.kill()
 
 
-def validate_config(config: Dict) -> None:
+def validate_config(config: dict) -> None:
     """Validate the configuration structure.
 
     Args:
@@ -180,14 +179,14 @@ def validate_config(config: Dict) -> None:
         if section not in config:
             raise ValueError(f'Missing required config section: {section}')
 
-    if not isinstance(config['engine'], (Dict, List)):
+    if not isinstance(config['engine'], (dict, list)):
         raise ValueError('engine config must be a dict or list of dicts')
 
-    if not isinstance(config['data'], (Dict, List)):
+    if not isinstance(config['data'], (dict, list)):
         raise ValueError('data config must be a dict or list of dicts')
 
 
-def main(backend: str, config_path: str, model_path: Optional[str] = None):
+def main(backend: str, config_path: str, model_path: str | None = None):
     """Main entry point for the benchmark script.
 
     Args:
@@ -197,14 +196,14 @@ def main(backend: str, config_path: str, model_path: Optional[str] = None):
     Raises:
         BenchmarkConfigError: If required parameters are missing or config is invalid
     """
-    with open(config_path, 'r') as f:
+    with open(config_path) as f:
         config = yaml.safe_load(f)
         server_config = config['server']
         engine_configs = config['engine']
         data_config = config['data']
-        if isinstance(engine_configs, Dict):
+        if isinstance(engine_configs, dict):
             engine_configs = [engine_configs]
-        assert isinstance(engine_configs, List) and all(isinstance(s, Dict) for s in engine_configs)
+        assert isinstance(engine_configs, list) and all(isinstance(s, dict) for s in engine_configs)
         for engine_config in engine_configs:
             server_config = server_config.copy()
             server_config.update(engine_config)  # Merge engine config with server config

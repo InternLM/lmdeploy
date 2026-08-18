@@ -66,7 +66,7 @@ def read_config():
 
     # Read config file content
     try:
-        with open(config_path, 'r', encoding='utf-8') as f:
+        with open(config_path, encoding='utf-8') as f:
             config_content = f.read()
         return config_content
     except FileNotFoundError:

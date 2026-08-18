@@ -126,7 +126,7 @@ void invokeMaskedSoftmax(MaskedSoftmaxParam<T>& param, cudaStream_t stream)
 
     auto invoke = [&](auto items_per_thread) {
         const int block = round_up(cdiv(param.k_length, items_per_thread.value), WARP_SIZE);
-        FT_CHECK(block <= 1024);
+        TM_CHECK(block <= 1024);
         softmax_kernel<T, items_per_thread.value><<<grid, block, 0, stream>>>(param.attention_score,
                                                                               param.qk,
                                                                               param.attention_mask,
@@ -166,6 +166,7 @@ void invokeMaskedSoftmax(MaskedSoftmaxParam<T>& param, cudaStream_t stream)
     else {
         throw std::runtime_error("not impelmented");
     }
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void invokeMaskedSoftmax(MaskedSoftmaxParam<half>& param, cudaStream_t stream);
@@ -262,16 +263,16 @@ __global__ void transpose_remove_padding(const T*     src,
 // clang-format off
 template<typename T>
 void invokeTransposeAttentionOutRemovePadding(T*           src,
-                                              T*           dst,
-                                              const int    valid_word_num,
-                                              const int    batch_size,
-                                              const int    seq_len,
-                                              const int    head_num,
-                                              const int    size_per_head,
-                                              const int*   mask_offset,
-                                              const float* scale,
-                                              const int    int8_mode,
-                                              cudaStream_t stream)
+                                                     T*           dst,
+                                                     const int    valid_word_num,
+                                                     const int    batch_size,
+                                                     const int    seq_len,
+                                                     const int    head_num,
+                                                     const int    size_per_head,
+                                                     const int*   mask_offset,
+                                                     const float* scale,
+                                                     const int    int8_mode,
+                                                     cudaStream_t stream)
 {
 #ifdef ENABLE_BF16
     bool is_half2 = (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value) && (size_per_head % 2 == 0);
@@ -304,6 +305,7 @@ void invokeTransposeAttentionOutRemovePadding(T*           src,
         transpose_remove_padding<<<valid_word_num, block_size, 0, stream>>>(
             src, dst, batch_size, seq_len, head_num, size_per_head, mask_offset, scale, int8_mode);
     }
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 // clang-format on
 
@@ -368,6 +370,7 @@ void invokeAddRelativeAttentionBias(T*           qk_buf,
         addRelativeAttentionBias<<<grid, block, 0, stream>>>(
             qk_buf, relative_attention_bias, batch_size, head_num, seq_len);
     }
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #define INSTANTIATEADDRELATIVEATTENTIONBIAS(T)                                                                         \

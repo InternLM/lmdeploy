@@ -9,7 +9,6 @@ LMDeploy supports the following InternVL series of models, which are detailed in
 |       InternVL2       |      4B       |          PyTorch           |
 |       InternVL2       | 1B-2B, 8B-76B |     TurboMind, PyTorch     |
 | InternVL2.5/2.5-MPO/3 |    1B-78B     |     TurboMind, PyTorch     |
-|     Mono-InternVL     |      2B       |          PyTorch           |
 
 The next chapter demonstrates how to deploy an InternVL model using LMDeploy, with [InternVL2-8B](https://huggingface.co/OpenGVLab/InternVL2-8B) as an example.
 
@@ -116,7 +115,7 @@ import numpy as np
 from lmdeploy import pipeline, GenerationConfig
 from decord import VideoReader, cpu
 from lmdeploy.vl.constants import IMAGE_TOKEN
-from lmdeploy.vl.utils import encode_image_base64
+from lmdeploy.vl import encode_image_base64
 from PIL import Image
 pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
 

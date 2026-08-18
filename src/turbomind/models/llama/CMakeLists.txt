@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-cmake_minimum_required(VERSION 3.11)
+cmake_minimum_required(VERSION 3.25)
 
 
 find_package(CUDAToolkit REQUIRED)
@@ -9,11 +9,7 @@ add_library(Llama STATIC
         LlamaV2.cc
         LlamaBatch.cc
         LlamaLinear.cu
-        BlockManager.cc
-        BlockTrie.cc
-        SequenceManager.cc
         LlamaWeight.cc
-        LlamaDenseWeight.cc
         LlamaDecoderLayerWeight.cc
         LlamaFfnLayer.cc
         moe_ffn_layer.cc
@@ -22,6 +18,9 @@ add_library(Llama STATIC
         llama_kernels.cu
         llama_utils.cu
         mla_utils.cu
+        GatedDeltaNetWeight.cc
+        GatedDeltaNetLayer.cc
+        gated_delta_net_kernels.cu
 )
 set_property(TARGET Llama PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Llama PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
@@ -42,5 +41,4 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         gpt_kernels
         memory_utils
         cuda_utils
-        logger
         anomaly_handler)

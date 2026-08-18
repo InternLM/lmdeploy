@@ -18,6 +18,7 @@
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/string_utils.h"
 
 namespace turbomind {
 
@@ -149,9 +150,9 @@ void invokeEmbeddingLookupPosEncoding(T*                    from_tensor,
     dim3 grid(min(local_token_num, 65536));
     dim3 block(min(hidden_units, 1024));
     if (position_encoding != nullptr) {
-        FT_CHECK_WITH_INFO(prompt_param.use_request_p_prompt_embedding == false
-                               && prompt_param.p_prompt_tuning_batch_weights == nullptr,
-                           fmtstr("embeddingLookupPosEncoding still not support prompt tuning"));
+        TM_CHECK(prompt_param.use_request_p_prompt_embedding == false
+                 && prompt_param.p_prompt_tuning_batch_weights == nullptr)
+            << fmtstr("embeddingLookupPosEncoding still not support prompt tuning");
         embeddingLookupPosEncoding<T><<<grid, block, 0, stream>>>(from_tensor,
                                                                   embedding_table,
                                                                   position_encoding,
@@ -177,6 +178,7 @@ void invokeEmbeddingLookupPosEncoding(T*                    from_tensor,
             EMBEDDING_LOOKUP(0);
         }
     }
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #undef EMBEDDING_LOOKUP
@@ -289,6 +291,7 @@ void invokePaddingEmbedding(T*           padded_embedding_kernel,
                                                  hidden_unit,
                                                  vocab_size,
                                                  vocab_size_padded);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 // template void invokePaddingEmbedding(float*       padded_embedding_kernel,
@@ -351,6 +354,7 @@ void invokePaddingEmbeddingKernel(T*           padded_embedding_kernel,
     dim3 grid((int)(ceil(hidden_unit * vocab_size_padded / 512.)));
     paddingEmbeddingKernel<<<grid, block, 0, stream>>>(
         padded_embedding_kernel, embedding_kernel, hidden_unit, vocab_size, vocab_size_padded);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 // template void invokePaddingEmbeddingKernel(float*       padded_embedding_kernel,
@@ -390,6 +394,7 @@ void invokePlusScalar(T* buf, const T val, const int size, cudaStream_t stream)
     dim3 block(min(256, size));
     dim3 grid(ceil(size / 256.));
     plusScalar<<<block, grid, 0, stream>>>(buf, val, size);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void invokePlusScalar(int* buf, const int val, const int size, cudaStream_t stream);
