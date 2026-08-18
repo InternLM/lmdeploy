@@ -140,7 +140,10 @@ class TestStoppingCriteria:
 
     def test_one_dimensional_output_token_ids_are_supported(self):
         stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([5, 5]))
-        extra_inputs = ARSpecExtraInputs(output_token_ids=torch.tensor([369, 200]))
+        extra_inputs = ARSpecExtraInputs(
+            num_rejected_tokens=torch.tensor([0, 0]),
+            output_token_ids=torch.tensor([369, 200]),
+        )
         stop_words = torch.tensor([
             [369, -1],
             [777, -1],
@@ -159,6 +162,7 @@ class TestStoppingCriteria:
     def test_rejected_tokens_do_not_trigger_length_or_padding_stop(self):
         stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([2, 3, 3]))
         extra_inputs = ARSpecExtraInputs(
+            num_rejected_tokens=torch.tensor([2, 1, 2]),
             output_token_ids=torch.tensor([
                 [100, -1, -1],
                 [200, 777, -1],
@@ -183,6 +187,7 @@ class TestStoppingCriteria:
     def test_stop_pos_handles_first_position_and_no_stop(self):
         stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([5, 5]))
         extra_inputs = ARSpecExtraInputs(
+            num_rejected_tokens=torch.tensor([0, 0]),
             output_token_ids=torch.tensor([
                 [369, 101, 102],
                 [200, 201, 202],
@@ -205,6 +210,7 @@ class TestStoppingCriteria:
     def test_stop_words_and_num_appendable_ids_can_stop_together(self):
         stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([3, 3, 4, 3]))
         extra_inputs = ARSpecExtraInputs(
+            num_rejected_tokens=torch.tensor([1, 1, 0, 0]),
             output_token_ids=torch.tensor([
                 [100, 101, 369, -1],
                 [200, 201, 202, -1],
@@ -231,6 +237,7 @@ class TestStoppingCriteria:
     def test_ignores_padded_stop_words_when_draft_tokens_are_rejected(self):
         stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([512, 5]))
         extra_inputs = ARSpecExtraInputs(
+            num_rejected_tokens=torch.tensor([3, 0]),
             output_token_ids=torch.tensor([
                 [100, 101, -1, -1, -1],
                 [200, 201, 202, 203, 204],
@@ -253,6 +260,7 @@ class TestStoppingCriteria:
     def test_stop_words_do_not_leak_across_batch_rows(self):
         stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([512, 512]))
         extra_inputs = ARSpecExtraInputs(
+            num_rejected_tokens=torch.tensor([1, 1]),
             output_token_ids=torch.tensor([
                 [100, 369, -1],
                 [369, 200, -1],
