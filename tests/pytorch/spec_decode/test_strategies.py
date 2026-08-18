@@ -122,6 +122,7 @@ class TestStoppingCriteria:
     def test_num_appendable_ids_stops_on_length(self):
         stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([3, 5]))
         extra_inputs = ARSpecExtraInputs(
+            num_rejected_tokens=torch.tensor([1, 2]),
             output_token_ids=torch.tensor([
                 [100, 101, 102, -1],
                 [200, 201, -1, -1],

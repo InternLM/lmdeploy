@@ -114,17 +114,28 @@ class ARSpecStoppingCriteria(ARStoppingCriteria):
 
         if token_ids.ndim == 1:
             token_ids = token_ids.unsqueeze(-1)
+        if stop_words is None:
+            # Rejection sampling already returns the length of the valid token
+            # prefix. Avoid recovering the same length from placeholder ids.
+            num_rejected_tokens = extra_inputs.num_rejected_tokens
+            assert num_rejected_tokens is not None
+            num_valid_tokens = token_ids.size(1) - num_rejected_tokens
+            num_appendable_ids = self.num_appendable_ids - num_valid_tokens
+            stopped = num_appendable_ids <= 0
+            length_stop_pos = torch.clamp_min(self.num_appendable_ids - 1, 0)
+            stop_pos = torch.where(stopped, length_stop_pos, -1)
+            return stopped, stop_pos, ARSpecStoppingCriteria(num_appendable_ids=num_appendable_ids)
+
         valid_tokens = token_ids > -1
         num_appendable_ids_exp = self.num_appendable_ids.unsqueeze(-1) - torch.arange(
             1, token_ids.size(1) + 1, device=token_ids.device)[None]
         mask = num_appendable_ids_exp <= 0
         mask[~valid_tokens] = False
-        if stop_words is not None:
-            # stop_words is batched and may contain negative padding -1
-            valid_stop_words = stop_words >= 0
-            # compare per row only for valid stop words
-            stop_mask = ((token_ids.unsqueeze(-1) == stop_words.unsqueeze(1)) & valid_stop_words.unsqueeze(1)).any(-1)
-            mask = torch.logical_or(mask, stop_mask)
+        # stop_words is batched and may contain negative padding -1
+        valid_stop_words = stop_words >= 0
+        # compare per row only for valid stop words
+        stop_mask = ((token_ids.unsqueeze(-1) == stop_words.unsqueeze(1)) & valid_stop_words.unsqueeze(1)).any(-1)
+        mask = torch.logical_or(mask, stop_mask)
         # find the index of first `1`,  if not found, would be 0
         index = torch.argmax(mask.int(), dim=-1, keepdim=True)
         # update index of 0 to -1 if not found
