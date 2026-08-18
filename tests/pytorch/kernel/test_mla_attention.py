@@ -14,29 +14,20 @@ def _disable_dynamic_compile(monkeypatch):
     monkeypatch.setattr(mla_module, '_try_dynamic_compile', lambda func, *args, **kwargs: func)
 
 
-def test_nsa_decode_indices_update_repeats_block_table_for_spec_decode(monkeypatch):
+def test_nsa_decode_indices_update(monkeypatch):
     _disable_dynamic_compile(monkeypatch)
     updater = NSAIndicesUpdater()
-    nsa_indices = torch.tensor([[0, 17, -1], [32, 1, 16], [0, 33, 47], [32, 1, 16]])
     block_offsets = torch.tensor([[100, 101, 102], [200, 201, 202]])
 
+    nsa_indices = torch.tensor([[0, 17, -1], [32, 1, 16], [0, 33, 47], [32, 1, 16]])
     output = updater.update_decode(nsa_indices, block_offsets, max_q_seqlen=2, block_size=16)
-
     expected = torch.tensor([[[1600, 1617, -1], [1632, 1601, 1616]],
                              [[3200, 3233, 3247], [3232, 3201, 3216]]])
     assert torch.equal(output, expected)
 
-
-def test_nsa_decode_indices_update_keeps_single_token_shape(monkeypatch):
-    _disable_dynamic_compile(monkeypatch)
-    updater = NSAIndicesUpdater()
     nsa_indices = torch.tensor([[0, 17], [32, -1]])
-    block_offsets = torch.tensor([[100, 101, 102], [200, 201, 202]])
-
     output = updater.update_decode(nsa_indices, block_offsets, max_q_seqlen=1, block_size=16)
-
-    expected = torch.tensor([[[1600, 1617]], [[3232, -1]]])
-    assert torch.equal(output, expected)
+    assert torch.equal(output, torch.tensor([[[1600, 1617]], [[3232, -1]]]))
 
 
 def test_nsa_decode_indices_update_caches_query_modes(monkeypatch):

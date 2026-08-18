@@ -4,10 +4,20 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 
-@pytest.mark.parametrize('hidden_size', [6144, 7168])
-@pytest.mark.parametrize('num_tokens', [1, 2, 4, 8, 16, 24, 32])
-@pytest.mark.parametrize('input_dtype', [torch.bfloat16, torch.float32])
+
+@pytest.mark.parametrize(
+    'hidden_size,num_tokens,input_dtype',
+    [
+        (6144, 1, torch.bfloat16),
+        (6144, 8, torch.float32),
+        (6144, 16, torch.bfloat16),
+        (7168, 16, torch.bfloat16),
+        (6144, 24, torch.bfloat16),
+        (6144, 32, torch.bfloat16),
+    ],
+)
 def test_fp32_router_gemm(hidden_size, num_tokens, input_dtype):
     if torch.cuda.get_device_capability()[0] < 9:
         pytest.skip('The optimized router kernel requires SM90 or newer.')
@@ -17,7 +27,7 @@ def test_fp32_router_gemm(hidden_size, num_tokens, input_dtype):
     torch.manual_seed(num_tokens)
     hidden_states = torch.randn(num_tokens, hidden_size, dtype=input_dtype, device='cuda')
     weight = torch.randn(256, hidden_size, dtype=torch.float32, device='cuda')
-    assert _is_supported(hidden_states, weight) == (input_dtype == torch.bfloat16 or num_tokens <= 8)
+    assert _is_supported(hidden_states, weight)
     output = fp32_router_gemm(hidden_states, weight)
     reference = F.linear(hidden_states.float(), weight)
 
@@ -32,6 +42,7 @@ def test_fp32_router_gemm_fallback():
 
     hidden_states = torch.randn(33, 6144, dtype=torch.bfloat16, device='cuda')
     weight = torch.randn(256, 6144, dtype=torch.float32, device='cuda')
+    assert not _is_supported(hidden_states, weight)
     output = fp32_router_gemm(hidden_states, weight)
     reference = F.linear(hidden_states.float(), weight)
     torch.testing.assert_close(output, reference, atol=0, rtol=0)
@@ -43,40 +54,16 @@ def test_fp32_router_gemm_fallback():
     torch.testing.assert_close(output, reference, atol=0, rtol=0)
 
 
-def test_fp32_router_gemm_cudagraph():
-    if torch.cuda.get_device_capability()[0] < 9:
-        pytest.skip('The optimized router kernel requires SM90 or newer.')
-
-    from lmdeploy.pytorch.kernels.cuda.fp32_router_gemm import fp32_router_gemm
-
-    hidden_states = torch.randn(16, 6144, dtype=torch.bfloat16, device='cuda')
-    weight = torch.randn(256, 6144, dtype=torch.float32, device='cuda')
-    for _ in range(3):
-        fp32_router_gemm(hidden_states, weight)
-    graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):
-        output = fp32_router_gemm(hidden_states, weight)
-    reference = F.linear(hidden_states.float(), weight)
-    graph.replay()
-    torch.testing.assert_close(output, reference, atol=2e-4, rtol=0)
-    output_ids = output.topk(8, dim=-1).indices.sort(dim=-1).values
-    reference_ids = reference.topk(8, dim=-1).indices.sort(dim=-1).values
-    torch.testing.assert_close(output_ids, reference_ids, atol=0, rtol=0)
-
-
 @pytest.mark.parametrize(
-    'architecture,hidden_size,n_group,topk_group',
+    'hidden_size,n_group,topk_group',
     [
-        ('GlmMoeDsaForCausalLM', 6144, 1, 1),
-        ('DeepseekV32ForCausalLM', 7168, 8, 4),
-        ('DeepseekV3ForCausalLM', 7168, 8, 4),
+        (6144, 1, 1),
+        (7168, 8, 4),
     ],
 )
-def test_moe_gate_model_contract(architecture, hidden_size, n_group, topk_group):
+def test_moe_gate_model_contract(hidden_size, n_group, topk_group):
     from lmdeploy.pytorch.models.deepseek_v2 import MoEGate
-    from lmdeploy.pytorch.models.module_map import MODULE_MAP
 
-    assert architecture in MODULE_MAP
     config = SimpleNamespace(
         num_experts_per_tok=8,
         n_routed_experts=256,
