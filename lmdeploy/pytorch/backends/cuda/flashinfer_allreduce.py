@@ -159,8 +159,8 @@ class FlashInferAllReduce:
             workspace=self._get_workspace(input_2d),
             pattern=self._comm.AllReduceFusionPattern.kARResidualRMSNorm,
             launch_with_pdl=True,
-            # The following Triton quant kernel is not PDL-aware, so wait for
-            # all blocks instead of signaling completion early.
+            # Keep completion conservative; early signaling requires separate
+            # validation for the one-shot and two-shot paths.
             trigger_completion_at_end=True,
             use_oneshot=input_2d.nbytes <= self._one_shot_max_size,
             residual_in=residual_2d,
