@@ -1,260 +1,280 @@
 # PyTorch Cache Engine
 
-This package separates three decisions that were previously mixed inside
-`CacheEngine`: what cache an operator needs, how a backend stores it, and which
-tensors own the runtime memory.
+The cache engine turns model cache requirements into backend-selected storage
+and then owns that storage at runtime. Most contributors only need the normal
+path below; layout, transfer, and checkpoint details are separate extension
+paths.
 
-## Reviewer Mental Model
+## Start Here
 
-Only three primary objects are needed to follow the construction pipeline:
+Follow four stages:
 
 ```text
-built operator requirements
-        |
-        v
-BlockCacheRequest[]          "what is needed"
-        |
-        v
-BlockCachePlan               "the finalized worker-local recipe"
-        |
-        +-- allocate on meta --> bytes per logical block
-        +-- allocate on CPU  --> CacheAllocation
-        `-- allocate on GPU  --> CacheAllocation
-                                  "the real tensors"
+built operators                    finalized K/V configuration
+       |                                      |
+       v                                      |
+BlockCacheRequest[]                          |
+       `------------------+------------------'
+                          v
+BlockCachePlan               finalized worker-local recipe
+                          |
+                          v
+CacheAllocation              real CPU or accelerator storage
+                          |
+                          v
+CacheEngine                  runtime owner and movement lifecycle
 ```
 
-`CacheEngine` retains one plan and the CPU/GPU allocations realized from it.
-It owns their lifetime, view construction, swap ordering, streams, and events.
-`NamedCacheView` owns only model-facing name/row/layer lookup. Neither decides
-operator payloads or backend packing.
+The boundaries are intentional:
 
-The remaining types support one of those three stages:
+- a request describes one built operator's requirement without choosing
+  storage;
+- a plan combines all requirements and retains one backend-selected layout;
+- an allocation owns real tensors realized from that plan;
+- `CacheEngine` retains the plan and CPU/accelerator allocations and owns
+  views, swap ordering, streams, events, local copy, and migration state.
 
-| Supporting type    | Why it exists                                                     |
-| ------------------ | ----------------------------------------------------------------- |
-| `CacheTensorSpec`  | Non-owning tensor metadata retained inside the plan               |
-| `BlockCacheLayout` | Backend-selected allocation strategy retained inside the plan     |
-| `CachePool`        | One owning tensor and the axis representing movable cache entries |
-| `NamedCacheView`   | Read-only model-facing lookup across physical cache tensors       |
+Sizing and real allocation both use the same retained plan. This prevents the
+driver, model configuration, and runtime allocator from independently guessing
+the physical cache layout.
 
-These supporting types are not additional runtime managers. Requests are
-temporary build inputs; tensor specs and layout are immutable plan details;
-pools belong to one allocation.
+## One Complete Example
 
-Three similar terms describe different identities:
+A DSA indexer is built with the attention implementation selected for the
+current worker. Its backend implementation knows the shape and contiguity
+required by its kernel, so the wrapper delegates request construction:
 
-| Term              | Meaning                                                             |
-| ----------------- | ------------------------------------------------------------------- |
-| Consumer row      | Logical row assigned to one built cache-using operator              |
-| Layer row         | State-cache tensor row mapped from a configured global model layer  |
-| Pool `entry_axis` | Physical tensor axis whose blocks or state slots move independently |
+```python
+def get_block_cache_requests(self, context):
+    return self.index_impl.get_block_cache_requests(
+        context.geometry, self.head_dim)
+```
 
-## Construction Pipeline
-
-### 1. Collect requests
-
-A selected cache-using operator declares one physical kernel-block payload:
+The selected implementation returns a request such as:
 
 ```python
 BlockCacheRequest(
-    name='index_cache',
-    shape=(kernel_block_size, num_heads, head_dim),
-    dtype=dtype,
+    name='dsa_indexer_k',
+    shape=(kernel_block_size, packed_head_dim),
+    dtype=torch.uint8,
     per_row_contiguous=True,
 )
 ```
 
-The operator knows its payload and kernel-visible requirements. A generic
-worker-local collector walks the built model's operator modules, collects
-their `get_block_cache_requests(context)` results, and calls
-`bind_block_cache(binding)` on each consumer. `BlockCacheRequestContext`
-carries worker-finalized inputs, currently logical/kernel block geometry;
-`BlockCacheBinding` carries the consumer's logical cache name and row. These
-records can grow without changing every operator method signature, but never
-carry physical tensors or layout details. Collection uses built module
-instances and registration order; it does not infer layer IDs from module names
-or require a model-specific collector. It happens independently on every
-target, speculative, and memory-model worker after block geometry is finalized.
+During worker-local plan construction, the collector walks the built model,
+assigns this indexer a stable row, and calls:
 
-The DSA indexer and DeepSeek-V4 compressors use this path. Their selected
-backend implementations declare packed tensor names, payloads, and contiguity;
-the generic wrappers retain collector-assigned rows. A V4 compressor resolves
-its rows once per forward, writes through that mapping, and passes the same
-mapping to the selected attention or indexer reader. The V4 model still
-resolves state caches by global layer ID, but it contains no block-cache names
-or block-layer lookup. Model configuration no longer describes these pageable
-cache tensors.
+```python
+indexer.bind_block_cache(
+    BlockCacheBinding(cache_name='dsa_indexer_k', consumer_row=row))
+```
 
-Standard K/V and quantization auxiliaries still come from finalized model/cache
-configuration. Every additional pageable cache comes from a built operator
-request; a model with neither source has an empty block-cache plan.
+The backend sees the collected tensor specifications and selects physical
+storage. `CacheEngine` later realizes the plan on CPU and accelerator devices.
+At forward time, the indexer uses its logical binding:
 
-### 2. Build one worker-local plan
+```python
+cache = block_caches.row(binding.cache_name, binding.consumer_row)
+```
 
-Schema construction validates requests and combines equal contracts from built
-consumers into `CacheTensorSpec` objects. Each spec records the stable consumer
-rows stored by its future tensor. For example, requests with contracts
-`A, B, A` become `A(consumer_rows=(0, 2))` and `B(consumer_rows=(1,))`.
-`schema.py` also derives standard K/V and quantized payload descriptions from
-the finalized model/cache policy. `plan.py` passes the ordered tensor specs to
-the active `CacheBackend`, retains its selected physical layout, and constructs
-the plan. Block plans contain only plain model tensors and operator consumer
-rows; configured layer rows belong to state caches.
+The operator never receives a pool, stride, tensor address, or layout object.
+The model never assigns cache layer IDs. This request/binding/view path is the
+complete interface needed by most new cache-using operators.
+
+## Choose a Reading Route
+
+| If you are changing...          | Read...                        | You normally do not need...  |
+| ------------------------------- | ------------------------------ | ---------------------------- |
+| A cache-using operator          | Operator Requests and Bindings | layouts, pools, PD migration |
+| Backend storage or copy kernels | Backend Layout and Allocation  | checkpoint lifecycle         |
+| Runtime swap, copy, or transfer | Runtime Ownership and Movement | operator internals           |
+| State caches                    | State Cache Identity and Slots | block-cache consumer binding |
+| The construction pipeline       | Plan Construction              | PD byte segmentation         |
+
+The remaining types are supporting details, not additional runtime managers.
+
+## Operator Requests and Bindings
+
+### Request ownership
+
+A selected cache-using operator declares one physical kernel-block payload
+through `get_block_cache_requests(context)`. `BlockCacheRequestContext`
+contains worker-finalized inputs, currently `BlockCacheGeometry`. The operator
+already owns model- and backend-specific facts such as head dimensions and
+packing, so the context does not duplicate them.
+
+The collector discovers request methods on actual built module instances. It
+uses deterministic module registration order, assigns compact consumer rows by
+cache name, and calls `bind_block_cache(binding)` on every requester. It does
+not use a global registry, infer layer IDs from module names, or require a
+model-specific collector.
+
+Collection happens independently for target, speculative, and memory models.
+Plans remain worker-local; only their byte counts cross the executor RPC
+boundary.
+
+### Request versus tensor specification
+
+`BlockCacheRequest` belongs to one consumer before physical grouping.
+`CacheTensorSpec` is immutable metadata retained by the finalized plan after
+equal requests are grouped. For requests with contracts `A, B, A`, schema
+construction produces specifications equivalent to:
+
+```text
+A(consumer_rows=(0, 2))
+B(consumer_rows=(1,))
+```
+
+This distinction lets consumers keep stable logical rows while the backend
+places heterogeneous contracts in different physical tensors.
+
+Standard K/V and quantization auxiliaries still come from finalized model and
+cache configuration. Every additional pageable block cache comes from a built
+operator request. Block plans contain only plain model tensors and operator
+consumer rows; configured layer rows belong to state caches.
+
+### Model-facing access
+
+Two access forms coexist:
+
+- `gpu_cache` and `cpu_cache` provide the per-layer tuple used as
+  `past_key_values`;
+- `block_caches.row(name, consumer_row)` resolves an operator's bound cache.
+
+`block_caches[name]` returns the complete tensor when the name has one physical
+tensor. Direct lookup raises for a heterogeneous name because the caller must
+select a consumer row. `BlockCachePlan.model_cache_indices` keeps scoped named
+tensors out of the standard per-layer tuple.
+
+`NamedCacheView` owns only logical-to-physical lookup. It does not own memory;
+the corresponding `CacheAllocation` must remain alive.
+
+If you are only adding an operator-owned cache, you can stop here.
+
+## Plan Construction
+
+`build_block_cache_plan()` is the worker-local composition boundary:
+
+```text
+finalize BlockCacheGeometry
+        |
+        v
+collect BlockCacheRequest[] and bind consumers
+        |
+        v
+build ordered CacheTensorSpec[]
+        |
+        v
+CacheBackend selects BlockCacheLayout
+        |
+        v
+BlockCachePlan
+```
 
 `BlockCachePlan` retains:
 
-- ordered tensor specs and model-facing access metadata;
+- ordered tensor specifications and model-facing access metadata;
 - the selected physical layout;
-- logical-to-kernel block geometry.
+- the kernel-page count represented by one logical scheduler block.
 
-It owns no tensors, streams, events, or movement policy. Plans never cross the
-executor RPC boundary; each worker returns only target/speculative/memory byte
-counts to the executor. A finalized plan is required by native sizing and
-`CacheEngine` construction; runtime allocation never rebuilds a configuration-
-only fallback plan.
+It owns no tensors, streams, events, or movement policy. A finalized plan is
+required for sizing and `CacheEngine` construction; runtime allocation does
+not rebuild a configuration-only fallback.
 
-The exact construction path is:
+Sparse-MLA cache policy is finalized before executor construction, operator
+building, and plan construction. `CacheEngine` does not mutate cache policy
+while sizing or allocating.
+
+## Backend Layout and Allocation
+
+`CacheBackend.build_block_layout()` decides how ordered tensor specifications
+are stored. An atomic layout implements one storage policy:
+
+| Layout                       | Storage policy                                                 |
+| ---------------------------- | -------------------------------------------------------------- |
+| `PackedBlockCacheLayout`     | Pack compatible full-model tensors into one byte pool          |
+| `RowBlockCacheLayout`        | Give row-scoped tensors independent padded byte pools          |
+| `ContiguousBlockCacheLayout` | Give each specification an independent contiguous typed tensor |
+| `PackedStateCacheLayout`     | Pack state tensors behind one slot axis                        |
+| `ContiguousStateCacheLayout` | Give each state specification an independent typed tensor      |
+
+`CompositeBlockCacheLayout` combines ordered atomic layouts without making a
+selection decision. For example:
 
 ```text
-plan.build_block_cache_plan()
-  ├── finalize BlockCacheGeometry
-  ├── request_collector(BlockCacheRequestContext(geometry))
-  ├── schema.build_model_block_cache_tensor_specs(...)
-  ├── get_backend().get_cache_backend().build_block_layout(...)
-  └── BlockCachePlan(...)
+BlockCachePlan
+`-- CompositeBlockCacheLayout
+    |-- PackedBlockCacheLayout(K, V)      -> packed pool
+    `-- ContiguousBlockCacheLayout(index) -> contiguous typed pool
 ```
 
-Sparse-MLA cache policy is finalized before executor construction, so configs
-are stable before they are copied to workers and before backend operators are
-built. This function is the worker-local cache-plan composition boundary.
-`CacheEngine` receives the finalized plan and owns only runtime allocation and
-movement.
+The default backend selects packed storage for plain full-model tensors, row
+storage for compact consumer tensors that accept padded strides, and
+contiguous storage when `per_row_contiguous=True`. Dlinfer instead selects the
+shared contiguous layouts required by its kernels.
 
-### 3. Realize allocations
-
-The same retained plan is realized on `meta`, CPU, and accelerator devices:
+The plan realizes a logical block count through its selected layout:
 
 ```python
 allocation = plan.allocate(num_logical_blocks, device)
 ```
 
 `CacheAllocation.pools` own storage and drive byte accounting and movement.
-`CacheAllocation.tensor_views` are typed tensors in the same order as
-`plan.tensor_specs`. Count bytes from pools, never from possibly overlapping
-views.
+`CacheAllocation.tensor_views` are typed views in tensor-specification order.
+Count bytes from pools, never from possibly overlapping views.
 
-Every pool records its cache-entry axis. This allows swap and later block-copy
-operations to handle one or many pools without assuming a tensor rank or
-memory order.
+Each `CachePool.entry_axis` identifies independently movable physical kernel
+pages or state slots. Every other tensor axis belongs to one entry's payload.
+This metadata lets runtime operations support one or many pools without
+assuming tensor rank or memory order.
 
-### Local logical-block copy
+## State Cache Identity and Slots
 
-`CacheEngine.copy_logical_blocks()` accepts a device tensor with shape
-`[2, num_pairs]` containing physical block-table offsets at scheduler-block
-granularity. The retained plan supplies the scheduler-block to kernel-page
-ratio, while `CacheAllocation` supplies every owning pool and its entry axis.
+State caches reuse tensor specifications, layouts, allocations, and named
+views, but their runtime unit is a state slot rather than a block.
+`StateCacheEngine` owns slot initialization and copying; it does not share the
+block-cache plan or movement lifecycle.
 
-The active `CacheBackend` builds the physical copy primitive once from that
-stable allocation. CUDA copies contiguous pools with Triton; other backends
-inherit the bounded tensor fallback unless they provide a more suitable local
-primitive. CacheEngine validates only copy-plan metadata on the hot path. The
-caller owns source/destination relationship validation and keeps block
-lifetimes safe until the stream-ordered copy completes.
+A configured state tensor may cover only selected global model layers.
+`LayerRowMap` validates their ordered identities and relates them to compact
+tensor rows. The model accesses one row through:
 
-### Per-forward checkpoint pipeline
-
-Checkpoint copies are one-forward side effects, not persistent model inputs:
-
-```text
-checkpoint lifecycle + paging ids
-              |
-              v
-InputsMaker reserves/pins and resolves physical block offsets
-              |
-              v
-CacheCheckpointInputs
-    restore plans -> model forward -> save plans
-              |                         |
-              +---- CacheEngine --------+  KV logical-block copies
-              `---- StateCacheEngine ---+  state-slot copies
+```python
+named_state_caches.layer(cache_name, layer_id)
 ```
 
-`CacheCheckpointInputs` travels beside `ModelInputs` in the executor payload.
-Only its KV plans move to the cache device; state plans remain compact host
-index pairs. The model agent consumes restores after context construction and
-before the model, then consumes saves after the model. The engine loop
-publishes reserved state checkpoints and releases their pins at the existing
-forward/output boundaries.
+Consumer rows and layer rows are different identities:
 
-Keeping this payload separate prevents one-shot operations from being cloned,
-reindexed, merged, or advanced with persistent decode inputs. An aligned SSM
-checkpoint emits only state plans. A non-aligned prefill checkpoint also emits
-one KV pair: save copies the producer's partial logical block into a
-checkpoint-owned frozen block, while restore copies that frozen source into the
-consumer's private writable block. Paging resolves both pairs before
-`CacheEngine` sees them.
+| Identity        | Meaning                                                     |
+| --------------- | ----------------------------------------------------------- |
+| Consumer row    | Assigned to one built cache-using operator                  |
+| Layer row       | Compact state-cache row selected by a global model layer ID |
+| Pool entry axis | Physical axis indexing movable blocks or slots              |
 
-## Layout Selection and Composition
+Layer rows are state-cache metadata. They are not used to give standard K/V or
+operator-requested block caches synthetic model-layer identities.
 
-An atomic layout implements one physical storage policy:
+## Runtime Ownership and Movement
 
-| Layout                       | Storage policy                                                |
-| ---------------------------- | ------------------------------------------------------------- |
-| `PackedBlockCacheLayout`     | Pack compatible full-layer tensors into one byte pool         |
-| `RowBlockCacheLayout`        | Give consumer-row tensors independent padded byte pools       |
-| `ContiguousBlockCacheLayout` | Give every tensor spec an independent contiguous typed tensor |
-| `PackedStateCacheLayout`     | Pack tensors behind one state-slot axis                       |
-| `ContiguousStateCacheLayout` | Give every state spec an independent contiguous typed tensor  |
+After CPU and accelerator allocation, `CacheEngine` resolves corresponding
+pool pairs once and verifies their entry axes, dtypes, counts, and per-entry
+payload shapes. Swap operations then reuse those pairs on the cache stream.
 
-`CompositeBlockCacheLayout` combines ordered atomic layouts. It allocates each
-child, concatenates their owning pools, and preserves child/tensor view order.
-It contains no tensor-selection policy; `DefaultCacheBackend` owns that
-decision.
+Three movement operations remain separate because they have different owners
+and constraints:
 
-For standard K/V plus a contiguous index cache, the selected plan is:
+- CPU/accelerator swap moves entries between matching local allocations;
+- same-device block copy copies scheduler-sized logical blocks;
+- PD/LMCache/Mooncake transfer moves registered allocation pools between
+  endpoints.
 
-```text
-BlockCachePlan
-└── CompositeBlockCacheLayout
-    ├── PackedBlockCacheLayout(K, V)       -> packed pool
-    └── ContiguousBlockCacheLayout(index)  -> typed contiguous pool
-```
+Layout selection supplies physical mechanisms but does not own these runtime
+lifecycles.
 
-The default backend groups consecutive tensor specs by requirement:
-
-- full-model tensors that accept strides use the packed layout;
-- compact-row tensors that accept padded strides use the row layout;
-- specs with `per_row_contiguous=True` use the contiguous layout.
-
-Different tensor specs with the same semantic name may therefore use different
-layouts while sharing one plan and scheduler block count.
-
-## Model-Facing Views
-
-Two model-facing access categories coexist during migration:
-
-- `gpu_cache` / `cpu_cache` provide the per-layer tuple used as
-  `past_key_values`;
-- named views provide scoped access: `block_caches.row(name, consumer_row)`
-  resolves a row assigned to a built operator, while
-  `named_state_caches.layer(name, layer_id)` resolves a configured state-cache
-  layer.
-
-`block_caches[name]` still returns the complete tensor when a name has one
-physical tensor. When a name is heterogeneous, direct lookup raises and asks
-the caller to select a consumer or layer row explicitly.
-
-`BlockCachePlan.model_cache_indices` determines which tensors participate in
-per-layer tuples. In a mixed allocation, adding a compact-row named tensor
-does not change standard K/V tuple ordering.
-
-These views do not own memory. The corresponding `CacheAllocation` must remain
-alive.
-
-## Logical and Kernel Blocks
+### Logical and kernel blocks
 
 `CacheConfig.block_size` is the scheduler and prefix-cache unit.
-`kernel_block_size` is the physical page unit expected by kernels. The logical
+`kernel_block_size` is the physical page size expected by kernels. The logical
 size must be an exact positive multiple of the kernel size:
 
 ```text
@@ -262,74 +282,94 @@ num_kernel_blocks = num_logical_blocks
                     * plan.kernel_blocks_per_logical_block
 ```
 
-Meta sizing and real allocation use this same conversion and layout path.
+Meta sizing, CPU allocation, accelerator allocation, and local copy all use
+this same relationship.
 
-## Runtime Ownership
+### Local logical-block copy
 
-After CPU and accelerator allocation, `CacheEngine._build_swap_pairs()` checks
-that corresponding pools have the same count, entry axis, dtype, and
-per-entry payload shape. Swap operations then use those pre-resolved pairs on
-the cache stream.
+`CacheEngine.copy_logical_blocks()` accepts a device tensor with shape
+`[2, num_pairs]` containing scheduler-block offsets. The retained plan provides
+the kernel pages per logical block, while the accelerator allocation provides
+every owning pool and its entry axis.
 
-`StateCacheEngine` uses the same schema/layout/allocation primitives but has a
-different slot lifecycle and currently does not retain a plan. State
-initialization and copies operate on allocation-owned pools rather than an
-assumed shared pool.
+The active backend builds the physical copy primitive once. CUDA copies
+contiguous pools with Triton; other backends inherit the bounded tensor
+fallback unless they provide a more suitable implementation. The hot path
+validates only copy-plan metadata. The caller owns block lifetimes and
+source/destination relationship validation.
 
-Same-device block copy, CPU/accelerator swap, and PD/LMCache/Mooncake transfer
-remain separate operations. Layout selection does not own those lifecycles.
+### Per-forward checkpoints
 
-PD migration registers every accelerator allocation pool with a stable
-memory-region key. The P/D endpoint handshake exchanges each pool's shape,
-dtype, element size, and entry axis. Migration then decomposes a requested
-block into contiguous byte segments for that pool. Pools may use different
-entry axes, and corresponding P/D pools may place the entry axis differently;
-the planner pairs their segments in logical payload order before dispatching
-one backend batch per remote engine.
+Checkpoint copies are one-forward side effects, not persistent model inputs:
+
+```text
+InputsMaker reserves state and resolves paging IDs
+        |
+        v
+CacheCheckpointInputs
+restore plans -> model forward -> save plans
+        |                             |
+        +---- CacheEngine ------------+  KV logical-block copies
+        `---- StateCacheEngine -------+  state-slot copies
+```
+
+`CacheCheckpointInputs` travels beside `ModelInputs`. Keeping it separate
+prevents one-shot operations from being cloned, reindexed, merged, or advanced
+with persistent decode inputs. Aligned SSM checkpoints emit state plans. A
+non-aligned prefill checkpoint additionally copies one partial logical KV block
+through a checkpoint-owned frozen block.
+
+### PD migration
+
+PD migration registers every accelerator pool with a stable memory-region key.
+The endpoint handshake exchanges each pool's shape, dtype, element size, and
+entry axis. The planner decomposes requested blocks into contiguous byte
+segments and pairs corresponding source and destination payloads before
+dispatching one backend batch per remote engine.
+
+P/D endpoints may place the entry axis differently, but their pools must keep
+the same order, dtype, and logical payload shape after removing that axis.
+Migration does not yet map one packed pool to several pools on the other
+endpoint, and it currently requires equal logical and kernel block sizes.
 
 ## Compatibility Boundaries
 
 The package preserves standard K/V configuration, anonymous state shapes,
-model-config named state specifications, and `gpu_cache`/`cpu_cache` as
-per-layer model-facing tuples. Additional pageable caches are declared only by
+model-config named state specifications, and the per-layer `gpu_cache` and
+`cpu_cache` interfaces. Additional pageable block caches are declared only by
 built operators.
 
 `BlockCachePlan` and `CacheAllocation` are the only block-cache allocation
-authorities. Runtime allocation, swap, copy, sizing, and PD paths do not call
-the old `CacheEngine.allocate_caches` extension point or accept its raw
-`(mem_pool, caches)` result. `StateCacheEngine` likewise realizes its backend
+authorities. Runtime sizing, allocation, swap, copy, and PD paths do not call
+the removed `CacheEngine.allocate_caches` extension point or accept raw
+`(mem_pool, caches)` results. `StateCacheEngine` also realizes its selected
 layout directly. Older dlinfer releases may still attach allocator methods at
-import time, but those methods are not consulted by either engine.
+import time, but neither engine consults them.
 
-PD migration accepts one or more contiguous native allocation pools with equal
-logical/kernel block sizes. Corresponding P/D pools must retain the same order,
-dtype, and logical payload shape after removing the entry axis. It does not yet
-map a packed pool on one endpoint to several pools on the other.
+## Code Reading Routes
 
-## Code Reading Order
+### Operator integration
 
-01. [`collector.py`](./collector.py): built-operator request collection and row
-    binding.
-02. [`schema.py`](./schema.py): payload descriptions, requests, tensor specs,
-    and row bindings.
-03. [`plan.py`](./plan.py): backend layout selection and the retained
-    worker-local allocation recipe.
-04. [`layout.py`](./layout.py): atomic/composite layouts, pools, and allocations.
-05. [`migration.py`](./migration.py): PD pool metadata and byte-transfer planning.
-06. [`backends/default/cache.py`](../../backends/default/cache.py): default
-    tensor-spec-to-layout selection.
-07. [`view.py`](./view.py): named tensor, consumer-row, and layer-row lookup.
-08. [`../cache_inputs.py`](../cache_inputs.py): one-forward checkpoint copy
-    payloads.
-09. [`state.py`](./state.py): state allocation and state-slot transitions.
-10. [`engine.py`](./engine.py): block-cache allocation lifetime, view
-    construction, and movement.
+1. [`nn/nsa.py`](../../nn/nsa.py): request delegation, binding, and forward-time lookup.
+2. [`collector.py`](./collector.py): generic collection and consumer-row assignment.
+3. [`view.py`](./view.py): logical name/row lookup.
 
-Backend-specific layout selection remains with each backend. For example,
-[`backends/dlinfer/cache.py`](../../backends/dlinfer/cache.py) selects the
-generic contiguous layouts required by dlinfer. Avoid adding a generic manager,
-registry, or utility module; add a component only when it owns a complete
-decision or lifecycle.
+### Plan and backend storage
+
+1. [`plan.py`](./plan.py): construction boundary and retained recipe.
+2. [`schema.py`](./schema.py): requests, payloads, tensor specifications, and row metadata.
+3. [`backends/default/cache.py`](../../backends/default/cache.py): default layout selection.
+4. [`layout.py`](./layout.py): layouts, owning pools, and typed views.
+
+### Runtime and state
+
+1. [`engine.py`](./engine.py): block allocation lifetime and movement.
+2. [`state.py`](./state.py): state allocation and slot transitions.
+3. [`migration.py`](./migration.py): PD metadata and byte-transfer planning.
+4. [`../cache_inputs.py`](../cache_inputs.py): one-forward checkpoint payloads.
+
+Avoid adding a general manager, registry, or utility module. Add a component
+only when it owns a complete decision, invariant, or runtime lifecycle.
 
 ## Focused Tests
 
