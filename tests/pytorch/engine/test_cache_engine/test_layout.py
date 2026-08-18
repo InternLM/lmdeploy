@@ -4,17 +4,12 @@ import torch
 
 from lmdeploy.pytorch.backends.default import DefaultOpsBackend
 from lmdeploy.pytorch.backends.default.cache import DefaultCacheBackend
-from lmdeploy.pytorch.backends.dlinfer.cache import (
-    DlinferBlockCacheLayout,
-    DlinferCacheBackend,
-    DlinferStateCacheLayout,
-)
-from lmdeploy.pytorch.backends.dlinfer.op_backend import DlinferOpsBackend
 from lmdeploy.pytorch.config import StateCacheSpec
 from lmdeploy.pytorch.engine.cache_engine.layout import (
     CachePool,
     CompositeBlockCacheLayout,
     ContiguousBlockCacheLayout,
+    ContiguousStateCacheLayout,
     PackedBlockCacheLayout,
     PackedStateCacheLayout,
     RowBlockCacheLayout,
@@ -22,7 +17,6 @@ from lmdeploy.pytorch.engine.cache_engine.layout import (
 from lmdeploy.pytorch.engine.cache_engine.schema import (
     CacheDesc,
     CacheTensorSpec,
-    LayerRowMap,
     build_state_cache_tensor_specs,
 )
 
@@ -92,15 +86,6 @@ def test_packed_state_allocation_owns_state_slot_axis():
     assert [tuple(cache.shape) for cache in allocation.tensor_views] == [(2, 4, 5), (4, 3)]
 
 
-def test_empty_state_allocation_keeps_one_empty_owning_pool():
-    allocation = PackedStateCacheLayout(()).allocate(num_caches=4, device='cpu')
-
-    assert len(allocation.pools) == 1
-    assert allocation.pools[0].entry_axis == 0
-    assert tuple(allocation.pools[0].tensor.shape) == (0, 0)
-    assert allocation.tensor_views == ()
-
-
 def test_row_block_layout_rejects_tensor_specs_without_consumer_rows():
     tensor_specs = (CacheTensorSpec('plain', CacheDesc(shape=[3], dtype=torch.float32)), )
 
@@ -156,37 +141,16 @@ def test_default_composite_layout_packs_plain_and_isolates_contiguous_tensors():
     assert allocation.nbytes == meta_allocation.nbytes == 4 * 3 * 24 + 2 * 3 * 5 * 2
 
 
-def test_dlinfer_block_layout_owns_contiguous_cache_tensors():
-    tensor_specs = (
-        CacheTensorSpec('plain', CacheDesc(shape=[3], dtype=torch.float32, alignment=16)),
-        CacheTensorSpec('consumer',
-                        CacheDesc(shape=[2], dtype=torch.float16, alignment=8),
-                        consumer_rows=(0, 1)),
+def test_contiguous_state_allocation_owns_independent_tensors():
+    tensor_specs = build_state_cache_tensor_specs(
+        (),
+        state_specs=[
+            StateCacheSpec('plain', (3, ), torch.float16),
+            StateCacheSpec('layered', (5, ), torch.float32, layer_ids=[3, 9]),
+        ],
     )
 
-    layout = DlinferBlockCacheLayout(tensor_specs, num_layers=4)
-    allocation = layout.allocate(num_blocks=3, device='cpu')
-    meta_allocation = layout.allocate(num_blocks=3, device='meta')
-
-    assert [pool.entry_axis for pool in allocation.pools] == [1, 1]
-    assert [tuple(pool.tensor.shape) for pool in allocation.pools] == [(4, 3, 3), (2, 3, 2)]
-    assert all(pool.tensor is cache for pool, cache in zip(allocation.pools, allocation.tensor_views))
-    assert all(cache.is_contiguous() for cache in allocation.tensor_views)
-    assert all(torch.count_nonzero(cache) == 0 for cache in allocation.tensor_views)
-    assert allocation.tensor_views[0].stride(1) == 3
-    assert allocation.tensor_views[1].stride(1) == 2
-    assert allocation.nbytes == meta_allocation.nbytes == 4 * 3 * 3 * 4 + 2 * 3 * 2 * 2
-
-
-def test_dlinfer_state_layout_owns_contiguous_cache_tensors():
-    tensor_specs = (
-        CacheTensorSpec('plain', CacheDesc(shape=[3], dtype=torch.float16)),
-        CacheTensorSpec('layered',
-                        CacheDesc(shape=[2, 5], dtype=torch.float32),
-                        layer_rows=LayerRowMap.build('layered', [3, 9])),
-    )
-
-    layout = DlinferStateCacheLayout(tensor_specs)
+    layout = ContiguousStateCacheLayout(tensor_specs)
     allocation = layout.allocate(num_caches=4, device='cpu')
     meta_allocation = layout.allocate(num_caches=4, device='meta')
 
@@ -197,24 +161,3 @@ def test_dlinfer_state_layout_owns_contiguous_cache_tensors():
     assert all(torch.count_nonzero(cache) == 0 for cache in allocation.tensor_views)
     assert allocation.tensor_views[1][0].is_contiguous()
     assert allocation.nbytes == meta_allocation.nbytes == 4 * 3 * 2 + 2 * 4 * 5 * 4
-
-
-def test_dlinfer_ops_backend_selects_native_cache_provider():
-    cache_backend = DlinferOpsBackend.get_cache_backend()
-    tensor_specs = (CacheTensorSpec('plain', CacheDesc(shape=[3], dtype=torch.float32)), )
-
-    assert cache_backend is DlinferCacheBackend
-    assert isinstance(cache_backend.build_block_layout(tensor_specs, num_layers=2), DlinferBlockCacheLayout)
-    assert isinstance(cache_backend.build_state_layout(tensor_specs), DlinferStateCacheLayout)
-
-
-def test_dlinfer_empty_layouts_keep_semantic_empty_pools():
-    block_allocation = DlinferBlockCacheLayout((), num_layers=2).allocate(num_blocks=3, device='cpu')
-    state_allocation = DlinferStateCacheLayout(()).allocate(num_caches=4, device='cpu')
-
-    assert block_allocation.tensor_views == ()
-    assert block_allocation.pools[0].entry_axis == 1
-    assert tuple(block_allocation.pools[0].tensor.shape) == (2, 3, 0)
-    assert state_allocation.tensor_views == ()
-    assert state_allocation.pools[0].entry_axis == 0
-    assert tuple(state_allocation.pools[0].tensor.shape) == (0, 0)

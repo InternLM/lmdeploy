@@ -11,21 +11,14 @@ from .schema import BlockCacheBinding, BlockCacheRequest, BlockCacheRequestConte
 def collect_block_cache_requests(
     model: nn.Module,
     context: BlockCacheRequestContext,
-) -> tuple[BlockCacheRequest, ...] | None:
-    """Collect cache requests from built operators and bind compact rows.
-
-    ``None`` means that the model has no cache-requesting operators and should
-    use the configuration compatibility path. An empty tuple is authoritative
-    when a requesting operator is present but requests no block cache.
-    """
+) -> tuple[BlockCacheRequest, ...]:
+    """Collect cache requests from built operators and bind compact rows."""
     collected = []
-    found_requester = False
 
     for module in model.modules():
         get_requests = getattr(module, 'get_block_cache_requests', None)
         if get_requests is None:
             continue
-        found_requester = True
         requests = tuple(get_requests(context))
         if not requests:
             continue
@@ -42,9 +35,6 @@ def collect_block_cache_requests(
                 raise ValueError(f'{type(module).__name__} requested block cache {request.name} more than once.')
             names.add(request.name)
             collected.append((bind_cache, request))
-
-    if not found_requester:
-        return None
 
     next_row_by_name = defaultdict(int)
     requests = []

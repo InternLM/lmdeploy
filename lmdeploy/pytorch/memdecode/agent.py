@@ -12,6 +12,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MemDecodeConfig,
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.cache_engine.collector import collect_block_cache_requests
+from lmdeploy.pytorch.engine.cache_engine.plan import build_block_cache_plan
 from lmdeploy.pytorch.memdecode.fusion import MemDecodeFusion
 from lmdeploy.pytorch.model_inputs import ModelInputs, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, build_patched_model, update_custom_module_map
@@ -155,31 +156,22 @@ class MemDecodeAgent:
         with self.memory_context():
             tp = get_dist_manager().current_context().dist_config.attn_tp
             request_collector = partial(collect_block_cache_requests, self.model)
-            self.block_cache_plan = CacheEngine.build_cache_plan(
+            self.block_cache_plan = build_block_cache_plan(
                 self.model_config,
                 cache_config,
                 tp,
                 request_collector=request_collector,
             )
-            return CacheEngine.get_logical_block_nbytes(
-                cache_config,
-                self.model_config,
-                tp,
-                block_cache_plan=self.block_cache_plan,
-            )
+            return self.block_cache_plan.logical_block_nbytes
 
     def build_cache_engine(self, cache_stream: torch.cuda.Stream):
         """Build cache engine."""
         with self.memory_context():
             dist_ctx = get_dist_manager().current_context()
-            dist_config = dist_ctx.dist_config
-            tp = dist_config.attn_tp
             self.cache_engine = CacheEngine(
                 self.cache_config,
-                self.model_config,
                 rank=self.dist_ctx.rank,
                 tp_rank=dist_ctx.attn_tp_group.rank,
-                world_size=tp,
                 cache_stream=cache_stream,
                 block_cache_plan=self.block_cache_plan,
             )

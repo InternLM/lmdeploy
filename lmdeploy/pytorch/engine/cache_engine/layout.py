@@ -111,6 +111,10 @@ class ContiguousBlockCacheLayout:
 
     def allocate(self, num_blocks: int, device: torch.device | str) -> CacheAllocation:
         """Allocate contiguous cache tensors for one block count."""
+        if not self.tensor_specs:
+            empty = torch.empty((self.num_layers, num_blocks, 0), dtype=torch.uint8, device=device)
+            return CacheAllocation(pools=(CachePool(empty, entry_axis=1), ), tensor_views=())
+
         pools = []
         tensor_views = []
         for spec in self.tensor_specs:
@@ -147,8 +151,7 @@ class PackedStateCacheLayout:
     def allocate(self, num_caches: int, device: torch.device | str) -> CacheAllocation:
         """Realize the layout for a state-slot count and device."""
         if len(self.tensor_specs) == 0 or num_caches == 0:
-            pool_tensor = torch.empty((0, 0), dtype=torch.uint8, device=device)
-            return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=0), ), tensor_views=())
+            return CacheAllocation(pools=(), tensor_views=())
 
         pool_size = sum(spec.desc.aligned_size for spec in self.tensor_specs)
         pool_tensor = torch.zeros((num_caches, pool_size), dtype=torch.uint8, device=device)
@@ -167,3 +170,30 @@ class PackedStateCacheLayout:
 
         return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=0), ),
                                tensor_views=tuple(tensor_views))
+
+
+@dataclass(frozen=True)
+class ContiguousStateCacheLayout:
+    """Give every state-cache spec an independent contiguous tensor."""
+
+    tensor_specs: tuple[CacheTensorSpec, ...]
+
+    def allocate(self, num_caches: int, device: torch.device | str) -> CacheAllocation:
+        """Allocate contiguous state tensors for one slot count."""
+        if not self.tensor_specs or num_caches == 0:
+            return CacheAllocation(pools=(), tensor_views=())
+
+        pools = []
+        tensor_views = []
+        for spec in self.tensor_specs:
+            if spec.layer_rows is None:
+                cache_shape = (num_caches, *spec.desc.shape)
+                entry_axis = 0
+            else:
+                assert spec.desc.shape[0] == spec.num_rows
+                cache_shape = (spec.num_rows, num_caches, *spec.desc.shape[1:])
+                entry_axis = 1
+            cache = torch.zeros(cache_shape, dtype=spec.desc.dtype, device=device)
+            pools.append(CachePool(cache, entry_axis=entry_axis))
+            tensor_views.append(cache)
+        return CacheAllocation(pools=tuple(pools), tensor_views=tuple(tensor_views))

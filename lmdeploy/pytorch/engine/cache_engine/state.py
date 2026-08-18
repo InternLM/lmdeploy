@@ -3,7 +3,6 @@
 
 from collections.abc import Iterator, Mapping, Sequence
 from operator import index as as_index
-from typing import TypeAlias
 
 import torch
 
@@ -11,40 +10,33 @@ from lmdeploy.pytorch.backends import get_backend
 
 from ...config import CacheConfig, ModelConfig, StateCacheSpec
 from .layout import CacheAllocation
-from .schema import build_state_cache_tensor_specs
+from .schema import CacheTensorSpec, build_state_cache_tensor_specs
 from .view import NamedCacheView
 
-_StateSlotTensor: TypeAlias = tuple[torch.Tensor, int]
-"""Physical tensor and axis indexing independently movable state slots."""
+
+def _allocate_state_caches(tensor_specs: Sequence[CacheTensorSpec], num_caches: int,
+                           device: torch.device | str) -> CacheAllocation:
+    """Realize state-cache tensor specs through the selected backend layout."""
+    layout = get_backend().get_cache_backend().build_state_layout(tensor_specs)
+    return layout.allocate(num_caches=num_caches, device=device)
 
 
 class StateCacheEngine:
     """Own state-cache allocation and state-slot transitions."""
 
-    def __init__(self, cache_config: CacheConfig, model_config: ModelConfig | None = None):
+    def __init__(self, cache_config: CacheConfig, model_config: ModelConfig):
         self.cache_config = cache_config
-        state_specs = None
-        if model_config is not None and len(model_config.state_cache_specs) > 0:
-            state_specs = model_config.state_cache_specs
-
-        tensor_specs = build_state_cache_tensor_specs(cache_config.states_shapes, state_specs=state_specs)
+        tensor_specs = build_state_cache_tensor_specs(cache_config.states_shapes,
+                                                      state_specs=model_config.state_cache_specs)
 
         # Non-CUDA device integrations patch the canonical "cuda" device path
         # before reaching this layer, so keep using it here.
-        allocate_kwargs = dict(num_caches=cache_config.num_state_caches,
-                               state_shapes=cache_config.states_shapes,
-                               device='cuda')
-        if state_specs is not None:
-            allocate_kwargs['state_specs'] = state_specs
-        result = self.allocate_caches(**allocate_kwargs)
-        if isinstance(result, CacheAllocation):
-            self.allocation = result
-            self._cache_tensors = list(result.tensor_views)
-        else:
-            self.allocation = None
-            _, state_caches = result
-            self._cache_tensors = list(state_caches)
-        self._slot_tensors = self._resolve_slot_tensors(self.allocation, self._cache_tensors)
+        self.allocation = _allocate_state_caches(tensor_specs,
+                                                 num_caches=cache_config.num_state_caches,
+                                                 device='cuda')
+        self._cache_tensors = list(self.allocation.tensor_views)
+        # Each pool declares the axis that indexes independently movable slots.
+        self._slot_tensors = tuple((pool.tensor, pool.entry_axis) for pool in self.allocation.pools)
         if any(spec.layer_rows is not None for spec in tensor_specs):
             self._named_state_caches = NamedCacheView(tensor_specs, self._cache_tensors)
         else:
@@ -54,40 +46,11 @@ class StateCacheEngine:
             }
 
     @staticmethod
-    def allocate_caches(num_caches: int,
-                        state_shapes: Sequence[tuple[tuple[int, ...], torch.dtype]],
-                        device: torch.device | str,
-                        state_specs: Sequence[StateCacheSpec] | None = None) -> CacheAllocation:
-        """Allocate all state-cache tensors for a fixed number of slots."""
-        tensor_specs = build_state_cache_tensor_specs(state_shapes, state_specs=state_specs)
-        layout = get_backend().get_cache_backend().build_state_layout(tensor_specs)
-        return layout.allocate(num_caches=num_caches, device=device)
-
-    @staticmethod
-    def _resolve_slot_tensors(allocation: CacheAllocation | None,
-                              state_caches: Sequence[torch.Tensor]) -> tuple[_StateSlotTensor, ...]:
-        """Resolve each physical tensor and the axis indexing state slots."""
-        if allocation is not None:
-            return tuple((pool.tensor, pool.entry_axis) for pool in allocation.pools)
-
-        # The pinned dlinfer tuple contract allocates every state tensor as
-        # contiguous [state_slot, ...] storage.
-        return tuple((cache, 0) for cache in state_caches)
-
-    @staticmethod
     def get_state_slot_nbytes(state_shapes: Sequence[tuple[tuple[int, ...], torch.dtype]],
                               state_specs: Sequence[StateCacheSpec] | None = None) -> int:
         """Return owning storage bytes required by one state slot."""
-        allocate_kwargs = dict(num_caches=1, state_shapes=state_shapes, device='meta')
-        if state_specs is not None:
-            allocate_kwargs['state_specs'] = state_specs
-        result = StateCacheEngine.allocate_caches(**allocate_kwargs)
-        if isinstance(result, CacheAllocation):
-            return result.nbytes
-        external_pool, _ = result
-        if not isinstance(external_pool, torch.Tensor):
-            raise RuntimeError('External state-cache sizing requires one tensor pool.')
-        return external_pool.numel() * external_pool.element_size()
+        tensor_specs = build_state_cache_tensor_specs(state_shapes, state_specs=state_specs)
+        return _allocate_state_caches(tensor_specs, num_caches=1, device='meta').nbytes
 
     @property
     def state_caches(self) -> Sequence[torch.Tensor]:

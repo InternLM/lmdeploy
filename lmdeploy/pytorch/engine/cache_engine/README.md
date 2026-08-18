@@ -85,10 +85,9 @@ resolves state caches by global layer ID, but it contains no block-cache names
 or block-layer lookup. Model configuration no longer describes these pageable
 cache tensors.
 
-Models without a cache-requesting operator retain the compatibility path
-through standard K/V configuration and anonymous `cache_shapes`. A discovered
-requester is authoritative for custom block caches, even when it returns no
-requests.
+Standard K/V and quantization auxiliaries still come from finalized model/cache
+configuration. Every additional pageable cache comes from a built operator
+request; a model with neither source has an empty block-cache plan.
 
 ### 2. Build one worker-local plan
 
@@ -117,24 +116,19 @@ only fallback plan.
 The exact construction path is:
 
 ```text
-CacheEngine.build_cache_plan()
-  ├── finalize BlockCacheGeometry and sparse-MLA cache policy
+plan.build_block_cache_plan()
+  ├── finalize BlockCacheGeometry
   ├── request_collector(BlockCacheRequestContext(geometry))
-  └── plan.build_block_cache_plan(...)
-        ├── schema.build_model_block_cache_tensor_specs(...)
-        ├── get_backend().get_cache_backend().build_block_layout(...)
-        └── BlockCachePlan(...)
+  ├── schema.build_model_block_cache_tensor_specs(...)
+  ├── get_backend().get_cache_backend().build_block_layout(...)
+  └── BlockCachePlan(...)
 ```
 
-The first method is a compatibility and request-collection boundary. The
-function in `plan.py` receives finalized inputs and owns physical layout
-selection plus construction of the immutable plan.
-
-Request collection through the old dlinfer allocator monkey patch remains
-rejected at build time because that compatibility path cannot consume a
-worker-local plan. `CacheEngine.build_cache_plan()` remains the compatibility
-facade that finalizes geometry, invokes the worker-owned request collector, and
-enforces this guard before delegating plan construction.
+Sparse-MLA cache policy is finalized before executor construction, so configs
+are stable before they are copied to workers and before backend operators are
+built. This function is the worker-local cache-plan composition boundary.
+`CacheEngine` receives the finalized plan and owns only runtime allocation and
+movement.
 
 ### 3. Realize allocations
 
@@ -204,13 +198,13 @@ consumer's private writable block. Paging resolves both pairs before
 
 An atomic layout implements one physical storage policy:
 
-| Layout                       | Storage policy                                                  |
-| ---------------------------- | --------------------------------------------------------------- |
-| `PackedBlockCacheLayout`     | Pack compatible full-layer tensors into one byte pool           |
-| `RowBlockCacheLayout`        | Give consumer-row tensors independent padded byte pools         |
-| `ContiguousBlockCacheLayout` | Give every tensor spec an independent contiguous typed tensor   |
-| `PackedStateCacheLayout`     | Pack tensors behind one state-slot axis                         |
-| dlinfer block/state layouts  | Use dlinfer's backend-specific contiguous tensor representation |
+| Layout                       | Storage policy                                                |
+| ---------------------------- | ------------------------------------------------------------- |
+| `PackedBlockCacheLayout`     | Pack compatible full-layer tensors into one byte pool         |
+| `RowBlockCacheLayout`        | Give consumer-row tensors independent padded byte pools       |
+| `ContiguousBlockCacheLayout` | Give every tensor spec an independent contiguous typed tensor |
+| `PackedStateCacheLayout`     | Pack tensors behind one state-slot axis                       |
+| `ContiguousStateCacheLayout` | Give every state spec an independent contiguous typed tensor  |
 
 `CompositeBlockCacheLayout` combines ordered atomic layouts. It allocates each
 child, concatenates their owning pools, and preserves child/tensor view order.
@@ -295,30 +289,22 @@ one backend batch per remote engine.
 
 ## Compatibility Boundaries
 
-The package temporarily preserves:
+The package preserves standard K/V configuration, anonymous state shapes,
+model-config named state specifications, and `gpu_cache`/`cpu_cache` as
+per-layer model-facing tuples. Additional pageable caches are declared only by
+built operators.
 
-- `CacheEngine.build_cache_plan()`, `allocate_caches()`, and the K/V/quant/custom
-  description facades used by dlinfer's contiguous allocator patch;
-- `CacheEngine.num_layers` and `kv_cache_dtype`, which dlinfer's Ascend310P
-  allocator patch still reads even though native allocation uses the plan;
-- anonymous cache/state shapes and model-config named state specifications;
-- `gpu_cache` and `cpu_cache` as per-layer model-facing tuples;
-- the external dlinfer allocator result `(mem_pool, caches)`.
+`BlockCachePlan` and `CacheAllocation` are the only block-cache allocation
+authorities. Runtime allocation, swap, copy, sizing, and PD paths do not call
+the old `CacheEngine.allocate_caches` extension point or accept its raw
+`(mem_pool, caches)` result. `StateCacheEngine` likewise realizes its backend
+layout directly. Older dlinfer releases may still attach allocator methods at
+import time, but those methods are not consulted by either engine.
 
-For native block caches, `gpu_allocation` and `cpu_allocation` are the internal
-sources of truth. Native allocation, swap, copy, sizing, and PD paths consume
-`CacheAllocation` directly and do not coerce it into a tuple. A private external
-GPU pool is retained only when a downstream patched allocator returns
-`(mem_pool, caches)`, because that result has no ownership or entry-axis
-metadata.
-
-Native operator request collection requires the retained-plan allocator path.
 PD migration accepts one or more contiguous native allocation pools with equal
 logical/kernel block sizes. Corresponding P/D pools must retain the same order,
 dtype, and logical payload shape after removing the entry axis. It does not yet
-map a packed pool on one endpoint to several pools on the other. External patched
-allocators remain limited to one `[layer, block, ...]` tensor because they do
-not provide per-pool entry-axis metadata.
+map a packed pool on one endpoint to several pools on the other.
 
 ## Code Reading Order
 
@@ -336,13 +322,14 @@ not provide per-pool entry-axis metadata.
 08. [`../cache_inputs.py`](../cache_inputs.py): one-forward checkpoint copy
     payloads.
 09. [`state.py`](./state.py): state allocation and state-slot transitions.
-10. [`engine.py`](./engine.py): compatibility construction facades, block-cache
-    allocation lifetime, view construction, and movement.
+10. [`engine.py`](./engine.py): block-cache allocation lifetime, view
+    construction, and movement.
 
-Backend-specific layouts remain with their backend, for example
-[`backends/dlinfer/cache.py`](../../backends/dlinfer/cache.py). Avoid adding a
-generic manager, registry, or utility module; add a component only when it owns
-a complete decision or lifecycle.
+Backend-specific layout selection remains with each backend. For example,
+[`backends/dlinfer/cache.py`](../../backends/dlinfer/cache.py) selects the
+generic contiguous layouts required by dlinfer. Avoid adding a generic manager,
+registry, or utility module; add a component only when it owns a complete
+decision or lifecycle.
 
 ## Focused Tests
 

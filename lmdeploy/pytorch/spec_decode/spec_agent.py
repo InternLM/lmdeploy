@@ -18,6 +18,7 @@ from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDe
 from ..distributed import DistContext, get_dist_manager
 from ..engine.cache_engine import CacheEngine
 from ..engine.cache_engine.collector import collect_block_cache_requests
+from ..engine.cache_engine.plan import build_block_cache_plan
 from ..engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
 from ..engine.model_agent.agent import BatchedLogProbs
 from ..model_inputs import DPMeta, ModelInputs
@@ -234,18 +235,13 @@ class SpecModelAgent(BaseSpecModelAgent):
             if not isinstance(cache_request_model, torch.nn.Module):
                 cache_request_model = cache_request_model.get_model()
             request_collector = partial(collect_block_cache_requests, cache_request_model)
-            self.block_cache_plan = CacheEngine.build_cache_plan(
+            self.block_cache_plan = build_block_cache_plan(
                 self.model_config,
                 cache_config,
                 draft_tp,
                 request_collector=request_collector,
             )
-            return CacheEngine.get_logical_block_nbytes(
-                cache_config,
-                self.model_config,
-                draft_tp,
-                block_cache_plan=self.block_cache_plan,
-            )
+            return self.block_cache_plan.logical_block_nbytes
 
     def build_cache_engine(self, cache_stream: torch.cuda.Stream):
         """Build cache engine."""
@@ -253,10 +249,8 @@ class SpecModelAgent(BaseSpecModelAgent):
             with self.draft_context():
                 draft_tp = self.draft_dist_ctx.dist_config.attn_tp
                 self.cache_engine = CacheEngine(self.cache_config,
-                                                self.model_config,
                                                 rank=0 if draft_tp == 1 else self.dist_ctx.rank,
                                                 tp_rank=self.draft_dist_ctx.attn_tp_group.rank,
-                                                world_size=draft_tp,
                                                 cache_stream=cache_stream,
                                                 block_cache_plan=self.block_cache_plan)
 

@@ -24,7 +24,7 @@ _MLA_FP8_HEAD_DIM = 656
 # Cache payload descriptions and policy.
 
 
-def round_up(x: int, alignment: int) -> int:
+def _round_up(x: int, alignment: int) -> int:
     """Round up x to the nearest multiple of alignment."""
     return ((x + alignment - 1) // alignment) * alignment
 
@@ -39,41 +39,20 @@ class CacheDesc:
     def __post_init__(self):
         self.numel = math.prod(self.shape)
         self.size = self.numel * self.dtype.itemsize
-        self.aligned_size = round_up(self.size, self.alignment)
+        self.aligned_size = _round_up(self.size, self.alignment)
 
 
-def resolve_model_kv_cache_dtype(model_config: ModelConfig) -> torch.dtype:
-    """Resolve the model-selected KV-cache dtype before policy overrides."""
-    kv_cache_dtype = model_config.dtype
-    if model_config.use_mla_fp8_cache:
-        kv_cache_dtype = torch.float8_e4m3fn
-    elif model_config.mla_kv_cache_dtype == 'bfloat16':
-        kv_cache_dtype = torch.bfloat16
-    return kv_cache_dtype
-
-
-def apply_sparse_mla_cache_policy(model_config: ModelConfig, cache_config: CacheConfig) -> None:
-    """Apply an explicit sparse-MLA cache policy to the model config."""
-    if model_config.mla_index_topk is None or cache_config.quant_policy == QuantPolicy.NONE:
-        return
-    if cache_config.quant_policy == QuantPolicy.FP8:
-        model_config.mla_kv_cache_dtype = 'fp8_ds_mla'
-        return
-    raise ValueError(f'Sparse MLA does not support quant_policy={cache_config.quant_policy}. '
-                     'Use none/0 for BF16 or fp8/16 for FP8.')
-
-
-def is_fp8_cache_policy(quant_policy: QuantPolicy) -> bool:
-    """Return whether a quantization policy stores KV payload as torch FP8."""
-    return quant_policy in _FP8_CACHE_DTYPES
-
-
-def resolve_fp8_cache_dtype(quant_policy: QuantPolicy) -> torch.dtype:
-    """Return the tensor dtype selected by an FP8 KV-cache policy."""
-    try:
+def _resolve_kv_cache_dtype(model_config: ModelConfig, quant_policy: QuantPolicy) -> torch.dtype:
+    """Resolve the storage dtype for standard key and value caches."""
+    if quant_policy in _FP8_CACHE_DTYPES:
         return _FP8_CACHE_DTYPES[quant_policy]
-    except KeyError as e:
-        raise ValueError(f'Not an FP8 quant policy: {quant_policy}') from e
+    if quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
+        return torch.uint8
+    if model_config.use_mla_fp8_cache:
+        return torch.float8_e4m3fn
+    if model_config.mla_kv_cache_dtype == 'bfloat16':
+        return torch.bfloat16
+    return model_config.dtype
 
 
 def _resolve_key_block_shape(model_config: ModelConfig,
@@ -136,11 +115,7 @@ def build_k_cache_desc(model_config: ModelConfig, cache_config: CacheConfig, wor
         world_size=world_size,
         quant_policy=cache_config.quant_policy,
     )
-    dtype = resolve_model_kv_cache_dtype(model_config)
-    if is_fp8_cache_policy(cache_config.quant_policy):
-        dtype = resolve_fp8_cache_dtype(cache_config.quant_policy)
-    elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
-        dtype = torch.uint8
+    dtype = _resolve_kv_cache_dtype(model_config, cache_config.quant_policy)
     return CacheDesc(shape=list(shape), dtype=dtype)
 
 
@@ -156,18 +131,14 @@ def build_v_cache_desc(model_config: ModelConfig, cache_config: CacheConfig, wor
         world_size=world_size,
         quant_policy=cache_config.quant_policy,
     )
-    dtype = resolve_model_kv_cache_dtype(model_config)
-    if is_fp8_cache_policy(cache_config.quant_policy):
-        dtype = resolve_fp8_cache_dtype(cache_config.quant_policy)
-    elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
-        dtype = torch.uint8
+    dtype = _resolve_kv_cache_dtype(model_config, cache_config.quant_policy)
     return CacheDesc(shape=list(shape), dtype=dtype)
 
 
 def build_quant_cache_descs(k_cache_desc: CacheDesc, v_cache_desc: CacheDesc, model_config: ModelConfig,
                             cache_config: CacheConfig) -> list[CacheDesc]:
     """Build auxiliary scale/zero cache descriptions when required."""
-    if cache_config.quant_policy == QuantPolicy.NONE or is_fp8_cache_policy(cache_config.quant_policy):
+    if cache_config.quant_policy == QuantPolicy.NONE or cache_config.quant_policy in _FP8_CACHE_DTYPES:
         return []
 
     dtype = model_config.dtype
@@ -363,20 +334,11 @@ def build_state_cache_tensor_specs(
         for idx, (shape, dtype) in enumerate(state_shapes))
 
 
-def build_custom_cache_descs(model_config: ModelConfig, cache_config: CacheConfig) -> list[CacheDesc]:
-    """Build configured anonymous custom-cache descriptions."""
-    block_size = cache_config.kernel_block_size
-    return [
-        CacheDesc(shape=(block_size, *shape), dtype=dtype)
-        for shape, dtype in model_config.cache_shapes
-    ]
-
-
 def build_model_block_cache_tensor_specs(
         model_config: ModelConfig,
         cache_config: CacheConfig,
         world_size: int,
-        block_requests: Sequence[BlockCacheRequest] | None = None) -> tuple[CacheTensorSpec, ...]:
+        block_requests: Sequence[BlockCacheRequest] = ()) -> tuple[CacheTensorSpec, ...]:
     """Build ordered block-cache tensor specs from model and operator
     inputs."""
     tensor_specs = []
@@ -390,10 +352,5 @@ def build_model_block_cache_tensor_specs(
             CacheTensorSpec(name=f'quant_{index}', desc=desc)
             for index, desc in enumerate(quant_cache_descs))
 
-    if block_requests is not None:
-        tensor_specs.extend(build_block_cache_tensor_specs_from_requests(block_requests))
-    else:
-        tensor_specs.extend(
-            CacheTensorSpec(name=f'custom_{index}', desc=desc)
-            for index, desc in enumerate(build_custom_cache_descs(model_config, cache_config)))
+    tensor_specs.extend(build_block_cache_tensor_specs_from_requests(block_requests))
     return tuple(tensor_specs)

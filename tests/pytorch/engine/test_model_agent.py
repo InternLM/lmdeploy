@@ -174,7 +174,7 @@ def test_model_agent_builds_and_retains_worker_local_cache_plans(graph_wrapped):
 
     assert sizes == (2048, 128, 64)
     assert agent._cache_plan_block_nbytes == (2048, 128)
-    assert agent.block_cache_plan.cache_names == ('operator_cache', )
+    assert tuple(spec.name for spec in agent.block_cache_plan.tensor_specs) == ('operator_cache', )
     assert agent.block_cache_plan.tensor_specs[0].consumer_rows == (0, 1)
     assert [requester.cache_binding.consumer_row for requester in patched_model.requesters] == [0, 1]
 
@@ -231,7 +231,7 @@ def test_spec_model_agent_collects_cache_requests_from_graph_runner():
     block_nbytes = agent.build_cache_plan(cache_config)
 
     assert block_nbytes == 1024
-    assert agent.block_cache_plan.cache_names == ('draft_cache', )
+    assert tuple(spec.name for spec in agent.block_cache_plan.tensor_specs) == ('draft_cache', )
     assert draft_model.requester.cache_binding.consumer_row == 0
 
 
@@ -363,7 +363,6 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
             return {'hidden_states': torch.tensor([0])}
 
     class _CacheEngine:
-        model_config = object()
         cache_config = SimpleNamespace(quant_policy=0)
         gpu_cache = object()
         block_caches = {}
@@ -397,6 +396,7 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
 
     agent_module.model_forward(_Model(),
                                inputs,
+                               object(),
                                _CacheEngine(),
                                _StateCacheEngine(),
                                stream=object(),

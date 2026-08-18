@@ -33,7 +33,7 @@ def test_block_cache_plan_owns_geometry_layout_and_access_metadata():
 
     assert allocations == [(6, 'cpu'), (2, 'meta')]
     assert [tuple(cache.shape) for cache in allocation.tensor_views] == [(2, 6, 3), (1, 6, 2)]
-    assert plan.cache_names == ('first', 'second')
+    assert tuple(spec.name for spec in plan.tensor_specs) == ('first', 'second')
     assert plan.model_cache_indices == ()
     assert block_nbytes == 2 * 2 * 16 + 1 * 2 * 8
 
@@ -54,7 +54,7 @@ def test_block_cache_plan_validates_heterogeneous_consumer_rows():
                           layout=RowBlockCacheLayout(tensor_specs),
                           kernel_blocks_per_logical_block=1)
 
-    assert plan.cache_names == ('index', 'index')
+    assert tuple(spec.name for spec in plan.tensor_specs) == ('index', 'index')
     with pytest.raises(ValueError, match='row 0 belongs to multiple tensor specs'):
         duplicate = (
             CacheTensorSpec('index', CacheDesc(shape=[3], dtype=torch.float32), consumer_rows=(0, )),

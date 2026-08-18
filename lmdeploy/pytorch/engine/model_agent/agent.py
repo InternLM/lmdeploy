@@ -23,6 +23,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.cache_engine.collector import collect_block_cache_requests
+from lmdeploy.pytorch.engine.cache_engine.plan import build_block_cache_plan
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
@@ -195,6 +196,7 @@ def _save_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInp
 def model_forward(
     model: torch.nn.Module,
     inputs: ModelInputs,
+    model_config: ModelConfig,
     cache_engine: CacheEngine,
     state_cache_engine: StateCacheEngine,
     stream: torch.cuda.Stream = None,
@@ -207,7 +209,7 @@ def model_forward(
         ctx_mgr = model.ctx_mgr
         context = ctx_mgr.build_context(
             inputs=inputs,
-            model_config=cache_engine.model_config,
+            model_config=model_config,
             cache_config=cache_engine.cache_config,
             kv_caches=cache_engine.gpu_cache,
             state_caches=state_cache_engine.state_caches,
@@ -1232,18 +1234,13 @@ class BaseModelAgent:
             if not isinstance(cache_request_model, torch.nn.Module):
                 cache_request_model = cache_request_model.get_model()
             request_collector = partial(collect_block_cache_requests, cache_request_model)
-            self.block_cache_plan = CacheEngine.build_cache_plan(
+            self.block_cache_plan = build_block_cache_plan(
                 self.model_config,
                 cache_config,
                 tp,
                 request_collector=request_collector,
             )
-            target_nbytes = CacheEngine.get_logical_block_nbytes(
-                cache_config,
-                self.model_config,
-                tp,
-                block_cache_plan=self.block_cache_plan,
-            )
+            target_nbytes = self.block_cache_plan.logical_block_nbytes
             spec_nbytes = self.spec_agent.build_cache_plan(spec_cache_config)
             memory_nbytes = 0
             if self.memdecode_agent is not None:
@@ -1268,14 +1265,10 @@ class BaseModelAgent:
         """Build cache engine."""
         with self.all_context():
             dist_ctx = get_dist_manager().current_context()
-            dist_cfg = self.dist_config
-            tp = dist_cfg.attn_tp
 
             self.cache_engine = CacheEngine(self.cache_config,
-                                            self.model_config,
                                             rank=self.rank,
                                             tp_rank=dist_ctx.attn_tp_group.rank,
-                                            world_size=tp,
                                             cache_stream=self.cache_stream,
                                             block_cache_plan=self.block_cache_plan)
             self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
@@ -1289,6 +1282,7 @@ class BaseModelAgent:
         output = model_forward(
             self.patched_model,
             inputs,
+            self.model_config,
             self.cache_engine,
             state_cache_engine=self.state_cache_engine,
             stream=self.stream,

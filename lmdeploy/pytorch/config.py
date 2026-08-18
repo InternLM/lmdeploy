@@ -401,9 +401,6 @@ class ModelConfig:
     dllm_mask_token: int = 0
     dllm_block_length: int = None
 
-    # Added for deepseekv3.2 nsa index
-    # caches would be added after kv cache
-    cache_shapes: list[tuple[list[int], torch.dtype]] = field(default_factory=list)
     # added for qwen3_next
     # could used for any SSM model.
     states_shapes: list[tuple[tuple[int], torch.dtype]] = field(default_factory=list)

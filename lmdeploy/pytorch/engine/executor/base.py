@@ -196,12 +196,6 @@ class ExecutorBase:
         ]
         return min(num_gpu_blocks)
 
-    def _get_spec_attn_tp(self) -> int:
-        """Get draft/spec attention TP."""
-        specdecode_config = getattr(self, 'specdecode_config', None)
-        spec_dist_config = getattr(specdecode_config, 'dist_config', None)
-        return getattr(spec_dist_config, 'attn_tp', 1)
-
     @staticmethod
     def _get_rank_cache_block_sizes(cache_block_sizes: list[_WorkerCachePlanSizes]) -> list[int]:
         """Get per-rank KV cache block sizes."""

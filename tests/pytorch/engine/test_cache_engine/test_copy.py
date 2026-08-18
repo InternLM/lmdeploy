@@ -140,17 +140,6 @@ def test_cache_engine_builds_block_copy_from_retained_allocation(monkeypatch):
     assert cache_engine._block_copy is block_copy
 
 
-def test_cache_engine_skips_block_copy_for_external_allocation(monkeypatch):
-    cache_engine = object.__new__(CacheEngine)
-    cache_engine.gpu_allocation = None
-    monkeypatch.setattr(cache_engine_module, 'get_backend',
-                        lambda: (_ for _ in ()).throw(AssertionError('external allocation must not request backend')))
-
-    cache_engine._build_block_copy()
-
-    assert cache_engine._block_copy is None
-
-
 def test_cache_engine_copy_logical_blocks_dispatches_device_plan():
     block_copy = _RecordingBlockCopy()
     cache_engine = object.__new__(CacheEngine)
@@ -185,14 +174,6 @@ def test_cache_engine_copy_logical_blocks_rejects_invalid_plan(copy_plan, error_
 
     with pytest.raises(error_type, match=message):
         cache_engine.copy_logical_blocks(copy_plan)
-
-
-def test_cache_engine_copy_logical_blocks_requires_native_allocation():
-    cache_engine = object.__new__(CacheEngine)
-    cache_engine._block_copy = None
-
-    with pytest.raises(RuntimeError, match='native cache allocation'):
-        cache_engine.copy_logical_blocks(torch.empty((2, 0), dtype=torch.long))
 
 
 def test_cuda_backend_selects_cuda_cache_primitives():

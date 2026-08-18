@@ -4,12 +4,13 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.messages import PytorchEngineConfig, QuantPolicy
 from lmdeploy.pytorch.config import CacheConfig, StateCacheSpec
 from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as update_deepseek_v4_cache_config
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
+from lmdeploy.pytorch.engine.executor import _finalize_sparse_mla_cache_policy
 from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _WorkerCachePlanSizes
 from lmdeploy.pytorch.engine.executor.uni_executor import UniExecutor
 
@@ -41,6 +42,26 @@ class _RecordingExecutor(ExecutorBase):
 
     def warmup(self):
         self.calls.append('warmup')
+
+
+def test_finalize_sparse_mla_cache_policy_before_executor_build():
+    model_config = SimpleNamespace(mla_index_topk=2048, mla_kv_cache_dtype='bfloat16')
+    cache_config = SimpleNamespace(quant_policy=QuantPolicy.FP8)
+
+    _finalize_sparse_mla_cache_policy([model_config], cache_config)
+
+    assert model_config.mla_kv_cache_dtype == 'fp8_ds_mla'
+    assert cache_config.quant_policy == QuantPolicy.NONE
+
+
+@pytest.mark.parametrize('quant_policy',
+                         [QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.FP8_E5M2, QuantPolicy.TURBO_QUANT])
+def test_finalize_sparse_mla_cache_policy_rejects_other_quantization(quant_policy):
+    model_config = SimpleNamespace(mla_index_topk=2048, mla_kv_cache_dtype='bfloat16')
+    cache_config = SimpleNamespace(quant_policy=quant_policy)
+
+    with pytest.raises(ValueError, match='Sparse MLA does not support quant_policy'):
+        _finalize_sparse_mla_cache_policy([model_config], cache_config)
 
 
 def test_init_warms_up_model_by_default():

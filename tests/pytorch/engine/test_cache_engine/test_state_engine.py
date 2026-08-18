@@ -9,16 +9,24 @@ import lmdeploy.pytorch.engine.cache_engine.state as state_module
 from lmdeploy.pytorch.config import CacheConfig, StateCacheSpec
 from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
 from lmdeploy.pytorch.engine.cache_engine.layout import CacheAllocation, CachePool
+from lmdeploy.pytorch.engine.cache_engine.schema import build_state_cache_tensor_specs
+
+
+def _allocate_test_state_caches(num_caches: int,
+                                state_shapes,
+                                device: torch.device | str = 'cpu',
+                                state_specs=None) -> CacheAllocation:
+    tensor_specs = build_state_cache_tensor_specs(state_shapes, state_specs=state_specs)
+    return state_module._allocate_state_caches(tensor_specs, num_caches=num_caches, device=device)
 
 
 def test_layered_state_cache_specs_do_not_require_total_layer_count():
     state_specs = [StateCacheSpec('subset', (96, ), torch.float32, layer_ids=[1, 9])]
     state_shapes = [(spec.shape, spec.dtype) for spec in state_specs]
 
-    allocation = StateCacheEngine.allocate_caches(num_caches=2,
-                                                  state_shapes=state_shapes,
-                                                  state_specs=state_specs,
-                                                  device='cpu')
+    allocation = _allocate_test_state_caches(num_caches=2,
+                                             state_shapes=state_shapes,
+                                             state_specs=state_specs)
     mem_pool = allocation.pools[0].tensor
     caches = allocation.tensor_views
 
@@ -26,40 +34,6 @@ def test_layered_state_cache_specs_do_not_require_total_layer_count():
     assert tuple(mem_pool.shape) == (2, 768)
     assert tuple(caches[0].shape) == (2, 2, 96)
     assert StateCacheEngine.get_state_slot_nbytes(state_shapes, state_specs=state_specs) == 768
-
-
-def test_state_cache_engine_accepts_external_allocation_tuple(monkeypatch):
-    mem_pool = torch.empty((2, 8), dtype=torch.uint8)
-    caches = [torch.empty((2, 2), dtype=torch.float32)]
-
-    @staticmethod
-    def external_allocate(num_caches, state_shapes, device):
-        return mem_pool, caches
-
-    monkeypatch.setattr(StateCacheEngine, 'allocate_caches', external_allocate)
-    cache_config = CacheConfig(max_batches=1,
-                               block_size=64,
-                               num_cpu_blocks=0,
-                               num_gpu_blocks=0,
-                               num_state_caches=2,
-                               states_shapes=[((2, ), torch.float32)])
-
-    cache_engine = StateCacheEngine(cache_config)
-
-    assert cache_engine.allocation is None
-    assert type(cache_engine.named_state_caches) is dict
-    assert all(actual is expected for actual, expected in zip(cache_engine.state_caches, caches))
-    assert cache_engine._slot_tensors[0][0] is caches[0]
-    assert cache_engine._slot_tensors[0][1] == 0
-
-    caches[0].fill_(1)
-    cache_engine.zero_slots(torch.tensor([1]), torch.tensor([True]))
-    assert torch.count_nonzero(caches[0][1]) == 0
-    caches[0][0].fill_(3)
-    cache_engine.copy_slots(0, 1)
-    assert torch.equal(caches[0][1], caches[0][0])
-
-    assert StateCacheEngine.get_state_slot_nbytes(cache_config.states_shapes) == mem_pool.numel()
 
 
 def _make_multi_pool_state_allocation(num_caches: int, device: torch.device | str = 'cpu'):
@@ -79,7 +53,7 @@ def test_state_cache_engine_accepts_multi_pool_layout(monkeypatch):
     ops_backend = SimpleNamespace(get_cache_backend=lambda: cache_backend)
     monkeypatch.setattr(state_module, 'get_backend', lambda: ops_backend)
 
-    allocation = StateCacheEngine.allocate_caches(num_caches=2, state_shapes=[], device='cpu')
+    allocation = _allocate_test_state_caches(num_caches=2, state_shapes=[])
 
     assert [pool.entry_axis for pool in allocation.pools] == [0, 1]
     assert allocation.nbytes == 2 * (2 * 4 + 3 * 2 * 2)
@@ -89,17 +63,17 @@ def test_state_cache_engine_accepts_multi_pool_layout(monkeypatch):
 def test_layer_scoped_state_cache_specs_reject_invalid_layer_ids():
     negative_layer = [StateCacheSpec('bad', (1, ), torch.float32, layer_ids=[-1])]
     with pytest.raises(ValueError, match='non-negative'):
-        StateCacheEngine.allocate_caches(num_caches=1,
-                                         state_shapes=[((1, ), torch.float32)],
-                                         state_specs=negative_layer,
-                                         device='meta')
+        _allocate_test_state_caches(num_caches=1,
+                                    state_shapes=[((1, ), torch.float32)],
+                                    state_specs=negative_layer,
+                                    device='meta')
 
     empty_state_layers = [StateCacheSpec('empty', (1, ), torch.float32, layer_ids=[])]
     with pytest.raises(ValueError, match='must not be empty'):
-        StateCacheEngine.allocate_caches(num_caches=1,
-                                         state_shapes=[((1, ), torch.float32)],
-                                         state_specs=empty_state_layers,
-                                         device='meta')
+        _allocate_test_state_caches(num_caches=1,
+                                    state_shapes=[((1, ), torch.float32)],
+                                    state_specs=empty_state_layers,
+                                    device='meta')
 
 
 def _make_state_cache_engine(num_caches: int = 4):
@@ -110,14 +84,10 @@ def _make_state_cache_engine(num_caches: int = 4):
                                             num_gpu_blocks=0,
                                             num_state_caches=num_caches,
                                             states_shapes=[((2, 3), torch.float32), ((2, ), torch.float16)])
-    cache_engine.allocation = StateCacheEngine.allocate_caches(
-        num_caches=num_caches,
-        state_shapes=cache_engine.cache_config.states_shapes,
-        device='cpu',
-    )
+    cache_engine.allocation = _allocate_test_state_caches(num_caches=num_caches,
+                                                          state_shapes=cache_engine.cache_config.states_shapes)
     cache_engine._cache_tensors = list(cache_engine.allocation.tensor_views)
-    cache_engine._slot_tensors = StateCacheEngine._resolve_slot_tensors(cache_engine.allocation,
-                                                                        cache_engine._cache_tensors)
+    cache_engine._slot_tensors = tuple((pool.tensor, pool.entry_axis) for pool in cache_engine.allocation.pools)
     return cache_engine
 
 
@@ -131,8 +101,7 @@ def _make_multi_pool_state_cache_engine(num_caches: int = 4):
                                             states_shapes=[])
     cache_engine.allocation = _make_multi_pool_state_allocation(num_caches)
     cache_engine._cache_tensors = list(cache_engine.allocation.tensor_views)
-    cache_engine._slot_tensors = StateCacheEngine._resolve_slot_tensors(cache_engine.allocation,
-                                                                        cache_engine._cache_tensors)
+    cache_engine._slot_tensors = tuple((pool.tensor, pool.entry_axis) for pool in cache_engine.allocation.pools)
     return cache_engine
 
 

@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Block-cache plan construction and its finalized allocation recipe."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import torch
@@ -13,6 +13,7 @@ from .layout import BlockCacheLayout, CacheAllocation
 from .schema import (
     BlockCacheGeometry,
     BlockCacheRequest,
+    BlockCacheRequestContext,
     CacheTensorSpec,
     build_model_block_cache_tensor_specs,
 )
@@ -65,11 +66,6 @@ class BlockCachePlan:
                 raise ValueError(f'Block cache {name} consumer rows must be contiguous from zero.')
 
     @property
-    def cache_names(self) -> tuple[str, ...]:
-        """Return tensor names in model-facing cache order."""
-        return tuple(spec.name for spec in self.tensor_specs)
-
-    @property
     def model_cache_indices(self) -> tuple[int, ...]:
         """Return tensors exposed through the per-layer model cache."""
         return tuple(index for index, spec in enumerate(self.tensor_specs) if spec.consumer_rows is None)
@@ -90,10 +86,17 @@ def build_block_cache_plan(
     model_config: ModelConfig,
     cache_config: CacheConfig,
     world_size: int,
-    geometry: BlockCacheGeometry,
-    block_requests: Sequence[BlockCacheRequest] | None = None,
+    request_collector: Callable[[BlockCacheRequestContext], Sequence[BlockCacheRequest]] | None = None,
 ) -> BlockCachePlan:
-    """Build one plan from finalized model, cache, and request inputs."""
+    """Finalize one worker-local block-cache plan."""
+    geometry = BlockCacheGeometry(logical_block_size=cache_config.block_size,
+                                  kernel_block_size=cache_config.kernel_block_size)
+
+    block_requests = ()
+    if request_collector is not None:
+        request_context = BlockCacheRequestContext(geometry=geometry)
+        block_requests = tuple(request_collector(request_context))
+
     tensor_specs = build_model_block_cache_tensor_specs(model_config,
                                                         cache_config,
                                                         world_size,

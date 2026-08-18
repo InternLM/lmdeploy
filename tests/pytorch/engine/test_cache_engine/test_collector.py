@@ -26,11 +26,11 @@ class _CacheRequester(nn.Module):
         self.bindings.append(binding)
 
 
-def test_collect_block_cache_requests_distinguishes_absent_and_empty_requesters():
+def test_collect_block_cache_requests_returns_empty_without_requests():
     geometry = BlockCacheGeometry(logical_block_size=64, kernel_block_size=64)
     context = BlockCacheRequestContext(geometry=geometry)
 
-    assert collect_block_cache_requests(nn.Linear(2, 2), context) is None
+    assert collect_block_cache_requests(nn.Linear(2, 2), context) == ()
     assert collect_block_cache_requests(_CacheRequester(), context) == ()
 
 
