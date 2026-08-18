@@ -46,10 +46,8 @@ def check_request(request: ChatCompletionRequest, server_context) -> str:
 
     # Validate input_ids and image_data constraints.
     # messages has higher priority. input_ids and image_data are only used when
-    # messages is empty (None, '', or []). image_data requires input_ids.
-    messages_empty = (request.messages is None or request.messages == ''
-                      or (isinstance(request.messages, list)
-                          and len(request.messages) == 0))
+    # messages is empty (None or []). image_data requires input_ids.
+    messages_empty = request.messages is None or len(request.messages) == 0
     if not messages_empty:
         # messages is active — input_ids and image_data must not be set
         if request.input_ids is not None:

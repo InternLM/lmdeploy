@@ -172,7 +172,7 @@ class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
 
-    messages: str | list[dict[str, Any]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])
+    messages: list[dict[str, Any]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])
     temperature: float | None = None
     top_p: float | None = None
     tools: list[Tool] | None = Field(default=None, examples=[None])
@@ -204,7 +204,6 @@ class ChatCompletionRequest(BaseModel):
     reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None
     response_format: ResponseFormat | None = Field(default=None, examples=[None])
     # additional argument of lmdeploy
-    do_preprocess: bool | None = True
     repetition_penalty: float | None = None
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)

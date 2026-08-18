@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from lmdeploy.serve.openai.responses import ResponsesRequest
 
 
@@ -70,6 +72,28 @@ def test_responses_tool_choice_none_does_not_require_tool_parser(
 
     assert response['output_text'] == 'ok'
     assert context.async_engine.preprocess_kwargs['tools'] is None
+
+
+def test_responses_tools_require_tool_parser(responses_endpoint,
+                                             fake_raw_request):
+    endpoint, _ = responses_endpoint
+    response = asyncio.run(
+        endpoint(
+            ResponsesRequest(
+                model='fake-model',
+                input='Hi',
+                tools=[{
+                    'type': 'function',
+                    'name': 'search',
+                }],
+            ),
+            fake_raw_request,
+        ))
+
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert body['error']['param'] == 'tools'
+    assert '--tool-call-parser' in body['error']['message']
 
 
 def test_responses_non_streaming_cleans_up_session(
@@ -194,6 +218,54 @@ def test_responses_forwards_repetition_penalty(responses_endpoint,
         'gen_config'].repetition_penalty == 1.1
 
 
+def test_responses_preserves_unspecified_generation_bool_defaults(
+        responses_endpoint, fake_raw_request):
+    endpoint, context = responses_endpoint
+    context.default_gen_config = {
+        'ignore_eos': True,
+        'skip_special_tokens': False,
+        'include_stop_str_in_output': True,
+    }
+
+    response = asyncio.run(
+        endpoint(ResponsesRequest(model='fake-model', input='Hi'),
+                 fake_raw_request))
+
+    gen_config = context.async_engine.preprocess_kwargs['gen_config']
+    assert response['output_text'] == 'ok'
+    assert gen_config.ignore_eos is True
+    assert gen_config.skip_special_tokens is False
+    assert gen_config.include_stop_str_in_output is True
+
+
+def test_responses_forwards_explicit_generation_bool_fields(
+        responses_endpoint, fake_raw_request):
+    endpoint, context = responses_endpoint
+    context.default_gen_config = {
+        'ignore_eos': True,
+        'skip_special_tokens': False,
+        'include_stop_str_in_output': True,
+    }
+
+    response = asyncio.run(
+        endpoint(
+            ResponsesRequest(
+                model='fake-model',
+                input='Hi',
+                ignore_eos=False,
+                skip_special_tokens=True,
+                include_stop_str_in_output=False,
+            ),
+            fake_raw_request,
+        ))
+
+    gen_config = context.async_engine.preprocess_kwargs['gen_config']
+    assert response['output_text'] == 'ok'
+    assert gen_config.ignore_eos is False
+    assert gen_config.skip_special_tokens is True
+    assert gen_config.include_stop_str_in_output is False
+
+
 def test_responses_parser_request_uses_max_completion_tokens(
         responses_endpoint, fake_raw_request, passthrough_response_parser_cls):
     endpoint, _ = responses_endpoint
@@ -204,3 +276,21 @@ def test_responses_parser_request_uses_max_completion_tokens(
     asyncio.run(endpoint(request, fake_raw_request))
 
     assert passthrough_response_parser_cls.last_request.max_completion_tokens == 17
+
+
+def test_responses_engine_error_is_not_returned_as_bad_request(
+        responses_endpoint, fake_raw_request):
+    endpoint, context = responses_endpoint
+
+    def _generate(_request, **kwargs):
+        async def _generator():
+            if False:
+                yield None
+            raise RuntimeError('engine exploded')
+
+        return _generator()
+
+    context.async_engine.generate = _generate
+
+    with pytest.raises(RuntimeError, match='engine exploded'):
+        asyncio.run(endpoint(ResponsesRequest(model='fake-model', input='Hi'), fake_raw_request))

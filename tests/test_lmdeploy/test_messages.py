@@ -22,6 +22,11 @@ def test_chat_completion_request_repetition_ngram_ge_zero():
         )
 
 
+def test_chat_completion_request_messages_must_be_list():
+    with pytest.raises(ValidationError):
+        ChatCompletionRequest(model='m', messages='hi')
+
+
 def test_engine_generation_config():
     tokenizer = Tokenizer('internlm/internlm2-chat-7b', trust_remote_code=True)
     config = GenerationConfig(n=3, stop_words=['<|im_end|>'])
