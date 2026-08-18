@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, TypeVar
 
 import shortuuid
 
@@ -23,6 +23,8 @@ from .protocol import (
     ToolChoiceToolParam,
     ToolParam,
 )
+
+_MessageT = TypeVar('_MessageT', bound=dict[str, Any])
 
 
 def get_model_list(server_context) -> list[str]:
@@ -236,20 +238,24 @@ def _convert_system_message(content: str | list[ContentBlockParam]) -> list[dict
     return [dict(role='system', content=system_text)]
 
 
-def _merge_system_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Move system messages to the front and concatenate their content."""
+def _merge_system_messages(messages: list[_MessageT]) -> list[_MessageT]:
+    """Move system messages to the front while preserving the message type."""
 
     system_parts: list[str] = []
-    non_system_messages: list[dict[str, Any]] = []
+    system_message: _MessageT | None = None
+    non_system_messages: list[_MessageT] = []
     for message in messages:
         if message['role'] == 'system':
+            if system_message is None:
+                system_message = message
             system_parts.append(message['content'])
         else:
             non_system_messages.append(message)
 
-    if not system_parts:
+    if system_message is None:
         return non_system_messages
-    return [dict(role='system', content=''.join(system_parts)), *non_system_messages]
+    system_message['content'] = ''.join(system_parts)
+    return [system_message, *non_system_messages]
 
 
 def _convert_user_tool_result(block: ContentBlockParam | dict[str, Any]) -> list[dict[str, Any]]:
@@ -387,7 +393,7 @@ def to_lmdeploy_messages(
 ) -> list[dict[str, str]]:
     """Convert Anthropic request messages into LMDeploy chat messages."""
 
-    lm_messages: list[dict[str, Any]] = []
+    lm_messages: list[dict[str, str]] = []
     if request.system is not None:
         lm_messages.extend(_convert_system_message(request.system))
     for idx, message in enumerate(request.messages):
