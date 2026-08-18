@@ -91,7 +91,7 @@ class FlashInferAllReduce:
 
     def supports(self, dtype: torch.dtype) -> bool:
         """Whether this group can handle the given dtype."""
-        return dtype == torch.bfloat16 and self.is_available()
+        return dtype in (torch.float16, torch.bfloat16) and self.is_available()
 
     def _get_workspace(self, input: torch.Tensor):
         hidden_dim = input.size(-1)
@@ -142,7 +142,7 @@ class FlashInferAllReduce:
                                            weight: torch.Tensor,
                                            eps: float):
         """Fuse all-reduce, residual addition and RMSNorm when supported."""
-        if not self.supports(input.dtype):
+        if weight.dtype != input.dtype or not self.supports(input.dtype):
             return None
         input_2d = input.flatten(0, -2)
         residual_2d = residual.flatten(0, -2)

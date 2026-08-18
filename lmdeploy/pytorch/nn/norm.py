@@ -69,7 +69,6 @@ class RMSNorm(nn.Module):
             self.weight.weight_loader = self.weight_loader
         self.align = align
         self.eps = eps
-        self._cast_weight = None
         self._all_reduce_group = None
         self._fuse_all_reduce = False
         if all_reduce_group is not None and self.can_handle_all_reduce(all_reduce_group):
@@ -81,18 +80,6 @@ class RMSNorm(nn.Module):
     def can_handle_all_reduce(layer_type: str) -> bool:
         """Whether this norm can consume a pending all-reduce."""
         return get_dist_group(layer_type).supports_optimized_all_reduce()
-
-    def _get_cast_weight(self, dtype: torch.dtype):
-        """Return a cached weight cast for dtype-constrained fused kernels."""
-        if self.weight.dtype == dtype:
-            return self.weight
-        if self._cast_weight is None or self._cast_weight.dtype != dtype:
-            self._cast_weight = self.weight.to(dtype)
-        return self._cast_weight
-
-    def update_weights(self):
-        """Invalidate the fused-kernel weight after an online update."""
-        self._cast_weight = None
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
@@ -117,7 +104,7 @@ class RMSNorm(nn.Module):
                 output = self._all_reduce_group.try_fused_all_reduce_residual_rms_norm(
                     input=x,
                     residual=residual,
-                    weight=self._get_cast_weight(x.dtype),
+                    weight=self.weight,
                     eps=self.eps,
                 )
                 if output is not None:

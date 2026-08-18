@@ -127,7 +127,12 @@ def test_rms_norm_fuses_pending_all_reduce(monkeypatch):
     residual = torch.ones_like(input)
 
     assert norm(input, residual) is fused_output
-    group.try_fused_all_reduce_residual_rms_norm.assert_called_once()
+    group.try_fused_all_reduce_residual_rms_norm.assert_called_once_with(
+        input=input,
+        residual=residual,
+        weight=norm.weight,
+        eps=norm.eps,
+    )
     group.all_reduce_.assert_not_called()
     impl.forward.assert_not_called()
 
@@ -185,6 +190,36 @@ def test_flashinfer_allreduce_in_place():
         trigger_completion_at_end=True,
         use_oneshot=True,
     )
+
+
+def test_flashinfer_allreduce_supports_16bit_floating_dtypes():
+    from lmdeploy.pytorch.backends.cuda.flashinfer_allreduce import FlashInferAllReduce
+
+    flashinfer = FlashInferAllReduce.__new__(FlashInferAllReduce)
+    flashinfer.is_available = Mock(return_value=True)
+
+    assert flashinfer.supports(torch.float16)
+    assert flashinfer.supports(torch.bfloat16)
+    assert not flashinfer.supports(torch.float32)
+
+
+def test_flashinfer_fused_allreduce_rejects_mixed_weight_dtype():
+    from lmdeploy.pytorch.backends.cuda.flashinfer_allreduce import FlashInferAllReduce
+
+    flashinfer = FlashInferAllReduce.__new__(FlashInferAllReduce)
+    flashinfer.supports = Mock(return_value=True)
+    flashinfer._comm = Mock()
+    input = torch.ones(2, 4, dtype=torch.bfloat16)
+
+    output = flashinfer.fused_all_reduce_residual_rms_norm(
+        input=input,
+        residual=torch.ones_like(input),
+        weight=torch.ones(4, dtype=torch.float32),
+        eps=1e-6,
+    )
+
+    assert output is None
+    flashinfer._comm.allreduce_fusion.assert_not_called()
 
 
 def test_symm_mem_allreduce_selects_group_algorithm(monkeypatch):
