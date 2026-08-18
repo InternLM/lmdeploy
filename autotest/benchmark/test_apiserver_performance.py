@@ -1,7 +1,6 @@
 import pytest
 import utils.constant as constant
 from utils.benchmark_utils import restful_profile, restful_test
-from utils.config_utils import get_func_config_list
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.pytest_layout_utils import (
     DISTRIBUTED_DP_EP_EQUAL_LAYOUTS,

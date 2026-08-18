@@ -1,6 +1,7 @@
 import pytest
 from utils.benchmark_utils import throughput_test
-from utils.config_utils import get_func_config_list, get_workerid
+from utils.config_utils import get_case_str_by_config, get_func_config_list, get_workerid
+from utils.pytest_layout_utils import LOCAL_TP_LAYOUTS, layout_mark
 
 TURBOMIND_LAYOUTS = LOCAL_TP_LAYOUTS[:4]
 PYTORCH_LAYOUTS = LOCAL_TP_LAYOUTS
@@ -22,7 +23,6 @@ def _filtered_multi_backend_params():
                 continue
             marks = [layout_mark(layout), backend_mark, pytest.mark.flaky(reruns=0)]
             for run_config in configs:
-                from utils.config_utils import get_case_str_by_config
                 rows.append(
                     pytest.param(
                         run_config,

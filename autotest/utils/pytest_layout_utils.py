@@ -15,7 +15,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 
 import pytest
-
 from utils.config_utils import get_case_str_by_config, get_func_config_list
 
 LOCAL_TP_LAYOUTS: tuple[dict[str, int], ...] = (
@@ -87,7 +86,8 @@ def build_multi_backend_layout_params(
     param_marks: Iterable = (),
     skip_empty_layouts: bool = True,
 ) -> list:
-    """Build layout params for multiple backends; each row carries a backend mark."""
+    """Build layout params for multiple backends; each row carries a backend
+    mark."""
     rows: list = []
     for backend, layouts in specs:
         backend_mark = getattr(pytest.mark, backend)
@@ -156,7 +156,8 @@ def build_eval_stage_params(
     param_marks: Iterable = (),
     skip_empty_layouts: bool = True,
 ) -> list:
-    """Build ``(test_type, run_config)`` params with layout / infer|eval / backend marks."""
+    """Build ``(test_type, run_config)`` params with layout / infer|eval /
+    backend marks."""
     rows: list = []
     backend_mark = getattr(pytest.mark, backend)
     for test_type in test_types:

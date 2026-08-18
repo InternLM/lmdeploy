@@ -1,5 +1,4 @@
 import pytest
-from utils.config_utils import get_func_config_list
 from utils.pipeline_chat import run_pipeline_mllm_test
 from utils.pytest_layout_utils import LOCAL_TP_LAYOUTS, build_layout_params
 
