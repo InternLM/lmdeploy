@@ -39,15 +39,6 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from .utils.cudagraph import CudaGraphMixin
 
 
-def fp32_router_gemm(hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
-    """Dispatch CUDA router GEMM while preserving other backends."""
-    if hidden_states.is_cuda:
-        from lmdeploy.pytorch.kernels.cuda.fp32_router_gemm import fp32_router_gemm as cuda_fp32_router_gemm
-        return cuda_fp32_router_gemm(hidden_states, weight)
-    hidden_states = hidden_states.flatten(0, -2)
-    return F.linear(hidden_states.to(weight.dtype), weight)
-
-
 # microbatch
 class ExecType(Enum):
     """Batch exec type."""
@@ -615,6 +606,7 @@ class MoEGate(nn.Module):
         self.gating_dim = config.hidden_size
         self.weight = nn.Parameter(
             torch.empty((self.n_routed_experts, self.gating_dim), dtype=torch.float32, device=device))
+        self._router_gemm = self._build_router_gemm()
         if self.topk_method == 'noaux_tc':
             from lmdeploy.pytorch.nn.moe.route import NoauxTCRouter
             self.e_score_correction_bias = nn.Parameter(
@@ -630,6 +622,17 @@ class MoEGate(nn.Module):
         self.softmax_topk = SoftmaxTopK(self.top_k, n_groups=self.router_n_groups)
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
         self.eplb_dispatch_info = info
+
+    @staticmethod
+    def _fp32_router_linear(hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        return F.linear(hidden_states.to(weight.dtype), weight)
+
+    def _build_router_gemm(self):
+        """Bind the router GEMM implementation for this device."""
+        if self.weight.is_cuda:
+            from lmdeploy.pytorch.kernels.cuda.fp32_router_gemm import fp32_router_gemm
+            return fp32_router_gemm
+        return self._fp32_router_linear
 
     def _compute_scores(self, logits: torch.Tensor):
         """Compute scores."""
@@ -654,7 +657,7 @@ class MoEGate(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, routed_experts: torch.Tensor = None):
         """forward."""
-        router_logits = fp32_router_gemm(hidden_states, self.weight)
+        router_logits = self._router_gemm(hidden_states, self.weight)
         if self.fake_eplb:
             # Forcefully manipulate router_logits to simulate expert load balancing (EPLB).
             # This is a benchmark-only hack to achieve optimal performance metrics.
