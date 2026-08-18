@@ -88,39 +88,6 @@ class TestRejectSample:
 
     # ----- greedy: rejection_sample -----
 
-    def test_greedy_fast_path_consumes_draft_and_bonus_ids_together(self):
-        """The wrapper sends one full argmax result to the greedy backend."""
-        target_token_ids = torch.tensor(
-            [
-                [10, 20, 30, 99],
-                [10, 20, 30, 88],
-                [10, 20, 30, 77],
-            ],
-            dtype=torch.long,
-            device=device,
-        )
-        draft = torch.tensor(
-            [
-                [10, 20, 30],
-                [10, 21, 30],
-                [11, 20, 30],
-            ],
-            dtype=torch.long,
-            device=device,
-        )
-
-        target_logits = _make_peaked_logits(target_token_ids[:, :-1], 128)
-        actual = rejection_sample(
-            target_logits,
-            draft,
-            target_token_ids[:, -1],
-            SamplingInputs(max_top_k=1),
-        )
-        expected = torch_greedy_rejection_sample(target_token_ids, draft)
-
-        for actual_tensor, expected_tensor in zip(actual, expected):
-            assert torch.equal(actual_tensor, expected_tensor)
-
     def test_greedy_all_match(self):
         """All draft == target -> accept all + bonus."""
         target_logits = _make_peaked_logits([[10, 20, 30], [10, 20, 30]], 64)

@@ -20,10 +20,10 @@ from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import (
     prepare_dsa_indexer_k_cache,
     prepare_dsa_indexer_q,
 )
-from lmdeploy.pytorch.kernels.cuda.fill_dsa_indexer_metadata import (
+from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
+from lmdeploy.pytorch.kernels.cuda.step_metadata.fill_dsa_indexer_metadata import (
     fill_dsa_indexer_metadata,
 )
-from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
 from lmdeploy.utils import get_logger
 
 from ..nsa import (

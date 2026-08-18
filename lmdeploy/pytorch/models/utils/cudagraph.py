@@ -184,7 +184,7 @@ class CudaGraphMixin:
         # Random padding balances MoE routing; the fused deterministic fill
         # below overwrites only the real token prefix.
         input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
-        from lmdeploy.pytorch.kernels.cuda.fill_graph_common_inputs import (
+        from lmdeploy.pytorch.kernels.cuda.step_metadata.fill_graph_common_inputs import (
             fill_graph_common_inputs,
         )
         fill_graph_common_inputs(
