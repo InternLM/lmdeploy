@@ -10,6 +10,44 @@ import pytest
 from lmdeploy.serve.openai.responses import ResponsesRequest
 
 
+@pytest.mark.parametrize(
+    ('field_name', 'value'),
+    [
+        pytest.param('temperature', -0.1, id='temperature-below-range'),
+        pytest.param('temperature', 2.1, id='temperature-above-range'),
+        pytest.param('top_p', -0.1, id='top-p-below-range'),
+        pytest.param('top_p', 1.1, id='top-p-above-range'),
+        pytest.param('top_k', -1, id='negative-top-k'),
+        pytest.param('min_p', -0.1, id='min-p-below-range'),
+        pytest.param('min_p', 1.1, id='min-p-above-range'),
+    ],
+)
+def test_responses_rejects_invalid_sampling_parameter(
+        responses_endpoint, fake_raw_request, field_name, value):
+    endpoint, _ = responses_endpoint
+    response = asyncio.run(
+        endpoint(
+            ResponsesRequest(model='fake-model', input='Hi', **{field_name: value}),
+            fake_raw_request,
+        ))
+
+    assert response.status_code == 400
+    assert json.loads(response.body)['error']['param'] == field_name
+
+
+def test_responses_rejects_empty_input_list(responses_endpoint,
+                                            fake_raw_request):
+    endpoint, _ = responses_endpoint
+    response = asyncio.run(
+        endpoint(
+            ResponsesRequest(model='fake-model', input=[]),
+            fake_raw_request,
+        ))
+
+    assert response.status_code == 400
+    assert json.loads(response.body)['error']['param'] == 'input'
+
+
 def test_responses_tool_validation_uses_tools_error_param(
         responses_endpoint, fake_raw_request):
     endpoint, _ = responses_endpoint

@@ -366,6 +366,25 @@ def test_messages_non_stream():
     assert len(context.session_mgr.removed) == 1
 
 
+@pytest.mark.parametrize(
+    ('field_name', 'value'),
+    [
+        pytest.param('temperature', -0.1, id='temperature-below-range'),
+        pytest.param('temperature', 1.1, id='temperature-above-range'),
+        pytest.param('top_p', -0.1, id='top-p-below-range'),
+        pytest.param('top_p', 1.1, id='top-p-above-range'),
+        pytest.param('top_k', -1, id='negative-top-k'),
+    ],
+)
+def test_messages_rejects_invalid_sampling_parameter(field_name, value):
+    response = _post_messages(_make_client(), **{field_name: value})
+
+    assert response.status_code == 400
+    data = response.json()
+    assert data['type'] == 'error'
+    assert field_name in data['error']['message']
+
+
 def test_messages_count_tokens_rejects_empty_messages():
     response = _post_count_tokens(_make_client(), messages=[])
 

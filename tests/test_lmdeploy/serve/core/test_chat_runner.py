@@ -59,10 +59,12 @@ class _FakeEngine:
             )
         ]
         self.session_mgr = _FakeSessionManager()
+        self.preprocess_messages = None
         self.preprocess_kwargs = None
         self.generator_closed = False
 
     async def preprocess(self, messages, session, **kwargs):
+        self.preprocess_messages = messages
         self.preprocess_kwargs = kwargs
         return SimpleNamespace(messages=messages, session=session)
 
@@ -167,13 +169,15 @@ def test_runner_always_preprocesses_chat_messages():
 def test_runner_skips_preprocess_for_raw_input_ids():
     context = _FakeServerContext(_Parser)
 
-    asyncio.run(
+    chat_runner = asyncio.run(
         ChatRunner.prepare(
             context,
             _request(messages=[]),
             ChatRunnerOptions(input_ids=[1, 2, 3], do_preprocess=False),
         ))
 
+    assert chat_runner.request.messages == []
+    assert context.async_engine.preprocess_messages is None
     assert context.async_engine.preprocess_kwargs['do_preprocess'] is False
     assert context.async_engine.preprocess_kwargs['input_ids'] == [1, 2, 3]
 

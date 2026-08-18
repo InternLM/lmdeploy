@@ -23,6 +23,10 @@ def check_request(request: MessagesRequest, raw_request: Request, server_context
     if model_error is not None:
         return model_error
 
+    sampling_error = _validate_sampling_request(request)
+    if sampling_error is not None:
+        return sampling_error
+
     extended_outputs_error = _validate_extended_outputs(request, server_context)
     if extended_outputs_error is not None:
         return extended_outputs_error
@@ -75,6 +79,22 @@ def _validate_extended_outputs(request: MessagesRequest, server_context):
             ('routed experts requested but not configured in engine configuration. '
              'May start the api_server with --enable-return-routed-experts flag.'))
 
+    return None
+
+
+def _validate_sampling_request(request: MessagesRequest):
+    if request.temperature is not None and not (0 <= request.temperature <= 1):
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'temperature {request.temperature!r} must be in [0, 1].')
+    if request.top_p is not None and not (0 <= request.top_p <= 1):
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'top_p {request.top_p!r} must be in [0, 1].')
+    if request.top_k is not None and request.top_k < 0:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'top_k {request.top_k!r} cannot be a negative integer.')
     return None
 
 
