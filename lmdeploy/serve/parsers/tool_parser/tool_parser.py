@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, ClassVar
+from copy import deepcopy
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import partial_json_parser
 import shortuuid
@@ -29,6 +30,10 @@ class ToolParser:
     """Base class for model-specific tool parsers."""
 
     validate_tool_names: ClassVar[bool] = False
+    # XGrammar builtin structural-tag key (or an LMDeploy-local key). Custom
+    # parsers must declare one explicitly before tool_choice="required" can be
+    # used with them.
+    structural_tag_model: str | None = None
 
     def __init__(self):
         self._tool_payload: str = ''
@@ -95,6 +100,56 @@ class ToolParser:
     def filter_tool_calls(self, calls: list[ToolCall]) -> list[ToolCall]:
         """Drop complete calls whose names are absent from request tools."""
         return [call for call in calls if self.is_valid_tool_name(call.function.name)]
+
+    @classmethod
+    def get_structural_tag_model(cls, request: ChatCompletionRequest, *, reasoning: bool) -> str | None:
+        """Return the native structural-tag format for this parser."""
+        return cls.structural_tag_model
+
+    @classmethod
+    def build_required_tool_response_format(cls, request: ChatCompletionRequest, tools: list, *,
+                                            reasoning: bool) -> dict | None:
+        """Build the guided-decoding format for ``tool_choice="required"``.
+
+        Most parsers only need to declare ``structural_tag_model``. Parsers
+        with custom required-call grammars can override this method.
+        """
+        structural_tag_model = cls.get_structural_tag_model(request, reasoning=reasoning)
+        if structural_tag_model is None:
+            return None
+
+        dumped_tools = cls._dump_tools(tools)
+        if not dumped_tools:
+            raise ValueError('`tool_choice="required"` requires at least one tool.')
+
+        import xgrammar as xgr
+
+        return xgr.get_model_structural_tag(
+            structural_tag_model,
+            dumped_tools,
+            tool_choice='required',
+            reasoning=reasoning,
+        ).model_dump(mode='json')
+
+    @staticmethod
+    def _dump_tools(tools: list) -> list[dict[str, Any]]:
+        """Return detached OpenAI tool dictionaries for XGrammar."""
+        dumped = []
+        for tool in tools:
+            if hasattr(tool, 'model_dump'):
+                dumped.append(tool.model_dump())
+            else:
+                dumped.append(deepcopy(tool))
+        return dumped
+
+    @classmethod
+    def supports_required_tool_choice(cls) -> bool:
+        """Whether this parser has a schema-constrained native format."""
+        has_custom_builder = (
+            cls.build_required_tool_response_format.__func__
+            is not ToolParser.build_required_tool_response_format.__func__
+        )
+        return cls.structural_tag_model is not None or has_custom_builder
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:

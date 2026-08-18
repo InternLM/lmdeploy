@@ -99,7 +99,15 @@ def check_request(request: ChatCompletionRequest,
     parser_cls = server_context.response_parser_cls
     if request.tool_choice != 'none' and request.tools:
         if parser_cls is None or parser_cls.tool_parser_cls is None:
-            return 'Please launch the api_server with --tool-call-parser if you want to use tools.'
+            return ('Please launch the api_server with --tool-call-parser '
+                    'if you want to use tools.')
+
+    if request.tool_choice == 'required':
+        if not request.tools:
+            return '`tool_choice="required"` requires at least one tool.'
+        if not parser_cls.supports_required_tool_choice():
+            return ('The configured tool-call parser does not support '
+                    '`tool_choice="required"`.')
 
     if request.return_routed_experts:
         if not hasattr(engine_config, 'enable_return_routed_experts'):

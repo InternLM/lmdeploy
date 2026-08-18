@@ -140,10 +140,35 @@ def _validate_input_request(request: MessagesRequest):
 
 
 def _validate_tool_choice_request(request: MessagesRequest, parser_cls):
+    if _is_tool_choice_any(request.tool_choice):
+        if not request.tools:
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                '`tool_choice={"type":"any"}` requires at least one tool.')
+
+    if _is_tool_choice_tool(request.tool_choice):
+        tool_name = request.tool_choice.name
+        if not request.tools:
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                '`tool_choice={"type":"tool"}` requires at least one tool.')
+        tool_names = {tool.name for tool in request.tools}
+        if tool_name not in tool_names:
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                f"Tool choice 'tool' not found in `tools`: {tool_name!r}.")
+
     if request.tools and (parser_cls is None or parser_cls.tool_parser_cls is None):
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
             'Please launch the api_server with --tool-call-parser if you want to use tool calling.')
+
+    if _is_tool_choice_any(request.tool_choice):
+        supports_required_tool_choice = getattr(parser_cls, 'supports_required_tool_choice', None)
+        if supports_required_tool_choice is None or not supports_required_tool_choice():
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                'The configured tool-call parser does not support `tool_choice={"type":"any"}`.')
 
     return None
 
@@ -154,3 +179,15 @@ def _is_tool_choice_auto(tool_choice) -> bool:
     if isinstance(tool_choice, str):
         return tool_choice == 'auto'
     return tool_choice.type == 'auto'
+
+
+def _is_tool_choice_any(tool_choice) -> bool:
+    if tool_choice is None:
+        return False
+    if isinstance(tool_choice, str):
+        return tool_choice == 'any'
+    return tool_choice.type == 'any'
+
+
+def _is_tool_choice_tool(tool_choice) -> bool:
+    return tool_choice is not None and not isinstance(tool_choice, str) and tool_choice.type == 'tool'

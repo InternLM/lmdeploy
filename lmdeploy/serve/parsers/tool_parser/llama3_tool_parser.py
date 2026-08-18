@@ -12,6 +12,8 @@ from .tool_parser import ToolParser, ToolParserManager
 class Llama3JsonToolParser(ToolParser):
     """Tool parser for Llama3 JSON tool-call payloads."""
 
+    structural_tag_model = 'llama'
+
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
         return '<|python_tag|>'
@@ -23,6 +25,20 @@ class Llama3JsonToolParser(ToolParser):
     @classmethod
     def get_tool_payload_format(cls) -> str:
         return 'json'
+
+    @classmethod
+    def build_required_tool_response_format(cls, request, tools: list, *, reasoning: bool) -> dict | None:
+        response_format = super().build_required_tool_response_format(
+            request,
+            tools,
+            reasoning=reasoning,
+        )
+        if response_format is None:
+            return None
+
+        for tag in response_format['format']['tags']:
+            tag['begin'] = '<|python_tag|>' + tag['begin']
+        return response_format
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
         """Decode incremental JSON tool payload."""

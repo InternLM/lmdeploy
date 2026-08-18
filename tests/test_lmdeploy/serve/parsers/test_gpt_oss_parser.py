@@ -320,6 +320,92 @@ class TestGptOssResponseParser:
         assert tool_calls[0].function.name == 'echo'
         assert tool_calls[0].function.arguments == '{"x":1}'
 
+    @pytest.mark.parametrize('stream', [False, True])
+    @pytest.mark.parametrize(
+        ('suffix', 'expected'),
+        [
+            ('<|call|>', True),
+            ('', False),
+            ('<|end|>', False),
+        ],
+    )
+    def test_required_validation_requires_call_terminator(self, stream, suffix, expected):
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'city': {
+                                'type': 'string',
+                            },
+                        },
+                        'required': ['city'],
+                    },
+                },
+            }],
+            tool_choice='required',
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
+        text = (
+            '<|channel|>commentary to=functions.get_weather'
+            '<|constrain|>json<|message|>{"city":"Paris"}'
+            f'{suffix}'
+        )
+        token_ids = openai_harmony_mod.get_encoding().encode(text, allowed_special='all')
+
+        if stream:
+            parser.stream_chunk('', token_ids)
+            valid = parser.validate_complete()
+        else:
+            parser.parse_complete('', token_ids)
+            valid = parser.validate_complete('')
+
+        assert valid is expected
+
+    @pytest.mark.parametrize('stream', [False, True])
+    @pytest.mark.parametrize(('finish_reason', 'expected'), [('stop', True), ('length', False)])
+    def test_required_validation_accepts_engine_stripped_call_stop_token(self, stream, finish_reason, expected):
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'city': {
+                                'type': 'string',
+                            },
+                        },
+                        'required': ['city'],
+                    },
+                },
+            }],
+            tool_choice='required',
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
+        text = (
+            '<|channel|>commentary to=functions.get_weather'
+            '<|constrain|>json<|message|>{"city":"Paris"}'
+        )
+        token_ids = openai_harmony_mod.get_encoding().encode(text, allowed_special='all')
+
+        if stream:
+            parser.stream_chunk('', token_ids)
+            valid = parser.validate_complete(finish_reason=finish_reason)
+        else:
+            parser.parse_complete('', token_ids)
+            valid = parser.validate_complete('', finish_reason=finish_reason)
+
+        assert valid is expected
+
     @pytest.mark.parametrize(
         ('recipient', 'expected'),
         [

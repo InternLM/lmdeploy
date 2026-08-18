@@ -8,6 +8,8 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any
 
+from jsonschema.exceptions import SchemaError
+
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.generation_config import build_generation_config
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
@@ -21,6 +23,10 @@ def should_validate_complete(
     finish_reason: str | None,
 ) -> bool:
     """Whether parser validity may change this terminal finish reason."""
+    if request.tool_choice == 'required':
+        # A token limit is an honest truncation; do not relabel it or invent a
+        # tool call. A normal stop must contain a complete required call.
+        return finish_reason == 'stop'
     return finish_reason in ('stop', 'length') and (
         bool(request.return_token_ids) or bool(request.return_routed_experts))
 
@@ -99,7 +105,7 @@ class ChatRunner:
 
         try:
             response_parser = parser_cls(request)
-        except ValueError as err:
+        except (SchemaError, ValueError) as err:
             raise RequestError(ErrorCode.INVALID_REQUEST, str(err)) from err
         parsed_request = response_parser.request
 
@@ -176,7 +182,7 @@ class ChatRunner:
 
                     if (
                             should_validate_complete(self.request, res.finish_reason)
-                            and not self.response_parser.validate_complete()):
+                            and not self.response_parser.validate_complete(finish_reason=res.finish_reason)):
                         res.finish_reason = 'parse_error'
                 except Exception as err:
                     raise RequestError(ErrorCode.INVALID_REQUEST, f'Failed to parse output: {err}') from err
@@ -244,7 +250,7 @@ class ChatRunner:
             text, tool_calls, reasoning_content = self.response_parser.parse_complete(text, final_token_ids)
             if (
                     should_validate_complete(self.request, final_res.finish_reason)
-                    and not self.response_parser.validate_complete(raw_text)):
+                    and not self.response_parser.validate_complete(raw_text, finish_reason=final_res.finish_reason)):
                 final_res.finish_reason = 'parse_error'
             if isinstance(tool_calls, list) and len(tool_calls) and final_res.finish_reason == 'stop':
                 final_res.finish_reason = 'tool_calls'

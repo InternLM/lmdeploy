@@ -19,7 +19,13 @@ from lmdeploy.serve.openai.protocol import (
 )
 from lmdeploy.utils import get_logger
 
-from .response_parser import ResponseParser, ResponseParserManager, normalize_chat_request
+from .response_parser import (
+    ResponseParser,
+    ResponseParserManager,
+    _build_required_tool_validators,
+    _validate_required_tool_calls,
+    normalize_chat_request,
+)
 
 if TYPE_CHECKING:
 
@@ -37,12 +43,81 @@ def get_encoding():
     return _harmony_encoding
 
 
+def _adapt_required_tool_response_format(response_format: dict, reasoning: bool) -> dict:
+    """Require Harmony calls after zero or more analysis messages."""
+    tool_calls = response_format['format']
+    tool_calls['at_least_one'] = True
+    if not reasoning:
+        return response_format
+
+    separator = tool_calls['separator']
+    analysis = {
+        'type': 'tag',
+        'begin': '<|channel|>analysis<|message|>',
+        'content': {
+            'type': 'any_text',
+            'excludes': [],
+        },
+        'end': ['<|end|>', '<|return|>'],
+    }
+    response_format['format'] = {
+        'type': 'sequence',
+        'elements': [
+            {
+                'type': 'star',
+                'content': {
+                    'type': 'sequence',
+                    'elements': [
+                        analysis,
+                        {
+                            'type': 'const_string',
+                            'value': separator,
+                        },
+                    ],
+                },
+            },
+            tool_calls,
+        ],
+    }
+    return response_format
+
+
+def _build_required_tool_response_format(tools):
+    # Harmony reasoning needs stricter ordering than XGrammar 0.2.0's builtin:
+    # optional analysis messages must precede at least one function call.
+    from .tool_parser.tool_parser import ToolParser
+
+    dumped_tools = ToolParser._dump_tools(tools)
+    if not dumped_tools:
+        raise ValueError('`tool_choice="required"` requires at least one tool.')
+
+    import xgrammar as xgr
+    response_format = xgr.get_model_structural_tag(
+        'harmony',
+        dumped_tools,
+        tool_choice='required',
+        reasoning=False,
+    ).model_dump(mode='json')
+    return _adapt_required_tool_response_format(response_format, reasoning=True)
+
+
 @ResponseParserManager.register_module('gpt-oss')
 class GptOssResponseParser(ResponseParser):
     """Harmony stream parser for GPT-OSS (assistant role)."""
     tool_parser_cls = object()  # API server checks `is not None` for tool support.
 
+    @classmethod
+    def supports_required_tool_choice(cls) -> bool:
+        return True
+
     def __init__(self, request: ChatCompletionRequest):
+        is_required = getattr(request, 'tool_choice', None) == 'required'
+        required_response_format = None
+        self._required_tool_validators = {}
+        if is_required:
+            self._required_tool_validators = _build_required_tool_validators(request.tools or [])
+            required_response_format = _build_required_tool_response_format(request.tools or [])
+
         if hasattr(request, 'tools') and hasattr(request, 'tool_choice'):
             # GPT-OSS templates expect full tool wrappers.
             if request.tools is None or request.tool_choice == 'none':
@@ -58,14 +133,24 @@ class GptOssResponseParser(ResponseParser):
         else:
             # Unit tests may inject a lightweight sentinel request object.
             self.request = request
-        self._convert_response_format_to_harmony()
+        if not is_required:
+            self._convert_response_format_to_harmony()
         self.request = normalize_chat_request(self.request)
-        self.parser = StreamableParser(get_encoding(), role=Role.ASSISTANT)
+        if required_response_format is not None:
+            self.request = self.request.model_copy(update={'response_format': required_response_format})
+        encoding = get_encoding()
+        self.parser = StreamableParser(encoding, role=Role.ASSISTANT)
+        self._call_token_id = encoding.encode('<|call|>', allowed_special='all')[0]
         self._seen_any = False
         self._next_tool_index = 0
         self._active_tool_id: str | None = None
         self._active_tool_index: int | None = None
         self._active_tool_name: str | None = None
+        self._stream_tool_calls: dict[int, dict[str, str]] = {}
+        self._completed_stream_tool_indices: set[int] = set()
+        self._complete_tool_calls: list[ToolCall] | None = None
+        self._complete_tool_calls_closed: list[bool] | None = None
+        self._complete_tool_call_open_at_eof = False
         self.tool_parser = object()  # API server checks `is not None` for tool support.
         self.reasoning_tokens = 0
 
@@ -88,10 +173,7 @@ class GptOssResponseParser(ResponseParser):
             messages = self.request.messages
 
             if not isinstance(messages, list):
-                logger.warning('Cannot inject response_format schema into '
-                               'non-list messages for GPT-OSS; clearing response_format only.')
-                self._clear_response_format()
-                return
+                raise TypeError('ChatCompletionRequest.messages must be a list of message objects.')
 
             new_messages = list(messages)
             system_idx = next(
@@ -170,6 +252,10 @@ class GptOssResponseParser(ResponseParser):
                 self._active_tool_index = self._next_tool_index
                 self._active_tool_name = event_value
                 self._next_tool_index += 1
+                self._stream_tool_calls[self._active_tool_index] = {
+                    'name': event_value,
+                    'arguments': '',
+                }
                 tool_deltas.append(
                     DeltaToolCall(
                         id=self._active_tool_id,
@@ -180,6 +266,7 @@ class GptOssResponseParser(ResponseParser):
                 continue
             if event_kind == 'tool_arguments':
                 if self._active_tool_id is not None and self._active_tool_index is not None:
+                    self._stream_tool_calls[self._active_tool_index]['arguments'] += event_value
                     tool_deltas.append(
                         DeltaToolCall(
                             id=None,
@@ -187,6 +274,13 @@ class GptOssResponseParser(ResponseParser):
                             type=None,
                             function=DeltaFunctionCall(arguments=event_value),
                         ))
+                continue
+            if event_kind == 'tool_end':
+                if self._active_tool_index is not None and event_value:
+                    self._completed_stream_tool_indices.add(self._active_tool_index)
+                self._active_tool_id = None
+                self._active_tool_index = None
+                self._active_tool_name = None
                 continue
             if event_kind == 'content':
                 content += event_value
@@ -210,19 +304,25 @@ class GptOssResponseParser(ResponseParser):
         if not token_ids:
             # Keep non-streaming behavior consistent with other parsers:
             # when token ids are unavailable, return raw text as assistant content.
+            self._complete_tool_calls = []
+            self._complete_tool_calls_closed = []
+            self._complete_tool_call_open_at_eof = False
             return text or None, None, None
 
         self.reasoning_tokens = 0
+        self._complete_tool_call_open_at_eof = False
         content = ''
         reasoning = ''
 
         calls: list[dict] = []
+        calls_closed: list[bool] = []
         active: dict | None = None
 
         for event_kind, event_value in self._iter_harmony_events(token_ids or []):
             if event_kind == 'tool_start':
                 if active is not None:
                     calls.append(active)
+                    calls_closed.append(False)
                 active = {
                     'id': f'chatcmpl-tool-{shortuuid.random()}',
                     'name': event_value,
@@ -235,8 +335,16 @@ class GptOssResponseParser(ResponseParser):
                     active['arguments'] += event_value
                 continue
 
+            if event_kind == 'tool_end':
+                if active is not None:
+                    calls.append(active)
+                    calls_closed.append(bool(event_value))
+                    active = None
+                continue
+
             if active is not None:
                 calls.append(active)
+                calls_closed.append(False)
                 active = None
             if event_kind == 'content':
                 content += event_value
@@ -245,6 +353,8 @@ class GptOssResponseParser(ResponseParser):
 
         if active is not None:
             calls.append(active)
+            calls_closed.append(False)
+            self._complete_tool_call_open_at_eof = True
 
         tool_calls = [
             ToolCall(
@@ -254,7 +364,36 @@ class GptOssResponseParser(ResponseParser):
             ) for call in calls
         ] or None
 
+        self._complete_tool_calls = tool_calls or []
+        self._complete_tool_calls_closed = calls_closed
+
         return content or None, tool_calls, reasoning or None
+
+    def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None) -> bool:
+        if getattr(self.request, 'tool_choice', None) != 'required':
+            return True
+
+        if self._complete_tool_calls is not None:
+            calls = self._complete_tool_calls
+            if self._complete_tool_calls_closed is None:
+                return False
+            closed = list(self._complete_tool_calls_closed)
+            if finish_reason == 'stop' and self._complete_tool_call_open_at_eof and closed:
+                closed[-1] = True
+            if not all(closed):
+                return False
+        else:
+            calls = [
+                ToolCall(
+                    function=FunctionCall(name=call['name'], arguments=call['arguments']),
+                ) for _, call in sorted(self._stream_tool_calls.items())
+            ]
+            completed_indices = set(self._completed_stream_tool_indices)
+            if finish_reason == 'stop' and self._active_tool_index in self._stream_tool_calls:
+                completed_indices.add(self._active_tool_index)
+            if completed_indices != set(self._stream_tool_calls):
+                return False
+        return _validate_required_tool_calls(calls, self._required_tool_validators)
 
     def _iter_harmony_events(self, token_ids: list[int]):
         """Yield parsed harmony events from token ids.
@@ -262,6 +401,7 @@ class GptOssResponseParser(ResponseParser):
         Event kinds:
         - ``tool_start``: tool-call channel switched to a new function.
         - ``tool_arguments``: incremental tool-arguments fragment.
+        - ``tool_end``: tool recipient ended; value says whether ``<|call|>`` closed it.
         - ``content``: assistant final-channel content fragment.
         - ``reasoning``: assistant analysis-channel reasoning fragment.
         """
@@ -275,6 +415,9 @@ class GptOssResponseParser(ResponseParser):
             tool_name = self._extract_tool_name(cur_recipient)
             prev_tool_name = self._extract_tool_name(prev_recipient)
             is_tool_channel = cur_channel in ('commentary', 'analysis')
+
+            if prev_tool_name and (not is_tool_channel or tool_name != prev_tool_name):
+                yield 'tool_end', token == self._call_token_id
 
             if is_tool_channel and tool_name:
                 if tool_name != prev_tool_name:

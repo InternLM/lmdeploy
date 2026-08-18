@@ -2,7 +2,6 @@
 
 import asyncio
 import copy
-import json
 import math
 import os
 import os.path as osp
@@ -17,6 +16,7 @@ import pybase64
 import torch
 
 import lmdeploy
+from lmdeploy._guided_decoding import compile_response_format
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
@@ -726,32 +726,7 @@ class TurboMindInstance:
         if gen_config.response_format is not None:
             try:
                 compiler = self.tm_model.grammar_compiler
-                decode_grammar_type = gen_config.response_format['type']
-                if decode_grammar_type == 'json_schema':
-                    decode_grammar = gen_config.response_format[decode_grammar_type]['schema']
-                elif decode_grammar_type == 'regex_schema':
-                    decode_grammar = gen_config.response_format[decode_grammar_type]
-                elif decode_grammar_type == 'json_object':
-                    decode_grammar = '{"type" : "object", "additionalProperties": true}'
-                elif decode_grammar_type == 'structural_tag':
-                    decode_grammar = gen_config.response_format[decode_grammar_type]
-
-                if decode_grammar_type == 'json_schema':
-                    decode_grammar = json.dumps(decode_grammar)
-                    grammar = compiler.compile_json_schema(decode_grammar)
-                elif decode_grammar_type == 'regex_schema':
-                    decode_grammar = str(decode_grammar)
-                    grammar = compiler.compile_regex(decode_grammar)
-                elif decode_grammar_type == 'json_object':
-                    decode_grammar = str(decode_grammar)
-                    grammar = compiler.compile_json_schema(decode_grammar)
-                elif decode_grammar_type == 'structural_tag':
-                    decode_grammar = json.dumps(decode_grammar)
-                    grammar = compiler.compile_structural_tag(decode_grammar)
-                else:
-                    assert False, f'Decode grammar type {decode_grammar_type} should be in ' \
-                                   '["json_schema", "regex_schema", "json_object", "structural_tag"]'
-
+                grammar = compile_response_format(compiler, gen_config.response_format)
                 self.model_inst.set_grammar(grammar)
             except (ValueError, KeyError) as e:
                 logger.warning(f'Failed to initialize guided decoding, '

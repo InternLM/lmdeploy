@@ -20,6 +20,8 @@ TOOL_CALLS_BLOCK_NAME = 'function_calls'
 class DeepSeekV32ToolParser(ToolParser):
     """Tool parser for DeepSeek-V3.2 DSML function-call blocks."""
 
+    structural_tag_model = 'deepseek_v3_2'
+
     dsml_token = dsml_token
     tool_calls_block_name = TOOL_CALLS_BLOCK_NAME
     parse_tool_calls_func = staticmethod(parse_tool_calls)

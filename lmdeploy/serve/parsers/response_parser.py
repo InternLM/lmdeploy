@@ -154,6 +154,38 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
     return request
 
 
+def _build_required_tool_validators(tools: list[Any]) -> dict[str, Any]:
+    """Build JSON Schema validators keyed by required tool name."""
+    from jsonschema.validators import validator_for
+
+    validators = {}
+    for tool in tools:
+        function = tool.function
+        schema = function.parameters if function.parameters is not None else True
+        validator_cls = validator_for(schema)
+        validator_cls.check_schema(schema)
+        validators[function.name] = validator_cls(schema)
+    return validators
+
+
+def _validate_required_tool_calls(tool_calls: list[Any] | None, validators: dict[str, Any]) -> bool:
+    """Validate required calls against their corresponding tool schemas."""
+    if not tool_calls:
+        return False
+
+    for tool_call in tool_calls:
+        validator = validators.get(tool_call.function.name)
+        if validator is None:
+            return False
+        try:
+            arguments = json.loads(tool_call.function.arguments)
+        except (json.JSONDecodeError, TypeError):
+            return False
+        if not validator.is_valid(arguments):
+            return False
+    return True
+
+
 class ResponseParser:
     reasoning_tokens: int | None
 
@@ -169,6 +201,11 @@ class ResponseParser:
     def __init__(self, request: ChatCompletionRequest):
         self.request = request
         self.reasoning_tokens = None
+
+    @classmethod
+    def supports_required_tool_choice(cls) -> bool:
+        """Whether this parser can constrain native required tool calls."""
+        return False
 
     @abstractmethod
     def stream_chunk(self,
@@ -191,7 +228,7 @@ class ResponseParser:
                        **kwargs) -> tuple[str, list | None, str | None]:
         raise NotImplementedError
 
-    def validate_complete(self, text: str | None = None) -> bool:
+    def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None) -> bool:
         return True
 
 @dataclass
@@ -263,6 +300,11 @@ class BaseResponseParser(ResponseParser):
             cls.tool_parser_cls = ToolParserManager.get(tool_parser_name)
 
     @classmethod
+    def supports_required_tool_choice(cls) -> bool:
+        tcls = cls.tool_parser_cls
+        return bool(tcls is not None and tcls.supports_required_tool_choice())
+
+    @classmethod
     def chat_template_kwargs_from_request(cls, request: ChatCompletionRequest) -> dict:
         """Normalize parser-related template kwargs from the request.
 
@@ -293,19 +335,45 @@ class BaseResponseParser(ResponseParser):
             self.enable_thinking = True
         self.reasoning_parser: ReasoningParser | None = rcls(**self._kwargs) if rcls else None
         self.tool_parser: ToolParser | None = tcls() if tcls else None
+        self.reasoning_enabled = bool(
+            self.reasoning_parser is not None
+            and self.enable_thinking is not False
+            and self.reasoning_parser.starts_in_reasoning_mode()
+        )
+        self._required_tool_validators = (
+            _build_required_tool_validators(request.tools or [])
+            if request.tool_choice == 'required' else {}
+        )
+
+        required_response_format = None
+        if request.tool_choice == 'required':
+            if tcls is None:
+                raise ValueError('`tool_choice="required"` requires a configured tool-call parser.')
+            required_response_format = tcls.build_required_tool_response_format(
+                request,
+                request.tools or [],
+                reasoning=self.reasoning_enabled,
+            )
+            if required_response_format is None:
+                raise ValueError(
+                    f'Tool parser {tcls.__name__!r} does not support `tool_choice="required"`.')
+
         if self.tool_parser is not None:
             self.request = self.tool_parser.adjust_request(request)
         else:
             self.request = self.dump_tools(request)
 
         self.request = normalize_chat_request(self.request)
+        if required_response_format is not None:
+            # Internal structural tags override client response_format because
+            # an engine can apply only one guided-decoding constraint.
+            self.request = self.request.model_copy(update={'response_format': required_response_format})
 
         self._accumulated_chunks: list[str] = []
         self._received_any_text = False
 
         self.profile = self._build_profile()
-        if (self.reasoning_parser is not None and self.enable_thinking is not False
-                and self.profile.starts_in_reasoning_mode):
+        if self.reasoning_enabled and self.profile.starts_in_reasoning_mode:
             self._mode = self.MODE_REASONING
         else:
             self._mode = self.MODE_PLAIN
@@ -692,8 +760,9 @@ class BaseResponseParser(ResponseParser):
         reasoning_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         pos = 0
-        mode = self.MODE_REASONING if (self.profile.starts_in_reasoning_mode and self.reasoning_parser is not None
-                                       and self.enable_thinking is not False) else self.MODE_PLAIN
+        mode = self.MODE_REASONING if (
+            self.reasoning_enabled and self.profile.starts_in_reasoning_mode
+        ) else self.MODE_PLAIN
         n = len(text)
         plain_open_tags = [
             t for t in (self.profile.reasoning_open_tag, self.profile.tool_open_tag) if t
@@ -753,13 +822,18 @@ class BaseResponseParser(ResponseParser):
                     break
                 tool_payload = text[open_idx + len(open_tag):close_idx].strip()
             else:
-                close_idx = n
-                tool_payload = text[open_idx + len(open_tag):].strip()
+                # Llama uses a start marker but no close marker. Bound one
+                # payload at the next start marker so repeated calls remain
+                # parseable in non-streaming responses.
+                payload_start = open_idx + len(open_tag)
+                next_open_idx = text.find(open_tag, payload_start)
+                close_idx = next_open_idx if next_open_idx >= 0 else n
+                tool_payload = text[payload_start:close_idx].strip()
             parsed_call = self.tool_parser.parse_tool_call_complete(tool_payload) if self.tool_parser else None
             if parsed_call and self.tool_parser is not None:
                 parsed_calls = parsed_call if isinstance(parsed_call, list) else [parsed_call]
                 tool_calls.extend(self.tool_parser.filter_tool_calls(parsed_calls))
-                pos = close_idx + len(close_tag) if close_tag else n
+                pos = close_idx + len(close_tag) if close_tag else close_idx
             else:
                 # Tool call parsing failed — fall back to plain text.
                 content_parts.append(text[open_idx:])
@@ -772,11 +846,10 @@ class BaseResponseParser(ResponseParser):
     def _get_accumulated_text(self) -> str:
         return ''.join(self._accumulated_chunks)
 
-    def validate_complete(self, text: str | None = None) -> bool:
+    def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None) -> bool:
         text = self._get_accumulated_text() if text is None else text
 
-        if (self.profile.starts_in_reasoning_mode and self.reasoning_parser is not None
-                and self.enable_thinking is not False):
+        if self.reasoning_enabled and self.profile.starts_in_reasoning_mode:
             close_tag = self.profile.reasoning_close_tag
             close_idx = text.find(close_tag) if close_tag else -1
             if close_idx < 0:
@@ -789,7 +862,16 @@ class BaseResponseParser(ResponseParser):
         if self.tool_parser is None or self.request.tool_choice == 'none':
             return True
 
-        return self.tool_parser.validate_complete(text)
+        if not self.tool_parser.validate_complete(text):
+            return False
+
+        if self.request.tool_choice != 'required':
+            return True
+
+        content, tool_calls, _ = self.parse_complete(text)
+        if content is not None and content.strip():
+            return False
+        return _validate_required_tool_calls(tool_calls, self._required_tool_validators)
 
     @staticmethod
     def _find_first(text: str, tags: list[str], start: int) -> tuple[int, str]:

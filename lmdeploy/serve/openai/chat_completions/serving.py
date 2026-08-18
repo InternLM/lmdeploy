@@ -56,7 +56,7 @@ def register(router: APIRouter, server_context) -> None:
         The request should be a JSON object with the following fields:
 
         - **model**: model name. Available from /v1/models.
-        - **messages**: chat history in OpenAI format. Chat history example:
+        - **messages**: string prompt or chat history in OpenAI format. Chat history example:
           ``[{"role": "user", "content": "hi"}]``.
         - **temperature** (float): to modulate the next token probability
         - **top_p** (float): If set to float < 1, only the smallest set of most
@@ -100,10 +100,11 @@ def register(router: APIRouter, server_context) -> None:
           list of functions for which the model can generate JSON inputs.
         - **tool_choice** (str | object): Controls which (if any) tool is called by
           the model. `none` means the model will not call any tool and instead
-          generates a message. Specifying a particular tool via
+          generates a message. `auto` lets the model choose whether to call a
+          tool, while `required` constrains generation to at least one valid
+          call. Specifying a particular tool via
           ``{"type": "function", "function": {"name": "my_function"}}``
-          forces the model to call that tool. `auto` or `required` will put all
-          the tools informationto the model.
+          forces the model to call that tool.
 
         Additional arguments supported by LMDeploy:
 
@@ -149,7 +150,9 @@ def register(router: APIRouter, server_context) -> None:
             )
 
         # Resolve input: messages has priority over input_ids/image_data
-        messages_empty = request.messages is None or len(request.messages) == 0
+        messages_empty = (request.messages is None or request.messages == ''
+                          or (isinstance(request.messages, list)
+                              and len(request.messages) == 0))
         resolved_input_ids = None
         if messages_empty and request.input_ids is not None:
             # /generate-style input: use input_ids (+ optional image_data)

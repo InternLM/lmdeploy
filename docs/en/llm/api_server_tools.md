@@ -48,6 +48,24 @@ response = client.chat.completions.create(
 print(response)
 ```
 
+## Requiring a Tool Call
+
+Set `tool_choice="required"` when the assistant must call at least one of the supplied functions. LMDeploy constrains generation to the model's native tool-call format and validates function arguments against the corresponding parameter schema.
+
+```python
+response = client.chat.completions.create(
+    model=model_name,
+    messages=messages,
+    tools=tools,
+    tool_choice='required',
+)
+
+print(response.choices[0].finish_reason)       # tool_calls
+print(response.choices[0].message.tool_calls)  # one or more calls
+```
+
+This mode requires a non-empty `tools` list and a compatible built-in parser selected with `--tool-call-parser`; otherwise, the server returns HTTP 400. The required-tool constraint takes precedence over a client-provided `response_format`, because only one guided-decoding constraint can be active. Reasoning produced before the call remains available as `reasoning_content`. If the token limit is reached before a call is complete, `finish_reason` remains `length`. Set `parallel_tool_calls=False` to expose only the first parsed call.
+
 ## Multiple Round Invocation
 
 ### InternLM

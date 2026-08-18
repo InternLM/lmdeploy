@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .tool_parser import ToolParser, ToolParserManager
 
@@ -15,6 +15,59 @@ if TYPE_CHECKING:
 @ToolParserManager.register_module(['internlm', 'intern-s1'])
 class Internlm2ToolParser(ToolParser):
     """Tool parser for InternLM JSON tool-call payloads."""
+
+    structural_tag_model = 'internlm'
+
+    @classmethod
+    def build_required_tool_response_format(cls, request: ChatCompletionRequest, tools: list, *,
+                                            reasoning: bool) -> dict | None:
+        dumped_tools = cls._dump_tools(tools)
+        if not dumped_tools:
+            raise ValueError('`tool_choice="required"` requires at least one tool.')
+
+        tags = []
+        for tool in dumped_tools:
+            function = tool['function']
+            name = function['name']
+            parameters = function.get('parameters')
+            if parameters is None:
+                parameters = True
+            tags.append({
+                'type': 'tag',
+                'begin': f'<|action_start|><|plugin|>\n{{"name": "{name}", "parameters": ',
+                'content': {
+                    'type': 'json_schema',
+                    'json_schema': parameters,
+                    'style': 'json',
+                },
+                'end': '}<|action_end|>',
+            })
+
+        tool_calls: dict[str, Any] = {
+            'type': 'tags_with_separator',
+            'tags': tags,
+            'separator': '',
+            'at_least_one': True,
+            'stop_after_first': False,
+        }
+        if not reasoning:
+            return {'type': 'structural_tag', 'format': tool_calls}
+
+        return {
+            'type': 'structural_tag',
+            'format': {
+                'type': 'sequence',
+                'elements': [{
+                    'type': 'tag',
+                    'begin': '',
+                    'content': {
+                        'type': 'any_text',
+                        'excludes': [],
+                    },
+                    'end': '</think>',
+                }, tool_calls],
+            },
+        }
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         if request.tools and request.tool_choice != 'none':

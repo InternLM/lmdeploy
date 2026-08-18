@@ -10,6 +10,8 @@ import pytest
 from lmdeploy.serve.core.chat_runner import ChatRunner, ChatRunnerOptions
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
+from lmdeploy.serve.parsers.response_parser import BaseResponseParser
+from lmdeploy.serve.parsers.tool_parser.tool_parser import ToolParser
 
 
 class _FakeSession:
@@ -102,14 +104,29 @@ class _Parser:
     def __init__(self, request):
         self.request = request
 
+    @classmethod
+    def supports_required_tool_choice(cls):
+        return True
+
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
         return [(DeltaMessage(role='assistant', content=delta_text), False)]
 
     def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
         return text, None, None
 
-    def validate_complete(self, text: str | None = None):
+    def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None):
         return True
+
+
+class _RequiredToolParser(ToolParser):
+
+    @classmethod
+    def build_required_tool_response_format(cls, request, tools, *, reasoning: bool):
+        return {'type': 'structural_tag', 'format': {'type': 'const_string', 'value': '<tool_call>'}}
+
+
+class _RequiredResponseParser(BaseResponseParser):
+    tool_parser_cls = _RequiredToolParser
 
 
 def _request(**kwargs):
@@ -124,9 +141,25 @@ def _request(**kwargs):
     return ChatCompletionRequest(**defaults)
 
 
+def _tools():
+    return [{
+        'type': 'function',
+        'function': {
+            'name': 'search',
+            'parameters': {
+                'type': 'object',
+            },
+        },
+    }]
+
+
 def test_runner_forwards_parser_adjusted_response_format_to_engine():
     response_format = {
-        'type': 'json_object',
+        'type': 'structural_tag',
+        'format': {
+            'type': 'const_string',
+            'value': '<tool_call>',
+        },
     }
 
     class _AdjustingParser(_Parser):
@@ -190,14 +223,15 @@ def test_runner_skips_preprocess_for_raw_input_ids():
     assert context.async_engine.preprocess_kwargs['input_ids'] == [1, 2, 3]
 
 
-@pytest.mark.parametrize(('finish_reason', 'expected'), [('stop', 'parse_error'), ('length', 'parse_error')])
-def test_runner_extended_output_validation_marks_parse_error(finish_reason, expected):
+@pytest.mark.parametrize(('finish_reason', 'expected'), [('stop', 'parse_error'), ('length', 'length')])
+def test_runner_required_validation_preserves_length(finish_reason, expected):
     class _InvalidRequiredParser(_Parser):
 
         def __init__(self, request):
             super().__init__(request)
+            self.request = request.model_copy(update={'response_format': {'type': 'structural_tag', 'format': {}}})
 
-        def validate_complete(self, text: str | None = None):
+        def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None):
             return False
 
     outputs = [
@@ -218,7 +252,7 @@ def test_runner_extended_output_validation_marks_parse_error(finish_reason, expe
     async def _run():
         chat_runner = await ChatRunner.prepare(
             context,
-            _request(return_token_ids=True),
+            _request(tool_choice='required', tools=_tools()),
         )
         return await chat_runner.collect()
 
@@ -260,6 +294,27 @@ def test_runner_close_cleans_prepared_unconsumed_request():
     asyncio.run(_run())
 
     assert context.session_manager.removed == [context.session_manager.session]
+
+
+def test_runner_invalid_required_tool_schema_raises_request_error():
+    context = _FakeServerContext(_RequiredResponseParser)
+    request = _request(
+        tool_choice='required',
+        tools=[{
+            'type': 'function',
+            'function': {
+                'name': 'search',
+                'parameters': {
+                    'type': 'not-a-json-schema-type',
+                },
+            },
+        }],
+    )
+
+    with pytest.raises(RequestError) as exc_info:
+        asyncio.run(ChatRunner.prepare(context, request))
+
+    assert exc_info.value.code == ErrorCode.INVALID_REQUEST
 
 
 def test_runner_parser_complete_error_raises_request_error():
