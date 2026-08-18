@@ -32,11 +32,14 @@ class _V4PagedMQALogitsWarmup:
         hf_config = getattr(model_config, 'hf_config', None)
         if getattr(hf_config, 'model_type', None) != 'deepseek_v4':
             return None
-        if 4 not in getattr(hf_config, 'compress_ratios', ()):
+
+        index_cache_spec = next(
+            (spec for spec in getattr(model_config, 'block_cache_specs', ())
+             if spec.name == 'v4_index_kv_r4'), None)
+        if index_cache_spec is None:
             return None
 
-        block_size = getattr(model_config, 'block_size', 256)
-        entries_per_block = block_size // 4
+        entries_per_block = index_cache_spec.shape[0]
         num_heads = getattr(hf_config, 'index_n_heads', None)
         head_dim = getattr(hf_config, 'index_head_dim', 128)
         if num_heads not in (32, 64):
@@ -57,7 +60,10 @@ class _V4PagedMQALogitsWarmup:
         rows = list(range(alignment, max_aligned_rows + 1, alignment))
         random.shuffle(rows)
         for row_count in rows:
-            context_lens = torch.zeros(row_count, 1, dtype=torch.int32, device='cuda')
+            # DeepGEMM's metadata scheduler cannot represent an all-empty
+            # workload. Use one valid compressed cache page per row.
+            context_lens = torch.full(
+                (row_count, 1), entries_per_block, dtype=torch.int32, device='cuda')
             deep_gemm.get_paged_mqa_logits_metadata(
                 context_lens, entries_per_block, deep_gemm.get_num_sms())
 
@@ -171,7 +177,8 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 
             score_meta = getattr(meta, 'index_score_meta', None)
             if (score_meta is None or score_meta.context_lens is None or score_meta.block_offsets is None
-                    or score_meta.schedule_metadata is None or score_meta.max_k_seqlen is None):
+                    or score_meta.schedule_metadata is None or score_meta.max_k_seqlen is None
+                    or score_meta.topk_seqlens is None):
                 raise RuntimeError('Packed V4 index scoring requires CUDA index-score metadata.')
             q_mqa = q_3d.view(q_3d.size(0), 1, q_3d.size(1), q_3d.size(2))
             scores = deep_gemm.fp8_paged_mqa_logits(
@@ -183,7 +190,7 @@ class TritonV4IndexerImpl(BaseV4Indexer):
                 score_meta.schedule_metadata,
                 score_meta.max_k_seqlen,
                 False)
-            topk_seqlens = score_meta.context_lens.squeeze(-1)
+            topk_seqlens = score_meta.topk_seqlens
         else:
             # fp8_index fallback for the legacy split value/scale cache layout.
             if index_kv_scale_cache is None:
