@@ -468,22 +468,22 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
         # Row-wise TP outputs normally reduce inside their projections. An
         # optimized communicator lets the following RMSNorm consume that
         # reduction instead. Attention is consumed in this layer.
-        attn_all_reduce = not RMSNorm.can_handle_all_reduce('attn')
+        defer_attn_all_reduce = RMSNorm.can_handle_all_reduce('attn')
         # MLP is consumed by the next target layer, so terminal and MTP blocks
         # must still reduce their outputs.
-        mlp_all_reduce = (layer_idx >= config.num_hidden_layers - 1
-                          or not RMSNorm.can_handle_all_reduce('mlp'))
+        defer_mlp_all_reduce = (layer_idx < config.num_hidden_layers - 1
+                                and RMSNorm.can_handle_all_reduce('mlp'))
 
         # build attention layer
         self.self_attn = self.attention_cls(
-            config, layer_idx, dtype=dtype, device=device, all_reduce=attn_all_reduce)
+            config, layer_idx, dtype=dtype, device=device, all_reduce=not defer_attn_all_reduce)
 
         # mlp
         self.mlp = (DeepseekV2MoE(
-            config, layer_idx, dtype=dtype, device=device, all_reduce=mlp_all_reduce) if
+            config, layer_idx, dtype=dtype, device=device, all_reduce=not defer_mlp_all_reduce) if
                     (config.n_routed_experts is not None and layer_idx >= config.first_k_dense_replace
                      and layer_idx % config.moe_layer_freq == 0) else DeepseekV2MLP(
-                         config, dtype=dtype, device=device, all_reduce=mlp_all_reduce))
+                         config, dtype=dtype, device=device, all_reduce=not defer_mlp_all_reduce))
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
