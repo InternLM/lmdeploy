@@ -252,7 +252,9 @@ class SamplingInputs:
     min_p: torch.Tensor = None
     random_seeds: torch.Tensor = None
     random_offsets: torch.Tensor = None
+    # Host-side summaries used to route sampling without reading device data.
     max_top_k: int = 1
+    has_greedy: bool = False
     min_top_p: float = 1.0
     response_formats: list[str, ...] = ()
     logits_processors: list[list[LogitsProcessor]] = None

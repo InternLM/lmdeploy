@@ -3,12 +3,111 @@ from types import SimpleNamespace
 
 import torch
 
+from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
 from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
 from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent, _expand_sampling_inputs
 from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+
+def test_rejection_sampling_delegates_complete_logits(monkeypatch):
+    """The agent delegates routing and bonus sampling to RejectionSampler."""
+    batch_size = 2
+    num_spec_tokens = 2
+    num_positions = num_spec_tokens + 1
+    vocab_size = 16
+    expected_target_ids = torch.tensor([
+        [3, 4, 5],
+        [6, 7, 8],
+    ])
+    target_logits = torch.full(
+        (batch_size * num_positions, vocab_size),
+        -100.0,
+    )
+    target_logits.scatter_(
+        1,
+        expected_target_ids.flatten()[:, None],
+        100.0,
+    )
+    draft_token_ids = expected_target_ids[:, :-1].clone()
+
+    class _FakeLogitsProcessor:
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __call__(self, logits):
+            return logits, None
+
+        def sampling(self, logits):
+            raise AssertionError('greedy fast path must not sample bonus separately')
+
+    class _GuidedHelper:
+
+        def cleanup_sessions(self, sessions):
+            pass
+
+        def get_processors(self, session_ctx, response_formats):
+            return {}
+
+        async def accept_rejection_sampled_tokens(self, *args, **kwargs):
+            pass
+
+    class _RecordingRejectionSampler:
+
+        def __init__(self):
+            self.target_logits = None
+
+        def __call__(self, actual_target_logits, actual_draft_token_ids,
+                     actual_sampling_inputs):
+            self.target_logits = actual_target_logits
+            assert torch.equal(actual_draft_token_ids, draft_token_ids)
+            assert actual_sampling_inputs.batch_size == batch_size * num_positions
+            target_token_ids = actual_target_logits.argmax(dim=-1)
+            return (
+                target_token_ids,
+                target_token_ids.new_zeros(batch_size),
+                target_token_ids[:, -1],
+            )
+
+    monkeypatch.setattr(
+        'lmdeploy.pytorch.spec_decode.spec_agent.FusedLogitsProcessor',
+        _FakeLogitsProcessor,
+    )
+    rejection_sampler = _RecordingRejectionSampler()
+    agent = object.__new__(SpecModelAgent)
+    agent.num_spec_tokens = num_spec_tokens
+    agent.misc_config = SimpleNamespace(logprobs_mode=None)
+    agent.guided_helper = _GuidedHelper()
+    agent.rejection_sampler = rejection_sampler
+    model_inputs = ModelInputs(
+        input_ids=torch.zeros(1, batch_size * num_positions, dtype=torch.long),
+        seq_length=torch.full((batch_size, ), num_positions, dtype=torch.long),
+        history_lengths=torch.zeros(batch_size, dtype=torch.long),
+        block_offsets=torch.zeros(batch_size, 1, dtype=torch.long),
+        num_ignored_history=torch.zeros(batch_size, dtype=torch.long),
+        is_decoding=True,
+        max_q_seqlen=num_positions,
+        max_kv_seqlen=num_positions,
+        sum_kv_seqlen=batch_size * num_positions,
+    )
+    extra_inputs = ARSpecExtraInputs(
+        target_logits=target_logits,
+        output_draft_token_ids=draft_token_ids,
+    )
+    sampling_inputs = SamplingInputs(max_top_k=1, batch_size=batch_size)
+
+    output = asyncio.run(
+        agent._rejection_sampling(model_inputs, extra_inputs, sampling_inputs))
+
+    assert torch.equal(
+        rejection_sampler.target_logits,
+        target_logits.view(batch_size, num_positions, vocab_size),
+    )
+    assert torch.equal(output.output_token_ids, expected_target_ids)
+    assert torch.equal(output.next_token_ids, expected_target_ids[:, -1])
 
 
 def _make_non_last_chunk_inputs(dp_meta=None):
@@ -549,22 +648,31 @@ def test_spec_model_agent_warmup_adds_dp_meta_for_draft_capture(monkeypatch):
     ]
 
 
-def test_slice_sampling_inputs_decode():
-    """Test _slice_sampling_inputs with decoding (num_tokens_per_batch > 1)."""
+def test_select_bonus_sampling_inputs_decode():
+    """Select the last expanded sampling policy for each request."""
     from lmdeploy.pytorch.engine.logits_process import SamplingInputs
-    from lmdeploy.pytorch.spec_decode.spec_agent import _slice_sampling_inputs
+    from lmdeploy.pytorch.spec_decode.reject_sampler import (
+        _select_bonus_sampling_inputs,
+    )
 
     batch_size = 2
     num_tokens_per_batch = 3
 
     temperature = torch.tensor([0.5, 1.0], device=device)
     top_k = torch.tensor([1, 10], device=device)
+    top_p = torch.tensor([0.8, 0.9], device=device)
+    min_p = torch.tensor([0.1, 0.2], device=device)
+    random_seeds = torch.tensor([10, 20], device=device)
     random_offsets = torch.tensor([100, 200], device=device)
 
     sampling_inputs = SamplingInputs(
         max_top_k=10,
-        top_k=top_k,
+        has_greedy=True,
         temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+        min_p=min_p,
+        random_seeds=random_seeds,
         random_offsets=random_offsets,
         max_num_logprobs=-1,
         batch_size=batch_size,
@@ -578,30 +686,29 @@ def test_slice_sampling_inputs_decode():
     expected_offsets = torch.tensor([100, 101, 102, 200, 201, 202], device=device)
     torch.testing.assert_close(expanded.random_offsets, expected_offsets)
 
-    # Then slice back (is_last=True, takes last token per batch)
-    sliced = _slice_sampling_inputs(expanded, num_tokens_per_batch)
+    sliced = _select_bonus_sampling_inputs(expanded, num_tokens_per_batch)
     assert sliced.batch_size == batch_size
-    torch.testing.assert_close(sliced.temperature, temperature)
     torch.testing.assert_close(sliced.top_k, top_k)
+    torch.testing.assert_close(sliced.top_p, top_p)
+    torch.testing.assert_close(sliced.min_p, min_p)
+    torch.testing.assert_close(sliced.random_seeds, random_seeds)
     assert sliced.max_top_k == 10
+    assert sliced.has_greedy
+    # Temperature was already applied to the processed target logits.
+    assert sliced.temperature is None
     # last token per batch: offsets [102, 202]
     torch.testing.assert_close(sliced.random_offsets, torch.tensor([102, 202], device=device))
 
-    # Slice with is_last=False (takes tokens except the last one per batch)
-    sliced_draft = _slice_sampling_inputs(expanded, num_tokens_per_batch, is_last=False)
-    assert sliced_draft.batch_size == batch_size * (num_tokens_per_batch - 1)
-    # drops last per batch: [100, 101, 200, 201]
-    torch.testing.assert_close(sliced_draft.random_offsets, torch.tensor([100, 101, 200, 201], device=device))
 
-
-def test_slice_sampling_inputs_prefill():
-    """Test _slice_sampling_inputs with prefill (num_tokens_per_batch=1 returns
-    same object)."""
+def test_select_bonus_sampling_inputs_one_position():
+    """A one-position policy needs no selection."""
     from lmdeploy.pytorch.engine.logits_process import SamplingInputs
-    from lmdeploy.pytorch.spec_decode.spec_agent import _slice_sampling_inputs
+    from lmdeploy.pytorch.spec_decode.reject_sampler import (
+        _select_bonus_sampling_inputs,
+    )
 
     sampling_inputs = SamplingInputs(max_top_k=1, batch_size=2)
-    result = _slice_sampling_inputs(sampling_inputs, 1)
+    result = _select_bonus_sampling_inputs(sampling_inputs, 1)
     assert result is sampling_inputs
 
 

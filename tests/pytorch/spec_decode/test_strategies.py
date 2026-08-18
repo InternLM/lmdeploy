@@ -45,10 +45,10 @@ def _make_seq(prefill_tokens=None):
     return seq
 
 
-def _make_sampling_seq(stop_words, seq_id=0):
+def _make_sampling_seq(stop_words, seq_id=0, top_k=1):
     """Create the minimal sequence shape used by ARSamplingStrategy."""
     return SimpleNamespace(
-        sampling_param=SamplingParam(stop_words=stop_words),
+        sampling_param=SamplingParam(stop_words=stop_words, top_k=top_k),
         num_valid_ids=0,
         num_new_tokens=0,
         valid_ids=np.array([], dtype=np.int64),
@@ -98,6 +98,26 @@ class TestStoppingCriteria:
         assert mixed_empty.stop_words.ndim == 2
         assert mixed_empty.stop_words.tolist() == [[369], [-1]]
         assert mixed_empty.stop_mask.tolist() == [[True], [False]]
+
+    def test_sampling_strategy_summarizes_greedy_policy_on_host(self):
+        sampling = ARSamplingStrategy(pad_token_id=0)
+
+        all_greedy = sampling.make_sampling_inputs([
+            _make_sampling_seq([], seq_id=0, top_k=1),
+            _make_sampling_seq([], seq_id=1, top_k=1),
+        ])
+        mixed = sampling.make_sampling_inputs([
+            _make_sampling_seq([], seq_id=0, top_k=1),
+            _make_sampling_seq([], seq_id=1, top_k=10),
+        ])
+        all_random = sampling.make_sampling_inputs([
+            _make_sampling_seq([], seq_id=0, top_k=2),
+            _make_sampling_seq([], seq_id=1, top_k=10),
+        ])
+
+        assert all_greedy.has_greedy
+        assert mixed.has_greedy
+        assert not all_random.has_greedy
 
     def test_num_appendable_ids_stops_on_length(self):
         stopping = ARSpecStoppingCriteria(num_appendable_ids=torch.tensor([3, 5]))
