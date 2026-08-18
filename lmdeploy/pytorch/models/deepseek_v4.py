@@ -307,8 +307,11 @@ class Indexer(nn.Module):
         )
         self.compressor = Compressor(args, layer_id, compress_ratio, self.head_dim,
                                      dtype=dtype, device=device, rotate=True)
-        self.indexer_fwd = NativeV4Indexer(index_topk=self.index_topk,
-                                           compress_ratio=self.compress_ratio)
+        self.indexer_fwd = NativeV4Indexer(
+            index_topk=self.index_topk,
+            compress_ratio=self.compress_ratio,
+            num_heads=self.n_heads,
+            head_dim=self.head_dim)
         self.apply_rotary = ApplyRotaryEmb()
 
     def forward(self,
