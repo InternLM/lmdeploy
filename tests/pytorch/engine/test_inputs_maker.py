@@ -121,6 +121,8 @@ def test_make_kv_prefix_cache_copy_plan_rejects_invalid_relationships(logical_pa
 
 class _FakeScheduler:
 
+    kv_connector = None
+
     def __init__(self, running, waiting=None, num_ready=0, num_running=0):
         self.running = running
         self.waiting = waiting or []
@@ -150,6 +152,9 @@ class _FakeScheduler:
 
     def num_running(self):
         return self._num_running
+
+    def build_kv_connector_metadata(self, running, token_lens=None):
+        return None
 
 
 class _FakeEngineStrategy:
@@ -223,7 +228,11 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
     state_checkpoints = _StateCheckpoints()
     block_trie = SimpleNamespace(enabled=True, state_checkpoints=state_checkpoints)
     loop = EngineLoop.__new__(EngineLoop)
-    loop.scheduler = SimpleNamespace(block_trie=block_trie, collect_migration_done=lambda: None)
+    loop.scheduler = SimpleNamespace(
+        block_trie=block_trie,
+        collect_migration_done=lambda: None,
+        has_pending_kv_transfer_work=lambda: False,
+    )
     loop.inputs_maker = _InputsMaker(state_checkpoints)
     loop.executor = _Executor(state_checkpoints)
     loop._sleep_requested = False
@@ -280,7 +289,11 @@ def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save()
     state_checkpoints = _StateCheckpoints()
     block_trie = SimpleNamespace(enabled=True, state_checkpoints=state_checkpoints)
     loop = EngineLoop.__new__(EngineLoop)
-    loop.scheduler = SimpleNamespace(block_trie=block_trie, collect_migration_done=lambda: None)
+    loop.scheduler = SimpleNamespace(
+        block_trie=block_trie,
+        collect_migration_done=lambda: None,
+        has_pending_kv_transfer_work=lambda: False,
+    )
     loop.inputs_maker = _InputsMaker()
     loop.executor = _Executor()
     loop._sleep_requested = True
@@ -308,6 +321,9 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
     class _Scheduler:
 
         def has_unfinished(self):
+            return False
+
+        def has_pending_kv_connector_work(self):
             return False
 
         def collect_migration_done(self):
@@ -350,6 +366,12 @@ def test_engine_loop_treats_pending_kv_connector_work_as_runnable_and_polls():
 
         def has_pending_kv_lookup_work(self):
             return False
+
+        def has_pending_kv_connector_work(self):
+            return (
+                self.has_pending_kv_transfer_work()
+                or self.has_pending_kv_lookup_work()
+            )
 
         def build_kv_connector_progress_metadata(self):
             events.append('build')
@@ -396,6 +418,9 @@ def test_engine_loop_does_not_poll_connector_without_pending_work():
         def has_pending_kv_connector_work(self):
             return False
 
+        def has_pending_kv_transfer_work(self):
+            return False
+
     class _Executor:
 
         async def poll_kv_connector(self, metadata=None):
@@ -419,6 +444,9 @@ def test_engine_loop_lookup_only_is_runnable_without_worker_progress_rpc():
             return False
 
         def has_pending_kv_lookup_work(self):
+            return True
+
+        def has_pending_kv_connector_work(self):
             return True
 
     class _Executor:
@@ -588,6 +616,9 @@ def test_engine_loop_sleep_drains_prefetched_forward_and_connector_pins():
         def has_pending_kv_connector_work(self):
             return self.pending
 
+        def has_pending_kv_transfer_work(self):
+            return self.pending
+
     class _InputsMaker:
 
         def deactivate_evict_seqs(self):
@@ -637,6 +668,15 @@ def test_engine_loop_idle_polls_until_kv_connector_releases_pin(monkeypatch):
 
         def has_pending_kv_connector_work(self):
             return self.pending
+
+        def has_pending_kv_transfer_work(self):
+            return self.pending
+
+        def has_pending_kv_lookup_work(self):
+            return False
+
+        def build_kv_connector_progress_metadata(self):
+            return None
 
         def collect_migration_done(self):
             events.append('collect')

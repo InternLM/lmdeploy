@@ -8,6 +8,7 @@ import torch
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.engine.inputs_maker import _ForwardInputsResult, _ForwardInputsTask
+from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput
 from lmdeploy.pytorch.kv_connector.mooncake.store import scheduler as scheduler_module
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     MOONCAKE_BLOCK_HASH_BYTES,
@@ -354,6 +355,15 @@ class _PinConnector:
         self.updates = []
         self.finished = []
 
+    def on_new_request(self, request):
+        return None
+
+    def cancel_lookup(self, request_id):
+        return None
+
+    def has_pending_kv_lookup_work(self):
+        return False
+
     def build_connector_meta(self, scheduler_output):
         self.outputs.append(scheduler_output)
         save_requests = ()
@@ -404,6 +414,12 @@ class _LoadConnector:
 
     def on_new_request(self, request):
         self.new_requests.append(request.seq_id)
+
+    def cancel_lookup(self, request_id):
+        return None
+
+    def has_pending_kv_lookup_work(self):
+        return False
 
     def get_num_new_matched_tokens(self, request, num_computed_tokens):
         self.lookup_calls.append((request.seq_id, num_computed_tokens))
@@ -1233,6 +1249,66 @@ def test_paging_scheduler_pins_until_all_tp_completion_and_rolls_back_dispatch()
     scheduler.block_manager.free(retry_seq)
 
 
+def test_paging_scheduler_eviction_kv_roundtrip(mooncake_scheduler):
+    """Saved KV survives eviction and restores the same request generation."""
+    stored_hashes = set()
+
+    def lookup(_req_id, token_len, block_hashes, non_block):
+        assert non_block
+        matched = 0
+        for block_hash in block_hashes:
+            if block_hash not in stored_hashes:
+                break
+            matched += mooncake_scheduler._cache_config.block_size
+        return min(matched, token_len)
+
+    mooncake_scheduler.client.lookup = lookup
+    scheduler = _paging_scheduler(
+        mooncake_scheduler,
+        num_gpu_blocks=3,
+        max_session_len=16,
+    )
+    seq = scheduler.add_session(4).add_sequence(np.arange(9, dtype=np.int64))
+
+    first = scheduler.schedule(is_prefill=True)
+    assert first.running == [seq]
+    save_metadata = scheduler.build_kv_connector_metadata([seq], (8, ))
+    save_request = save_metadata.save_requests[0]
+    assert save_request.generation == 0
+    stored_hashes.update(save_request.block_hashes)
+    scheduler.update_connector_output(
+        KVConnectorOutput(completed_save_ids={save_request.save_id}))
+    assert not scheduler.has_pending_kv_transfer_work()
+
+    seq.state.evict()
+    pressure = scheduler.add_session(5).add_sequence(
+        np.arange(9, dtype=np.int64))
+    assert scheduler.eviction_helper.evict_for_seq(pressure, [seq], 0)
+    pressure.session.remove_sequence(pressure)
+    assert seq.status == MessageStatus.WAITING
+    assert len(seq.logical_blocks) == 0
+    assert scheduler._kv_seq_generations[seq.seq_id] == 1
+
+    loading = scheduler.schedule(is_prefill=True)
+    assert loading.running == []
+    assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    load_metadata = scheduler.build_kv_connector_progress_metadata()
+    load_request = load_metadata.load_requests[0]
+    assert load_request.generation == 1
+    assert load_request.remote_token_len == 8
+    assert load_request.block_hashes == save_request.block_hashes
+    scheduler.mark_kv_connector_metadata_dispatched(load_metadata)
+    scheduler.update_connector_output(
+        KVConnectorOutput(completed_load_ids={load_request.load_id}))
+
+    assert seq.status == MessageStatus.WAITING
+    assert seq.num_history_ids == 8
+    assert not scheduler.has_pending_kv_transfer_work()
+    resumed = scheduler.schedule(is_prefill=True)
+    assert resumed.running == [seq]
+    assert seq.status == MessageStatus.READY
+
+
 def test_paging_scheduler_notifies_connector_before_end_session_free():
     connector = _PinConnector()
     scheduler = _paging_scheduler(connector)
@@ -1280,12 +1356,51 @@ def test_paging_scheduler_preemption_isolates_generation_without_cancelling_pinn
     scheduler.block_manager.free(seq)
 
 
+def test_decode_eviction_advances_connector_generation_once_per_tick():
+    """The decode and deferred-eviction layers represent one preemption."""
+    connector = _PinConnector()
+    scheduler = _paging_scheduler(
+        connector,
+        num_gpu_blocks=1,
+        max_session_len=8,
+    )
+    seq = scheduler.add_session(6).add_sequence(np.arange(4, dtype=np.int64))
+    scheduler.block_manager.allocate(seq)
+    scheduler.build_kv_connector_metadata([seq], (4, ))
+    seq.state.activate()
+    scheduler.activate_seqs([seq])
+
+    valid_mask = scheduler.schedule_running(
+        [seq],
+        num_required_tokens=1,
+        prealloc_size=1,
+    )
+    assert valid_mask == [False]
+    assert seq.status == MessageStatus.WAITING
+
+    # InputsMaker later revisits the same invalid sequence through
+    # deactivate_evict_seqs().  It must not create another generation.
+    scheduler.deactivate_seqs([seq])
+    scheduler.evict_seqs([seq])
+    assert scheduler._kv_seq_generations[seq.seq_id] == 1
+
+    resumed = scheduler.build_kv_connector_metadata([seq], (4, ))
+    assert resumed.save_requests[0].generation == 1
+
+    # A later forward tick starts a genuinely new preemption generation.
+    scheduler.tick()
+    scheduler.mark_kv_connector_preempted(seq)
+    assert scheduler._kv_seq_generations[seq.seq_id] == 2
+
+
 @pytest.mark.parametrize('is_chunk', [False, True])
 def test_forward_payload_appends_prefill_connector_metadata(is_chunk):
     calls = []
     metadata = object()
 
     class _Scheduler:
+
+        kv_connector = object()
 
         def build_kv_connector_metadata(self, running, token_lens):
             calls.append((running, token_lens))

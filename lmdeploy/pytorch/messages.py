@@ -329,11 +329,9 @@ class SchedulerSession:
         seq.set_state(build_seq_state(self.scheduler, seq, status))
         self.seq_manager.add_sequence(seq)
 
-        connector = getattr(self.scheduler, 'kv_connector', None)
+        connector = self.scheduler.kv_connector
         if connector is not None:
-            on_new_request = getattr(connector, 'on_new_request', None)
-            if on_new_request is not None:
-                on_new_request(seq)
+            connector.on_new_request(seq)
 
         # metrics
         seq.record_event(EventType.QUEUED)
@@ -343,9 +341,7 @@ class SchedulerSession:
     def remove_sequence(self, seq: 'SchedulerSequence'):
         """Remove sequence."""
         assert seq.seq_id in self.sequences
-        request_finished = getattr(self.scheduler, 'request_kv_connector_finished', None)
-        if request_finished is not None:
-            request_finished(seq)
+        self.scheduler.request_kv_connector_finished(seq)
         seq.state.free()
         self.sequences.pop(seq.seq_id)
         self.seq_manager.remove_sequence(seq)

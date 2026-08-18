@@ -15,6 +15,7 @@ from lmdeploy.pytorch.configurations.glm_moe_dsa import GlmMoeDsaModelConfigBuil
 from lmdeploy.pytorch.configurations.llava_hf import LlavaHfModelConfigBuilder
 from lmdeploy.pytorch.engine.executor.base import ExecutorBase
 from lmdeploy.pytorch.kv_connector import KVConnectorRole, build_kv_connector
+from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput
 from lmdeploy.pytorch.kv_connector.mooncake.store import connector as connector_module
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     MOONCAKE_BLOCK_HASH_BYTES,
@@ -25,7 +26,7 @@ from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     build_prefix_block_hashes,
     build_store_key,
 )
-from lmdeploy.pytorch.kv_connector.mooncake.store.worker import (
+from lmdeploy.pytorch.kv_connector.mooncake.store.worker_threads import (
     KVCacheStoreSendingThread,
     _StoreTask,
 )
@@ -477,6 +478,12 @@ class _PinConnector:
     def __init__(self):
         self.updates = []
 
+    def on_new_request(self, request):
+        return None
+
+    def has_pending_kv_lookup_work(self):
+        return False
+
     def build_connector_meta(self, scheduler_output):
         token_len = scheduler_output.connector_token_lens[0]
         num_blocks = token_len // 4
@@ -530,15 +537,16 @@ def test_tp_completion_intersection_holds_and_releases_scheduler_pin_once():
     executor = ExecutorBase.__new__(ExecutorBase)
     executor._kv_connector_acknowledged_sending = set()
     incomplete = executor._aggregate_kv_connector_outputs(
-        [({save_id}, None)] * 7 + [(None, None)], )
+        [KVConnectorOutput(completed_save_ids={save_id})] * 7
+        + [KVConnectorOutput()], )
     scheduler.update_connector_output(incomplete)
 
     assert not incomplete
     assert np.array_equal(allocator.get_ref_count(logical_ids), np.array([1]))
     assert scheduler.has_pending_kv_connector_work()
 
-    completed = executor._aggregate_kv_connector_outputs([({save_id}, None)] *
-                                                         8, )
+    completed = executor._aggregate_kv_connector_outputs(
+        [KVConnectorOutput(completed_save_ids={save_id})] * 8, )
     scheduler.update_connector_output(completed)
 
     assert completed.completed_save_ids == {save_id}

@@ -15,7 +15,7 @@ from .data import (
     MooncakeStoreSaveRequest,
     build_prefix_block_hashes,
 )
-from .worker import LookupKeyClient
+from .lookup import LookupKeyClient
 
 logger = get_logger('lmdeploy')
 

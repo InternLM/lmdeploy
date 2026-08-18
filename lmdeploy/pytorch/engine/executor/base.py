@@ -182,7 +182,13 @@ class ExecutorBase:
 
     @staticmethod
     def _normalize_kv_connector_output(output: Any) -> KVConnectorOutput:
-        """Normalize structured and legacy worker connector outputs."""
+        """Copy one native worker connector output.
+
+        LMDeploy connectors have a single typed worker-output contract.  Keep
+        ``None`` as the empty result used by executors without a connector, but
+        reject vLLM-style dictionaries, tuples, and duck-typed objects so an
+        interface mismatch fails at its source.
+        """
         if output is None:
             return KVConnectorOutput()
         if isinstance(output, KVConnectorOutput):
@@ -191,43 +197,9 @@ class ExecutorBase:
                 completed_load_ids=output.completed_load_ids,
                 failed_load_ids=output.failed_load_ids,
             )
-        if isinstance(output, dict):
-            completed_saves = output.get(
-                'completed_save_ids',
-                output.get('finished_sending', ()),
-            )
-            completed_loads = output.get(
-                'completed_load_ids',
-                output.get('finished_recving', ()),
-            )
-            failed_loads = output.get('failed_load_ids', ())
-            return KVConnectorOutput(
-                completed_save_ids=completed_saves or (),
-                completed_load_ids=completed_loads or (),
-                failed_load_ids=failed_loads or (),
-            )
-        if isinstance(output, tuple) and len(output) == 2:
-            completed_saves, completed_loads = output
-            return KVConnectorOutput(
-                completed_save_ids=completed_saves or (),
-                completed_load_ids=completed_loads or (),
-            )
-
-        completed_saves = getattr(
-            output,
-            'completed_save_ids',
-            getattr(output, 'finished_sending', ()),
-        )
-        completed_loads = getattr(
-            output,
-            'completed_load_ids',
-            getattr(output, 'finished_recving', ()),
-        )
-        failed_loads = getattr(output, 'failed_load_ids', ())
-        return KVConnectorOutput(
-            completed_save_ids=completed_saves or (),
-            completed_load_ids=completed_loads or (),
-            failed_load_ids=failed_loads or (),
+        raise TypeError(
+            'worker connector output must be KVConnectorOutput or None, got '
+            f'{type(output).__name__}'
         )
 
     def _aggregate_kv_connector_outputs(self, outputs: list[Any]) -> KVConnectorOutput:

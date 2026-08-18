@@ -269,6 +269,21 @@ class KVConnectorBase(ABC):
         it."""
         return None
 
+    def cancel_lookup(self, request_id: RequestId) -> None:
+        """Discard scheduler-side lookup state for an aborted request."""
+        return None
+
+    def mark_connector_meta_dispatched(
+        self,
+        connector_metadata: KVConnectorMetadata,
+    ) -> None:
+        """Commit connector bookkeeping after executor dispatch succeeds."""
+        return None
+
+    def has_pending_kv_lookup_work(self) -> bool:
+        """Return whether scheduler-side asynchronous lookup work remains."""
+        return False
+
     def update_connector_output(self, connector_output: Any) -> None:
         """Consume an executor-aggregated output from worker connectors."""
         return None

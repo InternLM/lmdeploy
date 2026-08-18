@@ -207,7 +207,18 @@ class RayExecutor(ExecutorBase):
         if cache_config is not None:
             transfer_config = cache_config.kv_transfer_config
             if transfer_config is not None and transfer_config.is_kv_transfer_instance:
-                return _KV_CONNECTOR_WORKER_RELEASE_TIMEOUT
+                timeout = transfer_config.kv_connector_extra_config.get(
+                    'worker_release_timeout',
+                    _KV_CONNECTOR_WORKER_RELEASE_TIMEOUT,
+                )
+                if (
+                    isinstance(timeout, bool)
+                    or not isinstance(timeout, (int, float))
+                    or timeout <= 0
+                ):
+                    raise ValueError(
+                        'worker_release_timeout must be a positive number')
+                return float(timeout)
         return _DEFAULT_WORKER_RELEASE_TIMEOUT
 
     def __init__(

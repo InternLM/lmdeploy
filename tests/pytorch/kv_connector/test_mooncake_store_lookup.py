@@ -12,8 +12,8 @@ import zmq
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import BlobBlockHashes
+from lmdeploy.pytorch.kv_connector.mooncake.store.lookup import LookupKeyClient, LookupKeyServer
 from lmdeploy.pytorch.kv_connector.mooncake.store.protocol import LOOKUP_MSG, RESET_MSG, RESP_ERR
-from lmdeploy.pytorch.kv_connector.mooncake.store.worker import LookupKeyClient, LookupKeyServer
 
 
 def _make_cache_config(endpoint: str, timeout_ms: int = 5000) -> CacheConfig:

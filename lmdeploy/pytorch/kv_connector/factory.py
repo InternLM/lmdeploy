@@ -18,7 +18,7 @@ def prepare_kv_connector_config(cache_config: CacheConfig, model_path: str | Non
     if transfer_config is None or not transfer_config.is_kv_transfer_instance:
         return
     if transfer_config.kv_connector == 'MooncakeStoreConnector':
-        from .mooncake.store.worker import prepare_lookup_rpc_path
+        from .mooncake.store.lookup import prepare_lookup_rpc_path
 
         if model_path is not None:
             resolved_model_path = os.path.realpath(model_path)

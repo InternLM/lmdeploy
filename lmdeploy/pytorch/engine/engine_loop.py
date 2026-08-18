@@ -65,16 +65,11 @@ class RunableEventAsync:
 
     def has_unfinished(self):
         """Check whether scheduler or engine-local state has runnable work."""
-        if self.scheduler.has_unfinished():
-            return True
-        for name in (
-            'has_pending_kv_transfer_work',
-            'has_pending_kv_lookup_work',
-            'has_pending_kv_connector_work',
+        if (
+            self.scheduler.has_unfinished()
+            or self.scheduler.has_pending_kv_connector_work()
         ):
-            pending_kv_work = getattr(self.scheduler, name, None)
-            if pending_kv_work is not None and pending_kv_work():
-                return True
+            return True
         return self.extra_runable_checker is not None and self.extra_runable_checker()
 
     async def wait(self):
@@ -453,16 +448,12 @@ class EngineLoop:
 
     def _has_pending_kv_transfer_work(self) -> bool:
         """Return whether submitted or ready KV transfers need progress."""
-        checker = getattr(self.scheduler, 'has_pending_kv_transfer_work', None)
-        if checker is None:
-            checker = getattr(self.scheduler, 'has_pending_kv_connector_work', None)
-        return checker is not None and checker()
+        return self.scheduler.has_pending_kv_transfer_work()
 
     def _has_pending_kv_lookup_work(self) -> bool:
         """Return whether scheduler-side asynchronous lookups need
         revisiting."""
-        checker = getattr(self.scheduler, 'has_pending_kv_lookup_work', None)
-        return checker is not None and checker()
+        return self.scheduler.has_pending_kv_lookup_work()
 
     def _has_pending_kv_connector_ack(self) -> bool:
         """Return whether the executor owes workers a sticky-completion ACK."""
@@ -488,21 +479,15 @@ class EngineLoop:
 
         metadata = None
         if self._has_pending_kv_transfer_work():
-            build_metadata = getattr(self.scheduler, 'build_kv_connector_progress_metadata', None)
-            if build_metadata is not None:
-                metadata = build_metadata()
+            metadata = self.scheduler.build_kv_connector_progress_metadata()
 
         try:
             completed = await self.executor.poll_kv_connector(metadata)
         except BaseException:
-            rollback_metadata = getattr(self.scheduler, 'rollback_kv_connector_metadata', None)
-            if rollback_metadata is not None:
-                rollback_metadata(metadata)
+            self.scheduler.rollback_kv_connector_metadata(metadata)
             raise
         if metadata is not None:
-            mark_dispatched = getattr(self.scheduler, 'mark_kv_connector_metadata_dispatched', None)
-            if mark_dispatched is not None:
-                mark_dispatched(metadata)
+            self.scheduler.mark_kv_connector_metadata_dispatched(metadata)
         if completed:
             self.scheduler.update_connector_output(completed)
         return completed

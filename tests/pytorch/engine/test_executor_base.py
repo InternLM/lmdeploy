@@ -430,8 +430,8 @@ def test_kv_connector_completion_aggregation_is_tp_wide_and_sticky():
     # Rank 0 finishes both waves first. Only the wave also reported by rank 1
     # may be exposed to the scheduler.
     completed = executor._aggregate_kv_connector_outputs([
-        ({10, 11}, None),
-        ({10}, None),
+        KVConnectorOutput(completed_save_ids={10, 11}),
+        KVConnectorOutput(completed_save_ids={10}),
     ])
 
     assert completed.completed_save_ids == {10}
@@ -442,15 +442,15 @@ def test_kv_connector_completion_aggregation_is_tp_wide_and_sticky():
     # The previous global completion is acknowledged on this poll. Rank 0's
     # sticky wave 11 remains visible until rank 1 catches up on a later tick.
     completed = executor._aggregate_kv_connector_outputs([
-        ({11}, None),
-        (None, None),
+        KVConnectorOutput(completed_save_ids={11}),
+        KVConnectorOutput(),
     ])
     assert not completed
     assert executor._kv_connector_poll_acknowledgements() == (set(), set())
 
     completed = executor._aggregate_kv_connector_outputs([
-        ({11}, None),
-        ({11}, None),
+        KVConnectorOutput(completed_save_ids={11}),
+        KVConnectorOutput(completed_save_ids={11}),
     ])
     assert completed.completed_save_ids == {11}
 
@@ -462,6 +462,12 @@ def test_kv_connector_completion_aggregation_is_tp_wide_and_sticky():
     ])
     assert not completed
     assert not executor.has_pending_kv_connector_ack()
+
+
+@pytest.mark.parametrize('legacy_output', [({}, ), ({1}, None), object()])
+def test_kv_connector_output_rejects_legacy_shapes(legacy_output):
+    with pytest.raises(TypeError, match='must be KVConnectorOutput or None'):
+        ExecutorBase._normalize_kv_connector_output(legacy_output)
 
 
 def test_kv_connector_load_failure_waits_for_all_tp_ranks_and_uses_union():

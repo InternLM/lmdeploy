@@ -55,6 +55,30 @@ def test_ray_executor_worker_release_timeout(ray_components):
     assert ray_executor_cls._get_worker_release_timeout(_make_cache_config(disabled)) == 5.0
     assert ray_executor_cls._get_worker_release_timeout(_make_cache_config(enabled)) == 45.0
 
+    configured = KVTransferConfig(
+        kv_connector='MooncakeStoreConnector',
+        kv_role='kv_both',
+        kv_connector_extra_config={'worker_release_timeout': 72.5},
+    )
+    assert ray_executor_cls._get_worker_release_timeout(
+        _make_cache_config(configured)) == 72.5
+
+
+@pytest.mark.parametrize('timeout', [True, 0, -1, '45'])
+def test_ray_executor_rejects_invalid_worker_release_timeout(
+    ray_components,
+    timeout,
+):
+    _, _, ray_executor_cls = ray_components
+    configured = KVTransferConfig(
+        kv_connector='MooncakeStoreConnector',
+        kv_role='kv_both',
+        kv_connector_extra_config={'worker_release_timeout': timeout},
+    )
+    with pytest.raises(ValueError, match='must be a positive number'):
+        ray_executor_cls._get_worker_release_timeout(
+            _make_cache_config(configured))
+
 
 @pytest.mark.parametrize(
     ('transfer_config', 'expected_timeout'),

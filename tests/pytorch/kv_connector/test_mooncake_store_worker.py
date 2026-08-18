@@ -13,6 +13,7 @@ from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput
 from lmdeploy.pytorch.kv_connector.mooncake.store import worker as worker_module
+from lmdeploy.pytorch.kv_connector.mooncake.store import worker_threads as worker_threads_module
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     DEFAULT_GLOBAL_SEGMENT_SIZE,
     DEFAULT_LOCAL_BUFFER_SIZE,
@@ -219,6 +220,7 @@ def patch_worker_runtime(monkeypatch):
         lambda value: isinstance(value, FakeTensor) or original_is_tensor(value),
     )
     monkeypatch.setattr(worker_module, 'logger', recording_logger)
+    monkeypatch.setattr(worker_threads_module, 'logger', recording_logger)
     return recording_logger
 
 
@@ -449,6 +451,23 @@ def test_store_create_setup_and_close_are_logged_with_ranks(tmp_path, patch_work
         assert any(f'interaction before: operation={operation}' in message for message in messages)
         assert any(f'interaction after: operation={operation}' in message for message in messages)
     assert all('global_rank=9 tp_rank=3 tp_size=8' in message for message in messages)
+
+
+def test_store_setup_accepts_explicit_local_hostname(tmp_path):
+    path = write_store_config(tmp_path)
+    store = FakeStore()
+    cache_config = make_cache_config(
+        path,
+        extra_config={'local_hostname': '10.10.0.7'},
+    )
+
+    worker = MooncakeStoreWorker(
+        cache_config,
+        store_factory=lambda: store,
+    )
+
+    assert store.setup_calls[0][0] == '10.10.0.7'
+    worker.shutdown()
 
 
 @pytest.mark.parametrize('setup_result', [-1, None])

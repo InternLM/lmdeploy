@@ -78,6 +78,15 @@ class MooncakeStoreConnector(KVConnectorBase):
             raise RuntimeError('worker-side method called on a scheduler MooncakeStoreConnector')
         return worker
 
+    @staticmethod
+    def _typed_metadata(
+        connector_metadata: KVConnectorMetadata,
+    ) -> MooncakeStoreConnectorMetadata:
+        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
+            raise TypeError(
+                'connector_metadata must be a MooncakeStoreConnectorMetadata')
+        return connector_metadata
+
     # Scheduler-side methods.
 
     def get_num_new_matched_tokens(
@@ -106,10 +115,8 @@ class MooncakeStoreConnector(KVConnectorBase):
         connector_metadata: KVConnectorMetadata,
     ) -> None:
         """Tell scheduler bookkeeping that metadata reached the executor."""
-        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
-            raise TypeError('connector_metadata must be a MooncakeStoreConnectorMetadata')
         return self._require_scheduler().mark_connector_meta_dispatched(
-            connector_metadata,
+            self._typed_metadata(connector_metadata),
         )
 
     def build_connector_meta(self, scheduler_output: SchedulerOutput) -> MooncakeStoreConnectorMetadata:
@@ -120,6 +127,9 @@ class MooncakeStoreConnector(KVConnectorBase):
 
     def cancel_lookup(self, request_id: int) -> None:
         return self._require_scheduler().cancel_lookup(request_id)
+
+    def has_pending_kv_lookup_work(self) -> bool:
+        return self._require_scheduler().has_pending_kv_lookup_work()
 
     def update_connector_output(self, connector_output: Any) -> None:
         return self._require_scheduler().update_connector_output(connector_output)
@@ -137,44 +147,32 @@ class MooncakeStoreConnector(KVConnectorBase):
         return self._require_worker().register_kv_caches(kv_caches)
 
     def handle_preemptions(self, connector_metadata: KVConnectorMetadata) -> None:
-        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
-            raise TypeError('connector_metadata must be a MooncakeStoreConnectorMetadata')
-        return self._require_worker().handle_preemptions(connector_metadata)
+        return self._require_worker().handle_preemptions(
+            self._typed_metadata(connector_metadata))
 
     def _get_worker_step_metadata(
         self,
     ) -> tuple[MooncakeStoreWorker, MooncakeStoreConnectorMetadata]:
         worker = self._require_worker()
-        connector_metadata = self._get_connector_metadata()
-        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
-            raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
+        connector_metadata = self._typed_metadata(self._get_connector_metadata())
         return worker, connector_metadata
 
     def has_pending_step_transfers(self) -> bool:
-        worker = self._require_worker()
         if not self.has_connector_metadata():
             return False
-        connector_metadata = self._get_connector_metadata()
-        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
-            raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
+        worker, connector_metadata = self._get_worker_step_metadata()
         return worker.has_pending_step_transfers(connector_metadata)
 
     def has_pending_step_loads(self) -> bool:
-        worker = self._require_worker()
         if not self.has_connector_metadata():
             return False
-        connector_metadata = self._get_connector_metadata()
-        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
-            raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
+        worker, connector_metadata = self._get_worker_step_metadata()
         return worker.has_pending_step_loads(connector_metadata)
 
     def has_pending_step_saves(self) -> bool:
-        worker = self._require_worker()
         if not self.has_connector_metadata():
             return False
-        connector_metadata = self._get_connector_metadata()
-        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
-            raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
+        worker, connector_metadata = self._get_worker_step_metadata()
         return worker.has_pending_step_saves(connector_metadata)
 
     def submit_loads(self) -> None:

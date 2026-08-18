@@ -598,16 +598,15 @@ class _ForwardInputsTask:
 
     def _build_kv_connector_metadata(self):
         """Build scheduler metadata after final prefill/chunk selection."""
-        build_metadata = getattr(self.scheduler, 'build_kv_connector_metadata', None)
-        if build_metadata is None:
+        if self.scheduler.kv_connector is None:
             return None
-
         inputs = self.result.inputs
         token_lens = None
         if inputs is not None and not inputs.is_decoding:
             ready_token_lens = inputs.history_lengths + inputs.seq_length
             token_lens = tuple(int(token_len) for token_len in ready_token_lens.tolist())
-        return build_metadata(self.result.running, token_lens)
+        return self.scheduler.build_kv_connector_metadata(
+            self.result.running, token_lens)
 
     def _build_payload(self):
         maker = self.maker
@@ -1308,15 +1307,13 @@ class InputsMakerAsync:
         try:
             await self.executor.forward_async(forward_inputs)
         except BaseException:
-            rollback_metadata = getattr(self.scheduler, 'rollback_kv_connector_metadata', None)
-            if rollback_metadata is not None:
-                rollback_metadata(forward_inputs.get('kv_connector_metadata'))
+            self.scheduler.rollback_kv_connector_metadata(
+                forward_inputs.get('kv_connector_metadata'))
             raise
         connector_metadata = forward_inputs.get('kv_connector_metadata')
         if connector_metadata is not None:
-            mark_dispatched = getattr(self.scheduler, 'mark_kv_connector_metadata_dispatched', None)
-            if mark_dispatched is not None:
-                mark_dispatched(connector_metadata)
+            self.scheduler.mark_kv_connector_metadata_dispatched(
+                connector_metadata)
         self._last_forward_kind = self._forward_kind(inputs, forward_inputs['delta'])
         self.scheduler.tick()
         self.forward_inputs = forward_inputs
