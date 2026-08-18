@@ -194,9 +194,8 @@ class DSAIndexerMetaBuilder(
             return None
         cache_config = step_context.cache_config
         num_tokens = step_context.input_ids.size(1)
-        batch_size = sequence_metadata.q_seqlens.numel()
         is_multi_token_decode = (step_context.is_decoding
-                                 and num_tokens != batch_size)
+                                 and step_context.max_q_seqlen > 1)
         indexer_kv_seqlens = None
         expanded_block_offsets = None
         if is_multi_token_decode:
