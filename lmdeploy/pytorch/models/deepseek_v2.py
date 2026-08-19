@@ -8,7 +8,6 @@ from os import getenv
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
@@ -33,6 +32,7 @@ from lmdeploy.pytorch.nn.linear import (
     build_o_proj,
 )
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
+from lmdeploy.pytorch.nn.moe.route import RouterGemm
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -606,7 +606,7 @@ class MoEGate(nn.Module):
         self.gating_dim = config.hidden_size
         self.weight = nn.Parameter(
             torch.empty((self.n_routed_experts, self.gating_dim), dtype=torch.float32, device=device))
-        self._router_gemm = self._build_router_gemm()
+        self.router_gemm = RouterGemm()
         if self.topk_method == 'noaux_tc':
             from lmdeploy.pytorch.nn.moe.route import NoauxTCRouter
             self.e_score_correction_bias = nn.Parameter(
@@ -622,17 +622,6 @@ class MoEGate(nn.Module):
         self.softmax_topk = SoftmaxTopK(self.top_k, n_groups=self.router_n_groups)
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
         self.eplb_dispatch_info = info
-
-    @staticmethod
-    def _fp32_router_linear(hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
-        return F.linear(hidden_states.to(weight.dtype), weight)
-
-    def _build_router_gemm(self):
-        """Bind the router GEMM implementation for this device."""
-        if self.weight.is_cuda:
-            from lmdeploy.pytorch.kernels.cuda.fp32_router_gemm import fp32_router_gemm
-            return fp32_router_gemm
-        return self._fp32_router_linear
 
     def _compute_scores(self, logits: torch.Tensor):
         """Compute scores."""
@@ -657,7 +646,7 @@ class MoEGate(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, routed_experts: torch.Tensor = None):
         """forward."""
-        router_logits = self._router_gemm(hidden_states, self.weight)
+        router_logits = self.router_gemm(hidden_states, self.weight)
         if self.fake_eplb:
             # Forcefully manipulate router_logits to simulate expert load balancing (EPLB).
             # This is a benchmark-only hack to achieve optimal performance metrics.

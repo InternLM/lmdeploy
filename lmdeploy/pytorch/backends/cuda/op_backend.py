@@ -93,6 +93,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.HcPrePost:
             from .hc_prepost import TritonHcPrePostBuilder
             return TritonHcPrePostBuilder
+        elif layer_type == OpType.RouterGemm:
+            from .moe_router import TritonRouterGemmBuilder
+            return TritonRouterGemmBuilder
         elif layer_type == OpType.RouterNoauxTC:
             from .moe_router import TritonRouterNoauxTCBuilder
             return TritonRouterNoauxTCBuilder

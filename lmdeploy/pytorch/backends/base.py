@@ -43,6 +43,7 @@ class OpType(Enum):
     CacheBlockCopy = auto()
 
     # MoE router
+    RouterGemm = auto()
     RouterNoauxTC = auto()
 
     # Gated Delta

@@ -2,13 +2,31 @@
 import torch
 
 from lmdeploy.pytorch import envs as _envs
+from lmdeploy.pytorch.kernels.cuda.fp32_router_gemm import fp32_router_gemm
 from lmdeploy.pytorch.kernels.cuda.fused_noaux_tc import fused_noaux_tc_routing
 from lmdeploy.pytorch.kernels.cuda.fused_single_group_router import (
     fused_single_group_topk_router,
 )
 
 from ..default.moe_router import DefaultRouterNoauxTCImpl
-from ..moe_router import RouterNoauxTCBuilder, RouterNoauxTCImpl
+from ..moe_router import RouterGemmBuilder, RouterGemmImpl, RouterNoauxTCBuilder, RouterNoauxTCImpl
+
+
+class TritonRouterGemmImpl(RouterGemmImpl):
+    """Triton router GEMM implementation."""
+
+    def forward(self, hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        """Compute router logits."""
+        return fp32_router_gemm(hidden_states, weight)
+
+
+class TritonRouterGemmBuilder(RouterGemmBuilder):
+    """Triton router GEMM builder."""
+
+    @staticmethod
+    def build():
+        """Build the Triton router GEMM implementation."""
+        return TritonRouterGemmImpl()
 
 
 def is_power_of_two(n):
