@@ -142,10 +142,9 @@ class _CudaStreamBoundary:
 
 
 class LinearFixture:
-    def __init__(self, case: LinearCase, device: torch.device | None = None, *, force_nonnative_fp8: bool = False):
+    def __init__(self, case: LinearCase, device: torch.device | None = None):
         self.case = case
         self.device = device or torch.device('cuda')
-        self.force_nonnative_fp8 = force_nonnative_fp8
         self._ctx = device_context()
         self._ctx.__enter__()
         self._stream_boundary: _CudaStreamBoundary | None = _CudaStreamBoundary(
@@ -299,12 +298,6 @@ class LinearFixture:
         w_deq_torch = self._fill_weight_triple(w_original, w_quant, w_dequant, w)
         # Clone dequant before prepare(): groupwise/fp8 prepare may repack storage.
         with self.on_tm_stream():
-            if self.force_nonnative_fp8:
-                if c.weight_type != 'fp8_e4m3':
-                    raise ValueError('force_nonnative_fp8_requires_fp8_weight')
-                from .linear import _tm, to_tm_dtype
-                dtype = to_tm_dtype(c.data_type)
-                w_quant._impl.input_format = _tm().ResolveLinearWeightFormat(dtype, dtype, 1, 1)
             w_original.prepare()
             w_quant.prepare()
             w_dequant.prepare()
