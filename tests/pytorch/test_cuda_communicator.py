@@ -30,21 +30,23 @@ class _Collective:
 
 def _build_communicator(monkeypatch,
                         *,
+                        backend,
                         fused_result=None,
-                        flashinfer_handled=False,
-                        symm_handled=False):
-    flashinfer = _Collective(result=fused_result, handled=flashinfer_handled)
-    symm_mem = _Collective(handled=symm_handled)
-    monkeypatch.setattr(communicator_module._envs, 'allreduce_use_flashinfer', True)
-    monkeypatch.setattr(communicator_module._envs, 'allreduce_use_symm_mem', True)
-    flashinfer_cls = Mock(return_value=flashinfer)
-    symm_mem_cls = Mock(return_value=symm_mem)
+                        handled=False):
+    collective = _Collective(result=fused_result, handled=handled)
+    use_flashinfer = backend == 'flashinfer'
+    monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', use_flashinfer)
+    monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_allreduce', not use_flashinfer)
+    flashinfer_cls = Mock(return_value=collective)
+    symm_mem_cls = Mock(return_value=collective)
     monkeypatch.setattr(communicator_module, 'FlashInferAllReduce', flashinfer_cls)
     monkeypatch.setattr(communicator_module, 'SymmetricMemoryAllReduce', symm_mem_cls)
     communicator = communicator_module.CudaCommunicator(cpu_group='cpu', device_group='gpu')
-    flashinfer_cls.assert_called_once_with('cpu')
-    symm_mem_cls.assert_called_once_with('cpu')
-    return communicator, flashinfer, symm_mem
+    enabled_cls, disabled_cls = ((flashinfer_cls, symm_mem_cls)
+                                 if use_flashinfer else (symm_mem_cls, flashinfer_cls))
+    enabled_cls.assert_called_once_with('cpu')
+    disabled_cls.assert_not_called()
+    return communicator, collective
 
 
 def _build_norm(monkeypatch, *, fused=False):
@@ -62,8 +64,8 @@ def _build_norm(monkeypatch, *, fused=False):
 
 def test_cuda_communicator_dispatch(monkeypatch):
     fused_result = object()
-    communicator, flashinfer, symm_mem = _build_communicator(
-        monkeypatch, fused_result=fused_result, symm_handled=True)
+    communicator, flashinfer = _build_communicator(
+        monkeypatch, backend='flashinfer', fused_result=fused_result)
     nccl_all_reduce = Mock()
     monkeypatch.setattr(communicator_module.dist, 'all_reduce', nccl_all_reduce)
 
@@ -74,17 +76,24 @@ def test_cuda_communicator_dispatch(monkeypatch):
 
     input = torch.ones(1)
     communicator.all_reduce_(input)
-    nccl_all_reduce.assert_not_called()
+    nccl_all_reduce.assert_called_once_with(input, group='gpu')
 
     flashinfer._handled = True
-    symm_mem._handled = False
     communicator.all_reduce_(input)
-    nccl_all_reduce.assert_not_called()
+    nccl_all_reduce.assert_called_once()
 
-    flashinfer._handled = False
-    symm_mem._handled = False
+    communicator, symm_mem = _build_communicator(monkeypatch, backend='symm_mem', handled=True)
     communicator.all_reduce_(input)
-    nccl_all_reduce.assert_called_once_with(input, group='gpu')
+    assert communicator.supports_optimized_all_reduce()
+    assert not communicator.supports_fused_all_reduce_residual_rms_norm()
+    nccl_all_reduce.assert_called_once()
+
+
+def test_cuda_communicator_rejects_multiple_backends(monkeypatch):
+    monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', True)
+    monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_allreduce', True)
+    with pytest.raises(ValueError, match='cannot be enabled together'):
+        communicator_module.CudaCommunicator(cpu_group='cpu', device_group='gpu')
 
 
 def test_rms_norm_fuses_or_falls_back(monkeypatch):
@@ -221,8 +230,8 @@ def test_symm_mem_allreduce_selects_group_algorithm(monkeypatch):
 
 
 def test_build_cuda_communicator_gates_unsupported_parallelism(monkeypatch):
-    monkeypatch.setattr(communicator_module._envs, 'allreduce_use_flashinfer', True)
-    monkeypatch.setattr(communicator_module._envs, 'allreduce_use_symm_mem', False)
+    monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', True)
+    monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_allreduce', False)
     communicator_cls = Mock(return_value=object())
     monkeypatch.setattr(communicator_module, 'CudaCommunicator', communicator_cls)
 
@@ -239,8 +248,8 @@ def test_build_cuda_communicator_gates_unsupported_parallelism(monkeypatch):
     assert communicator is communicator_cls.return_value
     communicator_cls.assert_called_once_with(cpu_group='cpu', device_group='device')
 
-    monkeypatch.setattr(communicator_module._envs, 'allreduce_use_flashinfer', False)
-    monkeypatch.setattr(communicator_module._envs, 'allreduce_use_symm_mem', True)
+    monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', False)
+    monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_allreduce', True)
     config.attn_tp = 1
     assert communicator_module.build_cuda_communicator('cpu', 'device', config) is None
     config.attn_tp = 2
@@ -248,12 +257,12 @@ def test_build_cuda_communicator_gates_unsupported_parallelism(monkeypatch):
 
 
 def test_dlinfer_communicator_rejects_cuda_options(monkeypatch):
-    monkeypatch.setattr(communicator_module._envs, 'allreduce_use_flashinfer', True)
-    monkeypatch.setattr(communicator_module._envs, 'allreduce_use_symm_mem', False)
+    monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', True)
+    monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_allreduce', False)
     with pytest.raises(AssertionError, match='not supported by DLInfer'):
         DlinferOpsBackend.build_communicator('cpu', 'device', SimpleNamespace())
 
-    monkeypatch.setattr(communicator_module._envs, 'allreduce_use_flashinfer', False)
+    monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', False)
     communicator = DlinferOpsBackend.build_communicator('cpu', 'device', SimpleNamespace())
     assert isinstance(communicator, base_communicator_module.DeviceCommunicator)
     assert communicator.device_group == 'device'

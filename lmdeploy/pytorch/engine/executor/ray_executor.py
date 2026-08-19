@@ -11,7 +11,6 @@ from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.pytorch.backends.cuda.comm.communicator import should_try_symm_mem
 from lmdeploy.pytorch.backends.selector import init_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
@@ -239,7 +238,10 @@ class RayExecutor(ExecutorBase):
 
         device_ctx = DeviceContext(device_type)
         with get_device_manager().context(device_ctx):
-            self._use_symm_mem = device_type == 'cuda' and should_try_symm_mem(dist_config)
+            self._try_symm_mem = False
+            if device_type == 'cuda':
+                from lmdeploy.pytorch.backends.cuda.comm.communicator import should_try_symm_mem
+                self._try_symm_mem = should_try_symm_mem(dist_config)
             logger.info('Init ray cluster.')
             attn_tp = dist_config.attn_tp
             self.ray_ctx = RayContext(attn_tp, dp=dist_config.dp, device_type=device_type)
@@ -640,7 +642,7 @@ class RayExecutor(ExecutorBase):
             if device_str == 'GPU':
                 runtime_env = dict()
                 runtime_env = _update_runtime_envs(runtime_env)
-                if self._use_symm_mem:
+                if self._try_symm_mem:
                     # Symmetric-memory IPC needs peer TP GPUs to stay visible.
                     # Keep the inherited visibility and bind each actor below.
                     runtime_env['env_vars']['RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES'] = '1'
@@ -670,7 +672,7 @@ class RayExecutor(ExecutorBase):
         driver_ip = _get_master_addr()
         if device_str == 'cuda':
             self.workers = self._sort_workers(driver_ip, self.workers)
-            if self._use_symm_mem:
+            if self._try_symm_mem:
                 # Ray did not narrow CUDA visibility, so select each actor's
                 # placement-group assignment before distributed initialization.
                 ray.get([worker.set_assigned_cuda_device.remote() for worker in self.workers])

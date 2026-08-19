@@ -233,8 +233,8 @@ with set_envs():
     enable_decode_torch_compile = env_to_bool('LMDEPLOY_ENABLE_DECODE_TORCH_COMPILE', False)
 
     # cuda communicator
-    allreduce_use_flashinfer = env_to_bool('LMDEPLOY_ALLREDUCE_USE_FLASHINFER', False)
-    allreduce_use_symm_mem = env_to_bool('LMDEPLOY_ALLREDUCE_USE_SYMM_MEM', False)
+    enable_flashinfer_allreduce = env_to_bool('LMDEPLOY_ENABLE_FLASHINFER_ALLREDUCE', False)
+    enable_symm_mem_allreduce = env_to_bool('LMDEPLOY_ENABLE_SYMM_MEM_ALLREDUCE', False)
 
     # opt-ttft
     opt_ttft_policy = env_to_choice('LMDEPLOY_PT_TTFT_POLICY', 'size', {'fifo', 'size'})

@@ -14,10 +14,13 @@ class CudaCommunicator(DeviceCommunicator):
 
     def __init__(self, cpu_group: dist.ProcessGroup, device_group: dist.ProcessGroup):
         super().__init__(device_group=device_group)
+        if _envs.enable_flashinfer_allreduce and _envs.enable_symm_mem_allreduce:
+            raise ValueError('FlashInfer and symmetric-memory all-reduce cannot be enabled together.')
+
         self._flashinfer = (FlashInferAllReduce(cpu_group)
-                            if _envs.allreduce_use_flashinfer else None)
+                            if _envs.enable_flashinfer_allreduce else None)
         self._symm_mem = (SymmetricMemoryAllReduce(cpu_group)
-                          if _envs.allreduce_use_symm_mem else None)
+                          if _envs.enable_symm_mem_allreduce else None)
 
     def supports_optimized_all_reduce(self) -> bool:
         """Whether an optimized all-reduce implementation is available."""
@@ -61,7 +64,7 @@ class CudaCommunicator(DeviceCommunicator):
 
 def should_try_symm_mem(dist_config) -> bool:
     """Whether this configuration is a symmetric-memory candidate."""
-    return (_envs.allreduce_use_symm_mem and dist_config.dp == 1
+    return (_envs.enable_symm_mem_allreduce and dist_config.dp == 1
             and dist_config.ep == 1 and dist_config.attn_tp > 1
             and not dist_config.enable_microbatch)
 
@@ -70,7 +73,7 @@ def build_cuda_communicator(cpu_group: dist.ProcessGroup, device_group: dist.Pro
                             dist_config):
     """Build the optional CUDA communicator for a TP group."""
     compatible = dist_config.dp == 1 and dist_config.ep == 1 and not dist_config.enable_microbatch
-    enabled = _envs.allreduce_use_flashinfer or should_try_symm_mem(dist_config)
+    enabled = _envs.enable_flashinfer_allreduce or should_try_symm_mem(dist_config)
     if not compatible or not enabled:
         return None
     return CudaCommunicator(cpu_group=cpu_group, device_group=device_group)

@@ -219,7 +219,7 @@ def _build_tp_group(context: 'DistContext', timeout: timedelta, cpu_backend: str
 
 
 def _build_tp_communicators(context: 'DistContext'):
-    """Attach one device communicator to each unique TP group."""
+    """Attach one communicator to each rank-local, unique TP group."""
     build_communicator = context.communicator_builder
     groups = (context.attn_tp_group, context.mlp_tp_group, context.moe_tp_group)
     for group in {id(group): group for group in groups}.values():
