@@ -154,11 +154,11 @@ void LinearWeight::prepare()
         TM_CHECK_EQ(scales.dtype(), kFloat);
         process(scales, q_desc, float{});
     }
-    else if (weight_format.dtype == kFloat8_e4m3) {
-        // FP8 non-native path (non-SM90)
-    }
     else {
-        // General quantization format conversion path.
+        // General quantization format conversion path. FP8 on pre-SM89
+        // devices falls through here: the e4m3 weights stay 1 byte in GPU
+        // memory and are dequantized online (e4m3 -> half x scale) inside the
+        // GEMM transform, mirroring the AWQ/GPTQ int4 w4a16 kernels.
         using namespace gemm;
 
         auto [conv_w, conv_s] =

@@ -26,6 +26,26 @@ from .weight_format import (
 logger = get_logger('lmdeploy')
 
 
+def _fp8_expands_scales() -> bool:
+    """Whether FP8 weights must keep e4m3 storage + online dequant.
+
+    Devices without native FP8 tensor cores (compute capability < 8.9) run
+    FP8 as weight-only w8a16: e4m3 stays 1 byte/weight in GPU memory and the
+    GEMM transform dequantizes online (e4m3 -> f16 x scale), mirroring the
+    AWQ/GPTQ int4 kernels. Those kernels consume a 1-D f16 group scale per
+    (N, K/128), so the 2-D [K/128, N/128] checkpoint scale is expanded to
+    [K/128, N] at load time (``FP8Format(expand_scales=True)``).
+    SM90+ keep the 2-D block scale and the native weight-as-A kernels.
+    """
+    if not torch.cuda.is_available():
+        return False
+    try:
+        major, minor = torch.cuda.get_device_capability()
+    except Exception:
+        return False
+    return (major, minor) < (8, 9)
+
+
 def _build_resolver(model_format: str | None,
                     group_size: int | None,
                     dtype: torch.dtype) -> (WeightFormatResolver, torch.dtype):
@@ -47,7 +67,10 @@ def _build_resolver(model_format: str | None,
         formats.append(CompressedTensorFormat(block_in=group_size))
         dtype = torch.float16
     elif model_format == 'fp8':
-        formats.append(FP8Format())
+        # pre-SM89: e4m3 weights + online dequant (w8a16) -> expand the 2-D
+        # block scale to a 1-D f16 group scale (block_out=1). SM90+ keep the
+        # 2-D block scale for the native kernels.
+        formats.append(FP8Format(expand_scales=_fp8_expands_scales()))
     elif model_format == 'mxfp4':
         formats.append(MXFP4Format())
     else:

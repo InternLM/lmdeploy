@@ -130,6 +130,19 @@ using Config_U4_g = Sm75_s16816<kColMajor,
                                 raster_order,
                                 0>;
 
+template<Order raster_order>  // kColMajor
+using Config_Fp8W = Sm75_s16816<kColMajor,
+                                Operand_A<half, kRowMajor>,               // A
+                                Transform_Default,                         // transform A
+                                VoidOperand,                                // U
+                                Operand_B_Pack<fp8_e4m3_t, kColMajor, 1>,  // B
+                                Transform_HMMA_16816<1, 0>,                // transform B
+                                Operand_UV_Pack<uint16_t, true>,           // V
+                                kRowMajor,                                 // order_C
+                                half,                                      // Tc
+                                raster_order,
+                                -1>;  // dense
+
 template<Order raster_order, int group_axis = -1>
 using Config_MXF4 = Sm75_s16816<kColMajor,
                                 Operand_A_Pack<fp4_e2m1_t, kColMajor, 1>,  // A

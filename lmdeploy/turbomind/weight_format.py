@@ -354,8 +354,19 @@ class FP8Format(WeightFormat):
     weight_dtype   = _tm.DataType.TYPE_FP8_E4M3
     has_zero_point = False
 
-    def __init__(self):
-        super().__init__(block_in=128, block_out=128)
+    def __init__(self, *, expand_scales: bool = False):
+        # Devices without native FP8 tensor cores (sm < 80) keep the e4m3
+        # weights in GPU memory and dequantize them online (e4m3 -> half x
+        # scale) inside the GEMM transform, mirroring the AWQ/GPTQ int4 w4a16
+        # kernels. Those kernels consume a per-(N, K/128) 1-D f16 group scale,
+        # so the 2-D [K/128, N/128] checkpoint scale is expanded to [K/128, N]
+        # and the output blocking is dropped (block_out=1) so the weight
+        # format resolves to a K-grouped quant (QuantType::kK).
+        # SM80+ keep the 2-D [K/128, N/128] block scale (block_out=128) for
+        # the native / weight-as-A kernels.
+        super().__init__(block_in=128,
+                         block_out=1 if expand_scales else 128)
+        self._expand_scales = expand_scales
 
     def accepts(self, available: dict[str, Tensor]) -> bool:
         if '.weight_scale_inv' not in available:
@@ -368,6 +379,11 @@ class FP8Format(WeightFormat):
             x = x.view(dtype=torch.uint8)
         if x.dim() >= 2:
             x = x.t()
+        if self._expand_scales and kind == 'scales':
+            # 2-D block scale [K/128, N/128] -> 1-D group scale [K/128, N]:
+            # repeat each 128-column block's scale across its columns and
+            # cast to f16 (the GEMM transform reads the scale bits as f16).
+            x = x.float().repeat_interleave(128, dim=1).to(torch.float16)
         return x
 
     def dequant(self, tensors, data_type):
@@ -378,9 +394,16 @@ class FP8Format(WeightFormat):
         block_size = 128
         fp8_weight = weight.view(torch.float8_e4m3fn).float()
         scale = scales.float()
-        scale = scale.repeat_interleave(block_size, dim=0)
-        scale = scale.repeat_interleave(block_size, dim=1)
-        scale = scale[: fp8_weight.shape[0], : fp8_weight.shape[1]]
+        if self._expand_scales:
+            # Scales already expanded to [K/128, N] at load time; only the
+            # K-axis blocks need repeating to reconstruct [K, N].
+            scale = scale.repeat_interleave(block_size, dim=0)
+            scale = scale[: fp8_weight.shape[0], : fp8_weight.shape[1]]
+        else:
+            # 2-D block scale [K/128, N/128] -> [K, N].
+            scale = scale.repeat_interleave(block_size, dim=0)
+            scale = scale.repeat_interleave(block_size, dim=1)
+            scale = scale[: fp8_weight.shape[0], : fp8_weight.shape[1]]
         target_dtype = _CPP_TO_TORCH[data_type]
         result: dict[str, Tensor] = {'weight': (fp8_weight * scale).to(target_dtype)}
         if 'bias' in tensors:

@@ -32,10 +32,15 @@ DataFormat ResolveLinearWeightFormat(DataType data_type, DataType weight_dtype, 
     }
 
     if (weight_dtype == kFloat8_e4m3) {
-        TM_CHECK(block_in == 128 && block_out == 128)
-            << "FP8 weight format requires block_in==128 and block_out==128, got " << block_in << ", " << block_out;
-        fmt.block_sizes  = {128, 128};
-        fmt.scales.dtype = kFloat;
+        // {128, 128}: 2D-blocked scales, SM90+ native w8a8 path, f32 scale per block.
+        // {128, 1}:   1D K-grouped scales, pre-SM89 weight-only (w8a16) path; scales are
+        //             expanded to [K/128, N] at load time and stored in the compute dtype
+        //             (same layout as int4 AWQ group quantization).
+        TM_CHECK((block_in == 128 && block_out == 128) || (block_in == 128 && block_out == 1))
+            << "FP8 weight format requires (block_in, block_out) == (128, 128) or (128, 1), got " << block_in
+            << ", " << block_out;
+        fmt.block_sizes  = {block_in, block_out};
+        fmt.scales.dtype = (block_out == 128) ? kFloat : data_type;
         return fmt;
     }
 

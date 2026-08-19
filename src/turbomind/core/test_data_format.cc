@@ -36,6 +36,19 @@ TEST_CASE("DataFormat FP8 blocked", "[data_format]")
     REQUIRE(!fmt.zeros.present());
 }
 
+TEST_CASE("DataFormat FP8 K-grouped (pre-SM89 w8a16)", "[data_format]")
+{
+    // 1D K-grouped scales: expanded to [K/128, N] at load time, stored in the
+    // compute dtype (sm75 = f16), same layout as int4 AWQ group quantization.
+    DataFormat fmt = ResolveLinearWeightFormat(kHalf, kFloat8_e4m3, 128, 1);
+    REQUIRE(fmt.is_quantized());
+    REQUIRE(fmt.dtype == kFloat8_e4m3);
+    REQUIRE(fmt.block_sizes == std::vector<int>{128, 1});
+    REQUIRE(fmt.scales.present());
+    REQUIRE(fmt.scales.dtype == kHalf);
+    REQUIRE(!fmt.zeros.present());
+}
+
 TEST_CASE("DataFormat FP4", "[data_format]")
 {
     DataFormat fmt = ResolveLinearWeightFormat(kHalf, kFloat4_e2m1, 128, 1);

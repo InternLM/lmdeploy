@@ -182,11 +182,20 @@ std::array<const LayoutConverter*, 2> GetConverters(DataType data_type,
     if (weight_type == kFloat8_e4m3) {
         constexpr Cvt<uint16_t, uint8_t>  W;  // e4m3     weight
         constexpr Cvt<uint16_t, uint16_t> S;  // f16/bf16 scales
-        // clang-format off
-        if (sm >= 80) return {W(sm8_, kCol, s16816h | A | _1), S(sm8_, kCol, s16816h | U | _1)};
-        if (sm == 75) return {W(sm75, kCol, s16816h | A | _1), S(sm75, kCol, s16816h | U | _1)};
-        if (sm >= 70) return {W(sm70, kRow,   s884h | B | _1), S(sm70, kCol,   s884h | V | _1)};
-        // clang-format on
+        if (grouped) {
+            // clang-format off
+            if (sm >= 80) return {W(sm8_, kCol, s16816h | A | _1), S(sm8_, kCol, s16816h | U | _1)};
+            if (sm == 75) return {W(sm75, kRow, s16816h | B | _1), S(sm75, kCol, s16816h | V | _1)};
+            if (sm >= 70) return {W(sm70, kRow,   s884h | B | _1), S(sm70, kCol,   s884h | V | _1)};
+            // clang-format on
+        }
+        else {
+            // clang-format off
+            if (sm >= 80) return {W(sm8_, kCol, s16816h | A | _1), S(sm8_, kCol, s16816h | U | _1)};
+            if (sm == 75) return {W(sm75, kCol, s16816h | B | _1), S(sm75, kCol, s16816h | V | _1)};
+            if (sm >= 70) return {W(sm70, kRow,   s884h | B | _1), S(sm70, kCol,   s884h | V | _1)};
+            // clang-format on
+        }
     }
 
     TM_LOG_FATAL("Invalid combination: {} {} {} {} {}", sm, data_type, weight_type, input_type, grouped);
