@@ -141,9 +141,8 @@ void LinearWeight::prepare()
         // scales for the native FP8 path. Expand each N-block scale over
         // its 128 output channels and describe the converted format as
         // K-groupwise before selecting/packing the legacy kernel layout.
-        // Checkpoints may store block scales as bf16/fp16 (Qwen3.5 FP8); the
-        // expansion kernel requires f32.
-        EnsureFloatDtype(scales, kFloat);
+        // Checkpoints may store block scales as bf16/fp16 (Qwen3.5 FP8);
+        // BlockscaleToGroupscale dispatches over the source dtype directly.
         const int group_size         = weight_format.block_sizes.at(0);
         scales                       = BlockscaleToGroupscale(scales, data_type, group_size);
         weight_format.block_sizes[1] = 1;
