@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -155,6 +156,14 @@ def test_flashinfer_allreduce_in_place_and_dtype_guards(monkeypatch):
     assert output is None
     assert flashinfer._comm.allreduce_fusion.call_count == fused_calls
 
+    unavailable = FlashInferAllReduce.__new__(FlashInferAllReduce)
+    unavailable._comm = None
+    unavailable._disabled = False
+    unavailable._max_size = 1024
+    monkeypatch.setitem(sys.modules, 'flashinfer.comm', None)
+    assert not unavailable.is_available()
+    assert unavailable._disabled
+
     workspace_error = FlashInferAllReduce.__new__(FlashInferAllReduce)
     workspace_error.group = 'cpu'
     workspace_error._world_size = 2
@@ -170,7 +179,6 @@ def test_flashinfer_allreduce_in_place_and_dtype_guards(monkeypatch):
         create_allreduce_fusion_workspace=create_workspace,
         allreduce_fusion=Mock(),
     )
-    workspace_error.supports = Mock(return_value=True)
     monkeypatch.setattr(flashinfer_module.dist, 'get_rank', lambda group: 0)
 
     input = torch.ones(2, 4, dtype=torch.bfloat16)

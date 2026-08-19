@@ -53,6 +53,7 @@ class FlashInferAllReduce:
     """FlashInfer all-reduce operations for one distributed group."""
 
     def __init__(self, group: dist.ProcessGroup):
+        """Initialize lazy FlashInfer state for ``group``."""
         self.group = group
         self._comm = None
         self._workspace = None
@@ -65,38 +66,52 @@ class FlashInferAllReduce:
         self._max_size = _FUSION_MAX_SIZE.get(self._device_capability, {}).get(self._world_size, 0)
         self._one_shot_max_size = _ONE_SHOT_MAX_SIZE.get(self._device_capability, {}).get(self._world_size, 0)
 
-    def _initialize(self):
+    def _disable(self, reason):
+        """Disable this backend after a process-group-wide setup failure."""
+        self._disabled = True
+        logger.warning(
+            f'Disabling FlashInfer all-reduce for this process group: {reason}')
+
+    def _initialize(self) -> bool:
+        """Load and validate the optional FlashInfer communication API."""
+        if self._disabled:
+            return False
         if self._comm is not None:
-            return
+            return True
         message = 'FlashInfer all-reduce fusion requires flashinfer-python with the unified comm API.'
         try:
             import flashinfer.comm as comm
             from flashinfer.comm.cuda_ipc import cudart
-        except ImportError as e:
-            raise ImportError(message) from e
-        if not (hasattr(comm, 'allreduce_fusion') and hasattr(
-                comm, 'create_allreduce_fusion_workspace')):
-            raise ImportError(message)
+            if not (hasattr(comm, 'allreduce_fusion') and hasattr(
+                    comm, 'create_allreduce_fusion_workspace')):
+                raise ImportError(message)
 
-        # Bind FlashInfer to the real CUDA runtime before TileLang can load its
-        # link-only libcudart stub into the worker process.
-        cudart.cudaSetDevice(torch.cuda.current_device())
+            # Resolve FlashInfer's CUDA runtime before TileLang loads its
+            # libcudart shim, which the lazy loader could otherwise select.
+            cudart.cudaSetDevice(torch.cuda.current_device())
+        except Exception as e:
+            self._disable(e)
+            return False
         self._comm = comm
+        return True
 
     def is_available(self) -> bool:
         """Whether the fused collective implementation is available."""
-        if self._disabled or self._max_size == 0:
-            return False
-        self._initialize()
-        return True
+        return self._max_size > 0 and self._initialize()
 
     def supports(self, dtype: torch.dtype) -> bool:
         """Whether this group can handle the given dtype."""
         return dtype in (torch.float16, torch.bfloat16) and self.is_available()
 
+    def _supports_input(self, input: torch.Tensor) -> bool:
+        """Whether a flattened input satisfies the FlashInfer launch limits."""
+        return (input.nbytes <= self._max_size
+                and input.size(0) <= _MAX_TOKEN_NUM
+                and input.is_contiguous()
+                and self.supports(input.dtype))
+
     def _get_workspace(self, input: torch.Tensor):
-        if self._disabled:
-            return None
+        """Return the workspace for the input shape and dtype."""
         hidden_dim = input.size(-1)
         if self._workspace is not None:
             assert self._hidden_dim == hidden_dim and self._dtype == input.dtype
@@ -114,17 +129,10 @@ class FlashInferAllReduce:
                 dtype=input.dtype,
                 group=self.group,
             )
+            if workspace is None:
+                raise RuntimeError('workspace creation returned None')
         except Exception as e:
-            self._disabled = True
-            logger.warning(
-                'Failed to initialize the FlashInfer all-reduce workspace; '
-                f'disabling FlashInfer for this process group: {e}')
-            return None
-        if workspace is None:
-            self._disabled = True
-            logger.warning(
-                'Failed to initialize the FlashInfer all-reduce workspace; '
-                'disabling FlashInfer for this process group.')
+            self._disable(f'workspace initialization failed: {e}')
             return None
 
         self._workspace = workspace
@@ -140,9 +148,7 @@ class FlashInferAllReduce:
         if input.dim() < 2 or not input.is_contiguous():
             return False
         input_2d = input.flatten(0, -2)
-        if (input_2d.nbytes > self._max_size
-                or input_2d.size(0) > _MAX_TOKEN_NUM
-                or not self.supports(input.dtype)):
+        if not self._supports_input(input_2d):
             return False
 
         workspace = self._get_workspace(input_2d)
@@ -165,12 +171,11 @@ class FlashInferAllReduce:
                                            weight: torch.Tensor,
                                            eps: float):
         """Fuse all-reduce, residual addition and RMSNorm when supported."""
-        if weight.dtype != input.dtype or not self.supports(input.dtype):
+        if weight.dtype != input.dtype:
             return None
         input_2d = input.flatten(0, -2)
         residual_2d = residual.flatten(0, -2)
-        if (input_2d.nbytes > self._max_size or input_2d.size(0) > _MAX_TOKEN_NUM
-                or not input_2d.is_contiguous()
+        if (not self._supports_input(input_2d)
                 or not residual_2d.is_contiguous()
                 or not weight.is_contiguous()):
             return None
