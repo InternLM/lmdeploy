@@ -124,7 +124,7 @@ class CudaOpsBackend(DefaultOpsBackend):
     @classmethod
     def build_communicator(cls, cpu_group, device_group, dist_config):
         """Build a CUDA communicator."""
-        from .communicator import build_cuda_communicator
+        from .comm.communicator import build_cuda_communicator
         communicator = build_cuda_communicator(
             cpu_group=cpu_group,
             device_group=device_group,

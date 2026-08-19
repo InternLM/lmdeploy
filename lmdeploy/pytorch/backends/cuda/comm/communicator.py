@@ -4,7 +4,7 @@ from torch import distributed as dist
 
 from lmdeploy.pytorch import envs as _envs
 
-from ..communicator import DeviceCommunicator
+from ...communicator import DeviceCommunicator
 from .flashinfer_allreduce import FlashInferAllReduce
 from .symm_mem_allreduce import SymmetricMemoryAllReduce
 

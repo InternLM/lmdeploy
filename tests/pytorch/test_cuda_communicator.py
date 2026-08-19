@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.backends import communicator as base_communicator_module
-from lmdeploy.pytorch.backends.cuda import communicator as communicator_module
+from lmdeploy.pytorch.backends.cuda.comm import communicator as communicator_module
 from lmdeploy.pytorch.backends.dlinfer.op_backend import DlinferOpsBackend
 from lmdeploy.pytorch.nn import norm as norm_module
 
@@ -116,7 +116,7 @@ def test_rms_norm_fuses_or_falls_back(monkeypatch):
 
 
 def test_flashinfer_allreduce_in_place_and_dtype_guards(monkeypatch):
-    from lmdeploy.pytorch.backends.cuda import flashinfer_allreduce as flashinfer_module
+    from lmdeploy.pytorch.backends.cuda.comm import flashinfer_allreduce as flashinfer_module
 
     FlashInferAllReduce = flashinfer_module.FlashInferAllReduce
 
@@ -182,7 +182,7 @@ def test_flashinfer_allreduce_in_place_and_dtype_guards(monkeypatch):
 
 
 def test_symm_mem_allreduce_selects_group_algorithm(monkeypatch):
-    from lmdeploy.pytorch.backends.cuda.symm_mem_allreduce import SymmetricMemoryAllReduce
+    from lmdeploy.pytorch.backends.cuda.comm.symm_mem_allreduce import SymmetricMemoryAllReduce
 
     multimem = Mock()
     two_shot = Mock()
