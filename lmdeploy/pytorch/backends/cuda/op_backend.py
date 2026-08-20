@@ -64,9 +64,6 @@ class CudaOpsBackend(DefaultOpsBackend):
                 TritonLinearStaticF8Builder,
             )
             return TritonLinearStaticF8Builder
-        elif layer_type == OpType.LinearBlockedF8:
-            from .blockedf8_modules import CudaLinearBlockedF8Builder
-            return CudaLinearBlockedF8Builder
         elif layer_type == OpType.NSAIndexFP8:
             from .nsa import TritonNSAIndexFP8Builder
             return TritonNSAIndexFP8Builder
@@ -103,6 +100,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         """Build a typed CUDA operator implementation."""
         from ..attention import PagedAttentionBuildSpec
         from ..awq_modules import LinearW4A16BuildSpec
+        from ..blockedf8_modules import LinearBlockedF8BuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
         from ..qmodules import LinearW8A8BuildSpec
         if isinstance(spec, LinearW4A16BuildSpec):
@@ -127,6 +125,9 @@ class CudaOpsBackend(DefaultOpsBackend):
                     spec.quant_dtype,
                 ),
             )
+        if isinstance(spec, LinearBlockedF8BuildSpec):
+            from .blockedf8_modules import build_linear_blocked_f8
+            return cast(ImplT, build_linear_blocked_f8(spec))
         if isinstance(spec, PagedAttentionBuildSpec):
             from .attention import build_paged_attention
             return cast(ImplT, build_paged_attention(spec))
