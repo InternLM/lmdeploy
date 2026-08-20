@@ -686,7 +686,7 @@ def _suite_launch_extra_defaults(suites: list[str] | set[str]) -> dict[str, Any]
     defaults: dict[str, Any] = {}
     if suite_set & {'logprob', 'experts'}:
         defaults['logprobs-mode'] = 'raw_logprobs'
-    if suite_set & {'experts', 'toolcall'}:
+    if suite_set & {'experts'}:
         defaults['enable-return-routed-experts'] = True
     return defaults
 
@@ -719,6 +719,46 @@ def build_interface_launch_extra(
     merged.update(_parallel_launch_extra(_entry_engine_config(entry)))
     merged.update(copy.deepcopy(extra_src or {}))
     return merged
+
+
+ROUTED_EXPERTS_UNSUPPORTED_SKIP = (
+    'return_routed_experts not enabled in model interface config '
+    '(add experts suite or enable-return-routed-experts: true in yaml)')
+
+
+def iter_model_yaml_entries(model_id: str) -> list[dict[str, Any]]:
+    """All matrix rows for *model_id* under the active ``TEST_ENV``."""
+    env_key = _resolve_paths_env_key(os.environ.get('TEST_ENV'))
+    return [entry for mid, entry in _iter_per_model_entries(env_key) if mid == model_id]
+
+
+def model_enables_return_routed_experts(
+    model_id: str,
+    backend: str,
+    *,
+    required_suites: set[str] | frozenset[str] | None = None,
+) -> bool:
+    """True when yaml interface launch extra enables ``return_routed_experts``.
+
+    When *required_suites* is set (e.g. ``{'toolcall'}`` or ``{'experts'}``),
+    only matching interface profiles are considered.
+    """
+    if backend == 'turbomind':
+        return False
+    for entry in iter_model_yaml_entries(model_id):
+        for prof in get_interface_profiles(entry, backend):
+            suites = set(prof.get('suites') or [])
+            if required_suites and not (required_suites & suites):
+                continue
+            extra = build_interface_launch_extra(
+                entry,
+                backend,
+                suites=prof['suites'],
+                interface_extra=prof.get('extra'),
+            )
+            if extra.get('enable-return-routed-experts'):
+                return True
+    return False
 
 
 def derive_interface_server_extra(

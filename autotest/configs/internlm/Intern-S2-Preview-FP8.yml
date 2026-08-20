@@ -7,9 +7,6 @@ h:
   engine_config:
     tp: 1
   backends:
-  - name: turbomind
-    communicators:
-    - nccl
   - name: pytorch
     communicators:
     - nccl
@@ -21,20 +18,6 @@ h:
   - mllm_evaluate
   interface:
     pytorch:
-    - suites:
-      - base
-      - logprob
-      - toolcall
-      - reasoning
-      extra:
-        logprobs-mode: raw_logprobs
-        tool-call-parser: interns2-preview
-        reasoning-parser: default
-    - suites:
-      - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
-    turbomind:
     - suites:
       - base
       - logprob

@@ -58,6 +58,7 @@ h:
       extra:
         tool-call-parser: qwen3coder
         reasoning-parser: default
+        enable-return-routed-experts: true
   gen_config:
     temperature: 1.0
     top-k: 20
