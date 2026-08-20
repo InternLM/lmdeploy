@@ -60,6 +60,7 @@ class SchedulerStats:
     external_prefix_cache_hit_rate: float | None = None
     external_prefix_cache_queries: int = 0
     external_prefix_cache_hits: int = 0
+    num_evicted_blocks: int = 0
 
     @property
     def num_failed_reqs(self) -> int:
@@ -94,6 +95,7 @@ class SchedulerStats:
                 f'  external_prefix_cache_hit_rate={self.external_prefix_cache_hit_rate},\n'
                 f'  external_prefix_cache_queries={self.external_prefix_cache_queries},\n'
                 f'  external_prefix_cache_hits={self.external_prefix_cache_hits},\n'
+                f'  num_evicted_blocks={self.num_evicted_blocks},\n'
                 ')')
 
     def update_from_schedule_metrics(self, scheduled_metrics: ScheduleMetrics):
@@ -104,6 +106,7 @@ class SchedulerStats:
         self.external_prefix_cache_hit_rate = scheduled_metrics.external_prefix_cache_hit_rate
         self.external_prefix_cache_queries = scheduled_metrics.external_prefix_cache_queries
         self.external_prefix_cache_hits = scheduled_metrics.external_prefix_cache_hits
+        self.num_evicted_blocks = scheduled_metrics.num_evicted_blocks
 
 
 class RequestStats:
