@@ -7,7 +7,7 @@ import time
 import allure
 import psutil
 import requests
-from openai import APIStatusError, BadRequestError, OpenAI
+from openai import APIStatusError, BadRequestError
 from pytest_assume.plugin import assume
 from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_multinode_env
 from utils.config_utils import (
@@ -19,10 +19,9 @@ from utils.config_utils import (
     resolve_extra_params,
 )
 from utils.constant import DEFAULT_PORT, DEFAULT_SERVER, MM_DEMO_TOMB_USER_PROMPT
-from utils.restful_return_check import assert_chat_completions_batch_return
+from utils.restful_return_check import assert_chat_completions_batch_return, get_client_and_model
 from utils.rule_condition_assert import assert_result
 
-from lmdeploy.serve.openai.api_client import APIClient
 from lmdeploy.serve.parsers.response_parser import _parse_tool_call_arguments_dict
 
 BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
@@ -178,8 +177,7 @@ def open_chat_test(log_path, case_name, case_info, url):
 
     result = True
 
-    client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{url}/v1')
-    model_name = client.models.list().data[0].id
+    client, model_name = get_client_and_model(url)
 
     messages = []
     msg = ''
@@ -228,16 +226,13 @@ def open_chat_test(log_path, case_name, case_info, url):
 
 def health_check(url, model_name):
     try:
-        api_client = APIClient(url)
-        model_name_current = api_client.available_models[0]
-        messages = []
-        messages.append({'role': 'user', 'content': '你好'})
-        for output in api_client.chat_completions_v1(model=model_name, messages=messages, top_k=1):
-            if output.get('code') is not None and output.get('code') != 0:
-                return False
-            # Return True on first successful response
-            return model_name == model_name_current
-        return False  # No output received
+        client, model_name_current = get_client_and_model(url)
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[{'role': 'user', 'content': '你好'}],
+            extra_body={'top_k': 1},
+        )
+        return model_name == model_name_current and response.choices is not None
     except Exception:
         return False
 
@@ -245,28 +240,34 @@ def health_check(url, model_name):
 def get_model(url):
     print(url)
     try:
-        api_client = APIClient(url)
-        model_name = api_client.available_models[0]
+        _, model_name = get_client_and_model(url)
         return model_name.split('/')[-1]
     except Exception:
         return None
 
 
+def _require_client_and_model(url):
+    """Return ``(client, model_name, short_model_name)``; fail if server is
+    down."""
+    try:
+        client, model_name = get_client_and_model(url)
+    except Exception:
+        assert False, 'server not start correctly'
+    return client, model_name, model_name.split('/')[-1]
+
+
 def _run_logprobs_test(port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
-    api_client = APIClient(http_url)
-    model_name = api_client.available_models[0]
-    output = None
-    for output in api_client.chat_completions_v1(model=model_name,
-                                                 messages='Hi, pls intro yourself',
-                                                 max_tokens=5,
-                                                 temperature=0.01,
-                                                 logprobs=True,
-                                                 top_logprobs=10):
-        continue
-    if output is None:
-        assert False, 'No output received from logprobs test'
-    print(output)
+    client, model_name = get_client_and_model(http_url)
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[{'role': 'user', 'content': 'Hi, pls intro yourself'}],
+        max_tokens=5,
+        temperature=0.01,
+        logprobs=True,
+        top_logprobs=10,
+    )
+    output = response.model_dump()
     assert_chat_completions_batch_return(output, model_name, check_logprobs=True, logprobs_num=10)
     assert output.get('choices')[0].get('finish_reason') == 'length'
     assert output.get('usage').get('completion_tokens') == 6 or output.get('usage').get('completion_tokens') == 5
@@ -503,16 +504,10 @@ def _is_video_mixed_whitelist_model(model_name: str) -> bool:
 def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
-    model = get_model(http_url)
-    if model is None:
-        assert False, 'server not start correctly'
-
-    client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
-    model_name = client.models.list().data[0].id
+    client, model_name, simple_model_name = _require_client_and_model(http_url)
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
 
-    simple_model_name = model_name.split('/')[-1]
     restful_log = os.path.join(log_path, f'restful_vl_{simple_model_name}_{str(port)}_{timestamp}.log')  # noqa
     file = open(restful_log, 'w')
 
@@ -538,12 +533,6 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
     response = client.chat.completions.create(model=model_name, messages=prompt_messages, temperature=0.8, top_p=0.8)
     file.writelines(str(response).lower() + '\n')
 
-    api_client = APIClient(http_url)
-    model_name = api_client.available_models[0]
-    for item in api_client.chat_completions_v1(model=model_name, messages=prompt_messages):
-        continue
-    file.writelines(str(item) + '\n')
-
     enable_video_mixed = _is_video_mixed_whitelist_model(model_name)
     if not enable_video_mixed:
         file.writelines(
@@ -558,11 +547,6 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
             assert (
                 'tiger' in resp_lower or '虎' in resp_lower or 'ski' in resp_lower or '滑雪' in resp_lower
             ), response
-        with assume:
-            item_lower = str(item).lower()
-            assert (
-                'tiger' in item_lower or '虎' in item_lower or 'ski' in item_lower or '滑雪' in item_lower
-            ), item
         return
 
     video_path = os.path.join(resource_path, VIDEO)
@@ -831,25 +815,16 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
     with assume:
         assert 'tiger' in str(response).lower() or '虎' in str(response).lower() or 'ski' in str(
             response).lower() or '滑雪' in str(response).lower(), response
-    with assume:
-        assert 'tiger' in str(item).lower() or '虎' in str(item).lower() or 'ski' in str(item).lower() or '滑雪' in str(
-            item).lower(), item
 
 
 def _run_reasoning_case(log_path, port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
-    model = get_model(http_url)
-
-    if model is None:
-        assert False, 'server not start correctly'
+    client, model_name, model = _require_client_and_model(http_url)
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     restful_log = os.path.join(log_path, f'restful_reasoning_{model}_{str(port)}_{timestamp}.log')
     file = open(restful_log, 'w')
-
-    client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
-    model_name = client.models.list().data[0].id
 
     with allure.step('step1 - stream'):
         messages = [{'role': 'user', 'content': '9.11 and 9.8, which is greater?'}]
@@ -1132,15 +1107,10 @@ def test_qwen_multiple_round_prompt(client, model):
 def _run_tools_case(log_path, port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
-    model = get_model(http_url)
-
-    if model is None:
-        assert False, 'server not start correctly'
+    client, model_name, model = _require_client_and_model(http_url)
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     restful_log = os.path.join(log_path, f'restful_toolcall_{model}_{str(port)}_{timestamp}.log')
-    client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
-    model_name = client.models.list().data[0].id
 
     with open(restful_log, 'a') as file:
         with allure.step('step1 - one_round_prompt'):

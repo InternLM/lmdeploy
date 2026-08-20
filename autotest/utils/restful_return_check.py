@@ -1,7 +1,38 @@
 import re
 
+import requests
+from openai import OpenAI
+from utils.constant import BASE_URL
+
 # Preprocess rejects oversize input with this OpenAI error substring.
 CONTEXT_LENGTH_ERROR = 'context length'
+
+
+def assert_openai_invalid_request_error(
+    response: requests.Response | dict,
+    *,
+    message_substr: str | None = None,
+) -> dict:
+    """Assert OpenAI invalid request (HTTP 400, ``invalid_request_error``).
+
+    Accepts a ``requests.Response`` (raw HTTP) or an error body ``dict``
+    (e.g. OpenAI SDK ``BadRequestError.body``).
+    """
+    if isinstance(response, requests.Response):
+        assert response.status_code == 400, (
+            f'expected 400, got {response.status_code}: {response.text[:500]}')
+        body = response.json()
+    else:
+        body = response
+
+    assert body.get('object') == 'error'
+    assert body.get('type') == 'invalid_request_error'
+    assert body.get('code') == 400
+    message = body.get('message')
+    assert message
+    if message_substr is not None:
+        assert message_substr.lower() in message.lower()
+    return body
 
 
 def get_chat_message_text(choice):
@@ -22,14 +53,6 @@ def get_chat_delta_text(choice):
         if isinstance(value, str):
             texts.append(value)
     return ''.join(texts)
-
-
-def assert_chat_message_error(output, message_substr=CONTEXT_LENGTH_ERROR):
-    """Assert OpenAI preprocess/validation error envelope."""
-    assert output.get('object') == 'error'
-    assert output.get('type') == 'invalid_request_error'
-    assert output.get('code') == 400
-    assert message_substr.lower() in output.get('message').lower()
 
 
 def assert_chat_message_empty(choice):
@@ -169,3 +192,27 @@ def has_repeated_fragment(text, repeat_count=5):
         start_pos = match.start()
         return True, {'repeated_fragment': repeated_fragment, 'position': start_pos}
     return False, f'{text} does not contain repeated fragments'
+
+
+def get_client_and_model(base_url: str | None = None) -> tuple[OpenAI, str]:
+    """Return ``(OpenAI client, deployed model id)`` for a running
+    api_server."""
+    url = base_url or BASE_URL
+    client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{url.rstrip("/")}/v1')
+    models = client.models.list().data
+    if not models:
+        raise RuntimeError(f'No model returned from GET {url}/v1/models')
+    return client, models[0].id
+
+
+def encode_prompt(base_url: str, text: str, *, add_bos: bool = True) -> tuple[list, int]:
+    """Tokenize via ``POST /v1/encode``; returns ``(input_ids, length)``."""
+    url = base_url.rstrip('/')
+    response = requests.post(
+        f'{url}/v1/encode',
+        json={'input': text, 'do_preprocess': False, 'add_bos': add_bos},
+        timeout=30,
+    )
+    response.raise_for_status()
+    output = response.json()
+    return output['input_ids'], output['length']

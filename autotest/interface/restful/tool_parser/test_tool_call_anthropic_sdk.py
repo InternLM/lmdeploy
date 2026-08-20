@@ -31,12 +31,16 @@ from utils.anthropic_messages import (
 )
 from utils.config_utils import get_config
 from utils.constant import BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS
-
-from lmdeploy.serve.openai.api_client import APIClient
+from utils.restful_return_check import get_client_and_model
 
 from .conftest import _apply_marks, _ToolCallTestBase
 
 ANTHROPIC_VERSION = '2023-06-01'
+
+
+@lru_cache(maxsize=1)
+def _deployed_model_name() -> str:
+    return get_client_and_model(BASE_URL)[1]
 
 _EVAL_IMAGE_TIGER = 'tiger.jpeg'
 _TINY_PNG_BASE64 = (
@@ -312,7 +316,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
     """
 
     def test_http_stream_tool_choice_force_named_tool(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = _deployed_model_name()
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
@@ -351,7 +355,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         assert_weather_tool_city_state(inputs[0], ctx='test_http_stream_tool_choice_force_named_tool')
 
     def test_http_stream_single_location_weather_tool(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = _deployed_model_name()
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
@@ -387,7 +391,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         assert 'dallas' in loc, inputs
 
     def test_http_parallel_same_tool_stream(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = _deployed_model_name()
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
@@ -425,7 +429,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         )
 
     def test_http_full_roundtrip_single_tool_result(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = _deployed_model_name()
         url = f'{BASE_URL}/v1/messages'
         turn1 = {
             'model': model_name,
@@ -483,7 +487,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         assert '98' in text or 'Dallas' in text or 'sunny' in text.lower(), text[:500]
 
     def test_http_history_tool_use_and_tool_result_blocks(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = _deployed_model_name()
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
@@ -515,7 +519,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         )
 
     def test_http_history_thinking_block_replay(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = _deployed_model_name()
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
@@ -549,7 +553,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         """``tools`` + user ``content`` blocks with ``image`` (VLM matrix only;
         same tool contract as text-only)."""
 
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = _deployed_model_name()
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
@@ -591,7 +595,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         """Streaming ``tools`` + user image URL (VLM): SSE must still surface
         ``tool_use``."""
 
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = _deployed_model_name()
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
@@ -631,7 +635,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         """Align with RESTful ``test_messages_user_image_base64_stream``: SSE
         text names the solid color."""
 
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = _deployed_model_name()
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
@@ -1143,7 +1147,7 @@ class TestAnthropicSdkToolCall(_ToolCallTestBase):
         assert WEATHER_TOOL_ANTHROPIC['name'] in names, names
 
     def test_tool_non_stream_weather_with_user_image_url(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = _deployed_model_name()
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
@@ -1155,7 +1159,7 @@ class TestAnthropicSdkToolCall(_ToolCallTestBase):
         assert_weather_tool_city_state(tool_blocks[0].input, ctx='test_tool_non_stream_weather_with_user_image_url')
 
     def test_tool_non_stream_weather_with_user_image_base64(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = _deployed_model_name()
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
@@ -1172,7 +1176,7 @@ class TestAnthropicSdkToolCall(_ToolCallTestBase):
         """SDK streaming + 1×1 red PNG: final text (or raw event blob) should
         mention a red-ish color."""
 
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = _deployed_model_name()
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
