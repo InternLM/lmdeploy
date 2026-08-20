@@ -26,10 +26,7 @@ class CudaOpsBackend(DefaultOpsBackend):
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
         """Get cuda layer builder."""
-        if layer_type == OpType.PagedAttention:
-            from .attention import TritonAttentionBuilder
-            return TritonAttentionBuilder
-        elif layer_type == OpType.ApplyRotaryEmb:
+        if layer_type == OpType.ApplyRotaryEmb:
             from .apply_rotary_emb import TritonApplyRotaryEmbBuilder
             return TritonApplyRotaryEmbBuilder
         elif layer_type == OpType.RMSNorm:
@@ -110,7 +107,11 @@ class CudaOpsBackend(DefaultOpsBackend):
     @classmethod
     def build_op(cls, spec: BuildSpec[ImplT]) -> ImplT:
         """Build a typed CUDA operator implementation."""
+        from ..attention import PagedAttentionBuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
+        if isinstance(spec, PagedAttentionBuildSpec):
+            from .attention import build_paged_attention
+            return cast(ImplT, build_paged_attention(spec))
         if isinstance(spec, FlashAttentionBuildSpec):
             from .flash_attention import TritonFlashAttentionImpl
             return cast(

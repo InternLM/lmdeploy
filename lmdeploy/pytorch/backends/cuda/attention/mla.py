@@ -310,7 +310,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         num_kv_heads: int = None,
         v_head_size: int = None,
         alibi: bool = False,
-        sliding_window: tuple = None,
+        sliding_window: tuple[int, int] | None = None,
         logit_softcapping: float = 0.0,
         causal: bool = True,
         use_fa3: bool = False,

@@ -19,7 +19,6 @@ class BuildSpec(Generic[ImplT]):
 
 class OpType(Enum):
     """Layer type enumerate."""
-    PagedAttention = auto()
     RotaryEmbedding = auto()
     ApplyRotaryEmb = auto()
     SiluAndMul = auto()

@@ -23,10 +23,7 @@ class DlinferOpsBackend(DefaultOpsBackend):
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
         """Get dlinfer layer builder."""
-        if layer_type == OpType.PagedAttention:
-            from .attention import DlinferAttentionBuilder
-            return DlinferAttentionBuilder
-        elif layer_type == OpType.ApplyRotaryEmb:
+        if layer_type == OpType.ApplyRotaryEmb:
             from .apply_rotary_emb import DlinferApplyRotaryEmbBuilder
             return DlinferApplyRotaryEmbBuilder
         elif layer_type == OpType.SiluAndMul:
@@ -60,8 +57,26 @@ class DlinferOpsBackend(DefaultOpsBackend):
     @classmethod
     def build_op(cls, spec: BuildSpec[ImplT]) -> ImplT:
         """Build a typed dlinfer operator implementation."""
+        from ..attention import PagedAttentionBuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
         from ..linear import LinearBuildSpec
+        if isinstance(spec, PagedAttentionBuildSpec):
+            from .attention import DlinferAttentionImpl
+            return cast(
+                ImplT,
+                DlinferAttentionImpl(
+                    num_heads=spec.num_heads,
+                    head_size=spec.head_size,
+                    scale=spec.scale,
+                    num_kv_heads=spec.num_kv_heads,
+                    v_head_size=spec.v_head_size,
+                    alibi=spec.alibi,
+                    sliding_window=spec.sliding_window,
+                    logit_softcapping=spec.logit_softcapping,
+                    causal=spec.causal,
+                    use_flash_mla=spec.use_flash_mla,
+                ),
+            )
         if isinstance(spec, FlashAttentionBuildSpec):
             from .flash_attention import DlinferFlashAttentionImpl
             return cast(
