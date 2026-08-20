@@ -120,6 +120,11 @@ MODULE_MAP.update({'DeepseekV32ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dee
 # deepseek-v4
 MODULE_MAP.update({'DeepseekV4ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v4.DeepseekV4ForCausalLM'})
 
+# mimo-v2-flash
+MODULE_MAP.update({
+    'MiMoV2FlashForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mimo_v2_flash.MiMoV2FlashForCausalLM',
+})
+
 # deepseek-vl2
 MODULE_MAP.update({'DeepseekVLV2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_vl2.DeepseekVLV2ForCausalLM'})
 

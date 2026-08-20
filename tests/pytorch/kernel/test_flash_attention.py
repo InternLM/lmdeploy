@@ -146,6 +146,57 @@ def _naive_window_attention(q, k, v, seqlens_q, seqlens_k, window_size):
     return output
 
 
+@pytest.mark.parametrize(
+    ('head_dim_k', 'head_dim_v'),
+    [
+        (64, 64),
+        (80, 80),
+        (96, 96),
+        (128, 128),
+        (160, 160),
+        (192, 128),
+        (256, 256),
+    ],
+)
+def test_flash_attention_head_dimension_resource_metadata(head_dim_k, head_dim_v):
+    """Run standard and split-D heads against an independent reference."""
+    from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attn_varlen_func
+
+    torch.manual_seed(123)
+    dtype = torch.float16
+    device = 'cuda'
+    num_heads_q = 4
+    num_heads_kv = 2
+    q_seqlens = torch.tensor([7, 11], dtype=torch.int32, device=device)
+    history_lens = torch.tensor([5, 3], dtype=torch.int32, device=device)
+    kv_seqlens = q_seqlens + history_lens
+
+    q = torch.rand(2, 11, num_heads_q, head_dim_k, dtype=dtype, device=device)
+    k = torch.rand(2, 14, num_heads_kv, head_dim_k, dtype=dtype, device=device)
+    v = torch.rand(2, 14, num_heads_kv, head_dim_v, dtype=dtype, device=device)
+    bias = _make_bias(q_seqlens, history_lens, -1e30, causal=True)
+    expected = _conti_input(_naive_attention(q, (k, v), bias), q_seqlens)
+
+    packed_q = _conti_input(q, q_seqlens)
+    packed_k = _conti_input(k, kv_seqlens).transpose(0, 1).contiguous()
+    packed_v = _conti_input(v, kv_seqlens).transpose(0, 1).contiguous()
+    cu_seqlens_q = torch.nn.functional.pad(q_seqlens.cumsum(0), (1, 0))
+    cu_seqlens_k = torch.nn.functional.pad(kv_seqlens.cumsum(0), (1, 0))
+
+    actual = flash_attn_varlen_func(
+        packed_q,
+        packed_k,
+        packed_v,
+        cu_seqlens_q=cu_seqlens_q,
+        cu_seqlens_k=cu_seqlens_k,
+        max_seqlen_q=int(q_seqlens.max().item()),
+        max_seqlen_k=int(kv_seqlens.max().item()),
+        causal=True,
+    )
+
+    torch.testing.assert_close(actual, expected, atol=2e-3, rtol=2e-3)
+
+
 class TestFlashAttention:
 
     @pytest.fixture

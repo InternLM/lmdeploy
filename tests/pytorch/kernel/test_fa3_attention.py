@@ -2,11 +2,47 @@
 import torch
 
 from lmdeploy.messages import QuantPolicy
+from lmdeploy.pytorch.backends.cuda.attention import _fa3_build_supports_head_dims
 from lmdeploy.pytorch.backends.cuda.attention.default import TritonAttentionMetadata
 from lmdeploy.pytorch.backends.cuda.attention.fa3 import FA3Impl
 
 _BLOCK_SIZE = 16
 _PREFILL_SEQLENS = (29, 18)
+
+
+def test_fa3_build_capability_requires_mimo_asymmetric_instantiation(monkeypatch):
+    """MiMo Full FA3 requires both the 192 and 192/128 templates."""
+    import flash_attn_config
+
+    flags = {
+        'FLASHATTENTION_DISABLE_HDIM192': False,
+        'FLASH_ATTENTION_DISABLE_HDIMDIFF192': False,
+    }
+    monkeypatch.setattr(flash_attn_config, 'CONFIG', {'build_flags': flags})
+    assert _fa3_build_supports_head_dims(192, 128)
+
+    flags['FLASH_ATTENTION_DISABLE_HDIMDIFF192'] = True
+    assert not _fa3_build_supports_head_dims(192, 128)
+
+    flags['FLASH_ATTENTION_DISABLE_HDIMDIFF192'] = False
+    flags['FLASHATTENTION_DISABLE_HDIM192'] = True
+    assert not _fa3_build_supports_head_dims(192, 128)
+
+
+def test_fa3_uses_zero_as_disabled_softcap_sentinel(monkeypatch):
+    """FA3 must not inherit Triton's negative disabled-softcap sentinel."""
+    monkeypatch.setattr(
+        'lmdeploy.pytorch.third_party.flash_attn_interface.flash_attn_varlen_func',
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        'lmdeploy.pytorch.third_party.flash_attn_interface.flash_attn_with_kvcache',
+        lambda *args, **kwargs: None,
+    )
+
+    impl = FA3Impl(8, 192, num_kv_heads=2, v_head_size=128, logit_softcapping=0.0)
+
+    assert impl.logit_softcapping == 0.0
 
 
 def _make_prefill_metadata(q_seqlens, block_offsets):

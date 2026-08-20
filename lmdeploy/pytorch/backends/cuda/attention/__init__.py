@@ -33,8 +33,60 @@ def use_fa3_warning():
     return False
 
 
+def _fa3_build_supports_head_dims(head_size: int, v_head_size: int | None = None) -> bool:
+    """Return whether the installed FA3 wheel contains a required head shape.
+
+    FlashAttention-3 wheels may omit template instantiations to reduce build
+    time and binary size.  In particular, MiMo-V2-Flash needs the asymmetric
+    ``Q/K=192, V=128`` instantiation, which is controlled by both HDIM192 and
+    HDIMDIFF192 build flags.
+
+    A wheel without build metadata is accepted only for symmetric head shapes,
+    preserving compatibility with older FA3 packages while avoiding unsafe
+    asymmetric dispatch.
+    """
+    if v_head_size is None:
+        v_head_size = head_size
+
+    try:
+        from flash_attn_config import CONFIG
+        flags = CONFIG['build_flags']
+    except (ImportError, KeyError, TypeError):
+        return head_size == v_head_size
+
+    def _disabled(name: str) -> bool:
+        # Older generated configs used FLASH_ATTENTION for HDIMDIFF while the
+        # other flags use FLASHATTENTION.  Accept both spellings.
+        aliases = (name, name.replace('FLASHATTENTION_DISABLE_HDIMDIFF',
+                                      'FLASH_ATTENTION_DISABLE_HDIMDIFF'))
+        return any(bool(flags.get(alias, False)) for alias in aliases)
+
+    if head_size <= 64:
+        if _disabled('FLASHATTENTION_DISABLE_HDIM64'):
+            return False
+        return v_head_size <= 64 or (
+            v_head_size <= 512 and not _disabled('FLASHATTENTION_DISABLE_HDIMDIFF64'))
+    if head_size <= 96:
+        return v_head_size <= 96 and not _disabled('FLASHATTENTION_DISABLE_HDIM96')
+    if head_size <= 128:
+        return v_head_size <= 128 and not _disabled('FLASHATTENTION_DISABLE_HDIM128')
+    if head_size <= 192:
+        if _disabled('FLASHATTENTION_DISABLE_HDIM192'):
+            return False
+        if v_head_size <= 128:
+            return not _disabled('FLASHATTENTION_DISABLE_HDIMDIFF192')
+        return v_head_size <= 192
+    if head_size <= 256:
+        return v_head_size <= 256 and not _disabled('FLASHATTENTION_DISABLE_HDIM256')
+    return False
+
+
 @functools.lru_cache
-def _enable_fa3(alibi: bool, learnable_sink: bool, block_sparse_size: int, head_size: int) -> bool:
+def _enable_fa3(alibi: bool,
+                learnable_sink: bool,
+                block_sparse_size: int,
+                head_size: int,
+                v_head_size: int | None = None) -> bool:
     """Check if FA3 should be enabled.
 
     FA3 is enabled when:
@@ -46,7 +98,8 @@ def _enable_fa3(alibi: bool, learnable_sink: bool, block_sparse_size: int, head_
     Returns:
         True if FA3 should be enabled, False otherwise.
     """
-    enable = not alibi and not learnable_sink and block_sparse_size == 1 and head_size <= 256
+    enable = (not alibi and not learnable_sink and block_sparse_size == 1
+              and _fa3_build_supports_head_dims(head_size, v_head_size))
     if enable and not use_fa3_warning():
         enable = False
     return enable
@@ -91,6 +144,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         use_flash_mla: bool = False,
         learnable_sink: bool = False,
         block_sparse_size: int = 1,
+        enable_fa3: bool = True,
         **kwargs,
     ) -> TritonAttentionImpl:
         """Build appropriate attention implementation.
@@ -108,6 +162,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
             use_flash_mla: Whether to use Flash MLA implementation.
             learnable_sink: Whether to use learnable sink tokens.
             block_sparse_size: Block sparse attention size.
+            enable_fa3: Whether this attention configuration may use FA3.
             **kwargs: Additional arguments.
 
         Returns:
@@ -129,7 +184,8 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
             causal=causal,
             **kwargs,
         )
-        enable_fa3 = _enable_fa3(alibi, learnable_sink, block_sparse_size, head_size)
+        enable_fa3 = enable_fa3 and _enable_fa3(
+            alibi, learnable_sink, block_sparse_size, head_size, v_head_size)
 
         if use_flash_mla is True:
             logger.debug('Build FlashMLAImpl Attention')
