@@ -47,9 +47,6 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.SiluAndMul:
             from .activation import TritonSiluAndMulBuilder
             return TritonSiluAndMulBuilder
-        elif layer_type == OpType.LinearW4A16:
-            from .awq_modules import AwqLinearW4A16Builder
-            return AwqLinearW4A16Builder
         elif layer_type == OpType.FusedMoE:
             from .moe import TritonFusedMoEBuilder
             return TritonFusedMoEBuilder
@@ -108,7 +105,19 @@ class CudaOpsBackend(DefaultOpsBackend):
     def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed CUDA operator implementation."""
         from ..attention import PagedAttentionBuildSpec
+        from ..awq_modules import LinearW4A16BuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
+        if isinstance(spec, LinearW4A16BuildSpec):
+            from .awq_modules import AwqLinearW4A16Impl
+            return cast(
+                ImplT,
+                AwqLinearW4A16Impl(
+                    spec.in_features,
+                    spec.out_features,
+                    spec.w_bit,
+                    spec.group_size,
+                ),
+            )
         if isinstance(spec, PagedAttentionBuildSpec):
             from .attention import build_paged_attention
             return cast(ImplT, build_paged_attention(spec))

@@ -37,9 +37,6 @@ class DefaultOpsBackend(OpsBackend):
         elif layer_type == OpType.MultinomialSampling:
             from .multinomial_sampling import DefaultMultinomialSamplingBuilder
             return DefaultMultinomialSamplingBuilder
-        elif layer_type == OpType.LinearW4A16:
-            from .awq_modules import DefaultLinearW4A16Builder
-            return DefaultLinearW4A16Builder
         elif layer_type == OpType.SoftmaxTopK:
             from .moe import DefaultSoftmaxTopKBuilder
             return DefaultSoftmaxTopKBuilder
@@ -58,7 +55,19 @@ class DefaultOpsBackend(OpsBackend):
     @classmethod
     def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed operator implementation."""
+        from ..awq_modules import LinearW4A16BuildSpec
         from ..linear import LinearBuildSpec
+        if isinstance(spec, LinearW4A16BuildSpec):
+            from .awq_modules import DefaultLinearW4A16Impl
+            return cast(
+                ImplT,
+                DefaultLinearW4A16Impl(
+                    spec.in_features,
+                    spec.out_features,
+                    spec.w_bit,
+                    spec.group_size,
+                ),
+            )
         if isinstance(spec, LinearBuildSpec):
             from .linear import DefaultLinearImpl
             return cast(ImplT, DefaultLinearImpl())

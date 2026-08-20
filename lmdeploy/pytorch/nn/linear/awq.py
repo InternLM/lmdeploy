@@ -3,7 +3,9 @@ from typing import Any
 
 import torch
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.awq_modules import LinearW4A16BuildSpec
+from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
 from ..utils import chunk_aligned, get_distribute_size
@@ -37,13 +39,17 @@ class AwqLinear(LinearBase):
             in_features, out_features = self._get_io_features(in_features, out_features, w_bit, group_size, colwise)
         qweight, scales, qzeros, bias = self.create_weights(in_features, out_features, w_bit, group_size, bias,
                                                             self.dtype, self.device)
-        impl_builder = get_backend().get_layer_impl_builder(OpType.LinearW4A16)
-        self.impl = impl_builder.build(in_features,
-                                       out_features,
-                                       w_bit,
-                                       group_size,
-                                       bias is not None,
-                                       dtype=scales.dtype)
+        self.impl = get_backend().build_op(
+            LinearW4A16BuildSpec(
+                in_features=in_features,
+                out_features=out_features,
+                w_bit=w_bit,
+                group_size=group_size,
+                bias=bias is not None,
+                dtype=scales.dtype,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
         self.register_all_parameters(qweight, scales, qzeros, bias)
 
         self.in_features = in_features

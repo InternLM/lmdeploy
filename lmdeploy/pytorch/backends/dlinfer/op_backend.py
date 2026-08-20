@@ -44,9 +44,6 @@ class DlinferOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.FusedMoE:
             from .moe import DlinferFusedMoEBuilder
             return DlinferFusedMoEBuilder
-        elif layer_type == OpType.LinearW4A16:
-            from .awq_modules import AwqLinearW4A16Builder
-            return AwqLinearW4A16Builder
         elif layer_type == OpType.RotaryEmbedding:
             from .rotary_embedding import DlinferRotaryEmbeddingBuilder
             return DlinferRotaryEmbeddingBuilder
@@ -58,8 +55,20 @@ class DlinferOpsBackend(DefaultOpsBackend):
     def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed dlinfer operator implementation."""
         from ..attention import PagedAttentionBuildSpec
+        from ..awq_modules import LinearW4A16BuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
         from ..linear import LinearBuildSpec
+        if isinstance(spec, LinearW4A16BuildSpec):
+            from .awq_modules import AwqLinearW4A16Impl
+            return cast(
+                ImplT,
+                AwqLinearW4A16Impl(
+                    spec.in_features,
+                    spec.out_features,
+                    spec.w_bit,
+                    spec.group_size,
+                ),
+            )
         if isinstance(spec, PagedAttentionBuildSpec):
             from .attention import DlinferAttentionImpl
             return cast(
