@@ -35,9 +35,6 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.LoRA:
             from .lora import TritonLoRABuilder
             return TritonLoRABuilder
-        elif layer_type == OpType.LinearW8A8:
-            from .qmodules import TritonLinearW8A8Builder
-            return TritonLinearW8A8Builder
         elif layer_type == OpType.RMSNormW8A8:
             from .qmodules import TritonRMSNormBuilder
             return TritonRMSNormBuilder
@@ -107,6 +104,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         from ..attention import PagedAttentionBuildSpec
         from ..awq_modules import LinearW4A16BuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
+        from ..qmodules import LinearW8A8BuildSpec
         if isinstance(spec, LinearW4A16BuildSpec):
             from .awq_modules import AwqLinearW4A16Impl
             return cast(
@@ -116,6 +114,17 @@ class CudaOpsBackend(DefaultOpsBackend):
                     spec.out_features,
                     spec.w_bit,
                     spec.group_size,
+                ),
+            )
+        if isinstance(spec, LinearW8A8BuildSpec):
+            from .qmodules import TritonLinearW8A8Impl
+            return cast(
+                ImplT,
+                TritonLinearW8A8Impl(
+                    spec.in_features,
+                    spec.out_features,
+                    spec.dtype,
+                    spec.quant_dtype,
                 ),
             )
         if isinstance(spec, PagedAttentionBuildSpec):

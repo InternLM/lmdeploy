@@ -26,7 +26,6 @@ class OpType(Enum):
     RMSNorm = auto()
     LayerNorm = auto()
     LoRA = auto()
-    LinearW8A8 = auto()
     RMSNormW8A8 = auto()
     MultinomialSampling = auto()
     SoftmaxTopK = auto()

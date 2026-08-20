@@ -10,7 +10,7 @@ from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import (
 )
 from lmdeploy.pytorch.models.q_modules import QTensor
 
-from ..qmodules import LinearW8A8Builder, LinearW8A8Impl, RMSNormW8A8Builder, RMSNormW8A8Impl
+from ..qmodules import LinearW8A8Impl, RMSNormW8A8Builder, RMSNormW8A8Impl
 
 
 class TritonRMSNormW8A8Impl(RMSNormW8A8Impl):
@@ -84,16 +84,3 @@ class TritonLinearW8A8Impl(LinearW8A8Impl):
         if all_reduce:
             dist.all_reduce(out, group=group)
         return out
-
-
-class TritonLinearW8A8Builder(LinearW8A8Builder):
-    """Triton linear w8a8 implementation builder."""
-
-    @staticmethod
-    def build(in_features: int,
-              out_features: int,
-              bias: bool = True,
-              dtype: torch.dtype = None,
-              quant_dtype: torch.dtype = torch.int8):
-        """build."""
-        return TritonLinearW8A8Impl(in_features, out_features, dtype, quant_dtype=quant_dtype)

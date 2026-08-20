@@ -32,9 +32,6 @@ class DlinferOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.RMSNorm:
             from .norm import DlinferRMSNormBuilder
             return DlinferRMSNormBuilder
-        elif layer_type == OpType.LinearW8A8:
-            from .qmodules import DlinferLinearW8A8Builder
-            return DlinferLinearW8A8Builder
         elif layer_type == OpType.RMSNormW8A8:
             from .qmodules import DlinferRMSNormW8A8Builder
             return DlinferRMSNormW8A8Builder
@@ -58,6 +55,7 @@ class DlinferOpsBackend(DefaultOpsBackend):
         from ..awq_modules import LinearW4A16BuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
         from ..linear import LinearBuildSpec
+        from ..qmodules import LinearW8A8BuildSpec
         if isinstance(spec, LinearW4A16BuildSpec):
             from .awq_modules import AwqLinearW4A16Impl
             return cast(
@@ -67,6 +65,17 @@ class DlinferOpsBackend(DefaultOpsBackend):
                     spec.out_features,
                     spec.w_bit,
                     spec.group_size,
+                ),
+            )
+        if isinstance(spec, LinearW8A8BuildSpec):
+            from .qmodules import DlinferLinearW8A8Impl
+            return cast(
+                ImplT,
+                DlinferLinearW8A8Impl(
+                    spec.in_features,
+                    spec.out_features,
+                    spec.dtype,
+                    spec.quant_dtype,
                 ),
             )
         if isinstance(spec, PagedAttentionBuildSpec):
