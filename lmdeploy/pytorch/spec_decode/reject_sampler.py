@@ -6,29 +6,6 @@ from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
 
 
-def _select_bonus_sampling_inputs(sampling_inputs: SamplingInputs,
-                                  num_tokens: int) -> SamplingInputs:
-    """Select the fields consumed when sampling one bonus per request."""
-    if num_tokens == 1:
-        return sampling_inputs
-
-    def select(value: Tensor | None) -> Tensor | None:
-        if value is None:
-            return None
-        return value[num_tokens - 1::num_tokens]
-
-    return SamplingInputs(
-        top_k=select(sampling_inputs.top_k),
-        top_p=select(sampling_inputs.top_p),
-        min_p=select(sampling_inputs.min_p),
-        random_seeds=select(sampling_inputs.random_seeds),
-        random_offsets=select(sampling_inputs.random_offsets),
-        max_top_k=sampling_inputs.max_top_k,
-        has_greedy=sampling_inputs.has_greedy,
-        batch_size=sampling_inputs.batch_size // num_tokens,
-    )
-
-
 class RejectionSampler(nn.Module):
     """Apply speculative rejection through the selected device backend."""
 
@@ -64,10 +41,8 @@ class RejectionSampler(nn.Module):
             target_token_ids = target_logits.argmax(dim=-1)
             return self._impl.forward_greedy(target_token_ids, draft_token_ids)
 
-        bonus_sampling_inputs = _select_bonus_sampling_inputs(
-            expanded_sampling_inputs,
-            num_tokens,
-        )
+        bonus_sampling_inputs = expanded_sampling_inputs.select_sampling_rows(
+            slice(num_tokens - 1, None, num_tokens))
         bonus_logits = target_logits[:, -1]
         bonus_token_ids = FusedLogitsProcessor(
             bonus_sampling_inputs).sampling(bonus_logits)

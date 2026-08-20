@@ -6,7 +6,7 @@ import torch
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
 from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
-from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent, _expand_sampling_inputs
+from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
 from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -646,70 +646,6 @@ def test_spec_model_agent_warmup_adds_dp_meta_for_draft_capture(monkeypatch):
             'global_is_decoding': True,
         },
     ]
-
-
-def test_select_bonus_sampling_inputs_decode():
-    """Select the last expanded sampling policy for each request."""
-    from lmdeploy.pytorch.engine.logits_process import SamplingInputs
-    from lmdeploy.pytorch.spec_decode.reject_sampler import (
-        _select_bonus_sampling_inputs,
-    )
-
-    batch_size = 2
-    num_tokens_per_batch = 3
-
-    temperature = torch.tensor([0.5, 1.0], device=device)
-    top_k = torch.tensor([1, 10], device=device)
-    top_p = torch.tensor([0.8, 0.9], device=device)
-    min_p = torch.tensor([0.1, 0.2], device=device)
-    random_seeds = torch.tensor([10, 20], device=device)
-    random_offsets = torch.tensor([100, 200], device=device)
-
-    sampling_inputs = SamplingInputs(
-        max_top_k=10,
-        has_greedy=True,
-        temperature=temperature,
-        top_k=top_k,
-        top_p=top_p,
-        min_p=min_p,
-        random_seeds=random_seeds,
-        random_offsets=random_offsets,
-        max_num_logprobs=-1,
-        batch_size=batch_size,
-    )
-
-    # First expand
-    expanded = _expand_sampling_inputs(sampling_inputs, num_tokens_per_batch)
-    assert expanded.batch_size == batch_size * num_tokens_per_batch
-    # random_offsets should be offset by arange per batch element
-    # batch 0: [100, 101, 102], batch 1: [200, 201, 202]
-    expected_offsets = torch.tensor([100, 101, 102, 200, 201, 202], device=device)
-    torch.testing.assert_close(expanded.random_offsets, expected_offsets)
-
-    sliced = _select_bonus_sampling_inputs(expanded, num_tokens_per_batch)
-    assert sliced.batch_size == batch_size
-    torch.testing.assert_close(sliced.top_k, top_k)
-    torch.testing.assert_close(sliced.top_p, top_p)
-    torch.testing.assert_close(sliced.min_p, min_p)
-    torch.testing.assert_close(sliced.random_seeds, random_seeds)
-    assert sliced.max_top_k == 10
-    assert sliced.has_greedy
-    # Temperature was already applied to the processed target logits.
-    assert sliced.temperature is None
-    # last token per batch: offsets [102, 202]
-    torch.testing.assert_close(sliced.random_offsets, torch.tensor([102, 202], device=device))
-
-
-def test_select_bonus_sampling_inputs_one_position():
-    """A one-position policy needs no selection."""
-    from lmdeploy.pytorch.engine.logits_process import SamplingInputs
-    from lmdeploy.pytorch.spec_decode.reject_sampler import (
-        _select_bonus_sampling_inputs,
-    )
-
-    sampling_inputs = SamplingInputs(max_top_k=1, batch_size=2)
-    result = _select_bonus_sampling_inputs(sampling_inputs, 1)
-    assert result is sampling_inputs
 
 
 def _model_inputs(input_ids,

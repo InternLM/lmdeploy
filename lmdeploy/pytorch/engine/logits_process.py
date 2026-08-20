@@ -247,6 +247,7 @@ class SamplingInputs:
     stop_words: torch.LongTensor = None
     stop_mask: torch.BoolTensor = None
     repetition_penalty: torch.Tensor = None
+    # Raw token-sampling fields. Keep select_sampling_rows in sync.
     top_k: torch.LongTensor = None
     top_p: torch.Tensor = None
     min_p: torch.Tensor = None
@@ -272,6 +273,34 @@ class SamplingInputs:
     repetition_ngram_size: torch.Tensor | None = None
     repetition_ngram_threshold: torch.Tensor | None = None
     max_repetition_ngram_size: int = 0
+
+    def select_sampling_rows(self, rows: slice) -> 'SamplingInputs':
+        """Select the fields consumed by raw token sampling."""
+        start, stop, step = rows.indices(self.batch_size)
+        if step <= 0:
+            raise ValueError('sampling row selection requires a positive step')
+
+        batch_size = len(range(start, stop, step))
+        if start == 0 and step == 1 and batch_size == self.batch_size:
+            return self
+
+        rows = slice(start, stop, step)
+
+        def select(value: torch.Tensor | None) -> torch.Tensor | None:
+            if value is None:
+                return None
+            return value[rows]
+
+        return SamplingInputs(
+            top_k=select(self.top_k),
+            top_p=select(self.top_p),
+            min_p=select(self.min_p),
+            random_seeds=select(self.random_seeds),
+            random_offsets=select(self.random_offsets),
+            max_top_k=self.max_top_k,
+            has_greedy=self.has_greedy,
+            batch_size=batch_size,
+        )
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
