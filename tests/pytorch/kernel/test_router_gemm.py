@@ -45,4 +45,6 @@ def test_moe_gate_model_contract(hidden_size, num_tokens, n_group, topk_group, m
     reference_weights, reference_ids = gate.noaux_tc_router(reference_logits, gate.e_score_correction_bias)
 
     torch.testing.assert_close(output_ids, reference_ids, atol=0, rtol=0)
-    torch.testing.assert_close(output_weights, reference_weights, atol=5e-7, rtol=0)
+    # Pre-Hopper CUDA falls back to BF16 linear before casting GLM logits to FP32.
+    atol = 2e-4 if router_dtype == torch.float32 else 5e-7
+    torch.testing.assert_close(output_weights, reference_weights, atol=atol, rtol=0)
