@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 
+from .base import OpsBackend
 
-def _get_backend():
+
+def _get_backend() -> type[OpsBackend]:
     """Get device backend implement."""
     device_mgr = get_device_manager()
     device_ctx = device_mgr.current_context()
@@ -25,7 +27,7 @@ def _get_backend():
         raise RuntimeError(f'Unsupported device type: {device_type}')
 
 
-def get_backend(backend_type: str = None):
+def get_backend(backend_type: str | None = None) -> type[OpsBackend]:
     """Get device backend."""
     if backend_type is None:
         return _get_backend()

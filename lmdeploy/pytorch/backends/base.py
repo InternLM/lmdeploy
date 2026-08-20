@@ -3,18 +3,29 @@
 # https://github.com/vllm-project/vllm/blob/main/vllm/attention/backends/abstract.py
 import contextlib
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Generic, TypeVar
 
 import torch
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+
+BuildSpecT = TypeVar('BuildSpecT')
+ImplT = TypeVar('ImplT')
+
+
+@dataclass(frozen=True)
+class OpSpec(Generic[BuildSpecT, ImplT]):
+    """Typed identity relating an operator's build request and result."""
+
+    name: str
 
 
 class OpType(Enum):
     """Layer type enumerate."""
     PagedAttention = auto()
     FlashAttention = auto()
-    Linear = auto()
     RotaryEmbedding = auto()
     ApplyRotaryEmb = auto()
     SiluAndMul = auto()
@@ -63,6 +74,12 @@ class OpsBackend(ABC):
     @abstractmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
         """Get builder of given layer type."""
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def build_op(cls, op: OpSpec[BuildSpecT, ImplT], spec: BuildSpecT) -> ImplT:
+        """Build a typed operator implementation."""
         raise NotImplementedError
 
     @staticmethod

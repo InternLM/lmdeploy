@@ -1,10 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from typing import cast
+
 import torch
 
 from lmdeploy.utils import get_logger
 
-from ..base import OpType
+from ..base import BuildSpecT, ImplT, OpSpec, OpType
 from ..default import DefaultOpsBackend
 
 logger = get_logger('lmdeploy')
@@ -48,9 +50,6 @@ class DlinferOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.FusedMoE:
             from .moe import DlinferFusedMoEBuilder
             return DlinferFusedMoEBuilder
-        elif layer_type == OpType.Linear:
-            from .linear import DlinferLinearBuilder
-            return DlinferLinearBuilder
         elif layer_type == OpType.LinearW4A16:
             from .awq_modules import AwqLinearW4A16Builder
             return AwqLinearW4A16Builder
@@ -60,6 +59,15 @@ class DlinferOpsBackend(DefaultOpsBackend):
         else:
             logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
+
+    @classmethod
+    def build_op(cls, op: OpSpec[BuildSpecT, ImplT], spec: BuildSpecT) -> ImplT:
+        """Build a typed dlinfer operator implementation."""
+        from ..linear import LINEAR
+        if op is LINEAR:
+            from .linear import DlinferLinearImpl
+            return cast(ImplT, DlinferLinearImpl())
+        return super().build_op(op, spec)
 
     @staticmethod
     def get_attention_metadata_cls():

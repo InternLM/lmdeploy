@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from typing import cast
+
 import torch
 
-from ..base import OpsBackend, OpType
+from ..base import BuildSpecT, ImplT, OpsBackend, OpSpec, OpType
 
 
 class DefaultOpsBackend(OpsBackend):
@@ -14,10 +16,7 @@ class DefaultOpsBackend(OpsBackend):
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
         """Get builder of given layer type."""
-        if layer_type == OpType.Linear:
-            from .linear import DefaultLinearBuilder
-            return DefaultLinearBuilder
-        elif layer_type == OpType.RotaryEmbedding:
+        if layer_type == OpType.RotaryEmbedding:
             from .rotary_embedding import DefaultRotaryEmbeddingBuilder
             return DefaultRotaryEmbeddingBuilder
         elif layer_type == OpType.ApplyRotaryEmb:
@@ -55,6 +54,15 @@ class DefaultOpsBackend(OpsBackend):
             return DefaultRouterNoauxTCBuilder
         else:
             raise RuntimeError(f'{layer_type} not supported.')
+
+    @classmethod
+    def build_op(cls, op: OpSpec[BuildSpecT, ImplT], spec: BuildSpecT) -> ImplT:
+        """Build a typed operator implementation."""
+        from ..linear import LINEAR
+        if op is LINEAR:
+            from .linear import DefaultLinearImpl
+            return cast(ImplT, DefaultLinearImpl())
+        raise RuntimeError(f'Op {op.name} is not supported by {cls.get_name()} backend.')
 
     @staticmethod
     def get_k_block_shape(

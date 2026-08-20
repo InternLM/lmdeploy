@@ -4,6 +4,7 @@ import torch.distributed as dist
 from torch import nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends.linear import LINEAR, LinearBuildSpec
 from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
@@ -140,8 +141,13 @@ class ParallelLMHead(ParallelEmbedding):
         else:
             self.register_parameter('bias', None)
 
-        builder = get_backend().get_layer_impl_builder(OpType.Linear)
-        self.impl = builder.build(hidden_size, self.vocab_size_padded, bias, dtype=dtype)
+        self.impl = get_backend().build_op(
+            LINEAR,
+            LinearBuildSpec(in_features=hidden_size,
+                            out_features=self.vocab_size_padded,
+                            bias=bias,
+                            dtype=dtype),
+        )
 
     def tie_weights(self, embedding: ParallelEmbedding):
         """Tie the local LM-head shard to a parallel embedding shard."""

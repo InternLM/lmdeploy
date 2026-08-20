@@ -3,7 +3,8 @@ from typing import Any
 
 import torch
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.linear import LINEAR, LinearBuildSpec
 from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
@@ -39,8 +40,13 @@ class BaseLinear(LinearBase):
                          layer_type=layer_type)
         if self.is_tp:
             in_features, out_features = self._get_io_features(in_features, out_features, colwise)
-        impl_builder = get_backend().get_layer_impl_builder(OpType.Linear)
-        self.impl = impl_builder.build(in_features, out_features, bias is not None, dtype=self.dtype)
+        self.impl = get_backend().build_op(
+            LINEAR,
+            LinearBuildSpec(in_features=in_features,
+                            out_features=out_features,
+                            bias=bias,
+                            dtype=self.dtype),
+        )
         weight, bias = self.create_weights(in_features, out_features, bias, self.dtype, self.device)
         self.register_all_parameters(weight, bias)
 

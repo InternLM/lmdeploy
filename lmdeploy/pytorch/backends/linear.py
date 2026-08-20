@@ -1,8 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
+
+from .base import OpSpec
+
+
+@dataclass(frozen=True)
+class LinearBuildSpec:
+    """Immutable requirements for constructing an unquantized linear op."""
+
+    in_features: int
+    out_features: int
+    bias: bool
+    dtype: torch.dtype | None
 
 
 class LinearImpl(ABC):
@@ -25,11 +38,4 @@ class LinearImpl(ABC):
         raise NotImplementedError
 
 
-class LinearBuilder(ABC):
-    """Linear implementation builder."""
-
-    @staticmethod
-    @abstractmethod
-    def build(in_features: int, out_features: int, bias: bool = True, dtype: torch.dtype = None):
-        """build."""
-        raise NotImplementedError
+LINEAR = OpSpec[LinearBuildSpec, LinearImpl]('linear')
