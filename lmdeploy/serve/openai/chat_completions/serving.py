@@ -260,13 +260,10 @@ def register(router: APIRouter, server_context) -> None:
                 mm_processor_kwargs=request.mm_processor_kwargs)
         except RequestError as error:
             return create_request_error_response(error)
-        try:
-            result_generator = server_context.async_engine.generate(
+
+        result_generator = server_context.async_engine.generate(
                 preprocessed,
                 stream_response=True)  # always use stream to enable batching
-        except Exception:
-            server_context.session_manager.remove(session)
-            raise
         include_usage = bool(request.stream_options
                              and request.stream_options.include_usage)
 
