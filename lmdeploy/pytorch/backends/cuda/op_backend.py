@@ -32,9 +32,6 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.RMSNorm:
             from .norm import TritonRMSNormBuilder
             return TritonRMSNormBuilder
-        elif layer_type == OpType.LoRA:
-            from .lora import TritonLoRABuilder
-            return TritonLoRABuilder
         elif layer_type == OpType.RMSNormW8A8:
             from .qmodules import TritonRMSNormBuilder
             return TritonRMSNormBuilder
@@ -59,11 +56,6 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.FusedMoEV4FP4:
             from .moe import TritonFusedMoEV4FP4Builder
             return TritonFusedMoEV4FP4Builder
-        elif layer_type == OpType.LinearStaticF8:
-            from .static_fp8_modules import (
-                TritonLinearStaticF8Builder,
-            )
-            return TritonLinearStaticF8Builder
         elif layer_type == OpType.NSAIndexFP8:
             from .nsa import TritonNSAIndexFP8Builder
             return TritonNSAIndexFP8Builder
@@ -102,7 +94,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         from ..awq_modules import LinearW4A16BuildSpec
         from ..blockedf8_modules import LinearBlockedF8BuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
+        from ..lora import LoRABuildSpec
         from ..qmodules import LinearW8A8BuildSpec
+        from ..static_fp8_modules import LinearStaticF8BuildSpec
         if isinstance(spec, LinearW4A16BuildSpec):
             from .awq_modules import AwqLinearW4A16Impl
             return cast(
@@ -128,6 +122,19 @@ class CudaOpsBackend(DefaultOpsBackend):
         if isinstance(spec, LinearBlockedF8BuildSpec):
             from .blockedf8_modules import build_linear_blocked_f8
             return cast(ImplT, build_linear_blocked_f8(spec))
+        if isinstance(spec, LinearStaticF8BuildSpec):
+            from .static_fp8_modules import TritonLinearStaticF8Impl
+            return cast(
+                ImplT,
+                TritonLinearStaticF8Impl(
+                    spec.in_features,
+                    spec.out_features,
+                    out_dtype=spec.dtype,
+                ),
+            )
+        if isinstance(spec, LoRABuildSpec):
+            from .lora import TritonLoRAImpl
+            return cast(ImplT, TritonLoRAImpl())
         if isinstance(spec, PagedAttentionBuildSpec):
             from .attention import build_paged_attention
             return cast(ImplT, build_paged_attention(spec))

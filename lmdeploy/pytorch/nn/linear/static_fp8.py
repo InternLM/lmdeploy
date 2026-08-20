@@ -4,8 +4,10 @@ from typing import Any
 
 import torch
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.static_fp8_modules import LinearStaticF8BuildSpec
 from lmdeploy.pytorch.config import TPMode
+from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.weight_loader.model_weight_loader import (
     default_weight_loader,
 )
@@ -49,14 +51,15 @@ class StaticF8Linear(LinearBase):
                 colwise,
             )
 
-        impl_builder = get_backend().get_layer_impl_builder(
-            OpType.LinearStaticF8,
-        )
-        self.impl = impl_builder.build(
-            in_features,
-            out_features,
-            bias=bias,
-            dtype=self.dtype,
+        self.impl = get_backend().build_op(
+            LinearStaticF8BuildSpec(
+                in_features=in_features,
+                out_features=out_features,
+                bias=bias,
+                dtype=self.dtype,
+                fp8_dtype=fp8_dtype,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
         self.in_features = in_features

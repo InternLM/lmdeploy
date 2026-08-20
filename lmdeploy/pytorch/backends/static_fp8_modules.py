@@ -1,8 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
+
+from .base import BuildSpec
 
 
 class LinearStaticF8Impl(ABC):
@@ -35,16 +38,12 @@ class LinearStaticF8Impl(ABC):
         raise NotImplementedError
 
 
-class LinearStaticF8Builder(ABC):
-    """Static per-tensor FP8 linear builder."""
+@dataclass(frozen=True)
+class LinearStaticF8BuildSpec(BuildSpec[LinearStaticF8Impl]):
+    """Immutable requirements for constructing a static-FP8 linear operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(
-        in_features: int,
-        out_features: int,
-        bias: bool = True,
-        dtype: torch.dtype | None = None,
-    ):
-        """Build static FP8 linear implementation."""
-        raise NotImplementedError
+    in_features: int
+    out_features: int
+    bias: bool
+    dtype: torch.dtype | None
+    fp8_dtype: torch.dtype

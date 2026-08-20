@@ -4,9 +4,10 @@ from typing import Any
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.backends.lora import AdapterInfo
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.lora import AdapterInfo, LoRABuildSpec
 from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
 class LoRA(nn.Module):
@@ -32,8 +33,13 @@ class LoRA(nn.Module):
             scalings=scalings,
             base_slice=base_slice,
         )
-        impl_builder = get_backend().get_layer_impl_builder(OpType.LoRA)
-        self.impl = impl_builder.build()
+        build_ctx = getattr(ctx_mgr, 'build_ctx', None)
+        if build_ctx is None:
+            build_ctx = get_build_model_context()
+        self.impl = get_backend().build_op(
+            LoRABuildSpec(),
+            enable_deterministic=build_ctx.enable_deterministic,
+        )
 
         lora_A = nn.Parameter(lora_a, requires_grad=False)
         lora_B = nn.Parameter(lora_b, requires_grad=False)
