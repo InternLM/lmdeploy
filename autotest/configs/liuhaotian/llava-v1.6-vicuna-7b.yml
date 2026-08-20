@@ -1,4 +1,5 @@
 # HF model id: liuhaotian/llava-v1.6-vicuna-7b
+# Docs: original liuhaotian LLaVA is TurboMind-only (PyTorch needs llava-hf/*-hf).
 
 a100:
 - model_type:

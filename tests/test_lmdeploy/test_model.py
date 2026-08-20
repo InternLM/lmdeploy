@@ -209,6 +209,72 @@ def test_qwen3(model_path, enable_thinking):
     assert ref == lm_res
 
 
+@pytest.mark.parametrize('preserve_thinking', ['unset', True, False])
+def test_qwen38_preserve_thinking(preserve_thinking):
+    from transformers import AutoTokenizer
+
+    model_path = 'Qwen/Qwen3.8-27B'
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    chat_template = MODELS.get('hf')(model_path)
+    reasoning_sentinel = 'historical reasoning sentinel'
+    messages = [{
+        'role': 'user',
+        'content': 'What is 2 + 2?'
+    }, {
+        'role': 'assistant',
+        'reasoning_content': reasoning_sentinel,
+        'content': '4'
+    }, {
+        'role': 'user',
+        'content': 'Now add 3.'
+    }]
+    kwargs = {} if preserve_thinking == 'unset' else {'preserve_thinking': preserve_thinking}
+
+    ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kwargs)
+    lm_res = chat_template.messages2prompt(messages, **kwargs)
+
+    assert ref == lm_res
+    assert (reasoning_sentinel in lm_res) is (preserve_thinking is not False)
+
+
+def test_qwen38_preserve_current_tool_turn_thinking():
+    from transformers import AutoTokenizer
+
+    model_path = 'Qwen/Qwen3.8-27B'
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    chat_template = MODELS.get('hf')(model_path)
+    reasoning_sentinel = 'current tool reasoning sentinel'
+    messages = [{
+        'role': 'user',
+        'content': 'What is the weather?'
+    }, {
+        'role': 'assistant',
+        'reasoning_content': reasoning_sentinel,
+        'content': '',
+        'tool_calls': [{
+            'type': 'function',
+            'function': {
+                'name': 'get_weather',
+                'arguments': {
+                    'city': 'Shanghai'
+                }
+            }
+        }]
+    }, {
+        'role': 'tool',
+        'content': 'Sunny'
+    }]
+
+    ref = tokenizer.apply_chat_template(messages,
+                                        tokenize=False,
+                                        add_generation_prompt=True,
+                                        preserve_thinking=False)
+    lm_res = chat_template.messages2prompt(messages, preserve_thinking=False)
+
+    assert ref == lm_res
+    assert reasoning_sentinel in lm_res
+
+
 # TODO(lvhan): bring this case back when internlm/Intern-S1 fix tokenizer
 # @pytest.mark.parametrize('model_path', ['internlm/Intern-S1'])
 # @pytest.mark.parametrize('enable_thinking', [None, True, False])

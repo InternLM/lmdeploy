@@ -14,9 +14,37 @@ from utils.rule_condition_assert import assert_result
 
 TEMPLATE = 'autotest/template.json'
 
+# Stderr noise that should not dominate failure messages.
+_STDERR_NOISE_MARKERS = (
+    '[transformers]',
+    'You are using a model of type',
+    'This may be expected if you are loading a checkpoint',
+    'The argument `trust_remote_code` is to be used with Auto classes',
+)
+
+
+def _sanitize_cli_stderr(errors: str) -> str:
+    """Drop known HF/transformers warning lines; keep Traceback / Error
+    tails."""
+    if not errors:
+        return errors
+    lines = errors.splitlines()
+    useful = [ln for ln in lines if not any(m in ln for m in _STDERR_NOISE_MARKERS)]
+    if not useful:
+        return errors.strip()
+    # Prefer the last traceback block when present.
+    for i, ln in enumerate(useful):
+        if ln.startswith('Traceback ') or ln.startswith('lmdeploy: error:'):
+            return '\n'.join(useful[i:]).strip()
+    return '\n'.join(useful).strip()
+
+
 CHAT_EXCLUDED_PARAMS = {
     'max-batch-size', 'cache-max-entry-count', 'max-prefill-token-num', 'server-name', 'enable-prefix-caching',
-    'dllm-block-length', 'dllm-denoising-steps', 'dllm-confidence-threshold'
+    'dllm-block-length', 'dllm-denoising-steps', 'dllm-confidence-threshold',
+    # Serve / OpenAI-api only — ``lmdeploy chat`` does not accept these.
+    'reasoning-parser', 'tool-call-parser', 'logprobs-mode', 'enable-return-routed-experts',
+    'allow-terminate-by-client', 'server-port', 'proxy-url', 'model-name',
 }
 
 
@@ -101,7 +129,7 @@ def command_test(config, cmd, run_config, case_info, need_extract_output):
             if returncode != 0:
                 file.writelines('error:' + errors + '\n')
                 result = False
-                return result, chat_log, errors
+                return result, chat_log, _sanitize_cli_stderr(errors)
 
             outputDialogs = parse_dialogue(outputs)
             file.writelines('answersize:' + str(len(outputDialogs)) + '\n')

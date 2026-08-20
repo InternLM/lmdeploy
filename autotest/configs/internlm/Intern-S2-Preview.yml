@@ -58,6 +58,35 @@ h:
   - longtext_evaluate
   - mllm_evaluate
   - quantization
+  interface:
+    pytorch:
+    - suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: interns2-preview
+        reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+    turbomind:
+    - suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: interns2-preview
+        reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     pytorch:
     - fp8

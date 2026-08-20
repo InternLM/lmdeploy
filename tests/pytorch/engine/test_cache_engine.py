@@ -2,7 +2,6 @@
 import asyncio
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 import torch
 
@@ -160,6 +159,43 @@ def test_named_block_cache_specs_allocate_only_declared_layers():
     }
 
 
+def test_named_block_cache_beside_standard_kv():
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=64,
+                               kernel_block_size=64,
+                               num_cpu_blocks=3,
+                               num_gpu_blocks=0)
+    model_config = _make_model_config(
+        block_cache_specs=[
+            BlockCacheSpec('index', [1, 3], (64, 1, 12), torch.uint8),
+        ],
+    )
+
+    mem_pool, caches = CacheEngine.allocate_caches(num_blocks=3,
+                                                   model_config=model_config,
+                                                   cache_config=cache_config,
+                                                   world_size=1,
+                                                   device='cpu')
+
+    assert len(mem_pool) == 2
+    assert tuple(caches[-1].shape) == (2, 3, 64, 1, 12)
+    assert caches[-1].stride(1) == 64 * 12
+    assert CacheEngine._get_block_cache_layer_maps(model_config) == {
+        'index': {
+            1: 0,
+            3: 1,
+        },
+    }
+
+    cache_engine = object.__new__(CacheEngine)
+    cache_engine.model_config = model_config
+    cache_engine.cache_config = cache_config
+    cache_engine.world_size = 1
+    layer_caches = cache_engine.allocate_cpu_cache()
+    assert len(layer_caches) == 4
+    assert all(len(layer_cache) == 2 for layer_cache in layer_caches)
+
+
 def test_layered_state_cache_specs_allocate_only_declared_layers():
     state_specs = [StateCacheSpec('subset', (96, ), torch.float32, layer_ids=[1, 3])]
     state_shapes = [(spec.shape, spec.dtype) for spec in state_specs]
@@ -265,7 +301,7 @@ def test_state_cache_engine_copy_caches_copies_all_state_views():
     conv_state[1].fill_(3.0)
     recurrent_state[1].fill_(5.0)
 
-    cache_engine.copy_caches(1, 2)
+    cache_engine.copy_caches((1, ), (2, ))
 
     assert torch.equal(conv_state[2], conv_state[1])
     assert torch.equal(recurrent_state[2], recurrent_state[1])
@@ -288,66 +324,39 @@ def test_state_cache_engine_copy_caches_supports_batched_indices():
     assert torch.equal(recurrent_state[3], recurrent_state[1])
 
 
-def test_state_cache_engine_copy_caches_accepts_host_integer_scalars():
-    cache_engine = _make_state_cache_engine()
-    conv_state, recurrent_state = cache_engine.state_caches
-
-    conv_state[1].fill_(7.0)
-    recurrent_state[1].fill_(9.0)
-
-    cache_engine.copy_caches(np.int64(1), np.int64(2))
-
-    assert torch.equal(conv_state[2], conv_state[1])
-    assert torch.equal(recurrent_state[2], recurrent_state[1])
-
-
 def test_state_cache_engine_copy_caches_coalesces_contiguous_ranges():
-    ranges = list(StateCacheEngine._copy_ranges([4, 1, 5, 0, 6, 9], [20, 11, 21, 10, 22, 30]))
+    ranges = list(StateCacheEngine._copy_ranges((4, 1, 5, 0, 6, 9), (20, 11, 21, 10, 22, 30)))
 
     assert ranges == [(0, 10, 2), (4, 20, 3), (9, 30, 1)]
-    assert list(StateCacheEngine._copy_ranges([], [])) == []
+    assert list(StateCacheEngine._copy_ranges((), ())) == []
 
 
 def test_state_cache_engine_copy_caches_rejects_mismatched_indices():
     cache_engine = _make_state_cache_engine()
 
     with pytest.raises(ValueError, match='same number of elements'):
-        cache_engine.copy_caches([0, 1], [2])
-
-
-def test_state_cache_engine_copy_caches_rejects_tensor_indices():
-    cache_engine = _make_state_cache_engine()
-
-    with pytest.raises(TypeError, match='host integers'):
-        cache_engine.copy_caches(torch.tensor([0, 1]), torch.tensor([2, 3]))
-
-
-def test_state_cache_engine_copy_caches_rejects_tensor_sequence_items():
-    cache_engine = _make_state_cache_engine()
-
-    with pytest.raises(TypeError, match='host integers'):
-        cache_engine.copy_caches([torch.tensor(0)], [2])
+        cache_engine.copy_caches((0, 1), (2, ))
 
 
 def test_state_cache_engine_copy_caches_rejects_out_of_range_indices():
     cache_engine = _make_state_cache_engine()
 
     with pytest.raises(ValueError, match='out of range'):
-        cache_engine.copy_caches([-1], [2])
+        cache_engine.copy_caches((-1, ), (2, ))
 
     with pytest.raises(ValueError, match='out of range'):
-        cache_engine.copy_caches([0], [4])
+        cache_engine.copy_caches((0, ), (4, ))
 
 
 def test_state_cache_engine_copy_caches_rejects_overlapping_indices():
     cache_engine = _make_state_cache_engine()
 
     with pytest.raises(ValueError, match='must not overlap'):
-        cache_engine.copy_caches([0, 1], [1, 2])
+        cache_engine.copy_caches((0, 1), (1, 2))
 
 
 def test_state_cache_engine_copy_caches_rejects_duplicate_destinations():
     cache_engine = _make_state_cache_engine()
 
     with pytest.raises(ValueError, match='duplicate'):
-        cache_engine.copy_caches([0, 1], [2, 2])
+        cache_engine.copy_caches((0, 1), (2, 2))

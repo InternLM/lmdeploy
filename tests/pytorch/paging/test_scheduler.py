@@ -6,7 +6,7 @@ import torch
 import lmdeploy.pytorch.paging.scheduler as scheduler_module
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
-from lmdeploy.pytorch.engine.inputs_maker import _compact_state_prefix_cache_save_offsets
+from lmdeploy.pytorch.engine.inputs_maker import _make_state_prefix_cache_save_plan
 from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.paging.state_manager import StateManager
@@ -351,8 +351,9 @@ def test_ssm_same_batch_duplicate_checkpoint_save_has_unique_dst_offsets():
     save_state_offsets = [
         scheduler.block_trie.state_checkpoints.reserve_save(seq) for seq in output.running
     ]
-    save_src_offsets, save_dst_offsets = _compact_state_prefix_cache_save_offsets(output.running,
-                                                                                  save_state_offsets)
+    save_plan = _make_state_prefix_cache_save_plan(output.running, save_state_offsets)
+    assert save_plan is not None
+    save_src_offsets, save_dst_offsets = save_plan
 
     assert save_src_offsets == (seq_a.logical_state, )
     assert save_dst_offsets == (save_state_offsets[0], )

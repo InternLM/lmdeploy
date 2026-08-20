@@ -5,6 +5,7 @@ from http import HTTPStatus
 
 from fastapi import APIRouter, Depends, Request
 
+from lmdeploy.serve.openai.errors import create_error_response
 from lmdeploy.serve.openai.protocol import (
     EmbeddingsRequest,
     EncodeRequest,
@@ -15,7 +16,6 @@ from lmdeploy.serve.openai.protocol import (
     PPLResponse,
     UsageInfo,
 )
-from lmdeploy.serve.openai.utils import create_error_response
 from lmdeploy.serve.utils.server_utils import validate_json_request
 
 

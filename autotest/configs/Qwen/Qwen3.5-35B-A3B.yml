@@ -16,6 +16,38 @@ a100:
     - nccl
   test_coverage:
   - func
+  interface:
+    pytorch:
+    - suites:
+      - base
+      - logprob
+      - experts
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: true
+        tool-call-parser: qwen3coder
+        reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: true
+    turbomind:
+    - suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: qwen3coder
+        reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - kvint8
@@ -59,6 +91,38 @@ h:
   - longtext_evaluate
   - mllm_evaluate
   - quantization
+  interface:
+    pytorch:
+    - suites:
+      - base
+      - logprob
+      - experts
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: true
+        tool-call-parser: qwen3coder
+        reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: true
+    turbomind:
+    - suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: qwen3coder
+        reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - awq

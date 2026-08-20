@@ -10,12 +10,14 @@ from http import HTTPStatus
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
+from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.openai.responses.protocol import ResponsesRequest
 from lmdeploy.serve.openai.responses.request import (
     error_response,
     messages_from_input,
     openai_tools_from_responses,
+    request_error_response,
     to_generation_config,
     tool_choice_from_responses,
     validate_text_v1_request,
@@ -66,17 +68,20 @@ class OpenAIServingResponses:
             return None, error_response(HTTPStatus.BAD_REQUEST, str(err))
         return response_parser, None
 
-    def _generate(self, model_name: str, parsed_request, gen_config):
+    async def _generate(self, model_name: str, parsed_request, gen_config):
         session = self.server_context.create_session(-1)
         adapter_name = None if model_name == self.server_context.async_engine.model_name else model_name
-        result_generator = self.server_context.async_engine.generate(
+        preprocessed = await self.server_context.async_engine.preprocess(
             parsed_request.messages,
             session,
             gen_config=gen_config,
             tools=parsed_request.tools,
-            stream_response=True,
             do_preprocess=True,
             adapter_name=adapter_name,
+        )
+        result_generator = self.server_context.async_engine.generate(
+            preprocessed,
+            stream_response=True,
         )
         return session, result_generator
 
@@ -115,7 +120,10 @@ class OpenAIServingResponses:
             return parser_error
         parsed_request = response_parser.request
 
-        session, result_generator = self._generate(model_name, parsed_request, gen_config)
+        try:
+            session, result_generator = await self._generate(model_name, parsed_request, gen_config)
+        except RequestError as error:
+            return request_error_response(error)
         created_time = int(time.time())
         session_mgr = self.server_context.session_manager
 
@@ -136,15 +144,18 @@ class OpenAIServingResponses:
         final_token_ids: list[int] = []
         final_res = None
         cleanup_generator = with_request_cleanup(result_generator, [result_generator], [session], session_mgr)
-        async with aclosing(cleanup_generator) as generator:
-            async for res in generator:
-                if await raw_request.is_disconnected():
-                    await session.async_abort()
-                    return error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-                final_res = res
-                text += res.response or ''
-                if getattr(res, 'token_ids', None):
-                    final_token_ids.extend(res.token_ids)
+        try:
+            async with aclosing(cleanup_generator) as generator:
+                async for res in generator:
+                    if await raw_request.is_disconnected():
+                        await session.async_abort()
+                        return error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                    final_res = res
+                    text += res.response or ''
+                    if getattr(res, 'token_ids', None):
+                        final_token_ids.extend(res.token_ids)
+        except RequestError as error:
+            return request_error_response(error)
 
         if final_res is None:
             return error_response(HTTPStatus.INTERNAL_SERVER_ERROR, 'No generation output from engine.')
@@ -165,6 +176,7 @@ class OpenAIServingResponses:
             tool_calls=tool_calls,
             input_tokens=final_res.input_token_len,
             output_tokens=final_res.generate_token_len,
+            reasoning_tokens=response_parser.reasoning_tokens or 0,
             finish_reason=final_res.finish_reason,
         )
         return response.model_dump(exclude_none=True)

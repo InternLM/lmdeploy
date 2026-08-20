@@ -1,6 +1,7 @@
 import re
 
-INPUT_LENGTH_ERROR = 'internal error happened, status code ResponseType.INPUT_LENGTH_ERROR'
+# Preprocess rejects oversize input with this OpenAI error substring.
+CONTEXT_LENGTH_ERROR = 'context length'
 
 
 def get_chat_message_text(choice):
@@ -23,14 +24,12 @@ def get_chat_delta_text(choice):
     return ''.join(texts)
 
 
-def assert_chat_message_error(choice, error_message=INPUT_LENGTH_ERROR):
-    msg = choice.get('message') or {}
-    assert msg.get('content') == error_message or msg.get('reasoning_content') == error_message
-
-
-def assert_chat_delta_error(choice, error_message=INPUT_LENGTH_ERROR):
-    delta = choice.get('delta') or {}
-    assert delta.get('content') == error_message or delta.get('reasoning_content') == error_message
+def assert_chat_message_error(output, message_substr=CONTEXT_LENGTH_ERROR):
+    """Assert OpenAI preprocess/validation error envelope."""
+    assert output.get('object') == 'error'
+    assert output.get('type') == 'invalid_request_error'
+    assert output.get('code') == 400
+    assert message_substr.lower() in output.get('message').lower()
 
 
 def assert_chat_message_empty(choice):

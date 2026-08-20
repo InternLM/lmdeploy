@@ -190,6 +190,56 @@ def _prepare_dsa_indexer_k_cache_kernel(
     tl.store(KSCache + physical_block * stride_ksb + page_off * stride_kss, scale)
 
 
+@triton.jit(do_not_specialize=['stride_boff'])
+def _flatten_dsa_indexer_k_cache_kernel(
+    KCache,
+    KSCache,
+    KOut,
+    KSOut,
+    CuSeqLenK,
+    KVSeqLens,
+    BlockOffsets,
+    stride_kcb: tl.constexpr,
+    stride_kcs: tl.constexpr,
+    stride_kcd: tl.constexpr,
+    stride_ksb: tl.constexpr,
+    stride_kss: tl.constexpr,
+    stride_boff,
+    block_size: tl.constexpr,
+    head_dim: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    logical_block = tl.program_id(0)
+    batch_id = tl.program_id(1)
+    kv_seqlen = tl.load(KVSeqLens + batch_id)
+    block_start = logical_block * block_size
+    if block_start >= kv_seqlen:
+        return
+
+    physical_block = tl.load(
+        BlockOffsets + batch_id * stride_boff + logical_block).to(tl.int64)
+    seq_start = tl.load(CuSeqLenK + batch_id)
+    token_off = tl.arange(0, block_size)
+    feat_off = tl.arange(0, BLOCK_D)
+    token_mask = block_start + token_off < kv_seqlen
+    feat_mask = feat_off < head_dim
+
+    cache_offsets = (physical_block * stride_kcb +
+                     token_off[:, None] * stride_kcs +
+                     feat_off[None, :] * stride_kcd)
+    values = tl.load(KCache + cache_offsets,
+                     mask=token_mask[:, None] & feat_mask[None, :])
+    scales = tl.load(KSCache + physical_block * stride_ksb +
+                     token_off * stride_kss,
+                     mask=token_mask)
+
+    out_token = seq_start + block_start + token_off
+    tl.store(KOut + out_token[:, None] * head_dim + feat_off[None, :],
+             values,
+             mask=token_mask[:, None] & feat_mask[None, :])
+    tl.store(KSOut + out_token, scales, mask=token_mask)
+
+
 def prepare_dsa_indexer_q(
     q: Tensor,
     weights: Tensor,
@@ -296,3 +346,44 @@ def prepare_dsa_indexer_k_cache(
                                               BLOCK_D=128,
                                               num_warps=4,
                                               num_stages=1)
+
+
+def flatten_dsa_indexer_k_cache(
+    k_cache: Tensor,
+    k_s_cache: Tensor,
+    cu_seqlen_k: Tensor,
+    kv_seqlens: Tensor,
+    block_offsets: Tensor,
+    out_size: int,
+) -> tuple[Tensor, Tensor]:
+    """Gather paged FP8 indexer K values and scales by sequence."""
+    assert k_cache.dim() == 3 and k_cache.size(-1) == 128
+    assert k_s_cache.dim() == 2 and k_s_cache.shape == k_cache.shape[:2]
+    assert cu_seqlen_k.numel() == kv_seqlens.numel() + 1
+    assert block_offsets.size(0) == kv_seqlens.numel()
+
+    block_offsets = block_offsets.contiguous()
+    k_out = k_cache.new_empty(out_size, k_cache.size(-1))
+    k_s_out = k_s_cache.new_empty(out_size)
+    grid = (block_offsets.size(1), kv_seqlens.numel())
+    _flatten_dsa_indexer_k_cache_kernel[grid](
+        k_cache,
+        k_s_cache,
+        k_out,
+        k_s_out,
+        cu_seqlen_k,
+        kv_seqlens,
+        block_offsets,
+        stride_kcb=k_cache.stride(0),
+        stride_kcs=k_cache.stride(1),
+        stride_kcd=k_cache.stride(2),
+        stride_ksb=k_s_cache.stride(0),
+        stride_kss=k_s_cache.stride(1),
+        stride_boff=block_offsets.stride(0),
+        block_size=k_cache.size(1),
+        head_dim=k_cache.size(2),
+        BLOCK_D=128,
+        num_warps=4,
+        num_stages=1,
+    )
+    return k_out, k_s_out

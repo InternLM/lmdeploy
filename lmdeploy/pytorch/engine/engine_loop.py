@@ -406,12 +406,6 @@ class EngineLoop:
         self.scheduler.collect_migration_done()
         return await self.inputs_maker.send_next_inputs()
 
-    @staticmethod
-    def _has_state_checkpoint_save(model_inputs: 'ModelInputs | None', delta: 'ModelInputsDelta | None'):
-        """Check whether the current forward reserved SSM checkpoints."""
-        return ((model_inputs is not None and model_inputs.state_prefix_cache_save_offsets is not None)
-                or (delta is not None and delta.state_prefix_cache_save_offsets is not None))
-
     async def _prefetch_next_inputs(self):
         """Collect migration completions before prefetching the next batch."""
         if self._sleep_requested:
@@ -449,8 +443,10 @@ class EngineLoop:
         """Get outputs and prefetch."""
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
+        cache_inputs = forward_inputs['cache_inputs']
         self.inputs_maker.update_running_seqs(running, model_inputs)
-        has_state_checkpoint_save = self._has_state_checkpoint_save(model_inputs, delta)
+        has_state_checkpoint_save = (cache_inputs is not None
+                                     and cache_inputs.state_save_plan is not None)
 
         # ModelAgent executes queued forwards in send order.  Once the current
         # input is queued, matched checkpoints can be published before waiting

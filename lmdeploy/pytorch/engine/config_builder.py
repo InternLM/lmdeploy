@@ -214,7 +214,7 @@ class ConfigBuilder:
         """Build spec decode config."""
         def _build_draft_dist_ctx(dist_config):
             # TODO support tp > 1, ep > 1 for other methods
-            if speculative_config.method == 'qwen3_5_mtp':
+            if speculative_config.method in ('qwen3_5_mtp', 'hy3_mtp'):
                 draft_dist_config = dist_config
             elif speculative_config.method == 'dflash':
                 from lmdeploy.pytorch.spec_decode.dflash_utils import (
