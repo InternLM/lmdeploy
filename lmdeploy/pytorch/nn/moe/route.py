@@ -8,10 +8,10 @@ from lmdeploy.pytorch.backends import OpType, get_backend
 class RouterGemm(torch.nn.Module):
     """Backend-dispatched router GEMM."""
 
-    def __init__(self):
+    def __init__(self, out_dtype: torch.dtype | None = None):
         super().__init__()
         impl_builder = get_backend().get_layer_impl_builder(OpType.RouterGemm)
-        self.impl = impl_builder.build()
+        self.impl = impl_builder.build(out_dtype=out_dtype)
 
     def forward(self, hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
         """Compute router logits."""

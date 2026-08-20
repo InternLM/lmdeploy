@@ -12,16 +12,19 @@ class DefaultRouterGemmImpl(RouterGemmImpl):
 
     def forward(self, hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
         """Compute router logits."""
-        return F.linear(hidden_states.to(weight.dtype), weight)
+        output = F.linear(hidden_states.to(weight.dtype), weight)
+        if self.out_dtype is not None:
+            output = output.to(self.out_dtype)
+        return output
 
 
 class DefaultRouterGemmBuilder(RouterGemmBuilder):
     """Default router GEMM builder."""
 
     @staticmethod
-    def build():
+    def build(out_dtype: torch.dtype | None = None):
         """Build the default router GEMM implementation."""
-        return DefaultRouterGemmImpl()
+        return DefaultRouterGemmImpl(out_dtype=out_dtype)
 
 
 def _compute_scores(scoring_func: str, logits: torch.Tensor):

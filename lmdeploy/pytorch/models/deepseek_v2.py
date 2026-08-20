@@ -580,6 +580,16 @@ class DeepseekV2Attention(nn.Module):
         return attn_output
 
 
+def _get_moe_router_dtype(config: Any) -> torch.dtype | None:
+    router_dtype = getattr(config, 'moe_router_dtype', None)
+    if getattr(config, 'model_type', None) == 'glm_moe_dsa':
+        # Older GLM-5/5.2 configs require FP32 routing but do not expose moe_router_dtype.
+        return torch.float32
+    if router_dtype == 'float32':
+        return torch.float32
+    return None
+
+
 class MoEGate(nn.Module):
     """Deepseek Gate."""
 
@@ -605,8 +615,8 @@ class MoEGate(nn.Module):
         self.norm_topk_prob = config.norm_topk_prob
         self.gating_dim = config.hidden_size
         self.weight = nn.Parameter(
-            torch.empty((self.n_routed_experts, self.gating_dim), dtype=torch.float32, device=device))
-        self.router_gemm = RouterGemm()
+            torch.empty((self.n_routed_experts, self.gating_dim), dtype=dtype, device=device))
+        self.router_gemm = RouterGemm(out_dtype=_get_moe_router_dtype(config))
         if self.topk_method == 'noaux_tc':
             from lmdeploy.pytorch.nn.moe.route import NoauxTCRouter
             self.e_score_correction_bias = nn.Parameter(

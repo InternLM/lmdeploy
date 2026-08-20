@@ -7,6 +7,9 @@ import torch
 class RouterGemmImpl(ABC):
     """Router GEMM implementation api."""
 
+    def __init__(self, out_dtype: torch.dtype | None = None):
+        self.out_dtype = out_dtype
+
     @abstractmethod
     def forward(self, hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
         """forward."""
@@ -18,7 +21,7 @@ class RouterGemmBuilder(ABC):
 
     @staticmethod
     @abstractmethod
-    def build():
+    def build(out_dtype: torch.dtype | None = None):
         """build."""
         raise NotImplementedError
 
