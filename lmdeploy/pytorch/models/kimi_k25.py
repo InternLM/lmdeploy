@@ -69,7 +69,9 @@ class KimiK25InputProcessor(BaseModelInputProcessor):
                 image_tokens = input_mm['image_tokens']
                 offset = input_mm['offset']
             except KeyError as error:
-                raise ValueError(f'Missing Kimi image processor field {error.args[0]!r} at index {image_index}.') from error
+                raise ValueError(
+                    f'Missing Kimi image processor field {error.args[0]!r} '
+                    f'at index {image_index}.') from error
             configured_token_id = self.media_placeholder_token_id
             if configured_token_id is None:
                 raise ValueError('Kimi config must define `media_placeholder_token_id` for image inference.')
@@ -190,8 +192,7 @@ class KimiK25ForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
                     'Kimi-K2.6 compressed-tensors metadata must be defined on `text_config`; '
                     'outer-only metadata cannot drive routed-expert dispatch safely.')
             build_quant_config = get_build_model_context().quant_config
-            if (build_quant_config is None or build_quant_config.quant_method != 'compressed-tensors'
-                    or build_quant_config.compressed_tensors_config is None):
+            if build_quant_config is None or build_quant_config.quant_method != 'compressed-tensors':
                 raise RuntimeError(
                     'Kimi-K2.6 compressed-tensors construction requires the validated ModelConfig quantization '
                     'metadata in BuildModelContext.')

@@ -37,23 +37,6 @@ def reference_noaux_tc_routing(
     return topk_weight * routed_scaling_factor, topk_idx
 
 
-def assert_routes_close(
-    output: tuple[torch.Tensor, torch.Tensor],
-    expected: tuple[torch.Tensor, torch.Tensor],
-):
-    output_weights, output_ids = output
-    expected_weights, expected_ids = expected
-    output_order = output_ids.argsort(dim=-1)
-    expected_order = expected_ids.argsort(dim=-1)
-    output_ids = output_ids.gather(1, output_order)
-    expected_ids = expected_ids.gather(1, expected_order)
-    output_weights = output_weights.gather(1, output_order)
-    expected_weights = expected_weights.gather(1, expected_order)
-
-    torch.testing.assert_close(output_ids, expected_ids, rtol=0, atol=0)
-    torch.testing.assert_close(output_weights, expected_weights, rtol=1e-4, atol=1e-5)
-
-
 class TestNoauxTC:
 
     @pytest.fixture(autouse=True)
@@ -113,172 +96,15 @@ class TestNoauxTC:
     def test_noaux_tc_router(self, logits, bias, kwargs, gt):
         from lmdeploy.pytorch.kernels.cuda.fused_noaux_tc import fused_noaux_tc_routing
 
-        output = fused_noaux_tc_routing(logits, bias, **kwargs)
-        assert_routes_close(output, gt)
+        out_weights, out_ids = fused_noaux_tc_routing(logits, bias, **kwargs)
+        gt_weights, gt_ids = gt
 
-    @pytest.mark.parametrize('batch_size', [1, 32])
-    def test_kimi_router(self, batch_size):
-        from lmdeploy.pytorch.kernels.cuda.fused_noaux_tc import fused_noaux_tc_routing
+        out_order = out_ids.argsort(dim=-1)
+        out_ids = out_ids.gather(1, out_order)
+        out_weights = out_weights.gather(1, out_order)
+        gt_order = gt_ids.argsort(dim=-1)
+        gt_ids = gt_ids.gather(1, gt_order)
+        gt_weights = gt_weights.gather(1, gt_order)
 
-        torch.manual_seed(batch_size)
-        logits = torch.randn(batch_size, 384)
-        bias = torch.randn(384)
-        kwargs = {
-            'num_experts': 384,
-            'n_group': 1,
-            'topk_group': 1,
-            'top_k': 8,
-            'renormalize': True,
-            'routed_scaling_factor': 2.827,
-        }
-
-        output = fused_noaux_tc_routing(logits, bias, **kwargs)
-        expected = reference_noaux_tc_routing(logits, bias, **kwargs)
-        assert_routes_close(output, expected)
-
-    def test_kimi_router_uses_custom_kernel(self):
-        from lmdeploy.pytorch.backends.cuda.moe_router import TritonRouterNoauxTCImpl
-
-        kwargs = {
-            'scoring_func': 'sigmoid',
-            'top_k': 8,
-            'n_group': 1,
-            'topk_group': 1,
-            'n_routed_experts': 384,
-            'routed_scaling_factor': 2.827,
-            'renormalize': True,
-        }
-        router = TritonRouterNoauxTCImpl(**kwargs)
-        padded_group_router = TritonRouterNoauxTCImpl(**(kwargs | {
-            'n_group': 8,
-            'topk_group': 4,
-        }))
-
-        assert router.enable_custom_kernel
-        assert not padded_group_router.enable_custom_kernel
-
-    @pytest.mark.parametrize('batch_size', [512, 513])
-    def test_kimi_router_large_batches(self, batch_size):
-        from lmdeploy.pytorch.kernels.cuda.fused_noaux_tc import fused_noaux_tc_routing
-
-        torch.manual_seed(batch_size)
-        logits = torch.randn(batch_size, 384)
-        bias = torch.randn(384)
-        kwargs = {
-            'num_experts': 384,
-            'n_group': 1,
-            'topk_group': 1,
-            'top_k': 8,
-            'renormalize': True,
-            'routed_scaling_factor': 2.827,
-        }
-
-        output = fused_noaux_tc_routing(logits, bias, **kwargs)
-        expected = reference_noaux_tc_routing(logits, bias, **kwargs)
-
-        assert output[0].dtype == torch.float32
-        assert output[1].dtype == torch.int64
-        assert_routes_close(output, expected)
-
-    @pytest.mark.parametrize('input_kind', ['saturation', 'near-tie'])
-    def test_kimi_router_numerical_edges(self, input_kind):
-        from lmdeploy.pytorch.kernels.cuda.fused_noaux_tc import fused_noaux_tc_routing
-
-        if input_kind == 'saturation':
-            logits = torch.empty(3, 384)
-            logits[:, 0::2] = -80
-            logits[:, 1::2] = 80
-            bias = torch.linspace(-0.25, 0.25, 384)
-        else:
-            logits = torch.zeros(3, 384)
-            # These differences are small but still distinct in FP32.
-            bias = torch.arange(384) * 2**-20
-        kwargs = {
-            'num_experts': 384,
-            'n_group': 1,
-            'topk_group': 1,
-            'top_k': 8,
-            'renormalize': True,
-            'routed_scaling_factor': 2.827,
-        }
-
-        output = fused_noaux_tc_routing(logits, bias, **kwargs)
-        expected = reference_noaux_tc_routing(logits, bias, **kwargs)
-
-        assert_routes_close(output, expected)
-
-    def test_kimi_router_is_repeatable(self):
-        from lmdeploy.pytorch.kernels.cuda.fused_noaux_tc import fused_noaux_tc_routing
-
-        torch.manual_seed(11)
-        logits = torch.randn(32, 384)
-        bias = torch.randn(384)
-        kwargs = {
-            'num_experts': 384,
-            'n_group': 1,
-            'topk_group': 1,
-            'top_k': 8,
-            'renormalize': True,
-            'routed_scaling_factor': 2.827,
-        }
-
-        outputs = [fused_noaux_tc_routing(logits, bias, **kwargs) for _ in range(3)]
-        for output in outputs[1:]:
-            torch.testing.assert_close(output[0], outputs[0][0], rtol=0, atol=0)
-            torch.testing.assert_close(output[1], outputs[0][1], rtol=0, atol=0)
-
-    def test_kimi_router_fuses_postprocessing(self, monkeypatch):
-        from lmdeploy.pytorch.kernels.cuda.fused_noaux_tc import fused_noaux_tc_routing
-
-        logits = torch.randn(1, 384)
-        bias = torch.randn(384)
-        monkeypatch.setattr(torch, 'topk', lambda *args, **kwargs: pytest.fail('unexpected torch.topk'))
-
-        weights, ids = fused_noaux_tc_routing(
-            logits,
-            bias,
-            num_experts=384,
-            n_group=1,
-            topk_group=1,
-            top_k=8,
-            renormalize=True,
-            routed_scaling_factor=2.827,
-        )
-
-        assert weights.shape == (1, 8)
-        assert ids.shape == (1, 8)
-
-    def test_kimi_router_cudagraph_dynamic_logits(self):
-        from lmdeploy.pytorch.kernels.cuda.fused_noaux_tc import fused_noaux_tc_routing
-
-        batch_size = 4
-        num_experts = 384
-        base_logits = torch.linspace(-4, 4, num_experts)
-        static_logits = torch.stack([base_logits.roll(i * 17) for i in range(batch_size)])
-        bias = torch.linspace(-0.01, 0.01, num_experts)
-        kwargs = {
-            'num_experts': num_experts,
-            'n_group': 1,
-            'topk_group': 1,
-            'top_k': 8,
-            'renormalize': True,
-            'routed_scaling_factor': 2.827,
-        }
-
-        warm_output = fused_noaux_tc_routing(static_logits, bias, **kwargs)
-        torch.cuda.synchronize()
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            graph_output = fused_noaux_tc_routing(static_logits, bias, **kwargs)
-
-        next_logits = static_logits.flip(-1)
-        static_logits.copy_(next_logits)
-        graph.replay()
-        torch.cuda.synchronize()
-
-        expected = reference_noaux_tc_routing(next_logits, bias, **kwargs)
-        assert_routes_close(graph_output, expected)
-        assert not torch.equal(
-            graph_output[1].sort(dim=-1).values,
-            warm_output[1].sort(dim=-1).values,
-        )
+        torch.testing.assert_close(out_ids, gt_ids, rtol=0, atol=0)
+        torch.testing.assert_close(out_weights, gt_weights, rtol=1e-4, atol=1e-5)

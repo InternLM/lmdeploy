@@ -209,28 +209,15 @@ class SpecModelAgent(BaseSpecModelAgent):
                 raise ValueError(
                     'replacement_indices must contain one entry per packed '
                     'request')
-            replacement_indices = replacement_indices.tolist()
-        offset = 0
-        for batch_idx, length in enumerate(seq_length.tolist()):
-            length = int(length)
-            if length <= 0:
-                continue
-            end = offset + length
-            if length > 1:
-                shifted[:, offset:end - 1] = input_tensor[:, offset + 1:end]
-            write_index = end - 1
-            if replacement_indices is not None:
-                write_index = int(replacement_indices[batch_idx])
-                if write_index < offset or write_index >= end:
-                    raise ValueError(
-                        f'replacement index {write_index} is outside packed '
-                        f'request {batch_idx} range [{offset}, {end})')
-            shifted[:, write_index] = next_token_ids[batch_idx]
-            offset = end
-        if offset != input_tensor.shape[1]:
-            raise ValueError(
-                f'packed sequence lengths sum to {offset}, but input has '
-                f'{input_tensor.shape[1]} tokens')
+        last_indices = seq_length.cumsum(0) - 1
+        shifted[:, :-1] = input_tensor[:, 1:]
+        # Restore request boundaries before writing replacement tokens. This
+        # matters when verification replaces a position before the true end.
+        shifted[:, last_indices] = input_tensor[:, last_indices]
+        write_indices = (
+            last_indices
+            if replacement_indices is None else replacement_indices)
+        shifted[:, write_indices] = next_token_ids
         return shifted
 
     @contextmanager

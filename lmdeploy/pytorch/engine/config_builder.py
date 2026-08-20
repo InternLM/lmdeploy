@@ -19,7 +19,6 @@ from lmdeploy.pytorch.config import (
 from lmdeploy.pytorch.transformers import config_from_pretrained
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
-
 _EAGLE3_DEEPSEEK_ARCH = 'Eagle3DeepseekV2ForCausalLM'
 
 

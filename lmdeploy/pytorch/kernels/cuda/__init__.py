@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from ..default.w8a8_kernels import per_channel_quant
 from .apply_rotary_pos_emb import apply_rotary_pos_emb
-from .compressed_tensors_w4a16 import fused_moe_w4a16
 from .fill_kv_cache import fill_kv_cache
 from .flashattention import flash_attn_varlen_func
 from .flatten_kv_cache import flatten_kv_cache
@@ -15,7 +14,6 @@ from .w8a8_triton_kernels import matmul_kernel_dynamic_quant, per_token_quant_in
 __all__ = [
     'apply_rotary_pos_emb',
     'fused_moe',
-    'fused_moe_w4a16',
     'flash_attn_with_kvcache',
     'fill_kv_cache',
     'multinomial_sampling',

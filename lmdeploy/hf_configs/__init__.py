@@ -17,6 +17,7 @@ def register_config(model_type: str):
         from .configuration_deepseek_v4 import DeepseekV4Config
         AutoConfig.register(DeepseekV4Config.model_type, DeepseekV4Config)
     elif model_type == 'kimi_k2':
+        # Standalone Kimi EAGLE checkpoints do not provide an auto_map.
         from .configuration_kimi_k2 import KimiK2Config
         AutoConfig.register(KimiK2Config.model_type, KimiK2Config)
     else:

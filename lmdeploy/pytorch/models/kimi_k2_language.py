@@ -43,6 +43,8 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .deepseek_v2 import (
     DeepseekV2BMM as KimiK2BMM,
+)
+from .deepseek_v2 import (
     MoEGate,
     execute_batch,
     merge_output,
@@ -51,7 +53,6 @@ from .deepseek_v2 import (
 )
 from .patch import add_prefix, get_build_model_context
 from .utils.cudagraph import CudaGraphMixin
-
 
 _COMPRESSED_TENSORS_EXPERT_WEIGHT_RE = re.compile(
     r'^(?P<prefix>(?:.+\.)?experts)\.(?P<expert_id>[0-9]+)\.'
