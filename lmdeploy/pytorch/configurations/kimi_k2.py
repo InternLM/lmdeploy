@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from .builder import AutoModelConfigBuilder
 from .deepseek_v2 import DeepseekV2ModelConfigBuilder
 
 _EAGLE3_DEEPSEEK_ARCH = 'Eagle3DeepseekV2ForCausalLM'
@@ -84,12 +83,3 @@ class KimiK2ModelConfigBuilder(DeepseekV2ModelConfigBuilder):
                                                  cfg.num_layers - 3)
 
         return cfg
-
-
-# DeepseekV2ModelConfigBuilder also recognizes ``kimi_k2``. Register the
-# narrower Kimi builder immediately before it without changing the shared
-# DeepSeek builder.
-_builders = AutoModelConfigBuilder._sub_classes
-_builders.remove(KimiK2ModelConfigBuilder)
-_builders.insert(_builders.index(DeepseekV2ModelConfigBuilder),
-                 KimiK2ModelConfigBuilder)
