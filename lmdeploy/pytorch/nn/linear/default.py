@@ -4,7 +4,7 @@ from typing import Any
 import torch
 
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.backends.linear import LINEAR, LinearBuildSpec
+from lmdeploy.pytorch.backends.linear import LinearBuildSpec
 from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
@@ -41,7 +41,6 @@ class BaseLinear(LinearBase):
         if self.is_tp:
             in_features, out_features = self._get_io_features(in_features, out_features, colwise)
         self.impl = get_backend().build_op(
-            LINEAR,
             LinearBuildSpec(in_features=in_features,
                             out_features=out_features,
                             bias=bias,

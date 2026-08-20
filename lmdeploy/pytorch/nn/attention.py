@@ -7,6 +7,7 @@ from lmdeploy.pytorch.distributed import get_tp_world_rank
 
 from ..backends import OpType, get_backend
 from ..backends.attention import AttentionMetadata
+from ..backends.flash_attention import FlashAttentionBuildSpec
 from .utils import get_distribute_size
 
 
@@ -162,20 +163,17 @@ class FlashAttention(nn.Module):
             v_head_dim = head_dim
         num_heads, num_kv_heads = _update_num_heads(num_heads, num_kv_heads)
 
-        layer_backend = get_backend()
-
-        impl_builder = layer_backend.get_layer_impl_builder(OpType.FlashAttention)
-
-        self.impl = impl_builder.build(
-            num_heads=num_heads,
-            head_dim=head_dim,
-            scale=scale,
-            num_kv_heads=num_kv_heads,
-            v_head_dim=v_head_dim,
-            causal=causal,
-            sliding_window=sliding_window,
-            logit_softcapping=logit_softcapping,
-            **kwargs,
+        self.impl = get_backend().build_op(
+            FlashAttentionBuildSpec(
+                num_heads=num_heads,
+                head_dim=head_dim,
+                scale=scale,
+                num_kv_heads=num_kv_heads,
+                v_head_dim=v_head_dim,
+                causal=causal,
+                sliding_window=sliding_window,
+                logit_softcapping=logit_softcapping,
+            ),
         )
 
     def forward(self,

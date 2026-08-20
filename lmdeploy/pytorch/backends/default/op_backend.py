@@ -4,7 +4,7 @@ from typing import cast
 
 import torch
 
-from ..base import BuildSpecT, ImplT, OpsBackend, OpSpec, OpType
+from ..base import BuildSpec, ImplT, OpsBackend, OpType
 
 
 class DefaultOpsBackend(OpsBackend):
@@ -56,13 +56,14 @@ class DefaultOpsBackend(OpsBackend):
             raise RuntimeError(f'{layer_type} not supported.')
 
     @classmethod
-    def build_op(cls, op: OpSpec[BuildSpecT, ImplT], spec: BuildSpecT) -> ImplT:
+    def build_op(cls, spec: BuildSpec[ImplT]) -> ImplT:
         """Build a typed operator implementation."""
-        from ..linear import LINEAR
-        if op is LINEAR:
+        from ..linear import LinearBuildSpec
+        if isinstance(spec, LinearBuildSpec):
             from .linear import DefaultLinearImpl
             return cast(ImplT, DefaultLinearImpl())
-        raise RuntimeError(f'Op {op.name} is not supported by {cls.get_name()} backend.')
+        spec_name = type(spec).__name__
+        raise RuntimeError(f'Build spec {spec_name} is not supported by {cls.get_name()} backend.')
 
     @staticmethod
     def get_k_block_shape(

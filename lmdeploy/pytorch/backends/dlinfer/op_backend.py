@@ -6,7 +6,7 @@ import torch
 
 from lmdeploy.utils import get_logger
 
-from ..base import BuildSpecT, ImplT, OpSpec, OpType
+from ..base import BuildSpec, ImplT, OpType
 from ..default import DefaultOpsBackend
 
 logger = get_logger('lmdeploy')
@@ -26,9 +26,6 @@ class DlinferOpsBackend(DefaultOpsBackend):
         if layer_type == OpType.PagedAttention:
             from .attention import DlinferAttentionBuilder
             return DlinferAttentionBuilder
-        elif layer_type == OpType.FlashAttention:
-            from .flash_attention import DlinferFlashAttentionBuilder
-            return DlinferFlashAttentionBuilder
         elif layer_type == OpType.ApplyRotaryEmb:
             from .apply_rotary_emb import DlinferApplyRotaryEmbBuilder
             return DlinferApplyRotaryEmbBuilder
@@ -61,13 +58,29 @@ class DlinferOpsBackend(DefaultOpsBackend):
             return super().get_layer_impl_builder(layer_type)
 
     @classmethod
-    def build_op(cls, op: OpSpec[BuildSpecT, ImplT], spec: BuildSpecT) -> ImplT:
+    def build_op(cls, spec: BuildSpec[ImplT]) -> ImplT:
         """Build a typed dlinfer operator implementation."""
-        from ..linear import LINEAR
-        if op is LINEAR:
+        from ..flash_attention import FlashAttentionBuildSpec
+        from ..linear import LinearBuildSpec
+        if isinstance(spec, FlashAttentionBuildSpec):
+            from .flash_attention import DlinferFlashAttentionImpl
+            return cast(
+                ImplT,
+                DlinferFlashAttentionImpl(
+                    num_heads=spec.num_heads,
+                    head_dim=spec.head_dim,
+                    scale=spec.scale,
+                    num_kv_heads=spec.num_kv_heads,
+                    v_head_dim=spec.v_head_dim,
+                    causal=spec.causal,
+                    sliding_window=spec.sliding_window,
+                    logit_softcapping=spec.logit_softcapping,
+                ),
+            )
+        if isinstance(spec, LinearBuildSpec):
             from .linear import DlinferLinearImpl
             return cast(ImplT, DlinferLinearImpl())
-        return super().build_op(op, spec)
+        return super().build_op(spec)
 
     @staticmethod
     def get_attention_metadata_cls():

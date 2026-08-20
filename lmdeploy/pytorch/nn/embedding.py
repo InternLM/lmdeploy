@@ -4,7 +4,7 @@ import torch.distributed as dist
 from torch import nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.backends.linear import LINEAR, LinearBuildSpec
+from lmdeploy.pytorch.backends.linear import LinearBuildSpec
 from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
@@ -142,7 +142,6 @@ class ParallelLMHead(ParallelEmbedding):
             self.register_parameter('bias', None)
 
         self.impl = get_backend().build_op(
-            LINEAR,
             LinearBuildSpec(in_features=hidden_size,
                             out_features=self.vocab_size_padded,
                             bias=bias,

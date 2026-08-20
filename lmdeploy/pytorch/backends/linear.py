@@ -5,17 +5,7 @@ from dataclasses import dataclass
 import torch
 import torch.distributed as dist
 
-from .base import OpSpec
-
-
-@dataclass(frozen=True)
-class LinearBuildSpec:
-    """Immutable requirements for constructing an unquantized linear op."""
-
-    in_features: int
-    out_features: int
-    bias: bool
-    dtype: torch.dtype | None
+from .base import BuildSpec
 
 
 class LinearImpl(ABC):
@@ -38,4 +28,11 @@ class LinearImpl(ABC):
         raise NotImplementedError
 
 
-LINEAR = OpSpec[LinearBuildSpec, LinearImpl]('linear')
+@dataclass(frozen=True)
+class LinearBuildSpec(BuildSpec[LinearImpl]):
+    """Immutable requirements for constructing an unquantized linear op."""
+
+    in_features: int
+    out_features: int
+    bias: bool
+    dtype: torch.dtype | None

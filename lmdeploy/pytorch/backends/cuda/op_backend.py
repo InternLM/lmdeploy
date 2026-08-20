@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import contextlib
+from typing import cast
 
 import torch
 
@@ -8,7 +9,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
-from ..base import OpType
+from ..base import BuildSpec, ImplT, OpType
 from ..default import DefaultOpsBackend
 
 logger = get_logger('lmdeploy')
@@ -28,9 +29,6 @@ class CudaOpsBackend(DefaultOpsBackend):
         if layer_type == OpType.PagedAttention:
             from .attention import TritonAttentionBuilder
             return TritonAttentionBuilder
-        elif layer_type == OpType.FlashAttention:
-            from .flash_attention import TritonFlashAttentionBuilder
-            return TritonFlashAttentionBuilder
         elif layer_type == OpType.ApplyRotaryEmb:
             from .apply_rotary_emb import TritonApplyRotaryEmbBuilder
             return TritonApplyRotaryEmbBuilder
@@ -108,6 +106,27 @@ class CudaOpsBackend(DefaultOpsBackend):
         else:
             logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
+
+    @classmethod
+    def build_op(cls, spec: BuildSpec[ImplT]) -> ImplT:
+        """Build a typed CUDA operator implementation."""
+        from ..flash_attention import FlashAttentionBuildSpec
+        if isinstance(spec, FlashAttentionBuildSpec):
+            from .flash_attention import TritonFlashAttentionImpl
+            return cast(
+                ImplT,
+                TritonFlashAttentionImpl(
+                    num_heads=spec.num_heads,
+                    head_dim=spec.head_dim,
+                    scale=spec.scale,
+                    num_kv_heads=spec.num_kv_heads,
+                    v_head_dim=spec.v_head_dim,
+                    causal=spec.causal,
+                    sliding_window=spec.sliding_window,
+                    logit_softcapping=spec.logit_softcapping,
+                ),
+            )
+        return super().build_op(spec)
 
     @staticmethod
     def get_attention_metadata_cls():
