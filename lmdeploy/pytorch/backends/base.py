@@ -21,8 +21,6 @@ class OpType(Enum):
     """Layer type enumerate."""
     RotaryEmbedding = auto()
     ApplyRotaryEmb = auto()
-    SiluAndMul = auto()
-    GeluAndMul = auto()
     RMSNorm = auto()
     LayerNorm = auto()
     RMSNormW8A8 = auto()

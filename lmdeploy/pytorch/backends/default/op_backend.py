@@ -22,12 +22,6 @@ class DefaultOpsBackend(OpsBackend):
         elif layer_type == OpType.ApplyRotaryEmb:
             from .apply_rotary_emb import DefaultApplyRotaryEmbBuilder
             return DefaultApplyRotaryEmbBuilder
-        elif layer_type == OpType.SiluAndMul:
-            from .activation import DefaultSiluAndMulBuilder
-            return DefaultSiluAndMulBuilder
-        elif layer_type == OpType.GeluAndMul:
-            from .activation import DefaultGeluAndMulBuilder
-            return DefaultGeluAndMulBuilder
         elif layer_type == OpType.RMSNorm:
             from .norm import DefaultRMSNormBuilder
             return DefaultRMSNormBuilder
@@ -55,8 +49,15 @@ class DefaultOpsBackend(OpsBackend):
     @classmethod
     def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed operator implementation."""
+        from ..activation import GeluAndMulBuildSpec, SiluAndMulBuildSpec
         from ..awq_modules import LinearW4A16BuildSpec
         from ..linear import LinearBuildSpec
+        if isinstance(spec, SiluAndMulBuildSpec):
+            from .activation import DefaultSiluAndMulImpl
+            return cast(ImplT, DefaultSiluAndMulImpl(spec.inplace))
+        if isinstance(spec, GeluAndMulBuildSpec):
+            from .activation import DefaultGeluAndMulImpl
+            return cast(ImplT, DefaultGeluAndMulImpl(spec.approximate))
         if isinstance(spec, LinearW4A16BuildSpec):
             from .awq_modules import DefaultLinearW4A16Impl
             return cast(

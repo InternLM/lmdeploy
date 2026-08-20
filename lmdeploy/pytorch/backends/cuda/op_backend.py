@@ -38,9 +38,6 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.MultinomialSampling:
             from .multinomial_sampling import TritonMultinomialSamplingBuilder
             return TritonMultinomialSamplingBuilder
-        elif layer_type == OpType.SiluAndMul:
-            from .activation import TritonSiluAndMulBuilder
-            return TritonSiluAndMulBuilder
         elif layer_type == OpType.NSAIndexFP8:
             from .nsa import TritonNSAIndexFP8Builder
             return TritonNSAIndexFP8Builder
@@ -75,6 +72,7 @@ class CudaOpsBackend(DefaultOpsBackend):
     @classmethod
     def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed CUDA operator implementation."""
+        from ..activation import SiluAndMulBuildSpec
         from ..attention import PagedAttentionBuildSpec
         from ..awq_modules import LinearW4A16BuildSpec
         from ..blockedf8_modules import LinearBlockedF8BuildSpec
@@ -89,6 +87,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         )
         from ..qmodules import LinearW8A8BuildSpec
         from ..static_fp8_modules import LinearStaticF8BuildSpec
+        if isinstance(spec, SiluAndMulBuildSpec):
+            from .activation import TritonSiluAndMulImpl
+            return cast(ImplT, TritonSiluAndMulImpl(spec.inplace))
         if isinstance(spec, LinearW4A16BuildSpec):
             from .awq_modules import AwqLinearW4A16Impl
             return cast(

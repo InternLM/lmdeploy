@@ -26,9 +26,6 @@ class DlinferOpsBackend(DefaultOpsBackend):
         if layer_type == OpType.ApplyRotaryEmb:
             from .apply_rotary_emb import DlinferApplyRotaryEmbBuilder
             return DlinferApplyRotaryEmbBuilder
-        elif layer_type == OpType.SiluAndMul:
-            from .activation import DlinferSiluAndMulBuilder
-            return DlinferSiluAndMulBuilder
         elif layer_type == OpType.RMSNorm:
             from .norm import DlinferRMSNormBuilder
             return DlinferRMSNormBuilder
@@ -48,12 +45,16 @@ class DlinferOpsBackend(DefaultOpsBackend):
     @classmethod
     def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed dlinfer operator implementation."""
+        from ..activation import SiluAndMulBuildSpec
         from ..attention import PagedAttentionBuildSpec
         from ..awq_modules import LinearW4A16BuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
         from ..linear import LinearBuildSpec
         from ..moe import FusedMoEBuildSpec
         from ..qmodules import LinearW8A8BuildSpec
+        if isinstance(spec, SiluAndMulBuildSpec):
+            from .activation import DlinferSiluAndMulImpl
+            return cast(ImplT, DlinferSiluAndMulImpl())
         if isinstance(spec, LinearW4A16BuildSpec):
             from .awq_modules import AwqLinearW4A16Impl
             return cast(

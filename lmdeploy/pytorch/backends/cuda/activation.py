@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul
 
-from ..activation import SiluAndMulBuilder, SiluAndMulImpl
+from ..activation import SiluAndMulImpl
 
 
 class TritonSiluAndMulImpl(SiluAndMulImpl):
@@ -25,12 +25,3 @@ class TritonSiluAndMulImpl(SiluAndMulImpl):
         if x_shape is not None:
             out = out.unflatten(0, x_shape[:-1])
         return out
-
-
-class TritonSiluAndMulBuilder(SiluAndMulBuilder):
-    """Silu and mul implementation builder."""
-
-    @staticmethod
-    def build(inplace: bool = False):
-        """build."""
-        return TritonSiluAndMulImpl(inplace)
