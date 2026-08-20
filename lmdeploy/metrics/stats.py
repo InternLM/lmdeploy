@@ -54,6 +54,7 @@ class SchedulerStats:
     num_waiting_reqs: int = 0
     gpu_cache_usage: float = 0.0
     prefix_cache_hit_rate: float = 0.0
+    num_evicted_blocks: int = 0
 
     @property
     def num_failed_reqs(self) -> int:
@@ -85,6 +86,7 @@ class SchedulerStats:
                 f'  num_waiting_reqs={self.num_waiting_reqs},\n'
                 f'  gpu_cache_usage={self.gpu_cache_usage:.6f},\n'
                 f'  prefix_cache_hit_rate={self.prefix_cache_hit_rate:.6f},\n'
+                f'  num_evicted_blocks={self.num_evicted_blocks},\n'
                 ')')
 
     def update_from_schedule_metrics(self, scheduled_metrics: ScheduleMetrics):
@@ -92,6 +94,7 @@ class SchedulerStats:
         self.num_waiting_reqs = scheduled_metrics.waiting_seqs
         self.gpu_cache_usage = scheduled_metrics.cache_usage
         self.prefix_cache_hit_rate = scheduled_metrics.prefix_cache_hit_rate
+        self.num_evicted_blocks = scheduled_metrics.num_evicted_blocks
 
 
 class RequestStats:
