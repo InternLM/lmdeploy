@@ -260,7 +260,8 @@ class CompressedTensorsMoEWeights(nn.Module):
         self._loaded_parts.add(key)
 
     def validate_complete(self):
-        """Reject inference unless every local projection triplet was loaded."""
+        """Reject inference unless every local projection triplet was
+        loaded."""
         expected = set(
             product(self.expert_list, self._expected_shards(), _PART_DTYPES))
         missing = sorted(expected - self._loaded_parts)

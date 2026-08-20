@@ -454,7 +454,8 @@ class KimiK2MoE(nn.Module):
         out_states: torch.Tensor,
         shared_states: torch.Tensor | None,
     ):
-        """Combine routed and shared outputs under their distribution contract."""
+        """Combine routed and shared outputs under their distribution
+        contract."""
         output_dtype = out_states.dtype
         tp_reduce_dtype = getattr(self.experts, 'tp_reduce_dtype', None)
         use_promoted_tp_reduce = self._all_reduce and tp_reduce_dtype is not None

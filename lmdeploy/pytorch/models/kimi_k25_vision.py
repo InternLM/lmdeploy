@@ -424,9 +424,8 @@ def packed_scaled_dot_product_attention(
 ) -> torch.Tensor:
     """Run non-causal SDPA independently for every packed image clip.
 
-    MoonViT is replicated on every tensor-parallel rank. Using PyTorch SDPA
-    here intentionally avoids LMDeploy's TP-aware attention head partitioning.
-    On CUDA, PyTorch can dispatch BF16 inputs to its fused SDPA kernels.
+    MoonViT is replicated on every tensor-parallel rank. Using PyTorch SDPA here intentionally avoids LMDeploy's TP-
+    aware attention head partitioning. On CUDA, PyTorch can dispatch BF16 inputs to its fused SDPA kernels.
     """
     if query.shape != key.shape or query.shape != value.shape:
         raise ValueError(

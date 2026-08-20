@@ -48,7 +48,8 @@ class KimiK25InputProcessor(BaseModelInputProcessor):
         input_multimodals: list[dict[str, Any]] = None,
         **kwargs,
     ) -> PreprocessInputResult:
-        """Validate the static-image contract and preserve one span per image."""
+        """Validate the static-image contract and preserve one span per
+        image."""
         del kwargs
         if input_multimodals is None or len(input_multimodals) == 0:
             return PreprocessInputResult(input_ids=input_ids, input_multimodals=input_multimodals)
@@ -244,7 +245,8 @@ class KimiK25ForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         pixel_values: torch.Tensor,
         grid_thws: torch.Tensor,
     ) -> list[torch.Tensor]:
-        """Run replicated MoonViT and project its merged patches to text width."""
+        """Run replicated MoonViT and project its merged patches to text
+        width."""
         target_dtype = self.vision_tower.patch_embed.proj.weight.dtype
         pixel_values = pixel_values.to(dtype=target_dtype)
         image_features = self.vision_tower(pixel_values, grid_thws)
@@ -262,7 +264,8 @@ class KimiK25ForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        """Inject projected image rows at media-pad positions during prefill."""
+        """Inject projected image rows at media-pad positions during
+        prefill."""
         self._raise_for_unsupported_multimodal_kwargs(kwargs)
         if self.language_model_only and any(value is not None for value in (pixel_values, grid_thws, image_mask)):
             raise NotImplementedError('Kimi-K2.6 multimodal inference is disabled by `language_model_only=True`.')
