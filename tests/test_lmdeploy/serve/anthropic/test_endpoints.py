@@ -12,8 +12,16 @@ from pydantic import ValidationError
 from lmdeploy.serve.anthropic.protocol import CountTokensRequest, MessagesRequest
 from lmdeploy.serve.anthropic.router import create_anthropic_router
 from lmdeploy.serve.anthropic.streaming import stream_messages_response
+from lmdeploy.serve.core.chat_runner import ChatStreamChunk
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
-from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
+from lmdeploy.serve.openai.protocol import (
+    ChatCompletionRequest,
+    DeltaFunctionCall,
+    DeltaMessage,
+    DeltaToolCall,
+    FunctionCall,
+    ToolCall,
+)
 from lmdeploy.serve.utils.server_utils import protocol_error_response
 
 ANTHROPIC_HEADERS = {'anthropic-version': '2023-06-01'}
@@ -105,6 +113,8 @@ class _FakeEngine:
                 input_token_len=8,
                 generate_token_len=1,
                 finish_reason=None,
+                cached_tokens=0,
+                cache_block_ids=None,
                 routed_experts=[[[1, 2, 3]]],
                 logprobs=[{101: -0.5, 102: -1.2}],
             )
@@ -114,6 +124,8 @@ class _FakeEngine:
                 input_token_len=8,
                 generate_token_len=2,
                 finish_reason='stop',
+                cached_tokens=0,
+                cache_block_ids=None,
                 routed_experts=[[[1, 2, 3]]],
                 logprobs=[{102: -0.3, 103: -2.1}],
             )
@@ -126,6 +138,8 @@ class _BasicParser:
 
     def __init__(self, request):
         self.request = request
+        self.tool_parser = None
+        self.reasoning_tokens = None
 
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
         return [(DeltaMessage(role='assistant', content=delta_text), False)]
@@ -250,6 +264,8 @@ class _ToolAndReasoningParser:
 
     def __init__(self, request):
         self.request = request
+        self.tool_parser = object()
+        self.reasoning_tokens = None
 
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
         if delta_text.startswith('Hello'):
@@ -395,15 +411,53 @@ def _sse_payloads(body: str):
     ]
 
 
+async def _parsed_stream(result_generator, response_parser):
+    streaming_tools = False
+    async for res in result_generator:
+        token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
+        stream_deltas = response_parser.stream_chunk(
+            res.response or '',
+            token_ids,
+            final=res.finish_reason is not None,
+        )
+        if not stream_deltas:
+            if res.finish_reason is None and not token_ids:
+                continue
+            stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
+
+        for delta_index, (delta_message, tool_emitted) in enumerate(stream_deltas):
+            if tool_emitted:
+                streaming_tools = True
+            is_last_delta = delta_index == len(stream_deltas) - 1
+            finish_reason = res.finish_reason if is_last_delta else None
+            if finish_reason == 'stop' and streaming_tools:
+                finish_reason = 'tool_calls'
+            yield ChatStreamChunk(
+                delta_message=delta_message,
+                tool_emitted=tool_emitted,
+                finish_reason=finish_reason,
+                token_ids=token_ids,
+                logprobs=getattr(res, 'logprobs', None),
+                input_token_len=res.input_token_len,
+                generate_token_len=res.generate_token_len,
+                cached_tokens=getattr(res, 'cached_tokens', 0),
+                routed_experts=getattr(res, 'routed_experts', None) if finish_reason is not None else None,
+                reasoning_tokens=getattr(response_parser, 'reasoning_tokens', None),
+                is_last_delta=is_last_delta,
+            )
+
+
 def _collect_stream_response_payloads(result_generator, response_parser, **kwargs):
     async def _collect_events():
         return [
             event async for event in stream_messages_response(
-                result_generator,
+                _parsed_stream(result_generator, response_parser),
                 request_id='msg_test',
-                model='fake-model',
-                response_parser=response_parser,
-                **kwargs,
+                request=ChatCompletionRequest(
+                    model='fake-model',
+                    messages=[],
+                    **kwargs,
+                ),
             )
         ]
 
@@ -437,6 +491,13 @@ def test_messages_return_routed_experts_requires_engine_flag():
 
     assert response.status_code == 400
     assert 'enable-return-routed-experts' in response.json()['error']['message']
+
+
+def test_messages_tools_require_tool_parser():
+    response = _post_messages(_make_client(), tools=[SEARCH_TOOL])
+
+    assert response.status_code == 400
+    assert '--tool-call-parser' in response.json()['error']['message']
 
 
 def test_messages_beta_accepts_system_role_message():
