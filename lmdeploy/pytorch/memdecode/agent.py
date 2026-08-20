@@ -126,6 +126,7 @@ class MemDecodeAgent:
         if build_model_ctx is not None:
             kwargs = dict(
                 language_model_only=build_model_ctx.language_model_only,
+                enable_deterministic=build_model_ctx.enable_deterministic,
                 dllm_config=build_model_ctx.dllm_config,
                 strategy_factory=build_model_ctx.strategy_factory,
                 enable_return_routed_experts=build_model_ctx.enable_return_routed_experts,

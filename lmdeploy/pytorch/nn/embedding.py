@@ -6,6 +6,7 @@ from torch import nn
 from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.backends.linear import LinearBuildSpec
 from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_tp_world_rank
+from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
 DEFAULT_VOCAB_PADDING_SIZE = 64
@@ -146,6 +147,7 @@ class ParallelLMHead(ParallelEmbedding):
                             out_features=self.vocab_size_padded,
                             bias=bias,
                             dtype=dtype),
+            enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
     def tie_weights(self, embedding: ParallelEmbedding):

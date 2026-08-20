@@ -4,6 +4,7 @@ from torch import nn
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from ..backends import get_backend
 from ..backends.attention import AttentionMetadata, PagedAttentionBuildSpec
@@ -62,6 +63,7 @@ class Attention(nn.Module):
                 learnable_sink=learnable_sink,
                 block_sparse_size=block_sparse_size,
             ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
         if alibi:
@@ -172,6 +174,7 @@ class FlashAttention(nn.Module):
                 sliding_window=sliding_window,
                 logit_softcapping=logit_softcapping,
             ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
     def forward(self,

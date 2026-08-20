@@ -6,6 +6,7 @@ import torch
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.linear import LinearBuildSpec
 from lmdeploy.pytorch.config import TPMode
+from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
 from ..utils import chunk_aligned, get_distribute_size
@@ -45,6 +46,7 @@ class BaseLinear(LinearBase):
                             out_features=out_features,
                             bias=bias,
                             dtype=self.dtype),
+            enable_deterministic=get_build_model_context().enable_deterministic,
         )
         weight, bias = self.create_weights(in_features, out_features, bias, self.dtype, self.device)
         self.register_all_parameters(weight, bias)

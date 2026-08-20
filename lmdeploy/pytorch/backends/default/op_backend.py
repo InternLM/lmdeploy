@@ -56,7 +56,7 @@ class DefaultOpsBackend(OpsBackend):
             raise RuntimeError(f'{layer_type} not supported.')
 
     @classmethod
-    def build_op(cls, spec: BuildSpec[ImplT]) -> ImplT:
+    def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed operator implementation."""
         from ..linear import LinearBuildSpec
         if isinstance(spec, LinearBuildSpec):

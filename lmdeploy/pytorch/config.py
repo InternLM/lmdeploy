@@ -90,6 +90,7 @@ class BackendConfig:
     """Backend config."""
     eager_mode: bool = True
     device_type: str = 'cuda'
+    enable_deterministic: bool = False
 
 
 @dataclass

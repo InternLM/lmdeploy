@@ -105,7 +105,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             return super().get_layer_impl_builder(layer_type)
 
     @classmethod
-    def build_op(cls, spec: BuildSpec[ImplT]) -> ImplT:
+    def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed CUDA operator implementation."""
         from ..attention import PagedAttentionBuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
@@ -127,7 +127,7 @@ class CudaOpsBackend(DefaultOpsBackend):
                     logit_softcapping=spec.logit_softcapping,
                 ),
             )
-        return super().build_op(spec)
+        return super().build_op(spec, enable_deterministic=enable_deterministic)
 
     @staticmethod
     def get_attention_metadata_cls():

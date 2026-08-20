@@ -55,7 +55,7 @@ class DlinferOpsBackend(DefaultOpsBackend):
             return super().get_layer_impl_builder(layer_type)
 
     @classmethod
-    def build_op(cls, spec: BuildSpec[ImplT]) -> ImplT:
+    def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed dlinfer operator implementation."""
         from ..attention import PagedAttentionBuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
@@ -95,7 +95,7 @@ class DlinferOpsBackend(DefaultOpsBackend):
         if isinstance(spec, LinearBuildSpec):
             from .linear import DlinferLinearImpl
             return cast(ImplT, DlinferLinearImpl())
-        return super().build_op(spec)
+        return super().build_op(spec, enable_deterministic=enable_deterministic)
 
     @staticmethod
     def get_attention_metadata_cls():
