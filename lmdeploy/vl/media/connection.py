@@ -97,8 +97,14 @@ def _load_http_url(url_spec: ParseResult, media_io: MediaIO[_M],
 
 def _load_data_url(url_spec: ParseResult, media_io: MediaIO[_M]) -> _M:
     url_spec_path = url_spec.path or ''
-    data_spec, data = url_spec_path.split(',', 1)
-    media_type, data_type = data_spec.split(';', 1)
+    parts = url_spec_path.split(',', 1)
+    if len(parts) != 2 or not parts[1]:
+        raise ValueError(f'Invalid data URL: data:{url_spec_path}')
+    data_spec, data = parts
+    media_parts = data_spec.split(';', 1)
+    if len(media_parts) != 2:
+        raise ValueError(f'Invalid data URL: data:{url_spec_path}')
+    media_type, data_type = media_parts
     # media_type starts with a leading "/" (e.g., "/video/jpeg")
     media_type = media_type.lstrip('/')
 
