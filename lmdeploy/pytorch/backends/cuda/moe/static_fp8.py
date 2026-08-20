@@ -3,7 +3,7 @@
 import torch
 
 from lmdeploy.pytorch.backends.moe import (
-    FusedMoEStaticF8Builder,
+    FusedMoEStaticF8BuildSpec,
     FusedMoEStaticF8Impl,
 )
 from lmdeploy.pytorch.kernels.cuda.w8a8_fused_moe import (
@@ -73,24 +73,12 @@ class TritonFusedMoEStaticF8Impl(FusedMoEStaticF8Impl):
         )
 
 
-class TritonFusedMoEStaticF8Builder(
-    FusedMoEStaticF8Builder,
-):
-    """Triton static FP8 fused MoE builder."""
-
-    @staticmethod
-    def build(
-        top_k: int,
-        num_experts: int,
-        renormalize: bool = False,
-        out_dtype: torch.dtype = torch.float16,
-        quant_dtype: torch.dtype = torch.float8_e4m3fn,
-    ):
-        """Build static FP8 fused MoE."""
-        return TritonFusedMoEStaticF8Impl(
-            top_k=top_k,
-            num_experts=num_experts,
-            renormalize=renormalize,
-            out_dtype=out_dtype,
-            quant_dtype=quant_dtype,
-        )
+def build_fused_moe_static_f8(spec: FusedMoEStaticF8BuildSpec) -> FusedMoEStaticF8Impl:
+    """Build a CUDA static-FP8 fused MoE implementation."""
+    return TritonFusedMoEStaticF8Impl(
+        top_k=spec.top_k,
+        num_experts=spec.num_experts,
+        renormalize=spec.renormalize,
+        out_dtype=spec.out_dtype,
+        quant_dtype=spec.quant_dtype,
+    )

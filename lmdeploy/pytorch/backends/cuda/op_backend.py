@@ -41,21 +41,6 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.SiluAndMul:
             from .activation import TritonSiluAndMulBuilder
             return TritonSiluAndMulBuilder
-        elif layer_type == OpType.FusedMoE:
-            from .moe import TritonFusedMoEBuilder
-            return TritonFusedMoEBuilder
-        elif layer_type == OpType.FusedMoEW8A8:
-            from .moe import TritonFusedMoEW8A8Builder
-            return TritonFusedMoEW8A8Builder
-        elif layer_type == OpType.FusedMoEStaticF8:
-            from .moe import TritonFusedMoEStaticF8Builder
-            return TritonFusedMoEStaticF8Builder
-        elif layer_type == OpType.FusedMoEBlockedF8:
-            from .moe import TritonFusedMoEBlockedF8Builder
-            return TritonFusedMoEBlockedF8Builder
-        elif layer_type == OpType.FusedMoEV4FP4:
-            from .moe import TritonFusedMoEV4FP4Builder
-            return TritonFusedMoEV4FP4Builder
         elif layer_type == OpType.NSAIndexFP8:
             from .nsa import TritonNSAIndexFP8Builder
             return TritonNSAIndexFP8Builder
@@ -95,6 +80,13 @@ class CudaOpsBackend(DefaultOpsBackend):
         from ..blockedf8_modules import LinearBlockedF8BuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
         from ..lora import LoRABuildSpec
+        from ..moe import (
+            FusedMoEBlockedF8BuildSpec,
+            FusedMoEBuildSpec,
+            FusedMoEStaticF8BuildSpec,
+            FusedMoEV4FP4BuildSpec,
+            FusedMoEW8A8BuildSpec,
+        )
         from ..qmodules import LinearW8A8BuildSpec
         from ..static_fp8_modules import LinearStaticF8BuildSpec
         if isinstance(spec, LinearW4A16BuildSpec):
@@ -135,6 +127,21 @@ class CudaOpsBackend(DefaultOpsBackend):
         if isinstance(spec, LoRABuildSpec):
             from .lora import TritonLoRAImpl
             return cast(ImplT, TritonLoRAImpl())
+        if isinstance(spec, FusedMoEBuildSpec):
+            from .moe.default import build_fused_moe
+            return cast(ImplT, build_fused_moe(spec))
+        if isinstance(spec, FusedMoEW8A8BuildSpec):
+            from .moe.w8a8 import build_fused_moe_w8a8
+            return cast(ImplT, build_fused_moe_w8a8(spec))
+        if isinstance(spec, FusedMoEStaticF8BuildSpec):
+            from .moe.static_fp8 import build_fused_moe_static_f8
+            return cast(ImplT, build_fused_moe_static_f8(spec))
+        if isinstance(spec, FusedMoEBlockedF8BuildSpec):
+            from .moe.blocked_fp8 import build_fused_moe_blocked_f8
+            return cast(ImplT, build_fused_moe_blocked_f8(spec))
+        if isinstance(spec, FusedMoEV4FP4BuildSpec):
+            from .moe.v4_fp4 import build_fused_moe_v4_fp4
+            return cast(ImplT, build_fused_moe_v4_fp4(spec))
         if isinstance(spec, PagedAttentionBuildSpec):
             from .attention import build_paged_attention
             return cast(ImplT, build_paged_attention(spec))

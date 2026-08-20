@@ -2,9 +2,12 @@
 import functools
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
+
+from .base import BuildSpec
 
 
 class SoftmaxTopKImpl(ABC):
@@ -58,22 +61,19 @@ class FusedMoEImpl(ABC):
         raise NotImplementedError
 
 
-class FusedMoEBuilder(ABC):
-    """Fused moe builder."""
+@dataclass(frozen=True)
+class FusedMoEBuildSpec(BuildSpec[FusedMoEImpl]):
+    """Immutable requirements for constructing a fused MoE operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(top_k: int,
-              num_experts: int,
-              renormalize: bool = False,
-              hidden_dim: int = 1,
-              ep_size: int = 1,
-              ep_group: dist.ProcessGroup = None,
-              layer_idx: int = 0,
-              out_dtype: torch.dtype = torch.bfloat16,
-              num_max_dispatch_tokens_per_rank: int = 128):
-        """Build from mlp."""
-        raise NotImplementedError
+    top_k: int
+    num_experts: int
+    renormalize: bool
+    hidden_dim: int
+    ep_size: int
+    ep_group: dist.ProcessGroup | None
+    layer_idx: int
+    out_dtype: torch.dtype
+    num_max_dispatch_tokens_per_rank: int
 
 
 class FusedMoEW8A8Impl(ABC):
@@ -103,18 +103,16 @@ class FusedMoEW8A8Impl(ABC):
         raise NotImplementedError
 
 
-class FusedMoEW8A8Builder(ABC):
-    """Fused moe w8a8 builder."""
+@dataclass(frozen=True)
+class FusedMoEW8A8BuildSpec(BuildSpec[FusedMoEW8A8Impl]):
+    """Immutable requirements for constructing a W8A8 fused MoE operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(top_k: int,
-              num_experts: int,
-              renormalize: bool = False,
-              out_dtype: torch.dtype = torch.float16,
-              quant_dtype: torch.dtype = torch.int8):
-        """Build from mlp."""
-        raise NotImplementedError
+    top_k: int
+    num_experts: int
+    renormalize: bool
+    out_dtype: torch.dtype
+    quant_dtype: torch.dtype | None
+
 
 class FusedMoEStaticF8Impl(ABC):
     """Fused MoE static FP8 implementation."""
@@ -156,20 +154,17 @@ class FusedMoEStaticF8Impl(ABC):
         raise NotImplementedError
 
 
-class FusedMoEStaticF8Builder(ABC):
-    """Fused MoE static FP8 builder."""
+@dataclass(frozen=True)
+class FusedMoEStaticF8BuildSpec(BuildSpec[FusedMoEStaticF8Impl]):
+    """Immutable requirements for constructing a static-FP8 fused MoE
+    operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(
-        top_k: int,
-        num_experts: int,
-        renormalize: bool = False,
-        out_dtype: torch.dtype = torch.float16,
-        quant_dtype: torch.dtype = torch.float8_e4m3fn,
-    ):
-        """Build static FP8 MoE implementation."""
-        raise NotImplementedError
+    top_k: int
+    num_experts: int
+    renormalize: bool
+    out_dtype: torch.dtype
+    quant_dtype: torch.dtype
+
 
 class FusedMoEBlockedF8Impl(ABC):
     """Fused moe blocked f8 implementation."""
@@ -208,22 +203,67 @@ class FusedMoEBlockedF8Impl(ABC):
         raise NotImplementedError
 
 
-class FusedMoEBlockedF8Builder(ABC):
-    """Fused moe blocked f8 builder."""
+@dataclass(frozen=True)
+class FusedMoEBlockedF8BuildSpec(BuildSpec[FusedMoEBlockedF8Impl]):
+    """Immutable requirements for constructing a blocked-FP8 fused MoE
+    operator."""
 
-    @staticmethod
+    top_k: int
+    num_experts: int
+    hidden_dim: int
+    renormalize: bool
+    block_size: int
+    ep_size: int
+    ep_group: dist.ProcessGroup | None
+    out_dtype: torch.dtype
+    fp8_dtype: torch.dtype
+    num_max_dispatch_tokens_per_rank: int
+    layer_idx: int
+    custom_gateup_act: bool
+    scale_fmt: str | None
+
+
+class FusedMoEV4FP4Impl(ABC):
+    """DeepSeek-V4 FP4 fused MoE implementation API."""
+
     @abstractmethod
-    def build(top_k: int,
-              num_experts: int,
-              hidden_dim: int = 1,
-              renormalize: bool = False,
-              block_size: int = 128,
-              ep_size: int = 1,
-              ep_group: dist.ProcessGroup = None,
-              out_dtype: torch.dtype = torch.float16,
-              fp8_dtype: torch.dtype = torch.float8_e4m3fn,
-              num_max_dispatch_tokens_per_rank: int = 128,
-              layer_idx: int = 0,
-              custom_gateup_act: bool = False):
-        """Build from mlp."""
+    def update_weights(
+        self,
+        gate_up_weight: torch.Tensor,
+        gate_up_scale: torch.Tensor,
+        down_weight: torch.Tensor,
+        down_scale: torch.Tensor,
+    ):
+        """Update weights and scales."""
         raise NotImplementedError
+
+    @abstractmethod
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        topk_weights: torch.Tensor,
+        topk_ids: torch.LongTensor,
+        gate_up_weight: torch.Tensor,
+        gate_up_scale: torch.Tensor,
+        down_weight: torch.Tensor,
+        down_scale: torch.Tensor,
+    ):
+        """Forward."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class FusedMoEV4FP4BuildSpec(BuildSpec[FusedMoEV4FP4Impl]):
+    """Immutable requirements for constructing a V4 FP4 fused MoE operator."""
+
+    top_k: int
+    num_experts: int
+    hidden_dim: int
+    ffn_dim: int
+    expert_offset: int
+    swiglu_limit: float
+    scale_fmt: str | None
+    ep_size: int
+    ep_group: dist.ProcessGroup | None
+    layer_idx: int
+    num_max_dispatch_tokens_per_rank: int

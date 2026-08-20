@@ -3,7 +3,8 @@
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.moe import FusedMoEV4FP4BuildSpec
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
@@ -204,8 +205,7 @@ class FusedMoEV4FP4(nn.Module):
         if self.ep_size > 1 and dist_config.enable_eplb:
             raise NotImplementedError('DeepSeek-V4 FP4 EP does not support enable_eplb yet.')
 
-        impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEV4FP4)
-        deep_ep_max_tokens_per_rank = get_build_model_context().deep_ep_max_tokens_per_rank
+        build_ctx = get_build_model_context()
 
         if self.ep_size > 1:
             # EP mode: each rank holds num_experts // ep_size experts.
@@ -228,15 +228,22 @@ class FusedMoEV4FP4(nn.Module):
                                         weight_type='down',
                                         device=device)
 
-            self.impl = impl_builder.build(top_k=top_k,
-                                           num_experts=num_experts,
-                                           hidden_dim=hidden_dim,
-                                           ffn_dim=ffn_dim,
-                                           expert_offset=expert_offset,
-                                           swiglu_limit=swiglu_limit,
-                                           ep_size=self.ep_size,
-                                           ep_group=dist_ctx.ep_gpu_group,
-                                           num_max_dispatch_tokens_per_rank=deep_ep_max_tokens_per_rank)
+            self.impl = get_backend().build_op(
+                FusedMoEV4FP4BuildSpec(
+                    top_k=top_k,
+                    num_experts=num_experts,
+                    hidden_dim=hidden_dim,
+                    ffn_dim=ffn_dim,
+                    expert_offset=expert_offset,
+                    swiglu_limit=swiglu_limit,
+                    scale_fmt='ue8m0',
+                    ep_size=self.ep_size,
+                    ep_group=dist_ctx.ep_gpu_group,
+                    layer_idx=0,
+                    num_max_dispatch_tokens_per_rank=build_ctx.deep_ep_max_tokens_per_rank,
+                ),
+                enable_deterministic=build_ctx.enable_deterministic,
+            )
         else:
             # TP-only mode: all experts, FFN dim sharded by TP rank.
             self.expert_offset = 0
@@ -253,13 +260,22 @@ class FusedMoEV4FP4(nn.Module):
                                           weight_type='down',
                                           device=device)
 
-            self.impl = impl_builder.build(top_k=top_k,
-                                           num_experts=num_experts,
-                                           hidden_dim=hidden_dim,
-                                           ffn_dim=local_ffn_dim,
-                                           expert_offset=0,
-                                           swiglu_limit=swiglu_limit,
-                                           scale_fmt='ue8m0')
+            self.impl = get_backend().build_op(
+                FusedMoEV4FP4BuildSpec(
+                    top_k=top_k,
+                    num_experts=num_experts,
+                    hidden_dim=hidden_dim,
+                    ffn_dim=local_ffn_dim,
+                    expert_offset=0,
+                    swiglu_limit=swiglu_limit,
+                    scale_fmt='ue8m0',
+                    ep_size=1,
+                    ep_group=None,
+                    layer_idx=0,
+                    num_max_dispatch_tokens_per_rank=build_ctx.deep_ep_max_tokens_per_rank,
+                ),
+                enable_deterministic=build_ctx.enable_deterministic,
+            )
 
     def update_weights(self):
         if self.ep_size > 1:

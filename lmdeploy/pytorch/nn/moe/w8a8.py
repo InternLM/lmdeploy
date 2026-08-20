@@ -2,8 +2,10 @@
 
 import torch
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.moe import FusedMoEW8A8BuildSpec
 from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from .base import FusedMoEBase, MoeType, moe_gather_inputs, moe_reduce, update_dims
 from .default import LinearWeights
@@ -95,8 +97,16 @@ class FusedMoEW8A8(FusedMoEBase):
         )
 
         # create implementation
-        impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEW8A8)
-        self.impl = impl_builder.build(top_k, num_experts, renormalize, dtype, quant_dtype=quant_dtype)
+        self.impl = get_backend().build_op(
+            FusedMoEW8A8BuildSpec(
+                top_k=top_k,
+                num_experts=num_experts,
+                renormalize=renormalize,
+                out_dtype=dtype,
+                quant_dtype=quant_dtype,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
         # create weights
         hidden_dim, ffn_dim = update_dims(hidden_dim, ffn_dim)

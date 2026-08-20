@@ -38,9 +38,6 @@ class DlinferOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.SoftmaxTopK:
             from .moe import DlinferSoftmaxTopKBuilder
             return DlinferSoftmaxTopKBuilder
-        elif layer_type == OpType.FusedMoE:
-            from .moe import DlinferFusedMoEBuilder
-            return DlinferFusedMoEBuilder
         elif layer_type == OpType.RotaryEmbedding:
             from .rotary_embedding import DlinferRotaryEmbeddingBuilder
             return DlinferRotaryEmbeddingBuilder
@@ -55,6 +52,7 @@ class DlinferOpsBackend(DefaultOpsBackend):
         from ..awq_modules import LinearW4A16BuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
         from ..linear import LinearBuildSpec
+        from ..moe import FusedMoEBuildSpec
         from ..qmodules import LinearW8A8BuildSpec
         if isinstance(spec, LinearW4A16BuildSpec):
             from .awq_modules import AwqLinearW4A16Impl
@@ -113,6 +111,9 @@ class DlinferOpsBackend(DefaultOpsBackend):
         if isinstance(spec, LinearBuildSpec):
             from .linear import DlinferLinearImpl
             return cast(ImplT, DlinferLinearImpl())
+        if isinstance(spec, FusedMoEBuildSpec):
+            from .moe import build_fused_moe
+            return cast(ImplT, build_fused_moe(spec))
         return super().build_op(spec, enable_deterministic=enable_deterministic)
 
     @staticmethod

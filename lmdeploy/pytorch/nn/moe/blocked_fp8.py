@@ -3,7 +3,8 @@ from collections.abc import Callable
 
 import torch
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.moe import FusedMoEBlockedF8BuildSpec
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
@@ -173,21 +174,25 @@ class FusedMoEBlockedF8(FusedMoEBase):
 
         dist_ctx = get_dist_manager().current_context()
         self.ep_size, rank = get_ep_world_rank()
-        impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEBlockedF8)
-        deep_ep_max_tokens_per_rank = get_build_model_context().deep_ep_max_tokens_per_rank
-        self.impl = impl_builder.build(top_k,
-                                       num_experts,
-                                       hidden_dim,
-                                       renormalize,
-                                       block_size=self.block_size,
-                                       ep_size=self.ep_size,
-                                       ep_group=dist_ctx.ep_gpu_group,
-                                       out_dtype=dtype,
-                                       fp8_dtype=fp8_dtype,
-                                       num_max_dispatch_tokens_per_rank=deep_ep_max_tokens_per_rank,
-                                       layer_idx=layer_idx,
-                                       custom_gateup_act=act_func is not None)
-        self.impl.set_scale_fmt(scale_fmt)
+        build_ctx = get_build_model_context()
+        self.impl = get_backend().build_op(
+            FusedMoEBlockedF8BuildSpec(
+                top_k=top_k,
+                num_experts=num_experts,
+                hidden_dim=hidden_dim,
+                renormalize=renormalize,
+                block_size=self.block_size,
+                ep_size=self.ep_size,
+                ep_group=dist_ctx.ep_gpu_group,
+                out_dtype=dtype,
+                fp8_dtype=fp8_dtype,
+                num_max_dispatch_tokens_per_rank=build_ctx.deep_ep_max_tokens_per_rank,
+                layer_idx=layer_idx,
+                custom_gateup_act=act_func is not None,
+                scale_fmt=scale_fmt,
+            ),
+            enable_deterministic=build_ctx.enable_deterministic,
+        )
 
         if self.ep_size > 1:
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)

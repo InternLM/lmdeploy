@@ -2,7 +2,9 @@
 
 import torch
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.moe import FusedMoEStaticF8BuildSpec
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from .base import (
     FusedMoEBase,
@@ -251,18 +253,15 @@ class FusedMoEStaticF8(FusedMoEBase):
             do_renormalize=renormalize,
         )
 
-        impl_builder = (
-            get_backend().get_layer_impl_builder(
-                OpType.FusedMoEStaticF8
-            )
-        )
-
-        self.impl = impl_builder.build(
-            top_k=top_k,
-            num_experts=num_experts,
-            renormalize=renormalize,
-            out_dtype=dtype,
-            quant_dtype=quant_dtype,
+        self.impl = get_backend().build_op(
+            FusedMoEStaticF8BuildSpec(
+                top_k=top_k,
+                num_experts=num_experts,
+                renormalize=renormalize,
+                out_dtype=dtype,
+                quant_dtype=quant_dtype,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
         # TP shards the intermediate dimension.
