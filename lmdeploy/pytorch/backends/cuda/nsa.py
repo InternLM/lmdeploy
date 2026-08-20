@@ -25,7 +25,6 @@ from lmdeploy.utils import get_logger
 
 from ..nsa import (
     BaseNSAIndexFP8,
-    BaseNSAIndexFP8Builder,
     NSAIndexMeta,
     build_nsa_index_meta,
     should_skip_nsa_indexer,
@@ -423,10 +422,3 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                     eps=norm_eps,
                                     rope_interleaved=rope_interleaved)
         return self._score_and_select(q, q_s, indexer_k_cache, meta)
-
-
-class TritonNSAIndexFP8Builder(BaseNSAIndexFP8Builder):
-
-    @staticmethod
-    def build(topk: int, softmax_scale: float, block_size: int = 128, fill: int = -1) -> BaseNSAIndexFP8:
-        return TritonNSAIndexFP8(topk, softmax_scale=softmax_scale, block_size=block_size, fill=fill)

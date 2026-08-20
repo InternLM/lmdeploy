@@ -4,7 +4,7 @@ from typing import cast
 
 import torch
 
-from ..base import BuildSpec, ImplT, OpsBackend, OpType
+from ..base import BuildSpec, ImplT, OpsBackend
 
 
 class DefaultOpsBackend(OpsBackend):
@@ -14,50 +14,64 @@ class DefaultOpsBackend(OpsBackend):
         return 'default'
 
     @classmethod
-    def get_layer_impl_builder(cls, layer_type: OpType):
-        """Get builder of given layer type."""
-        if layer_type == OpType.RotaryEmbedding:
-            from .rotary_embedding import DefaultRotaryEmbeddingBuilder
-            return DefaultRotaryEmbeddingBuilder
-        elif layer_type == OpType.ApplyRotaryEmb:
-            from .apply_rotary_emb import DefaultApplyRotaryEmbBuilder
-            return DefaultApplyRotaryEmbBuilder
-        elif layer_type == OpType.RMSNorm:
-            from .norm import DefaultRMSNormBuilder
-            return DefaultRMSNormBuilder
-        elif layer_type == OpType.LayerNorm:
-            from .norm import DefaultLayerNormBuilder
-            return DefaultLayerNormBuilder
-        elif layer_type == OpType.MultinomialSampling:
-            from .multinomial_sampling import DefaultMultinomialSamplingBuilder
-            return DefaultMultinomialSamplingBuilder
-        elif layer_type == OpType.SoftmaxTopK:
-            from .moe import DefaultSoftmaxTopKBuilder
-            return DefaultSoftmaxTopKBuilder
-        elif layer_type == OpType.Embedding:
-            from .embedding import DefaultEmbeddingBuilder
-            return DefaultEmbeddingBuilder
-        elif layer_type == OpType.CacheBlockCopy:
-            from .cache_block_copy import DefaultCacheBlockCopyBuilder
-            return DefaultCacheBlockCopyBuilder
-        elif layer_type == OpType.RouterNoauxTC:
-            from .moe_router import DefaultRouterNoauxTCBuilder
-            return DefaultRouterNoauxTCBuilder
-        else:
-            raise RuntimeError(f'{layer_type} not supported.')
-
-    @classmethod
     def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed operator implementation."""
         from ..activation import GeluAndMulBuildSpec, SiluAndMulBuildSpec
+        from ..apply_rotary_emb import ApplyRotaryEmbBuildSpec
         from ..awq_modules import LinearW4A16BuildSpec
+        from ..cache_block_copy import CacheBlockCopyBuildSpec
+        from ..embedding import EmbeddingBuildSpec
         from ..linear import LinearBuildSpec
+        from ..moe import SoftmaxTopKBuildSpec
+        from ..moe_router import RouterNoauxTCBuildSpec
+        from ..multinomial_sampling import MultinomialSamplingBuildSpec
+        from ..norm import LayerNormBuildSpec, RMSNormBuildSpec
+        from ..rotary_embedding import RotaryEmbeddingBuildSpec
         if isinstance(spec, SiluAndMulBuildSpec):
             from .activation import DefaultSiluAndMulImpl
             return cast(ImplT, DefaultSiluAndMulImpl(spec.inplace))
         if isinstance(spec, GeluAndMulBuildSpec):
             from .activation import DefaultGeluAndMulImpl
             return cast(ImplT, DefaultGeluAndMulImpl(spec.approximate))
+        if isinstance(spec, RotaryEmbeddingBuildSpec):
+            from .rotary_embedding import build_rotary_embedding
+            return cast(ImplT, build_rotary_embedding(spec))
+        if isinstance(spec, ApplyRotaryEmbBuildSpec):
+            from .apply_rotary_emb import DefaultApplyRotaryEmbImpl
+            return cast(ImplT, DefaultApplyRotaryEmbImpl())
+        if isinstance(spec, RMSNormBuildSpec):
+            from .norm import DefaultRMSNormImpl
+            return cast(ImplT, DefaultRMSNormImpl(spec.hidden_size, spec.eps))
+        if isinstance(spec, LayerNormBuildSpec):
+            from .norm import DefaultLayerNormImpl
+            return cast(ImplT, DefaultLayerNormImpl(spec.normalized_shape, spec.eps))
+        if isinstance(spec, MultinomialSamplingBuildSpec):
+            from .multinomial_sampling import DefaultMultinomialSamplingImpl
+            return cast(ImplT, DefaultMultinomialSamplingImpl())
+        if isinstance(spec, SoftmaxTopKBuildSpec):
+            from .moe import DefaultSoftmaxTopKImpl
+            return cast(ImplT, DefaultSoftmaxTopKImpl(spec.top_k, spec.dim, n_groups=spec.n_groups))
+        if isinstance(spec, EmbeddingBuildSpec):
+            from .embedding import DefaultEmbeddingImpl
+            return cast(ImplT, DefaultEmbeddingImpl(spec.start_index, spec.end_index))
+        if isinstance(spec, CacheBlockCopyBuildSpec):
+            from .cache_block_copy import build_cache_block_copy
+            return cast(ImplT, build_cache_block_copy(spec))
+        if isinstance(spec, RouterNoauxTCBuildSpec):
+            from .moe_router import DefaultRouterNoauxTCImpl
+            return cast(
+                ImplT,
+                DefaultRouterNoauxTCImpl(
+                    scoring_func=spec.scoring_func,
+                    top_k=spec.top_k,
+                    n_group=spec.n_group,
+                    topk_group=spec.topk_group,
+                    n_routed_experts=spec.n_routed_experts,
+                    routed_scaling_factor=spec.routed_scaling_factor,
+                    renormalize=spec.renormalize,
+                    router_n_groups=spec.router_n_groups,
+                ),
+            )
         if isinstance(spec, LinearW4A16BuildSpec):
             from .awq_modules import DefaultLinearW4A16Impl
             return cast(

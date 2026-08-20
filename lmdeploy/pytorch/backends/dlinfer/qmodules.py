@@ -7,7 +7,7 @@ import torch.distributed as dist
 from lmdeploy.pytorch.kernels.dlinfer.w8a8_kernels import dynamic_quant, linear_w8a8, rms_norm_w8a8
 from lmdeploy.pytorch.models.q_modules import QTensor
 
-from ..qmodules import LinearW8A8Impl, RMSNormW8A8Builder, RMSNormW8A8Impl
+from ..qmodules import LinearW8A8Impl, RMSNormW8A8Impl
 
 
 class DlinferLinearW8A8Impl(LinearW8A8Impl):
@@ -69,12 +69,3 @@ class DlinferRMSNormW8A8Impl(RMSNormW8A8Impl):
             (x, rms_scale, residual) = rms_norm_w8a8(x, weight, self.eps, self.quant_dtype, residual)
             x = QTensor(x, rms_scale)
             return x, residual
-
-
-class DlinferRMSNormW8A8Builder(RMSNormW8A8Builder):
-    """Dlinfer RMS norm w8a8 implementation builder."""
-
-    @staticmethod
-    def build(hidden_size: int, eps: float = 1e-6, quant_dtype: torch.dtype = torch.int8):
-        """build."""
-        return DlinferRMSNormW8A8Impl(hidden_size, eps, quant_dtype)

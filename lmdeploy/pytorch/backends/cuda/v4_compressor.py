@@ -9,7 +9,7 @@ from lmdeploy.pytorch.kernels.cuda.v4_compressor import (
     score_kv,
 )
 
-from ..compressor import BaseV4Compressor, BaseV4CompressorBuilder, V4CompressorMetadata
+from ..compressor import BaseV4Compressor, V4CompressorMetadata
 
 
 def _get_v4_packed_index_cache_views(index_cache: torch.Tensor,
@@ -89,13 +89,3 @@ class TritonV4CompressorImpl(BaseV4Compressor):
     def rotate_activation(self, x: torch.Tensor) -> torch.Tensor:
         from fast_hadamard_transform import hadamard_transform
         return hadamard_transform(x, scale=x.size(-1)**-0.5)
-
-
-class TritonV4CompressorBuilder(BaseV4CompressorBuilder):
-
-    @staticmethod
-    def build(compress_ratio: int, overlap: bool, head_dim: int) -> BaseV4Compressor:
-        return TritonV4CompressorImpl(
-            compress_ratio=compress_ratio,
-            overlap=overlap,
-            head_dim=head_dim)

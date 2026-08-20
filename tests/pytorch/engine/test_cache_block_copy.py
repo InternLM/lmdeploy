@@ -2,10 +2,10 @@
 import pytest
 import torch
 
+import lmdeploy.pytorch.backends.default.cache_block_copy as default_cache_block_copy
 import lmdeploy.pytorch.engine.cache_engine as cache_engine_module
-from lmdeploy.pytorch.backends.base import OpType
+from lmdeploy.pytorch.backends.cache_block_copy import CacheBlockCopyBuildSpec
 from lmdeploy.pytorch.backends.default.cache_block_copy import (
-    DefaultCacheBlockCopyBuilder,
     DefaultCacheBlockCopyImpl,
 )
 from lmdeploy.pytorch.backends.default.op_backend import DefaultOpsBackend
@@ -13,8 +13,11 @@ from lmdeploy.pytorch.config import CacheConfig, ModelConfig
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
 
 
-def test_default_backend_registers_cache_block_copy_builder():
-    assert DefaultOpsBackend.get_layer_impl_builder(OpType.CacheBlockCopy) is DefaultCacheBlockCopyBuilder
+def test_default_backend_builds_cache_block_copy():
+    copy_impl = DefaultOpsBackend.build_op(
+        CacheBlockCopyBuildSpec(packed_caches=(), num_logical_blocks=1, pages_per_block=1))
+
+    assert isinstance(copy_impl, DefaultCacheBlockCopyImpl)
 
 
 def test_cache_engine_build_cache_block_copy_routes_stable_list_pools(monkeypatch):
@@ -30,23 +33,15 @@ def test_cache_engine_build_cache_block_copy_routes_stable_list_pools(monkeypatc
         torch.empty((2, physical_pages, 8), dtype=torch.uint8),
         torch.empty((2, 3, physical_pages, 16), dtype=torch.uint8),
     ]
-    build_calls = []
-    requested_ops = []
+    build_specs = []
     copy_impl = object()
-
-    class _RecordingBuilder:
-
-        @staticmethod
-        def build(**kwargs):
-            build_calls.append(kwargs)
-            return copy_impl
 
     class _RecordingBackend:
 
         @staticmethod
-        def get_layer_impl_builder(op_type):
-            requested_ops.append(op_type)
-            return _RecordingBuilder
+        def build_op(spec, **kwargs):
+            build_specs.append(spec)
+            return copy_impl
 
     monkeypatch.setattr(cache_engine_module, 'get_backend', lambda: _RecordingBackend())
     cache_engine = object.__new__(CacheEngine)
@@ -55,12 +50,12 @@ def test_cache_engine_build_cache_block_copy_routes_stable_list_pools(monkeypatc
 
     cache_engine._build_cache_block_copy()
 
-    assert requested_ops == [OpType.CacheBlockCopy]
-    assert len(build_calls) == 1
-    build_args = build_calls[0]
-    assert [id(pool) for pool in build_args['packed_caches']] == [id(pool) for pool in packed_pools]
-    assert build_args['num_logical_blocks'] == cache_config.num_gpu_blocks
-    assert build_args['pages_per_block'] == 3
+    assert len(build_specs) == 1
+    build_spec = build_specs[0]
+    assert isinstance(build_spec, CacheBlockCopyBuildSpec)
+    assert [id(pool) for pool in build_spec.packed_caches] == [id(pool) for pool in packed_pools]
+    assert build_spec.num_logical_blocks == cache_config.num_gpu_blocks
+    assert build_spec.pages_per_block == 3
     assert cache_engine._cache_block_copy_device == packed_pools[0].device
     assert cache_engine._cache_block_copy_impl is copy_impl
 
@@ -159,17 +154,20 @@ def test_default_cache_block_copy_chunks_pages_and_reuses_workspaces(shape, page
     assert tuple(workspace.data_ptr() for workspace in copy_impl._workspaces) == workspace_ptrs
 
 
-def test_default_cache_block_copy_builder_uses_total_byte_budget(monkeypatch):
+def test_default_cache_block_copy_build_uses_total_byte_budget(monkeypatch):
     packed_pools = [
         torch.empty((2, 12, 8), dtype=torch.uint8),
         torch.empty((2, 3, 12, 16), dtype=torch.uint8),
     ]
     bytes_per_block = sum(pool.numel() * pool.element_size() // 6 for pool in packed_pools)
-    monkeypatch.setattr(DefaultCacheBlockCopyBuilder, '_TARGET_WORKSPACE_BYTES', bytes_per_block * 2)
+    monkeypatch.setattr(default_cache_block_copy, '_TARGET_WORKSPACE_BYTES', bytes_per_block * 2)
 
-    copy_impl = DefaultCacheBlockCopyBuilder.build(packed_caches=packed_pools,
-                                                   num_logical_blocks=6,
-                                                   pages_per_block=2)
+    copy_impl = DefaultOpsBackend.build_op(
+        CacheBlockCopyBuildSpec(
+            packed_caches=tuple(packed_pools),
+            num_logical_blocks=6,
+            pages_per_block=2,
+        ))
 
     assert copy_impl.blocks_per_chunk == 2
     assert copy_impl._workspaces is None

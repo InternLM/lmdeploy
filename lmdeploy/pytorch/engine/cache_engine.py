@@ -9,7 +9,7 @@ from operator import index as as_index
 import torch
 
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.backends.base import OpType
+from lmdeploy.pytorch.backends.cache_block_copy import CacheBlockCopyBuildSpec
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
@@ -284,10 +284,12 @@ class CacheEngine:
         pages_per_block = self.cache_config.block_size // self.cache_config.kernel_block_size
         packed_pools = self._as_mem_pools(self.full_gpu_cache)
         self._cache_block_copy_device = packed_pools[0].device
-        block_copy_builder = get_backend().get_layer_impl_builder(OpType.CacheBlockCopy)
-        self._cache_block_copy_impl = block_copy_builder.build(packed_caches=packed_pools,
-                                                               num_logical_blocks=self.num_gpu_blocks,
-                                                               pages_per_block=pages_per_block)
+        self._cache_block_copy_impl = get_backend().build_op(
+            CacheBlockCopyBuildSpec(
+                packed_caches=tuple(packed_pools),
+                num_logical_blocks=self.num_gpu_blocks,
+                pages_per_block=pages_per_block,
+            ))
 
     @property
     def cpu_cache(self):

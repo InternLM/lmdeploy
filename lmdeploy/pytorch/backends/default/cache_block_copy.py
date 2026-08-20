@@ -4,7 +4,12 @@ from collections.abc import Sequence
 
 import torch
 
-from ..cache_block_copy import CacheBlockCopyBuilder, CacheBlockCopyImpl
+from ..cache_block_copy import CacheBlockCopyBuildSpec, CacheBlockCopyImpl
+
+# Bound the total persistent gather workspace across all packed pools. One
+# logical block remains the irreducible unit, so an unusually large block may
+# exceed this target.
+_TARGET_WORKSPACE_BYTES = 64 * 1024**2
 
 
 class DefaultCacheBlockCopyImpl(CacheBlockCopyImpl):
@@ -49,30 +54,19 @@ class DefaultCacheBlockCopyImpl(CacheBlockCopyImpl):
                 logical_cache.scatter_(-3, dst_index, chunk_workspace)
 
 
-class DefaultCacheBlockCopyBuilder(CacheBlockCopyBuilder):
+def build_cache_block_copy(spec: CacheBlockCopyBuildSpec) -> CacheBlockCopyImpl:
     """Build the batched torch logical-block copy fallback."""
-
-    # Bound the total persistent gather workspace across all packed pools.
-    # One logical block remains the irreducible unit, so an unusually large
-    # block may exceed this target.
-    _TARGET_WORKSPACE_BYTES = 64 * 1024**2
-
-    @staticmethod
-    def build(packed_caches: Sequence[torch.Tensor], num_logical_blocks: int,
-              pages_per_block: int) -> CacheBlockCopyImpl:
-        packed_caches = tuple(packed_caches)
-        if num_logical_blocks == 0:
-            blocks_per_chunk = 1
+    if spec.num_logical_blocks == 0:
+        blocks_per_chunk = 1
+    else:
+        bytes_per_block = sum(cache.numel() * cache.element_size() // spec.num_logical_blocks
+                              for cache in spec.packed_caches)
+        if bytes_per_block == 0:
+            blocks_per_chunk = spec.num_logical_blocks
         else:
-            bytes_per_block = sum(cache.numel() * cache.element_size() // num_logical_blocks
-                                  for cache in packed_caches)
-            if bytes_per_block == 0:
-                blocks_per_chunk = num_logical_blocks
-            else:
-                blocks_per_chunk = max(1,
-                                       DefaultCacheBlockCopyBuilder._TARGET_WORKSPACE_BYTES // bytes_per_block)
-                blocks_per_chunk = min(blocks_per_chunk, num_logical_blocks)
-        return DefaultCacheBlockCopyImpl(packed_caches=packed_caches,
-                                         num_logical_blocks=num_logical_blocks,
-                                         pages_per_block=pages_per_block,
-                                         blocks_per_chunk=blocks_per_chunk)
+            blocks_per_chunk = max(1, _TARGET_WORKSPACE_BYTES // bytes_per_block)
+            blocks_per_chunk = min(blocks_per_chunk, spec.num_logical_blocks)
+    return DefaultCacheBlockCopyImpl(packed_caches=spec.packed_caches,
+                                     num_logical_blocks=spec.num_logical_blocks,
+                                     pages_per_block=spec.pages_per_block,
+                                     blocks_per_chunk=blocks_per_chunk)

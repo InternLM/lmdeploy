@@ -2,9 +2,10 @@
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.attention import V4AttentionBuildSpec, V4AttentionMetadata
 from lmdeploy.pytorch.backends.indexer import V4IndexerOutput
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
 class V4Attention(nn.Module):
@@ -12,13 +13,15 @@ class V4Attention(nn.Module):
 
     def __init__(self, head_size: int, scale: float, window_size: int, compress_ratio: int, **kwargs):
         super().__init__()
-        layer_backend = get_backend()
-        impl_builder = layer_backend.get_layer_impl_builder(OpType.V4Attention)
-        self.impl = impl_builder.build(head_size=head_size,
-                                       scale=scale,
-                                       window_size=window_size,
-                                       compress_ratio=compress_ratio,
-                                       **kwargs)
+        self.impl = get_backend().build_op(
+            V4AttentionBuildSpec(
+                head_size=head_size,
+                scale=scale,
+                window_size=window_size,
+                compress_ratio=compress_ratio,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     def forward(self,
                 query: torch.Tensor,

@@ -26,14 +26,13 @@ class RMSNormW8A8Impl(ABC):
         raise NotImplementedError
 
 
-class RMSNormW8A8Builder(ABC):
-    """RMS norm w8a8 implementation builder."""
+@dataclass(frozen=True)
+class RMSNormW8A8BuildSpec(BuildSpec[RMSNormW8A8Impl]):
+    """Immutable requirements for constructing a W8A8 RMS norm operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(hidden_size: int, eps: float = 1e-6, quant_dtype: torch.dtype = torch.int8):
-        """build."""
-        raise NotImplementedError
+    hidden_size: int
+    eps: float = 1e-6
+    quant_dtype: torch.dtype = torch.int8
 
 
 class LinearW8A8Impl(ABC):

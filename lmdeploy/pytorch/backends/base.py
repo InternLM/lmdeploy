@@ -3,7 +3,6 @@
 # https://github.com/vllm-project/vllm/blob/main/vllm/attention/backends/abstract.py
 import contextlib
 from abc import ABC, abstractmethod
-from enum import Enum, auto
 from typing import Generic, TypeVar
 
 import torch
@@ -17,31 +16,6 @@ class BuildSpec(Generic[ImplT]):
     """Build request whose type parameter is the result interface."""
 
 
-class OpType(Enum):
-    """Layer type enumerate."""
-    RotaryEmbedding = auto()
-    ApplyRotaryEmb = auto()
-    RMSNorm = auto()
-    LayerNorm = auto()
-    RMSNormW8A8 = auto()
-    MultinomialSampling = auto()
-    SoftmaxTopK = auto()
-    NSAIndexFP8 = auto()
-    V4Attention = auto()
-    V4Indexer = auto()
-    V4Compressor = auto()
-    HcPrePost = auto()
-    Embedding = auto()
-    CacheBlockCopy = auto()
-
-    # MoE router
-    RouterNoauxTC = auto()
-
-    # Gated Delta
-    CausalConv1d = auto()
-    GatedDeltaRule = auto()
-
-
 class OpsBackend(ABC):
     """Layer backend abstract."""
 
@@ -49,12 +23,6 @@ class OpsBackend(ABC):
     @abstractmethod
     def get_name() -> str:
         """Get backend name."""
-        raise NotImplementedError
-
-    @classmethod
-    @abstractmethod
-    def get_layer_impl_builder(cls, layer_type: OpType):
-        """Get builder of given layer type."""
         raise NotImplementedError
 
     @classmethod

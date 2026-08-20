@@ -6,7 +6,9 @@ from torch import nn
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
-from ..backends import OpType, get_backend
+from ..backends import get_backend
+from ..backends.norm import LayerNormBuildSpec, RMSNormBuildSpec
+from ..backends.qmodules import RMSNormW8A8BuildSpec
 from .utils import chunk_aligned, get_distribute_size
 
 
@@ -49,20 +51,19 @@ class RMSNorm(nn.Module):
 
         w8a8_flag = quant_method == 'smooth_quant'
 
-        if w8a8_flag:
-            builder = backend.get_layer_impl_builder(OpType.RMSNormW8A8)
-        else:
-            builder = backend.get_layer_impl_builder(OpType.RMSNorm)
-
         if tp:
             world_size, rank = get_tp_world_rank('attn')
             hidden_size = get_distribute_size(hidden_size, world_size, rank, align=align)
 
         self.register_parameter('weight', self.create_weight(hidden_size, dtype, device))
         if w8a8_flag:
-            self.impl = builder.build(hidden_size, eps, quant_dtype=quant_config.quant_dtype)
+            spec = RMSNormW8A8BuildSpec(hidden_size, eps, quant_dtype=quant_config.quant_dtype)
         else:
-            self.impl = builder.build(hidden_size, eps)
+            spec = RMSNormBuildSpec(hidden_size, eps)
+        self.impl = backend.build_op(
+            spec,
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
         if tp:
             self.weight.weight_loader = self.weight_loader
@@ -99,12 +100,13 @@ class LayerNorm(nn.Module):
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None):
         super().__init__()
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.LayerNorm)
         weight, bias = self.create_weight(hidden_size, bias, dtype, device)
         self.register_parameter('weight', weight)
         self.register_parameter('bias', bias)
-        self.impl = builder.build(hidden_size, eps)
+        self.impl = get_backend().build_op(
+            LayerNormBuildSpec(hidden_size, eps),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     @staticmethod
     def create_weight(hidden_size: int,

@@ -98,6 +98,34 @@ class V4AttentionMetadata:
         )
 
 
+class V4AttentionImpl(ABC):
+    """DeepSeek-V4 attention implementation contract."""
+
+    @abstractmethod
+    def forward(
+        self,
+        query: torch.Tensor,
+        kv: torch.Tensor,
+        attn_sink: torch.Tensor,
+        attn_metadata: V4AttentionMetadata,
+        caches: dict,
+        slot: torch.Tensor,
+        index_out=None,
+    ) -> torch.Tensor:
+        """Run sparse DeepSeek-V4 attention."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class V4AttentionBuildSpec(BuildSpec[V4AttentionImpl]):
+    """Immutable requirements for constructing DeepSeek-V4 attention."""
+
+    head_size: int
+    scale: float
+    window_size: int
+    compress_ratio: int
+
+
 T = TypeVar('T', bound=AttentionMetadata)
 
 

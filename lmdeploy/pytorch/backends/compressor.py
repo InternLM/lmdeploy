@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 import torch
 
+from .base import BuildSpec
+
 
 @dataclass
 class V4CompressorMetadata:
@@ -47,9 +49,10 @@ class BaseV4Compressor(ABC):
         raise NotImplementedError
 
 
-class BaseV4CompressorBuilder:
+@dataclass(frozen=True)
+class V4CompressorBuildSpec(BuildSpec[BaseV4Compressor]):
+    """Immutable requirements for constructing a DeepSeek-V4 compressor."""
 
-    @staticmethod
-    @abstractmethod
-    def build(compress_ratio: int, overlap: bool, head_dim: int) -> BaseV4Compressor:
-        raise NotImplementedError
+    compress_ratio: int
+    overlap: bool
+    head_dim: int

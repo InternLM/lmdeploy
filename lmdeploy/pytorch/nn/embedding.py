@@ -3,7 +3,8 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.embedding import EmbeddingBuildSpec
 from lmdeploy.pytorch.backends.linear import LinearBuildSpec
 from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
@@ -65,9 +66,10 @@ class ParallelEmbedding(nn.Module):
         self.register_parameter('weight', self.create_weight(self.vocab_size_padded, hidden_size, weight_dtype, device))
         self.weight.weight_loader = self.weight_loader
 
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.Embedding)
-        self.impl = builder.build(self.start_index, self.end_index)
+        self.impl = get_backend().build_op(
+            EmbeddingBuildSpec(self.start_index, self.end_index),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
         self.all_reduce = self.is_tp and self.tp > 1
 

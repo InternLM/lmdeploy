@@ -1,7 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import torch
+
+from .base import BuildSpec
 
 
 class BaseHcPrePost(ABC):
@@ -33,9 +36,10 @@ class BaseHcPrePost(ABC):
         raise NotImplementedError
 
 
-class BaseHcPrePostBuilder:
+@dataclass(frozen=True)
+class HcPrePostBuildSpec(BuildSpec[BaseHcPrePost]):
+    """Immutable requirements for DeepSeek-V4 hyper-connection kernels."""
 
-    @staticmethod
-    @abstractmethod
-    def build(hc_mult: int, sinkhorn_iters: int, eps: float) -> BaseHcPrePost:
-        raise NotImplementedError
+    hc_mult: int
+    sinkhorn_iters: int
+    eps: float

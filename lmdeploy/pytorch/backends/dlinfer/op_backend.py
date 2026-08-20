@@ -4,12 +4,8 @@ from typing import cast
 
 import torch
 
-from lmdeploy.utils import get_logger
-
-from ..base import BuildSpec, ImplT, OpType
+from ..base import BuildSpec, ImplT
 from ..default import DefaultOpsBackend
-
-logger = get_logger('lmdeploy')
 
 
 class DlinferOpsBackend(DefaultOpsBackend):
@@ -21,40 +17,36 @@ class DlinferOpsBackend(DefaultOpsBackend):
         return 'dlinfer'
 
     @classmethod
-    def get_layer_impl_builder(cls, layer_type: OpType):
-        """Get dlinfer layer builder."""
-        if layer_type == OpType.ApplyRotaryEmb:
-            from .apply_rotary_emb import DlinferApplyRotaryEmbBuilder
-            return DlinferApplyRotaryEmbBuilder
-        elif layer_type == OpType.RMSNorm:
-            from .norm import DlinferRMSNormBuilder
-            return DlinferRMSNormBuilder
-        elif layer_type == OpType.RMSNormW8A8:
-            from .qmodules import DlinferRMSNormW8A8Builder
-            return DlinferRMSNormW8A8Builder
-        elif layer_type == OpType.SoftmaxTopK:
-            from .moe import DlinferSoftmaxTopKBuilder
-            return DlinferSoftmaxTopKBuilder
-        elif layer_type == OpType.RotaryEmbedding:
-            from .rotary_embedding import DlinferRotaryEmbeddingBuilder
-            return DlinferRotaryEmbeddingBuilder
-        else:
-            logger.debug(f'Op {layer_type} fallback to default implementation.')
-            return super().get_layer_impl_builder(layer_type)
-
-    @classmethod
     def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed dlinfer operator implementation."""
         from ..activation import SiluAndMulBuildSpec
+        from ..apply_rotary_emb import ApplyRotaryEmbBuildSpec
         from ..attention import PagedAttentionBuildSpec
         from ..awq_modules import LinearW4A16BuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
         from ..linear import LinearBuildSpec
-        from ..moe import FusedMoEBuildSpec
-        from ..qmodules import LinearW8A8BuildSpec
+        from ..moe import FusedMoEBuildSpec, SoftmaxTopKBuildSpec
+        from ..norm import RMSNormBuildSpec
+        from ..qmodules import LinearW8A8BuildSpec, RMSNormW8A8BuildSpec
+        from ..rotary_embedding import RotaryEmbeddingBuildSpec
         if isinstance(spec, SiluAndMulBuildSpec):
             from .activation import DlinferSiluAndMulImpl
             return cast(ImplT, DlinferSiluAndMulImpl())
+        if isinstance(spec, ApplyRotaryEmbBuildSpec):
+            from .apply_rotary_emb import DlinferApplyRotaryEmbImpl
+            return cast(ImplT, DlinferApplyRotaryEmbImpl())
+        if isinstance(spec, RMSNormBuildSpec):
+            from .norm import DlinferRMSNormImpl
+            return cast(ImplT, DlinferRMSNormImpl(spec.hidden_size, spec.eps))
+        if isinstance(spec, RMSNormW8A8BuildSpec):
+            from .qmodules import DlinferRMSNormW8A8Impl
+            return cast(ImplT, DlinferRMSNormW8A8Impl(spec.hidden_size, spec.eps, spec.quant_dtype))
+        if isinstance(spec, SoftmaxTopKBuildSpec):
+            from .moe import DlinferSoftmaxTopKImpl
+            return cast(ImplT, DlinferSoftmaxTopKImpl(spec.top_k, spec.dim, spec.n_groups))
+        if isinstance(spec, RotaryEmbeddingBuildSpec):
+            from .rotary_embedding import build_rotary_embedding
+            return cast(ImplT, build_rotary_embedding(spec))
         if isinstance(spec, LinearW4A16BuildSpec):
             from .awq_modules import AwqLinearW4A16Impl
             return cast(

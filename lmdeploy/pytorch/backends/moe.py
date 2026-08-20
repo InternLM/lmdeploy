@@ -25,14 +25,13 @@ class SoftmaxTopKImpl(ABC):
         raise NotImplementedError
 
 
-class SoftmaxTopKBuilder(ABC):
-    """Softmax topk implementation builder."""
+@dataclass(frozen=True)
+class SoftmaxTopKBuildSpec(BuildSpec[SoftmaxTopKImpl]):
+    """Immutable requirements for constructing softmax top-k routing."""
 
-    @staticmethod
-    @abstractmethod
-    def build(top_k: int, dim: int = -1, n_groups: int = -1):
-        """build."""
-        raise NotImplementedError
+    top_k: int
+    dim: int = -1
+    n_groups: int = -1
 
 
 class FusedMoEImpl(ABC):

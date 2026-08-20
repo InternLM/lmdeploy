@@ -7,10 +7,12 @@ import torch
 import torch.nn as nn
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.moe import SoftmaxTopKBuildSpec
 from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
 class MoeType(Enum):
@@ -26,8 +28,10 @@ class SoftmaxTopK(nn.Module):
     def __init__(self, top_k: int, dim: int = -1, n_groups: int = -1):
         super().__init__()
         self.top_k = top_k
-        impl_builder = get_backend().get_layer_impl_builder(OpType.SoftmaxTopK)
-        self.impl = impl_builder.build(top_k, dim, n_groups=n_groups)
+        self.impl = get_backend().build_op(
+            SoftmaxTopKBuildSpec(top_k, dim, n_groups=n_groups),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     def forward(self, x: torch.Tensor):
         """forward."""

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 import torch
 
+from .base import BuildSpec
+
 
 @dataclass
 class V4IndexerMetadata:
@@ -42,10 +44,9 @@ class BaseV4Indexer(ABC):
         raise NotImplementedError
 
 
-class BaseV4IndexerBuilder:
+@dataclass(frozen=True)
+class V4IndexerBuildSpec(BuildSpec[BaseV4Indexer]):
+    """Immutable requirements for constructing a DeepSeek-V4 indexer."""
 
-    @staticmethod
-    @abstractmethod
-    def build(index_topk: int, compress_ratio: int) -> BaseV4Indexer:
-        """Build layer implementation."""
-        raise NotImplementedError
+    index_topk: int
+    compress_ratio: int

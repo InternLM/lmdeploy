@@ -11,7 +11,7 @@ from lmdeploy.pytorch.kernels.dlinfer import (
 )
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
-from ..moe import FusedMoEBuildSpec, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopKImpl
+from ..moe import FusedMoEBuildSpec, FusedMoEImpl, SoftmaxTopKImpl
 
 
 class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
@@ -29,17 +29,6 @@ class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
             moe_metadata.router_n_groups = self.n_groups
         routing_weights, selected_experts = moe_gating_topk_softmax(x, self.top_k, moe_metadata)
         return routing_weights, selected_experts
-
-
-class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
-    """Dlinfer softmax topk implementation builder."""
-
-    @staticmethod
-    def build(top_k: int, dim: int = -1, n_groups: int = -1):
-        """build."""
-        return DlinferSoftmaxTopKImpl(top_k, dim, n_groups)
-
-
 class DlinferFusedMoEImpl(FusedMoEImpl):
     """Dlinfer fused moe implementation."""
 

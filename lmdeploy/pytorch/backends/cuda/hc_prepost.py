@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from lmdeploy.pytorch.backends.hc_prepost import BaseHcPrePost, BaseHcPrePostBuilder
+from lmdeploy.pytorch.backends.hc_prepost import BaseHcPrePost
 from lmdeploy.pytorch.kernels.cuda.dsv4.hc_prepost import hc_post_expand, hc_pre_reduce
 
 
@@ -32,10 +32,3 @@ class TritonHcPrePostImpl(BaseHcPrePost):
     def post_expand(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor,
                     comb: torch.Tensor) -> torch.Tensor:
         return hc_post_expand(x, residual, post, comb, self.hc_mult)
-
-
-class TritonHcPrePostBuilder(BaseHcPrePostBuilder):
-
-    @staticmethod
-    def build(hc_mult: int, sinkhorn_iters: int, eps: float) -> BaseHcPrePost:
-        return TritonHcPrePostImpl(hc_mult=hc_mult, sinkhorn_iters=sinkhorn_iters, eps=eps)

@@ -8,7 +8,6 @@ from lmdeploy.utils import get_logger
 
 from .default import TritonAttentionImpl
 from .default import TritonAttentionMetadata as TritonAttentionMetadata
-from .v4 import TritonV4AttentionBuilder  # noqa: F401
 
 logger = get_logger('lmdeploy')
 

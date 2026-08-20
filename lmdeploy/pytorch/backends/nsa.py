@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from .base import BuildSpec
+
 
 @dataclass
 class NSAIndexMeta:
@@ -96,10 +98,11 @@ class BaseNSAIndexFP8(ABC):
         """Forward with fused DSA indexer preparation."""
         raise NotImplementedError('Not implemented.')
 
-class BaseNSAIndexFP8Builder:
+@dataclass(frozen=True)
+class NSAIndexFP8BuildSpec(BuildSpec[BaseNSAIndexFP8]):
+    """Immutable requirements for constructing an FP8 NSA indexer."""
 
-    @staticmethod
-    @abstractmethod
-    def build(topk: int, softmax_scale: float, block_size: int = 128, fill: int = -1) -> BaseNSAIndexFP8:
-        """Build layer implementation."""
-        raise NotImplementedError('Not implemented.')
+    topk: int
+    softmax_scale: float
+    block_size: int = 128
+    fill: int = -1
