@@ -10,6 +10,7 @@ from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as u
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
+from lmdeploy.pytorch.engine.executor import base as executor_base
 from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _CacheBlockSize
 
 
@@ -91,6 +92,37 @@ def test_get_num_gpu_blocks_with_spec_cache():
 def test_get_num_gpu_blocks_rejects_empty_cache_block():
     with pytest.raises(RuntimeError, match='No enough gpu memory for kv cache.'):
         ExecutorBase._get_num_gpu_blocks(available_mem=4096, cache_block_size=0)
+
+
+def test_dsa_score_workspace_uses_configured_logits_budget(monkeypatch):
+    monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', 7)
+    executor = object.__new__(ExecutorBase)
+    executor.model_config = SimpleNamespace(mla_index_topk=2048)
+
+    assert executor._get_dsa_score_workspace_size() == 7 << 20
+
+    executor.model_config.mla_index_topk = None
+    assert executor._get_dsa_score_workspace_size() == 0
+
+
+def test_runtime_size_reserves_dsa_score_workspace(monkeypatch):
+    monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', 1)
+    executor = object.__new__(ExecutorBase)
+    executor.model_config = SimpleNamespace(mla_index_topk=2048)
+    executor.cache_config = SimpleNamespace(
+        cache_max_entry_count=1.0,
+        max_prefill_token_num=16,
+        max_batches=2,
+    )
+    executor.dist_config = SimpleNamespace(attn_tp=1)
+    executor.specdecode_config = None
+
+    runtime_size, max_prefill_token_num = executor._get_runtime_size(
+        [4 << 20], _CacheBlockSize(target=1024), vocab_size=100)
+
+    generic_runtime_size = (16 + 2 * 2) * 100 * 2
+    assert runtime_size == (1 << 20) + generic_runtime_size
+    assert max_prefill_token_num == 16
 
 
 def test_sync_spec_cache_block_size_updates_kernel_block_size():

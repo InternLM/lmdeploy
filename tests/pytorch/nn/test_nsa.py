@@ -55,6 +55,68 @@ def test_indexer_meta_builds_causal_rows():
     assert meta.max_kv_seqlen == 8
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA backend')
+def test_deepgemm_prefill_scores_are_chunked_by_logits_budget(monkeypatch):
+    from lmdeploy.pytorch.backends.cuda import nsa as cuda_nsa
+
+    class FakeDeepGemm:
+
+        def __init__(self):
+            self.row_counts = []
+
+        def fp8_fp4_mqa_logits(self, q, kv, weights, cu_seq_len_k_start,
+                               cu_seq_len_k_end, **kwargs):
+            query = q[0]
+            self.row_counts.append(query.size(0))
+            assert kv == ('flat_k', 'flat_k_s')
+            assert weights.size(0) == query.size(0)
+            assert cu_seq_len_k_start.size(0) == query.size(0)
+            assert cu_seq_len_k_end.size(0) == query.size(0)
+            return query[:, :1] * 10 + torch.arange(4)
+
+    deep_gemm = FakeDeepGemm()
+    monkeypatch.setattr(cuda_nsa, '_get_deep_gemm', lambda: deep_gemm)
+
+    impl = object.__new__(cuda_nsa.TritonNSAIndexFP8)
+    impl.topk = 2
+    impl.fill = -1
+    impl.max_logits_bytes = 2 * 4 * 4
+    flatten_calls = []
+
+    def fake_flatten(indexer_k_cache, head_dim, meta):
+        flatten_calls.append((indexer_k_cache, head_dim, meta))
+        return 'flat_k', 'flat_k_s'
+
+    def fake_topk(scores, q_seqlens, kv_seqlens, k, **kwargs):
+        assert q_seqlens.tolist() == [5]
+        assert kv_seqlens.numel() == scores.size(0)
+        return torch.topk(scores, k).indices.to(torch.int32)
+
+    impl._flatten_prefill_k = fake_flatten
+    impl._sparse_index_topk = fake_topk
+    q = torch.arange(5, dtype=torch.float32).unsqueeze(-1)
+    q_s = torch.ones(5)
+    indexer_k_cache = object()
+    score_meta = cuda_nsa._DeepGemmContiguousScoreMeta(
+        k_starts=torch.arange(5, dtype=torch.int32),
+        k_ends=torch.arange(5, dtype=torch.int32) + 4,
+        max_kv_seqlen=4,
+    )
+    meta = SimpleNamespace(
+        score_meta=score_meta,
+        indexer_kv_seqlens=torch.full((5, ), 4, dtype=torch.int32),
+        q_seqlens=torch.tensor([5], dtype=torch.int32),
+    )
+
+    selected = impl._score_and_select(q, q_s, indexer_k_cache, meta)
+
+    assert cuda_nsa._get_max_score_rows(4, impl.max_logits_bytes) == 2
+    assert deep_gemm.row_counts == [2, 2, 1]
+    assert len(flatten_calls) == 1
+    assert flatten_calls[0][:2] == (indexer_k_cache, 1)
+    assert torch.equal(selected, torch.tensor([[3, 2]] * 5, dtype=torch.int32))
+
+
 @pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
     reason='requires CUDA device with cc>=9.0')
@@ -86,6 +148,12 @@ def test_deepgemm_prefill_scores_match_triton():
         topk=2, softmax_scale=1.0, block_size=128, fill=-1)
 
     deepgemm_scores = impl._compute_scores(q, q_s, packed_cache, meta)
+    expected_topk = impl._select_topk(deepgemm_scores, meta)
+    impl.max_logits_bytes = 2 * meta.max_kv_seqlen * 4
+    chunked_topk = impl._score_and_select(q, q_s, packed_cache, meta)
+    torch.testing.assert_close(chunked_topk.sort().values,
+                               expected_topk.sort().values)
+
     meta.score_meta = None
     triton_scores = impl._compute_scores(q, q_s, packed_cache, meta)
     assert deepgemm_scores.shape == triton_scores.shape == (5, 8)
