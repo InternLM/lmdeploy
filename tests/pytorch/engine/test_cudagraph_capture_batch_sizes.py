@@ -61,10 +61,10 @@ def test_graph_runner_reset_clears_padding_batch_size(monkeypatch):
 
     runner = object.__new__(CUDAGraphRunner)
     runner._runner_meta = GraphRunnerMeta(padding_batch_size=1)
-    runner._runner_map = {'stale': object()}
+    runner._full_graph_runners = {'stale': object()}
     monkeypatch.setattr(cuda_graph_runner.get_deepep_state(), 'enabled', lambda: False)
 
     runner.reset()
 
     assert runner.get_meta().padding_batch_size is None
-    assert runner._runner_map == {}
+    assert runner._full_graph_runners == {}

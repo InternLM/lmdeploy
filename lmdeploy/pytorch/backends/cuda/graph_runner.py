@@ -272,10 +272,10 @@ class CUDAGraphRunner(GraphRunner):
                     f'is installed, or disable speculative decoding.')
 
         self.enable_graph = self.check_enable_graph()
-        self.decode_model_forward: Callable[..., Any] | None = None
+        self._decode_model_forward: Callable[..., Any] | None = None
 
-        self.graph_pool_handle = torch.cuda.graph_pool_handle()
-        self._runner_map: dict[Any, CUDASingleGraphRunner] = dict()
+        self._full_graph_pool_handle = torch.cuda.graph_pool_handle()
+        self._full_graph_runners: dict[Any, CUDASingleGraphRunner] = dict()
 
         # strategy factory
         build_ctx = model.ctx_mgr.build_ctx
@@ -291,14 +291,14 @@ class CUDAGraphRunner(GraphRunner):
 
     def _get_decode_model_forward(self) -> Callable[..., Any]:
         """Lazily build the callable used to capture decode graphs."""
-        if self.decode_model_forward is None:
+        if self._decode_model_forward is None:
             if self.backend_config.device_type == 'cuda':
-                self.decode_model_forward = _build_decode_model_forward(self.model)
+                self._decode_model_forward = _build_decode_model_forward(self.model)
             else:
                 # CAMB and MACA reuse this graph runner, but the compiler policy
                 # and Inductor options above are CUDA-specific.
-                self.decode_model_forward = self.model
-        return self.decode_model_forward
+                self._decode_model_forward = self.model
+        return self._decode_model_forward
 
     def _get_capture_tokens(self, batch_size: int):
         """Get capture tokens."""
@@ -333,6 +333,10 @@ class CUDAGraphRunner(GraphRunner):
             attn_metadata.block_offsets = attn_metadata.block_offsets.to(torch.int32)
         return kwargs
 
+    def _should_use_full_graph(self, context: StepContext, **kwargs) -> bool:
+        """Return whether the existing full CUDA graph path owns this call."""
+        return context.global_is_decoding() and self.enable_graph(**kwargs)
+
     def _get_max_tokens(self, graph_key: tuple, input_ids: torch.Tensor, q_seqlens: torch.Tensor):
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
@@ -340,6 +344,40 @@ class CUDAGraphRunner(GraphRunner):
         origin_batch_size = q_seqlens.size(0)
         num_tokens = input_ids.size(1)
         return self.cudagraph_strategy.get_max_tokens(max_batches, origin_batch_size, num_tokens)
+
+    def _forward_eager(self, **kwargs):
+        """Run the existing eager path."""
+        with record_function('forward_eager'):
+            output = self.model(**kwargs)
+            return self.model.make_output_buffers(output)
+
+    def _forward_full_graph(self, **kwargs):
+        """Capture or replay one existing full decode CUDA graph."""
+        graph_key = self.get_graph_key(**kwargs)
+        runner = self._full_graph_runners.get(graph_key)
+        if runner is None:
+            max_batches = graph_key[0]
+            is_decoding = graph_key[1]
+            decode_query_len = graph_key[3]
+            max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
+            runner = CUDASingleGraphRunner(
+                self.model,
+                model_forward=self._get_decode_model_forward(),
+                max_batches=max_batches,
+                max_tokens=max_tokens,
+                num_blocks=self.num_blocks,
+                is_decoding=is_decoding,
+                decode_query_len=decode_query_len,
+                pool=self._full_graph_pool_handle,
+                model_config=self.model_config,
+                device=self.device,
+            )
+            output = runner.capture(**kwargs)
+            self._full_graph_runners[graph_key] = runner
+            # SSM would update the state in capture(warmup), replay the graph will leads unexpected state update.
+            return output
+
+        return runner.forward(**kwargs)
 
     def __call__(self, **kwargs):
         """call."""
@@ -350,39 +388,10 @@ class CUDAGraphRunner(GraphRunner):
             deepep_mode = DeepEPMode.LOW_LATENCY if context.global_is_decoding() else DeepEPMode.NORMAL
             DeepEPBuffer.set_deepep_mode(deepep_mode)
 
-        enable_graph = context.global_is_decoding() and self.enable_graph(**kwargs)
+        if self._should_use_full_graph(context, **kwargs):
+            return self._forward_full_graph(**kwargs)
 
-        if not enable_graph:
-            with record_function('forward_eager'):
-                output = self.model(**kwargs)
-                return self.model.make_output_buffers(output)
-
-        graph_key = self.get_graph_key(**kwargs)
-        max_batches = graph_key[0]
-        is_decoding = graph_key[1]
-        decode_query_len = graph_key[3]
-        if graph_key not in self._runner_map:
-            max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
-            runner = CUDASingleGraphRunner(
-                self.model,
-                model_forward=self._get_decode_model_forward(),
-                max_batches=max_batches,
-                max_tokens=max_tokens,
-                num_blocks=self.num_blocks,
-                is_decoding=is_decoding,
-                decode_query_len=decode_query_len,
-                pool=self.graph_pool_handle,
-                model_config=self.model_config,
-                device=self.device,
-            )
-            output = runner.capture(**kwargs)
-            self._runner_map[graph_key] = runner
-            # SSM would update the state in capture(warmup), replay the graph will leads unexpected state update.
-            return output
-        else:
-            runner = self._runner_map[graph_key]
-            output = runner.forward(**kwargs)
-            return output
+        return self._forward_eager(**kwargs)
 
     @record_function('prepare_inputs_for_generation')
     def prepare_inputs_for_generation(
@@ -401,7 +410,7 @@ class CUDAGraphRunner(GraphRunner):
     def reset(self):
         """Remove all graphs to prevent hanging on exit."""
         super().reset()
-        self._runner_map.clear()
+        self._full_graph_runners.clear()
         if get_deepep_state().enabled():
             from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer
 
