@@ -442,10 +442,10 @@ def test_streaming_cancelled_choice_fails_without_hanging(
     assert context.session_manager.sessions == {}
 
 
-def test_streaming_setup_failure_closes_completed_choice_responses(
+def test_streaming_generation_failure_cleans_all_sessions(
         chat_endpoint, fake_raw_request):
 
-    class SetupFailingEngine(_PreprocessingEngine):
+    class FailingEngine(_PreprocessingEngine):
         model_name = 'fake-model'
         backend_config = SimpleNamespace(adapters=[], logprobs_mode=None)
 
@@ -454,24 +454,40 @@ def test_streaming_setup_failure_closes_completed_choice_responses(
             self.tokenizer = original_engine.tokenizer
             self.call_count = 0
             self.gen_configs = []
+            self.sibling_started = asyncio.Event()
+            self.sibling_closed = False
 
         def generate(self, preprocessed, **kwargs):
             self.call_count += 1
-            if self.call_count == 2:
-                raise RuntimeError('choice setup failed')
+            index = self.call_count
 
             async def wait_forever():
-                await asyncio.Event().wait()
+                self.sibling_started.set()
+                try:
+                    await asyncio.Event().wait()
+                    yield  # noqa: unreachable
+                finally:
+                    self.sibling_closed = True
+
+            async def fail():
+                await self.sibling_started.wait()
+                raise RuntimeError('choice generation failed')
                 yield  # noqa: unreachable
 
-            return wait_forever()
+            return wait_forever() if index == 1 else fail()
 
     endpoint, context = chat_endpoint
-    context.async_engine = SetupFailingEngine(context.async_engine)
+    engine = FailingEngine(context.async_engine)
+    context.async_engine = engine
 
-    with pytest.raises(RuntimeError, match='choice setup failed'):
-        asyncio.run(
-            endpoint(_request(n=2, stream=True), fake_raw_request))
+    async def collect():
+        response = await endpoint(
+            _request(n=2, stream=True), fake_raw_request)
+        await asyncio.wait_for(_collect_stream(response), 1)
+
+    with pytest.raises(RuntimeError, match='choice generation failed'):
+        asyncio.run(collect())
+    assert engine.sibling_closed
     assert context.session_manager.sessions == {}
 
 
