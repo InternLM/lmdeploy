@@ -115,6 +115,126 @@ def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
     assert events == ['build_step_inputs', 'reset_spec']
 
 
+@pytest.mark.parametrize('graph_wrapped', [False, True])
+def test_model_agent_builds_and_retains_worker_local_cache_plans(graph_wrapped):
+    from lmdeploy.pytorch.config import CacheConfig, ModelConfig
+    from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheBinding, BlockCacheRequest
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    request = BlockCacheRequest('operator_cache', (64, 3), torch.float16)
+
+    class _CacheRequester(torch.nn.Module):
+
+        def get_block_cache_requests(self, context):
+            assert context.geometry.logical_block_size == 128
+            assert context.geometry.kernel_block_size == 64
+            return (request, )
+
+        def bind_block_cache(self, binding: BlockCacheBinding):
+            assert binding.cache_name == 'operator_cache'
+            self.cache_binding = binding
+
+    class _PatchedModel(torch.nn.Module):
+
+        def __init__(self):
+            super().__init__()
+            self.requesters = torch.nn.ModuleList([_CacheRequester(), _CacheRequester()])
+
+    class _GraphRunner:
+
+        def __init__(self, model):
+            self.model = model
+
+        def get_model(self):
+            return self.model
+
+    model_config = ModelConfig(hidden_size=16,
+                               num_layers=4,
+                               num_attention_heads=2,
+                               num_key_value_heads=2,
+                               bos_token_id=1,
+                               eos_token_id=[2],
+                               head_dim=8,
+                               use_standard_kv_cache=False)
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=128,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.all_context = nullcontext
+    agent.dist_config = SimpleNamespace(attn_tp=1)
+    patched_model = _PatchedModel()
+    agent.patched_model = _GraphRunner(patched_model) if graph_wrapped else patched_model
+    agent.model_config = model_config
+    agent.spec_agent = SimpleNamespace(build_cache_plan=lambda config: 128)
+    agent.memdecode_agent = SimpleNamespace(build_cache_plan=lambda config: 64)
+
+    sizes = agent.build_cache_plans(cache_config, spec_cache_config=object())
+
+    assert sizes == (2048, 128, 64)
+    assert agent._cache_plan_block_nbytes == (2048, 128)
+    assert tuple(spec.name for spec in agent.block_cache_plan.tensor_specs) == ('operator_cache', )
+    assert agent.block_cache_plan.tensor_specs[0].consumer_rows == (0, 1)
+    assert [requester.cache_binding.consumer_row for requester in patched_model.requesters] == [0, 1]
+
+
+def test_spec_model_agent_collects_cache_requests_from_graph_runner():
+    from lmdeploy.pytorch.config import CacheConfig, ModelConfig
+    from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheBinding, BlockCacheRequest
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    request = BlockCacheRequest('draft_cache', (64, 3), torch.float16)
+
+    class _CacheRequester(torch.nn.Module):
+
+        def get_block_cache_requests(self, context):
+            return (request, )
+
+        def bind_block_cache(self, binding: BlockCacheBinding):
+            self.cache_binding = binding
+
+    class _DraftModel(torch.nn.Module):
+
+        def __init__(self):
+            super().__init__()
+            self.requester = _CacheRequester()
+
+    class _GraphRunner:
+
+        def __init__(self, model):
+            self.model = model
+
+        def get_model(self):
+            return self.model
+
+    model_config = ModelConfig(hidden_size=16,
+                               num_layers=1,
+                               num_attention_heads=2,
+                               num_key_value_heads=2,
+                               bos_token_id=1,
+                               eos_token_id=[2],
+                               head_dim=8,
+                               use_standard_kv_cache=False)
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=128,
+                               kernel_block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=0)
+    draft_model = _DraftModel()
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    agent.draft_context = nullcontext
+    agent.draft_dist_ctx = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=1))
+    agent.proposer = SimpleNamespace(model=_GraphRunner(draft_model))
+    agent.model_config = model_config
+
+    block_nbytes = agent.build_cache_plan(cache_config)
+
+    assert block_nbytes == 1024
+    assert tuple(spec.name for spec in agent.block_cache_plan.tensor_specs) == ('draft_cache', )
+    assert draft_model.requester.cache_binding.consumer_row == 0
+
+
 def test_build_spec_agent_allows_guided_spec_followers_without_proposer():
     from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
     from lmdeploy.pytorch.distributed import DistContext
@@ -243,7 +363,6 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
             return {'hidden_states': torch.tensor([0])}
 
     class _CacheEngine:
-        model_config = object()
         cache_config = SimpleNamespace(quant_policy=0)
         gpu_cache = object()
         block_caches = {}
@@ -256,7 +375,7 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
         state_caches = object()
         named_state_caches = {}
 
-        def copy_caches(self, src, dst):
+        def copy_slots(self, src, dst):
             copy_calls.append(('state', src, dst))
             events.append('state_restore' if src == (5, ) else 'state_save')
 
@@ -277,6 +396,7 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
 
     agent_module.model_forward(_Model(),
                                inputs,
+                               object(),
                                _CacheEngine(),
                                _StateCacheEngine(),
                                stream=object(),
@@ -356,11 +476,12 @@ def test_record_forward_input_stream_uses_payload_protocol():
     tensor = _CudaTensor()
     nested_tensor = _CudaTensor()
     payload = _Payload()
+    cache_payload = _Payload()
     forward_inputs = {
         'inputs': payload,
         'delta': tensor,
+        'cache_inputs': cache_payload,
         'unowned_container': {'tensor': nested_tensor},
-        'cache_inputs': torch.empty(1),
     }
 
     _record_forward_input_stream(forward_inputs, stream)
@@ -368,6 +489,7 @@ def test_record_forward_input_stream_uses_payload_protocol():
     assert recorded == [
         ('payload', id(payload), stream),
         ('tensor', id(tensor), stream),
+        ('payload', id(cache_payload), stream),
     ]
 
 
@@ -890,6 +1012,72 @@ class TestResetGraphRunner:
 
 
 class TestModelAgentWakeup:
+
+    @staticmethod
+    def _make_level2_agent(rebuilt_block_nbytes):
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+        events = []
+        cache_config = object()
+        spec_cache_config = object()
+
+        class _Model(torch.nn.Module):
+
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.empty(0, device='meta'))
+
+        class _GraphRunner:
+
+            def __init__(self, model):
+                self.model = model
+
+            def get_model(self):
+                return self.model
+
+        agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.memdecode_agent = None
+        agent.patched_model = _GraphRunner(_Model())
+        agent.spec_agent = SimpleNamespace(get_model=lambda: None, cache_config=spec_cache_config)
+        agent.cache_config = cache_config
+        agent.misc_config = SimpleNamespace(empty_init=False)
+        agent._cache_plan_block_nbytes = (256, 128)
+
+        def _build_model():
+            events.append('build_model')
+            agent.patched_model = _Model()
+
+        def _build_cache_plans(received_cache_config, received_spec_cache_config):
+            events.append(('build_cache_plans', received_cache_config, received_spec_cache_config))
+            agent._cache_plan_block_nbytes = rebuilt_block_nbytes
+            target_nbytes, spec_nbytes = rebuilt_block_nbytes
+            return target_nbytes, spec_nbytes, 0
+
+        agent.build_model = _build_model
+        agent.build_cache_plans = _build_cache_plans
+        agent.build_graph_runner = lambda: events.append('build_graph_runner')
+        return agent, events, cache_config, spec_cache_config
+
+    def test_level2_wakeup_rebuilds_cache_plans_before_graph_runner(self):
+        agent, events, cache_config, spec_cache_config = self._make_level2_agent((256, 128))
+
+        agent.wakeup(['weights'])
+
+        assert events == [
+            'build_model',
+            ('build_cache_plans', cache_config, spec_cache_config),
+            'build_graph_runner',
+        ]
+        assert agent.misc_config.empty_init is False
+
+    def test_level2_wakeup_rejects_changed_cache_block_sizes(self):
+        agent, events, _, _ = self._make_level2_agent((512, 128))
+
+        with pytest.raises(RuntimeError, match=r'expected target/draft \(256, 128\), got \(512, 128\)'):
+            agent.wakeup(['weights'])
+
+        assert 'build_graph_runner' not in events
+        assert agent.misc_config.empty_init is False
 
     def test_sleep_clears_middle_chunk_carryover_state(self, event_loop, monkeypatch):
         from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent, SleepWakeupState

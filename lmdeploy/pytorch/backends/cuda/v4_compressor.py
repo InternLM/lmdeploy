@@ -1,7 +1,17 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Mapping
+
 import torch
 
-from lmdeploy.pytorch.consts import V4_INDEX_SCALE_BYTES
+from lmdeploy.pytorch.consts import (
+    V4_COMPRESSED_KV_R4_CACHE_NAME,
+    V4_COMPRESSED_KV_R128_CACHE_NAME,
+    V4_INDEX_KV_R4_CACHE_NAME,
+    V4_INDEX_SCALE_BYTES,
+    V4_PACKED_TOKEN_DIM,
+    v4_packed_index_cache_shape,
+)
+from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheGeometry, BlockCacheRequest
 from lmdeploy.pytorch.kernels.cuda.v4_compressor import (
     fill_compress_state,
     fill_compressed_kv,
@@ -37,11 +47,50 @@ def _get_v4_packed_index_cache_views(index_cache: torch.Tensor,
 
 class TritonV4CompressorImpl(BaseV4Compressor):
 
-    def __init__(self, compress_ratio: int, overlap: bool, head_dim: int) -> None:
+    def __init__(self,
+                 compress_ratio: int,
+                 overlap: bool,
+                 head_dim: int,
+                 is_indexer: bool = False) -> None:
         super().__init__()
         self.compress_ratio = compress_ratio
         self.overlap = overlap
         self.head_dim = head_dim
+        self.is_indexer = is_indexer
+        self.block_cache_name = self._resolve_block_cache_name()
+
+    def _resolve_block_cache_name(self) -> str:
+        if self.is_indexer:
+            if self.compress_ratio != 4:
+                raise ValueError('The V4 indexer compressor requires compress_ratio=4.')
+            return V4_INDEX_KV_R4_CACHE_NAME
+        try:
+            return {
+                4: V4_COMPRESSED_KV_R4_CACHE_NAME,
+                128: V4_COMPRESSED_KV_R128_CACHE_NAME,
+            }[self.compress_ratio]
+        except KeyError as e:
+            raise ValueError(f'Unsupported V4 compression ratio: {self.compress_ratio}.') from e
+
+    def get_block_cache_requests(self, geometry: BlockCacheGeometry) -> tuple[BlockCacheRequest, ...]:
+        """Describe the CUDA compressor's contiguous per-consumer cache."""
+        entries_per_block = geometry.kernel_block_size // self.compress_ratio
+        if self.is_indexer:
+            request = BlockCacheRequest(
+                name=self.block_cache_name,
+                shape=v4_packed_index_cache_shape(entries_per_block, self.head_dim),
+                dtype=torch.uint8,
+                per_row_contiguous=True,
+            )
+            return (request, )
+
+        request = BlockCacheRequest(
+            name=self.block_cache_name,
+            shape=(entries_per_block, V4_PACKED_TOKEN_DIM),
+            dtype=torch.float8_e4m3fn,
+            per_row_contiguous=True,
+        )
+        return (request, )
 
     def score_and_fill_state(
         self,
@@ -71,13 +120,18 @@ class TritonV4CompressorImpl(BaseV4Compressor):
     def write_compressed_kv(
         self,
         compressed_kv: torch.Tensor,
-        kv_cache: torch.Tensor | None,
+        block_caches: Mapping[str, torch.Tensor],
         meta: V4CompressorMetadata,
-        fp8_cache: torch.Tensor | None = None,
-        kv_scale_cache: torch.Tensor | None = None,
     ) -> None:
-        if kv_cache is not None and kv_cache.dtype == torch.uint8:
+        cache = block_caches[self.block_cache_name]
+        kv_cache = None
+        kv_scale_cache = None
+        fp8_cache = None
+        if self.is_indexer:
+            kv_cache = cache
             kv_cache, kv_scale_cache = _get_v4_packed_index_cache_views(kv_cache, compressed_kv.size(-1))
+        else:
+            fp8_cache = cache
         fill_compressed_kv(
             compressed_kv, kv_cache,
             meta.cu_q_seqlens, meta.kv_seqlens,
@@ -94,8 +148,12 @@ class TritonV4CompressorImpl(BaseV4Compressor):
 class TritonV4CompressorBuilder(BaseV4CompressorBuilder):
 
     @staticmethod
-    def build(compress_ratio: int, overlap: bool, head_dim: int) -> BaseV4Compressor:
+    def build(compress_ratio: int,
+              overlap: bool,
+              head_dim: int,
+              is_indexer: bool = False) -> BaseV4Compressor:
         return TritonV4CompressorImpl(
             compress_ratio=compress_ratio,
             overlap=overlap,
-            head_dim=head_dim)
+            head_dim=head_dim,
+            is_indexer=is_indexer)

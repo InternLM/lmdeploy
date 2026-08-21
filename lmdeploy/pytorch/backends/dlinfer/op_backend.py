@@ -19,6 +19,12 @@ class DlinferOpsBackend(DefaultOpsBackend):
         return 'dlinfer'
 
     @classmethod
+    def get_cache_backend(cls):
+        """Get the native dlinfer cache backend provider."""
+        from .cache import DlinferCacheBackend
+        return DlinferCacheBackend
+
+    @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
         """Get dlinfer layer builder."""
         if layer_type == OpType.PagedAttention:

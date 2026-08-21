@@ -47,6 +47,7 @@ class BaseSpecModelAgent:
         self.draft_dist_ctx = _build_draft_dist_ctx(dist_ctx, specdecode_config)
         self.device = device
         self.cache_engine = None
+        self.block_cache_plan = None
         self.inputs_strategy = inputs_strategy
         self.agent_strategy = agent_strategy
         self.misc_config = misc_config
@@ -78,6 +79,12 @@ class BaseSpecModelAgent:
     def build_cache_engine(self, cache_stream: torch.cuda.Stream):
         """Build cache engine."""
         pass
+
+    def build_cache_plan(self, cache_config: CacheConfig | None) -> int:
+        """Build this rank's draft cache plan and return logical-block
+        bytes."""
+        self.block_cache_plan = None
+        return 0
 
     async def async_model_forward(self,
                                 model_inputs: ModelInputs,

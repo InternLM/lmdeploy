@@ -153,23 +153,16 @@ class TestDefaultBlockManager:
 
         assert np.array_equal(block_offsets, expected[[0, 2, 0]])
 
-    @pytest.mark.parametrize(
-        ('logical_ids', 'error'),
-        [
-            pytest.param(np.array([-1]), 'out-of-range', id='negative'),
-            pytest.param(np.array([8]), 'out-of-range', id='too-large'),
-            pytest.param(np.array([0]), 'unallocated', id='unallocated'),
-        ],
-    )
-    def test_resolve_gpu_block_offsets_rejects_invalid_logical_ids(self, block_mgr, logical_ids, error):
-        with pytest.raises(ValueError, match=error):
-            block_mgr.resolve_gpu_block_offsets(logical_ids)
+    def test_resolve_gpu_block_offsets_rejects_unavailable_blocks(self, block_mgr):
+        num_logical_blocks = block_mgr.num_gpu_blocks + block_mgr.num_cpu_blocks
+        with pytest.raises(ValueError, match='out-of-range'):
+            block_mgr.resolve_gpu_block_offsets(np.array([-1, num_logical_blocks]))
+        with pytest.raises(ValueError, match='unallocated'):
+            block_mgr.resolve_gpu_block_offsets(np.array([0]))
 
-    def test_resolve_gpu_block_offsets_rejects_cpu_resident_blocks(self, block_mgr):
-        logical_ids = block_mgr.allocator.allocate(1, 'cpu')
-
+        cpu_ids = block_mgr.allocator.allocate(1, 'cpu')
         with pytest.raises(ValueError, match='not GPU-resident'):
-            block_mgr.resolve_gpu_block_offsets(logical_ids)
+            block_mgr.resolve_gpu_block_offsets(cpu_ids)
 
     def test_num_required_blocks(self, scheduler, block_mgr):
         from lmdeploy.pytorch.messages import InputEmbeddings

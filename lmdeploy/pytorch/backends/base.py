@@ -9,6 +9,8 @@ import torch
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 
+from .cache import CacheBackend
+
 
 class OpType(Enum):
     """Layer type enumerate."""
@@ -40,7 +42,6 @@ class OpType(Enum):
     V4Compressor = auto()
     HcPrePost = auto()
     Embedding = auto()
-    CacheBlockCopy = auto()
 
     # MoE router
     RouterNoauxTC = auto()
@@ -101,6 +102,12 @@ class OpsBackend(ABC):
         dtype: torch.dtype,
     ) -> tuple[int, ...]:
         """Get block shape of v."""
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def get_cache_backend(cls) -> type[CacheBackend]:
+        """Get the cache backend provider."""
         raise NotImplementedError
 
     @classmethod

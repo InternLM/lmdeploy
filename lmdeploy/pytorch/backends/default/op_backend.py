@@ -47,9 +47,6 @@ class DefaultOpsBackend(OpsBackend):
         elif layer_type == OpType.Embedding:
             from .embedding import DefaultEmbeddingBuilder
             return DefaultEmbeddingBuilder
-        elif layer_type == OpType.CacheBlockCopy:
-            from .cache_block_copy import DefaultCacheBlockCopyBuilder
-            return DefaultCacheBlockCopyBuilder
         elif layer_type == OpType.RouterNoauxTC:
             from .moe_router import DefaultRouterNoauxTCBuilder
             return DefaultRouterNoauxTCBuilder
@@ -83,6 +80,12 @@ class DefaultOpsBackend(OpsBackend):
             num_heads,
             head_size,
         )
+
+    @classmethod
+    def get_cache_backend(cls):
+        """Get the default cache backend provider."""
+        from .cache import DefaultCacheBackend
+        return DefaultCacheBackend
 
     @staticmethod
     def init():
