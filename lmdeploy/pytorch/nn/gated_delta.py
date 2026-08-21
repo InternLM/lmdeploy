@@ -36,6 +36,14 @@ class GatedDeltaMeta:
         self.num_tokens = num_tokens
         self.is_decoding = attn_metadata.is_decoding
         self.cu_seqlens = attn_metadata.cu_seqlens_q
+        self.chunk_indices = attn_metadata.gated_delta_chunk_indices
+        self.chunk_offsets = attn_metadata.gated_delta_chunk_offsets
+        # Per-chunk-boundary conv states, filled by CausalConv1dFunc.conv1d_func
+        # on the prefill path (None while decoding / until the conv layer runs).
+        # Paired with the recurrent chunk_states from GatedDelta: together they
+        # let a prefix-cache checkpoint restore the layer at any 64-token chunk
+        # boundary. Attached to the shared meta so the model layer can store it.
+        self.chunk_conv_states = None
         self.cache_seqlens = None
         self.num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
         self.spec_conv_offsets = None
@@ -93,6 +101,7 @@ class CausalConv1dFunc:
         impl = builder.build()
         self.causal_conv1d_fn = impl.conv1d_fn
         self.causal_conv1d_update = impl.update_fn
+        self.chunk_conv_states_fn = impl.chunk_conv_states
         self.activation = activation
 
     def conv1d_func(self, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, conv_state: torch.Tensor,
@@ -112,6 +121,20 @@ class CausalConv1dFunc:
         if weight.dim() == 3:
             assert weight.size(1) == 1
             weight = weight[:, 0]
+
+        # Per-chunk-boundary conv states for prefix-cache checkpointing: the last
+        # ``conv_kernel_size`` raw conv-input tokens preceding each 64-token chunk
+        # boundary ([1, NT, dim, W]), produced by the chunk_conv_states kernel.
+        # This is the conv half of the recurrent chunk_states from GatedDelta; the
+        # two together let a checkpoint restore the layer at any chunk boundary.
+        # Computed on the prefill path (this method is prefill-only) and attached
+        # to the shared meta so the model layer can store it per layer.
+        gated_delta_meta.chunk_conv_states = self.chunk_conv_states_fn(
+            x,
+            conv_state.size(-1),
+            cu_seqlens=gated_delta_meta.cu_seqlens,
+            chunk_indices=gated_delta_meta.chunk_indices,
+        )
 
         # Save conv state (last kernel_size input tokens per sequence).
         final_state = x[0, conv_idx].transpose(-2, -1)
@@ -226,6 +249,8 @@ class GatedDelta:
         """call."""
         is_decoding = gated_delta_meta.is_decoding
         cu_seqlens = gated_delta_meta.cu_seqlens
+        chunk_indices = gated_delta_meta.chunk_indices
+        chunk_offsets = gated_delta_meta.chunk_offsets
         state_ids = gated_delta_meta.state_ids
         spec_state_offsets = gated_delta_meta.spec_state_offsets
         cache_seqlens = gated_delta_meta.cache_seqlens
@@ -244,7 +269,7 @@ class GatedDelta:
         )
 
         if not is_decoding:
-            core_attn_out, last_recurrent_state = self.impl.chunk_gated_delta_rule(
+            core_attn_out, last_recurrent_state, chunk_states = self.impl.chunk_gated_delta_rule(
                 query,
                 key,
                 value,
@@ -255,6 +280,8 @@ class GatedDelta:
                 output_final_state=True,
                 use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel and not qk_l2norm_done,
                 cu_seqlens=cu_seqlens,
+                chunk_indices=chunk_indices,
+                chunk_offsets=chunk_offsets,
                 spec_state_offsets=spec_state_offsets,
                 transpose_state_layout=True,
             )
@@ -276,7 +303,9 @@ class GatedDelta:
             )
             # out (seqlen, B, ...) -> (1, seqlen * B, ...)
             core_attn_out = core_attn_out.flatten(0, 1).unsqueeze(0)
-        return core_attn_out, last_recurrent_state
+            # decode path does not produce per-chunk boundary states.
+            chunk_states = None
+        return core_attn_out, last_recurrent_state, chunk_states
 
 
 class CausalConv1d(nn.Module):

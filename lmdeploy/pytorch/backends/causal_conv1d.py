@@ -33,6 +33,18 @@ class CausalConv1dImpl(ABC):
         """Update conv state."""
         raise NotImplementedError
 
+    @abstractmethod
+    def chunk_conv_states(
+        self,
+        x: torch.Tensor,
+        conv_kernel_size: int,
+        cu_seqlens: torch.Tensor | None = None,
+        chunk_size: int = 64,
+        chunk_indices: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Extract the conv state at every chunk boundary."""
+        raise NotImplementedError
+
 
 class CausalConv1dBuilder(ABC):
     """CausalConv1d implementation builder."""
