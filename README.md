@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2026</b></summary>
 
+- \[2026/08\] Our paper, “LMDeploy Accelerates Mixed-Precision LLM Inference with TurboMind,” has been accepted to EuroSys 2027.
 - \[2026/04\] PyPI has expanded the storage quota for LMDeploy and wheel uploads have resumed. `v0.12.3` is now available on PyPI, so you can install it directly via `pip install lmdeploy`.
 - \[2026/02\] Support [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35)
 - \[2026/02\] Support [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) 4bit symmetric/asymmetric quantization. Refer [here](./docs/en/quantization/llm_compressor.md) for detailed guide
@@ -292,9 +293,9 @@ We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.
 ```
 
 ```bibtex
-@article{zhang2025efficient,
-  title={Efficient Mixed-Precision Large Language Model Inference with TurboMind},
-  author={Zhang, Li and Jiang, Youhe and He, Guoliang and Chen, Xin and Lv, Han and Yao, Qian and Fu, Fangcheng and Chen, Kai},
+@article{zhang2025lmdeploy,
+  title={LMDeploy Accelerates Mixed-Precision LLM Inference with TurboMind},
+  author={Zhang, Li and Jiang, Youhe and He, Guoliang and Chen, Xin and Lv, Han and Yao, Qian and Ma, Ningsheng and Fu, Fangcheng and Chen, Kai},
   journal={arXiv preprint arXiv:2508.15601},
   year={2025}
 }
