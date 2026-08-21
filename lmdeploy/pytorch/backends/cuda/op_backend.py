@@ -205,16 +205,8 @@ class CudaOpsBackend(DefaultOpsBackend):
                 decode_query_len = step_context.input_ids.size(1) // q_seqlens.size(0)
                 cls.update_meta_flashmla(attn_metadata, model_config, decode_query_len)
             elif use_flash_attn3_decoding:
-                from .attention import use_fa3
-                if not use_fa3:
-                    sm = torch.cuda.get_device_capability()
-                    cuda_ver = torch.version.cuda or 'N/A'
-                    raise RuntimeError(
-                        f'Speculative decoding on CUDA requires FlashAttention-3 (FA3), '
-                        f'which needs SM80+ (Ampere and above) with CUDA >= 12.3 and '
-                        f'flash-attn installed. Detected: SM{sm[0]}.{sm[1]}, CUDA {cuda_ver}. '
-                        f'Please ensure your GPU meets SM80+, CUDA >= 12.3, and flash-attn '
-                        f'is installed, or disable speculative decoding.')
+                from .attention import require_fa3_for_speculative_decoding
+                require_fa3_for_speculative_decoding()
                 cls.update_meta_flashattn(attn_metadata, step_context)
 
         if step_context.model_config.is_gated_delta and not step_context.is_decoding:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from packaging import version
@@ -13,6 +13,9 @@ from lmdeploy.pytorch.config import ModelConfig
 from lmdeploy.pytorch.envs import enable_decode_torch_compile, fake_capture
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.utils import get_logger
+
+if TYPE_CHECKING:
+    from lmdeploy.pytorch.model_inputs import StepContextManager
 
 logger = get_logger('lmdeploy')
 
@@ -75,8 +78,45 @@ def build_decode_model_forward(model: torch.nn.Module) -> Callable[..., Any]:
     )
 
 
+def _make_graph_meta(
+    model_config: ModelConfig,
+    ctx_mgr: StepContextManager,
+    *,
+    max_batches: int,
+    max_tokens: int,
+    num_blocks: int,
+    is_decoding: bool,
+    decode_query_len: int,
+    device: torch.device,
+) -> CudaGraphMeta:
+    """Build the fixed metadata owned by one full CUDA graph."""
+    step_meta_plan = ctx_mgr.backend_step_meta_plan
+    if step_meta_plan is not None and not step_meta_plan.is_supported:
+        step_meta_plan = None
+
+    return CudaGraphMeta(
+        max_batchs=max_batches,
+        max_tokens=max_tokens,
+        num_blocks=num_blocks,
+        is_decoding=is_decoding,
+        device=device,
+        input_buffers=dict(),
+        output_buffers=dict(),
+        vocab_size=model_config.vocab_size,
+        use_mla_fp8_cache=model_config.use_mla_fp8_cache,
+        use_flash_mla=model_config.use_flash_mla,
+        mla_index_topk=model_config.mla_index_topk,
+        use_fa3_decoding=(model_config.model_paradigm == 'ar_spec' and not model_config.use_flash_mla),
+        is_ssm=bool(model_config.states_shapes),
+        use_mrope=model_config.use_mrope,
+        block_size=model_config.block_size,
+        decode_query_len=decode_query_len,
+        step_meta_plan=step_meta_plan,
+    )
+
+
 class CUDASingleGraphRunner:
-    """Cuda single graph runner."""
+    """Own capture and replay state for one full CUDA graph."""
 
     def __init__(
         self,
@@ -92,103 +132,85 @@ class CUDASingleGraphRunner:
         model_forward: Callable[..., Any] | None = None,
     ):
         self.model = model
-        self.model_forward = model if model_forward is None else model_forward
-        self.ctx_mgr = model.ctx_mgr
-        self.model_config = model_config
-        step_meta_plan = getattr(self.ctx_mgr, 'backend_step_meta_plan', None)
-        if not getattr(step_meta_plan, 'is_supported', False):
-            step_meta_plan = None
-
-        self.meta = CudaGraphMeta(
-            max_batchs=max_batches,
+        self._model_forward = model if model_forward is None else model_forward
+        self._ctx_mgr = model.ctx_mgr
+        self.meta = _make_graph_meta(
+            model_config,
+            self._ctx_mgr,
+            max_batches=max_batches,
             max_tokens=max_tokens,
             num_blocks=num_blocks,
             is_decoding=is_decoding,
-            device=device,
-            input_buffers=dict(),
-            output_buffers=dict(),
-            vocab_size=self.model_config.vocab_size,
-            use_mla_fp8_cache=getattr(self.model_config, 'use_mla_fp8_cache', False),
-            use_flash_mla=getattr(self.model_config, 'use_flash_mla', False),
-            mla_index_topk=getattr(self.model_config, 'mla_index_topk', None),
-            use_fa3_decoding=(model_config.model_paradigm == 'ar_spec'
-                              and not getattr(model_config, 'use_flash_mla', False)),
-            is_ssm=len(model_config.states_shapes) > 0,
-            use_mrope=model_config.use_mrope,
-            block_size=model_config.block_size,
             decode_query_len=decode_query_len,
-            step_meta_plan=step_meta_plan,
+            device=device,
         )
-        self.device = device
-        self.max_batches = max_batches
-        self.max_tokens = max_tokens
-        self.num_blocks = num_blocks
-        self.is_decoding = is_decoding
-        self.pool = pool
-        self._graph: torch.cuda.CUDAGraph = None
-        self.USE_GRAPH = not fake_capture
+        self._pool = pool
+        self._graph: torch.cuda.CUDAGraph | None = None
+        self._use_graph = not fake_capture
         logger.info(f'Initialized CUDASingleGraphRunner with max_batches={max_batches}, max_tokens={max_tokens}, '
-                    f'num_blocks={num_blocks}, is_decoding={is_decoding}, use_graph={self.USE_GRAPH}')
+                    f'num_blocks={num_blocks}, is_decoding={is_decoding}, use_graph={self._use_graph}')
 
     @record_function('capture_cudagraph')
     def capture(self, **kwargs):
-        """Capture graph."""
+        """Allocate stable buffers, warm up, and capture the model forward."""
         logger.debug(f'Capturing graph with meta: {self.meta}')
         self.meta.input_buffers = self.model.make_buffers_cudagraph(self.meta, **kwargs)
-        padded_kwargs = self.model.fill_buffers_cudagraph(self.meta, **kwargs)
-        context = self.ctx_mgr.current_context()
-        self.model.update_context_cudagraph(self.meta, context)
-        current_stream = torch.cuda.current_stream()
+        padded_kwargs = self._bind_inputs(**kwargs)
+        capture_stream = torch.cuda.current_stream() if self._use_graph else None
 
         # warmup
-        warmup_output = self.model_forward(**padded_kwargs)
+        warmup_output = self._model_forward(**padded_kwargs)
         warmup_buffers = self.model.make_output_buffers(warmup_output)
 
-        if self.USE_GRAPH:
-            step_meta_plan = self.meta.step_meta_plan
-            if step_meta_plan is not None:
-                step_ctx = self.ctx_mgr.current_context()
-                assert self.meta.step_meta_buffers is not None
-                step_meta_plan.prepare_cudagraph_capture(
-                    self.meta,
-                    self.meta.input_buffers,
-                    step_ctx,
-                    self.meta.step_meta_buffers,
-                    padded_kwargs['attn_metadata'],
-                )
-
-            self._graph = torch.cuda.CUDAGraph()
-            # unsafe kernel call in other thread might invalid the capture
-            # so we set thread_safe capture mode here.
-            with torch.cuda.graph(self._graph,
-                                  pool=self.pool,
-                                  stream=current_stream,
-                                  capture_error_mode='thread_local'):
-                output = self.model_forward(**padded_kwargs)
+        if self._use_graph:
+            assert capture_stream is not None
+            output = self._capture_model(padded_kwargs, capture_stream)
         else:
             output = warmup_output
 
-        output_buffers = self.model.make_output_buffers(output)
-        self.meta.output_buffers = output_buffers
-        output = self.model.get_outputs_cudagraph(warmup_buffers, **kwargs)
-        return output
+        self.meta.output_buffers = self.model.make_output_buffers(output)
+        return self.model.get_outputs_cudagraph(warmup_buffers, **kwargs)
 
     @record_function('forward_cudagraph')
     def forward(self, **kwargs):
-        """forward."""
-        padded_kwargs = self.model.fill_buffers_cudagraph(self.meta, **kwargs)
-        context = self.ctx_mgr.current_context()
-        self.model.update_context_cudagraph(self.meta, context)
-        if self.USE_GRAPH:
+        """Refill stable buffers and replay the captured model forward."""
+        padded_kwargs = self._bind_inputs(**kwargs)
+        if self._use_graph:
             assert self._graph is not None
             self._graph.replay()
             output_buffers = self.meta.output_buffers
         else:
-            output = self.model_forward(**padded_kwargs)
+            output = self._model_forward(**padded_kwargs)
             output_buffers = self.model.make_output_buffers(output)
-        output = self.model.get_outputs_cudagraph(output_buffers, **kwargs)
-        return output
+        return self.model.get_outputs_cudagraph(output_buffers, **kwargs)
+
+    def _bind_inputs(self, **kwargs) -> dict[str, Any]:
+        """Fill stable buffers and bind the current step context to them."""
+        padded_kwargs = self.model.fill_buffers_cudagraph(self.meta, **kwargs)
+        self.model.update_context_cudagraph(self.meta, self._ctx_mgr.current_context())
+        return padded_kwargs
+
+    def _capture_model(self, padded_kwargs: dict[str, Any], capture_stream: torch.cuda.Stream):
+        """Capture the prepared model call into this runner's full graph."""
+        step_meta_plan = self.meta.step_meta_plan
+        if step_meta_plan is not None:
+            assert self.meta.step_meta_buffers is not None
+            step_meta_plan.prepare_cudagraph_capture(
+                self.meta,
+                self.meta.input_buffers,
+                self._ctx_mgr.current_context(),
+                self.meta.step_meta_buffers,
+                padded_kwargs['attn_metadata'],
+            )
+
+        self._graph = torch.cuda.CUDAGraph()
+        # CUDA work in another thread must not invalidate this capture.
+        with torch.cuda.graph(self._graph,
+                              pool=self._pool,
+                              stream=capture_stream,
+                              capture_error_mode='thread_local'):
+            return self._model_forward(**padded_kwargs)
 
     def __del__(self):
-        """del."""
-        del self._graph
+        """Release the captured graph before the remaining runner state."""
+        self._graph = None

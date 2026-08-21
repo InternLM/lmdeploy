@@ -24,19 +24,7 @@ from .full_graph import CUDASingleGraphRunner, build_decode_model_forward
 
 if TYPE_CHECKING:
     from ..attention import TritonAttentionMetadata
-
-
-def next_power_of_2(n: int):
-    """Return the smallest power of 2 greater than or equal to n."""
-    n -= 1
-    n |= n >> 1
-    n |= n >> 2
-    n |= n >> 4
-    n |= n >> 8
-    n |= n >> 16
-    n |= n >> 32
-    n += 1
-    return n
+    from .piecewise import PiecewiseGraphManager
 
 
 @functools.lru_cache
@@ -59,50 +47,75 @@ def _get_capture_batch_size_impl(max_batches: int):
 
 
 def _false(*args, **kwargs):
-    """Default value of not support cuda graph."""
+    """Disable CUDA graph execution for an unsupported model."""
     return False
 
 
+def _validate_speculative_decoding(model_config: ModelConfig) -> None:
+    """Validate the CUDA attention backend required by speculative decode."""
+    if model_config.model_paradigm != 'ar_spec' or model_config.use_flash_mla:
+        return
+
+    from ..attention import require_fa3_for_speculative_decoding
+    require_fa3_for_speculative_decoding()
+
+
+def _make_piecewise_graph_manager(model: torch.nn.Module,
+                                  backend_config: BackendConfig) -> PiecewiseGraphManager | None:
+    """Build the optional PCG runtime only for an eligible CUDA model."""
+    enabled = (enable_piecewise_cuda_graph and not backend_config.eager_mode
+               and backend_config.device_type == 'cuda')
+    if not enabled:
+        return None
+
+    # PCG is an optional model/backend capability until Stage 2 supplies the
+    # first production integration.
+    hooks = getattr(model, 'piecewise_cuda_graph_hooks', None)
+    if hooks is None:
+        return None
+
+    from .piecewise import PiecewiseGraphManager
+    return PiecewiseGraphManager(hooks)
+
+
+def _update_deepep_mode(context: StepContext) -> None:
+    """Select the DeepEP communication mode for this model forward."""
+    if not get_deepep_state().enabled():
+        return
+
+    from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer, DeepEPMode
+    mode = DeepEPMode.LOW_LATENCY if context.global_is_decoding() else DeepEPMode.NORMAL
+    DeepEPBuffer.set_deepep_mode(mode)
+
+
+def _destroy_deepep_buffer() -> None:
+    """Destroy the process-wide DeepEP buffer at the graph reset barrier."""
+    if not get_deepep_state().enabled():
+        return
+
+    from torch import distributed as dist
+
+    from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer
+    DeepEPBuffer.destroy()
+    dist.barrier()
+
+
 class CUDAGraphRunner(GraphRunner):
-    """Cuda graph runner."""
+    """Dispatch model forwards among full graph, piecewise graph, and eager."""
 
     def __init__(self, model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                  backend_config: BackendConfig, device: torch.device):
         super().__init__(model, model_config, cache_config, backend_config, device)
-        self.max_batches = cache_config.max_batches
         self.num_blocks = cache_config.num_gpu_blocks
-
-        # Speculative decoding on CUDA requires FlashAttention-3 (FA3),
-        # unless the model uses FlashMLA (e.g., DeepSeek MTP) which handles
-        # multi-token decoding queries natively.
-        # FA3 is available on SM80+ (Ampere and above) GPUs with CUDA >= 12.3.
-        # Without FA3, the Triton paged attention kernel cannot handle
-        # multi-token decoding queries (max_q_seqlen > 1) used in spec decoding.
-        if model_config.model_paradigm == 'ar_spec' and not getattr(model_config, 'use_flash_mla', False):
-            from ..attention import use_fa3
-            if not use_fa3:
-                sm = torch.cuda.get_device_capability()
-                cuda_ver = torch.version.cuda or 'N/A'
-                raise RuntimeError(
-                    f'Speculative decoding on CUDA requires FlashAttention-3 (FA3), '
-                    f'which needs SM80+ (Ampere and above) with CUDA >= 12.3 and '
-                    f'flash-attn installed. Detected: SM{sm[0]}.{sm[1]}, CUDA {cuda_ver}. '
-                    f'Please ensure your GPU meets SM80+, CUDA >= 12.3, and flash-attn '
-                    f'is installed, or disable speculative decoding.')
+        _validate_speculative_decoding(model_config)
 
         self.enable_graph = self.check_enable_graph()
         self._decode_model_forward: Callable[..., Any] | None = None
 
         self._full_graph_pool_handle = torch.cuda.graph_pool_handle()
-        self._full_graph_runners: dict[Any, CUDASingleGraphRunner] = dict()
+        self._full_graph_runners: dict[Any, CUDASingleGraphRunner] = {}
 
-        self._piecewise_graph_manager = None
-        if (enable_piecewise_cuda_graph and not backend_config.eager_mode and backend_config.device_type == 'cuda'):
-            hooks = getattr(model, 'piecewise_cuda_graph_hooks', None)
-            if hooks is not None:
-                from .piecewise import PiecewiseGraphManager
-
-                self._piecewise_graph_manager = PiecewiseGraphManager(hooks)
+        self._piecewise_graph_manager = _make_piecewise_graph_manager(model, backend_config)
 
         # strategy factory
         build_ctx = model.ctx_mgr.build_ctx
@@ -156,7 +169,7 @@ class CUDAGraphRunner(GraphRunner):
         """Prepare inputs."""
         assert 'attn_metadata' in kwargs, 'attn_metadata is required for cudagraph.'
         attn_metadata: TritonAttentionMetadata = kwargs['attn_metadata']
-        if not attn_metadata.block_offsets.dtype == torch.int32:
+        if attn_metadata.block_offsets.dtype != torch.int32:
             attn_metadata.block_offsets = attn_metadata.block_offsets.to(torch.int32)
         return kwargs
 
@@ -190,48 +203,42 @@ class CUDAGraphRunner(GraphRunner):
         graph_key = self.get_graph_key(**kwargs)
         runner = self._full_graph_runners.get(graph_key)
         if runner is None:
-            max_batches = graph_key[0]
-            is_decoding = graph_key[1]
-            decode_query_len = graph_key[3]
-            max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
-            runner = CUDASingleGraphRunner(
-                self.model,
-                model_forward=self._get_decode_model_forward(),
-                max_batches=max_batches,
-                max_tokens=max_tokens,
-                num_blocks=self.num_blocks,
-                is_decoding=is_decoding,
-                decode_query_len=decode_query_len,
-                pool=self._full_graph_pool_handle,
-                model_config=self.model_config,
-                device=self.device,
-            )
-            output = runner.capture(**kwargs)
-            self._full_graph_runners[graph_key] = runner
-            # SSM would update the state in capture(warmup), replay the graph will leads unexpected state update.
-            return output
+            return self._capture_full_graph(graph_key, kwargs)
 
         return runner.forward(**kwargs)
 
-    def _forward_piecewise_graph(self, descriptor, **kwargs):
-        """Build or replay one sibling piecewise CUDA graph plan."""
-        return self._piecewise_graph_manager.run(descriptor, kwargs)
+    def _capture_full_graph(self, graph_key: tuple, kwargs: dict[str, Any]):
+        """Capture and publish a full graph for one cache miss."""
+        runner = CUDASingleGraphRunner(
+            self.model,
+            model_forward=self._get_decode_model_forward(),
+            max_batches=graph_key[0],
+            max_tokens=self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens),
+            num_blocks=self.num_blocks,
+            is_decoding=graph_key[1],
+            decode_query_len=graph_key[3],
+            pool=self._full_graph_pool_handle,
+            model_config=self.model_config,
+            device=self.device,
+        )
+        output = runner.capture(**kwargs)
+        self._full_graph_runners[graph_key] = runner
+        # SSM capture warmup updates state, so the first call returns that
+        # warmup output instead of replaying and applying the update twice.
+        return output
 
     def __call__(self, **kwargs):
-        """call."""
+        """Run one model forward through the selected execution path."""
         kwargs = self._prepare_inputs(**kwargs)
         context = self.ctx_mgr.current_context()
-        if get_deepep_state().enabled():
-            from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer, DeepEPMode
-            deepep_mode = DeepEPMode.LOW_LATENCY if context.global_is_decoding() else DeepEPMode.NORMAL
-            DeepEPBuffer.set_deepep_mode(deepep_mode)
+        _update_deepep_mode(context)
 
         if self._should_use_full_graph(context, **kwargs):
             return self._forward_full_graph(**kwargs)
 
         descriptor = self._get_piecewise_graph_descriptor(context, **kwargs)
         if descriptor is not None:
-            result = self._forward_piecewise_graph(descriptor, **kwargs)
+            result = self._piecewise_graph_manager.run(descriptor, kwargs)
             if result.executed:
                 return result.output
 
@@ -257,14 +264,7 @@ class CUDAGraphRunner(GraphRunner):
         self._full_graph_runners.clear()
         if self._piecewise_graph_manager is not None:
             self._piecewise_graph_manager.reset()
-        if get_deepep_state().enabled():
-            from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer
-
-            if hasattr(DeepEPBuffer, 'destroy'):
-                from torch import distributed as dist
-
-                DeepEPBuffer.destroy()
-                dist.barrier()
+        _destroy_deepep_buffer()
 
     def update_inputs(self, inputs):
         """Update inputs."""
