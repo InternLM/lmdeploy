@@ -117,13 +117,12 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
         os.makedirs(eval_path, exist_ok=True)
 
     parallel_config = run_config['parallel_config']
-    tp = int(parallel_config['tp'])
-    total_gpus = int(os.environ.get('TOTAL_GPU_COUNT', '8'))
-    work_num = int(total_gpus / tp)
-
     case_name = get_case_str_by_config(run_config)
 
     if test_type == 'infer':
+        tp = int(parallel_config['tp'])
+        total_gpus = int(os.environ.get('TOTAL_GPU_COUNT', '8'))
+        work_num = int(total_gpus / tp)
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), constant.PROXY_PORT,
                                                       f'{case_name}_infer')
         run_config_new = run_config.copy()

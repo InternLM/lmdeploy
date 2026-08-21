@@ -1,10 +1,10 @@
 import pytest
+from utils.config_utils import ROUTED_EXPERTS_UNSUPPORTED_SKIP
 from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS
 from utils.tool_reasoning_definitions import (
     ALL_OPTIONAL_TOOL,
     CALCULATOR_TOOL,
     NESTED_PARAM_TOOL,
-    ROUTED_EXPERTS_UNSUPPORTED_SKIP,
     SEARCH_TOOL,
     WEATHER_TOOL,
     assert_arguments_parseable,

@@ -3,9 +3,10 @@
 h:
 - model_type: chat
   engine_config:
-    tp: 8
+    dp: 8
+    ep: 8
     extra:
-      max-batch-size: 64
+      max-batch-size: 32
       quant-policy: fp8
       cache-max-entry-count: 0.7
       speculative-algorithm: deepseek_mtp
