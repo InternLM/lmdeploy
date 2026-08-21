@@ -225,23 +225,23 @@ def _supports_gluon(in_features: int, out_features: int, block_size: int, dtype:
             and fp8_dtype == torch.float8_e4m3fn and in_features % block_size == 0 and out_features % 8 == 0)
 
 
-def build_linear_blocked_f8(spec: LinearBlockedF8BuildSpec) -> LinearBlockedF8Impl:
+def _build_linear_blocked_f8(spec: LinearBlockedF8BuildSpec) -> LinearBlockedF8Impl:
     """Build the requested provider or the best compatible provider."""
     provider = blocked_fp8_gemm_backend
 
     if provider == 'auto':
-        if _supports_deep_gemm(spec.block_size, spec.dtype, spec.fp8_dtype):
+        if _supports_deep_gemm(spec.block_size, spec.output_dtype, spec.fp8_dtype):
             impl_cls = DeepGemmLinearBlockedF8Impl
-        elif _supports_gluon(spec.in_features, spec.out_features, spec.block_size, spec.dtype, spec.fp8_dtype):
+        elif _supports_gluon(spec.in_features, spec.out_features, spec.block_size, spec.output_dtype, spec.fp8_dtype):
             impl_cls = GluonLinearBlockedF8Impl
         else:
             impl_cls = TritonLinearBlockedF8Impl
     elif provider == 'deepgemm':
-        if not _supports_deep_gemm(spec.block_size, spec.dtype, spec.fp8_dtype):
+        if not _supports_deep_gemm(spec.block_size, spec.output_dtype, spec.fp8_dtype):
             raise RuntimeError('DeepGEMM blocked-FP8 linear was requested but is unavailable or incompatible.')
         impl_cls = DeepGemmLinearBlockedF8Impl
     elif provider == 'gluon':
-        if not _supports_gluon(spec.in_features, spec.out_features, spec.block_size, spec.dtype, spec.fp8_dtype):
+        if not _supports_gluon(spec.in_features, spec.out_features, spec.block_size, spec.output_dtype, spec.fp8_dtype):
             try:
                 import triton
                 triton_version = triton.__version__
@@ -256,6 +256,6 @@ def build_linear_blocked_f8(spec: LinearBlockedF8BuildSpec) -> LinearBlockedF8Im
         impl_cls = TritonLinearBlockedF8Impl
 
     logger.debug(f'Build LinearBlockedF8 with {impl_cls.__name__}.')
-    impl = impl_cls(spec.in_features, spec.out_features, spec.block_size, spec.dtype, spec.fp8_dtype)
+    impl = impl_cls(spec.in_features, spec.out_features, spec.block_size, spec.output_dtype, spec.fp8_dtype)
     impl.set_scale_fmt(spec.scale_fmt)
     return impl

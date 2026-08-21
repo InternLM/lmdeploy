@@ -108,7 +108,7 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
                          self.renormalize, moe_metadata, self.chunked_moe_layout)
 
 
-def build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
+def _build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
     """Build a DLINFER fused MoE implementation."""
     return DlinferFusedMoEImpl(
         top_k=spec.top_k,

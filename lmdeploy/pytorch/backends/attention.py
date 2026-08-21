@@ -120,7 +120,7 @@ class V4AttentionImpl(ABC):
 class V4AttentionBuildSpec(BuildSpec[V4AttentionImpl]):
     """Immutable requirements for constructing DeepSeek-V4 attention."""
 
-    head_size: int
+    head_dim: int
     scale: float
     window_size: int
     compress_ratio: int
@@ -214,10 +214,10 @@ class PagedAttentionBuildSpec(BuildSpec[AttentionImpl[AttentionMetadata]]):
     """Immutable requirements for constructing paged attention."""
 
     num_heads: int
-    head_size: int
+    head_dim: int
     scale: float | None
     num_kv_heads: int
-    v_head_size: int
+    v_head_dim: int
     alibi: bool
     sliding_window: int | tuple[int, int] | None
     logit_softcapping: float

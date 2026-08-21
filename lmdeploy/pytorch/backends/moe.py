@@ -71,7 +71,7 @@ class FusedMoEBuildSpec(BuildSpec[FusedMoEImpl]):
     ep_size: int
     ep_group: dist.ProcessGroup | None
     layer_idx: int
-    out_dtype: torch.dtype
+    output_dtype: torch.dtype
     num_max_dispatch_tokens_per_rank: int
 
 
@@ -109,7 +109,7 @@ class FusedMoEW8A8BuildSpec(BuildSpec[FusedMoEW8A8Impl]):
     top_k: int
     num_experts: int
     renormalize: bool
-    out_dtype: torch.dtype
+    output_dtype: torch.dtype
     quant_dtype: torch.dtype | None
 
 
@@ -161,7 +161,7 @@ class FusedMoEStaticF8BuildSpec(BuildSpec[FusedMoEStaticF8Impl]):
     top_k: int
     num_experts: int
     renormalize: bool
-    out_dtype: torch.dtype
+    output_dtype: torch.dtype
     quant_dtype: torch.dtype
 
 
@@ -214,7 +214,7 @@ class FusedMoEBlockedF8BuildSpec(BuildSpec[FusedMoEBlockedF8Impl]):
     block_size: int
     ep_size: int
     ep_group: dist.ProcessGroup | None
-    out_dtype: torch.dtype
+    output_dtype: torch.dtype
     fp8_dtype: torch.dtype
     num_max_dispatch_tokens_per_rank: int
     layer_idx: int

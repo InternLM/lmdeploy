@@ -45,8 +45,8 @@ class DlinferOpsBackend(DefaultOpsBackend):
             from .moe import DlinferSoftmaxTopKImpl
             return cast(ImplT, DlinferSoftmaxTopKImpl(spec.top_k, spec.dim, spec.n_groups))
         if isinstance(spec, RotaryEmbeddingBuildSpec):
-            from .rotary_embedding import build_rotary_embedding
-            return cast(ImplT, build_rotary_embedding(spec))
+            from .rotary_embedding import _build_rotary_embedding
+            return cast(ImplT, _build_rotary_embedding(spec))
         if isinstance(spec, LinearW4A16BuildSpec):
             from .awq_modules import AwqLinearW4A16Impl
             return cast(
@@ -65,7 +65,7 @@ class DlinferOpsBackend(DefaultOpsBackend):
                 DlinferLinearW8A8Impl(
                     spec.in_features,
                     spec.out_features,
-                    spec.dtype,
+                    spec.output_dtype,
                     spec.quant_dtype,
                 ),
             )
@@ -75,10 +75,10 @@ class DlinferOpsBackend(DefaultOpsBackend):
                 ImplT,
                 DlinferAttentionImpl(
                     num_heads=spec.num_heads,
-                    head_size=spec.head_size,
+                    head_size=spec.head_dim,
                     scale=spec.scale,
                     num_kv_heads=spec.num_kv_heads,
-                    v_head_size=spec.v_head_size,
+                    v_head_size=spec.v_head_dim,
                     alibi=spec.alibi,
                     sliding_window=spec.sliding_window,
                     logit_softcapping=spec.logit_softcapping,
@@ -105,8 +105,8 @@ class DlinferOpsBackend(DefaultOpsBackend):
             from .linear import DlinferLinearImpl
             return cast(ImplT, DlinferLinearImpl())
         if isinstance(spec, FusedMoEBuildSpec):
-            from .moe import build_fused_moe
-            return cast(ImplT, build_fused_moe(spec))
+            from .moe import _build_fused_moe
+            return cast(ImplT, _build_fused_moe(spec))
         return super().build_op(spec, enable_deterministic=enable_deterministic)
 
     @staticmethod

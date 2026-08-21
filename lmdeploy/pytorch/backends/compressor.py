@@ -18,7 +18,7 @@ class V4CompressorMetadata:
     max_q_seqlen: int
 
 
-class BaseV4Compressor(ABC):
+class V4CompressorImpl(ABC):
 
     @abstractmethod
     def score_and_fill_state(
@@ -50,7 +50,7 @@ class BaseV4Compressor(ABC):
 
 
 @dataclass(frozen=True)
-class V4CompressorBuildSpec(BuildSpec[BaseV4Compressor]):
+class V4CompressorBuildSpec(BuildSpec[V4CompressorImpl]):
     """Immutable requirements for constructing a DeepSeek-V4 compressor."""
 
     compress_ratio: int

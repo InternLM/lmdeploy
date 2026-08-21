@@ -46,7 +46,7 @@ class AwqLinear(LinearBase):
                 w_bit=w_bit,
                 group_size=group_size,
                 bias=bias is not None,
-                dtype=scales.dtype,
+                output_dtype=scales.dtype,
             ),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )

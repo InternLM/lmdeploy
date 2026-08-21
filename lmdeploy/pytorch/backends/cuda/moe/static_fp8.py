@@ -73,12 +73,12 @@ class TritonFusedMoEStaticF8Impl(FusedMoEStaticF8Impl):
         )
 
 
-def build_fused_moe_static_f8(spec: FusedMoEStaticF8BuildSpec) -> FusedMoEStaticF8Impl:
+def _build_fused_moe_static_f8(spec: FusedMoEStaticF8BuildSpec) -> FusedMoEStaticF8Impl:
     """Build a CUDA static-FP8 fused MoE implementation."""
     return TritonFusedMoEStaticF8Impl(
         top_k=spec.top_k,
         num_experts=spec.num_experts,
         renormalize=spec.renormalize,
-        out_dtype=spec.out_dtype,
+        out_dtype=spec.output_dtype,
         quant_dtype=spec.quant_dtype,
     )

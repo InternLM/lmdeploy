@@ -56,7 +56,7 @@ class StaticF8Linear(LinearBase):
                 in_features=in_features,
                 out_features=out_features,
                 bias=bias,
-                dtype=self.dtype,
+                output_dtype=self.dtype,
                 fp8_dtype=fp8_dtype,
             ),
             enable_deterministic=get_build_model_context().enable_deterministic,

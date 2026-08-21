@@ -1,11 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from lmdeploy.pytorch.backends.hc_prepost import BaseHcPrePost
+from lmdeploy.pytorch.backends.hc_prepost import HCPrePostImpl
 from lmdeploy.pytorch.kernels.cuda.dsv4.hc_prepost import hc_post_expand, hc_pre_reduce
 
 
-class TritonHcPrePostImpl(BaseHcPrePost):
+class TritonHCPrePostImpl(HCPrePostImpl):
 
     def __init__(self, hc_mult: int, sinkhorn_iters: int, eps: float):
         self.hc_mult = hc_mult

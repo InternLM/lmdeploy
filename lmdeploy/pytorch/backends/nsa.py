@@ -78,7 +78,7 @@ def should_skip_nsa_indexer(model_metas) -> bool:
         for meta in model_metas)
 
 
-class BaseNSAIndexFP8(ABC):
+class NSAIndexFP8Impl(ABC):
 
     @abstractmethod
     def get_step_metadata(self, attn_metadata) -> NSAIndexMeta:
@@ -99,10 +99,10 @@ class BaseNSAIndexFP8(ABC):
         raise NotImplementedError('Not implemented.')
 
 @dataclass(frozen=True)
-class NSAIndexFP8BuildSpec(BuildSpec[BaseNSAIndexFP8]):
+class NSAIndexFP8BuildSpec(BuildSpec[NSAIndexFP8Impl]):
     """Immutable requirements for constructing an FP8 NSA indexer."""
 
-    topk: int
+    top_k: int
     softmax_scale: float
     block_size: int = 128
     fill: int = -1

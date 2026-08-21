@@ -34,8 +34,8 @@ class DefaultOpsBackend(OpsBackend):
             from .activation import DefaultGeluAndMulImpl
             return cast(ImplT, DefaultGeluAndMulImpl(spec.approximate))
         if isinstance(spec, RotaryEmbeddingBuildSpec):
-            from .rotary_embedding import build_rotary_embedding
-            return cast(ImplT, build_rotary_embedding(spec))
+            from .rotary_embedding import _build_rotary_embedding
+            return cast(ImplT, _build_rotary_embedding(spec))
         if isinstance(spec, ApplyRotaryEmbBuildSpec):
             from .apply_rotary_emb import DefaultApplyRotaryEmbImpl
             return cast(ImplT, DefaultApplyRotaryEmbImpl())
@@ -55,8 +55,8 @@ class DefaultOpsBackend(OpsBackend):
             from .embedding import DefaultEmbeddingImpl
             return cast(ImplT, DefaultEmbeddingImpl(spec.start_index, spec.end_index))
         if isinstance(spec, CacheBlockCopyBuildSpec):
-            from .cache_block_copy import build_cache_block_copy
-            return cast(ImplT, build_cache_block_copy(spec))
+            from .cache_block_copy import _build_cache_block_copy
+            return cast(ImplT, _build_cache_block_copy(spec))
         if isinstance(spec, RouterNoauxTCBuildSpec):
             from .moe_router import DefaultRouterNoauxTCImpl
             return cast(
@@ -65,7 +65,7 @@ class DefaultOpsBackend(OpsBackend):
                     scoring_func=spec.scoring_func,
                     top_k=spec.top_k,
                     n_group=spec.n_group,
-                    topk_group=spec.topk_group,
+                    topk_group=spec.top_k_group,
                     n_routed_experts=spec.n_routed_experts,
                     routed_scaling_factor=spec.routed_scaling_factor,
                     renormalize=spec.renormalize,

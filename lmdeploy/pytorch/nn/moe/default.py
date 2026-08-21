@@ -156,7 +156,7 @@ class FusedMoE(FusedMoEBase):
                 ep_size=self.ep_size,
                 ep_group=dist_ctx.ep_gpu_group,
                 layer_idx=layer_idx,
-                out_dtype=torch.bfloat16,
+                output_dtype=torch.bfloat16,
                 num_max_dispatch_tokens_per_rank=build_ctx.deep_ep_max_tokens_per_rank,
             ),
             enable_deterministic=build_ctx.enable_deterministic,

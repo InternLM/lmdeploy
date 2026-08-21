@@ -73,12 +73,12 @@ class TritonFusedMoEW8A8Impl(FusedMoEW8A8Impl):
                               renormalize=self.renormalize)
 
 
-def build_fused_moe_w8a8(spec: FusedMoEW8A8BuildSpec) -> FusedMoEW8A8Impl:
+def _build_fused_moe_w8a8(spec: FusedMoEW8A8BuildSpec) -> FusedMoEW8A8Impl:
     """Build a CUDA W8A8 fused MoE implementation."""
     return TritonFusedMoEW8A8Impl(
         top_k=spec.top_k,
         num_experts=spec.num_experts,
         renormalize=spec.renormalize,
-        out_dtype=spec.out_dtype,
+        out_dtype=spec.output_dtype,
         quant_dtype=spec.quant_dtype,
     )

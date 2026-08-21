@@ -51,7 +51,7 @@ class BlockedF8Linear(LinearBase):
                 out_features=out_features,
                 block_size=self.block_size,
                 bias=bias,
-                dtype=self.dtype,
+                output_dtype=self.dtype,
                 fp8_dtype=self.fp8_dtype,
                 scale_fmt=scale_fmt,
             ),

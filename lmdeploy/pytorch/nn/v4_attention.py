@@ -15,7 +15,7 @@ class V4Attention(nn.Module):
         super().__init__()
         self.impl = get_backend().build_op(
             V4AttentionBuildSpec(
-                head_size=head_size,
+                head_dim=head_size,
                 scale=scale,
                 window_size=window_size,
                 compress_ratio=compress_ratio,

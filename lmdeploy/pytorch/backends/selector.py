@@ -27,18 +27,18 @@ def _get_backend() -> type[OpsBackend]:
         raise RuntimeError(f'Unsupported device type: {device_type}')
 
 
-def get_backend(backend_type: str | None = None) -> type[OpsBackend]:
+def get_backend(device_type: str | None = None) -> type[OpsBackend]:
     """Get device backend."""
-    if backend_type is None:
+    if device_type is None:
         return _get_backend()
     else:
-        device_ctx = DeviceContext(backend_type)
+        device_ctx = DeviceContext(device_type)
         device_mgr = get_device_manager()
         with device_mgr.context(device_ctx):
             return _get_backend()
 
 
-def init_backend(backend_type: str):
+def init_backend(device_type: str):
     """Init device backend."""
-    backend = get_backend(backend_type)
+    backend = get_backend(device_type)
     backend.init()

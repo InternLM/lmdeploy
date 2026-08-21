@@ -363,7 +363,7 @@ def test_fp8_ep_builder_passes_activation_dtype_and_scale_fmt(monkeypatch):
         calls.append((args, kwargs))
         return 'moe'
 
-    monkeypatch.setattr(blocked_fp8, 'build_deepep_moe', fake_build_deepep_moe)
+    monkeypatch.setattr(blocked_fp8, '_build_deepep_moe', fake_build_deepep_moe)
     impl = blocked_fp8.FusedDeepEpMoEBlockedF8Impl.__new__(blocked_fp8.FusedDeepEpMoEBlockedF8Impl)
     impl.ep_size = 2
     impl.ep_group = object()
@@ -393,7 +393,7 @@ def test_bf16_ep_builder_passes_low_latency_token_limit(monkeypatch):
         calls.append((args, kwargs))
         return 'moe'
 
-    monkeypatch.setattr(default, 'build_deepep_moe', fake_build_deepep_moe)
+    monkeypatch.setattr(default, '_build_deepep_moe', fake_build_deepep_moe)
     impl = default.FusedMoEEPImpl.__new__(default.FusedMoEEPImpl)
     impl.ep_size = 2
     impl.ep_group = object()

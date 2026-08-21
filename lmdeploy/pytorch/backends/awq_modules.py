@@ -38,4 +38,4 @@ class LinearW4A16BuildSpec(BuildSpec[LinearW4A16Impl]):
     w_bit: int
     group_size: int
     bias: bool
-    dtype: torch.dtype | None
+    output_dtype: torch.dtype | None

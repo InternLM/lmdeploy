@@ -27,7 +27,7 @@ class NoauxTCRouter(torch.nn.Module):
                 scoring_func=scoring_func,
                 top_k=top_k,
                 n_group=n_group,
-                topk_group=topk_group,
+                top_k_group=topk_group,
                 n_routed_experts=n_routed_experts,
                 routed_scaling_factor=routed_scaling_factor,
                 renormalize=renormalize,

@@ -404,7 +404,7 @@ class TritonFusedMoEV4FP4EPImpl(FusedMoEV4FP4Impl):
 
 
 
-def build_fused_moe_v4_fp4(spec: FusedMoEV4FP4BuildSpec) -> FusedMoEV4FP4Impl:
+def _build_fused_moe_v4_fp4(spec: FusedMoEV4FP4BuildSpec) -> FusedMoEV4FP4Impl:
     """Build the CUDA V4 FP4 MoE selected by the current backend policy."""
     if spec.ep_size > 1:
         return TritonFusedMoEV4FP4EPImpl(

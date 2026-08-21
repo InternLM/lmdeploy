@@ -9,7 +9,7 @@ from lmdeploy.pytorch.kernels.cuda.v4_compressor import (
     score_kv,
 )
 
-from ..compressor import BaseV4Compressor, V4CompressorMetadata
+from ..compressor import V4CompressorImpl, V4CompressorMetadata
 
 
 def _get_v4_packed_index_cache_views(index_cache: torch.Tensor,
@@ -35,7 +35,7 @@ def _get_v4_packed_index_cache_views(index_cache: torch.Tensor,
     return values, scales
 
 
-class TritonV4CompressorImpl(BaseV4Compressor):
+class TritonV4CompressorImpl(V4CompressorImpl):
 
     def __init__(self, compress_ratio: int, overlap: bool, head_dim: int) -> None:
         super().__init__()

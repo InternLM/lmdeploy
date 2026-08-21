@@ -68,7 +68,7 @@ def _normalize_sliding_window(sliding_window):
     return sliding_window
 
 
-def build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl:
+def _build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl:
     """Build the selected CUDA paged-attention implementation.
 
     Selection order:
@@ -79,16 +79,16 @@ def build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl:
     sliding_window = _normalize_sliding_window(spec.sliding_window)
     common_args = dict(
         num_heads=spec.num_heads,
-        head_size=spec.head_size,
+        head_size=spec.head_dim,
         scale=spec.scale,
         num_kv_heads=spec.num_kv_heads,
-        v_head_size=spec.v_head_size,
+        v_head_size=spec.v_head_dim,
         alibi=spec.alibi,
         sliding_window=sliding_window,
         logit_softcapping=spec.logit_softcapping,
         causal=spec.causal,
     )
-    enable_fa3 = _enable_fa3(spec.alibi, spec.learnable_sink, spec.block_sparse_size, spec.head_size)
+    enable_fa3 = _enable_fa3(spec.alibi, spec.learnable_sink, spec.block_sparse_size, spec.head_dim)
 
     if spec.use_flash_mla is True:
         logger.debug('Build FlashMLAImpl Attention')

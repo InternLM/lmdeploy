@@ -32,7 +32,7 @@ class V4IndexerOutput:
     topk_length: torch.Tensor
 
 
-class BaseV4Indexer(ABC):
+class V4IndexerImpl(ABC):
 
     @abstractmethod
     def forward(self,
@@ -45,8 +45,8 @@ class BaseV4Indexer(ABC):
 
 
 @dataclass(frozen=True)
-class V4IndexerBuildSpec(BuildSpec[BaseV4Indexer]):
+class V4IndexerBuildSpec(BuildSpec[V4IndexerImpl]):
     """Immutable requirements for constructing a DeepSeek-V4 indexer."""
 
-    index_topk: int
+    index_top_k: int
     compress_ratio: int

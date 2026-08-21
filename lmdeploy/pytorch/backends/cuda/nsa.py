@@ -24,7 +24,7 @@ from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp
 from lmdeploy.utils import get_logger
 
 from ..nsa import (
-    BaseNSAIndexFP8,
+    NSAIndexFP8Impl,
     NSAIndexMeta,
     build_nsa_index_meta,
     should_skip_nsa_indexer,
@@ -262,7 +262,7 @@ class DSAIndexerMetaBuilder(
         return meta
 
 
-class TritonNSAIndexFP8(BaseNSAIndexFP8):
+class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
 
     def __init__(self, topk: int, softmax_scale: float, block_size: int, fill: int) -> None:
         super().__init__()

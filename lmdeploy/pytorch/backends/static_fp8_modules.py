@@ -45,5 +45,5 @@ class LinearStaticF8BuildSpec(BuildSpec[LinearStaticF8Impl]):
     in_features: int
     out_features: int
     bias: bool
-    dtype: torch.dtype | None
+    output_dtype: torch.dtype | None
     fp8_dtype: torch.dtype

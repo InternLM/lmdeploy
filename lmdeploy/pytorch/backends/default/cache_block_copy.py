@@ -54,7 +54,7 @@ class DefaultCacheBlockCopyImpl(CacheBlockCopyImpl):
                 logical_cache.scatter_(-3, dst_index, chunk_workspace)
 
 
-def build_cache_block_copy(spec: CacheBlockCopyBuildSpec) -> CacheBlockCopyImpl:
+def _build_cache_block_copy(spec: CacheBlockCopyBuildSpec) -> CacheBlockCopyImpl:
     """Build the batched torch logical-block copy fallback."""
     if spec.num_logical_blocks == 0:
         blocks_per_chunk = 1

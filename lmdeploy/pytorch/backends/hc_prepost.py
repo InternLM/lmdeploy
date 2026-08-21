@@ -7,7 +7,7 @@ import torch
 from .base import BuildSpec
 
 
-class BaseHcPrePost(ABC):
+class HCPrePostImpl(ABC):
     """Backend interface for DeepSeek-V4 hyper-connection reductions."""
 
     @abstractmethod
@@ -37,7 +37,7 @@ class BaseHcPrePost(ABC):
 
 
 @dataclass(frozen=True)
-class HcPrePostBuildSpec(BuildSpec[BaseHcPrePost]):
+class HCPrePostBuildSpec(BuildSpec[HCPrePostImpl]):
     """Immutable requirements for DeepSeek-V4 hyper-connection kernels."""
 
     hc_mult: int

@@ -240,7 +240,7 @@ class FusedMoELowLatency:
         return self.experts(recv_hidden_states, up_weight, up_scale, down_weight, down_scale, masked_m, expected_m)
 
 
-def build_deepep_moe(
+def _build_deepep_moe(
     low_latency_mode: bool,
     ep_size: int,
     ep_group: dist.ProcessGroup,
@@ -433,23 +433,23 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         return _renormalize(topk_weights, self.renormalize)
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
-        deepep_moe = build_deepep_moe(low_latency_mode,
-                                      self.ep_size,
-                                      self.ep_group,
-                                      self.num_experts,
-                                      self.hidden_dim,
-                                      self.block_size,
-                                      self.top_k,
-                                      self.out_dtype,
-                                      fp8_dtype=self.fp8_dtype,
-                                      scale_fmt=self.scale_fmt,
-                                      layer_idx=self.layer_idx,
-                                      num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank,
-                                      chunk_size=16 * 1024)
+        deepep_moe = _build_deepep_moe(low_latency_mode,
+                                       self.ep_size,
+                                       self.ep_group,
+                                       self.num_experts,
+                                       self.hidden_dim,
+                                       self.block_size,
+                                       self.top_k,
+                                       self.out_dtype,
+                                       fp8_dtype=self.fp8_dtype,
+                                       scale_fmt=self.scale_fmt,
+                                       layer_idx=self.layer_idx,
+                                       num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank,
+                                       chunk_size=16 * 1024)
         return deepep_moe
 
 
-def build_fused_moe_blocked_f8(spec: FusedMoEBlockedF8BuildSpec) -> FusedMoEBlockedF8Impl:
+def _build_fused_moe_blocked_f8(spec: FusedMoEBlockedF8BuildSpec) -> FusedMoEBlockedF8Impl:
     """Build a CUDA blocked-FP8 fused MoE implementation."""
     if spec.ep_size > 1:
         assert not spec.custom_gateup_act, 'Custom gate up activation is not supported in EP MoE.'
@@ -461,7 +461,7 @@ def build_fused_moe_blocked_f8(spec: FusedMoEBlockedF8BuildSpec) -> FusedMoEBloc
             hidden_dim=spec.hidden_dim,
             renormalize=spec.renormalize,
             block_size=spec.block_size,
-            out_dtype=spec.out_dtype,
+            out_dtype=spec.output_dtype,
             fp8_dtype=spec.fp8_dtype,
             num_max_dispatch_tokens_per_rank=spec.num_max_dispatch_tokens_per_rank,
             layer_idx=spec.layer_idx,
@@ -472,7 +472,7 @@ def build_fused_moe_blocked_f8(spec: FusedMoEBlockedF8BuildSpec) -> FusedMoEBloc
             num_experts=spec.num_experts,
             renormalize=spec.renormalize,
             block_size=spec.block_size,
-            out_dtype=spec.out_dtype,
+            out_dtype=spec.output_dtype,
         )
     impl.set_scale_fmt(spec.scale_fmt)
     return impl

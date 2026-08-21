@@ -23,7 +23,7 @@ class RouterNoauxTCBuildSpec(BuildSpec[RouterNoauxTCImpl]):
     scoring_func: str
     top_k: int
     n_group: int
-    topk_group: int
+    top_k_group: int
     n_routed_experts: int
     routed_scaling_factor: float
     renormalize: bool = True

@@ -102,7 +102,7 @@ class FusedMoEW8A8(FusedMoEBase):
                 top_k=top_k,
                 num_experts=num_experts,
                 renormalize=renormalize,
-                out_dtype=dtype,
+                output_dtype=dtype,
                 quant_dtype=quant_dtype,
             ),
             enable_deterministic=get_build_model_context().enable_deterministic,

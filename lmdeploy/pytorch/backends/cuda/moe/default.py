@@ -333,7 +333,7 @@ class FusedMoELowLatency:
         return self.experts(recv_hidden_states, up_weight, down_weight, masked_m, expected_m)
 
 
-def build_deepep_moe(
+def _build_deepep_moe(
     low_latency_mode: bool,
     ep_size: int,
     ep_group: dist.ProcessGroup,
@@ -442,19 +442,19 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         return _renormalize(topk_weights, self.renormalize)
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
-        deepep_moe = build_deepep_moe(low_latency_mode,
-                                      self.ep_size,
-                                      self.ep_group,
-                                      self.num_experts,
-                                      self.hidden_dim,
-                                      self.top_k,
-                                      layer_idx=self.layer_idx,
-                                      out_dtype=self.out_dtype,
-                                      num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank)
+        deepep_moe = _build_deepep_moe(low_latency_mode,
+                                       self.ep_size,
+                                       self.ep_group,
+                                       self.num_experts,
+                                       self.hidden_dim,
+                                       self.top_k,
+                                       layer_idx=self.layer_idx,
+                                       out_dtype=self.out_dtype,
+                                       num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank)
         return deepep_moe
 
 
-def build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
+def _build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
     """Build a CUDA fused MoE implementation."""
     if spec.ep_size > 1:
         return FusedMoEEPImpl(
@@ -465,7 +465,7 @@ def build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
             hidden_dim=spec.hidden_dim,
             renormalize=spec.renormalize,
             layer_idx=spec.layer_idx,
-            out_dtype=spec.out_dtype,
+            out_dtype=spec.output_dtype,
             num_max_dispatch_tokens_per_rank=spec.num_max_dispatch_tokens_per_rank,
         )
     return TritonFusedMoEImpl(

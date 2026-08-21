@@ -375,7 +375,7 @@ class FopeRotaryEmbeddingImpl(RotaryEmbeddingImpl):
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
-def build_rotary_embedding(spec: RotaryEmbeddingBuildSpec) -> RotaryEmbeddingImpl:
+def _build_rotary_embedding(spec: RotaryEmbeddingBuildSpec) -> RotaryEmbeddingImpl:
     """Build the selected default rotary-embedding implementation."""
     if spec.emb_type in (RopeType.Default, RopeType.LinearScaling):
         return RotaryEmbeddingImpl(spec.dim, spec.base, spec.scaling_factor)

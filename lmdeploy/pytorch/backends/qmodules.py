@@ -61,5 +61,5 @@ class LinearW8A8BuildSpec(BuildSpec[LinearW8A8Impl]):
     in_features: int
     out_features: int
     bias: bool
-    dtype: torch.dtype | None
+    output_dtype: torch.dtype | None
     quant_dtype: torch.dtype | None

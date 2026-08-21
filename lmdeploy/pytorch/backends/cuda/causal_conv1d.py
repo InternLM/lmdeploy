@@ -93,7 +93,7 @@ def has_dao():
         return False
 
 
-def build_causal_conv1d() -> CausalConv1dImpl:
+def _build_causal_conv1d() -> CausalConv1dImpl:
     """Build the best available CUDA causal-convolution implementation."""
     if has_tilelang():
         return CausalConv1dTilelangImpl()

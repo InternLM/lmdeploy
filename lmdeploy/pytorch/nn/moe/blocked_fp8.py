@@ -184,7 +184,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
                 block_size=self.block_size,
                 ep_size=self.ep_size,
                 ep_group=dist_ctx.ep_gpu_group,
-                out_dtype=dtype,
+                output_dtype=dtype,
                 fp8_dtype=fp8_dtype,
                 num_max_dispatch_tokens_per_rank=build_ctx.deep_ep_max_tokens_per_rank,
                 layer_idx=layer_idx,

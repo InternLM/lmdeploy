@@ -45,6 +45,6 @@ class LinearBlockedF8BuildSpec(BuildSpec[LinearBlockedF8Impl]):
     out_features: int
     block_size: int
     bias: bool
-    dtype: torch.dtype | None
+    output_dtype: torch.dtype | None
     fp8_dtype: torch.dtype
     scale_fmt: str | None

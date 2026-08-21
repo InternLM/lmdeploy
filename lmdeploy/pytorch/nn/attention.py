@@ -51,10 +51,10 @@ class Attention(nn.Module):
         self.impl = get_backend().build_op(
             PagedAttentionBuildSpec(
                 num_heads=num_heads,
-                head_size=head_size,
+                head_dim=head_size,
                 scale=scale,
                 num_kv_heads=num_kv_heads,
-                v_head_size=v_head_size,
+                v_head_dim=v_head_size,
                 alibi=alibi,
                 sliding_window=sliding_window,
                 logit_softcapping=logit_softcapping,

@@ -152,7 +152,7 @@ class DlinferYarnRotaryEmbeddingImpl(YarnRotaryEmbeddingImpl):
         return _rotary_embedding_fwd(position_ids, self.inv_freq, scaling_factor=1.0, mscale=self.mscale, dtype=dtype)
 
 
-def build_rotary_embedding(spec: RotaryEmbeddingBuildSpec) -> RotaryEmbeddingImpl:
+def _build_rotary_embedding(spec: RotaryEmbeddingBuildSpec) -> RotaryEmbeddingImpl:
     """Build the selected DLINFER rotary-embedding implementation."""
     if spec.emb_type in (RopeType.Default, RopeType.LinearScaling):
         return DlinferRotaryEmbeddingImpl(spec.dim, spec.base, spec.scaling_factor)

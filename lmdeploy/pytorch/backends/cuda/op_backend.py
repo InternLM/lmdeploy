@@ -36,7 +36,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         from ..compressor import V4CompressorBuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
         from ..gated_delta_rule import GatedDeltaRuleBuildSpec
-        from ..hc_prepost import HcPrePostBuildSpec
+        from ..hc_prepost import HCPrePostBuildSpec
         from ..indexer import V4IndexerBuildSpec
         from ..lora import LoRABuildSpec
         from ..moe import (
@@ -68,26 +68,26 @@ class CudaOpsBackend(DefaultOpsBackend):
             from .multinomial_sampling import TritonMultinomialSamplingImpl
             return cast(ImplT, TritonMultinomialSamplingImpl())
         if isinstance(spec, NSAIndexFP8BuildSpec):
-            from .nsa import TritonNSAIndexFP8
+            from .nsa import TritonNSAIndexFP8Impl
             return cast(
                 ImplT,
-                TritonNSAIndexFP8(spec.topk, spec.softmax_scale, spec.block_size, spec.fill),
+                TritonNSAIndexFP8Impl(spec.top_k, spec.softmax_scale, spec.block_size, spec.fill),
             )
         if isinstance(spec, V4AttentionBuildSpec):
             from .attention.v4 import TritonV4AttentionImpl
             return cast(
                 ImplT,
-                TritonV4AttentionImpl(spec.head_size, spec.scale, spec.window_size, spec.compress_ratio),
+                TritonV4AttentionImpl(spec.head_dim, spec.scale, spec.window_size, spec.compress_ratio),
             )
         if isinstance(spec, V4IndexerBuildSpec):
             from .v4_indexer import TritonV4IndexerImpl
-            return cast(ImplT, TritonV4IndexerImpl(spec.index_topk, spec.compress_ratio))
+            return cast(ImplT, TritonV4IndexerImpl(spec.index_top_k, spec.compress_ratio))
         if isinstance(spec, V4CompressorBuildSpec):
             from .v4_compressor import TritonV4CompressorImpl
             return cast(ImplT, TritonV4CompressorImpl(spec.compress_ratio, spec.overlap, spec.head_dim))
-        if isinstance(spec, HcPrePostBuildSpec):
-            from .hc_prepost import TritonHcPrePostImpl
-            return cast(ImplT, TritonHcPrePostImpl(spec.hc_mult, spec.sinkhorn_iters, spec.eps))
+        if isinstance(spec, HCPrePostBuildSpec):
+            from .hc_prepost import TritonHCPrePostImpl
+            return cast(ImplT, TritonHCPrePostImpl(spec.hc_mult, spec.sinkhorn_iters, spec.eps))
         if isinstance(spec, RouterNoauxTCBuildSpec):
             from .moe_router import TritonRouterNoauxTCImpl
             return cast(
@@ -96,7 +96,7 @@ class CudaOpsBackend(DefaultOpsBackend):
                     scoring_func=spec.scoring_func,
                     top_k=spec.top_k,
                     n_group=spec.n_group,
-                    topk_group=spec.topk_group,
+                    topk_group=spec.top_k_group,
                     n_routed_experts=spec.n_routed_experts,
                     routed_scaling_factor=spec.routed_scaling_factor,
                     renormalize=spec.renormalize,
@@ -104,8 +104,8 @@ class CudaOpsBackend(DefaultOpsBackend):
                 ),
             )
         if isinstance(spec, CausalConv1dBuildSpec):
-            from .causal_conv1d import build_causal_conv1d
-            return cast(ImplT, build_causal_conv1d())
+            from .causal_conv1d import _build_causal_conv1d
+            return cast(ImplT, _build_causal_conv1d())
         if isinstance(spec, GatedDeltaRuleBuildSpec):
             from .gated_delta_rule import CudaGatedDeltaRuleImpl
             return cast(ImplT, CudaGatedDeltaRuleImpl())
@@ -130,13 +130,13 @@ class CudaOpsBackend(DefaultOpsBackend):
                 TritonLinearW8A8Impl(
                     spec.in_features,
                     spec.out_features,
-                    spec.dtype,
+                    spec.output_dtype,
                     spec.quant_dtype,
                 ),
             )
         if isinstance(spec, LinearBlockedF8BuildSpec):
-            from .blockedf8_modules import build_linear_blocked_f8
-            return cast(ImplT, build_linear_blocked_f8(spec))
+            from .blockedf8_modules import _build_linear_blocked_f8
+            return cast(ImplT, _build_linear_blocked_f8(spec))
         if isinstance(spec, LinearStaticF8BuildSpec):
             from .static_fp8_modules import TritonLinearStaticF8Impl
             return cast(
@@ -144,30 +144,30 @@ class CudaOpsBackend(DefaultOpsBackend):
                 TritonLinearStaticF8Impl(
                     spec.in_features,
                     spec.out_features,
-                    out_dtype=spec.dtype,
+                    out_dtype=spec.output_dtype,
                 ),
             )
         if isinstance(spec, LoRABuildSpec):
             from .lora import TritonLoRAImpl
             return cast(ImplT, TritonLoRAImpl())
         if isinstance(spec, FusedMoEBuildSpec):
-            from .moe.default import build_fused_moe
-            return cast(ImplT, build_fused_moe(spec))
+            from .moe.default import _build_fused_moe
+            return cast(ImplT, _build_fused_moe(spec))
         if isinstance(spec, FusedMoEW8A8BuildSpec):
-            from .moe.w8a8 import build_fused_moe_w8a8
-            return cast(ImplT, build_fused_moe_w8a8(spec))
+            from .moe.w8a8 import _build_fused_moe_w8a8
+            return cast(ImplT, _build_fused_moe_w8a8(spec))
         if isinstance(spec, FusedMoEStaticF8BuildSpec):
-            from .moe.static_fp8 import build_fused_moe_static_f8
-            return cast(ImplT, build_fused_moe_static_f8(spec))
+            from .moe.static_fp8 import _build_fused_moe_static_f8
+            return cast(ImplT, _build_fused_moe_static_f8(spec))
         if isinstance(spec, FusedMoEBlockedF8BuildSpec):
-            from .moe.blocked_fp8 import build_fused_moe_blocked_f8
-            return cast(ImplT, build_fused_moe_blocked_f8(spec))
+            from .moe.blocked_fp8 import _build_fused_moe_blocked_f8
+            return cast(ImplT, _build_fused_moe_blocked_f8(spec))
         if isinstance(spec, FusedMoEV4FP4BuildSpec):
-            from .moe.v4_fp4 import build_fused_moe_v4_fp4
-            return cast(ImplT, build_fused_moe_v4_fp4(spec))
+            from .moe.v4_fp4 import _build_fused_moe_v4_fp4
+            return cast(ImplT, _build_fused_moe_v4_fp4(spec))
         if isinstance(spec, PagedAttentionBuildSpec):
-            from .attention import build_paged_attention
-            return cast(ImplT, build_paged_attention(spec))
+            from .attention import _build_paged_attention
+            return cast(ImplT, _build_paged_attention(spec))
         if isinstance(spec, FlashAttentionBuildSpec):
             from .flash_attention import TritonFlashAttentionImpl
             return cast(

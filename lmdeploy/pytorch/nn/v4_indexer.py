@@ -12,7 +12,7 @@ class V4Indexer(nn.Module):
     def __init__(self, index_topk: int, compress_ratio: int):
         super().__init__()
         self.impl = get_backend().build_op(
-            V4IndexerBuildSpec(index_topk=index_topk, compress_ratio=compress_ratio),
+            V4IndexerBuildSpec(index_top_k=index_topk, compress_ratio=compress_ratio),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
