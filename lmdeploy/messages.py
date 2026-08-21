@@ -701,6 +701,7 @@ class ScheduleMetrics:
     cache_usage: float = 0.0
     prefix_cache_hit_rate: float = 0
     scheduler_tick: int = 0
+    num_evicted_blocks: int = 0
 
 
 @dataclass

@@ -983,4 +983,5 @@ class Scheduler:
             cache_usage=cache_usage,
             prefix_cache_hit_rate=self.block_trie.stats.hit_rate(),
             scheduler_tick=self.scheduler_tick,
+            num_evicted_blocks=self.block_trie.stats.num_evicted_blocks,
         )
