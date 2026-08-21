@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from collections.abc import Hashable
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from typing import Any
 
@@ -157,8 +157,36 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
 
         self.block_sparse_size = block_sparse_size
         self._step_meta_group: int | None = None
+        self._piecewise_forward: Callable[..., torch.Tensor] | None = None
 
         register_step_metadata_impl(self)
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Run this CUDA attention implementation as a PCG eager boundary."""
+        if self._piecewise_forward is not None:
+            return
+
+        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            PaddedTensorOutputAdapter,
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        original_forward = self.forward
+
+        @eager_boundary(adapter_factory=PaddedTensorOutputAdapter)
+        def piecewise_forward(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, *args,
+                              **kwargs) -> torch.Tensor:
+            execution = get_piecewise_graph_execution()
+            if execution is not None:
+                raw_tokens = execution.raw_tokens
+                query = query[:raw_tokens]
+                key = key[:raw_tokens]
+                value = value[:raw_tokens]
+            return original_forward(query, key, value, *args, **kwargs)
+
+        self._piecewise_forward = piecewise_forward
+        self.forward = piecewise_forward
 
     def get_step_metadata_provider(self):
         """Describe metadata required by this selected implementation."""

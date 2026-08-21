@@ -68,14 +68,16 @@ def _make_piecewise_graph_manager(model: torch.nn.Module,
     if not enabled:
         return None
 
-    # PCG is an optional model/backend capability until Stage 2 supplies the
-    # first production integration.
-    hooks = getattr(model, 'piecewise_cuda_graph_hooks', None)
-    if hooks is None:
+    from lmdeploy.pytorch.models.utils.cudagraph import PiecewiseCudaGraphMixin
+
+    if not isinstance(model, PiecewiseCudaGraphMixin):
         return None
 
     from .piecewise import PiecewiseGraphManager
-    return PiecewiseGraphManager(hooks)
+    from .standard import StandardDecoderPiecewiseGraphRuntime
+
+    runtime = StandardDecoderPiecewiseGraphRuntime(model)
+    return PiecewiseGraphManager(runtime.hooks)
 
 
 def _update_deepep_mode(context: StepContext) -> None:

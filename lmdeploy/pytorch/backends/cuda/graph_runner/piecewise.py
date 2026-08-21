@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
@@ -39,6 +40,80 @@ class FixedOutputAdapter:
 
     def copy(self, destination: Any, source: Any) -> None:
         _copy_tree(destination, source)
+
+
+@dataclass(frozen=True)
+class PiecewiseGraphExecution:
+    """Logical token extent for one bucket-shaped construction or replay."""
+
+    raw_tokens: int
+    token_bucket: int
+
+    def __post_init__(self) -> None:
+        if not 0 < self.raw_tokens <= self.token_bucket:
+            raise ValueError('raw_tokens must be within the token bucket')
+
+
+_ACTIVE_EXECUTION: ContextVar[PiecewiseGraphExecution | None] = ContextVar(
+    'piecewise_cuda_graph_execution', default=None)
+
+
+@contextmanager
+def piecewise_graph_execution(raw_tokens: int, token_bucket: int):
+    """Bind logical token metadata for eager boundaries and their adapters."""
+    execution = PiecewiseGraphExecution(raw_tokens=raw_tokens, token_bucket=token_bucket)
+    token = _ACTIVE_EXECUTION.set(execution)
+    try:
+        yield execution
+    finally:
+        _ACTIVE_EXECUTION.reset(token)
+
+
+def get_piecewise_graph_execution() -> PiecewiseGraphExecution | None:
+    """Return the active bucket execution, if piecewise execution owns it."""
+    return _ACTIVE_EXECUTION.get()
+
+
+class PaddedTensorOutputAdapter:
+    """Bind a raw-token eager tensor into bucket-shaped stable storage."""
+
+    def allocate(self, output: Any, boundary_input_storages: frozenset[int]) -> torch.Tensor:
+        execution = _ACTIVE_EXECUTION.get()
+        if execution is None:
+            raise RuntimeError('padded output allocation requires an active piecewise execution')
+        if not isinstance(output, torch.Tensor):
+            raise UnsupportedBoundaryError('padded output adapter requires one tensor output')
+        if output.layout is not torch.strided:
+            raise UnsupportedBoundaryError(f'only strided tensor outputs are supported, got {output.layout}')
+        aliases_boundary_input = output.untyped_storage().data_ptr() in boundary_input_storages
+        if aliases_boundary_input or output._is_view() or output._base is not None or output.storage_offset() != 0:
+            raise UnsupportedBoundaryError('view or aliased tensor outputs are not supported by the padded adapter')
+        if output.ndim == 0 or output.size(0) != execution.raw_tokens:
+            raise UnsupportedBoundaryError('eager output does not match the active raw-token extent')
+        if not output.is_contiguous():
+            raise UnsupportedBoundaryError('padded output adapter requires a contiguous eager output')
+
+        shape = (execution.token_bucket, *output.shape[1:])
+        return output.new_empty(shape)
+
+    def copy(self, destination: Any, source: Any) -> None:
+        execution = _ACTIVE_EXECUTION.get()
+        if execution is None:
+            raise RuntimeError('padded output binding requires an active piecewise execution')
+        if not isinstance(destination, torch.Tensor) or not isinstance(source, torch.Tensor):
+            raise UnsupportedBoundaryError('padded output adapter requires tensor inputs')
+        if source.ndim != destination.ndim or source.shape[1:] != destination.shape[1:]:
+            raise UnsupportedBoundaryError('eager output rank or non-token dimensions changed at replay')
+        if source.size(0) != execution.raw_tokens or destination.size(0) != execution.token_bucket:
+            raise UnsupportedBoundaryError('eager output token extent changed at replay')
+        if source.dtype != destination.dtype or source.device != destination.device:
+            raise UnsupportedBoundaryError('eager output dtype or device changed at replay')
+        if not source.is_contiguous():
+            raise UnsupportedBoundaryError('eager output layout changed at replay')
+
+        destination[:execution.raw_tokens].copy_(source)
+        if execution.raw_tokens < execution.token_bucket:
+            destination[execution.raw_tokens:].zero_()
 
 
 @dataclass(frozen=True)
@@ -275,12 +350,20 @@ class PiecewiseGraphPlan:
             if static.device.type != 'cuda':
                 static.copy_(current)
 
+        def bind(static_inputs: tuple[torch.Tensor, ...]) -> None:
+            for static, current in zip(static_inputs, inputs):
+                if static.device.type == 'cuda':
+                    static.copy_(current)
+
+        return self.replay_with_input_binder(bind)
+
+    def replay_with_input_binder(self, bind: Callable[[tuple[torch.Tensor, ...]], None]) -> Any:
+        """Fill plan-owned inputs on the replay stream, then execute the
+        plan."""
         caller_stream = torch.cuda.current_stream(self.device)
         self.stream.wait_stream(caller_stream)
         with torch.cuda.stream(self.stream), torch.inference_mode():
-            for static, current in zip(self._static_inputs, inputs):
-                if static.device.type == 'cuda':
-                    static.copy_(current)
+            bind(self._static_inputs)
             for step in self.steps:
                 step.run()
         caller_stream.wait_stream(self.stream)
@@ -368,8 +451,14 @@ def trace_piecewise_cuda_graph(
     example_inputs: Sequence[torch.Tensor],
     *,
     warmup_iterations: int = 3,
+    warmup_func: Callable[..., Any] | None = None,
 ) -> PiecewiseGraphPlan:
-    """Warm up and directly trace a fixed-shape callable into a plan."""
+    """Warm up and directly trace a fixed-shape callable into a plan.
+
+    A boundary adapter may change an eager result from its raw shape to its
+    captured shape. Such integrations can supply a shape-compatible warmup
+    callable while keeping ``func`` as the exact construction callable.
+    """
     if not example_inputs:
         raise ValueError('at least one tensor input is required')
     cuda_inputs = [value for value in example_inputs if value.device.type == 'cuda']
@@ -391,8 +480,9 @@ def trace_piecewise_cuda_graph(
     with torch.cuda.stream(capture_stream), torch.inference_mode():
         for static, example in zip(static_inputs, example_inputs):
             static.copy_(example)
+        run_warmup = func if warmup_func is None else warmup_func
         for _ in range(warmup_iterations):
-            func(*static_inputs)
+            run_warmup(*static_inputs)
         # Warmup may mutate explicit state inputs. Restore the supplied baseline
         # so construction performs exactly one logical forward from that state.
         for static, example in zip(static_inputs, example_inputs):
@@ -418,12 +508,13 @@ class PiecewiseGraphDescriptor:
 class PiecewiseGraphHooks:
     """Narrow integration hooks supplied by a supported model/backend pair.
 
-    ``build`` receives no live request. It must construct against synthetic
-    inputs and scratch state before returning an immutable plan.
+    ``build`` may inspect the current call only to bind stable model/cache
+    resources. Request-local values must be replaced with synthetic inputs and
+    scratch metadata before model execution.
     """
 
     get_piecewise_graph_descriptor: Callable[[Any, Mapping[str, Any]], PiecewiseGraphDescriptor | None]
-    build: Callable[[PiecewiseGraphDescriptor], Any]
+    build: Callable[[PiecewiseGraphDescriptor, Mapping[str, Any]], Any]
     replay: Callable[[Any, PiecewiseGraphDescriptor, Mapping[str, Any]], Any]
 
 
@@ -492,7 +583,7 @@ class PiecewiseGraphManager:
 
         if entry is None:
             try:
-                plan = self._hooks.build(descriptor)
+                plan = self._hooks.build(descriptor, kwargs)
                 if plan is None:
                     raise TypeError('piecewise plan builder returned None')
             except Exception as error:
