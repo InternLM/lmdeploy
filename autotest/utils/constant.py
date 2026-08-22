@@ -9,6 +9,15 @@ BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
 BASE_URL = f'{BASE_HTTP_URL}:{os.getenv("LMDEPLOY_PORT", str(DEFAULT_PORT))}'
 
 EVAL_CONFIGS = {
+    # Base-model PPL/LL API eval (TurboMindAPIModel / get_ppl).
+    'base': {
+        'max_out_len': 1024,
+        'max_seq_len': 7168,
+        'batch_size': 32,
+        'temperature': 1e-6,
+        'top_p': 0.9,
+        'top_k': 1,
+    },
     'default': {
         'query_per_second': 4,
         'max_out_len': 64000,
