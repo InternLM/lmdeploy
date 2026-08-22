@@ -364,7 +364,9 @@ class FusedLogitsProcessor:
             if not self.guided_decoding_manager.is_terminated(processor):
                 self.guided_decoding_manager.fill_bitmap(processor, guided_bitmask, i)
 
-    def _accept_guided_tokens(self, next_token_ids: torch.Tensor):
+    def _accept_guided_tokens(self, next_token_ids: torch.Tensor, ready_event: torch.cuda.Event | None):
+        if ready_event is not None:
+            ready_event.synchronize()
         cpu_result = next_token_ids.tolist()
         for i, processor in self.guided_processors.items():
             if self.guided_decoding_manager.is_terminated(processor):
@@ -374,7 +376,13 @@ class FusedLogitsProcessor:
 
     async def accept_guided_tokens(self, next_token_ids: torch.Tensor):
         if self.guided_decoding_manager and self.guided_processors:
-            await asyncio.to_thread(self._accept_guided_tokens, next_token_ids)
+            ready_event = None
+            if next_token_ids.is_cuda:
+                # Sampling runs on the forward stream, while to_thread uses a
+                # different thread-local CUDA stream. Preserve that dependency.
+                ready_event = torch.cuda.Event()
+                ready_event.record()
+            await asyncio.to_thread(self._accept_guided_tokens, next_token_ids, ready_event)
 
     async def __call__(self, scores: torch.Tensor) -> torch.Tensor:
         r"""
