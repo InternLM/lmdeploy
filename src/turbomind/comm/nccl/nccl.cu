@@ -408,12 +408,11 @@ public:
                                         int          group0,
                                         int          group1,
                                         const int*   local_token_nums,
+                                        int          local_token_nums_count,
                                         cudaStream_t stream) override
     {
         const size_t         elem_size = byte_size(type);
         const ncclDataType_t nccl_type = to_nccl_dtype(type);
-
-        TM_CHECK(group0 == 0 || group1 == 0);
 
         ncclComm_t comm0 = groups_.at(group0);
         ncclComm_t comm1 = groups_.at(group1);
@@ -422,9 +421,7 @@ public:
         NCCLCHECK(ncclCommCount(comm0, &tp0));
         NCCLCHECK(ncclCommCount(comm1, &tp1));
 
-        const int inner_tp = std::min(tp0, tp1);
-
-        TM_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
+        const int inner_tp = global_n_ranks_ / local_token_nums_count;
 
         std::vector<std::tuple<int, int, int>> tasks;
         tasks.reserve(global_n_ranks_);
@@ -440,12 +437,25 @@ public:
             }
         }
 
+        const int rank0 = rank(group0);
+        const int rank1 = rank(group1);
+        TM_CHECK_EQ(rank0, global_rank_ % tp0);
+        TM_CHECK_EQ(rank1, global_rank_ % tp1);
+
+        const int rs_begin = global_rank_ - rank0;
+        const int rs_end   = rs_begin + tp0;
+
+        const int ag_begin = global_rank_ - rank1;
+        const int ag_end   = ag_begin + tp1;
+
+        // group0: reduce
         if (tp0 > 1) {
             NCCLCHECK(ncclGroupStart());
-            for (int i = 0; i < global_n_ranks_; ++i) {
+            for (int i = rs_begin; i < rs_end; ++i) {
                 if (auto& [offset, first, num] = tasks[i]; num > 0) {
-                    char* buff = (char*)hidden + elem_size * (offset + first) * dim;
-                    NCCLCHECK(ncclReduce(buff, buff, (size_t)num * dim, nccl_type, ncclSum, i % tp0, comm0, stream));
+                    char*     buff = (char*)hidden + elem_size * (offset + first) * dim;
+                    const int root = i - rs_begin;
+                    NCCLCHECK(ncclReduce(buff, buff, (size_t)num * dim, nccl_type, ncclSum, root, comm0, stream));
                 }
             }
             NCCLCHECK(ncclGroupEnd());
@@ -465,12 +475,14 @@ public:
                                                     stream));
         }
 
+        // group1: all-gather
         if (tp1 > 1) {
             NCCLCHECK(ncclGroupStart());
-            for (int i = 0; i < global_n_ranks_; ++i) {
+            for (int i = ag_begin; i < ag_end; ++i) {
                 if (auto& [offset, first, num] = tasks[i]; num > 0) {
-                    char* buff = (char*)hidden + elem_size * (offset + first) * dim;
-                    NCCLCHECK(ncclBroadcast(buff, buff, (size_t)num * dim, nccl_type, i % tp1, comm1, stream));
+                    char*     buff = (char*)hidden + elem_size * (offset + first) * dim;
+                    const int root = i - ag_begin;
+                    NCCLCHECK(ncclBroadcast(buff, buff, (size_t)num * dim, nccl_type, root, comm1, stream));
                 }
             }
             NCCLCHECK(ncclGroupEnd());

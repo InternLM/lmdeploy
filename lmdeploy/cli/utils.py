@@ -691,6 +691,15 @@ class ArgumentHelper:
                                    'deprecated and serves as an alias for "cuda-ipc"')
 
     @staticmethod
+    def moe_a2a_backend(parser):
+        return parser.add_argument('--moe-a2a-backend',
+                                   type=str,
+                                   default='auto',
+                                   choices=['auto', 'default', 'deepep'],
+                                   help='Communication backend for MoE all-to-all. The "auto" option selects '
+                                   '"default" for single-node inference and "deepep" for multi-node inference')
+
+    @staticmethod
     def enable_microbatch(parser):
         """Add argument enable_microbatch to parser."""
 

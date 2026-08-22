@@ -912,6 +912,7 @@ struct TestComm {
                                                                group0,
                                                                group1,
                                                                local_token_nums.data(),
+                                                               local_token_nums.size(),
                                                                stream);
                     });
                     if (i >= warmup_) {
