@@ -18,8 +18,7 @@ from utils.anthropic_messages import (
 )
 from utils.config_utils import get_config
 from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_MODEL_LIST
-
-from lmdeploy.serve.openai.api_client import APIClient
+from utils.restful_return_check import get_client_and_model
 
 ANTHROPIC_VERSION = '2023-06-01'
 
@@ -41,7 +40,8 @@ _STOP_SEQUENCES = ('6',)
 def deployed_model_name() -> str:
     """Single model id exposed by the RESTFUL api_server."""
 
-    return APIClient(BASE_URL).available_models[0]
+    _, model_name = get_client_and_model(BASE_URL)
+    return model_name
 
 
 @lru_cache(maxsize=1)

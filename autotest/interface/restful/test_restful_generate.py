@@ -11,9 +11,8 @@ import requests
 from transformers import AutoTokenizer
 from utils.config_utils import get_model_path_from_config
 from utils.constant import BACKEND_LIST, BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
+from utils.restful_return_check import encode_prompt
 from utils.toolkit import encode_text, parse_sse_stream
-
-from lmdeploy.serve.openai.api_client import APIClient
 
 
 @pytest.mark.parametrize('backend', BACKEND_LIST)
@@ -733,8 +732,8 @@ class TestGenerateComprehensive:
                 self._post(payload)
 
             response = exc_info.value.response
-            assert response.status_code in [400, 422], (f"Bad Request for case '{test_desc}', "
-                                                        f'but got {response.status_code}')
+            assert response.status_code == 400, (f"Bad Request for case '{test_desc}', "
+                                                   f'but got {response.status_code}')
 
     def test_stress_concurrent_requests(self):
         print(f'\n[Model: {self.model_name}] Running stress concurrent requests test')
@@ -1024,8 +1023,7 @@ class TestGenerateComprehensive:
 
     def test_stop_token_ids(self):
         print(f'\n[Model: {self.model_name}] Running stop_token_ids test')
-        api_client = APIClient(BASE_URL)
-        input_ids1, length1 = api_client.encode('.', add_bos=False)
+        input_ids1, length1 = encode_prompt(BASE_URL, '.', add_bos=False)
         print(f'input_ids1={input_ids1}, length1={length1}')
 
         payload = {
@@ -1105,7 +1103,7 @@ class TestGenerateComprehensive:
 
         with pytest.raises(requests.HTTPError) as exc_info:
             self._post({'prompt': 'Test', 'max_tokens': 3, 'temperature': -0.5, 'stream': False})
-        assert exc_info.value.response.status_code in [400, 422]
+        assert exc_info.value.response.status_code == 400
 
         print('  Invalid temperature values test passed')
 
@@ -1113,7 +1111,7 @@ class TestGenerateComprehensive:
         print(f'\n[Model: {self.model_name}] Running invalid top_p values test')
         with pytest.raises(requests.HTTPError) as exc_info:
             self._post({'prompt': 'Test', 'max_tokens': 3, 'top_p': 1.5, 'stream': False})
-        assert exc_info.value.response.status_code in [400, 422]
+        assert exc_info.value.response.status_code == 400
 
         print('  Invalid top_p values test passed')
 
@@ -1121,7 +1119,7 @@ class TestGenerateComprehensive:
         print(f'\n[Model: {self.model_name}] Running invalid top_k values test')
         with pytest.raises(requests.HTTPError) as exc_info:
             self._post({'prompt': 'Test', 'max_tokens': 3, 'top_k': -5, 'stream': False})
-        assert exc_info.value.response.status_code in [400, 422]
+        assert exc_info.value.response.status_code == 400
 
         print('  Invalid top_k values test passed')
 

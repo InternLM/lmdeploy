@@ -7,9 +7,9 @@ import uuid
 
 import aiohttp
 import requests
-from openai import OpenAI
 from utils.config_utils import get_model_path_from_config
 from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_PORT
+from utils.restful_return_check import get_client_and_model
 
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
@@ -199,15 +199,6 @@ ALL_OPTIONAL_TOOL = {
         },
     },
 }
-
-
-def get_client_and_model(base_url=None):
-    url = base_url or BASE_URL
-    client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{url}/v1')
-    models = client.models.list().data
-    if not models:
-        raise RuntimeError(f'No model returned from GET {url}/v1/models')
-    return client, models[0].id
 
 
 # -- Logging / client helpers ------------------------------------------------
