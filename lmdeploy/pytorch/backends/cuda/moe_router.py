@@ -2,8 +2,8 @@
 import torch
 
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.pytorch.kernels.cuda.fused_noaux_tc import fused_noaux_tc_routing
-from lmdeploy.pytorch.kernels.cuda.fused_single_group_router import (
+from lmdeploy.pytorch.kernels.cuda.moe.route_noaux_tc import fused_noaux_tc_routing
+from lmdeploy.pytorch.kernels.cuda.moe.route_single_group import (
     fused_single_group_topk_router,
 )
 
