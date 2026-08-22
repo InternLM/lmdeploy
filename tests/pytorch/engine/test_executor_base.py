@@ -10,7 +10,9 @@ from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as u
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
+from lmdeploy.pytorch.engine.executor import ray_executor as ray_executor_module
 from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _CacheBlockSize
+from lmdeploy.pytorch.engine.executor.ray_executor import RayExecutor
 
 
 class _RecordingExecutor(ExecutorBase):
@@ -67,6 +69,38 @@ def test_init_skips_model_warmup_for_empty_init():
         'build_graph_runner',
         'build_cache_engine',
     ]
+
+
+def test_ray_executor_aborts_workers_after_failed_init(monkeypatch):
+    executor = object.__new__(RayExecutor)
+    workers = [object(), object()]
+    executor.workers = workers
+    shutdown_calls = []
+    killed_workers = []
+    init_error = RuntimeError('injected init failure')
+
+    def fail_init(_):
+        raise init_error
+
+    def kill_worker(worker):
+        killed_workers.append(worker)
+        if worker is workers[0]:
+            raise RuntimeError('injected kill failure')
+
+    def shutdown():
+        shutdown_calls.append(True)
+        raise RuntimeError('injected shutdown failure')
+
+    executor.ray_ctx = SimpleNamespace(shutdown=shutdown)
+    monkeypatch.setattr(ExecutorBase, 'init', fail_init)
+    monkeypatch.setattr(ray_executor_module.ray, 'kill', kill_worker)
+
+    with pytest.raises(RuntimeError, match='injected init failure') as exc_info:
+        executor.init()
+
+    assert exc_info.value is init_error
+    assert killed_workers == workers
+    assert shutdown_calls == [True]
 
 
 def test_get_num_gpu_blocks_without_spec_cache():
