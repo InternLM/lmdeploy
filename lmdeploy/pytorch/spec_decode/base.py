@@ -22,7 +22,13 @@ def _build_draft_dist_ctx(dist_ctx: DistContext, specdecode_config: SpecDecodeCo
     if specdecode_config.method in ('qwen3_5_mtp', 'hy3_mtp') or draft_dist_config == dist_ctx.dist_config:
         return dist_ctx
 
-    return DistContext.build(rank=dist_ctx.rank, dist_config=draft_dist_config)
+    if dist_ctx.communicator_builder is None:
+        return DistContext.build(rank=dist_ctx.rank, dist_config=draft_dist_config)
+    return DistContext.build(
+        rank=dist_ctx.rank,
+        dist_config=draft_dist_config,
+        communicator_builder=dist_ctx.communicator_builder,
+    )
 
 
 class BaseSpecModelAgent:
