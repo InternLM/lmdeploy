@@ -182,6 +182,10 @@ class MessageStatus(enum.Enum):
     """Status of a sequence."""
 
     WAITING = enum.auto()
+    # Destination GPU blocks are allocated and pinned while an asynchronous
+    # KV connector fills them.  Requests in this state are never forwarded or
+    # considered eviction candidates.
+    WAITING_FOR_REMOTE_KVS = enum.auto()
     READY = enum.auto()
     STOPPED = enum.auto()
     RUNNING = enum.auto()
@@ -325,6 +329,10 @@ class SchedulerSession:
         seq.set_state(build_seq_state(self.scheduler, seq, status))
         self.seq_manager.add_sequence(seq)
 
+        connector = self.scheduler.kv_connector
+        if connector is not None:
+            connector.on_new_request(seq)
+
         # metrics
         seq.record_event(EventType.QUEUED)
 
@@ -333,6 +341,7 @@ class SchedulerSession:
     def remove_sequence(self, seq: 'SchedulerSequence'):
         """Remove sequence."""
         assert seq.seq_id in self.sequences
+        self.scheduler.request_kv_connector_finished(seq)
         seq.state.free()
         self.sequences.pop(seq.seq_id)
         self.seq_manager.remove_sequence(seq)

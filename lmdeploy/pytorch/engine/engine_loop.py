@@ -13,6 +13,7 @@ from torch.profiler import record_function
 from lmdeploy.messages import RequestMetrics
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput
 from lmdeploy.pytorch.messages import MessageStatus, UpdateTokenMode
 from lmdeploy.pytorch.utils import cancel_async_tasks, wait_for_async_tasks
 from lmdeploy.utils import get_logger
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
 
 logger = get_logger('lmdeploy')
 _EMPTY_TOKEN = np.empty((0, ), dtype=np.int64)
+_KV_CONNECTOR_IDLE_POLL_INTERVAL = 0.001
 
 
 class CounterEvent(asyncio.Event):
@@ -63,7 +65,10 @@ class RunableEventAsync:
 
     def has_unfinished(self):
         """Check whether scheduler or engine-local state has runnable work."""
-        if self.scheduler.has_unfinished():
+        if (
+            self.scheduler.has_unfinished()
+            or self.scheduler.has_pending_kv_connector_work()
+        ):
             return True
         return self.extra_runable_checker is not None and self.extra_runable_checker()
 
@@ -138,7 +143,7 @@ class EngineLoop:
         self.migration_event = asyncio.Event()
         # Active long-context chunks are owned by InputsMaker, not the
         # scheduler WAITING/READY queues, so include them in the runnable gate.
-        self.has_runable_event = RunableEventAsync(self.scheduler, self.inputs_maker.has_pending_long_context_chunk)
+        self.has_runable_event = RunableEventAsync(self.scheduler, self._has_engine_local_runnable_work)
         # Sleep uses a small handshake with the scheduling loops:
         # 1. sleep() sets _sleep_requested and waits for main/migration drain events.
         # 2. main_loop and migration_loop reach safe boundaries, acknowledge
@@ -435,6 +440,86 @@ class EngineLoop:
         step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
         self.resp_queue.put_nowait(step_outputs)
 
+    def _has_engine_local_runnable_work(self) -> bool:
+        """Return work owned outside scheduler queues."""
+        if self.inputs_maker.has_pending_long_context_chunk():
+            return True
+        return self._has_pending_kv_connector_ack()
+
+    def _has_pending_kv_transfer_work(self) -> bool:
+        """Return whether submitted or ready KV transfers need progress."""
+        return self.scheduler.has_pending_kv_transfer_work()
+
+    def _has_pending_kv_lookup_work(self) -> bool:
+        """Return whether scheduler-side asynchronous lookups need
+        revisiting."""
+        return self.scheduler.has_pending_kv_lookup_work()
+
+    def _has_pending_kv_connector_ack(self) -> bool:
+        """Return whether the executor owes workers a sticky-completion ACK."""
+        checker = getattr(getattr(self, 'executor', None), 'has_pending_kv_connector_ack', None)
+        return checker is not None and checker()
+
+    def _has_pending_kv_connector_work(self) -> bool:
+        """Return any connector work that keeps the engine loop runnable."""
+        return (
+            self._has_pending_kv_transfer_work()
+            or self._has_pending_kv_lookup_work()
+            or self._has_pending_kv_connector_ack()
+        )
+
+    def _has_pending_kv_progress_work(self) -> bool:
+        """Return worker-side transfer/ACK work, excluding CPU lookups."""
+        return self._has_pending_kv_transfer_work() or self._has_pending_kv_connector_ack()
+
+    async def _poll_kv_connector(self) -> KVConnectorOutput:
+        """Make one non-blocking connector progress RPC."""
+        if not self._has_pending_kv_progress_work():
+            return KVConnectorOutput()
+
+        metadata = None
+        if self._has_pending_kv_transfer_work():
+            metadata = self.scheduler.build_kv_connector_progress_metadata()
+
+        try:
+            completed = await self.executor.poll_kv_connector(metadata)
+        except BaseException:
+            self.scheduler.rollback_kv_connector_metadata(metadata)
+            raise
+        if metadata is not None:
+            self.scheduler.mark_kv_connector_metadata_dispatched(metadata)
+        if completed:
+            self.scheduler.update_connector_output(completed)
+        return completed
+
+    async def _drain_for_sleep(
+        self,
+        forward_inputs: dict[str, Any] | None,
+        next_running: 'SeqList | None',
+    ) -> tuple[None, None]:
+        """Finish already-dispatched work before worker cache teardown.
+
+        Prefetch dispatches the next worker forward before the engine consumes the current output.  Dropping that local
+        bookkeeping during sleep can therefore strand connector pins for metadata that a worker has already received (or
+        is about to receive). Drain that forward without prefetching another one, then keep polling until all
+        asynchronous loads and saves release their scheduler-owned block references and their final sticky-completion
+        ACKs reach every worker.
+        """
+        if next_running is not None:
+            assert forward_inputs is not None
+            self.scheduler.activate_seqs(next_running)
+            await self._main_loop_get_outputs(
+                running=next_running,
+                forward_inputs=forward_inputs,
+            )
+            self.inputs_maker.deactivate_evict_seqs()
+
+        while self._has_pending_kv_progress_work():
+            await self._poll_kv_connector()
+            if self._has_pending_kv_progress_work():
+                await asyncio.sleep(_KV_CONNECTOR_IDLE_POLL_INTERVAL)
+        return None, None
+
     async def _main_loop_get_outputs(
         self,
         running: 'SeqList',
@@ -457,6 +542,7 @@ class EngineLoop:
         out = await self.executor.get_output_async()
         self._release_forward_save_pins(running)
         self._finish_forward_output(out, running, model_inputs, delta)
+        await self._poll_kv_connector()
         # out might come from shared memory, need to explicitly delete to release memory in time
         del out
 
@@ -482,11 +568,10 @@ class EngineLoop:
 
         while not self.stop_event.is_set():
             if self._sleep_requested:
-                # Drop prefetched work from before sleep. Sleep ends scheduler
-                # sessions and releases KV cache, so any saved next batch is
-                # stale after the drain point.
-                forward_inputs = None
-                next_running = None
+                forward_inputs, next_running = await self._drain_for_sleep(
+                    forward_inputs,
+                    next_running,
+                )
                 # Acknowledge that no new forward input will be scheduled until
                 # wakeup resumes this loop.
                 self._main_sleep_drain_event.set()
@@ -497,6 +582,14 @@ class EngineLoop:
                 forward_inputs, next_running = await self._main_loop_try_send_next_inputs()
                 if next_running is None:
                     if self._sleep_requested:
+                        continue
+                    pending_progress = self._has_pending_kv_progress_work()
+                    pending_lookup = self._has_pending_kv_lookup_work()
+                    if pending_progress:
+                        await self._poll_kv_connector()
+                    if pending_progress or pending_lookup:
+                        has_runable_event.set()
+                        await asyncio.sleep(_KV_CONNECTOR_IDLE_POLL_INTERVAL)
                         continue
                     await __no_running_warning()
                     continue

@@ -36,6 +36,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
 
             if block_trie.enabled:
                 evict_seq.prefix_cache.suppress_match_stats = True
+            self.scheduler.mark_kv_connector_preempted(evict_seq)
             evict_seq.state.free()
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
@@ -88,6 +89,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             # free sequence
             if block_trie.enabled:
                 evict_seq.prefix_cache.suppress_match_stats = True
+            self.scheduler.mark_kv_connector_preempted(evict_seq)
             evict_seq.state.free()
             has_free_state = has_runtime_state or state_manager.get_num_free_runtime() > 0
             if not has_free_state:

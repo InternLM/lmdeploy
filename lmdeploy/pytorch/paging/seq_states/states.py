@@ -66,6 +66,16 @@ class StateBase:
         """Finish the state."""
         raise NotImplementedError(f'finish not implemented for state {self.status}')
 
+    def begin_remote_load(self):
+        """Move a waiting request behind an asynchronous KV transfer."""
+        raise NotImplementedError(
+            f'begin_remote_load not implemented for state {self.status}')
+
+    def finish_remote_load(self):
+        """Make a terminal remote-load request schedulable again."""
+        raise NotImplementedError(
+            f'finish_remote_load not implemented for state {self.status}')
+
     def stop(self):
         """Stop the state."""
         self.to_state(StoppedState)
@@ -89,6 +99,29 @@ class WaitingState(StateBase):
 
     def evict(self):
         self.to_state(WaitingState)
+
+    def begin_remote_load(self):
+        """Keep allocated load destinations out of runnable queues."""
+        self.to_state(RemoteLoadingState)
+
+
+class RemoteLoadingState(StateBase):
+    """State for a request whose remote KV suffix is being populated."""
+
+    status = MessageStatus.WAITING_FOR_REMOTE_KVS
+
+    def finish_remote_load(self):
+        """Return to normal admission after success or safe fallback."""
+        self.to_state(WaitingState)
+
+    def evict(self):
+        """In-flight RDMA destinations cannot be evicted."""
+        return None
+
+    def stop(self):
+        """Detach from the transfer but retain its tombstone pin until done."""
+        self.scheduler.cancel_remote_kv_load(self.seq, make_waiting=False)
+        self.to_state(StoppedState)
 
 
 class ReadyState(StateBase):

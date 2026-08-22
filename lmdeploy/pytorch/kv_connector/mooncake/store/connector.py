@@ -1,0 +1,220 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+"""Role adapter for the Mooncake Store scheduler and worker components."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any
+
+from lmdeploy.pytorch.kv_connector.base import (
+    KVCacheValue,
+    KVConnectorBase,
+    KVConnectorMetadata,
+    KVConnectorOutput,
+    KVConnectorRole,
+    RequestId,
+)
+
+from .data import MooncakeStoreConnectorMetadata, validate_kv_head_replica_num
+from .scheduler import MooncakeStoreScheduler
+from .worker import MooncakeStoreWorker
+
+if TYPE_CHECKING:
+    from lmdeploy.pytorch.config import CacheConfig
+    from lmdeploy.pytorch.messages import SchedulerSequence
+    from lmdeploy.pytorch.paging.scheduler import SchedulerOutput
+
+
+class MooncakeStoreConnector(KVConnectorBase):
+    """Delegate connector calls to the component for this process role."""
+
+    def __init__(
+        self,
+        role: KVConnectorRole,
+        cache_config: CacheConfig,
+        *,
+        global_rank: int = 0,
+        tp_rank: int = 0,
+        tp_size: int = 1,
+        kv_head_replica_num: int = 1,
+    ) -> None:
+        super().__init__(role)
+
+        kv_transfer_config = cache_config.kv_transfer_config
+        if kv_transfer_config is None or not kv_transfer_config.is_kv_transfer_instance:
+            raise ValueError('MooncakeStoreConnector requires an enabled kv_transfer_config')
+        if kv_transfer_config.kv_connector != 'MooncakeStoreConnector':
+            raise ValueError(
+                f'MooncakeStoreConnector cannot use kv_connector={kv_transfer_config.kv_connector!r}')
+
+        self._cache_config = cache_config
+        self._kv_transfer_config = kv_transfer_config
+        self.kv_role = kv_transfer_config.kv_role
+        self.kv_head_replica_num = validate_kv_head_replica_num(
+            kv_head_replica_num, tp_size)
+
+        self.connector_scheduler: MooncakeStoreScheduler | None = None
+        self.connector_worker: MooncakeStoreWorker | None = None
+        if role is KVConnectorRole.SCHEDULER:
+            self.connector_scheduler = MooncakeStoreScheduler(cache_config)
+        else:
+            self.connector_worker = MooncakeStoreWorker(
+                cache_config,
+                global_rank=global_rank,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                kv_head_replica_num=self.kv_head_replica_num,
+            )
+
+    def _require_scheduler(self) -> MooncakeStoreScheduler:
+        scheduler = self.connector_scheduler
+        if scheduler is None:
+            raise RuntimeError('scheduler-side method called on a worker MooncakeStoreConnector')
+        return scheduler
+
+    def _require_worker(self) -> MooncakeStoreWorker:
+        worker = self.connector_worker
+        if worker is None:
+            raise RuntimeError('worker-side method called on a scheduler MooncakeStoreConnector')
+        return worker
+
+    @staticmethod
+    def _typed_metadata(
+        connector_metadata: KVConnectorMetadata,
+    ) -> MooncakeStoreConnectorMetadata:
+        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
+            raise TypeError(
+                'connector_metadata must be a MooncakeStoreConnectorMetadata')
+        return connector_metadata
+
+    # Scheduler-side methods.
+
+    def get_num_new_matched_tokens(
+        self,
+        request: SchedulerSequence,
+        num_computed_tokens: int,
+    ) -> tuple[int | None, bool]:
+        return self._require_scheduler().get_num_new_matched_tokens(request, num_computed_tokens)
+
+    def update_state_after_alloc(
+        self,
+        request: SchedulerSequence,
+        block_ids: Sequence[int],
+        num_external_tokens: int,
+        generation: int = 0,
+    ) -> Any | None:
+        return self._require_scheduler().update_state_after_alloc(
+            request,
+            block_ids,
+            num_external_tokens,
+            generation=generation,
+        )
+
+    def mark_connector_meta_dispatched(
+        self,
+        connector_metadata: KVConnectorMetadata,
+    ) -> None:
+        """Tell scheduler bookkeeping that metadata reached the executor."""
+        return self._require_scheduler().mark_connector_meta_dispatched(
+            self._typed_metadata(connector_metadata),
+        )
+
+    def build_connector_meta(self, scheduler_output: SchedulerOutput) -> MooncakeStoreConnectorMetadata:
+        return self._require_scheduler().build_connector_meta(scheduler_output)
+
+    def on_new_request(self, request: SchedulerSequence) -> None:
+        return self._require_scheduler().on_new_request(request)
+
+    def cancel_lookup(self, request_id: int) -> None:
+        return self._require_scheduler().cancel_lookup(request_id)
+
+    def has_pending_kv_lookup_work(self) -> bool:
+        return self._require_scheduler().has_pending_kv_lookup_work()
+
+    def update_connector_output(self, connector_output: Any) -> None:
+        return self._require_scheduler().update_connector_output(connector_output)
+
+    def request_finished(
+        self,
+        request: SchedulerSequence,
+        block_ids: Sequence[int],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        return self._require_scheduler().request_finished(request, block_ids)
+
+    # Worker-side methods.
+
+    def register_kv_caches(self, kv_caches: Mapping[str, KVCacheValue]) -> None:
+        return self._require_worker().register_kv_caches(kv_caches)
+
+    def handle_preemptions(self, connector_metadata: KVConnectorMetadata) -> None:
+        return self._require_worker().handle_preemptions(
+            self._typed_metadata(connector_metadata))
+
+    def _get_worker_step_metadata(
+        self,
+    ) -> tuple[MooncakeStoreWorker, MooncakeStoreConnectorMetadata]:
+        worker = self._require_worker()
+        connector_metadata = self._typed_metadata(self._get_connector_metadata())
+        return worker, connector_metadata
+
+    def has_pending_step_transfers(self) -> bool:
+        if not self.has_connector_metadata():
+            return False
+        worker, connector_metadata = self._get_worker_step_metadata()
+        return worker.has_pending_step_transfers(connector_metadata)
+
+    def has_pending_step_loads(self) -> bool:
+        if not self.has_connector_metadata():
+            return False
+        worker, connector_metadata = self._get_worker_step_metadata()
+        return worker.has_pending_step_loads(connector_metadata)
+
+    def has_pending_step_saves(self) -> bool:
+        if not self.has_connector_metadata():
+            return False
+        worker, connector_metadata = self._get_worker_step_metadata()
+        return worker.has_pending_step_saves(connector_metadata)
+
+    def submit_loads(self) -> None:
+        worker, connector_metadata = self._get_worker_step_metadata()
+        return worker.submit_loads(connector_metadata)
+
+    def submit_saves(
+        self,
+        *,
+        save_ready_event: Any | None = None,
+    ) -> None:
+        worker, connector_metadata = self._get_worker_step_metadata()
+        return worker.submit_saves(
+            connector_metadata,
+            save_ready_event=save_ready_event,
+        )
+
+    def submit_transfers(
+        self,
+        *,
+        save_ready_event: Any | None = None,
+    ) -> None:
+        worker, connector_metadata = self._get_worker_step_metadata()
+        return worker.submit_transfers(
+            connector_metadata,
+            save_ready_event=save_ready_event,
+        )
+
+    def poll_finished(
+        self,
+        acknowledged_sending: set[RequestId] | None = None,
+        acknowledged_recving: set[RequestId] | None = None,
+    ) -> KVConnectorOutput:
+        return self._require_worker().poll_finished(
+            acknowledged_sending,
+            acknowledged_recving,
+        )
+
+    def get_block_ids_with_load_errors(self) -> set[int]:
+        return self._require_worker().get_block_ids_with_load_errors()
+
+    def shutdown(self) -> None:
+        if self.connector_scheduler is not None:
+            return self.connector_scheduler.shutdown()
+        return self._require_worker().shutdown()

@@ -35,7 +35,9 @@ class ChatGLMModelConfigBuilder(AutoModelConfigBuilder):
                           bos_token_id=bos_token_id,
                           eos_token_id=hf_config.eos_token_id,
                           head_dim=head_dim,
-                          vocab_size=hf_config.padded_vocab_size)
+                          vocab_size=hf_config.padded_vocab_size,
+                          num_replicate_key_value_heads=getattr(
+                              hf_config, 'num_replicate_key_value_heads', 1))
         # glm-4v
         if hasattr(hf_config, 'vision_config'):
             cfg.cogvlm_style = True

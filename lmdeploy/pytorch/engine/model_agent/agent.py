@@ -24,6 +24,8 @@ from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+from lmdeploy.pytorch.kv_connector import KVConnectorRole, build_kv_connector
+from lmdeploy.pytorch.kv_connector.base import KVConnectorMetadata, KVConnectorOutput
 from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
@@ -348,6 +350,7 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         self.state_cache_engine = None
+        self.kv_connector = None
         self.profiler: AgentProfiler = None
         try:
             self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
@@ -829,7 +832,7 @@ class BaseModelAgent:
 
         return inputs, next_token_ids, extra_inputs, extra_outputs
 
-    async def _async_step(
+    async def _async_step_impl(
         self,
         inputs: ModelInputs,
         delta: ModelInputsDelta = None,
@@ -908,6 +911,8 @@ class BaseModelAgent:
             return_logits=return_logits or return_ce_loss,
             cache_inputs=cache_inputs,
         )
+
+        self._submit_kv_connector_save()
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output
@@ -991,6 +996,113 @@ class BaseModelAgent:
                 model_metas,
                 extra_outputs,
             )
+
+    async def _async_step(
+        self,
+        inputs: ModelInputs,
+        delta: ModelInputsDelta = None,
+        swap_in_map: dict = None,
+        swap_out_map: dict = None,
+        sampling_inputs: SamplingInputs = None,
+        stopping_criteria: StoppingCriteria = None,
+        return_logits: bool = False,
+        return_routed_experts: bool = False,
+        return_ce_loss: bool = False,
+        extra_inputs: ExtraInputs = None,
+        cache_inputs: CacheCheckpointInputs | None = None,
+        kv_connector_metadata: Any | None = None,
+    ):
+        """Run one model step with worker-local connector metadata bound."""
+        connector = getattr(self, 'kv_connector', None)
+        if connector is None or kv_connector_metadata is None:
+            return await self._async_step_impl(
+                inputs=inputs,
+                delta=delta,
+                swap_in_map=swap_in_map,
+                swap_out_map=swap_out_map,
+                sampling_inputs=sampling_inputs,
+                stopping_criteria=stopping_criteria,
+                return_logits=return_logits,
+                return_routed_experts=return_routed_experts,
+                return_ce_loss=return_ce_loss,
+                extra_inputs=extra_inputs,
+                cache_inputs=cache_inputs,
+            )
+
+        connector.bind_connector_metadata(kv_connector_metadata)
+        try:
+            connector.handle_preemptions(kv_connector_metadata)
+            self._submit_kv_connector_loads()
+            return await self._async_step_impl(
+                inputs=inputs,
+                delta=delta,
+                swap_in_map=swap_in_map,
+                swap_out_map=swap_out_map,
+                sampling_inputs=sampling_inputs,
+                stopping_criteria=stopping_criteria,
+                return_logits=return_logits,
+                return_routed_experts=return_routed_experts,
+                return_ce_loss=return_ce_loss,
+                extra_inputs=extra_inputs,
+                cache_inputs=cache_inputs,
+            )
+        finally:
+            connector.clear_connector_metadata()
+
+    def poll_kv_connector(
+        self,
+        connector_metadata: KVConnectorMetadata | None = None,
+        acknowledged_sending: set[int] | None = None,
+        acknowledged_recving: set[int] | None = None,
+    ) -> KVConnectorOutput:
+        """Submit connector-only loads and poll transfer completion.
+
+        Progress metadata follows the same bind/handle/clear lifecycle as a normal model step, but intentionally submits
+        no saves because there is no preceding model forward from which to record a readiness event.
+        """
+        connector = getattr(self, 'kv_connector', None)
+        if connector is None:
+            return KVConnectorOutput()
+
+        if connector_metadata is not None:
+            connector.bind_connector_metadata(connector_metadata)
+            try:
+                connector.handle_preemptions(connector_metadata)
+                self._submit_kv_connector_loads()
+            finally:
+                connector.clear_connector_metadata()
+
+        return connector.poll_finished(
+            acknowledged_sending or set(),
+            acknowledged_recving or set(),
+        )
+
+    def _submit_kv_connector_loads(self) -> None:
+        """Submit this step's loads before any model forward is queued."""
+        connector = getattr(self, 'kv_connector', None)
+        if connector is None:
+            return
+        has_loads = getattr(connector, 'has_pending_step_loads', None)
+        if has_loads is None or not has_loads():
+            return
+        connector.submit_loads()
+
+    def _submit_kv_connector_save(self) -> None:
+        """Submit this step's save jobs after its KV writes are queued."""
+        connector = getattr(self, 'kv_connector', None)
+        if connector is None:
+            return
+        has_saves = getattr(connector, 'has_pending_step_saves', None)
+        if has_saves is None:
+            has_saves = connector.has_pending_step_transfers
+        if not has_saves():
+            return
+        ready_event = torch.cuda.Event()
+        ready_event.record(self.stream)
+        submit_saves = getattr(connector, 'submit_saves', None)
+        if submit_saves is None:
+            submit_saves = connector.submit_transfers
+        submit_saves(save_ready_event=ready_event)
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""
@@ -1229,25 +1341,67 @@ class BaseModelAgent:
             if self.memdecode_agent is not None:
                 self.memdecode_agent.build_graph_runner()
 
+    def _shutdown_kv_connector(self):
+        """Shutdown the connector before releasing its registered caches."""
+        connector = getattr(self, 'kv_connector', None)
+        if connector is None:
+            return
+        connector.shutdown()
+        self.kv_connector = None
+
     def build_cache_engine(self):
         """Build cache engine."""
         with self.all_context():
+            self._shutdown_kv_connector()
             dist_ctx = get_dist_manager().current_context()
             dist_cfg = self.dist_config
             tp = dist_cfg.attn_tp
+            tp_rank = dist_ctx.attn_tp_group.rank
 
             self.cache_engine = CacheEngine(self.cache_config,
                                             self.model_config,
                                             rank=self.rank,
-                                            tp_rank=dist_ctx.attn_tp_group.rank,
+                                            tp_rank=tp_rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
             self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
 
-            self.spec_agent.build_cache_engine(self.cache_stream)
-            if self.memdecode_agent is not None:
-                self.memdecode_agent.set_cache_config(self.cache_config)
-                self.memdecode_agent.build_cache_engine(self.cache_stream)
+            try:
+                try:
+                    self.kv_connector = build_kv_connector(
+                        KVConnectorRole.WORKER,
+                        self.cache_config,
+                        global_rank=self.rank,
+                        tp_rank=tp_rank,
+                        tp_size=tp,
+                        kv_head_replica_num=getattr(
+                            self.model_config,
+                            'num_replicate_key_value_heads',
+                            1,
+                        ),
+                    )
+                    if self.kv_connector is not None:
+                        self.kv_connector.register_kv_caches(self.cache_engine.connector_kv_caches)
+                except Exception:
+                    logger.exception(
+                        'Failed to initialize KV connector: global_rank=%d tp_rank=%d tp_size=%d',
+                        self.rank,
+                        tp_rank,
+                        tp,
+                    )
+                    raise
+
+                self.spec_agent.build_cache_engine(self.cache_stream)
+                if self.memdecode_agent is not None:
+                    self.memdecode_agent.set_cache_config(self.cache_config)
+                    self.memdecode_agent.build_cache_engine(self.cache_stream)
+            except Exception:
+                try:
+                    self._shutdown_kv_connector()
+                finally:
+                    self.cache_engine = None
+                    self.state_cache_engine = None
+                raise
 
     def _forward_impl(self, inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None = None):
         output = model_forward(
@@ -1511,6 +1665,10 @@ class BaseModelAgent:
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
         device = 'cpu' if level == 1 else 'meta'
+        self._drain_queues()
+        torch.cuda.synchronize()
+        self._release_completed_h2d_transfers()
+        self._shutdown_kv_connector()
         self.cache_engine = None
         self.state_cache_engine = None
         self.reset_graph_runner()
@@ -1521,9 +1679,7 @@ class BaseModelAgent:
             self.spec_agent.cache_engine = None
             spec_model.to(device=device, non_blocking=True)
 
-        self._drain_queues()
         torch.cuda.synchronize()
-        self._release_completed_h2d_transfers()
         self.reset_runtime_state()
         # force clean _update_params_ipc tensor and event after all gpu jobs done
         self._update_params_ipc_tensor = None
@@ -1566,6 +1722,7 @@ class BaseModelAgent:
 
     def release(self):
         """release."""
+        self._shutdown_kv_connector()
         self.reset_graph_runner()
         if self.memdecode_agent is not None:
             self.memdecode_agent.release()

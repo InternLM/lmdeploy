@@ -6,7 +6,7 @@ from typing import Any
 
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, QuantPolicy
+from lmdeploy.messages import KVTransferConfig, PytorchEngineConfig, QuantPolicy
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
 from lmdeploy.utils import get_logger, is_bf16_supported
@@ -131,6 +131,7 @@ class CacheConfig:
     # For PD Disaggregation
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
+    kv_transfer_config: KVTransferConfig | None = None
 
     def __post_init__(self):
         """Post init."""
@@ -443,6 +444,12 @@ class ModelConfig:
 
     # update cache config
     update_cache_config_func: Any = None
+
+    # Number of contiguous TP ranks that own the same logical KV-head shard.
+    # Configuration builders populate this before num_key_value_heads is
+    # expanded to the TP size, so external KV connectors do not need to infer
+    # replication from cache tensor shapes.
+    num_replicate_key_value_heads: int = 1
 
     @property
     def use_mla_fp8_cache(self):

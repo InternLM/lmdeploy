@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import torch
 
+import lmdeploy.pytorch.engine.engine_loop as engine_loop_module
 import lmdeploy.pytorch.engine.inputs_maker as inputs_maker_module
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
@@ -18,6 +19,7 @@ from lmdeploy.pytorch.engine.inputs_maker import (
     _make_state_prefix_cache_restore_plan,
     _make_state_prefix_cache_save_plan,
 )
+from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput
 from lmdeploy.pytorch.messages import MessageStatus, StateCheckpointRestore, StateCheckpointSaveReservation
 
 
@@ -119,6 +121,8 @@ def test_make_kv_prefix_cache_copy_plan_rejects_invalid_relationships(logical_pa
 
 class _FakeScheduler:
 
+    kv_connector = None
+
     def __init__(self, running, waiting=None, num_ready=0, num_running=0):
         self.running = running
         self.waiting = waiting or []
@@ -148,6 +152,9 @@ class _FakeScheduler:
 
     def num_running(self):
         return self._num_running
+
+    def build_kv_connector_metadata(self, running, token_lens=None):
+        return None
 
 
 class _FakeEngineStrategy:
@@ -221,7 +228,11 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
     state_checkpoints = _StateCheckpoints()
     block_trie = SimpleNamespace(enabled=True, state_checkpoints=state_checkpoints)
     loop = EngineLoop.__new__(EngineLoop)
-    loop.scheduler = SimpleNamespace(block_trie=block_trie, collect_migration_done=lambda: None)
+    loop.scheduler = SimpleNamespace(
+        block_trie=block_trie,
+        collect_migration_done=lambda: None,
+        has_pending_kv_transfer_work=lambda: False,
+    )
     loop.inputs_maker = _InputsMaker(state_checkpoints)
     loop.executor = _Executor(state_checkpoints)
     loop._sleep_requested = False
@@ -278,7 +289,11 @@ def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save()
     state_checkpoints = _StateCheckpoints()
     block_trie = SimpleNamespace(enabled=True, state_checkpoints=state_checkpoints)
     loop = EngineLoop.__new__(EngineLoop)
-    loop.scheduler = SimpleNamespace(block_trie=block_trie, collect_migration_done=lambda: None)
+    loop.scheduler = SimpleNamespace(
+        block_trie=block_trie,
+        collect_migration_done=lambda: None,
+        has_pending_kv_transfer_work=lambda: False,
+    )
     loop.inputs_maker = _InputsMaker()
     loop.executor = _Executor()
     loop._sleep_requested = True
@@ -308,6 +323,9 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
         def has_unfinished(self):
             return False
 
+        def has_pending_kv_connector_work(self):
+            return False
+
         def collect_migration_done(self):
             events.append('collect_migration_done')
 
@@ -330,6 +348,384 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
 
     assert result == ('forward_inputs', ['long-seq'])
     assert events == ['collect_migration_done', 'send_next_inputs']
+
+
+def test_engine_loop_treats_pending_kv_connector_work_as_runnable_and_polls():
+    events = []
+    metadata = object()
+
+    class _Scheduler:
+
+        kv_connector = object()
+
+        def has_unfinished(self):
+            return False
+
+        def has_pending_kv_transfer_work(self):
+            return True
+
+        def has_pending_kv_lookup_work(self):
+            return False
+
+        def has_pending_kv_connector_work(self):
+            return (
+                self.has_pending_kv_transfer_work()
+                or self.has_pending_kv_lookup_work()
+            )
+
+        def build_kv_connector_progress_metadata(self):
+            events.append('build')
+            return metadata
+
+        def mark_kv_connector_metadata_dispatched(self, value):
+            events.append(('mark', value))
+
+        def rollback_kv_connector_metadata(self, value):
+            events.append(('rollback', value))
+
+        def update_connector_output(self, completed):
+            events.append(('update', completed))
+
+    class _Executor:
+
+        async def poll_kv_connector(self, value):
+            events.append(('poll', value))
+            return KVConnectorOutput(completed_save_ids={17})
+
+    scheduler = _Scheduler()
+    runable = RunableEventAsync(scheduler)
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = scheduler
+    loop.executor = _Executor()
+
+    assert runable.has_unfinished()
+    completed = asyncio.run(loop._poll_kv_connector())
+
+    assert completed.completed_save_ids == {17}
+    assert events == [
+        'build',
+        ('poll', metadata),
+        ('mark', metadata),
+        ('update', completed),
+    ]
+
+
+def test_engine_loop_does_not_poll_connector_without_pending_work():
+    class _Scheduler:
+
+        kv_connector = object()
+
+        def has_pending_kv_connector_work(self):
+            return False
+
+        def has_pending_kv_transfer_work(self):
+            return False
+
+    class _Executor:
+
+        async def poll_kv_connector(self, metadata=None):
+            raise AssertionError('idle connector must not add a per-token RPC')
+
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = _Scheduler()
+    loop.executor = _Executor()
+
+    assert not asyncio.run(loop._poll_kv_connector())
+
+
+def test_engine_loop_lookup_only_is_runnable_without_worker_progress_rpc():
+
+    class _Scheduler:
+
+        def has_unfinished(self):
+            return False
+
+        def has_pending_kv_transfer_work(self):
+            return False
+
+        def has_pending_kv_lookup_work(self):
+            return True
+
+        def has_pending_kv_connector_work(self):
+            return True
+
+    class _Executor:
+
+        async def poll_kv_connector(self, metadata=None):
+            raise AssertionError('scheduler-side lookup must not add a worker RPC')
+
+    scheduler = _Scheduler()
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = scheduler
+    loop.executor = _Executor()
+
+    assert RunableEventAsync(scheduler).has_unfinished()
+    assert not asyncio.run(loop._poll_kv_connector())
+
+
+def test_engine_loop_progress_rpc_failure_does_not_mark_metadata_dispatched():
+    events = []
+    metadata = object()
+
+    class _Scheduler:
+
+        def has_pending_kv_transfer_work(self):
+            return True
+
+        def build_kv_connector_progress_metadata(self):
+            return metadata
+
+        def mark_kv_connector_metadata_dispatched(self, value):
+            events.append(('mark', value))
+
+        def rollback_kv_connector_metadata(self, value):
+            events.append(('rollback', value))
+
+    class _Executor:
+
+        async def poll_kv_connector(self, value):
+            assert value is metadata
+            raise RuntimeError('collective failed')
+
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = _Scheduler()
+    loop.executor = _Executor()
+
+    with pytest.raises(RuntimeError, match='collective failed'):
+        asyncio.run(loop._poll_kv_connector())
+    assert events == [('rollback', metadata)]
+
+
+def test_engine_loop_polls_final_connector_ack_without_scheduler_transfer():
+    events = []
+
+    class _Scheduler:
+
+        def has_pending_kv_transfer_work(self):
+            return False
+
+    class _Executor:
+
+        def __init__(self):
+            self.pending_ack = True
+
+        def has_pending_kv_connector_ack(self):
+            return self.pending_ack
+
+        async def poll_kv_connector(self, metadata):
+            events.append(metadata)
+            self.pending_ack = False
+            return KVConnectorOutput()
+
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = _Scheduler()
+    loop.executor = _Executor()
+
+    assert not asyncio.run(loop._poll_kv_connector())
+    assert events == [None]
+    assert not loop._has_pending_kv_connector_ack()
+
+
+def test_inputs_maker_marks_connector_metadata_only_after_forward_dispatch():
+    events = []
+    metadata = object()
+    inputs = object()
+    payload = {
+        'running': ['seq'],
+        'inputs': inputs,
+        'delta': None,
+        'kv_connector_metadata': metadata,
+    }
+
+    class _Executor:
+
+        async def forward_async(self, forward_inputs):
+            events.append(('forward', forward_inputs['kv_connector_metadata']))
+
+    class _Scheduler:
+
+        def mark_kv_connector_metadata_dispatched(self, value):
+            events.append(('mark', value))
+
+        def rollback_kv_connector_metadata(self, value):
+            events.append(('rollback', value))
+
+        def tick(self):
+            events.append('tick')
+
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.executor = _Executor()
+    maker.scheduler = _Scheduler()
+    maker._make_forward_inputs = lambda prefill, enable_empty: dict(payload)
+    maker._forward_kind = lambda model_inputs, delta: 'prefill'
+
+    _, running = asyncio.run(maker._send_next_inputs_impl(prefill=True))
+
+    assert running == ['seq']
+    assert events == [
+        ('forward', metadata),
+        ('mark', metadata),
+        'tick',
+    ]
+
+
+def test_inputs_maker_rolls_back_metadata_when_forward_dispatch_fails():
+    events = []
+    metadata = object()
+    payload = {
+        'running': ['seq'],
+        'inputs': object(),
+        'delta': None,
+        'kv_connector_metadata': metadata,
+    }
+
+    class _Executor:
+
+        async def forward_async(self, forward_inputs):
+            raise RuntimeError('dispatch failed')
+
+    class _Scheduler:
+
+        def mark_kv_connector_metadata_dispatched(self, value):
+            events.append(('mark', value))
+
+        def rollback_kv_connector_metadata(self, value):
+            events.append(('rollback', value))
+
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.executor = _Executor()
+    maker.scheduler = _Scheduler()
+    maker._make_forward_inputs = lambda prefill, enable_empty: dict(payload)
+
+    with pytest.raises(RuntimeError, match='dispatch failed'):
+        asyncio.run(maker._send_next_inputs_impl(prefill=True))
+    assert events == [('rollback', metadata)]
+
+
+def test_engine_loop_sleep_drains_prefetched_forward_and_connector_pins():
+    events = []
+
+    class _Scheduler:
+
+        def __init__(self):
+            self.pending = True
+
+        def activate_seqs(self, running):
+            events.append(('activate', running))
+
+        def has_pending_kv_connector_work(self):
+            return self.pending
+
+        def has_pending_kv_transfer_work(self):
+            return self.pending
+
+    class _InputsMaker:
+
+        def deactivate_evict_seqs(self):
+            events.append('deactivate')
+
+    scheduler = _Scheduler()
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = scheduler
+    loop.inputs_maker = _InputsMaker()
+
+    async def _get_outputs(running, forward_inputs):
+        events.append(('forward', running, forward_inputs))
+        return None, None
+
+    async def _poll():
+        events.append('poll')
+        scheduler.pending = False
+        return {31}
+
+    loop._main_loop_get_outputs = _get_outputs
+    loop._poll_kv_connector = _poll
+
+    forward_payload = {'inputs': object()}
+    result = asyncio.run(loop._drain_for_sleep(forward_payload, ['seq']))
+
+    assert result == (None, None)
+    assert events == [
+        ('activate', ['seq']),
+        ('forward', ['seq'], forward_payload),
+        'deactivate',
+        'poll',
+    ]
+
+
+def test_engine_loop_idle_polls_until_kv_connector_releases_pin(monkeypatch):
+    events = []
+
+    class _Scheduler:
+
+        kv_connector = object()
+
+        def __init__(self):
+            self.pending = True
+
+        def has_unfinished(self):
+            return False
+
+        def has_pending_kv_connector_work(self):
+            return self.pending
+
+        def has_pending_kv_transfer_work(self):
+            return self.pending
+
+        def has_pending_kv_lookup_work(self):
+            return False
+
+        def build_kv_connector_progress_metadata(self):
+            return None
+
+        def collect_migration_done(self):
+            events.append('collect')
+
+        def update_connector_output(self, completed):
+            events.append(('update', completed))
+            self.pending = False
+            loop.stop_event.set()
+
+    class _InputsMaker:
+
+        async def send_next_inputs(self):
+            events.append('no-forward')
+            return None, None
+
+    class _Executor:
+
+        def __init__(self):
+            self.poll_count = 0
+
+        async def poll_kv_connector(self, metadata=None):
+            self.poll_count += 1
+            events.append(('poll', self.poll_count))
+            return {23} if self.poll_count == 2 else set()
+
+    scheduler = _Scheduler()
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = scheduler
+    loop.inputs_maker = _InputsMaker()
+    loop.executor = _Executor()
+    loop.has_runable_event = RunableEventAsync(scheduler)
+    loop.stop_event = asyncio.Event()
+    loop._sleep_requested = False
+    warnings = []
+    monkeypatch.setattr(engine_loop_module.logger, 'warning', warnings.append)
+
+    asyncio.run(asyncio.wait_for(loop.main_loop(), timeout=1.0))
+
+    assert loop.executor.poll_count == 2
+    assert events == [
+        'collect',
+        'no-forward',
+        ('poll', 1),
+        'collect',
+        'no-forward',
+        ('poll', 2),
+        ('update', {23}),
+    ]
+    assert warnings == []
 
 
 def test_engine_loop_reset_runtime_state_delegates_to_inputs_maker():

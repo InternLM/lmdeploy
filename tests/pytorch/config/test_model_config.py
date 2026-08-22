@@ -80,6 +80,67 @@ def test_get_num_qkv_head_by_tp_replicated_kv_heads():
     assert model_config.get_num_qkv_head_by_tp() == (4, 1)
 
 
+@pytest.mark.parametrize(
+    ('num_key_value_heads', 'expected_replica_num'),
+    [
+        (1, 8),
+        (2, 4),
+        (4, 2),
+        (8, 1),
+        (16, 1),
+    ],
+)
+def test_from_hf_config_preserves_kv_head_replica_num(
+    num_key_value_heads,
+    expected_replica_num,
+):
+    hf_config = SimpleNamespace(
+        architectures=['OtherForCausalLM'],
+        bos_token_id=1,
+        eos_token_id=2,
+        hidden_size=4096,
+        model_type='other',
+        num_attention_heads=32,
+        num_hidden_layers=1,
+        num_key_value_heads=num_key_value_heads,
+        vocab_size=32000,
+    )
+
+    model_config = ModelConfig.from_hf_config(
+        hf_config,
+        dist_config=DistConfig(tp=8),
+    )
+
+    assert model_config.num_replicate_key_value_heads == expected_replica_num
+
+
+def test_mla_model_config_preserves_full_tp_replica_num(monkeypatch):
+    from lmdeploy.pytorch.configurations import deepseek_v2
+
+    monkeypatch.setattr(deepseek_v2, 'flash_mla_available', lambda: True)
+    hf_config = SimpleNamespace(
+        architectures=['DeepseekV2ForCausalLM'],
+        bos_token_id=1,
+        eos_token_id=2,
+        hidden_size=4096,
+        kv_lora_rank=512,
+        model_type='deepseek_v2',
+        num_attention_heads=32,
+        num_hidden_layers=2,
+        q_lora_rank=1536,
+        qk_rope_head_dim=64,
+        vocab_size=32000,
+    )
+
+    model_config = deepseek_v2.DeepseekV2ModelConfigBuilder.build(
+        hf_config,
+        tp=8,
+    )
+
+    assert model_config.num_key_value_heads == 8
+    assert model_config.num_replicate_key_value_heads == 8
+
+
 def test_get_num_qkv_head_by_tp_requires_divisible_heads():
     model_config = _make_model_config(num_attention_heads=30, num_key_value_heads=8, dist_config=DistConfig(tp=4))
 

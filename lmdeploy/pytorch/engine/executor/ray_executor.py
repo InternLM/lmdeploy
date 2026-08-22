@@ -16,6 +16,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, Misc
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.kv_connector.base import KVConnectorMetadata, KVConnectorOutput
 from lmdeploy.pytorch.ray import RayContext, get_device_str
 from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.utils import get_logger, try_import_deeplink
@@ -25,6 +26,9 @@ from .base_worker import WorkerWrapperBase
 from .dist_utils import find_available_port
 
 logger = get_logger('lmdeploy')
+
+_DEFAULT_WORKER_RELEASE_TIMEOUT = 5.0
+_KV_CONNECTOR_WORKER_RELEASE_TIMEOUT = 45.0
 
 
 def _get_master_addr():
@@ -195,6 +199,27 @@ class RayWorkerWrapper(WorkerWrapperBase):
 
 class RayExecutor(ExecutorBase):
     """Ray executor."""
+
+    @staticmethod
+    def _get_worker_release_timeout(cache_config: CacheConfig | None) -> float:
+        """Allow external buffer registrations to be released before killing
+        workers."""
+        if cache_config is not None:
+            transfer_config = cache_config.kv_transfer_config
+            if transfer_config is not None and transfer_config.is_kv_transfer_instance:
+                timeout = transfer_config.kv_connector_extra_config.get(
+                    'worker_release_timeout',
+                    _KV_CONNECTOR_WORKER_RELEASE_TIMEOUT,
+                )
+                if (
+                    isinstance(timeout, bool)
+                    or not isinstance(timeout, (int, float))
+                    or timeout <= 0
+                ):
+                    raise ValueError(
+                        'worker_release_timeout must be a positive number')
+                return float(timeout)
+        return _DEFAULT_WORKER_RELEASE_TIMEOUT
 
     def __init__(
         self,
@@ -451,14 +476,15 @@ class RayExecutor(ExecutorBase):
             ray.timeline(_envs.ray_timeline_output_path)
 
         if self.dp == 1:
+            release_timeout = self._get_worker_release_timeout(self.cache_config)
             try:
-                self.collective_rpc('release', timeout=5.0)
+                self.collective_rpc('release', timeout=release_timeout)
                 logger.debug('RayExecutor workers released.')
             except ray.exceptions.ActorDiedError:
                 logger.info('RayExecutor worker has been killed before finish release.')
                 [ray.kill(worker) for worker in self.workers]
             except ray.exceptions.GetTimeoutError:
-                logger.info('Ray release timeout, killing workers')
+                logger.info('Ray release timeout after %.1f seconds, killing workers.', release_timeout)
                 [ray.kill(worker) for worker in self.workers]
         else:
             [ray.kill(worker) for worker in self.workers]
@@ -510,6 +536,18 @@ class RayExecutor(ExecutorBase):
         ret = await self.workers[0].get_outputs.remote()
         ret = ret.to_tensor()
         return ret
+
+    async def poll_kv_connector(
+        self,
+        connector_metadata: KVConnectorMetadata | None = None,
+    ) -> KVConnectorOutput:
+        """Submit loads and aggregate completions from every TP worker."""
+        acknowledged_sending, acknowledged_recving = self._kv_connector_poll_acknowledgements()
+        outputs = await self.collective_rpc_async(
+            'poll_kv_connector',
+            (connector_metadata, acknowledged_sending, acknowledged_recving),
+        )
+        return self._aggregate_kv_connector_outputs(outputs)
 
     @contextlib.contextmanager
     def remote_log(self, msg: str):

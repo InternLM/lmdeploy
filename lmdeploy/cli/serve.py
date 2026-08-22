@@ -180,6 +180,9 @@ class SubCliServe:
         # spec decode
         ArgumentHelper.add_spec_group(parser)
 
+        # kv transfer
+        ArgumentHelper.kv_transfer_config(pt_group)
+
     @staticmethod
     def add_parser_proxy():
         """Add parser for proxy server command."""
@@ -232,6 +235,11 @@ class SubCliServe:
             # set auto backend mode
             backend = autoget_backend(args.model_path, trust_remote_code=args.trust_remote_code)
 
+        kv_transfer_config = getattr(args, 'kv_transfer_config', None)
+        if kv_transfer_config is not None and backend != 'pytorch':
+            raise ValueError('--kv-transfer-config is supported only by the PyTorch engine; '
+                             'set --backend pytorch to enable a KV connector')
+
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
             adapters = get_lora_adapters(args.adapters)
@@ -269,6 +277,7 @@ class SubCliServe:
                 dllm_confidence_threshold=args.dllm_confidence_threshold,
                 enable_return_routed_experts=args.enable_return_routed_experts,
                 distributed_executor_backend=args.distributed_executor_backend,
+                kv_transfer_config=kv_transfer_config,
             )
         else:
             from lmdeploy.messages import TurbomindEngineConfig
