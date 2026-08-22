@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from copy import copy
+
 import torch
 
 from lmdeploy.utils import get_logger
@@ -17,6 +19,15 @@ logger = get_logger('lmdeploy')
 class Eagle3(DeepseekMTP):
 
     def build_model(self, empty_init: bool, target_model: torch.nn.Module = None, build_model_ctx=None):
+        hf_config = self.specdecode_config.model_config.hf_config
+        architectures = getattr(hf_config, 'architectures', ()) or ()
+        if ('Eagle3DeepseekV2ForCausalLM' in architectures
+                and build_model_ctx is not None):
+            # The target build context is mutable. Kimi's BF16 draft needs its
+            # own quantization state without changing the target model.
+            build_model_ctx = copy(build_model_ctx)
+            build_model_ctx.quant_config = (
+                self.specdecode_config.model_config.quant_config)
         super().build_model(empty_init, target_model=target_model, build_model_ctx=build_model_ctx)
         self.draft_id_to_target_id = self.model.draft_id_to_target_id
         self._init_bitmask_translate_constants()
@@ -100,16 +111,20 @@ class Eagle3(DeepseekMTP):
         """Get outputs."""
         hidden_states = model_outputs['hidden_states']
         hidden_states_prenorm = model_outputs['hidden_states_prenorm']
+        draft_aux_hidden_states = model_outputs.get(
+            'draft_aux_hidden_states', hidden_states_prenorm)
         model_metas = model_outputs['model_metas']
         if extra_inputs is not None and extra_inputs.last_token_indices is not None:
             # for long input
             if (not model_inputs.is_decoding) and model_inputs.seq_length.size(0) == 1:
                 hidden_states = hidden_states[:, -1:]
                 hidden_states_prenorm = hidden_states_prenorm[:, -1:]
+                draft_aux_hidden_states = draft_aux_hidden_states[:, -1:]
             else:
                 last_token_loc = extra_inputs.last_token_indices
                 hidden_states = hidden_states[:, last_token_loc]
                 hidden_states_prenorm = hidden_states_prenorm[:, last_token_loc]
+                draft_aux_hidden_states = draft_aux_hidden_states[:, last_token_loc]
 
         logits = self.get_logits(hidden_states)[0]
 
@@ -123,4 +138,4 @@ class Eagle3(DeepseekMTP):
 
         await self.guided_helper.accept_draft_tokens(draft_token_ids, guided_processors)
 
-        return draft_token_ids, model_metas, hidden_states_prenorm
+        return draft_token_ids, model_metas, draft_aux_hidden_states

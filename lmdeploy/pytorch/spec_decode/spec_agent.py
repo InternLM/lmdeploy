@@ -186,6 +186,40 @@ class SpecModelAgent(BaseSpecModelAgent):
         sessions."""
         self._prev_chunk_last.clear()
 
+    @staticmethod
+    def _shift_packed_prefill_inputs(input_tensor: torch.Tensor,
+                                     seq_length: torch.Tensor,
+                                     next_token_ids: torch.Tensor,
+                                     replacement_indices: torch.Tensor | None =
+                                     None) -> torch.Tensor:
+        """Shift each packed request independently for EAGLE prefill.
+
+        Target states at token ``t`` are paired with the input for token
+        ``t + 1``. Packed requests must be shifted within their own boundaries.
+        During verification, ``replacement_indices`` identifies the row that
+        receives each request's replacement or bonus token.
+        """
+        if input_tensor.dim() not in (2, 3):
+            raise ValueError(
+                f'packed prefill shift expects [1, T] or [1, T, H], got '
+                f'{tuple(input_tensor.shape)}')
+        shifted = input_tensor.clone()
+        if replacement_indices is not None:
+            if replacement_indices.numel() != seq_length.numel():
+                raise ValueError(
+                    'replacement_indices must contain one entry per packed '
+                    'request')
+        last_indices = seq_length.cumsum(0) - 1
+        shifted[:, :-1] = input_tensor[:, 1:]
+        # Restore request boundaries before writing replacement tokens. This
+        # matters when verification replaces a position before the true end.
+        shifted[:, last_indices] = input_tensor[:, last_indices]
+        write_indices = (
+            last_indices
+            if replacement_indices is None else replacement_indices)
+        shifted[:, write_indices] = next_token_ids
+        return shifted
+
     @contextmanager
     def draft_context(self):
         """Draft-local dist context."""
@@ -268,16 +302,23 @@ class SpecModelAgent(BaseSpecModelAgent):
             # chunks. Keep pending chunk carry here; a new first chunk clears it
             # explicitly, and the final chunk consumes it.
             # Case A: non-chunked — shift left by 1, place next_token at end
-            input_ids = model_inputs.input_ids.clone()
-            input_ids[:, :-1] = model_inputs.input_ids[:, 1:]
-            input_ids[:, last_token_indices] = next_token_ids
+            input_ids = self._shift_packed_prefill_inputs(
+                model_inputs.input_ids,
+                model_inputs.seq_length,
+                next_token_ids,
+                replacement_indices=(
+                    last_token_indices if model_inputs.is_decoding else None),
+            )
 
             if target_inputs_embeds is not None:
-                input_embeds = target_inputs_embeds.clone()
-                input_embeds[:, :-1, :] = target_inputs_embeds[:, 1:, :]
-                next_token_embeds = self.proposer.embed_input_ids(next_token_ids)
-                input_embeds[:, last_token_indices, :] = next_token_embeds
-                target_inputs_embeds = input_embeds
+                target_inputs_embeds = self._shift_packed_prefill_inputs(
+                    target_inputs_embeds,
+                    model_inputs.seq_length,
+                    self.proposer.embed_input_ids(next_token_ids),
+                    replacement_indices=(
+                        last_token_indices
+                        if model_inputs.is_decoding else None),
+                )
 
         else:
             if model_inputs.is_first_chunk:
