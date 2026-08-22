@@ -296,6 +296,12 @@ template<typename T>
 __device__ inline T from_float(float x);
 
 template<>
+__device__ inline float from_float<float>(float x)
+{
+    return x;
+}
+
+template<>
 __device__ inline half from_float<half>(float x)
 {
     return __float2half(x);
@@ -310,8 +316,14 @@ __device__ inline __nv_bfloat16 from_float<__nv_bfloat16>(float x)
 #endif
 
 template<typename T>
-__global__ void fastPosEmbedIdxWeightKernel(
-    int* idx_out, T* weight_out, const int* grid_thws, const int* grid_offsets, int num_grids, int total_n, int G)
+__global__ void fastPosEmbedIdxWeightKernel(int*       idx_out,
+                                            T*         weight_out,
+                                            const int* grid_thws,
+                                            const int* grid_offsets,
+                                            int        num_grids,
+                                            int        total_n,
+                                            int        G,
+                                            bool       zero_padded)
 {
     const int pos = blockIdx.x * blockDim.x + threadIdx.x;
     if (pos >= total_n) {
@@ -333,25 +345,32 @@ __global__ void fastPosEmbedIdxWeightKernel(
     //   out[i>=hw]= end   - step * (n - 1 - i)
     // For n == 1 the single element is `start` (== 0 here); the formula
     // below collapses to 0 since hw_h == 0 is bypassed via grid_h > 1.
-    const float end    = (float)(G - 1);
-    const float step_h = (grid_h > 1) ? end / (float)(grid_h - 1) : 0.f;
-    const float step_w = (grid_w > 1) ? end / (float)(grid_w - 1) : 0.f;
+    const float end = (float)(G - 1);
+    float       h_val, w_val;
+    if (zero_padded) {
+        h_val = ((float)i + .5f) * ((float)G / grid_h) - .5f;
+        w_val = ((float)j + .5f) * ((float)G / grid_w) - .5f;
+    }
+    else {
+        const float step_h = (grid_h > 1) ? end / (float)(grid_h - 1) : 0.f;
+        const float step_w = (grid_w > 1) ? end / (float)(grid_w - 1) : 0.f;
+        const int   hw_h   = grid_h / 2;
+        const int   hw_w   = grid_w / 2;
+        h_val = (grid_h == 1) ? 0.f : ((i < hw_h) ? step_h * (float)i : end - step_h * (float)(grid_h - 1 - i));
+        w_val = (grid_w == 1) ? 0.f : ((j < hw_w) ? step_w * (float)j : end - step_w * (float)(grid_w - 1 - j));
+    }
 
-    const int hw_h = grid_h / 2;
-    const int hw_w = grid_w / 2;
+    const int h_floor_raw = (int)floorf(h_val);
+    const int w_floor_raw = (int)floorf(w_val);
+    const int h_ceil_raw  = h_floor_raw + 1;
+    const int w_ceil_raw  = w_floor_raw + 1;
+    const int h_floor     = max(0, min(h_floor_raw, G - 1));
+    const int w_floor     = max(0, min(w_floor_raw, G - 1));
+    const int h_ceil      = max(0, min(h_ceil_raw, G - 1));
+    const int w_ceil      = max(0, min(w_ceil_raw, G - 1));
 
-    const float h_val = (grid_h == 1) ? 0.f : ((i < hw_h) ? step_h * (float)i : end - step_h * (float)(grid_h - 1 - i));
-    const float w_val = (grid_w == 1) ? 0.f : ((j < hw_w) ? step_w * (float)j : end - step_w * (float)(grid_w - 1 - j));
-
-    // torch.Tensor.int() truncates toward zero; h_val, w_val are non-negative
-    // and bounded above by G-1, so (int) cast is in [0, G-1].
-    const int h_floor = (int)h_val;
-    const int w_floor = (int)w_val;
-    const int h_ceil  = min(h_floor + 1, G - 1);
-    const int w_ceil  = min(w_floor + 1, G - 1);
-
-    const float dh = h_val - (float)h_floor;
-    const float dw = w_val - (float)w_floor;
+    const float dh = h_val - (float)h_floor_raw;
+    const float dw = w_val - (float)w_floor_raw;
 
     const int base_h      = h_floor * G;
     const int base_h_ceil = h_ceil * G;
@@ -363,10 +382,14 @@ __global__ void fastPosEmbedIdxWeightKernel(
     idx[3] = base_h_ceil + w_ceil;
 
     Array<T, 4> weight;
-    weight[0] = from_float<T>((1.f - dh) * (1.f - dw));
-    weight[1] = from_float<T>((1.f - dh) * dw);
-    weight[2] = from_float<T>(dh * (1.f - dw));
-    weight[3] = from_float<T>(dh * dw);
+    const float h0 = !zero_padded || (h_floor_raw >= 0 && h_floor_raw < G);
+    const float h1 = !zero_padded || (h_ceil_raw >= 0 && h_ceil_raw < G);
+    const float w0 = !zero_padded || (w_floor_raw >= 0 && w_floor_raw < G);
+    const float w1 = !zero_padded || (w_ceil_raw >= 0 && w_ceil_raw < G);
+    weight[0]      = from_float<T>((1.f - dh) * (1.f - dw) * h0 * w0);
+    weight[1]      = from_float<T>((1.f - dh) * dw * h0 * w1);
+    weight[2]      = from_float<T>(dh * (1.f - dw) * h1 * w0);
+    weight[3]      = from_float<T>(dh * dw * h1 * w1);
 
     const int out_base = pos * 4;
     Store(idx_out + out_base, idx);
@@ -379,10 +402,10 @@ __device__ Array<float, N> roundToStorageDtype(Array<float, N> x)
     return cast<float>(cast<T>(x));
 }
 
-template<int vec_size, typename T>
+template<int vec_size, typename T, typename W>
 __global__ void fusedPosEmbedMergeKernel(T*         hidden_states,
                                          const T*   pos_embeds,
-                                         const T*   pos_embed_weights,
+                                         const W*   pos_embed_weights,
                                          const int* mapped_idx,
                                          const T*   bias,
                                          int        hidden,
@@ -391,7 +414,7 @@ __global__ void fusedPosEmbedMergeKernel(T*         hidden_states,
     const int index  = blockIdx.x;
     const int mapped = mapped_idx[index];  // same address for all threads in block -> L1 broadcast
 
-    Array<T, 4> w4;
+    Array<W, 4> w4;
     Ldg(w4, pos_embed_weights + mapped * 4);
 
     const int row_off = index * hidden;
@@ -411,7 +434,7 @@ __global__ void fusedPosEmbedMergeKernel(T*         hidden_states,
         PRAGMA_UNROLL
         for (int k = 0; k < 4; ++k) {
             Ldg(tmp, pos_embeds + pe_row0 + k * hidden + d * vec_size);
-            pos = pos + cast<float>(tmp * w4[k]);
+            pos = pos + cast<float>(tmp) * (float)w4[k];
         }
         const auto out = hidden_acc + roundToStorageDtype<T>(pos);
         Store(hidden_states + row_off + d * vec_size, cast<T>(out));
@@ -429,7 +452,9 @@ __global__ void fastRotaryPosEmbKernel(T*         cos_sin_out,
                                        int        num_grids,
                                        int        total_hw,
                                        int        head_dim,
-                                       float      scale)  // -log2(theta) / (head_dim/4)
+                                       float      scale,
+                                       bool       axes_w_first,
+                                       int        position_offset)  // -log2(theta) / (head_dim/4)
 {
     const int pair_count = head_dim / 2;  // e.g. 36
     const int freq_half  = head_dim / 4;  // e.g. 18
@@ -449,7 +474,9 @@ __global__ void fastRotaryPosEmbKernel(T*         cos_sin_out,
 
     // Pairs [0, freq_half) rotate in h; pairs [freq_half, 2*freq_half) rotate in w.
     const int   freq_idx = pair_k % freq_half;
-    const int   coord    = (pair_k < freq_half) ? i : j;
+    const int   first    = axes_w_first ? j : i;
+    const int   second   = axes_w_first ? i : j;
+    const int   coord    = ((pair_k < freq_half) ? first : second) + position_offset;
     const float inv_freq = exp2f((float)freq_idx * scale);
 
     float c, s;
@@ -547,6 +574,54 @@ __global__ void buildWindowMappedIdxKernel(
     window_mapped_idx[idx] = mapped_idx[src_group * merge_unit + inner];
 }
 
+template<class T>
+__global__ void pixelShuffleKernel(T*         out,
+                                   const T*   in,
+                                   const int* grid_thws,
+                                   const int* grid_offsets,
+                                   int        num_grids,
+                                   int        token_num,
+                                   int        hidden,
+                                   int        merge)
+{
+    const int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= (int64_t)token_num * hidden) {
+        return;
+    }
+    const int token = idx / hidden;
+    const int dim   = idx - (int64_t)token * hidden;
+
+    int grid = 0;
+    for (int i = 1; i < num_grids; ++i) {
+        if (grid_offsets[i * 2] <= token) {
+            grid = i;
+        }
+        else {
+            break;
+        }
+    }
+
+    const int h     = grid_thws[grid * 3 + 1];
+    const int w     = grid_thws[grid * 3 + 2];
+    const int local = token - grid_offsets[grid * 2];
+    const int frame = local / (h * w);
+    const int rem   = local - frame * h * w;
+    const int row   = rem / w;
+    const int col   = rem - row * w;
+
+    const int area     = merge * merge;
+    int       out_base = 0;
+    for (int i = 0; i < grid; ++i) {
+        out_base += grid_thws[i * 3] * grid_thws[i * 3 + 1] * grid_thws[i * 3 + 2] / area;
+    }
+    const int out_h     = h / merge;
+    const int out_w     = w / merge;
+    const int out_local = (frame * out_h + row / merge) * out_w + col / merge;
+    const int inner     = (row % merge) * merge + col % merge;
+    out[((int64_t)out_base + out_local) * hidden * area + (int64_t)dim * area + inner] =
+        in[(int64_t)token * hidden + dim];
+}
+
 }  // namespace
 
 // =====================================================================================
@@ -632,6 +707,7 @@ void invokeFastPosEmbedIdxWeight(int*         idx_out,
                                  int          num_grids,
                                  int          total_n,
                                  int          num_grid_per_side,
+                                 bool         zero_padded,
                                  cudaStream_t stream)
 {
     if (total_n <= 0 || num_grids <= 0) {
@@ -643,9 +719,14 @@ void invokeFastPosEmbedIdxWeight(int*         idx_out,
     auto invoke = [&](auto t) {
         using T = decltype(t);
         fastPosEmbedIdxWeightKernel<T><<<grid, block, 0, stream>>>(
-            idx_out, (T*)weight_out, grid_thws, grid_offsets, num_grids, total_n, num_grid_per_side);
+            idx_out, (T*)weight_out, grid_thws, grid_offsets, num_grids, total_n, num_grid_per_side, zero_padded);
     };
-    TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
+    if (dtype == DataType::kFloat32) {
+        invoke(float{});
+    }
+    else {
+        TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
+    }
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -657,6 +738,7 @@ void invokeFusedPosEmbedMerge(void*        hidden_states,
                               int          batch,
                               int          hidden,
                               DataType     dtype,
+                              bool         weights_fp32,
                               cudaStream_t stream)
 {
     if (batch <= 0) {
@@ -670,13 +752,24 @@ void invokeFusedPosEmbedMerge(void*        hidden_states,
         using T                = decltype(t);
         constexpr int vec_size = sizeof(uint4) / sizeof(T);
         TM_CHECK(hidden % vec_size == 0);
-        fusedPosEmbedMergeKernel<vec_size, T><<<grid, block, 0, stream>>>((T*)hidden_states,
-                                                                          (const T*)pos_embeds,
-                                                                          (const T*)pos_embed_weights,
-                                                                          mapped_idx,
-                                                                          (const T*)bias,
-                                                                          hidden,
-                                                                          hidden / vec_size);
+        if (weights_fp32) {
+            fusedPosEmbedMergeKernel<vec_size, T, float><<<grid, block, 0, stream>>>((T*)hidden_states,
+                                                                                     (const T*)pos_embeds,
+                                                                                     (const float*)pos_embed_weights,
+                                                                                     mapped_idx,
+                                                                                     (const T*)bias,
+                                                                                     hidden,
+                                                                                     hidden / vec_size);
+        }
+        else {
+            fusedPosEmbedMergeKernel<vec_size, T, T><<<grid, block, 0, stream>>>((T*)hidden_states,
+                                                                                 (const T*)pos_embeds,
+                                                                                 (const T*)pos_embed_weights,
+                                                                                 mapped_idx,
+                                                                                 (const T*)bias,
+                                                                                 hidden,
+                                                                                 hidden / vec_size);
+        }
     };
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
     TM_CUDA_CHECK(cudaGetLastError());
@@ -690,6 +783,8 @@ void invokeQwenVitRotaryPosEmb(void*        cos_sin,
                                int          total_hw,
                                int          head_dim,
                                float        theta,
+                               bool         axes_w_first,
+                               int          position_offset,
                                cudaStream_t stream)
 {
     if (total_hw <= 0 || num_grids <= 0 || head_dim <= 0) {
@@ -704,8 +799,8 @@ void invokeQwenVitRotaryPosEmb(void*        cos_sin,
 
     auto invoke = [&](auto t) {
         using T = decltype(t);
-        fastRotaryPosEmbKernel<T>
-            <<<grid, block, 0, stream>>>((T*)cos_sin, grid_thws, grid_offsets, num_grids, total_hw, head_dim, scale);
+        fastRotaryPosEmbKernel<T><<<grid, block, 0, stream>>>(
+            (T*)cos_sin, grid_thws, grid_offsets, num_grids, total_hw, head_dim, scale, axes_w_first, position_offset);
     };
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
     TM_CUDA_CHECK(cudaGetLastError());
@@ -826,6 +921,30 @@ void invokeQwenVitBuildWindowMappedIdx(int*         window_mapped_idx,
     const int threads = 256;
     buildWindowMappedIdxKernel<<<cdiv(total, threads), threads, 0, stream>>>(
         window_mapped_idx, mapped_idx, window_idx, merge_unit, total);
+    TM_CUDA_CHECK(cudaGetLastError());
+}
+
+void invokeQwenVitPixelShuffle(Tensor&       out,
+                               const Tensor& in,
+                               const int*    grid_thws,
+                               const int*    grid_offsets,
+                               int           num_grids,
+                               int           spatial_merge_size,
+                               cudaStream_t  stream)
+{
+    const int token_num = in.shape(0);
+    const int hidden    = in.shape(1);
+    const int area      = spatial_merge_size * spatial_merge_size;
+    TM_CHECK_EQ(out.shape(0) * area, token_num);
+    TM_CHECK_EQ(out.shape(1), hidden * area);
+    const int64_t total  = (int64_t)token_num * hidden;
+    const int     block  = 256;
+    auto          invoke = [&](auto t) {
+        using T = decltype(t);
+        pixelShuffleKernel<<<cdiv(total, (int64_t)block), block, 0, stream>>>(
+            out.data<T>(), in.data<T>(), grid_thws, grid_offsets, num_grids, token_num, hidden, spatial_merge_size);
+    };
+    TM_DISPATCH_PRIMARY_DTYPES(in.dtype(), invoke);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 

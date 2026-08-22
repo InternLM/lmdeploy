@@ -52,13 +52,13 @@ class TextModel(ABC):
                 optional: bool = False) -> Linear | None:
         return self._resolver.resolve(pfx, optional=optional)
 
-    def norm(self, pfx, transform=None, *, zero_centered=False):
+    def norm(self, pfx, transform=None, *, zero_centered=False, norm_eps=None):
         weight = pfx.pop('weight')
         if transform is not None:
             weight = transform(weight)
         cfg = make_norm_config(
             dim=weight.shape[-1],
-            norm_eps=self.cfg.rms_norm_eps,
+            norm_eps=self.cfg.rms_norm_eps if norm_eps is None else norm_eps,
             zero_centered=zero_centered,
         )
         m = NormBuilder(cfg, self._ctx)

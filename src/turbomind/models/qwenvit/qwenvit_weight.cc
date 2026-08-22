@@ -41,6 +41,9 @@ bool QwenVitWeight::verify(std::vector<std::string>& missing)
     if (!merger_fc1 || !merger_fc2 || !merger_norm) {
         missing.push_back(full_path() + ": missing merger");
     }
+    if (config_.pixel_shuffle && (!pre_norm || !merger_fc3 || !output_norm)) {
+        missing.push_back(full_path() + ": missing Muse-Glimmer vision projection weights");
+    }
     return missing.empty();
 }
 

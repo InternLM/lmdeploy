@@ -32,6 +32,8 @@ private:
     const size_t layer_num_;
     const size_t hidden_units_;
     const bool   output_norm_zero_centered_;
+    const float  output_norm_eps_;
+    const bool   has_post_norm_;
 
     const int attn_tp_size_;
     const int attn_dp_size_;

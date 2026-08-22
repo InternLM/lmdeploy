@@ -8,7 +8,12 @@
 namespace turbomind {
 
 ModelWeight::ModelWeight(const core::ModelWeightConfig& cfg):
-    tp_size(cfg.tp_size), tp_rank(cfg.tp_rank), data_type(cfg.data_type), hidden_units(cfg.hidden_units)
+    tp_size(cfg.tp_size),
+    tp_rank(cfg.tp_rank),
+    logit_scale(cfg.logit_scale),
+    logit_softcap(cfg.logit_softcap),
+    data_type(cfg.data_type),
+    hidden_units(cfg.hidden_units)
 {
 }
 

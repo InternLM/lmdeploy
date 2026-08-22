@@ -211,6 +211,12 @@ def get_tm_config(model_path,
     dtype = _resolve_dtype(engine_config.dtype, hf_model_cfg)
     dtype = getattr(torch, dtype)
 
+    if arch == 'MuseGlimmerForConditionalGeneration':
+        if engine_config.model_format not in (None, 'hf'):
+            raise ValueError('Muse-Glimmer TurboMind currently supports unquantized Hugging Face weights only.')
+        if dtype != torch.bfloat16:
+            raise ValueError('Muse-Glimmer TurboMind currently requires BF16 inference.')
+
     # Capture the user/file dtype before _build_resolver may force fp16 for
     # AWQ/GPTQ/CT. VL checkpoints list 'vision' in modules_to_not_convert, so
     # the ViT sub-tree is unquantized and should keep this dtype rather than

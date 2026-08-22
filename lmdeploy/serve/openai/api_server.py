@@ -180,6 +180,8 @@ def set_parsers(context: ServerContext,
     arch = context.async_engine.arch
     if arch == 'GptOssForCausalLM':
         name = 'gpt-oss'
+    elif arch == 'MuseGlimmerForConditionalGeneration':
+        name = 'muse-glimmer'
     cls = ResponseParserManager.get(name)
     if cls is None:
         raise ValueError(

@@ -6,6 +6,7 @@ from .interns2_mobius import InternS2MobiusModel  # noqa: F401
 from .internvl import InternVLModel  # noqa: F401
 from .llama import LlamaModel  # noqa: F401
 from .mixtral import MixtralModel  # noqa: F401
+from .muse_glimmer import MuseGlimmerModel, MuseGlimmerTextModel, MuseGlimmerVisionModel  # noqa: F401
 from .qwen2 import Qwen2Model  # noqa: F401
 from .qwen2_vl import Qwen2VLModel  # noqa: F401
 from .qwen3 import Qwen3TextModel  # noqa: F401

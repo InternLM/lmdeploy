@@ -37,4 +37,7 @@ void Activation(Tensor&             gate_up,  //
 // Supports kGelu (erf) and kGeluPytorchTanh (tanh approximation).
 void invokeAddBiasActivation(Tensor& x, const Tensor& bias, ActivationType type, cudaStream_t stream);
 
+// In-place logit scaling followed by an optional tanh softcap.
+void invokeLogitTransform(Tensor& logits, float scale, float softcap, cudaStream_t stream);
+
 }  // namespace turbomind
