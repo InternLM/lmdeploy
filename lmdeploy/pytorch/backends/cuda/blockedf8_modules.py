@@ -11,7 +11,7 @@ from lmdeploy.pytorch.envs import blocked_fp8_gemm_backend
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import blocked_gemm_fp8, deep_gemm_fp8, quant_fp8, quant_fp8_tma
 from lmdeploy.utils import get_logger
 
-from ..blockedf8_modules import LinearBlockedF8Builder, LinearBlockedF8Impl
+from ..blockedf8_modules import LinearBlockedF8BuildSpec, LinearBlockedF8Impl
 from .warmup_manager import WarmupMeta, get_warmup_manager
 
 logger = get_logger('lmdeploy')
@@ -225,44 +225,37 @@ def _supports_gluon(in_features: int, out_features: int, block_size: int, dtype:
             and fp8_dtype == torch.float8_e4m3fn and in_features % block_size == 0 and out_features % 8 == 0)
 
 
-class CudaLinearBlockedF8Builder(LinearBlockedF8Builder):
-    """Select one blocked-FP8 GEMM provider when constructing the layer."""
+def _build_linear_blocked_f8(spec: LinearBlockedF8BuildSpec) -> LinearBlockedF8Impl:
+    """Build the requested provider or the best compatible provider."""
+    provider = blocked_fp8_gemm_backend
 
-    @staticmethod
-    def build(in_features: int,
-              out_features: int,
-              block_size: int = 128,
-              bias: bool = True,
-              dtype: torch.dtype = None,
-              fp8_dtype: torch.dtype = torch.float8_e4m3fn):
-        """Build the requested provider or the best compatible provider."""
-        provider = blocked_fp8_gemm_backend
-
-        if provider == 'auto':
-            if _supports_deep_gemm(block_size, dtype, fp8_dtype):
-                impl_cls = DeepGemmLinearBlockedF8Impl
-            elif _supports_gluon(in_features, out_features, block_size, dtype, fp8_dtype):
-                impl_cls = GluonLinearBlockedF8Impl
-            else:
-                impl_cls = TritonLinearBlockedF8Impl
-        elif provider == 'deepgemm':
-            if not _supports_deep_gemm(block_size, dtype, fp8_dtype):
-                raise RuntimeError('DeepGEMM blocked-FP8 linear was requested but is unavailable or incompatible.')
+    if provider == 'auto':
+        if _supports_deep_gemm(spec.block_size, spec.output_dtype, spec.fp8_dtype):
             impl_cls = DeepGemmLinearBlockedF8Impl
-        elif provider == 'gluon':
-            if not _supports_gluon(in_features, out_features, block_size, dtype, fp8_dtype):
-                try:
-                    import triton
-                    triton_version = triton.__version__
-                except ImportError:
-                    triton_version = 'not installed'
-                raise RuntimeError('Gluon blocked-FP8 linear requires Hopper, BF16 output, FP8 E4M3, block size 128, '
-                                   'K divisible by 128, N divisible by 8, and Triton '
-                                   f'>={_GLUON_TRITON_MIN_VERSION},<{_GLUON_TRITON_MAX_EXCLUSIVE} '
-                                   f'(found {triton_version}).')
+        elif _supports_gluon(spec.in_features, spec.out_features, spec.block_size, spec.output_dtype, spec.fp8_dtype):
             impl_cls = GluonLinearBlockedF8Impl
         else:
             impl_cls = TritonLinearBlockedF8Impl
+    elif provider == 'deepgemm':
+        if not _supports_deep_gemm(spec.block_size, spec.output_dtype, spec.fp8_dtype):
+            raise RuntimeError('DeepGEMM blocked-FP8 linear was requested but is unavailable or incompatible.')
+        impl_cls = DeepGemmLinearBlockedF8Impl
+    elif provider == 'gluon':
+        if not _supports_gluon(spec.in_features, spec.out_features, spec.block_size, spec.output_dtype, spec.fp8_dtype):
+            try:
+                import triton
+                triton_version = triton.__version__
+            except ImportError:
+                triton_version = 'not installed'
+            raise RuntimeError('Gluon blocked-FP8 linear requires Hopper, BF16 output, FP8 E4M3, block size 128, '
+                               'K divisible by 128, N divisible by 8, and Triton '
+                               f'>={_GLUON_TRITON_MIN_VERSION},<{_GLUON_TRITON_MAX_EXCLUSIVE} '
+                               f'(found {triton_version}).')
+        impl_cls = GluonLinearBlockedF8Impl
+    else:
+        impl_cls = TritonLinearBlockedF8Impl
 
-        logger.debug(f'Build LinearBlockedF8 with {impl_cls.__name__}.')
-        return impl_cls(in_features, out_features, block_size, dtype, fp8_dtype)
+    logger.debug(f'Build LinearBlockedF8 with {impl_cls.__name__}.')
+    impl = impl_cls(spec.in_features, spec.out_features, spec.block_size, spec.output_dtype, spec.fp8_dtype)
+    impl.set_scale_fmt(spec.scale_fmt)
+    return impl

@@ -2,8 +2,9 @@
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.backends.compressor import V4CompressorMetadata
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.compressor import V4CompressorBuildSpec, V4CompressorMetadata
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
 class V4Compressor(nn.Module):
@@ -11,12 +12,14 @@ class V4Compressor(nn.Module):
 
     def __init__(self, compress_ratio: int, overlap: bool, head_dim: int):
         super().__init__()
-        backend = get_backend()
-        impl_builder = backend.get_layer_impl_builder(OpType.V4Compressor)
-        self.impl = impl_builder.build(
-            compress_ratio=compress_ratio,
-            overlap=overlap,
-            head_dim=head_dim)
+        self.impl = get_backend().build_op(
+            V4CompressorBuildSpec(
+                compress_ratio=compress_ratio,
+                overlap=overlap,
+                head_dim=head_dim,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     def score_and_fill_state(
         self,

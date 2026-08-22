@@ -3,11 +3,11 @@ import functools
 
 import torch
 
-from lmdeploy.pytorch.backends.attention import AttentionBuilder
+from lmdeploy.pytorch.backends.attention import PagedAttentionBuildSpec
 from lmdeploy.utils import get_logger
 
-from .default import TritonAttentionImpl, TritonAttentionMetadata
-from .v4 import TritonV4AttentionBuilder  # noqa: F401
+from .default import TritonAttentionImpl
+from .default import TritonAttentionMetadata as TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
 
@@ -68,77 +68,36 @@ def _normalize_sliding_window(sliding_window):
     return sliding_window
 
 
-class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
-    """Triton attention builder.
+def _build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl:
+    """Build the selected CUDA paged-attention implementation.
 
-    This builder selects the appropriate attention implementation based on:
+    Selection order:
     1. use_flash_mla: Use FlashMLAImpl for MLA models
     2. enable_fa3: Use FA3Impl if FA3 is available and supported
     3. Default: Use TritonAttentionImpl as fallback
     """
+    sliding_window = _normalize_sliding_window(spec.sliding_window)
+    common_args = dict(
+        num_heads=spec.num_heads,
+        head_size=spec.head_dim,
+        scale=spec.scale,
+        num_kv_heads=spec.num_kv_heads,
+        v_head_size=spec.v_head_dim,
+        alibi=spec.alibi,
+        sliding_window=sliding_window,
+        logit_softcapping=spec.logit_softcapping,
+        causal=spec.causal,
+    )
+    enable_fa3 = _enable_fa3(spec.alibi, spec.learnable_sink, spec.block_sparse_size, spec.head_dim)
 
-    @staticmethod
-    def build(
-        num_heads: int,
-        head_size: int,
-        scale: float = None,
-        num_kv_heads: int = None,
-        v_head_size: int = None,
-        alibi: bool = False,
-        sliding_window: int = None,
-        logit_softcapping: float = 0.0,
-        causal: bool = True,
-        use_flash_mla: bool = False,
-        learnable_sink: bool = False,
-        block_sparse_size: int = 1,
-        **kwargs,
-    ) -> TritonAttentionImpl:
-        """Build appropriate attention implementation.
-
-        Args:
-            num_heads: Number of attention heads.
-            head_size: Size of each attention head.
-            scale: Scaling factor for attention scores.
-            num_kv_heads: Number of key-value heads (for GQA).
-            v_head_size: Size of value head (for MLA).
-            alibi: Whether to use ALiBi positional encoding.
-            sliding_window: Sliding window size for local attention.
-            logit_softcapping: Logit softcapping value (for Gemma 2).
-            causal: Whether to use causal attention.
-            use_flash_mla: Whether to use Flash MLA implementation.
-            learnable_sink: Whether to use learnable sink tokens.
-            block_sparse_size: Block sparse attention size.
-            **kwargs: Additional arguments.
-
-        Returns:
-            Appropriate AttentionImpl instance.
-        """
-        # Normalize sliding window format
-        sliding_window = _normalize_sliding_window(sliding_window)
-
-        # Common arguments for all implementations
-        common_args = dict(
-            num_heads=num_heads,
-            head_size=head_size,
-            scale=scale,
-            num_kv_heads=num_kv_heads,
-            v_head_size=v_head_size,
-            alibi=alibi,
-            sliding_window=sliding_window,
-            logit_softcapping=logit_softcapping,
-            causal=causal,
-            **kwargs,
-        )
-        enable_fa3 = _enable_fa3(alibi, learnable_sink, block_sparse_size, head_size)
-
-        if use_flash_mla is True:
-            logger.debug('Build FlashMLAImpl Attention')
-            from .mla import FlashMLAImpl
-            return FlashMLAImpl(use_fa3=use_fa3, **common_args)
-        elif enable_fa3:
-            logger.debug('Build FA3Impl Attention')
-            from .fa3 import FA3Impl
-            return FA3Impl(**common_args)
-        else:
-            logger.debug('Build TritonAttentionImpl Attention')
-            return TritonAttentionImpl(block_sparse_size=block_sparse_size, **common_args)
+    if spec.use_flash_mla is True:
+        logger.debug('Build FlashMLAImpl Attention')
+        from .mla import FlashMLAImpl
+        return FlashMLAImpl(use_fa3=use_fa3, **common_args)
+    elif enable_fa3:
+        logger.debug('Build FA3Impl Attention')
+        from .fa3 import FA3Impl
+        return FA3Impl(**common_args)
+    else:
+        logger.debug('Build TritonAttentionImpl Attention')
+        return TritonAttentionImpl(block_sparse_size=spec.block_sparse_size, **common_args)

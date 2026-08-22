@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 import torch
 
-from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
+from lmdeploy.pytorch.backends.attention import V4AttentionImpl, V4AttentionMetadata
 from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
 from lmdeploy.pytorch.kernels.cuda.v4_sparse_indices import (
     build_decode_compressed_sparse_indices,
@@ -536,7 +536,7 @@ class _V4PrefillExecutor(_V4AttentionExecutorBase):
         return out[0][:, :num_heads].unsqueeze(0)  # [1, total_q_tokens, n_heads, head_dim]
 
 
-class TritonV4AttentionImpl:
+class TritonV4AttentionImpl(V4AttentionImpl):
     """DeepSeek V4 attention using batched FlashMLA sparse decode/prefill.
 
     The model layer calls this backend once per layer. This class owns kernel imports and dispatch; decode/prefill
@@ -567,15 +567,3 @@ class TritonV4AttentionImpl:
         return self._prefill_executor.forward(
             query, kv, attn_sink, attn_metadata, caches, slot,
             index_out=index_out)
-
-
-class TritonV4AttentionBuilder:
-    """Builder for DeepSeek V4 sparse attention."""
-
-    @staticmethod
-    def build(head_size: int, scale: float, window_size: int, compress_ratio: int,
-              **kwargs) -> TritonV4AttentionImpl:
-        return TritonV4AttentionImpl(head_size=head_size,
-                                     scale=scale,
-                                     window_size=window_size,
-                                     compress_ratio=compress_ratio)

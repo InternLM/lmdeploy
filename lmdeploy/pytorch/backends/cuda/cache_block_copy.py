@@ -6,7 +6,7 @@ import torch
 
 from lmdeploy.pytorch.kernels.cuda.copy_packed_cache import copy_packed_cache
 
-from ..cache_block_copy import CacheBlockCopyBuilder, CacheBlockCopyImpl
+from ..cache_block_copy import CacheBlockCopyImpl
 
 
 class CudaCacheBlockCopyImpl(CacheBlockCopyImpl):
@@ -22,13 +22,3 @@ class CudaCacheBlockCopyImpl(CacheBlockCopyImpl):
 
         for packed_cache in self._packed_caches:
             copy_packed_cache(packed_cache, src_block_offsets, dst_block_offsets, self.pages_per_block)
-
-
-class CudaCacheBlockCopyBuilder(CacheBlockCopyBuilder):
-    """Build the CUDA packed logical-block copy implementation."""
-
-    @staticmethod
-    def build(packed_caches: Sequence[torch.Tensor], num_logical_blocks: int,
-              pages_per_block: int) -> CacheBlockCopyImpl:
-        return CudaCacheBlockCopyImpl(packed_caches=packed_caches,
-                                      pages_per_block=pages_per_block)

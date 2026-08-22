@@ -1,7 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from abc import ABC, abstractmethod
+from abc import ABC
+from dataclasses import dataclass
 
 from torch import Tensor
+
+from .base import BuildSpec
 
 
 class FlashAttentionImpl(ABC):
@@ -20,21 +23,15 @@ class FlashAttentionImpl(ABC):
         raise NotImplementedError
 
 
-class FlashAttentionBuilder(ABC):
-    """FlashAttention implementation builder."""
+@dataclass(frozen=True)
+class FlashAttentionBuildSpec(BuildSpec[FlashAttentionImpl]):
+    """Immutable requirements for constructing non-paged attention."""
 
-    @staticmethod
-    @abstractmethod
-    def build(
-        num_heads: int,
-        head_dim: int,
-        scale: float = None,
-        num_kv_heads: int = None,
-        v_head_dim: int = None,
-        causal: bool = True,
-        sliding_window: int = None,
-        logit_softcapping: float = None,
-        **kwargs,
-    ) -> FlashAttentionImpl:
-        """build."""
-        raise NotImplementedError
+    num_heads: int
+    head_dim: int
+    scale: float | None
+    num_kv_heads: int
+    v_head_dim: int
+    causal: bool
+    sliding_window: int | tuple[int, int] | None
+    logit_softcapping: float

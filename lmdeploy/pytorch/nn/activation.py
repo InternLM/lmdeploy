@@ -1,7 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from torch import Tensor, nn
 
-from ..backends import OpType, get_backend
+from lmdeploy.pytorch.models.patch import get_build_model_context
+
+from ..backends import get_backend
+from ..backends.activation import GeluAndMulBuildSpec, SiluAndMulBuildSpec
 
 
 class SiluAndMul(nn.Module):
@@ -9,9 +12,10 @@ class SiluAndMul(nn.Module):
 
     def __init__(self, inplace: bool = True):
         super().__init__()
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.SiluAndMul)
-        self.impl = builder.build(inplace)
+        self.impl = get_backend().build_op(
+            SiluAndMulBuildSpec(inplace=inplace),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     def forward(self, x: Tensor):
         """forward."""
@@ -23,9 +27,10 @@ class GeluAndMul(nn.Module):
 
     def __init__(self, approximate: str = 'none'):
         super().__init__()
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.GeluAndMul)
-        self.impl = builder.build(approximate)
+        self.impl = get_backend().build_op(
+            GeluAndMulBuildSpec(approximate=approximate),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     def forward(self, x: Tensor):
         """forward."""

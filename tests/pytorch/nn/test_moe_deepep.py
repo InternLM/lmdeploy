@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import ast
 import builtins
 import importlib
 from pathlib import Path
@@ -277,26 +276,6 @@ def test_deepep_token_limit_is_inferred_from_engine_max_batch_size():
     assert build_ctx.deep_ep_max_tokens_per_rank == 128
 
 
-def test_all_fused_moe_builders_accept_deepep_token_limit():
-    def build_args(module_path, class_name):
-        tree = ast.parse((Path(__file__).parents[3] / module_path).read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef) and node.name == class_name:
-                for item in node.body:
-                    if isinstance(item, ast.FunctionDef) and item.name == 'build':
-                        return [arg.arg for arg in item.args.args]
-        raise AssertionError(f'{class_name}.build not found')
-
-    assert 'num_max_dispatch_tokens_per_rank' in build_args('lmdeploy/pytorch/backends/cuda/moe/default.py',
-                                                            'TritonFusedMoEBuilder')
-    assert 'num_max_dispatch_tokens_per_rank' in build_args('lmdeploy/pytorch/backends/cuda/moe/v4_fp4.py',
-                                                            'TritonFusedMoEV4FP4Builder')
-    assert 'num_max_dispatch_tokens_per_rank' in build_args('lmdeploy/pytorch/backends/cuda/moe/v4_fp4.py',
-                                                            'DeepGemmFusedMoEV4Builder')
-    assert 'num_max_dispatch_tokens_per_rank' in build_args('lmdeploy/pytorch/backends/dlinfer/moe.py',
-                                                            'DlinferFusedMoEBuilder')
-
-
 def test_eplb_env_vars_are_lmdeploy_prefixed():
     envs_text = (Path(__file__).parents[3] / 'lmdeploy/pytorch/envs.py').read_text()
 
@@ -384,7 +363,7 @@ def test_fp8_ep_builder_passes_activation_dtype_and_scale_fmt(monkeypatch):
         calls.append((args, kwargs))
         return 'moe'
 
-    monkeypatch.setattr(blocked_fp8, 'build_deepep_moe', fake_build_deepep_moe)
+    monkeypatch.setattr(blocked_fp8, '_build_deepep_moe', fake_build_deepep_moe)
     impl = blocked_fp8.FusedDeepEpMoEBlockedF8Impl.__new__(blocked_fp8.FusedDeepEpMoEBlockedF8Impl)
     impl.ep_size = 2
     impl.ep_group = object()
@@ -414,7 +393,7 @@ def test_bf16_ep_builder_passes_low_latency_token_limit(monkeypatch):
         calls.append((args, kwargs))
         return 'moe'
 
-    monkeypatch.setattr(default, 'build_deepep_moe', fake_build_deepep_moe)
+    monkeypatch.setattr(default, '_build_deepep_moe', fake_build_deepep_moe)
     impl = default.FusedMoEEPImpl.__new__(default.FusedMoEEPImpl)
     impl.ep_size = 2
     impl.ep_group = object()
@@ -595,20 +574,15 @@ def test_v4_fp4_layer_passes_build_context_deepep_token_limit(monkeypatch):
         def current_context(self):
             return FakeDistContext()
 
-    class FakeBuilder:
-
-        @staticmethod
-        def build(**kwargs):
-            calls.append(kwargs)
-            return object()
-
     class FakeBackend:
 
-        def get_layer_impl_builder(self, op_type):
-            return FakeBuilder
+        def build_op(self, spec, *, enable_deterministic=False):
+            calls.append((spec, enable_deterministic))
+            return object()
 
     class FakeBuildContext:
         deep_ep_max_tokens_per_rank = 384
+        enable_deterministic = True
 
     monkeypatch.setattr(v4_fp4, 'get_dist_manager', lambda: FakeDistManager())
     monkeypatch.setattr(v4_fp4, 'get_ep_world_rank', lambda: (2, 1))
@@ -623,7 +597,8 @@ def test_v4_fp4_layer_passes_build_context_deepep_token_limit(monkeypatch):
                                  device=torch.device('cpu'))
 
     assert layer.impl is not None
-    assert calls[0]['num_max_dispatch_tokens_per_rank'] == 384
+    assert calls[0][0].num_max_dispatch_tokens_per_rank == 384
+    assert calls[0][1] is True
 
 
 def test_blocked_fp8_async_prefill_passes_weight_dtype_and_scale_fmt():

@@ -1,10 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from torch import Tensor, nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.attention import AttentionMetadata
+from lmdeploy.pytorch.backends.nsa import NSAIndexFP8BuildSpec
 from lmdeploy.pytorch.consts import DSA_INDEXER_K_CACHE_NAME
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
 def get_dsa_indexer_k_cache(layer_idx: int) -> Tensor:
@@ -17,9 +19,10 @@ class IndexerTopKFP8(nn.Module):
 
     def __init__(self, topk: int, softmax_scale: float, block_size: int = 128, fill: int = -1):
         super().__init__()
-        backend = get_backend()
-        index_builder = backend.get_layer_impl_builder(OpType.NSAIndexFP8)
-        self.index_impl = index_builder.build(topk, softmax_scale, block_size, fill)
+        self.index_impl = get_backend().build_op(
+            NSAIndexFP8BuildSpec(top_k=topk, softmax_scale=softmax_scale, block_size=block_size, fill=fill),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     def forward(
         self,

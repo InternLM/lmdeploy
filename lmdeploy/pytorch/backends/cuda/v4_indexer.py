@@ -12,7 +12,7 @@ from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
 )
 from lmdeploy.utils import get_logger
 
-from ..indexer import BaseV4Indexer, BaseV4IndexerBuilder, V4IndexerMetadata, V4IndexerOutput
+from ..indexer import V4IndexerImpl, V4IndexerMetadata, V4IndexerOutput
 from .warmup_manager import get_warmup_manager
 
 logger = get_logger('lmdeploy')
@@ -104,7 +104,7 @@ class _V4PagedMQALogitsWarmup:
             deep_gemm, entries_per_block, num_heads, head_dim, max_context_len)
 
 
-class TritonV4IndexerImpl(BaseV4Indexer):
+class TritonV4IndexerImpl(V4IndexerImpl):
 
     def __init__(self, index_topk: int, compress_ratio: int) -> None:
         super().__init__()
@@ -219,10 +219,3 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 
         # Always return [total_q, topk_width] — caller handles decode/prefill dimension adaptation
         return V4IndexerOutput(indices_in_kvcache=topk, topk_length=topk_length)
-
-
-class TritonV4IndexerBuilder(BaseV4IndexerBuilder):
-
-    @staticmethod
-    def build(index_topk: int, compress_ratio: int) -> BaseV4Indexer:
-        return TritonV4IndexerImpl(index_topk=index_topk, compress_ratio=compress_ratio)

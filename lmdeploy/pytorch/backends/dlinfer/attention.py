@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from torch import Tensor
 
-from ..attention import AttentionBuilder, AttentionImpl, AttentionMetadata
+from ..attention import AttentionImpl, AttentionMetadata
 
 
 @dataclass
@@ -36,7 +36,7 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         num_kv_heads: int = None,
         v_head_size: int = None,
         alibi: bool = None,
-        sliding_window: int = None,
+        sliding_window: int | tuple[int, int] | None = None,
         logit_softcapping: float = None,
         causal: bool = True,
         **kwargs,
@@ -150,33 +150,3 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         )
 
         return attn_output
-
-
-class DlinferAttentionBuilder(AttentionBuilder[DlinferAttentionMetadata]):
-    """Dlinfer attention builder."""
-
-    @staticmethod
-    def build(
-        num_heads: int,
-        head_size: int,
-        scale: float = None,
-        num_kv_heads: int = None,
-        v_head_size: int = None,
-        alibi_scale: float = None,
-        sliding_window: int = None,
-        logit_softcapping: float = None,
-        causal: bool = True,
-        learnable_sink: bool = False,
-        **kwargs,
-    ) -> DlinferAttentionImpl:
-        """build."""
-        return DlinferAttentionImpl(num_heads,
-                                    head_size,
-                                    scale=scale,
-                                    num_kv_heads=num_kv_heads,
-                                    v_head_size=v_head_size,
-                                    alibi_scale=alibi_scale,
-                                    sliding_window=sliding_window,
-                                    logit_softcapping=logit_softcapping,
-                                    causal=causal,
-                                    **kwargs)

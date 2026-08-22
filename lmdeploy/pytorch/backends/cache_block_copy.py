@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from dataclasses import dataclass
 
 import torch
+
+from .base import BuildSpec
 
 
 class CacheBlockCopyImpl(ABC):
@@ -19,12 +21,10 @@ class CacheBlockCopyImpl(ABC):
         raise NotImplementedError
 
 
-class CacheBlockCopyBuilder(ABC):
-    """Logical-block copy implementation builder."""
+@dataclass(frozen=True)
+class CacheBlockCopyBuildSpec(BuildSpec[CacheBlockCopyImpl]):
+    """Stable packed pools and geometry for logical-block copying."""
 
-    @staticmethod
-    @abstractmethod
-    def build(packed_caches: Sequence[torch.Tensor], num_logical_blocks: int,
-              pages_per_block: int) -> CacheBlockCopyImpl:
-        """Build an implementation for stable logical/cache-page geometry."""
-        raise NotImplementedError
+    packed_caches: tuple[torch.Tensor, ...]
+    num_logical_blocks: int
+    pages_per_block: int

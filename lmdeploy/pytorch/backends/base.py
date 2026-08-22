@@ -3,51 +3,17 @@
 # https://github.com/vllm-project/vllm/blob/main/vllm/attention/backends/abstract.py
 import contextlib
 from abc import ABC, abstractmethod
-from enum import Enum, auto
+from typing import Generic, TypeVar
 
 import torch
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 
+ImplT = TypeVar('ImplT')
 
-class OpType(Enum):
-    """Layer type enumerate."""
-    PagedAttention = auto()
-    FlashAttention = auto()
-    Linear = auto()
-    RotaryEmbedding = auto()
-    ApplyRotaryEmb = auto()
-    SiluAndMul = auto()
-    GeluAndMul = auto()
-    RMSNorm = auto()
-    LayerNorm = auto()
-    LoRA = auto()
-    LinearW8A8 = auto()
-    RMSNormW8A8 = auto()
-    MultinomialSampling = auto()
-    LinearW4A16 = auto()
-    SoftmaxTopK = auto()
-    FusedMoE = auto()
-    FusedMoEW8A8 = auto()
-    FusedMoEStaticF8 = auto()
-    LinearBlockedF8 = auto()
-    LinearStaticF8 = auto()
-    FusedMoEBlockedF8 = auto()
-    FusedMoEV4FP4 = auto()
-    NSAIndexFP8 = auto()
-    V4Attention = auto()
-    V4Indexer = auto()
-    V4Compressor = auto()
-    HcPrePost = auto()
-    Embedding = auto()
-    CacheBlockCopy = auto()
 
-    # MoE router
-    RouterNoauxTC = auto()
-
-    # Gated Delta
-    CausalConv1d = auto()
-    GatedDeltaRule = auto()
+class BuildSpec(Generic[ImplT]):
+    """Build request whose type parameter is the result interface."""
 
 
 class OpsBackend(ABC):
@@ -61,8 +27,8 @@ class OpsBackend(ABC):
 
     @classmethod
     @abstractmethod
-    def get_layer_impl_builder(cls, layer_type: OpType):
-        """Get builder of given layer type."""
+    def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
+        """Build a typed operator implementation."""
         raise NotImplementedError
 
     @staticmethod

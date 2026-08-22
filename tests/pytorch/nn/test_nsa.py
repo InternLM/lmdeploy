@@ -82,7 +82,7 @@ def test_deepgemm_prefill_scores_match_triton():
         packed_cache, 128)
     k_cache.copy_(torch.randn_like(k_cache.float()).to(k_cache.dtype))
     k_s_cache.copy_(torch.rand_like(k_s_cache) * 0.01)
-    impl = cuda_nsa.TritonNSAIndexFP8(
+    impl = cuda_nsa.TritonNSAIndexFP8Impl(
         topk=2, softmax_scale=1.0, block_size=128, fill=-1)
 
     deepgemm_scores = impl._compute_scores(q, q_s, packed_cache, meta)
@@ -111,7 +111,7 @@ def test_sparse_index_topk_is_resolved_at_init(monkeypatch):
     monkeypatch.setattr(cuda_nsa, '_get_sparse_index_topk',
                         lambda topk: selector)
 
-    index_impl = cuda_nsa.TritonNSAIndexFP8(
+    index_impl = cuda_nsa.TritonNSAIndexFP8Impl(
         topk=512, softmax_scale=1.0, block_size=128, fill=-1)
 
     assert index_impl._sparse_index_topk is selector

@@ -5,7 +5,7 @@ import torch
 
 pytest.importorskip('triton')
 
-from lmdeploy.pytorch.backends.base import OpType
+from lmdeploy.pytorch.backends.cache_block_copy import CacheBlockCopyBuildSpec
 from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
 from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
@@ -17,10 +17,13 @@ if torch.cuda.is_available():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA backend import')
-def test_cuda_backend_registers_cache_block_copy_builder():
-    from lmdeploy.pytorch.backends.cuda.cache_block_copy import CudaCacheBlockCopyBuilder
+def test_cuda_backend_builds_cache_block_copy():
+    from lmdeploy.pytorch.backends.cuda.cache_block_copy import CudaCacheBlockCopyImpl
 
-    assert CudaOpsBackend.get_layer_impl_builder(OpType.CacheBlockCopy) is CudaCacheBlockCopyBuilder
+    copy_impl = CudaOpsBackend.build_op(
+        CacheBlockCopyBuildSpec(packed_caches=(), num_logical_blocks=1, pages_per_block=1))
+
+    assert isinstance(copy_impl, CudaCacheBlockCopyImpl)
 
 
 def _logical_view(packed_cache: torch.Tensor, pages_per_block: int):

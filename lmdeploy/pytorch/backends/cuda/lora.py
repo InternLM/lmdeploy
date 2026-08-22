@@ -6,7 +6,7 @@ import torch
 from lmdeploy.pytorch.kernels.cuda.fused_lora import fused_lora
 from lmdeploy.pytorch.model_inputs import StepContextManager
 
-from ..lora import AdapterInfo, LoRABuilder, LoRAImpl
+from ..lora import AdapterInfo, LoRAImpl
 
 
 @dataclass
@@ -79,12 +79,3 @@ class TritonLoRAImpl(LoRAImpl):
             lora_out = lora_out.reshape(sliced_base.shape)
             sliced_base.add_(lora_out)
         return base_output
-
-
-class TritonLoRABuilder(LoRABuilder):
-    """Triton lora layer builder."""
-
-    @staticmethod
-    def build():
-        """build."""
-        return TritonLoRAImpl()

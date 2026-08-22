@@ -4,9 +4,11 @@ from torch import nn
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
-from ..backends import OpType, get_backend
-from ..backends.attention import AttentionMetadata
+from ..backends import get_backend
+from ..backends.attention import AttentionMetadata, PagedAttentionBuildSpec
+from ..backends.flash_attention import FlashAttentionBuildSpec
 from .utils import get_distribute_size
 
 
@@ -46,23 +48,22 @@ class Attention(nn.Module):
         num_heads, num_kv_heads = _update_num_heads(num_heads, num_kv_heads)
         self.num_heads = num_heads
 
-        layer_backend = get_backend()
-        impl_builder = layer_backend.get_layer_impl_builder(OpType.PagedAttention)
-
-        self.impl = impl_builder.build(
-            num_heads=num_heads,
-            head_size=head_size,
-            scale=scale,
-            num_kv_heads=num_kv_heads,
-            v_head_size=v_head_size,
-            alibi=alibi,
-            sliding_window=sliding_window,
-            logit_softcapping=logit_softcapping,
-            causal=causal,
-            use_flash_mla=use_flash_mla,
-            learnable_sink=learnable_sink,
-            block_sparse_size=block_sparse_size,
-            **kwargs,
+        self.impl = get_backend().build_op(
+            PagedAttentionBuildSpec(
+                num_heads=num_heads,
+                head_dim=head_size,
+                scale=scale,
+                num_kv_heads=num_kv_heads,
+                v_head_dim=v_head_size,
+                alibi=alibi,
+                sliding_window=sliding_window,
+                logit_softcapping=logit_softcapping,
+                causal=causal,
+                use_flash_mla=use_flash_mla,
+                learnable_sink=learnable_sink,
+                block_sparse_size=block_sparse_size,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
         if alibi:
@@ -162,20 +163,18 @@ class FlashAttention(nn.Module):
             v_head_dim = head_dim
         num_heads, num_kv_heads = _update_num_heads(num_heads, num_kv_heads)
 
-        layer_backend = get_backend()
-
-        impl_builder = layer_backend.get_layer_impl_builder(OpType.FlashAttention)
-
-        self.impl = impl_builder.build(
-            num_heads=num_heads,
-            head_dim=head_dim,
-            scale=scale,
-            num_kv_heads=num_kv_heads,
-            v_head_dim=v_head_dim,
-            causal=causal,
-            sliding_window=sliding_window,
-            logit_softcapping=logit_softcapping,
-            **kwargs,
+        self.impl = get_backend().build_op(
+            FlashAttentionBuildSpec(
+                num_heads=num_heads,
+                head_dim=head_dim,
+                scale=scale,
+                num_kv_heads=num_kv_heads,
+                v_head_dim=v_head_dim,
+                causal=causal,
+                sliding_window=sliding_window,
+                logit_softcapping=logit_softcapping,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
     def forward(self,

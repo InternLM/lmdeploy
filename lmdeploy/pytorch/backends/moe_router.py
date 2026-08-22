@@ -1,7 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import torch
+
+from .base import BuildSpec
 
 
 class RouterNoauxTCImpl(ABC):
@@ -13,20 +16,15 @@ class RouterNoauxTCImpl(ABC):
         raise NotImplementedError
 
 
-class RouterNoauxTCBuilder(ABC):
-    """Noaux tc implementation builder."""
+@dataclass(frozen=True)
+class RouterNoauxTCBuildSpec(BuildSpec[RouterNoauxTCImpl]):
+    """Immutable requirements for constructing no-aux-loss routing."""
 
-    @staticmethod
-    @abstractmethod
-    def build(
-        scoring_func: str,
-        top_k: int,
-        n_group: int,
-        topk_group: int,
-        n_routed_experts: int,
-        routed_scaling_factor: float,
-        renormalize: bool = True,
-        router_n_groups: int = -1,
-    ):
-        """build."""
-        raise NotImplementedError
+    scoring_func: str
+    top_k: int
+    n_group: int
+    top_k_group: int
+    n_routed_experts: int
+    routed_scaling_factor: float
+    renormalize: bool = True
+    router_n_groups: int = -1

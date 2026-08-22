@@ -3,7 +3,7 @@ from functools import lru_cache
 
 import torch
 
-from ..causal_conv1d import CausalConv1dBuilder, CausalConv1dImpl
+from ..causal_conv1d import CausalConv1dImpl
 from .utils import has_tilelang
 
 
@@ -93,16 +93,11 @@ def has_dao():
         return False
 
 
-class CausalConv1dCudaBuilder(CausalConv1dBuilder):
-    """CausalConv1d update implementation builder."""
-
-    @staticmethod
-    def build() -> CausalConv1dImpl:
-        """build."""
-        if has_tilelang():
-            return CausalConv1dTilelangImpl()
-        elif has_dao():
-            return CausalConv1dDaoImpl()
-        else:
-            raise RuntimeError('No available implementation for CausalConv1d, '
-                               'please install https://tilelang.com/ or https://github.com/Dao-AILab/causal-conv1d')
+def _build_causal_conv1d() -> CausalConv1dImpl:
+    """Build the best available CUDA causal-convolution implementation."""
+    if has_tilelang():
+        return CausalConv1dTilelangImpl()
+    if has_dao():
+        return CausalConv1dDaoImpl()
+    raise RuntimeError('No available implementation for CausalConv1d, '
+                       'please install https://tilelang.com/ or https://github.com/Dao-AILab/causal-conv1d')

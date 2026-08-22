@@ -8,6 +8,8 @@ import torch
 
 from lmdeploy.messages import QuantPolicy
 
+from .base import BuildSpec
+
 
 @dataclass
 class AttentionMetadata:
@@ -96,6 +98,34 @@ class V4AttentionMetadata:
         )
 
 
+class V4AttentionImpl(ABC):
+    """DeepSeek-V4 attention implementation contract."""
+
+    @abstractmethod
+    def forward(
+        self,
+        query: torch.Tensor,
+        kv: torch.Tensor,
+        attn_sink: torch.Tensor,
+        attn_metadata: V4AttentionMetadata,
+        caches: dict,
+        slot: torch.Tensor,
+        index_out=None,
+    ) -> torch.Tensor:
+        """Run sparse DeepSeek-V4 attention."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class V4AttentionBuildSpec(BuildSpec[V4AttentionImpl]):
+    """Immutable requirements for constructing DeepSeek-V4 attention."""
+
+    head_dim: int
+    scale: float
+    window_size: int
+    compress_ratio: int
+
+
 T = TypeVar('T', bound=AttentionMetadata)
 
 
@@ -110,7 +140,7 @@ class AttentionImpl(ABC, Generic[T]):
         num_kv_heads: int = None,
         v_head_size: int = None,
         alibi: bool = None,
-        sliding_window: int = None,
+        sliding_window: int | tuple[int, int] | None = None,
         logit_softcapping: float = 0.0,
         causal: bool = True,
         use_flash_mla: bool = False,
@@ -179,25 +209,19 @@ class AttentionImpl(ABC, Generic[T]):
         raise NotImplementedError
 
 
-class AttentionBuilder(ABC, Generic[T]):
-    """Attention implementation builder."""
+@dataclass(frozen=True)
+class PagedAttentionBuildSpec(BuildSpec[AttentionImpl[AttentionMetadata]]):
+    """Immutable requirements for constructing paged attention."""
 
-    @staticmethod
-    @abstractmethod
-    def build(
-        num_heads: int,
-        head_size: int,
-        scale: float = None,
-        num_kv_heads: int = None,
-        v_head_size: int = None,
-        alibi: bool = False,
-        sliding_window: int = None,
-        logit_softcapping: float = 0.0,
-        causal: bool = True,
-        use_flash_mla: bool = False,
-        learnable_sink: bool = False,
-        block_sparse_size: int = 1,
-        **kwargs,
-    ) -> AttentionImpl[T]:
-        """build."""
-        raise NotImplementedError
+    num_heads: int
+    head_dim: int
+    scale: float | None
+    num_kv_heads: int
+    v_head_dim: int
+    alibi: bool
+    sliding_window: int | tuple[int, int] | None
+    logit_softcapping: float
+    causal: bool
+    use_flash_mla: bool
+    learnable_sink: bool
+    block_sparse_size: int
