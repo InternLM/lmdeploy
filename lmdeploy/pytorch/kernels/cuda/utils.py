@@ -63,5 +63,12 @@ def supports_tma():
     return TRITON_VERSION >= VALID_VERSION
 
 
+@functools.lru_cache
+def supports_pdl():
+    """Whether Triton programmatic dependent launch is available."""
+    return (is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+            and TRITON_VERSION >= version.parse('3.4.0'))
+
+
 if supports_tma():
     from triton.tools.tensor_descriptor import TensorDescriptor  # noqa: F401
