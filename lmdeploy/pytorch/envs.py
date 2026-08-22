@@ -229,7 +229,6 @@ with set_envs():
     # fake capture flag for debug cudagraph padding behavior
     fake_capture = env_to_bool('LMDEPLOY_FAKE_CUDA_GRAPH_CAPTURE', False)
     enable_decode_torch_compile = env_to_bool('LMDEPLOY_ENABLE_DECODE_TORCH_COMPILE', False)
-    enable_piecewise_cuda_graph = env_to_bool('LMDEPLOY_ENABLE_PIECEWISE_CUDA_GRAPH', False)
 
     # opt-ttft
     opt_ttft_policy = env_to_choice('LMDEPLOY_PT_TTFT_POLICY', 'size', {'fifo', 'size'})

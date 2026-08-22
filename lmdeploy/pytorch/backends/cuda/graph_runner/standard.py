@@ -56,24 +56,24 @@ class StandardDecoderPiecewiseGraphRuntime:
     def __init__(
         self,
         model: PiecewiseCudaGraphMixin,
-        max_prefill_tokens: int,
+        max_capture_tokens: int,
         cache_quant_policy: QuantPolicy = QuantPolicy.NONE,
         token_stride: int = _DEFAULT_TOKEN_STRIDE,
     ) -> None:
         if token_stride < 1:
             raise ValueError('token_stride must be positive')
         self.model = model
-        self.max_prefill_tokens = max_prefill_tokens
+        self.max_capture_tokens = max_capture_tokens
         self.cache_quant_policy = cache_quant_policy
         self.token_stride = token_stride
 
     def get_capture_token_sizes(self) -> list[int]:
         """Return fixed-stride token buckets, including the configured cap."""
-        if (self.max_prefill_tokens == 0 or self.cache_quant_policy != QuantPolicy.NONE
+        if (self.max_capture_tokens == 0 or self.cache_quant_policy != QuantPolicy.NONE
                 or get_world_rank()[0] != 1):
             return []
-        sizes = list(range(self.token_stride, self.max_prefill_tokens, self.token_stride))
-        sizes.append(self.max_prefill_tokens)
+        sizes = list(range(self.token_stride, self.max_capture_tokens, self.token_stride))
+        sizes.append(self.max_capture_tokens)
         return sizes
 
     def get_piecewise_graph_descriptor(
@@ -194,10 +194,10 @@ class StandardDecoderPiecewiseGraphRuntime:
         return tuple(constants)
 
     def _round_up_token_bucket(self, raw_tokens: int) -> int | None:
-        if not 0 < raw_tokens <= self.max_prefill_tokens:
+        if not 0 < raw_tokens <= self.max_capture_tokens:
             return None
         rounded = ((raw_tokens + self.token_stride - 1) // self.token_stride) * self.token_stride
-        return min(rounded, self.max_prefill_tokens)
+        return min(rounded, self.max_capture_tokens)
 
     @classmethod
     def _make_bucket_inputs(

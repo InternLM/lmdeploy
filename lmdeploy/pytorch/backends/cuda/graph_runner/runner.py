@@ -15,7 +15,6 @@ from lmdeploy.pytorch.config import (
     ModelConfig,
     normalize_cudagraph_capture_batch_sizes,
 )
-from lmdeploy.pytorch.envs import enable_piecewise_cuda_graph
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
 
@@ -63,9 +62,8 @@ def _validate_speculative_decoding(model_config: ModelConfig) -> None:
 def _make_piecewise_graph_manager(model: torch.nn.Module, cache_config: CacheConfig,
                                   backend_config: BackendConfig) -> PiecewiseGraphManager | None:
     """Build the optional PCG runtime only for an eligible CUDA model."""
-    enabled = (enable_piecewise_cuda_graph and not backend_config.eager_mode
-               and backend_config.device_type == 'cuda')
-    if not enabled:
+    max_capture_tokens = backend_config.piecewise_cudagraph_max_tokens
+    if max_capture_tokens is None or backend_config.eager_mode or backend_config.device_type != 'cuda':
         return None
 
     from lmdeploy.pytorch.models.utils.cudagraph import PiecewiseCudaGraphMixin
@@ -78,7 +76,7 @@ def _make_piecewise_graph_manager(model: torch.nn.Module, cache_config: CacheCon
 
     runtime = StandardDecoderPiecewiseGraphRuntime(
         model,
-        cache_config.max_prefill_token_num,
+        min(max_capture_tokens, cache_config.max_prefill_token_num),
         cache_config.quant_policy,
     )
     if not runtime.get_capture_token_sizes():

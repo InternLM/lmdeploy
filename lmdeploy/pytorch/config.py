@@ -90,6 +90,7 @@ class BackendConfig:
     """Backend config."""
     eager_mode: bool = True
     device_type: str = 'cuda'
+    piecewise_cudagraph_max_tokens: int | None = None
 
 
 @dataclass
