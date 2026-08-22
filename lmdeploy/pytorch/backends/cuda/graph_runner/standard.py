@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 
 from lmdeploy.messages import QuantPolicy
-from lmdeploy.pytorch.distributed import get_world_rank
+from lmdeploy.pytorch.distributed import get_dp_world_rank, get_ep_world_rank
 
 from .piecewise import (
     PiecewiseGraphBuild,
@@ -70,7 +70,7 @@ class StandardDecoderPiecewiseGraphRuntime:
     def get_capture_token_sizes(self) -> list[int]:
         """Return fixed-stride token buckets, including the configured cap."""
         if (self.max_capture_tokens == 0 or self.cache_quant_policy != QuantPolicy.NONE
-                or get_world_rank()[0] != 1):
+                or get_dp_world_rank()[0] != 1 or get_ep_world_rank()[0] != 1):
             return []
         sizes = list(range(self.token_stride, self.max_capture_tokens, self.token_stride))
         sizes.append(self.max_capture_tokens)
