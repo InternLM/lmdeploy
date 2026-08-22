@@ -509,10 +509,10 @@ class Scheduler:
 
     def shutdown(self) -> None:
         """Release scheduler-side connector resources exactly once."""
-        connector = getattr(self, 'kv_connector', None)
+        if self.kv_connector is None:
+            return
+        self.kv_connector.shutdown()
         self.kv_connector = None
-        if connector is not None:
-            connector.shutdown()
 
     def _ensure_runtime_state_available(self):
         """Make one state-cache slot available for an SSM runtime state.

@@ -85,8 +85,11 @@ class MooncakeStoreConfig:
     enable_offload: bool = False
 
     def __post_init__(self) -> None:
-        for field_name in ('metadata_server', 'master_server_address'):
-            value = getattr(self, field_name)
+        required_addresses = (
+            ('metadata_server', self.metadata_server),
+            ('master_server_address', self.master_server_address),
+        )
+        for field_name, value in required_addresses:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f'{field_name} must be a non-empty string')
         if not isinstance(self.protocol, str) or self.protocol not in ('rdma', 'tcp'):

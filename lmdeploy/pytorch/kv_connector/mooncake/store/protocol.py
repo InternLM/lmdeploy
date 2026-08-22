@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Wire protocol for Mooncake prefix-key lookups.
 
-Requests use ZMQ multipart frames.  The first frame is a named message tag so
-the protocol can grow without overloading a payload field.
+Requests use ZMQ multipart frames.  The first frame is a named message tag so the protocol can grow without overloading
+a payload field.
 """
 
 LOOKUP_MSG = b'lookup'

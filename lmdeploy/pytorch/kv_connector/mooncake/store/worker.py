@@ -10,7 +10,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import torch
@@ -23,6 +23,7 @@ from .data import BlobBlockHashes, MooncakeStoreConfig, MooncakeStoreConnectorMe
 from .protocol import LOOKUP_MSG, RESET_MSG, RESP_ERR, RESP_OK
 
 if TYPE_CHECKING:
+    from lmdeploy.messages import KVTransferConfig
     from lmdeploy.pytorch.config import CacheConfig
 
 logger = get_logger('lmdeploy')
@@ -35,9 +36,7 @@ _LOOKUP_RPC_TIMEOUT_MS = 5000
 
 def prepare_lookup_rpc_path(cache_config: CacheConfig) -> str:
     """Create one endpoint before ``CacheConfig`` is copied to workers."""
-    transfer_config = cache_config.kv_transfer_config
-    if transfer_config is None or not transfer_config.is_kv_transfer_instance:
-        raise ValueError('lookup RPC requires an enabled kv_transfer_config')
+    transfer_config = cast('KVTransferConfig', cache_config.kv_transfer_config)
 
     extra_config = transfer_config.kv_connector_extra_config
     configured_path = extra_config.get('lookup_rpc_path')
@@ -59,14 +58,8 @@ def prepare_lookup_rpc_path(cache_config: CacheConfig) -> str:
     return socket_path
 
 
-def get_lookup_rpc_path(cache_config: CacheConfig) -> str:
-    """Return the endpoint shared by the scheduler and worker rank 0."""
-    return prepare_lookup_rpc_path(cache_config)
-
-
 def _get_lookup_rpc_timeout_ms(cache_config: CacheConfig) -> int:
-    transfer_config = cache_config.kv_transfer_config
-    assert transfer_config is not None
+    transfer_config = cast('KVTransferConfig', cache_config.kv_transfer_config)
     timeout_ms = transfer_config.kv_connector_extra_config.get('lookup_rpc_timeout_ms', _LOOKUP_RPC_TIMEOUT_MS)
     if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms <= 0:
         raise ValueError('lookup_rpc_timeout_ms must be a positive integer')
@@ -125,11 +118,6 @@ def _get_local_hostname() -> str:
     raise RuntimeError('cannot determine the local hostname for Mooncake Store')
 
 
-def _is_tensor(value: object) -> bool:
-    """Keep the production tensor check strict while allowing test patching."""
-    return isinstance(value, torch.Tensor)
-
-
 class MooncakeStoreWorker:
     """Worker-side component of the Mooncake Store connector."""
 
@@ -142,12 +130,7 @@ class MooncakeStoreWorker:
         tp_size: int = 1,
         store_factory: StoreFactory | None = None,
     ) -> None:
-        kv_transfer_config = cache_config.kv_transfer_config
-        if kv_transfer_config is None or not kv_transfer_config.is_kv_transfer_instance:
-            raise ValueError('MooncakeStoreWorker requires an enabled kv_transfer_config')
-        if kv_transfer_config.kv_connector != 'MooncakeStoreConnector':
-            raise ValueError(
-                f'MooncakeStoreWorker cannot use kv_connector={kv_transfer_config.kv_connector!r}')
+        kv_transfer_config = cast('KVTransferConfig', cache_config.kv_transfer_config)
         if global_rank < 0:
             raise ValueError('global_rank must be non-negative')
         if tp_size <= 0:
@@ -156,26 +139,17 @@ class MooncakeStoreWorker:
             raise ValueError(f'tp_rank must be in [0, {tp_size}), got {tp_rank}')
 
         self._cache_config = cache_config
-        self._kv_transfer_config = kv_transfer_config
-        self.kv_role = kv_transfer_config.kv_role
         self.global_rank = global_rank
         self.tp_rank = tp_rank
         self.tp_size = tp_size
-        self.store: Any | None = None
         self.lookup_server: LookupKeyServer | None = None
-        self._registered_regions: tuple[MooncakeStoreRegistration, ...] | None = None
 
         config_path = kv_transfer_config.kv_connector_extra_config.get('mooncake_config_path')
         self.store_config = MooncakeStoreConfig.load_from_config(config_path)
         local_hostname = _get_local_hostname()
         factory = store_factory if store_factory is not None else _load_mooncake_store_factory()
-        store = self._create_store(factory)
-        try:
-            self._setup_store(store, local_hostname)
-        except Exception:
-            self._close_store(store)
-            raise
-        self.store = store
+        self.store: Any | None = self._create_store(factory)
+        self._setup_store(self.store, local_hostname)
 
     def _rank_fields(self) -> tuple[int, int, int]:
         return self.global_rank, self.tp_rank, self.tp_size
@@ -190,18 +164,7 @@ class MooncakeStoreWorker:
             *self._rank_fields(),
         )
         start = time.perf_counter()
-        try:
-            store = store_factory()
-        except Exception as e:
-            logger.error(
-                'Mooncake Store interaction after: operation=create global_rank=%d tp_rank=%d tp_size=%d '
-                'status=error elapsed_ms=%.3f error=%s',
-                *self._rank_fields(),
-                (time.perf_counter() - start) * 1000,
-                e,
-                exc_info=True,
-            )
-            raise RuntimeError('failed to create MooncakeDistributedStore') from e
+        store = store_factory()
         logger.info(
             'Mooncake Store interaction after: operation=create global_rank=%d tp_rank=%d tp_size=%d '
             'status=ok elapsed_ms=%.3f',
@@ -226,26 +189,15 @@ class MooncakeStoreWorker:
             config.master_server_address,
         )
         start = time.perf_counter()
-        try:
-            ret = store.setup(
-                local_hostname,
-                config.metadata_server,
-                config.global_segment_size,
-                config.local_buffer_size,
-                config.protocol,
-                config.device_name,
-                config.master_server_address,
-            )
-        except Exception as e:
-            logger.error(
-                'Mooncake Store interaction after: operation=setup global_rank=%d tp_rank=%d tp_size=%d '
-                'status=error elapsed_ms=%.3f error=%s',
-                *self._rank_fields(),
-                (time.perf_counter() - start) * 1000,
-                e,
-                exc_info=True,
-            )
-            raise RuntimeError('MooncakeDistributedStore.setup raised an exception') from e
+        ret = store.setup(
+            local_hostname,
+            config.metadata_server,
+            config.global_segment_size,
+            config.local_buffer_size,
+            config.protocol,
+            config.device_name,
+            config.master_server_address,
+        )
 
         status = 'ok' if ret == 0 else 'error'
         log = logger.info if ret == 0 else logger.error
@@ -265,7 +217,7 @@ class MooncakeStoreWorker:
         for cache_name, value in kv_caches.items():
             if not isinstance(cache_name, str) or not cache_name:
                 raise ValueError('KV cache names must be non-empty strings')
-            if _is_tensor(value):
+            if torch.is_tensor(value):
                 yield cache_name, value
                 continue
             if not isinstance(value, Sequence):
@@ -273,7 +225,7 @@ class MooncakeStoreWorker:
             if not value:
                 raise ValueError(f'KV cache {cache_name!r} contains no rows')
             for index, row in enumerate(value):
-                if not _is_tensor(row):
+                if not torch.is_tensor(row):
                     raise TypeError(f'KV cache {cache_name!r} row {index} is not a tensor')
                 yield f'{cache_name}[{index}]', row
 
@@ -315,21 +267,7 @@ class MooncakeStoreWorker:
             registration.size,
         )
         start = time.perf_counter()
-        try:
-            ret = self.store.register_buffer(registration.address, registration.size)
-        except Exception as e:
-            logger.error(
-                'Mooncake Store interaction after: operation=register_buffer global_rank=%d tp_rank=%d '
-                'tp_size=%d index=%d/%d name=%s status=error elapsed_ms=%.3f error=%s',
-                *self._rank_fields(),
-                index,
-                total,
-                registration.name,
-                (time.perf_counter() - start) * 1000,
-                e,
-                exc_info=True,
-            )
-            raise RuntimeError(f'Mooncake register_buffer raised for {registration.name!r}') from e
+        ret = self.store.register_buffer(registration.address, registration.size)
 
         status = 'ok' if ret == 0 else 'error'
         log = logger.info if ret == 0 else logger.error
@@ -352,41 +290,13 @@ class MooncakeStoreWorker:
         """Register each contiguous physical KV-cache row with Mooncake."""
         if not kv_caches:
             raise ValueError('No KV cache rows were provided for Mooncake Store registration')
-        if self.store is None:
-            raise RuntimeError('MooncakeDistributedStore is not available')
 
         registrations, backing_storages = self._build_registrations(kv_caches)
-        if self._registered_regions is not None:
-            if frozenset(registrations) == frozenset(self._registered_regions):
-                try:
-                    self._start_lookup_server()
-                except Exception:
-                    self.shutdown()
-                    raise
-                logger.info(
-                    'Mooncake KV cache registration already complete; skipping identical mapping: '
-                    'global_rank=%d tp_rank=%d tp_size=%d regions=%d',
-                    *self._rank_fields(),
-                    len(registrations),
-                )
-                return None
-            raise RuntimeError('Mooncake KV caches were already registered with a different mapping')
-
         total = len(registrations)
         total_bytes = sum(registration.size for registration in registrations)
-        try:
-            for index, registration in enumerate(registrations, start=1):
-                self._register_buffer(registration, index, total)
-        except Exception:
-            self.shutdown()
-            raise
-
-        self._registered_regions = registrations
-        try:
-            self._start_lookup_server()
-        except Exception:
-            self.shutdown()
-            raise
+        for index, registration in enumerate(registrations, start=1):
+            self._register_buffer(registration, index, total)
+        self._start_lookup_server()
         logger.info(
             'Mooncake KV cache registration complete: global_rank=%d tp_rank=%d tp_size=%d '
             'backing_storages=%d registered_regions=%d bytes=%d',
@@ -395,7 +305,6 @@ class MooncakeStoreWorker:
             total,
             total_bytes,
         )
-        return None
 
     def handle_preemptions(self, connector_metadata: MooncakeStoreConnectorMetadata) -> None:
         """Handle no preemption state until transfer support is implemented."""
@@ -426,12 +335,9 @@ class MooncakeStoreWorker:
             lookup_server.close()
 
         store = self.store
-        if store is None:
-            return None
         self.store = None
-        self._registered_regions = None
-        self._close_store(store)
-        return None
+        if store is not None:
+            self._close_store(store)
 
     def _close_store(self, store: Any) -> None:
         logger.info(
@@ -439,18 +345,7 @@ class MooncakeStoreWorker:
             *self._rank_fields(),
         )
         start = time.perf_counter()
-        try:
-            ret = store.close()
-        except Exception as e:
-            logger.warning(
-                'Mooncake Store interaction after: operation=close global_rank=%d tp_rank=%d tp_size=%d '
-                'status=error elapsed_ms=%.3f error=%s',
-                *self._rank_fields(),
-                (time.perf_counter() - start) * 1000,
-                e,
-                exc_info=True,
-            )
-            return
+        ret = store.close()
         status = 'ok' if ret in (None, 0) else 'error'
         log = logger.info if status == 'ok' else logger.warning
         log(
@@ -468,7 +363,7 @@ class LookupKeyServer:
 
     def __init__(self, store_worker: MooncakeStoreWorker, cache_config: CacheConfig) -> None:
         self.store_worker = store_worker
-        self.socket_path = get_lookup_rpc_path(cache_config)
+        self.socket_path = prepare_lookup_rpc_path(cache_config)
         self._ipc_path = self.socket_path.removeprefix('ipc://')
         self._lock_path = f'{self._ipc_path}.lock'
         self._lock_fd: int | None = None
@@ -477,7 +372,6 @@ class LookupKeyServer:
         self._ready_event = threading.Event()
         self._bind_error: BaseException | None = None
         self._closed = False
-        self.running = True
         self.context: zmq.Context | None = None
         self.socket: zmq.Socket | None = None
 
@@ -488,22 +382,15 @@ class LookupKeyServer:
         )
         self.thread.start()
         if not self._ready_event.wait(timeout=5.0):
-            self._stop_event.set()
-            self.thread.join()
             raise RuntimeError('LookupKeyServer did not start within 5 seconds')
         if self._bind_error is not None:
-            self.thread.join()
             raise RuntimeError(f'LookupKeyServer failed to bind {self.socket_path!r}') from self._bind_error
-
-    @staticmethod
-    def _frame_bytes(frame: Any) -> bytes:
-        return bytes(frame)
 
     def _acquire_endpoint_lock(self) -> None:
         lock_fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except Exception:
+        except OSError:
             os.close(lock_fd)
             raise RuntimeError(f'lookup endpoint is already in use: {self.socket_path}') from None
         self._lock_fd = lock_fd
@@ -514,28 +401,22 @@ class LookupKeyServer:
         if lock_fd is None:
             return
         try:
-            if os.path.exists(self._lock_path):
-                os.unlink(self._lock_path)
+            os.unlink(self._lock_path)
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
 
-    def _handle_lookup(self, frames: list[Any]) -> bytes:
+    def _handle_lookup(self, frames: list[zmq.Frame]) -> bytes:
         if len(frames) != 4:
             raise ValueError(f'lookup request must have 4 frames, got {len(frames)}')
-        token_frame = self._frame_bytes(frames[1])
-        hash_len_frame = self._frame_bytes(frames[2])
+        token_frame = bytes(frames[1])
+        hash_len_frame = bytes(frames[2])
         if len(token_frame) != 4 or len(hash_len_frame) != 2:
             raise ValueError('lookup request has an invalid integer frame width')
 
         token_len = int.from_bytes(token_frame, byteorder='big')
         hash_len = int.from_bytes(hash_len_frame, byteorder='big')
-        payload_frame = frames[3]
-        if hasattr(payload_frame, 'buffer'):
-            payload = payload_frame.buffer
-        else:
-            payload = memoryview(self._frame_bytes(payload_frame))
-        block_hashes = BlobBlockHashes(payload, hash_len)
+        block_hashes = BlobBlockHashes(frames[3].buffer, hash_len)
         result = self.store_worker.lookup(token_len, block_hashes)
         if (isinstance(result, bool) or not isinstance(result, int) or result < 0 or result > token_len
                 or result >= 2**32):
@@ -544,12 +425,7 @@ class LookupKeyServer:
 
     def _handle_reset(self) -> bytes:
         try:
-            send_thread = getattr(self.store_worker, 'kv_send_thread', None)
-            if send_thread is not None:
-                send_thread.request_queue.join()
             store = self.store_worker.store
-            if store is None:
-                raise RuntimeError('MooncakeDistributedStore is not available')
             store.remove_all(force=True)
             logger.info('Mooncake Store reset via remove_all succeeded.')
             return RESP_OK
@@ -557,11 +433,11 @@ class LookupKeyServer:
             logger.error('Mooncake Store remove_all failed: %s', e, exc_info=True)
             return RESP_ERR
 
-    def _dispatch(self, frames: list[Any]) -> bytes:
+    def _dispatch(self, frames: list[zmq.Frame]) -> bytes:
         if not frames:
             logger.warning('LookupKeyServer received an empty request.')
             return RESP_ERR
-        msg_type = self._frame_bytes(frames[0])
+        msg_type = bytes(frames[0])
         if msg_type == LOOKUP_MSG:
             try:
                 return self._handle_lookup(frames)
@@ -583,14 +459,14 @@ class LookupKeyServer:
             if os.path.exists(self._ipc_path):
                 os.unlink(self._ipc_path)
             self.socket = _make_zmq_socket(self.context, self.socket_path, zmq.REP, bind=True)
+            rpc_socket = self.socket
             self._owns_ipc_path = True
             self._ready_event.set()
             while not self._stop_event.is_set():
-                assert self.socket is not None
-                if self.socket.poll(_LOOKUP_POLL_INTERVAL_MS, zmq.POLLIN) == 0:
+                if rpc_socket.poll(_LOOKUP_POLL_INTERVAL_MS, zmq.POLLIN) == 0:
                     continue
-                frames = self.socket.recv_multipart(copy=False)
-                self.socket.send(self._dispatch(frames))
+                frames = rpc_socket.recv_multipart(copy=False)
+                rpc_socket.send(self._dispatch(frames))
         except Exception as e:
             if not self._ready_event.is_set():
                 self._bind_error = e
@@ -612,7 +488,6 @@ class LookupKeyServer:
                 os.unlink(self._ipc_path)
             self._owns_ipc_path = False
             self._release_endpoint_lock()
-            self.running = False
 
     def close(self) -> None:
         """Stop the server thread and remove its IPC socket path."""
@@ -627,8 +502,7 @@ class LookupKeyClient:
     """Scheduler-side ZMQ client with non-blocking Future polling."""
 
     def __init__(self, cache_config: CacheConfig) -> None:
-        self.cache_config = cache_config
-        self.socket_path = get_lookup_rpc_path(cache_config)
+        self.socket_path = prepare_lookup_rpc_path(cache_config)
         self.timeout_ms = _get_lookup_rpc_timeout_ms(cache_config)
         self.context: zmq.Context | None = None
         self.socket: zmq.Socket | None = None

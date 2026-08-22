@@ -152,7 +152,7 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
     assert agent.state_cache_engine is state_cache_engine
 
 
-def test_build_cache_engine_shuts_down_connector_after_registration_error(monkeypatch):
+def test_build_cache_engine_propagates_registration_error(monkeypatch):
     from lmdeploy.pytorch.engine.model_agent import agent as agent_module
 
     events = []
@@ -180,11 +180,11 @@ def test_build_cache_engine_shuts_down_connector_after_registration_error(monkey
     with pytest.raises(RuntimeError, match='registration failed'):
         agent.build_cache_engine()
 
-    assert events == ['register', 'shutdown']
-    assert agent.kv_connector is None
+    assert events == ['register']
+    assert agent.kv_connector is not None
 
 
-def test_build_cache_engine_shuts_down_connector_after_later_initialization_error(monkeypatch):
+def test_build_cache_engine_propagates_later_initialization_error(monkeypatch):
     from lmdeploy.pytorch.engine.model_agent import agent as agent_module
 
     events = []
@@ -215,10 +215,8 @@ def test_build_cache_engine_shuts_down_connector_after_later_initialization_erro
     with pytest.raises(RuntimeError, match='spec cache failed'):
         agent.build_cache_engine()
 
-    assert events == ['register', 'shutdown']
-    assert agent.kv_connector is None
-    assert agent.cache_engine is None
-    assert agent.state_cache_engine is None
+    assert events == ['register']
+    assert agent.kv_connector is not None
 
 
 def test_sleep_shuts_down_connector_before_dropping_cache(monkeypatch):

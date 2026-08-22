@@ -191,22 +191,13 @@ class Engine(EngineBase):
                                         cache_config=cache_config,
                                         seq_strategy=self.seq_strategy,
                                         sampling_strategy=self.sampling_strategy)
-        scheduler_connector = None
-        try:
-            scheduler_connector = build_kv_connector(KVConnectorRole.SCHEDULER, cache_config)
-            self.scheduler = Scheduler(
-                scheduler_config,
-                cache_config,
-                seq_meta=self.seq_meta,
-                kv_connector=scheduler_connector,
-            )
-        except Exception:
-            try:
-                if scheduler_connector is not None:
-                    scheduler_connector.shutdown()
-            finally:
-                self.executor.release()
-            raise
+        scheduler_connector = build_kv_connector(KVConnectorRole.SCHEDULER, cache_config)
+        self.scheduler = Scheduler(
+            scheduler_config,
+            cache_config,
+            seq_meta=self.seq_meta,
+            kv_connector=scheduler_connector,
+        )
 
         # engine args
         self.model_path = model_path
@@ -522,12 +513,8 @@ class Engine(EngineBase):
         """Finally process for dist."""
         logger.info('Cleanup executor.')
         self.migration_event = None
-        try:
-            scheduler = getattr(self, 'scheduler', None)
-            if scheduler is not None:
-                scheduler.shutdown()
-        finally:
-            self.executor.release()
+        self.scheduler.shutdown()
+        self.executor.release()
 
     def update_params(self, request: Any):
         """Update params."""

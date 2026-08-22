@@ -132,12 +132,12 @@ class RecordingLogger:
 
 @pytest.fixture(autouse=True)
 def patch_worker_runtime(monkeypatch):
-    original_is_tensor = worker_module._is_tensor
+    original_is_tensor = torch.is_tensor
     recording_logger = RecordingLogger()
     monkeypatch.setattr(worker_module, '_get_local_hostname', lambda: '10.0.0.8')
     monkeypatch.setattr(
-        worker_module,
-        '_is_tensor',
+        worker_module.torch,
+        'is_tensor',
         lambda value: isinstance(value, FakeTensor) or original_is_tensor(value),
     )
     monkeypatch.setattr(worker_module, 'logger', recording_logger)
@@ -335,14 +335,14 @@ def test_store_create_setup_and_close_are_logged_with_ranks(tmp_path, patch_work
 
 
 @pytest.mark.parametrize('setup_result', [-1, None])
-def test_setup_failure_closes_partial_store(tmp_path, setup_result):
+def test_setup_failure_propagates_without_cleanup(tmp_path, setup_result):
     path = write_store_config(tmp_path)
     store = FakeStore(setup_ret=setup_result)
 
     with pytest.raises(RuntimeError, match='setup failed'):
         MooncakeStoreWorker(make_cache_config(path), store_factory=lambda: store)
 
-    assert store.close_calls == 1
+    assert store.close_calls == 0
 
 
 def test_registers_99_logical_glm_cache_rows(tmp_path, patch_worker_runtime):
@@ -389,10 +389,6 @@ def test_sequence_values_are_flattened_to_rows(tmp_path):
     worker.register_kv_caches({'main': rows})
 
     assert store.register_calls == [(0x1000, 4096), (0x2000, 4096)]
-    assert [(region.name, region.address, region.size) for region in worker._registered_regions] == [
-        ('main[0]', 0x1000, 4096),
-        ('main[1]', 0x2000, 4096),
-    ]
     worker.shutdown()
 
 
@@ -414,7 +410,7 @@ def test_lookup_server_starts_after_registration_only_on_global_rank_zero(tmp_pa
     rank_one_worker.shutdown()
 
 
-def test_lookup_server_start_failure_rolls_back_registration(tmp_path, monkeypatch):
+def test_lookup_server_start_failure_propagates_without_cleanup(tmp_path, monkeypatch):
     worker, store = make_worker(tmp_path)
 
     def fail_to_start(*args, **kwargs):
@@ -425,32 +421,9 @@ def test_lookup_server_start_failure_rolls_back_registration(tmp_path, monkeypat
         worker.register_kv_caches({'row': FakeTensor(0x1000)})
 
     assert store.register_calls == [(0x1000, 4096)]
-    assert store.close_calls == 1
-    assert worker.store is None
+    assert store.close_calls == 0
+    assert worker.store is store
     assert worker.lookup_server is None
-    assert worker._registered_regions is None
-
-
-def test_equivalent_registration_is_noop_but_different_mapping_fails(tmp_path):
-    worker, store = make_worker(tmp_path)
-    rows = {
-        'first': FakeTensor(0x1000),
-        'second': FakeTensor(0x2000),
-    }
-    worker.register_kv_caches(rows)
-
-    worker.register_kv_caches(rows)
-    assert len(store.register_calls) == 2
-
-    worker.register_kv_caches(dict(reversed(list(rows.items()))))
-    assert len(store.register_calls) == 2
-    assert [region.name for region in worker._registered_regions] == ['first', 'second']
-
-    with pytest.raises(RuntimeError, match='different mapping'):
-        worker.register_kv_caches({'first': FakeTensor(0x3000)})
-    assert len(store.register_calls) == 2
-    worker.shutdown()
-    assert worker._registered_regions is None
 
 
 def test_empty_registration_mapping_fails_fast(tmp_path):
@@ -463,7 +436,7 @@ def test_empty_registration_mapping_fails_fast(tmp_path):
     worker.shutdown()
 
 
-def test_register_failure_stops_and_closes_store(tmp_path):
+def test_register_failure_propagates_without_cleanup(tmp_path):
     store = FakeStore(register_failure_at=3)
     worker, _ = make_worker(tmp_path, store=store)
     rows = {f'row.{index}': FakeTensor(0x1000 + index * 0x1000) for index in range(5)}
@@ -472,23 +445,21 @@ def test_register_failure_stops_and_closes_store(tmp_path):
         worker.register_kv_caches(rows)
 
     assert len(store.register_calls) == 3
-    assert store.close_calls == 1
-    assert worker.store is None
-    assert worker._registered_regions is None
+    assert store.close_calls == 0
+    assert worker.store is store
 
 
-def test_register_exception_stops_and_closes_store(tmp_path):
+def test_register_exception_propagates_without_cleanup(tmp_path):
     store = FakeStore(register_error_at=2)
     worker, _ = make_worker(tmp_path, store=store)
     rows = {f'row.{index}': FakeTensor(0x1000 + index * 0x1000) for index in range(3)}
 
-    with pytest.raises(RuntimeError, match="raised for 'row.1'"):
+    with pytest.raises(RuntimeError, match='register failed'):
         worker.register_kv_caches(rows)
 
     assert len(store.register_calls) == 2
-    assert store.close_calls == 1
-    assert worker.store is None
-    assert worker._registered_regions is None
+    assert store.close_calls == 0
+    assert worker.store is store
 
 
 def test_registration_rejects_non_cuda_noncontiguous_and_empty_rows(tmp_path):
@@ -506,14 +477,13 @@ def test_registration_rejects_non_cuda_noncontiguous_and_empty_rows(tmp_path):
     worker.shutdown()
 
 
-def test_shutdown_is_idempotent_and_swallows_close_error(tmp_path, patch_worker_runtime):
+def test_shutdown_is_idempotent_and_propagates_close_error(tmp_path):
     store = FakeStore(close_error=RuntimeError('close failed'))
     worker, _ = make_worker(tmp_path, store=store)
 
-    worker.shutdown()
+    with pytest.raises(RuntimeError, match='close failed'):
+        worker.shutdown()
     worker.shutdown()
 
     assert store.close_calls == 1
     assert worker.store is None
-    assert any('operation=close' in message and 'status=error' in message
-               for _, message in patch_worker_runtime.messages)

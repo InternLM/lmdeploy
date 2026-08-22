@@ -19,15 +19,7 @@ class MooncakeStoreScheduler:
     """Scheduler-side component of the Mooncake Store connector."""
 
     def __init__(self, cache_config: CacheConfig) -> None:
-        kv_transfer_config = cache_config.kv_transfer_config
-        if kv_transfer_config is None or not kv_transfer_config.is_kv_transfer_instance:
-            raise ValueError('MooncakeStoreScheduler requires an enabled kv_transfer_config')
-
-        self._cache_config = cache_config
-        self._kv_transfer_config = kv_transfer_config
-        self.kv_role = kv_transfer_config.kv_role
-        self.lookup_async = True
-        self.client: LookupKeyClient | None = LookupKeyClient(cache_config)
+        self.client = LookupKeyClient(cache_config)
 
     def get_num_new_matched_tokens(
         self,
@@ -62,17 +54,11 @@ class MooncakeStoreScheduler:
         self,
         request: SchedulerSequence,
         block_ids: Sequence[int],
-    ) -> tuple[bool, dict[str, Any] | None]:
+) -> tuple[bool, dict[str, Any] | None]:
         """Do not take ownership of finished request blocks yet."""
-        request_id = getattr(request, 'seq_id', None)
-        if self.client is not None and request_id is not None:
-            self.client.discard(request_id)
+        self.client.discard(request.seq_id)
         return False, None
 
     def shutdown(self) -> None:
         """Cancel pending lookups and release the scheduler client."""
-        client = self.client
-        self.client = None
-        if client is not None:
-            client.close()
-        return None
+        self.client.close()

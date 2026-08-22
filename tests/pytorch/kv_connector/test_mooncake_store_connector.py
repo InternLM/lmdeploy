@@ -57,7 +57,6 @@ def test_connector_constructs_only_scheduler_delegate(cache_config):
     connector = MooncakeStoreConnector(KVConnectorRole.SCHEDULER, cache_config)
 
     assert isinstance(connector.connector_scheduler, MooncakeStoreScheduler)
-    assert connector.connector_scheduler._cache_config is cache_config
     assert connector.connector_worker is None
     assert connector.kv_role == 'kv_both'
 
@@ -110,7 +109,7 @@ def test_connector_rejects_a_different_connector_configuration():
 
 def test_scheduler_empty_implementations_are_fail_closed(cache_config):
     connector = MooncakeStoreConnector(KVConnectorRole.SCHEDULER, cache_config)
-    request = object()
+    request = MagicMock(seq_id=17)
 
     assert connector.get_num_new_matched_tokens(request, 0) == (0, False)
     assert connector.update_state_after_alloc(request, [1, 2], 0) is None

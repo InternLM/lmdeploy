@@ -1233,10 +1233,9 @@ class BaseModelAgent:
 
     def _shutdown_kv_connector(self):
         """Shutdown the connector before releasing its registered caches."""
-        connector = getattr(self, 'kv_connector', None)
-        if connector is None:
+        if self.kv_connector is None:
             return
-        connector.shutdown()
+        self.kv_connector.shutdown()
         self.kv_connector = None
 
     def build_cache_engine(self):
@@ -1256,37 +1255,20 @@ class BaseModelAgent:
                                             cache_stream=self.cache_stream)
             self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
 
-            try:
-                try:
-                    self.kv_connector = build_kv_connector(
-                        KVConnectorRole.WORKER,
-                        self.cache_config,
-                        global_rank=self.rank,
-                        tp_rank=tp_rank,
-                        tp_size=tp,
-                    )
-                    if self.kv_connector is not None:
-                        self.kv_connector.register_kv_caches(self.cache_engine.connector_kv_caches)
-                except Exception:
-                    logger.exception(
-                        'Failed to initialize KV connector: global_rank=%d tp_rank=%d tp_size=%d',
-                        self.rank,
-                        tp_rank,
-                        tp,
-                    )
-                    raise
+            self.kv_connector = build_kv_connector(
+                KVConnectorRole.WORKER,
+                self.cache_config,
+                global_rank=self.rank,
+                tp_rank=tp_rank,
+                tp_size=tp,
+            )
+            if self.kv_connector is not None:
+                self.kv_connector.register_kv_caches(self.cache_engine.connector_kv_caches)
 
-                self.spec_agent.build_cache_engine(self.cache_stream)
-                if self.memdecode_agent is not None:
-                    self.memdecode_agent.set_cache_config(self.cache_config)
-                    self.memdecode_agent.build_cache_engine(self.cache_stream)
-            except Exception:
-                try:
-                    self._shutdown_kv_connector()
-                finally:
-                    self.cache_engine = None
-                    self.state_cache_engine = None
-                raise
+            self.spec_agent.build_cache_engine(self.cache_stream)
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.set_cache_config(self.cache_config)
+                self.memdecode_agent.build_cache_engine(self.cache_stream)
 
     def _forward_impl(self, inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None = None):
         output = model_forward(

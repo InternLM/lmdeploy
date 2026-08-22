@@ -112,7 +112,7 @@ def test_engine_loop_finally_shuts_down_scheduler_before_executor():
     assert engine.migration_event is None
 
 
-def test_engine_loop_finally_releases_executor_when_scheduler_shutdown_fails():
+def test_engine_loop_finally_propagates_scheduler_shutdown_error():
     engine = Engine.__new__(Engine)
     engine.migration_event = object()
     engine.scheduler = Mock()
@@ -122,5 +122,4 @@ def test_engine_loop_finally_releases_executor_when_scheduler_shutdown_fails():
     with pytest.raises(RuntimeError, match='scheduler shutdown failed'):
         engine._loop_finally()
 
-    engine.executor.release.assert_called_once_with()
-    assert engine.migration_event is None
+    engine.executor.release.assert_not_called()

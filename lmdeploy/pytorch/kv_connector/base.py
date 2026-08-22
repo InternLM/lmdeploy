@@ -1,13 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Base interfaces for external KV-cache connectors.
 
-A connector has a scheduler-side instance and one worker-side instance per
-model worker. The scheduler instance discovers external cache hits and builds
-serializable metadata for a model step. Worker instances consume that metadata
+A connector has a scheduler-side instance and one worker-side instance per model worker. The scheduler instance
+discovers external cache hits and builds serializable metadata for a model step. Worker instances consume that metadata
 to load or save the GPU KV cache.
 
-The interface intentionally contains only the lifecycle needed by lmdeploy's
-PyTorch engine.
+The interface intentionally contains only the lifecycle needed by lmdeploy's PyTorch engine.
 """
 
 import enum
@@ -35,8 +33,8 @@ class KVConnectorRole(enum.Enum):
 class KVConnectorMetadata(ABC):
     """Scheduler-to-worker metadata for one engine step.
 
-    Implementations must remain serializable because distributed executors may
-    send an instance to model workers through multiprocessing RPC.
+    Implementations must remain serializable because distributed executors may send an instance to model workers through
+    multiprocessing RPC.
     """
 
 
@@ -78,14 +76,14 @@ class KVConnectorBase(ABC):
     def register_kv_caches(self, kv_caches: Mapping[str, KVCacheValue]) -> None:
         """Register GPU KV-cache tensors with the external store.
 
-        This is a no-op for connectors that do not require memory
-        registration. Implementations must not retain temporary tensor views
-        in a way that changes ownership of the underlying cache allocation.
+        This is a no-op for connectors that do not require memory registration. Implementations must not retain
+        temporary tensor views in a way that changes ownership of the underlying cache allocation.
         """
         return None
 
     def handle_preemptions(self, connector_metadata: KVConnectorMetadata) -> None:
-        """Handle preempted requests before their GPU blocks are overwritten."""
+        """Handle preempted requests before their GPU blocks are
+        overwritten."""
         return None
 
     def get_finished(
@@ -155,7 +153,8 @@ class KVConnectorBase(ABC):
         raise NotImplementedError
 
     def on_new_request(self, request: 'SchedulerSequence') -> None:
-        """Record a newly admitted request when connector bookkeeping needs it."""
+        """Record a newly admitted request when connector bookkeeping needs
+        it."""
         return None
 
     def update_connector_output(self, connector_output: Any) -> None:

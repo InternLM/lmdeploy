@@ -45,8 +45,6 @@ class MooncakeStoreConnector(KVConnectorBase):
             raise ValueError(
                 f'MooncakeStoreConnector cannot use kv_connector={kv_transfer_config.kv_connector!r}')
 
-        self._cache_config = cache_config
-        self._kv_transfer_config = kv_transfer_config
         self.kv_role = kv_transfer_config.kv_role
 
         self.connector_scheduler: MooncakeStoreScheduler | None = None
