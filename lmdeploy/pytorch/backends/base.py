@@ -25,6 +25,7 @@ class OpType(Enum):
     LinearW8A8 = auto()
     RMSNormW8A8 = auto()
     MultinomialSampling = auto()
+    RejectionSampling = auto()
     LinearW4A16 = auto()
     SoftmaxTopK = auto()
     FusedMoE = auto()

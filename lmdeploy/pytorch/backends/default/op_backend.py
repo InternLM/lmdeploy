@@ -38,6 +38,9 @@ class DefaultOpsBackend(OpsBackend):
         elif layer_type == OpType.MultinomialSampling:
             from .multinomial_sampling import DefaultMultinomialSamplingBuilder
             return DefaultMultinomialSamplingBuilder
+        elif layer_type == OpType.RejectionSampling:
+            from .rejection_sampling import DefaultRejectionSamplingBuilder
+            return DefaultRejectionSamplingBuilder
         elif layer_type == OpType.LinearW4A16:
             from .awq_modules import DefaultLinearW4A16Builder
             return DefaultLinearW4A16Builder
