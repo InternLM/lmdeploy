@@ -111,3 +111,7 @@ class GraphRunner:
                 self.cache_config.cudagraph_capture_batch_sizes, self.cache_config.max_batches)
             return self.cache_config.cudagraph_capture_batch_sizes
         return _get_capture_batch_size_impl(self.cache_config.max_batches)
+
+    def get_prefill_warmup_token_sizes(self) -> list[int]:
+        """Return extra single-batch token sizes to warm up before serving."""
+        return []

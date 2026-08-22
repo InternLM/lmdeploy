@@ -60,7 +60,7 @@ def _validate_speculative_decoding(model_config: ModelConfig) -> None:
     require_fa3_for_speculative_decoding()
 
 
-def _make_piecewise_graph_manager(model: torch.nn.Module,
+def _make_piecewise_graph_manager(model: torch.nn.Module, cache_config: CacheConfig,
                                   backend_config: BackendConfig) -> PiecewiseGraphManager | None:
     """Build the optional PCG runtime only for an eligible CUDA model."""
     enabled = (enable_piecewise_cuda_graph and not backend_config.eager_mode
@@ -76,8 +76,19 @@ def _make_piecewise_graph_manager(model: torch.nn.Module,
     from .piecewise import PiecewiseGraphManager
     from .standard import StandardDecoderPiecewiseGraphRuntime
 
-    runtime = StandardDecoderPiecewiseGraphRuntime(model)
-    return PiecewiseGraphManager(runtime.hooks)
+    runtime = StandardDecoderPiecewiseGraphRuntime(
+        model,
+        cache_config.max_prefill_token_num,
+        cache_config.quant_policy,
+    )
+    if not runtime.get_capture_token_sizes():
+        return None
+
+    step_meta_plan = model.ctx_mgr.backend_step_meta_plan
+    if not step_meta_plan.enable_piecewise_cuda_graph():
+        return None
+
+    return PiecewiseGraphManager(runtime)
 
 
 def _update_deepep_mode(context: StepContext) -> None:
@@ -117,7 +128,7 @@ class CUDAGraphRunner(GraphRunner):
         self._full_graph_pool_handle = torch.cuda.graph_pool_handle()
         self._full_graph_runners: dict[Any, CUDASingleGraphRunner] = {}
 
-        self._piecewise_graph_manager = _make_piecewise_graph_manager(model, backend_config)
+        self._piecewise_graph_manager = _make_piecewise_graph_manager(model, cache_config, backend_config)
 
         # strategy factory
         build_ctx = model.ctx_mgr.build_ctx
@@ -186,6 +197,13 @@ class CUDAGraphRunner(GraphRunner):
             return None
         return manager.get_piecewise_graph_descriptor(context, kwargs)
 
+    def get_prefill_warmup_token_sizes(self) -> list[int]:
+        """Return extra single-batch token sizes needed by this runner."""
+        manager = self._piecewise_graph_manager
+        if manager is None:
+            return []
+        return manager.get_capture_token_sizes()
+
     def _get_max_tokens(self, graph_key: tuple, input_ids: torch.Tensor, q_seqlens: torch.Tensor):
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
@@ -240,10 +258,14 @@ class CUDAGraphRunner(GraphRunner):
 
         descriptor = self._get_piecewise_graph_descriptor(context, **kwargs)
         if descriptor is not None:
-            result = self._piecewise_graph_manager.run(descriptor, kwargs)
-            if result.executed:
-                return result.output
+            manager = self._piecewise_graph_manager
+            if manager.has_plan(descriptor):
+                return manager.replay(descriptor, kwargs)
+            if context.is_dummy:
+                return manager.prepare(descriptor, kwargs)
 
+        # Serving never captures. If startup warmup was skipped or this call is
+        # unsupported, eager execution is selected before PCG can mutate state.
         return self._forward_eager(**kwargs)
 
     @record_function('prepare_inputs_for_generation')

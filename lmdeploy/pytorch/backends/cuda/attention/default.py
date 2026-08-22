@@ -174,19 +174,44 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
 
         original_forward = self.forward
 
-        @eager_boundary(adapter_factory=PaddedTensorOutputAdapter)
-        def piecewise_forward(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, *args,
-                              **kwargs) -> torch.Tensor:
+        @eager_boundary(
+            adapter_factory=PaddedTensorOutputAdapter,
+            reuse_bridge_after_next_step=True,
+        )
+        def run_eager_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor,
+                                v_cache: torch.Tensor, **kwargs) -> torch.Tensor:
+            from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+
+            context = get_step_ctx_manager().current_context()
             execution = get_piecewise_graph_execution()
-            if execution is not None:
-                raw_tokens = execution.raw_tokens
-                query = query[:raw_tokens]
-                key = key[:raw_tokens]
-                value = value[:raw_tokens]
-            return original_forward(query, key, value, *args, **kwargs)
+            metadata = context.attn_metadata
+            kwargs['attn_metadata'] = metadata
+            raw_tokens = execution.raw_tokens
+            query = query[:raw_tokens]
+            key = key[:raw_tokens]
+            value = value[:raw_tokens]
+
+            saved_max_q_seqlen = metadata.max_q_seqlen
+            metadata.max_q_seqlen = context.max_q_seqlen
+            try:
+                return original_forward(query, key, value, k_cache, v_cache, **kwargs)
+            finally:
+                metadata.max_q_seqlen = saved_max_q_seqlen
+
+        def piecewise_forward(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor,
+                              v_cache: torch.Tensor, **kwargs) -> torch.Tensor:
+            if get_piecewise_graph_execution() is None:
+                return original_forward(query, key, value, k_cache, v_cache, **kwargs)
+
+            kwargs.pop('attn_metadata')
+            return run_eager_attention(query, key, value, k_cache, v_cache, **kwargs)
 
         self._piecewise_forward = piecewise_forward
         self.forward = piecewise_forward
+
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Return whether this selected implementation supports PCG."""
+        return type(self) is TritonAttentionImpl
 
     def get_step_metadata_provider(self):
         """Describe metadata required by this selected implementation."""
@@ -203,8 +228,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
 
     def get_step_kernel_metadata(self, attn_metadata: TritonAttentionMetadata) -> Any | None:
         """Return group-specific metadata when a model uses multiple groups."""
-        kernel_metadata = getattr(attn_metadata, 'kernel_metadata', ())
-        group_id = getattr(self, '_step_meta_group', None)
+        kernel_metadata = attn_metadata.kernel_metadata
+        group_id = self._step_meta_group
         if len(kernel_metadata) <= 1 or group_id is None:
             return None
         return kernel_metadata[group_id]

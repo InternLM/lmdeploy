@@ -1,17 +1,17 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-from collections import OrderedDict
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from enum import Enum
-from functools import wraps
+from functools import partial, wraps
 from typing import Any, Protocol, TypeVar, overload
 
 import torch
 from torch.profiler import record_function
+
+# Eager boundary declaration and output binding.
 
 
 class UnsupportedBoundaryError(RuntimeError):
@@ -22,10 +22,55 @@ class PiecewiseGraphGuardError(RuntimeError):
     """Raised before replay when a request does not satisfy plan guards."""
 
 
+BoundEagerCall = Callable[[], Any]
+
+
+def _make_weak_cuda_view(tensor: torch.Tensor) -> torch.Tensor:
+    """Keep tensor metadata without owning graph-pool storage.
+
+    A captured graph keeps its private pool alive. This view lets later eager replay use the captured address without
+    preventing that pool from reusing the allocation after the eager call's position in the recorded order.
+    """
+    if tensor.device.type != 'cuda' or tensor.numel() == 0:
+        return tensor
+
+    storage = tensor.untyped_storage()
+    weak_storage = torch._C._construct_storage_from_data_pointer(
+        storage.data_ptr(),
+        tensor.device,
+        storage.nbytes(),
+    )
+    return torch.empty(0, dtype=tensor.dtype, device=tensor.device).set_(
+        weak_storage,
+        storage_offset=tensor.storage_offset(),
+        size=tensor.size(),
+        stride=tensor.stride(),
+    )
+
+
+def _make_replay_eager_call(
+    func: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> BoundEagerCall:
+    """Retain non-owning CUDA views for one ordered eager replay call."""
+    replay_args = tuple(_make_weak_cuda_view(value) if isinstance(value, torch.Tensor) else value for value in args)
+    replay_kwargs = {
+        name: _make_weak_cuda_view(value) if isinstance(value, torch.Tensor) else value
+        for name, value in kwargs.items()
+    }
+    return partial(func, *replay_args, **replay_kwargs)
+
+
 class BoundaryAdapter(Protocol):
     """Stabilize one eager result for a following CUDA graph piece."""
 
-    def allocate(self, output: Any, boundary_input_storages: frozenset[int]) -> Any:
+    def allocate(
+        self,
+        output: Any,
+        boundary_input_storages: frozenset[int],
+        bridge_pool: ReusableBridgePool | None = None,
+    ) -> Any:
         ...
 
     def copy(self, destination: Any, source: Any) -> None:
@@ -35,7 +80,12 @@ class BoundaryAdapter(Protocol):
 class FixedOutputAdapter:
     """Require an eager result with a fixed tensor-pytree contract."""
 
-    def allocate(self, output: Any, boundary_input_storages: frozenset[int]) -> Any:
+    def allocate(
+        self,
+        output: Any,
+        boundary_input_storages: frozenset[int],
+        _bridge_pool: ReusableBridgePool | None = None,
+    ) -> Any:
         return _allocate_bridge(output, boundary_input_storages)
 
     def copy(self, destination: Any, source: Any) -> None:
@@ -48,10 +98,6 @@ class PiecewiseGraphExecution:
 
     raw_tokens: int
     token_bucket: int
-
-    def __post_init__(self) -> None:
-        if not 0 < self.raw_tokens <= self.token_bucket:
-            raise ValueError('raw_tokens must be within the token bucket')
 
 
 _ACTIVE_EXECUTION: ContextVar[PiecewiseGraphExecution | None] = ContextVar(
@@ -77,7 +123,12 @@ def get_piecewise_graph_execution() -> PiecewiseGraphExecution | None:
 class PaddedTensorOutputAdapter:
     """Bind a raw-token eager tensor into bucket-shaped stable storage."""
 
-    def allocate(self, output: Any, boundary_input_storages: frozenset[int]) -> torch.Tensor:
+    def allocate(
+        self,
+        output: Any,
+        boundary_input_storages: frozenset[int],
+        bridge_pool: ReusableBridgePool | None = None,
+    ) -> torch.Tensor:
         execution = _ACTIVE_EXECUTION.get()
         if execution is None:
             raise RuntimeError('padded output allocation requires an active piecewise execution')
@@ -94,23 +145,12 @@ class PaddedTensorOutputAdapter:
             raise UnsupportedBoundaryError('padded output adapter requires a contiguous eager output')
 
         shape = (execution.token_bucket, *output.shape[1:])
-        return output.new_empty(shape)
+        if bridge_pool is None:
+            return output.new_empty(shape)
+        return bridge_pool.allocate_padded_tensor(output, shape)
 
     def copy(self, destination: Any, source: Any) -> None:
         execution = _ACTIVE_EXECUTION.get()
-        if execution is None:
-            raise RuntimeError('padded output binding requires an active piecewise execution')
-        if not isinstance(destination, torch.Tensor) or not isinstance(source, torch.Tensor):
-            raise UnsupportedBoundaryError('padded output adapter requires tensor inputs')
-        if source.ndim != destination.ndim or source.shape[1:] != destination.shape[1:]:
-            raise UnsupportedBoundaryError('eager output rank or non-token dimensions changed at replay')
-        if source.size(0) != execution.raw_tokens or destination.size(0) != execution.token_bucket:
-            raise UnsupportedBoundaryError('eager output token extent changed at replay')
-        if source.dtype != destination.dtype or source.device != destination.device:
-            raise UnsupportedBoundaryError('eager output dtype or device changed at replay')
-        if not source.is_contiguous():
-            raise UnsupportedBoundaryError('eager output layout changed at replay')
-
         destination[:execution.raw_tokens].copy_(source)
         if execution.raw_tokens < execution.token_bucket:
             destination[execution.raw_tokens:].zero_()
@@ -120,9 +160,9 @@ class PaddedTensorOutputAdapter:
 class BoundaryDeclaration:
     """Immutable metadata attached to one eager boundary."""
 
-    boundary_id: str
     func: Callable[..., Any]
     adapter_factory: Callable[[], BoundaryAdapter]
+    reuse_bridge_after_next_step: bool
 
 
 class _Builder(Protocol):
@@ -148,6 +188,7 @@ def eager_boundary(
     func: None = None,
     *,
     adapter_factory: Callable[[], BoundaryAdapter] | None = None,
+    reuse_bridge_after_next_step: bool = False,
 ) -> Callable[[_CallableT], _CallableT]:
     ...
 
@@ -156,6 +197,7 @@ def eager_boundary(
     func: _CallableT | None = None,
     *,
     adapter_factory: Callable[[], BoundaryAdapter] | None = None,
+    reuse_bridge_after_next_step: bool = False,
 ) -> _CallableT | Callable[[_CallableT], _CallableT]:
     """Declare a function that must execute eagerly between graph pieces.
 
@@ -164,12 +206,16 @@ def eager_boundary(
     """
 
     if func is None:
-        return lambda decorated: eager_boundary(decorated, adapter_factory=adapter_factory)
+        return lambda decorated: eager_boundary(
+            decorated,
+            adapter_factory=adapter_factory,
+            reuse_bridge_after_next_step=reuse_bridge_after_next_step,
+        )
 
     declaration = BoundaryDeclaration(
-        boundary_id=f'{func.__module__}.{func.__qualname__}',
         func=func,
         adapter_factory=adapter_factory or FixedOutputAdapter,
+        reuse_bridge_after_next_step=reuse_bridge_after_next_step,
     )
 
     @wraps(func)
@@ -179,7 +225,6 @@ def eager_boundary(
             return func(*args, **kwargs)
         return builder.call_eager(declaration, args, kwargs)
 
-    wrapped.__piecewise_cuda_graph_boundary__ = declaration  # type: ignore[attr-defined]
     return wrapped  # type: ignore[return-value]
 
 
@@ -197,6 +242,62 @@ def _tensor_storage_pointers(value: Any) -> tuple[int, ...]:
             pointers.extend(_tensor_storage_pointers(item))
         return tuple(pointers)
     return ()
+
+
+@dataclass
+class _ReusableTensorSlot:
+    tensor: torch.Tensor
+    available: bool = True
+
+
+class ReusableBridgePool:
+    """Own stable tensor storage shared by mutually exclusive plans.
+
+    Releasing a bridge only makes its address eligible for a later boundary; the storage remains alive for every CUDA
+    graph that captured that address.
+    """
+
+    def __init__(self) -> None:
+        self._tensor_slots: list[_ReusableTensorSlot] = []
+
+    def begin_plan(self) -> None:
+        """Make all slots available while constructing another serial plan."""
+        for slot in self._tensor_slots:
+            slot.available = True
+
+    def allocate_padded_tensor(self, output: torch.Tensor, shape: Sequence[int]) -> torch.Tensor:
+        """Return a contiguous slot, allowing a larger token axis to back
+        it."""
+        shape = tuple(shape)
+        candidates = [
+            slot for slot in self._tensor_slots
+            if slot.available and slot.tensor.dtype == output.dtype and slot.tensor.device == output.device
+            and slot.tensor.ndim == len(shape) and tuple(slot.tensor.shape[1:]) == shape[1:]
+            and slot.tensor.size(0) >= shape[0]
+        ]
+        if candidates:
+            slot = min(candidates, key=lambda item: item.tensor.size(0))
+            slot.available = False
+            return slot.tensor[:shape[0]]
+
+        tensor = output.new_empty(shape)
+        self._tensor_slots.append(_ReusableTensorSlot(tensor=tensor, available=False))
+        return tensor
+
+    def release(self, bridge: Any) -> None:
+        """Logically release pool-owned tensors contained in a bridge tree."""
+        pointers = frozenset(_tensor_storage_pointers(bridge))
+        for slot in self._tensor_slots:
+            if slot.tensor.untyped_storage().data_ptr() in pointers:
+                slot.available = True
+
+    def reset(self) -> None:
+        self._tensor_slots.clear()
+
+    @property
+    def allocated_bytes(self) -> int:
+        """Return physical bridge capacity retained by this pool."""
+        return sum(slot.tensor.numel() * slot.tensor.element_size() for slot in self._tensor_slots)
 
 
 def _allocate_bridge(value: Any, boundary_input_storages: frozenset[int]) -> Any:
@@ -246,22 +347,6 @@ def _copy_tree(destination: Any, source: Any) -> None:
     raise AssertionError(f'unexpected bridge type: {type(destination).__name__}')
 
 
-def _tensor_pointers(value: Any) -> tuple[int, ...]:
-    if isinstance(value, torch.Tensor):
-        return (value.data_ptr(), )
-    if isinstance(value, (tuple, list)):
-        pointers: list[int] = []
-        for item in value:
-            pointers.extend(_tensor_pointers(item))
-        return tuple(pointers)
-    if isinstance(value, dict):
-        pointers = []
-        for item in value.values():
-            pointers.extend(_tensor_pointers(item))
-        return tuple(pointers)
-    return ()
-
-
 @dataclass(frozen=True)
 class GraphStep:
     """One captured graph executable in an ordered piecewise plan."""
@@ -283,8 +368,7 @@ class EagerStep:
     """One eager boundary and its plan-owned stable output bridge."""
 
     declaration: BoundaryDeclaration
-    args: tuple[Any, ...]
-    kwargs: dict[str, Any]
+    call: BoundEagerCall
     bridge: Any
     adapter: BoundaryAdapter
 
@@ -294,11 +378,14 @@ class EagerStep:
 
     def run(self) -> None:
         with record_function(f'piecewise::{self.label}'):
-            output = self.declaration.func(*self.args, **self.kwargs)
+            output = self.call()
             self.adapter.copy(self.bridge, output)
 
 
 PlanStep = GraphStep | EagerStep
+
+
+# Captured plan construction and replay.
 
 
 class PiecewiseGraphPlan:
@@ -311,30 +398,12 @@ class PiecewiseGraphPlan:
         output: Any,
         steps: Iterable[PlanStep],
         stream: torch.cuda.Stream,
-        pool: tuple[int, int],
     ) -> None:
         self._static_inputs = tuple(static_inputs)
         self.output = output
         self.steps = tuple(steps)
-        self.stream = stream
-        self.pool = pool
-        self.device = next(value.device for value in self._static_inputs if value.device.type == 'cuda')
-
-    def describe(self) -> tuple[str, ...]:
-        """Describe the immutable replay order."""
-        return tuple(step.label for step in self.steps)
-
-    def output_pointers(self) -> tuple[int, ...]:
-        """Return final output addresses for capture contract tests."""
-        return _tensor_pointers(self.output)
-
-    def bridge_pointers(self) -> tuple[int, ...]:
-        """Return eager-to-graph bridge addresses for contract tests."""
-        pointers: list[int] = []
-        for step in self.steps:
-            if isinstance(step, EagerStep):
-                pointers.extend(_tensor_pointers(step.bridge))
-        return tuple(pointers)
+        self._stream = stream
+        self._device = next(value.device for value in self._static_inputs if value.device.type == 'cuda')
 
     def replay(self, *inputs: torch.Tensor) -> Any:
         """Fill static inputs and replay graph/eager steps in original
@@ -346,41 +415,45 @@ class PiecewiseGraphPlan:
                     or static.device != current.device):
                 raise PiecewiseGraphGuardError('input shape, stride, dtype, or device differs from the trace')
 
-        for static, current in zip(self._static_inputs, inputs):
-            if static.device.type != 'cuda':
-                static.copy_(current)
-
         def bind(static_inputs: tuple[torch.Tensor, ...]) -> None:
             for static, current in zip(static_inputs, inputs):
-                if static.device.type == 'cuda':
-                    static.copy_(current)
+                static.copy_(current)
 
         return self.replay_with_input_binder(bind)
 
     def replay_with_input_binder(self, bind: Callable[[tuple[torch.Tensor, ...]], None]) -> Any:
         """Fill plan-owned inputs on the replay stream, then execute the
         plan."""
-        caller_stream = torch.cuda.current_stream(self.device)
-        self.stream.wait_stream(caller_stream)
-        with torch.cuda.stream(self.stream), torch.inference_mode():
+        caller_stream = torch.cuda.current_stream(self._device)
+        self._stream.wait_stream(caller_stream)
+        with torch.cuda.stream(self._stream), torch.inference_mode():
             bind(self._static_inputs)
             for step in self.steps:
                 step.run()
-        caller_stream.wait_stream(self.stream)
+        caller_stream.wait_stream(self._stream)
         return self.output
 
 
-class _PlanBuilder:
+class _CaptureBuilder:
     """Ephemeral direct-execution tracer for one piecewise plan."""
 
-    def __init__(self, *, pool: tuple[int, int], stream: torch.cuda.Stream) -> None:
-        self.pool = pool
-        self.stream = stream
-        self.steps: list[PlanStep] = []
+    def __init__(
+        self,
+        *,
+        graph_pool: tuple[int, int],
+        stream: torch.cuda.Stream,
+        bridge_pool: ReusableBridgePool,
+    ) -> None:
+        self._graph_pool = graph_pool
+        self._stream = stream
+        self._bridge_pool = bridge_pool
+        self._steps: list[PlanStep] = []
         self.inside_eager_boundary = False
         self._active_graph: torch.cuda.CUDAGraph | None = None
+        self._previous_reusable_bridge: Any | None = None
 
     def build(self, func: Callable[..., Any], static_inputs: Sequence[torch.Tensor]) -> PiecewiseGraphPlan:
+        self._bridge_pool.begin_plan()
         token = _ACTIVE_BUILDER.set(self)
         try:
             self._begin_piece()
@@ -388,7 +461,7 @@ class _PlanBuilder:
             self._finish_piece_and_replay()
         except BaseException:
             self._discard_active_capture()
-            self.steps.clear()
+            self._steps.clear()
             raise
         finally:
             _ACTIVE_BUILDER.reset(token)
@@ -396,13 +469,13 @@ class _PlanBuilder:
         return PiecewiseGraphPlan(
             static_inputs=static_inputs,
             output=output,
-            steps=self.steps,
-            stream=self.stream,
-            pool=self.pool,
+            steps=self._steps,
+            stream=self._stream,
         )
 
     def call_eager(self, declaration: BoundaryDeclaration, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         self._finish_piece_and_replay()
+
         self.inside_eager_boundary = True
         try:
             with record_function(f'piecewise::trace_eager:{declaration.func.__qualname__}'):
@@ -410,11 +483,20 @@ class _PlanBuilder:
         finally:
             self.inside_eager_boundary = False
 
-        boundary_input_storages = frozenset(_tensor_storage_pointers(args) + _tensor_storage_pointers(kwargs))
+        if self._previous_reusable_bridge is not None:
+            self._bridge_pool.release(self._previous_reusable_bridge)
+            self._previous_reusable_bridge = None
+
+        input_storages = frozenset(_tensor_storage_pointers(args) + _tensor_storage_pointers(kwargs))
         adapter = declaration.adapter_factory()
-        bridge = adapter.allocate(output, boundary_input_storages)
+        pool = self._bridge_pool if declaration.reuse_bridge_after_next_step else None
+        bridge = adapter.allocate(output, input_storages, pool)
         adapter.copy(bridge, output)
-        self.steps.append(EagerStep(declaration, args, dict(kwargs), bridge, adapter))
+        call = _make_replay_eager_call(declaration.func, args, kwargs)
+        step = EagerStep(declaration, call, bridge, adapter)
+        self._steps.append(step)
+        if declaration.reuse_bridge_after_next_step:
+            self._previous_reusable_bridge = bridge
         self._begin_piece()
         return bridge
 
@@ -422,7 +504,7 @@ class _PlanBuilder:
         if self._active_graph is not None:
             raise RuntimeError('a graph piece is already being captured')
         graph = torch.cuda.CUDAGraph()
-        graph.capture_begin(pool=self.pool, capture_error_mode='thread_local')
+        graph.capture_begin(pool=self._graph_pool, capture_error_mode='thread_local')
         self._active_graph = graph
 
     def _finish_piece_and_replay(self) -> None:
@@ -431,11 +513,12 @@ class _PlanBuilder:
             raise RuntimeError('no graph piece is being captured')
         graph.capture_end()
         self._active_graph = None
-        index = sum(isinstance(step, GraphStep) for step in self.steps)
-        self.steps.append(GraphStep(index, graph))
+        index = sum(isinstance(step, GraphStep) for step in self._steps)
+        self._steps.append(GraphStep(index, graph))
         graph.replay()
 
     def _discard_active_capture(self) -> None:
+        """End a failed capture best-effort and preserve its original error."""
         graph = self._active_graph
         if graph is None:
             return
@@ -452,6 +535,7 @@ def trace_piecewise_cuda_graph(
     *,
     warmup_iterations: int = 3,
     warmup_func: Callable[..., Any] | None = None,
+    bridge_pool: ReusableBridgePool | None = None,
 ) -> PiecewiseGraphPlan:
     """Warm up and directly trace a fixed-shape callable into a plan.
 
@@ -489,138 +573,90 @@ def trace_piecewise_cuda_graph(
             static.copy_(example)
     capture_stream.synchronize()
 
-    pool = torch.cuda.graph_pool_handle()
+    graph_pool = torch.cuda.graph_pool_handle()
+    bridge_pool = ReusableBridgePool() if bridge_pool is None else bridge_pool
     with torch.cuda.stream(capture_stream), torch.inference_mode():
-        plan = _PlanBuilder(pool=pool, stream=capture_stream).build(func, static_inputs)
+        plan = _CaptureBuilder(graph_pool=graph_pool, stream=capture_stream,
+                               bridge_pool=bridge_pool).build(func, static_inputs)
     capture_stream.synchronize()
     caller_stream.wait_stream(capture_stream)
     return plan
 
 
-@dataclass(frozen=True)
-class PiecewiseGraphDescriptor:
-    """Side-effect-free, plan-invariant identity for one supported call."""
-
-    key: Hashable
+# Runner-local plan lifecycle.
 
 
 @dataclass(frozen=True)
-class PiecewiseGraphHooks:
-    """Narrow integration hooks supplied by a supported model/backend pair.
+class PiecewiseGraphBuild:
+    """A publishable plan and the startup output produced while building."""
 
-    ``build`` may inspect the current call only to bind stable model/cache
-    resources. Request-local values must be replaced with synthetic inputs and
-    scratch metadata before model execution.
+    plan: Any
+    output: Any
+
+
+class PiecewiseGraphRuntime(Protocol):
+    """Model integration consumed by the runner-local plan manager.
+
+    Warmup and build execute startup dummy requests. A serving request only replays a plan that was published
+    successfully during startup.
     """
 
-    get_piecewise_graph_descriptor: Callable[[Any, Mapping[str, Any]], PiecewiseGraphDescriptor | None]
-    build: Callable[[PiecewiseGraphDescriptor, Mapping[str, Any]], Any]
-    replay: Callable[[Any, PiecewiseGraphDescriptor, Mapping[str, Any]], Any]
+    def get_capture_token_sizes(self) -> Sequence[int]:
+        ...
 
+    def get_piecewise_graph_descriptor(self, context: Any, kwargs: Mapping[str, Any]) -> Hashable | None:
+        ...
 
-class PiecewiseFallbackReason(str, Enum):
-    """Reasons for safely selecting the existing eager path."""
+    def warmup(self, descriptor: Any, kwargs: Mapping[str, Any]) -> None:
+        ...
 
-    UNSUPPORTED = 'unsupported'
-    BUILD_FAILED = 'build_failed'
-    GUARD_REJECTED = 'guard_rejected'
+    def build(
+        self,
+        descriptor: Any,
+        kwargs: Mapping[str, Any],
+        bridge_pool: ReusableBridgePool,
+    ) -> PiecewiseGraphBuild:
+        ...
 
-
-@dataclass(frozen=True)
-class PiecewiseFallback:
-    """Structured reason why no piecewise execution occurred."""
-
-    reason: PiecewiseFallbackReason
-    detail: str
-
-
-@dataclass(frozen=True)
-class PiecewiseGraphResult:
-    """Result of a manager attempt, including safe pre-execution fallback."""
-
-    executed: bool
-    output: Any = None
-    fallback: PiecewiseFallback | None = None
-
-
-class PiecewisePlanState(str, Enum):
-    """Observable state of one runner-local plan-cache entry."""
-
-    MISSING = 'missing'
-    READY = 'ready'
-    NEGATIVE = 'negative'
-
-
-@dataclass(frozen=True)
-class _NegativeEntry:
-    fallback: PiecewiseFallback
+    def replay(self, plan: Any, kwargs: Mapping[str, Any]) -> Any:
+        ...
 
 
 class PiecewiseGraphManager:
-    """Own runner-local piecewise plan construction, caching, and replay."""
+    """Prepare all runner-local plans at startup and replay them in serving."""
 
-    def __init__(self, hooks: PiecewiseGraphHooks, *, max_entries: int = 64) -> None:
-        if max_entries < 1:
-            raise ValueError('max_entries must be positive')
-        self._hooks = hooks
-        self._max_entries = max_entries
-        self._entries: OrderedDict[PiecewiseGraphDescriptor, Any | _NegativeEntry] = OrderedDict()
+    def __init__(self, runtime: PiecewiseGraphRuntime) -> None:
+        self._runtime = runtime
+        self._plans: dict[Hashable, Any] = {}
+        self._bridge_pool = ReusableBridgePool()
 
-    def get_piecewise_graph_descriptor(self, context: Any,
-                                       kwargs: Mapping[str, Any]) -> PiecewiseGraphDescriptor | None:
+    def get_capture_token_sizes(self) -> list[int]:
+        """Return every token size that startup must prepare."""
+        return list(self._runtime.get_capture_token_sizes())
+
+    def get_piecewise_graph_descriptor(self, context: Any, kwargs: Mapping[str, Any]) -> Hashable | None:
         """Return a supported descriptor without changing runtime state."""
-        descriptor = self._hooks.get_piecewise_graph_descriptor(context, kwargs)
-        if descriptor is not None:
-            hash(descriptor)
-        return descriptor
+        return self._runtime.get_piecewise_graph_descriptor(context, kwargs)
 
-    def run(self, descriptor: PiecewiseGraphDescriptor, kwargs: Mapping[str, Any]) -> PiecewiseGraphResult:
-        """Build transactionally on a miss, then replay a ready plan."""
-        entry = self._entries.get(descriptor)
-        if isinstance(entry, _NegativeEntry):
-            self._entries.move_to_end(descriptor)
-            return PiecewiseGraphResult(executed=False, fallback=entry.fallback)
+    def has_plan(self, descriptor: Hashable) -> bool:
+        """Return whether startup published this exact plan."""
+        return descriptor in self._plans
 
-        if entry is None:
-            try:
-                plan = self._hooks.build(descriptor, kwargs)
-                if plan is None:
-                    raise TypeError('piecewise plan builder returned None')
-            except Exception as error:
-                fallback = PiecewiseFallback(
-                    reason=PiecewiseFallbackReason.BUILD_FAILED,
-                    detail=f'{type(error).__name__}: {error}',
-                )
-                self._publish(descriptor, _NegativeEntry(fallback))
-                return PiecewiseGraphResult(executed=False, fallback=fallback)
-            # Publication happens only after construction returns successfully.
-            self._publish(descriptor, plan)
-            entry = plan
-        else:
-            self._entries.move_to_end(descriptor)
+    def prepare(self, descriptor: Hashable, kwargs: Mapping[str, Any]) -> Any:
+        """Warm up and publish one plan; any failure aborts engine warmup."""
+        self._runtime.warmup(descriptor, kwargs)
+        build = self._runtime.build(descriptor, kwargs, self._bridge_pool)
+        self._plans[descriptor] = build.plan
+        return build.output
 
-        try:
-            output = self._hooks.replay(entry, descriptor, kwargs)
-        except PiecewiseGraphGuardError as error:
-            fallback = PiecewiseFallback(PiecewiseFallbackReason.GUARD_REJECTED, str(error))
-            return PiecewiseGraphResult(executed=False, fallback=fallback)
-        return PiecewiseGraphResult(executed=True, output=output)
+    def replay(self, descriptor: Hashable, kwargs: Mapping[str, Any]) -> Any:
+        """Replay a prepared plan.
 
-    def get_plan_state(self, descriptor: PiecewiseGraphDescriptor) -> PiecewisePlanState:
-        """Inspect one entry without mutating cache order."""
-        entry = self._entries.get(descriptor)
-        if entry is None:
-            return PiecewisePlanState.MISSING
-        if isinstance(entry, _NegativeEntry):
-            return PiecewisePlanState.NEGATIVE
-        return PiecewisePlanState.READY
+        Replay failures always propagate.
+        """
+        return self._runtime.replay(self._plans[descriptor], kwargs)
 
     def reset(self) -> None:
-        """Drop all graph plans and negative entries."""
-        self._entries.clear()
-
-    def _publish(self, descriptor: PiecewiseGraphDescriptor, entry: Any | _NegativeEntry) -> None:
-        self._entries[descriptor] = entry
-        self._entries.move_to_end(descriptor)
-        while len(self._entries) > self._max_entries:
-            self._entries.popitem(last=False)
+        """Drop every plan before releasing their shared bridge storage."""
+        self._plans.clear()
+        self._bridge_pool.reset()

@@ -4,7 +4,7 @@ from collections.abc import Hashable, Iterable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Protocol, TypeVar, runtime_checkable
 
 import torch
 
@@ -120,6 +120,17 @@ class CudaStepMetaUpdater(ABC):
         raise NotImplementedError
 
 
+@runtime_checkable
+class CudaPiecewiseGraphImpl(Protocol):
+    """Operator capability required by the CUDA piecewise runtime."""
+
+    def supports_piecewise_cuda_graph(self) -> bool:
+        ...
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        ...
+
+
 @dataclass(frozen=True)
 class CudaStepMetaGraphBuffers:
     """Runner-owned graph buffers paired with one resolved metadata plan."""
@@ -136,11 +147,28 @@ class CudaStepMetaPlan:
     attention_builders: tuple[CudaAttentionMetaBuilder[Any, Any], ...]
     step_updaters: tuple[CudaStepMetaUpdater, ...]
     fallback_reason: str | None = None
+    implementations: tuple[Any, ...] = ()
 
     @property
     def is_supported(self) -> bool:
         """Whether every discovered CUDA metadata contract is understood."""
         return self.fallback_reason is None
+
+    def enable_piecewise_cuda_graph(self) -> bool:
+        """Install eager boundaries when every collected operator supports
+        PCG."""
+        if not self.is_supported or not self.implementations:
+            return False
+
+        installers = []
+        for impl in self.implementations:
+            if not isinstance(impl, CudaPiecewiseGraphImpl) or not impl.supports_piecewise_cuda_graph():
+                return False
+            installers.append(impl.enable_piecewise_cuda_graph)
+
+        for install in installers:
+            install()
+        return True
 
     @classmethod
     def from_implementations(cls, implementations: Iterable[Any]) -> 'CudaStepMetaPlan':
@@ -150,11 +178,13 @@ class CudaStepMetaPlan:
         updater_keys: set[Hashable] = set()
         output_keys: dict[str, Hashable] = {}
         visited_impls: set[int] = set()
+        unique_implementations: list[Any] = []
 
         for impl in implementations:
             if id(impl) in visited_impls:
                 continue
             visited_impls.add(id(impl))
+            unique_implementations.append(impl)
 
             get_provider = getattr(impl, 'get_step_metadata_provider', None)
             if get_provider is None:
@@ -209,7 +239,11 @@ class CudaStepMetaPlan:
             impl.bind_step_meta_group(group_id)
 
         step_updaters.sort(key=lambda builder: builder.priority)
-        return cls(tuple(attention_builders), tuple(step_updaters))
+        return cls(
+            tuple(attention_builders),
+            tuple(step_updaters),
+            implementations=tuple(unique_implementations),
+        )
 
     def _attach_attention_metadata(self, attn_metadata, metadata: tuple[Any, ...]) -> None:
         """Attach grouped results and expose the legacy single-group view."""
