@@ -178,7 +178,7 @@ accepted and normalized into the two-profile shape.
 
 Merge order for each profile's `api_server` command (later wins):
 
-1. suite defaults (`logprobs-mode` for logprob/experts; `enable-return-routed-experts` for experts/toolcall)
+1. suite defaults (`logprobs-mode` for logprob/experts; `enable-return-routed-experts` for experts suite only)
 2. row `engine_config.extra` (shared with tools on the same row)
 3. that profile's `extra`
 
@@ -192,7 +192,7 @@ Suites:
 - `logprob` — generate logprob cases
 - `experts` — generate routed-experts cases
 - `anthropic` — Anthropic Messages HTTP + SDK smoke (`RESTFUL_MODEL_LIST`). Share a profile with `base`/`logprob` when `extra` matches; otherwise its own profile **without** `tool-call-parser` / `reasoning-parser`.
-- `toolcall` — `interface/restful/tool_parser/` (requires `tool-call-parser` in yaml `extra`; also suite-defaults `--enable-return-routed-experts`, because toolcall includes `@experts`-marked return_token_ids / routed_experts cases)
+- `toolcall` — `interface/restful/tool_parser/` (requires `tool-call-parser` in yaml `extra`; add `enable-return-routed-experts: true` when toolcall includes `@experts` cases)
 - `reasoning` — `interface/restful/reasoning_parser/` (requires `reasoning-parser` in yaml `extra`)
 
 Notes:
@@ -202,7 +202,7 @@ Notes:
 - Each distinct `extra` is one api_server phase (generic; not hardcoded to anthropic).
   Add more `- suites: [...]` / `extra:` blocks only when launch flags differ.
 - Put tool-call / reasoning parsers only on profiles that need them (yaml only).
-- Suite defaults for `experts` / `toolcall` include `enable-return-routed-experts`;
+- Suite default for `experts` includes `enable-return-routed-experts`; set it explicitly on `toolcall` profiles when needed;
   yaml `extra` can still override if needed.
 - Chat/vl rows run `chat_completions_v1` + `generate` when any of base/logprob/experts is set.
 - Base-only rows run `completions_v1`.

@@ -79,17 +79,6 @@ def _sync_ruler_tokenizer_model(cfg, model_path):
             dataset['tokenizer_model'] = tokenizer
 
 
-def _is_fp8_case(case_name: str) -> bool:
-    return case_name.endswith('_fp8')
-
-
-def _should_skip_num_workers_override(eval_config_name: str, case_name: str) -> bool:
-    if eval_config_name in ('longtext-256k', 'longtext-512k'):
-        return True
-    if _is_fp8_case(case_name):
-        return True
-    return False
-
 
 def _dataset_size_cache_path(eval_path: str, eval_config_name: str) -> str:
     """Cache path for ``NumWorkerPartitioner`` dataset sizes.
@@ -297,13 +286,10 @@ def eval_test(model_path,
 
                     for key, value in kwargs.items():
                         model_cfg[key] = value
+                    if 'max_workers' not in kwargs:
+                        model_cfg['max_workers'] = 1024
 
                 _sync_ruler_tokenizer_model(cfg, model_path)
-
-                if not _should_skip_num_workers_override(eval_config_name, case_name):
-                    cfg.NUM_WORKERS = extra_config.get('max-num-workers', 8)
-                    cfg.infer['partitioner']['num_worker'] = extra_config.get(
-                        'max-num-workers', 8)
 
                 # Persist dataset-size cache under eval_path (opencompass NumWorkerPartitioner).
                 cfg.infer['partitioner']['dataset_size_path'] = _dataset_size_cache_path(
