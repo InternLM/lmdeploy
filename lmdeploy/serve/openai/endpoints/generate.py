@@ -168,7 +168,10 @@ def register(router: APIRouter, server_context) -> None:
             return StreamingResponse(stream_generator,
                                      media_type='text/event-stream')
 
+        disconnect_response = None
+
         async def _inner_call():
+            nonlocal disconnect_response
             text = ''
             output_ids = []
             logprobs = []
@@ -181,13 +184,17 @@ def register(router: APIRouter, server_context) -> None:
                         if await raw_request.is_disconnected():
                             # Abort the request if the client disconnects.
                             await session.async_abort()
-                            return create_error_response(HTTPStatus.BAD_REQUEST,
-                                                         'Client disconnected')
+                            disconnect_response = create_error_response(
+                                HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                            break
                         text += res.response or ''
                         output_ids.extend(res.token_ids or [])
                         logprobs.extend(res.logprobs or [])
             except RequestError as e:
                 return create_request_error_response(e)
+
+            if disconnect_response is not None:
+                return disconnect_response
 
             output_token_logprobs = []
             if len(logprobs) and len(output_ids):
