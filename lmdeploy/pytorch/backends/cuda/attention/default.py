@@ -73,6 +73,7 @@ def build_triton_attention_metadata(attn_meta_cls, step_context,
         cu_seqlens_q=sequence_metadata.cu_seqlens_q,
         cu_seqlens_k=sequence_metadata.cu_seqlens_k,
         max_kv_seqlen=sequence_metadata.max_kv_seqlen,
+        max_q_seqlen=step_context.max_q_seqlen,
     )
 
 
@@ -179,32 +180,24 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             reuse_bridge_after_next_step=True,
         )
         def run_eager_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor,
-                                v_cache: torch.Tensor, **kwargs) -> torch.Tensor:
-            from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
-
-            context = get_step_ctx_manager().current_context()
+                                v_cache: torch.Tensor, attn_metadata: TritonAttentionMetadata,
+                                **kwargs) -> torch.Tensor:
             execution = get_piecewise_graph_execution()
-            metadata = context.attn_metadata
-            kwargs['attn_metadata'] = metadata
+            assert execution is not None
             raw_tokens = execution.raw_tokens
             query = query[:raw_tokens]
             key = key[:raw_tokens]
             value = value[:raw_tokens]
 
-            saved_max_q_seqlen = metadata.max_q_seqlen
-            metadata.max_q_seqlen = context.max_q_seqlen
-            try:
-                return original_forward(query, key, value, k_cache, v_cache, **kwargs)
-            finally:
-                metadata.max_q_seqlen = saved_max_q_seqlen
+            return original_forward(query, key, value, k_cache, v_cache, attn_metadata, **kwargs)
 
         def piecewise_forward(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor,
-                              v_cache: torch.Tensor, **kwargs) -> torch.Tensor:
+                              v_cache: torch.Tensor, attn_metadata: TritonAttentionMetadata,
+                              **kwargs) -> torch.Tensor:
             if get_piecewise_graph_execution() is None:
-                return original_forward(query, key, value, k_cache, v_cache, **kwargs)
+                return original_forward(query, key, value, k_cache, v_cache, attn_metadata, **kwargs)
 
-            kwargs.pop('attn_metadata')
-            return run_eager_attention(query, key, value, k_cache, v_cache, **kwargs)
+            return run_eager_attention(query, key, value, k_cache, v_cache, attn_metadata, **kwargs)
 
         self._piecewise_forward = piecewise_forward
         self.forward = piecewise_forward
