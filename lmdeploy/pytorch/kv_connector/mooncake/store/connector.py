@@ -4,15 +4,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from lmdeploy.pytorch.kv_connector.base import (
     KVCacheValue,
     KVConnectorBase,
-    KVConnectorMetadata,
     KVConnectorOutput,
+    KVConnectorResult,
     KVConnectorRole,
-    KVLoadResult,
     RequestId,
 )
 
@@ -111,25 +110,22 @@ class MooncakeStoreConnector(KVConnectorBase):
     def update_connector_output(
         self,
         connector_output: KVConnectorOutput,
-    ) -> tuple[KVLoadResult, ...]:
+    ) -> KVConnectorResult:
         return self._require_scheduler().update_connector_output(connector_output)
+
+    def finish_transfers_after_worker_drain(self) -> None:
+        return self._require_scheduler().finish_transfers_after_worker_drain()
 
     def request_finished(
         self,
         request: SchedulerSequence,
-        block_ids: Sequence[int],
-    ) -> tuple[bool, dict[str, Any] | None]:
-        return self._require_scheduler().request_finished(request, block_ids)
+    ) -> None:
+        return self._require_scheduler().request_finished(request)
 
     # Worker-side methods.
 
     def register_kv_caches(self, kv_caches: Mapping[str, KVCacheValue]) -> None:
         return self._require_worker().register_kv_caches(kv_caches)
-
-    def handle_preemptions(self, connector_metadata: KVConnectorMetadata) -> None:
-        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
-            raise TypeError('connector_metadata must be a MooncakeStoreConnectorMetadata')
-        return self._require_worker().handle_preemptions(connector_metadata)
 
     def start_load_kv(self) -> None:
         connector_metadata = self._get_connector_metadata()
@@ -137,18 +133,17 @@ class MooncakeStoreConnector(KVConnectorBase):
             raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
         return self._require_worker().start_load_kv(connector_metadata)
 
-    def get_finished(
-        self,
-        finished_req_ids: set[RequestId],
-    ) -> tuple[set[RequestId] | None, set[RequestId] | None]:
-        worker = self._require_worker()
+    def start_save_kv(self) -> None:
         connector_metadata = self._get_connector_metadata()
         if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
             raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
-        return worker.get_finished(finished_req_ids, connector_metadata)
+        return self._require_worker().start_save_kv(connector_metadata)
 
-    def get_block_ids_with_load_errors(self) -> set[int]:
-        return self._require_worker().get_block_ids_with_load_errors()
+    def get_finished(self) -> KVConnectorOutput:
+        connector_metadata = self._get_connector_metadata()
+        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
+            raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
+        return self._require_worker().get_finished()
 
     def shutdown(self) -> None:
         if self.connector_scheduler is not None:

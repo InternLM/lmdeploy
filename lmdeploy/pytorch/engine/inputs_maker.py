@@ -352,10 +352,17 @@ class _ForwardInputsTask:
             maker._decode_count = 0
 
         result = self.result
+        connector_token_lens = ()
+        connector_enabled = maker.scheduler.kv_connector is not None
+        if (connector_enabled and result.inputs is not None
+                and not result.inputs.is_decoding and not result.inputs.is_dummy):
+            token_lens = result.inputs.history_lengths + result.inputs.seq_length
+            connector_token_lens = tuple(int(token_len) for token_len in token_lens.tolist())
         result.kv_connector_metadata = self.scheduler.build_connector_meta(
             result.running,
             result.swap_in_map,
             result.swap_out_map,
+            connector_token_lens,
         )
         if result.is_empty():
             return None

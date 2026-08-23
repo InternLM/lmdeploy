@@ -18,9 +18,19 @@ def start_kv_connector_step(
     if connector is None:
         raise RuntimeError('received KV connector metadata without a worker connector')
     connector.bind_connector_metadata(metadata)
-    connector.handle_preemptions(metadata)
     connector.start_load_kv()
     return True
+
+
+def start_kv_connector_save(
+    connector: KVConnectorBase | None,
+    connector_step: bool,
+) -> None:
+    """Submit saves immediately after model work has been queued."""
+    if not connector_step:
+        return
+    assert connector is not None
+    connector.start_save_kv()
 
 
 def finish_kv_connector_step(
@@ -31,11 +41,6 @@ def finish_kv_connector_step(
     if not connector_step:
         return None
     assert connector is not None
-    finished_sending, finished_receiving = connector.get_finished(set())
-    output = KVConnectorOutput(
-        finished_sending=finished_sending,
-        finished_receiving=finished_receiving,
-        invalid_block_ids=connector.get_block_ids_with_load_errors(),
-    )
+    output = connector.get_finished()
     connector.clear_connector_metadata()
     return output

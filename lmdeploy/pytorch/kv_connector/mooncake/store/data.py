@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 import numpy as np
 
-from lmdeploy.pytorch.kv_connector.base import KVConnectorMetadata
+from lmdeploy.pytorch.kv_connector.base import KVConnectorMetadata, KVSaveBlockLease
 
 DEFAULT_GLOBAL_SEGMENT_SIZE = 4 * 1024 * 1024 * 1024
 DEFAULT_LOCAL_BUFFER_SIZE = 4 * 1024 * 1024 * 1024
@@ -348,6 +348,19 @@ class MooncakeStoreLoadRequest:
     request_id: int
     block_ids: tuple[int, ...]
     block_hashes: tuple[bytes, ...]
+    remote_block_count: int = 0
+
+
+@dataclass(frozen=True)
+class MooncakeStoreSaveRequest:
+    """One immutable full-block suffix saved after a model forward."""
+
+    save_id: int
+    request_id: int
+    start_block: int
+    block_ids: tuple[int, ...]
+    logical_block_ids: tuple[int, ...]
+    block_hashes: tuple[bytes, ...]
 
 
 @dataclass(frozen=True)
@@ -355,3 +368,13 @@ class MooncakeStoreConnectorMetadata(KVConnectorMetadata):
     """Serializable Mooncake work issued by one scheduler step."""
 
     load_requests: tuple[MooncakeStoreLoadRequest, ...] = ()
+    save_requests: tuple[MooncakeStoreSaveRequest, ...] = ()
+
+    def get_save_block_leases(self) -> tuple[KVSaveBlockLease, ...]:
+        return tuple(
+            KVSaveBlockLease(
+                operation_id=request.save_id,
+                logical_block_ids=request.logical_block_ids,
+            )
+            for request in self.save_requests
+        )

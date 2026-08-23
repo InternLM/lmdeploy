@@ -8,7 +8,13 @@ from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.engine.inputs_maker import _make_state_prefix_cache_save_plan
-from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVLoadResult
+from lmdeploy.pytorch.kv_connector import (
+    KVConnectorMetadata,
+    KVConnectorOutput,
+    KVConnectorResult,
+    KVLoadResult,
+    KVSaveBlockLease,
+)
 from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.paging.state_manager import StateManager
@@ -51,17 +57,21 @@ class _AsyncLookupConnector:
         return None
 
     def update_connector_output(self, connector_output):
-        return tuple(
-            KVLoadResult(
-                request_id=request_id,
-                success=request_id not in self.failed_ids,
+        return KVConnectorResult(
+            load_results=tuple(
+                KVLoadResult(
+                    request_id=request_id,
+                    success=request_id not in self.failed_ids,
+                )
+                for request_id in (connector_output.finished_receiving or set())
             )
-            for request_id in (connector_output.finished_receiving or set())
         )
 
-    def request_finished(self, request, block_ids):
-        self.finished.append((request.seq_id, tuple(block_ids)))
-        return False, None
+    def request_finished(self, request):
+        self.finished.append(request.seq_id)
+
+    def finish_transfers_after_worker_drain(self):
+        pass
 
     def shutdown(self):
         pass
@@ -1010,7 +1020,7 @@ def test_end_session_waits_for_active_async_load_before_freeing_blocks():
     scheduler.update_connector_output(
         KVConnectorOutput(finished_receiving={seq.seq_id}))
     assert 82 not in scheduler.sessions
-    assert connector.finished == [(seq.seq_id, ())]
+    assert connector.finished == [seq.seq_id]
 
 
 def test_worker_drain_finishes_an_ended_session_with_a_dropped_load_output():
@@ -1023,10 +1033,10 @@ def test_worker_drain_finishes_an_ended_session_with_a_dropped_load_output():
     scheduler.schedule(is_prefill=True)
     scheduler.end_session(85)
 
-    scheduler.finish_deferred_loads_after_worker_drain()
+    scheduler.finish_deferred_kv_transfers_after_worker_drain()
 
     assert 85 not in scheduler.sessions
-    assert connector.finished == [(seq.seq_id, ())]
+    assert connector.finished == [seq.seq_id]
     assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 0
 
 
@@ -1063,7 +1073,97 @@ def test_stop_and_end_session_cancel_lookup_before_request_cleanup():
     assert connector.cancelled == [seq.seq_id]
 
     scheduler.end_session(73)
-    assert connector.finished == [(seq.seq_id, ())]
+    assert connector.finished == [seq.seq_id]
+
+
+def test_async_save_lease_keeps_exact_blocks_alive_until_all_tp_complete():
+
+    class _SaveMetadata(KVConnectorMetadata):
+
+        def __init__(self, logical_block_ids):
+            self.logical_block_ids = tuple(logical_block_ids)
+
+        def get_save_block_leases(self):
+            return (KVSaveBlockLease(7, self.logical_block_ids), )
+
+    class _SaveConnector(_AsyncLookupConnector):
+
+        def __init__(self):
+            super().__init__([])
+            self.metadata = None
+
+        def build_connector_meta(self, scheduler_output):
+            metadata, self.metadata = self.metadata, None
+            return metadata
+
+        def update_connector_output(self, connector_output):
+            return KVConnectorResult(
+                completed_save_ids=frozenset(
+                    connector_output.completed_save_ids or ()),
+            )
+
+    connector = _SaveConnector()
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+        num_gpu_blocks=4,
+    )
+    seq = scheduler.add_session(88).add_sequence(torch.arange(8))
+    scheduler.block_manager.allocate(seq)
+    logical_blocks = seq.logical_blocks.get_real_blocks().copy()
+    allocator = scheduler.block_manager.allocator
+    connector.metadata = _SaveMetadata(logical_blocks)
+
+    metadata = scheduler.build_connector_meta(
+        [seq],
+        connector_token_lens=(8, ),
+    )
+
+    assert metadata is not None
+    assert allocator.get_ref_count(logical_blocks).tolist() == [2, 2]
+    assert scheduler.has_unfinished()
+
+    # Sequence ownership may disappear before remote I/O completes. The save
+    # lease remains as the only reference and prevents physical reuse.
+    scheduler.block_manager.free(seq)
+    assert allocator.get_ref_count(logical_blocks).tolist() == [1, 1]
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 2
+
+    scheduler.update_connector_output(
+        KVConnectorOutput(completed_save_ids={7}))
+    assert allocator.get_ref_count(logical_blocks).tolist() == [0, 0]
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 4
+    assert not scheduler.kv_save_coordinator.has_pending()
+
+
+def test_worker_drain_releases_save_leases_when_outputs_are_discarded():
+
+    class _SaveMetadata(KVConnectorMetadata):
+
+        def __init__(self, logical_block_ids):
+            self.logical_block_ids = tuple(logical_block_ids)
+
+        def get_save_block_leases(self):
+            return (KVSaveBlockLease(9, self.logical_block_ids), )
+
+    connector = _AsyncLookupConnector([])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+        num_gpu_blocks=2,
+    )
+    seq = scheduler.add_session(89).add_sequence(torch.arange(8))
+    scheduler.block_manager.allocate(seq)
+    logical_blocks = seq.logical_blocks.get_real_blocks().copy()
+    metadata = _SaveMetadata(logical_blocks)
+    connector.build_connector_meta = lambda scheduler_output: metadata
+
+    scheduler.build_connector_meta([seq], connector_token_lens=(8, ))
+    scheduler.block_manager.free(seq)
+    scheduler.finish_deferred_kv_transfers_after_worker_drain()
+
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 2
+    assert not scheduler.kv_save_coordinator.has_pending()
 
 
 def test_scheduler_recomputes_prefill_budget_after_prefix_hit():

@@ -16,7 +16,7 @@ from uuid import uuid4
 import torch
 import zmq
 
-from lmdeploy.pytorch.kv_connector.base import KVCacheValue, RequestId
+from lmdeploy.pytorch.kv_connector.base import KVCacheValue, KVConnectorOutput, RequestId
 from lmdeploy.utils import get_logger
 
 from .data import (
@@ -28,7 +28,7 @@ from .data import (
     build_store_key,
 )
 from .protocol import LOOKUP_MSG, RESET_MSG, RESP_ERR, RESP_OK
-from .worker_threads import KVCacheStoreRecvingThread
+from .worker_threads import KVCacheStoreRecvingThread, KVCacheStoreSendingThread
 
 if TYPE_CHECKING:
     from lmdeploy.messages import KVTransferConfig
@@ -138,6 +138,7 @@ class MooncakeStoreWorker:
         tp_size: int = 1,
         kv_head_replica_num: int = 1,
         store_factory: StoreFactory | None = None,
+        replicate_config: Any = None,
     ) -> None:
         kv_transfer_config = cast('KVTransferConfig', cache_config.kv_transfer_config)
         if global_rank < 0:
@@ -148,6 +149,8 @@ class MooncakeStoreWorker:
             raise ValueError(f'tp_rank must be in [0, {tp_size}), got {tp_rank}')
         if cache_config.states_shapes:
             raise ValueError('Mooncake Store does not support linear-attention state caches')
+        if cache_config.window_size > 1:
+            raise ValueError('Mooncake Store does not support sliding-window KV caches')
 
         self._cache_config = cache_config
         self.kv_role = kv_transfer_config.kv_role
@@ -156,12 +159,15 @@ class MooncakeStoreWorker:
         self.tp_size = tp_size
         self.lookup_server: LookupKeyServer | None = None
         self.kv_recv_thread: KVCacheStoreRecvingThread | None = None
+        self.kv_send_thread: KVCacheStoreSendingThread | None = None
         self._registered_regions: tuple[MooncakeStoreRegistration, ...] | None = None
         self._row_block_sizes: tuple[int, ...] | None = None
+        self._replicate_config = replicate_config
         self._completion_lock = threading.Lock()
         self._inflight_loads: set[RequestId] = set()
         self._completed_loads: dict[RequestId, set[int]] = {}
-        self._load_error_block_ids: set[int] = set()
+        self._inflight_save_ids: set[int] = set()
+        self._completed_save_ids: set[int] = set()
 
         extra_config = kv_transfer_config.kv_connector_extra_config
         self.key_metadata = MooncakeStoreKeyMetadata(
@@ -186,14 +192,24 @@ class MooncakeStoreWorker:
         if self.global_rank == 0 and self.lookup_server is None:
             self.lookup_server = LookupKeyServer(self, self._cache_config)
 
-    def _prepare_receiver_layout(
+    def _prepare_transfer_layout(
         self,
         registrations: tuple[MooncakeStoreRegistration, ...],
     ) -> tuple[int, ...]:
         num_gpu_blocks = self._cache_config.num_gpu_blocks
+        if num_gpu_blocks <= 0:
+            raise ValueError('Mooncake Store requires num_gpu_blocks greater than 0')
         row_block_sizes = []
         for registration in registrations:
             block_size, remainder = divmod(registration.size, num_gpu_blocks)
+            if remainder != 0:
+                raise ValueError(
+                    f'registered region {registration.name!r} size '
+                    f'{registration.size} is not divisible by num_gpu_blocks '
+                    f'{num_gpu_blocks}')
+            if block_size <= 0:
+                raise ValueError(
+                    f'registered region {registration.name!r} has an empty block')
             row_block_sizes.append(block_size)
         return tuple(row_block_sizes)
 
@@ -205,6 +221,11 @@ class MooncakeStoreWorker:
         with self._completion_lock:
             self._inflight_loads.discard(request_id)
             self._completed_loads[request_id] = failed_block_ids
+
+    def _mark_save_finished(self, save_id: int) -> None:
+        with self._completion_lock:
+            self._inflight_save_ids.discard(save_id)
+            self._completed_save_ids.add(save_id)
 
     def _start_receiver(self) -> None:
         if self.kv_role not in ('kv_consumer', 'kv_both') or self.kv_recv_thread is not None:
@@ -230,6 +251,32 @@ class MooncakeStoreWorker:
         )
         receiver.start()
         self.kv_recv_thread = receiver
+
+    def _start_sender(self) -> None:
+        if self.kv_role not in ('kv_producer', 'kv_both') or self.kv_send_thread is not None:
+            return
+        registrations = self._registered_regions
+        row_block_sizes = self._row_block_sizes
+        if registrations is None or row_block_sizes is None:
+            raise RuntimeError('Mooncake sender cannot start before KV cache registration')
+        store = self.store
+        if store is None:
+            raise RuntimeError('Mooncake Store is closed')
+
+        sender = KVCacheStoreSendingThread(
+            store=store,
+            registrations=registrations,
+            row_block_sizes=row_block_sizes,
+            num_gpu_blocks=self._cache_config.num_gpu_blocks,
+            key_metadata=self.key_metadata,
+            global_rank=self.global_rank,
+            tp_rank=self.tp_rank,
+            tp_size=self.tp_size,
+            completion_callback=self._mark_save_finished,
+            replicate_config=self._replicate_config,
+        )
+        sender.start()
+        self.kv_send_thread = sender
 
     def _create_store(self, store_factory: StoreFactory) -> Any:
         logger.info(
@@ -365,7 +412,7 @@ class MooncakeStoreWorker:
             raise ValueError('No KV cache rows were provided for Mooncake Store registration')
 
         registrations, backing_storages = self._build_registrations(kv_caches)
-        row_block_sizes = self._prepare_receiver_layout(registrations)
+        row_block_sizes = self._prepare_transfer_layout(registrations)
         total = len(registrations)
         total_bytes = sum(registration.size for registration in registrations)
         for index, registration in enumerate(registrations, start=1):
@@ -373,6 +420,7 @@ class MooncakeStoreWorker:
         self._registered_regions = registrations
         self._row_block_sizes = row_block_sizes
         self._start_receiver()
+        self._start_sender()
         self._start_lookup_server()
         logger.info(
             'Mooncake KV cache registration complete: global_rank=%d tp_rank=%d tp_size=%d '
@@ -383,42 +431,58 @@ class MooncakeStoreWorker:
             total_bytes,
         )
 
-    def handle_preemptions(self, connector_metadata: MooncakeStoreConnectorMetadata) -> None:
-        """Loads are retained until terminal completion, including
-        cancellation."""
-        return None
-
     def start_load_kv(self, connector_metadata: MooncakeStoreConnectorMetadata) -> None:
         """Submit each new request to the background receiver once."""
+        receiver = self.kv_recv_thread
+        if connector_metadata.load_requests and receiver is None:
+            raise RuntimeError('Mooncake KV-cache receiver is not initialized')
         for request in connector_metadata.load_requests:
             request_id = request.request_id
             with self._completion_lock:
                 if request_id in self._inflight_loads or request_id in self._completed_loads:
                     continue
                 self._inflight_loads.add(request_id)
-            self.kv_recv_thread.add_request(request)
+            assert receiver is not None
+            receiver.add_request(request)
 
-    def get_finished(
-        self,
-        finished_req_ids: set[RequestId],
-        connector_metadata: MooncakeStoreConnectorMetadata,
-    ) -> tuple[set[RequestId] | None, set[RequestId] | None]:
-        """Return rank-local receive completions since the previous poll."""
+    def start_save_kv(self, connector_metadata: MooncakeStoreConnectorMetadata) -> None:
+        """Fence the compute stream and submit immutable full-block saves."""
+        requests = connector_metadata.save_requests
+        if not requests:
+            return
+        sender = self.kv_send_thread
+        if sender is None:
+            raise RuntimeError('Mooncake KV-cache sender is not initialized')
+
+        ready_event = torch.cuda.Event()
+        ready_event.record()
+        for request in requests:
+            save_id = request.save_id
+            with self._completion_lock:
+                if save_id in self._inflight_save_ids or save_id in self._completed_save_ids:
+                    continue
+                self._inflight_save_ids.add(save_id)
+            try:
+                sender.add_request(request, ready_event)
+            except Exception:
+                self._mark_save_finished(save_id)
+                raise
+
+    def get_finished(self) -> KVConnectorOutput:
+        """Return rank-local terminal transfer progress since the last poll."""
         with self._completion_lock:
-            if not self._completed_loads:
-                return None, None
-            completed = set(self._completed_loads)
+            completed_loads = set(self._completed_loads)
+            invalid_block_ids = set()
             for failed_blocks in self._completed_loads.values():
-                self._load_error_block_ids.update(failed_blocks)
+                invalid_block_ids.update(failed_blocks)
             self._completed_loads.clear()
-        return None, completed
-
-    def get_block_ids_with_load_errors(self) -> set[int]:
-        """Return and clear physical blocks whose latest load failed."""
-        with self._completion_lock:
-            block_ids = self._load_error_block_ids
-            self._load_error_block_ids = set()
-        return block_ids
+            completed_save_ids = set(self._completed_save_ids)
+            self._completed_save_ids.clear()
+        return KVConnectorOutput(
+            completed_save_ids=completed_save_ids or None,
+            finished_receiving=completed_loads or None,
+            invalid_block_ids=invalid_block_ids,
+        )
 
     def lookup(self, token_len: int, block_hashes: Sequence[bytes]) -> int:
         """Return the longest prefix present for every unique KV-head shard."""
@@ -500,6 +564,11 @@ class MooncakeStoreWorker:
         self.kv_recv_thread = None
         if receiver is not None:
             receiver.close()
+
+        sender = self.kv_send_thread
+        self.kv_send_thread = None
+        if sender is not None:
+            sender.close()
 
         store = self.store
         self.store = None

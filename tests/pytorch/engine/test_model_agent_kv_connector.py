@@ -292,13 +292,19 @@ def test_connector_output_aggregator_waits_for_every_tp_rank():
         KVConnectorOutput(invalid_block_ids={4}),
     ])
     second = aggregator.aggregate([
-        KVConnectorOutput(),
+        KVConnectorOutput(completed_save_ids={23}),
         KVConnectorOutput(finished_receiving={11}),
+    ])
+    third = aggregator.aggregate([
+        KVConnectorOutput(),
+        KVConnectorOutput(completed_save_ids={23}),
     ])
 
     assert first.finished_receiving is None
     assert first.invalid_block_ids == {3, 4}
     assert second.finished_receiving == {11}
+    assert second.completed_save_ids is None
+    assert third.completed_save_ids == {23}
 
 
 def test_model_agent_connector_only_step_returns_progress_on_nonzero_tp_rank(monkeypatch):
@@ -312,19 +318,15 @@ def test_model_agent_connector_only_step_returns_progress_on_nonzero_tp_rank(mon
         def bind_connector_metadata(self, value):
             events.append(('bind', value))
 
-        def handle_preemptions(self, value):
-            events.append(('preemptions', value))
-
         def start_load_kv(self):
             events.append('start_load')
 
-        def get_finished(self, finished_ids):
-            events.append(('finished', finished_ids))
-            return None, {11}
-
-        def get_block_ids_with_load_errors(self):
-            events.append('errors')
-            return {3}
+        def get_finished(self):
+            events.append('finished')
+            return KVConnectorOutput(
+                finished_receiving={11},
+                invalid_block_ids={3},
+            )
 
         def clear_connector_metadata(self):
             events.append('clear')
@@ -351,10 +353,8 @@ def test_model_agent_connector_only_step_returns_progress_on_nonzero_tp_rank(mon
 
     assert events == [
         ('bind', metadata),
-        ('preemptions', metadata),
         'start_load',
-        ('finished', set()),
-        'errors',
+        'finished',
         'clear',
     ]
     assert len(outputs) == 1
@@ -363,6 +363,50 @@ def test_model_agent_connector_only_step_returns_progress_on_nonzero_tp_rank(mon
         finished_receiving={11},
         invalid_block_ids={3},
     )
+
+
+def test_model_agent_connector_save_hook_runs_between_forward_and_progress_poll():
+    from lmdeploy.pytorch.engine.model_agent.kv_connector import (
+        finish_kv_connector_step,
+        start_kv_connector_save,
+        start_kv_connector_step,
+    )
+
+    events = []
+    metadata = KVConnectorMetadata()
+    output = KVConnectorOutput(completed_save_ids={7})
+
+    class _Connector:
+
+        def bind_connector_metadata(self, value):
+            events.append(('bind', value))
+
+        def start_load_kv(self):
+            events.append('load')
+
+        def start_save_kv(self):
+            events.append('save')
+
+        def get_finished(self):
+            events.append('poll')
+            return output
+
+        def clear_connector_metadata(self):
+            events.append('clear')
+
+    connector = _Connector()
+    connector_step = start_kv_connector_step(connector, metadata)
+    events.append('forward')
+    start_kv_connector_save(connector, connector_step)
+    assert finish_kv_connector_step(connector, connector_step) is output
+    assert events == [
+        ('bind', metadata),
+        'load',
+        'forward',
+        'save',
+        'poll',
+        'clear',
+    ]
 
 
 def test_release_shuts_down_connector_before_dropping_cache(monkeypatch):

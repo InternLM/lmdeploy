@@ -7,7 +7,9 @@ import torch
 
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
+from lmdeploy.pytorch.kv_connector import KVConnectorOutput
 from lmdeploy.pytorch.kv_connector.mooncake.store import worker as worker_module
+from lmdeploy.pytorch.kv_connector.mooncake.store import worker_threads as worker_threads_module
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     DEFAULT_GLOBAL_SEGMENT_SIZE,
     DEFAULT_LOCAL_BUFFER_SIZE,
@@ -15,6 +17,7 @@ from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     MooncakeStoreConnectorMetadata,
     MooncakeStoreKeyMetadata,
     MooncakeStoreLoadRequest,
+    MooncakeStoreSaveRequest,
     build_prefix_block_hashes,
     build_store_key,
 )
@@ -35,6 +38,9 @@ class FakeStore:
         lookup_error=None,
         get_results=None,
         get_error=None,
+        put_results=None,
+        put_error=None,
+        put_callback=None,
     ):
         self.setup_ret = setup_ret
         self.register_failure_at = register_failure_at
@@ -45,10 +51,14 @@ class FakeStore:
         self.lookup_error = lookup_error
         self.get_results = get_results
         self.get_error = get_error
+        self.put_results = put_results
+        self.put_error = put_error
+        self.put_callback = put_callback
         self.setup_calls = []
         self.register_calls = []
         self.lookup_calls = []
         self.get_calls = []
+        self.put_calls = []
         self.close_calls = 0
 
     def setup(self, *args):
@@ -84,6 +94,16 @@ class FakeStore:
         if self.get_results is None:
             return [0] * len(keys)
         return self.get_results
+
+    def batch_put_from_multi_buffers(self, keys, addresses, sizes, replicate_config):
+        self.put_calls.append((list(keys), addresses, sizes, replicate_config))
+        if self.put_callback is not None:
+            self.put_callback()
+        if self.put_error is not None:
+            raise self.put_error
+        if self.put_results is None:
+            return [0] * len(keys)
+        return self.put_results
 
 
 class FakeTensor:
@@ -160,6 +180,22 @@ class RecordingLogger:
     def warning(self, message, *args, **kwargs):
         self._record('warning', message, *args, **kwargs)
 
+    def exception(self, message, *args, **kwargs):
+        self._record('exception', message, *args, **kwargs)
+
+
+class FakeCudaEvent:
+
+    def __init__(self):
+        self.record_calls = 0
+        self.synchronize_calls = 0
+
+    def record(self):
+        self.record_calls += 1
+
+    def synchronize(self):
+        self.synchronize_calls += 1
+
 
 @pytest.fixture(autouse=True)
 def patch_worker_runtime(monkeypatch):
@@ -172,6 +208,7 @@ def patch_worker_runtime(monkeypatch):
         lambda value: isinstance(value, FakeTensor) or original_is_tensor(value),
     )
     monkeypatch.setattr(worker_module, 'logger', recording_logger)
+    monkeypatch.setattr(worker_threads_module, 'logger', recording_logger)
     return recording_logger
 
 
@@ -604,9 +641,11 @@ def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path
     worker.start_load_kv(MooncakeStoreConnectorMetadata(load_requests=(request, )))
     worker.kv_recv_thread.request_queue.join()
 
-    assert worker.get_finished(set(), MooncakeStoreConnectorMetadata()) == (None, {19})
-    assert worker.get_block_ids_with_load_errors() == {1}
-    assert worker.get_block_ids_with_load_errors() == set()
+    assert worker.get_finished() == KVConnectorOutput(
+        finished_receiving={19},
+        invalid_block_ids={1},
+    )
+    assert worker.get_finished() == KVConnectorOutput()
     assert store.get_calls == [(
         [
             build_store_key(worker.key_metadata, 1, block_hash)
@@ -618,6 +657,111 @@ def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path
         ],
         [[100, 200], [100, 200]],
     )]
+    worker.shutdown()
+
+
+def test_async_save_waits_for_forward_and_writes_only_owned_missing_blocks(
+    tmp_path,
+    monkeypatch,
+):
+    path = write_store_config(tmp_path)
+    event = FakeCudaEvent()
+    replicate_config = object()
+
+    def assert_forward_is_ready():
+        assert event.synchronize_calls == 1
+
+    store = FakeStore(
+        lookup_results=[0, 1],
+        put_results=[0],
+        put_callback=assert_forward_is_ready,
+    )
+    worker = MooncakeStoreWorker(
+        make_cache_config(path, num_gpu_blocks=4),
+        global_rank=1,
+        tp_rank=3,
+        tp_size=4,
+        kv_head_replica_num=2,
+        store_factory=lambda: store,
+        replicate_config=replicate_config,
+    )
+    worker.register_kv_caches({
+        'row.0': FakeTensor(0x1000, size=400),
+        'row.1': FakeTensor(0x2000, size=800),
+    })
+    monkeypatch.setattr(worker_module.torch.cuda, 'Event', lambda: event)
+    block_hashes = build_prefix_block_hashes(range(320), 64)
+    request = MooncakeStoreSaveRequest(
+        save_id=23,
+        request_id=19,
+        start_block=1,
+        block_ids=(3, 2, 1, 0),
+        logical_block_ids=(13, 12, 11, 10),
+        block_hashes=block_hashes[1:5],
+    )
+
+    worker.start_save_kv(MooncakeStoreConnectorMetadata(save_requests=(request, )))
+    worker.kv_send_thread.request_queue.join()
+
+    # tp_rank=3 owns KV-head shard 1 and replica phase 1, so absolute
+    # blocks 1 and 3 are queried. The second key already exists.
+    expected_keys = [
+        build_store_key(worker.key_metadata, 1, block_hashes[index])
+        for index in (1, 3)
+    ]
+    assert store.lookup_calls == [expected_keys]
+    assert store.put_calls == [(
+        [expected_keys[0]],
+        [[0x1000 + 3 * 100, 0x2000 + 3 * 200]],
+        [[100, 200]],
+        replicate_config,
+    )]
+    assert event.record_calls == 1
+    assert event.synchronize_calls == 1
+    assert worker.get_finished() == KVConnectorOutput(completed_save_ids={23})
+    assert worker.get_finished() == KVConnectorOutput()
+    worker.shutdown()
+
+
+@pytest.mark.parametrize('failure_stage', ['lookup', 'put'])
+def test_async_save_failure_is_terminal_and_does_not_leak_completion(
+    tmp_path,
+    monkeypatch,
+    failure_stage,
+):
+    path = write_store_config(tmp_path)
+    event = FakeCudaEvent()
+    store = FakeStore(
+        lookup_results=[0],
+        lookup_error=(RuntimeError('lookup failed')
+                      if failure_stage == 'lookup' else None),
+        put_error=(RuntimeError('put failed')
+                   if failure_stage == 'put' else None),
+    )
+    worker = MooncakeStoreWorker(
+        make_cache_config(path, num_gpu_blocks=2),
+        global_rank=1,
+        store_factory=lambda: store,
+        replicate_config=object(),
+    )
+    worker.register_kv_caches({'row': FakeTensor(0x1000, size=200)})
+    monkeypatch.setattr(worker_module.torch.cuda, 'Event', lambda: event)
+    request = MooncakeStoreSaveRequest(
+        save_id=29,
+        request_id=7,
+        start_block=0,
+        block_ids=(1, ),
+        logical_block_ids=(9, ),
+        block_hashes=build_prefix_block_hashes(range(64), 64),
+    )
+
+    worker.start_save_kv(MooncakeStoreConnectorMetadata(save_requests=(request, )))
+    worker.kv_send_thread.request_queue.join()
+
+    assert event.record_calls == 1
+    assert event.synchronize_calls == 1
+    assert len(store.put_calls) == (0 if failure_stage == 'lookup' else 1)
+    assert worker.get_finished() == KVConnectorOutput(completed_save_ids={29})
     worker.shutdown()
 
 

@@ -57,6 +57,7 @@ from .block_manager import build_block_manager
 from .block_trie import BlockTrie
 from .eviction_helper import build_eviction_helper
 from .kv_load_coordinator import KVLoadCoordinator
+from .kv_save_coordinator import KVSaveCoordinator
 from .state_manager import build_state_manager
 
 if TYPE_CHECKING:
@@ -76,6 +77,9 @@ class SchedulerOutput:
     swap_in_map: MapType
     swap_out_map: MapType
     copy_map: MapType
+    connector_token_lens: tuple[int, ...] = ()
+    connector_block_ids: tuple[tuple[int, ...], ...] = ()
+    connector_logical_block_ids: tuple[tuple[int, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -689,6 +693,7 @@ class Scheduler:
             and not self.is_ssm
         )
         self.kv_load_coordinator = KVLoadCoordinator(self)
+        self.kv_save_coordinator = KVSaveCoordinator(self)
         self.last_schedule_had_pending_lookup = False
         checkpoint_state_manager = self.state_manager if self.is_ssm else None
         self.block_trie = BlockTrie(allocator=self.block_manager.allocator,
@@ -715,6 +720,7 @@ class Scheduler:
         self.kv_connector = None
         self._external_lookup_enabled = False
         self.kv_load_coordinator.clear()
+        self.kv_save_coordinator.clear()
         if connector is not None:
             connector.shutdown()
 
@@ -1185,11 +1191,7 @@ class Scheduler:
             # stop session so it won't get scheduled again
             seq.state.stop()
             if connector is not None:
-                block_ids = tuple(
-                    int(block_id)
-                    for block_id in self.block_manager.get_block_table(seq)
-                )
-                connector.request_finished(seq, block_ids)
+                connector.request_finished(seq)
             session.remove_sequence(seq)
         if not session.sequences:
             self.sessions.pop(session_id)
@@ -1201,6 +1203,7 @@ class Scheduler:
             or self.has_waiting()
             or self.has_remote_loading()
             or self.has_migration_done()
+            or self.kv_save_coordinator.has_pending()
         )
 
     def build_connector_meta(
@@ -1208,32 +1211,56 @@ class Scheduler:
         running: SeqList,
         swap_in_map: MapType | None = None,
         swap_out_map: MapType | None = None,
+        connector_token_lens: tuple[int, ...] = (),
     ):
         """Build one connector payload after model work has been selected."""
         connector = self.kv_connector
         if connector is None:
             return None
+        if connector_token_lens:
+            logical_block_ids = tuple(
+                tuple(int(block_id) for block_id in seq.logical_blocks.get_real_blocks())
+                for seq in running
+            )
+            block_ids = tuple(
+                tuple(int(block_id) for block_id in self.block_manager.get_block_table(seq))
+                for seq in running
+            )
+        else:
+            logical_block_ids = ()
+            block_ids = ()
         scheduler_output = SchedulerOutput(
             running=running,
             swap_in_map=swap_in_map or {},
             swap_out_map=swap_out_map or {},
             copy_map={},
+            connector_token_lens=connector_token_lens,
+            connector_block_ids=block_ids,
+            connector_logical_block_ids=logical_block_ids,
         )
-        return connector.build_connector_meta(scheduler_output)
+        metadata = connector.build_connector_meta(scheduler_output)
+        if metadata is not None:
+            self.kv_save_coordinator.acquire(metadata)
+        return metadata
 
     def update_connector_output(self, connector_output) -> None:
         """Route all-TP progress through the connector before paging."""
         if connector_output is None or self.kv_connector is None:
             return
-        results = self.kv_connector.update_connector_output(connector_output)
-        self.kv_load_coordinator.update(results)
+        result = self.kv_connector.update_connector_output(connector_output)
+        self.kv_load_coordinator.update(result.load_results)
+        self.kv_save_coordinator.update(result.completed_save_ids)
 
     def release_completed_prefill_reservations(self, seqs: SeqList) -> None:
         self.kv_load_coordinator.release_completed_prefills(seqs)
 
-    def finish_deferred_loads_after_worker_drain(self) -> None:
-        """Finish session removals made safe by worker-side load draining."""
+    def finish_deferred_kv_transfers_after_worker_drain(self) -> None:
+        """Release paging ownership after worker transfer queues have
+        drained."""
         self.kv_load_coordinator.finish_deferred_loads_after_worker_drain()
+        if self.kv_connector is not None:
+            self.kv_connector.finish_transfers_after_worker_drain()
+        self.kv_save_coordinator.clear()
 
     def get_block_tables(self, seqs: SeqList):
         """Get block tables for the sequences."""

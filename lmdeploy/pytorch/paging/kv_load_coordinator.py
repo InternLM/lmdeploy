@@ -225,11 +225,7 @@ class KVLoadCoordinator:
         scheduler = self.scheduler
         connector = scheduler.kv_connector
         if connector is not None:
-            block_ids = tuple(
-                int(block_id)
-                for block_id in scheduler.block_manager.get_block_table(seq)
-            )
-            connector.request_finished(seq, block_ids)
+            connector.request_finished(seq)
 
         session = seq.session
         session.remove_sequence(seq)

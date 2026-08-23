@@ -127,6 +127,8 @@ class _FakeScheduler:
         self.waiting = waiting or []
         self._num_ready = num_ready
         self._num_running = num_running
+        self.kv_connector = None
+        self.connector_meta_calls = []
 
     def schedule(self,
                  is_prefill: bool,
@@ -152,7 +154,14 @@ class _FakeScheduler:
     def num_running(self):
         return self._num_running
 
-    def build_connector_meta(self, running, swap_in_map=None, swap_out_map=None):
+    def build_connector_meta(
+        self,
+        running,
+        swap_in_map=None,
+        swap_out_map=None,
+        connector_token_lens=(),
+    ):
+        self.connector_meta_calls.append(tuple(connector_token_lens))
         return None
 
 
@@ -179,10 +188,13 @@ class _FakeModelAgentStrategy:
 
 def _fake_model_inputs(is_chunk: bool = False):
     return SimpleNamespace(is_decoding=False,
+                           is_dummy=False,
                            is_chunk=is_chunk,
                            is_first_chunk=False,
                            is_last_chunk=False,
-                           is_chunk_multimodal=False)
+                           is_chunk_multimodal=False,
+                           history_lengths=torch.tensor([0]),
+                           seq_length=torch.tensor([1]))
 
 
 def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
@@ -586,6 +598,44 @@ def test_single_forward_multimodal_long_context_stays_normal_prefill_for_spec_de
     assert not model_inputs.is_first_chunk
     assert not model_inputs.is_last_chunk
     assert not model_inputs.is_chunk_multimodal
+
+
+def test_prefill_passes_actual_computed_token_boundaries_to_kv_connector():
+    seq = _DummySeq(
+        history_ids=4,
+        token_ids=4,
+        all_multimodals={},
+        input_multimodals={},
+    )
+    model_inputs = SimpleNamespace(
+        is_decoding=False,
+        is_dummy=False,
+        is_chunk=False,
+        is_first_chunk=False,
+        is_last_chunk=False,
+        is_chunk_multimodal=False,
+        history_lengths=torch.tensor([4]),
+        seq_length=torch.tensor([4]),
+    )
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
+    maker.spec_decoding = False
+    maker.scheduler = _FakeScheduler([seq])
+    maker.scheduler.kv_connector = object()
+    maker.engine_strategy = _FakeEngineStrategy()
+    maker.sampling_strategy = _FakeSamplingStrategy()
+    maker.model_agent_strategy = _FakeModelAgentStrategy()
+    maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
+    maker.running_seqs = []
+    maker.to_evict_seqs = []
+    maker._decode_count = 0
+    maker.create_model_inputs = lambda seqs, is_prefill: model_inputs
+    maker._prepare_prefill_cache_inputs = lambda seqs: None
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [], [])
+
+    maker._make_forward_inputs(prefill=True)
+
+    assert maker.scheduler.connector_meta_calls == [(8, )]
 
 
 def test_spec_decoding_text_turn_ignores_previous_multimodal_chunk_limit():

@@ -5,13 +5,19 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput, KVLoadResult, RequestId
+from lmdeploy.pytorch.kv_connector.base import (
+    KVConnectorOutput,
+    KVConnectorResult,
+    KVLoadResult,
+    RequestId,
+)
 
 from .data import (
     MooncakeStoreConnectorMetadata,
     MooncakeStoreLoadRequest,
+    MooncakeStoreSaveRequest,
     build_prefix_block_hashes,
 )
 from .worker import LookupKeyClient
@@ -47,6 +53,8 @@ class MooncakeStoreScheduler:
             raise ValueError('MooncakeStoreScheduler requires an enabled kv_transfer_config')
         if cache_config.states_shapes:
             raise ValueError('Mooncake Store does not support linear-attention state caches')
+        if cache_config.window_size > 1:
+            raise ValueError('Mooncake Store does not support sliding-window KV caches')
 
         lookup_async = kv_transfer_config.kv_connector_extra_config.get('lookup_async', True)
         if lookup_async is not True:
@@ -62,6 +70,9 @@ class MooncakeStoreScheduler:
         self._inflight_loads: dict[RequestId, MooncakeStoreLoadRequest] = {}
         self._invalid_block_ids: set[int] = set()
         self._failed_load_requests: set[RequestId] = set()
+        self._next_save_id = 0
+        self._scheduled_save_blocks: dict[RequestId, int] = {}
+        self._inflight_save_ids: set[int] = set()
 
     def get_num_new_matched_tokens(
         self,
@@ -173,16 +184,72 @@ class MooncakeStoreScheduler:
             request_id=req_id,
             block_ids=block_ids,
             block_hashes=block_hashes,
+            remote_block_count=remote_block,
         )
         self._pending_loads[req_id] = load_request
+
+    def _build_save_requests(
+        self,
+        scheduler_output: SchedulerOutput,
+    ) -> tuple[MooncakeStoreSaveRequest, ...]:
+        """Build newly completed full-block suffixes for prefill work."""
+        token_lens = scheduler_output.connector_token_lens
+        if not self._kv_transfer_config.is_kv_producer or not token_lens:
+            return ()
+
+        running = scheduler_output.running
+        block_ids = scheduler_output.connector_block_ids
+        logical_block_ids = scheduler_output.connector_logical_block_ids
+        if not (len(running) == len(token_lens) == len(block_ids) == len(logical_block_ids)):
+            raise ValueError('connector save fields must contain one value per running request')
+
+        block_size = self._cache_config.block_size
+        save_requests = []
+        for request, token_len, request_blocks, request_logical_blocks in zip(
+                running, token_lens, block_ids, logical_block_ids, strict=True):
+            if (not request.history_multimodals.empty()
+                    or len(request.history_embeddings) > 0):
+                continue
+
+            request_id = int(request.seq_id)
+            full_blocks = int(token_len) // block_size
+            first_block = self._scheduled_save_blocks.get(request_id, 0)
+            if full_blocks <= first_block:
+                continue
+            if full_blocks > len(request_blocks) or full_blocks > len(request_logical_blocks):
+                raise RuntimeError(
+                    f'request {request_id} has fewer connector blocks than its '
+                    f'{full_blocks * block_size}-token save boundary')
+
+            block_hashes = self._get_request_block_hashes(
+                request,
+                request_id,
+                full_blocks * block_size,
+                block_size,
+            )
+            save_id = self._next_save_id
+            self._next_save_id += 1
+            save_requests.append(
+                MooncakeStoreSaveRequest(
+                    save_id=save_id,
+                    request_id=request_id,
+                    start_block=first_block,
+                    block_ids=tuple(request_blocks[first_block:full_blocks]),
+                    logical_block_ids=tuple(request_logical_blocks[first_block:full_blocks]),
+                    block_hashes=block_hashes[first_block:full_blocks],
+                ))
+            self._scheduled_save_blocks[request_id] = full_blocks
+            self._inflight_save_ids.add(save_id)
+        return tuple(save_requests)
 
     def build_connector_meta(
         self,
         scheduler_output: SchedulerOutput,
     ) -> MooncakeStoreConnectorMetadata | None:
-        """Dispatch new loads and keep emitting polling steps while I/O
-        runs."""
-        if not self._pending_loads and not self._inflight_loads:
+        """Dispatch new work and keep emitting polling steps while I/O runs."""
+        save_requests = self._build_save_requests(scheduler_output)
+        if (not save_requests and not self._pending_loads
+                and not self._inflight_loads and not self._inflight_save_ids):
             return None
 
         load_requests = tuple(self._pending_loads.values())
@@ -190,6 +257,7 @@ class MooncakeStoreScheduler:
         self._pending_loads.clear()
         return MooncakeStoreConnectorMetadata(
             load_requests=load_requests,
+            save_requests=save_requests,
         )
 
     def on_new_request(self, request: SchedulerSequence) -> None:
@@ -198,6 +266,7 @@ class MooncakeStoreScheduler:
         self._request_hash_trackers.pop(req_id, None)
         self._lookup_plans.pop(req_id, None)
         self._failed_load_requests.discard(req_id)
+        self._scheduled_save_blocks.pop(req_id, None)
         return None
 
     def is_lookup_pending(self, request_id: int) -> bool:
@@ -211,9 +280,15 @@ class MooncakeStoreScheduler:
     def update_connector_output(
         self,
         connector_output: KVConnectorOutput,
-    ) -> tuple[KVLoadResult, ...]:
-        """Convert all-TP worker completion into backend-neutral load
-        results."""
+    ) -> KVConnectorResult:
+        """Convert all-TP worker completion into backend-neutral updates."""
+        completed_save_ids = frozenset(
+            save_id
+            for save_id in connector_output.completed_save_ids or ()
+            if save_id in self._inflight_save_ids
+        )
+        self._inflight_save_ids.difference_update(completed_save_ids)
+
         self._invalid_block_ids.update(connector_output.invalid_block_ids)
         completed = connector_output.finished_receiving or set()
         results = []
@@ -226,15 +301,23 @@ class MooncakeStoreScheduler:
             self._invalid_block_ids.difference_update(request_blocks)
             if failed:
                 self._failed_load_requests.add(req_id)
+            else:
+                current = self._scheduled_save_blocks.get(req_id, 0)
+                self._scheduled_save_blocks[req_id] = max(
+                    current,
+                    request.remote_block_count,
+                )
             results.append(KVLoadResult(request_id=req_id, success=not failed))
-        return tuple(results)
+        return KVConnectorResult(
+            load_results=tuple(results),
+            completed_save_ids=completed_save_ids,
+        )
 
     def request_finished(
         self,
         request: SchedulerSequence,
-        block_ids: Sequence[int],
-    ) -> tuple[bool, dict[str, Any] | None]:
-        """Do not take ownership of finished request blocks yet."""
+    ) -> None:
+        """Discard request-local lookup and save-boundary state."""
         req_id = int(request.seq_id)
         self.client.discard(req_id)
         self._request_hash_trackers.pop(req_id, None)
@@ -245,7 +328,15 @@ class MooncakeStoreScheduler:
         if load_request is not None:
             self._invalid_block_ids.difference_update(load_request.block_ids)
         self._failed_load_requests.discard(req_id)
-        return False, None
+        self._scheduled_save_blocks.pop(req_id, None)
+        return None
+
+    def finish_transfers_after_worker_drain(self) -> None:
+        """Forget completions whose worker outputs were discarded by sleep."""
+        self._pending_loads.clear()
+        self._inflight_loads.clear()
+        self._invalid_block_ids.clear()
+        self._inflight_save_ids.clear()
 
     def shutdown(self) -> None:
         """Cancel pending lookups and release the scheduler client."""
@@ -256,3 +347,5 @@ class MooncakeStoreScheduler:
         self._inflight_loads.clear()
         self._invalid_block_ids.clear()
         self._failed_load_requests.clear()
+        self._scheduled_save_blocks.clear()
+        self._inflight_save_ids.clear()

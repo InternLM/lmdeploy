@@ -44,7 +44,7 @@ from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_l
 
 from .dp_utils import DistGatherScalar, DPForwardMeta, GatheredDPForwardMeta
 from .inputs_maker import build_inputs_maker
-from .kv_connector import finish_kv_connector_step, start_kv_connector_step
+from .kv_connector import finish_kv_connector_step, start_kv_connector_save, start_kv_connector_step
 from .profiler import AgentProfiler
 from .scoring import compute_input_ce_loss
 
@@ -930,6 +930,7 @@ class BaseModelAgent:
             return_logits=return_logits or return_ce_loss,
             cache_inputs=cache_inputs,
         )
+        start_kv_connector_save(self.kv_connector, connector_step)
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output

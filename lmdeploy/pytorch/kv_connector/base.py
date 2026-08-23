@@ -12,7 +12,7 @@ import enum
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import torch
 
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.paging.scheduler import SchedulerOutput
 
 RequestId = int
+KVOperationId = int
 KVCacheValue = torch.Tensor | Sequence[torch.Tensor]
 
 
@@ -38,17 +39,31 @@ class KVConnectorMetadata(ABC):
     multiprocessing RPC.
     """
 
+    def get_save_block_leases(self) -> tuple['KVSaveBlockLease', ...]:
+        """Return scheduler-owned block leases required by this step."""
+        return ()
+
+
+@dataclass(frozen=True)
+class KVSaveBlockLease:
+    """Logical blocks kept alive until one save operation completes."""
+
+    operation_id: KVOperationId
+    logical_block_ids: tuple[int, ...]
+
 
 @dataclass
 class KVConnectorOutput:
     """Worker connector progress returned by one executor step.
 
     Completion sets are rank-local until the executor aggregates every TP
-    worker.  ``invalid_block_ids`` may arrive before the request-level receive
-    completion and is therefore consumed by the scheduler-side connector.
+    worker. Save completions use operation IDs because one request can own
+    several concurrent chunk saves. ``invalid_block_ids`` may arrive before
+    the request-level receive completion and is therefore consumed by the
+    scheduler-side connector.
     """
 
-    finished_sending: set[RequestId] | None = None
+    completed_save_ids: set[KVOperationId] | None = None
     finished_receiving: set[RequestId] | None = None
     invalid_block_ids: set[int] = field(default_factory=set)
 
@@ -61,12 +76,20 @@ class KVLoadResult:
     success: bool
 
 
+@dataclass(frozen=True)
+class KVConnectorResult:
+    """Backend-neutral scheduler updates produced by a connector."""
+
+    load_results: tuple[KVLoadResult, ...] = ()
+    completed_save_ids: frozenset[KVOperationId] = frozenset()
+
+
 class KVConnectorOutputAggregator:
     """Aggregate request completions that may arrive on different TP steps."""
 
     def __init__(self, world_size: int) -> None:
         self.world_size = world_size
-        self._sending_ranks: dict[RequestId, set[int]] = {}
+        self._saving_ranks: dict[KVOperationId, set[int]] = {}
         self._receiving_ranks: dict[RequestId, set[int]] = {}
 
     def _aggregate_completions(
@@ -92,21 +115,21 @@ class KVConnectorOutputAggregator:
         if len(outputs) != self.world_size:
             raise ValueError(
                 f'expected {self.world_size} TP connector outputs, got {len(outputs)}')
-        sending_by_rank: list[set[RequestId] | None] = []
+        saving_by_rank: list[set[KVOperationId] | None] = []
         receiving_by_rank: list[set[RequestId] | None] = []
         invalid_block_ids = set()
         for output in outputs:
             if output is None:
-                sending_by_rank.append(None)
+                saving_by_rank.append(None)
                 receiving_by_rank.append(None)
                 continue
-            sending_by_rank.append(output.finished_sending)
+            saving_by_rank.append(output.completed_save_ids)
             receiving_by_rank.append(output.finished_receiving)
             invalid_block_ids.update(output.invalid_block_ids)
         return KVConnectorOutput(
-            finished_sending=self._aggregate_completions(
-                sending_by_rank,
-                self._sending_ranks,
+            completed_save_ids=self._aggregate_completions(
+                saving_by_rank,
+                self._saving_ranks,
             ),
             finished_receiving=self._aggregate_completions(
                 receiving_by_rank,
@@ -117,7 +140,7 @@ class KVConnectorOutputAggregator:
 
     def clear(self) -> None:
         """Discard partial completions when pending executor work is reset."""
-        self._sending_ranks.clear()
+        self._saving_ranks.clear()
         self._receiving_ranks.clear()
 
 
@@ -164,31 +187,17 @@ class KVConnectorBase(ABC):
         """
         return None
 
-    def handle_preemptions(self, connector_metadata: KVConnectorMetadata) -> None:
-        """Handle preempted requests before their GPU blocks are
-        overwritten."""
-        return None
-
     def start_load_kv(self) -> None:
         """Submit loads described by the currently bound metadata."""
         return None
 
-    def get_finished(
-        self,
-        finished_req_ids: set[RequestId],
-    ) -> tuple[set[RequestId] | None, set[RequestId] | None]:
-        """Return requests whose asynchronous save/load has completed.
+    def start_save_kv(self) -> None:
+        """Submit saves after the current model forward has been queued."""
+        return None
 
-        The tuple order is ``(finished_sending, finished_receiving)``. A
-        request returned in ``finished_sending`` must have appeared in
-        ``finished_req_ids`` in this call or an earlier call. The receiving set
-        reports requests whose asynchronous external-cache load is complete.
-        """
-        return None, None
-
-    def get_block_ids_with_load_errors(self) -> set[int]:
-        """Return GPU block IDs whose external-cache load failed."""
-        return set()
+    def get_finished(self) -> KVConnectorOutput:
+        """Return rank-local terminal transfer progress since the last poll."""
+        return KVConnectorOutput()
 
     def shutdown(self) -> None:
         """Drain asynchronous work and release connector resources."""
@@ -254,21 +263,18 @@ class KVConnectorBase(ABC):
     def update_connector_output(
         self,
         connector_output: KVConnectorOutput,
-    ) -> tuple[KVLoadResult, ...]:
-        """Consume executor-aggregated progress and return terminal loads."""
-        return ()
+    ) -> KVConnectorResult:
+        """Consume all-TP worker progress and return backend-neutral
+        updates."""
+        return KVConnectorResult()
+
+    def finish_transfers_after_worker_drain(self) -> None:
+        """Drop scheduler-side transfer state after workers have drained."""
+        return None
 
     def request_finished(
         self,
         request: 'SchedulerSequence',
-        block_ids: Sequence[int],
-    ) -> tuple[bool, dict[str, Any] | None]:
-        """Notify the connector before a finished request's blocks are freed.
-
-        The boolean is true when the connector temporarily takes ownership of
-        the blocks for an asynchronous save. In that case the scheduler must
-        defer freeing them until the request is reported by ``get_finished``.
-        The optional dictionary is reserved for connector-specific response
-        metadata.
-        """
-        return False, None
+    ) -> None:
+        """Discard connector-owned state when a request is removed."""
+        return None

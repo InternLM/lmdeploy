@@ -280,6 +280,16 @@ class BaseBlockManager:
             raise ValueError('logical_block_ids contains a block that is not GPU-resident.')
         return block_offsets
 
+    def pin_logical_blocks(self, logical_block_ids: np.ndarray) -> None:
+        """Keep GPU pages alive while an asynchronous reader owns them."""
+        if len(logical_block_ids) > 0:
+            self.allocator.add_ref_count(logical_block_ids, 1)
+
+    def release_logical_blocks(self, logical_block_ids: np.ndarray) -> None:
+        """Release one asynchronous ownership reference."""
+        if len(logical_block_ids) > 0:
+            self.allocator.free(logical_block_ids)
+
     def allocate(self, data: SchedulerSequence, prealloc_size: int = 0):
         """Allocate stuff."""
         return self.allocate_msg(data, prealloc_size)

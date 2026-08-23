@@ -4,8 +4,11 @@ from .base import (
     KVConnectorMetadata,
     KVConnectorOutput,
     KVConnectorOutputAggregator,
+    KVConnectorResult,
     KVConnectorRole,
     KVLoadResult,
+    KVOperationId,
+    KVSaveBlockLease,
 )
 from .factory import build_kv_connector, prepare_kv_connector_config
 
@@ -14,8 +17,11 @@ __all__ = [
     'KVConnectorMetadata',
     'KVConnectorOutput',
     'KVConnectorOutputAggregator',
+    'KVConnectorResult',
     'KVConnectorRole',
     'KVLoadResult',
+    'KVOperationId',
+    'KVSaveBlockLease',
     'build_kv_connector',
     'prepare_kv_connector_config',
 ]
