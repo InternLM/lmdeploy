@@ -42,7 +42,7 @@ import time
 from collections import Counter, OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from torch.profiler import record_function
 
@@ -231,6 +231,22 @@ class _PrefillAdmissionResult:
         return not self.admitted and not self.should_skip
 
 
+@dataclass(frozen=True)
+class _PrefixMatchBaseline:
+    """Sequence state preserved across a tentative local prefix match."""
+
+    num_history_ids: int
+    num_blocks: int
+    trie_cursor: Any
+    match_start_step: int
+    cached_tokens: int
+    kv_token_limit: int | None
+    fresh_block_range: range | None
+    trie_block_map: dict[int, int]
+    model_meta: Any
+    stats_snapshot: Any
+
+
 class _PrefillAdmissionAttempt:
     """Try to admit one waiting prefill sequence.
 
@@ -258,6 +274,7 @@ class _PrefillAdmissionAttempt:
         self._alloc_size = prealloc_size
         self._gate_match_stats_snapshot = None
         self._gate_match_rollback_result = None
+        self._prefix_match_baseline: _PrefixMatchBaseline | None = None
 
     def run(self):
         """Run the admission route for one waiting prefill.
@@ -268,6 +285,11 @@ class _PrefillAdmissionAttempt:
         4. Return skip/stop if resources block the candidate.
         5. On success, allocate blocks/states and publish any prefix-cache hit.
         """
+        if self.scheduler._external_lookup_enabled:
+            if self._lookup_is_pending():
+                return self._check_result(_PrefillAdmissionResult.skip())
+            self._capture_prefix_match_baseline()
+
         gate_result = self._check_prefill_admission_gates()
         if gate_result is not None:
             return self._check_result(gate_result)
@@ -303,9 +325,43 @@ class _PrefillAdmissionAttempt:
         logger.warning('Unexpected prefill admission state: session_id=%s seq_id=%s %s',
                        seq.session_id, seq.seq_id, message)
 
+    def _lookup_is_pending(self) -> bool:
+        """Skip without touching local prefix state while lookup is running."""
+        scheduler = self.scheduler
+        connector = scheduler.kv_connector
+        assert connector is not None
+        if not connector.is_lookup_pending(self.seq.seq_id):
+            return False
+        scheduler.last_schedule_had_pending_lookup = True
+        return True
+
+    def _capture_prefix_match_baseline(self) -> None:
+        """Capture state before any prefill gate may match the local trie."""
+        scheduler = self.scheduler
+        if not scheduler.block_trie.enabled:
+            return
+        seq = self.seq
+        overlap = seq.prefix_cache.recompute_overlap
+        self._prefix_match_baseline = _PrefixMatchBaseline(
+            num_history_ids=int(seq.num_history_ids),
+            num_blocks=int(seq.num_blocks),
+            trie_cursor=seq.prefix_cache.trie_cursor,
+            match_start_step=int(seq.prefix_cache.match_start_step),
+            cached_tokens=int(seq.cached_tokens),
+            kv_token_limit=seq.kv_token_limit,
+            fresh_block_range=overlap.fresh_block_range,
+            trie_block_map=dict(overlap.trie_block_map),
+            model_meta=seq.model_meta,
+            stats_snapshot=scheduler.block_trie.stats.snapshot(),
+        )
+
     def _admit_resources(self):
         if self.scheduler.block_trie.enabled:
             return self._admit_prefix_cache_resources()
+        if self.scheduler._external_lookup_enabled:
+            lookup_result = self._query_external_prefix()
+            if lookup_result is not None:
+                return lookup_result
         if not self._prepare_and_evict():
             return _PrefillAdmissionResult.stop()
         return None
@@ -329,6 +385,11 @@ class _PrefillAdmissionAttempt:
         if stats_snapshot is None:
             stats_snapshot = scheduler.block_trie.stats.snapshot()
             scheduler.block_trie.match(seq)
+
+        if scheduler._external_lookup_enabled:
+            lookup_result = self._query_external_prefix()
+            if lookup_result is not None:
+                return lookup_result
 
         had_ssm_restore = scheduler.is_ssm and seq.prefix_cache.restore.is_selected
         if not scheduler._pin_ssm_restore_if_needed(seq):
@@ -363,6 +424,29 @@ class _PrefillAdmissionAttempt:
                 return _PrefillAdmissionResult.stop()
 
         return None
+
+    def _query_external_prefix(self):
+        """Poll the external prefix after prioritizing the local trie."""
+        scheduler = self.scheduler
+        connector = scheduler.kv_connector
+        assert connector is not None
+        num_external_tokens, _ = connector.get_num_new_matched_tokens(
+            self.seq,
+            self.seq.num_history_ids,
+        )
+        if num_external_tokens is not None:
+            # Task 6 only discovers the external boundary. Task 7 will allocate
+            # and advance the sequence when a positive result is loadable.
+            return None
+
+        baseline = self._prefix_match_baseline
+        if baseline is not None:
+            scheduler._rollback_unscheduled_prefix_match(
+                self.seq,
+                baseline=baseline,
+            )
+        scheduler.last_schedule_had_pending_lookup = True
+        return _PrefillAdmissionResult.skip()
 
     def _match_prefix_for_prefill_gate(self):
         """Tentatively match once so a request can be rechecked by a gate."""
@@ -442,7 +526,11 @@ class _PrefillAdmissionAttempt:
         logger.debug('Rollback tentative prefix-cache match: session_id=%s seq_id=%s reason=%s '
                      'num_history_ids=%s restore_state=%s', seq.session_id, seq.seq_id, reason, seq.num_history_ids,
                      seq.prefix_cache.restore.slot)
-        self.scheduler._rollback_unscheduled_prefix_match(seq, stats_snapshot)
+        self.scheduler._rollback_unscheduled_prefix_match(
+            seq,
+            stats_snapshot,
+            baseline=self._prefix_match_baseline,
+        )
 
     def _finish_admission(self):
         scheduler = self.scheduler
@@ -488,6 +576,14 @@ class Scheduler:
         self.state_manager = build_state_manager(self.cache_config)
         self.block_manager = build_block_manager(cache_config)
         self.is_ssm = len(self.cache_config.states_shapes) > 0
+        transfer_config = cache_config.kv_transfer_config
+        self._external_lookup_enabled = (
+            kv_connector is not None
+            and transfer_config is not None
+            and transfer_config.is_kv_consumer
+            and not self.is_ssm
+        )
+        self.last_schedule_had_pending_lookup = False
         checkpoint_state_manager = self.state_manager if self.is_ssm else None
         self.block_trie = BlockTrie(allocator=self.block_manager.allocator,
                                    block_size=self.cache_config.block_size,
@@ -513,6 +609,7 @@ class Scheduler:
             return
         self.kv_connector.shutdown()
         self.kv_connector = None
+        self._external_lookup_enabled = False
 
     def _ensure_runtime_state_available(self):
         """Make one state-cache slot available for an SSM runtime state.
@@ -533,7 +630,13 @@ class Scheduler:
             return True
         return self.block_trie.state_checkpoints.pin_restore(seq)
 
-    def _rollback_unscheduled_prefix_match(self, seq: SchedulerSequence, stats_snapshot=None):
+    def _rollback_unscheduled_prefix_match(
+        self,
+        seq: SchedulerSequence,
+        stats_snapshot=None,
+        *,
+        baseline: _PrefixMatchBaseline | None = None,
+    ):
         """Drop a tentative prefix match that will not be used now.
 
         ``block_trie.match()`` mutates sequence state immediately: it advances
@@ -541,6 +644,26 @@ class Scheduler:
         If later eviction or state allocation fails, undo those side effects so
         the waiting sequence can be scheduled cleanly in a later round.
         """
+        if baseline is not None:
+            self.block_trie.stats.restore(baseline.stats_snapshot)
+            if seq.num_blocks < baseline.num_blocks:
+                raise RuntimeError(
+                    'tentative prefix match removed sequence-owned baseline blocks')
+            if seq.num_blocks > baseline.num_blocks:
+                self.block_manager.truncate(seq, baseline.num_blocks)
+            seq.set_step(baseline.num_history_ids)
+            seq.model_meta = baseline.model_meta
+            seq.kv_token_limit = baseline.kv_token_limit
+            prefix_cache = seq.prefix_cache
+            prefix_cache.trie_cursor = baseline.trie_cursor
+            prefix_cache.match_start_step = baseline.match_start_step
+            overlap = prefix_cache.recompute_overlap
+            overlap.fresh_block_range = baseline.fresh_block_range
+            overlap.trie_block_map.clear()
+            overlap.trie_block_map.update(baseline.trie_block_map)
+            seq.cached_tokens = baseline.cached_tokens
+            return
+
         self.block_trie.stats.restore(stats_snapshot)
         if self.is_ssm:
             self.block_trie.state_checkpoints.unpin_restore(seq)
@@ -857,6 +980,7 @@ class Scheduler:
                  allow_long_prefill: bool = True,
                  prefer_long_prefill: bool = False):
         """Schedule inputs for next steps."""
+        self.last_schedule_had_pending_lookup = False
         if is_prefill:
             output = self._schedule_prefill(prealloc_size, allow_long_prefill, prefer_long_prefill)
         else:
@@ -908,7 +1032,10 @@ class Scheduler:
         """
         assert session_id in self.sessions
         session = self.sessions[session_id]
+        connector = self.kv_connector
         for seq in session.sequences.values():
+            if connector is not None:
+                connector.cancel_lookup(seq.seq_id)
             seq.state.stop()
 
     def end_session(self, session_id: int):
@@ -921,9 +1048,16 @@ class Scheduler:
             self.seq_meta.sampling_strategy.on_session_end(session_id)
         session = self.sessions[session_id]
         seqs = list(session.sequences.values())
+        connector = self.kv_connector
         for seq in seqs:
             # stop session so it won't get scheduled again
             seq.state.stop()
+            if connector is not None:
+                block_ids = tuple(
+                    int(block_id)
+                    for block_id in self.block_manager.get_block_table(seq)
+                )
+                connector.request_finished(seq, block_ids)
             session.remove_sequence(seq)
         self.sessions.pop(session_id)
 

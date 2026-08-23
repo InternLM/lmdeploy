@@ -137,9 +137,13 @@ class Engine(EngineBase):
         # build configs
         scheduler_config = ConfigBuilder.build_scheduler_config(engine_config)
         cache_config = ConfigBuilder.build_cache_config(engine_config)
-        prepare_kv_connector_config(cache_config)
         backend_config = ConfigBuilder.build_backend_config(engine_config)
         dist_config = ConfigBuilder.build_dist_config(engine_config)
+        prepare_kv_connector_config(
+            cache_config,
+            model_path=model_path,
+            dist_config=dist_config,
+        )
         memdecode_config = ConfigBuilder.build_memdecode_config(model_path,
                                                                 engine_config,
                                                                 cache_config,
@@ -191,7 +195,12 @@ class Engine(EngineBase):
                                         cache_config=cache_config,
                                         seq_strategy=self.seq_strategy,
                                         sampling_strategy=self.sampling_strategy)
-        scheduler_connector = build_kv_connector(KVConnectorRole.SCHEDULER, cache_config)
+        scheduler_connector = build_kv_connector(
+            KVConnectorRole.SCHEDULER,
+            cache_config,
+            tp_size=dist_config.attn_tp,
+            kv_head_replica_num=self.model_config.num_replicate_key_value_heads,
+        )
         self.scheduler = Scheduler(
             scheduler_config,
             cache_config,

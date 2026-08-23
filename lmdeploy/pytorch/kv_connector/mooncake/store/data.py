@@ -3,20 +3,199 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import struct
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Literal
+
+import numpy as np
 
 from lmdeploy.pytorch.kv_connector.base import KVConnectorMetadata
 
 DEFAULT_GLOBAL_SEGMENT_SIZE = 4 * 1024 * 1024 * 1024
 DEFAULT_LOCAL_BUFFER_SIZE = 4 * 1024 * 1024 * 1024
 MOONCAKE_CONFIG_PATH_ENV = 'MOONCAKE_CONFIG_PATH'
+MOONCAKE_BLOCK_HASH_BYTES = hashlib.sha256().digest_size
+
+_BLOCK_HASH_SCHEMA = b'lmdeploy-mooncake-prefix-block-v1\x00'
 
 MooncakeMode = Literal['embedded']
+
+
+def validate_kv_head_replica_num(
+    kv_head_replica_num: int,
+    tp_size: int,
+) -> int:
+    """Validate and return the number of TP replicas per KV-head shard."""
+    if tp_size % kv_head_replica_num != 0:
+        raise ValueError(
+            f'tp_size ({tp_size}) must be divisible by kv_head_replica_num '
+            f'({kv_head_replica_num})')
+    return kv_head_replica_num
+
+
+def _identity_bytes(extra_identity: bytes | bytearray | memoryview | str) -> bytes:
+    if isinstance(extra_identity, str):
+        return extra_identity.encode('utf-8')
+    if isinstance(extra_identity, (bytes, bytearray, memoryview)):
+        return bytes(extra_identity)
+    raise TypeError('extra_identity must be a string or bytes-like value')
+
+
+@lru_cache(maxsize=16)
+def _token_block_struct(block_size: int) -> struct.Struct:
+    """Return a cached encoder for one block of unsigned token IDs."""
+    return struct.Struct(f'>{block_size}Q')
+
+
+def _pack_python_token_block(
+    token_ids: Sequence[int],
+    block_struct: struct.Struct,
+) -> bytes:
+    """Validate and encode one generic token block."""
+    values = []
+    for token_id in token_ids:
+        token_id = int(token_id)
+        if token_id < 0 or token_id >= 2**64:
+            raise ValueError('token IDs must fit in an unsigned 64-bit integer')
+        values.append(token_id)
+    return block_struct.pack(*values)
+
+
+def _pack_numpy_token_suffix(
+    token_ids: np.ndarray,
+    start: int,
+    end: int,
+) -> bytes:
+    """Encode an integer ndarray suffix as contiguous big-endian uint64."""
+    if token_ids.ndim != 1 or token_ids.dtype.kind not in ('i', 'u'):
+        raise TypeError('token_ids must contain integers')
+    suffix = token_ids[start:end]
+    if suffix.dtype.itemsize > 8:
+        raise ValueError('token IDs must fit in an unsigned 64-bit integer')
+    if suffix.dtype.kind == 'i' and suffix.size and bool(np.any(suffix < 0)):
+        raise ValueError('token IDs must fit in an unsigned 64-bit integer')
+    return np.asarray(suffix, dtype='>u8', order='C').tobytes()
+
+
+def build_prefix_block_hashes(
+    token_ids: Sequence[int],
+    block_size: int,
+    *,
+    extra_identity: bytes | bytearray | memoryview | str = b'',
+    previous_hashes: Sequence[bytes] = (),
+) -> tuple[bytes, ...]:
+    """Build stable, prefix-chained hashes for complete token blocks.
+
+    Each digest includes a versioned schema, the preceding digest, the block
+    size, canonically encoded token IDs, and request attributes such as the
+    active adapter from ``extra_identity``. A mutable partial tail is
+    intentionally excluded. ``previous_hashes`` lets callers extend an
+    append-only request without rehashing its existing prefix.
+    """
+    identity = _identity_bytes(extra_identity)
+    if len(identity) >= 2**32:
+        raise ValueError('extra_identity is too large')
+
+    full_block_count = len(token_ids) // block_size
+    block_hashes = []
+    for block_hash in previous_hashes:
+        if not isinstance(block_hash, (bytes, bytearray, memoryview)):
+            raise TypeError('previous_hashes must contain bytes-like values')
+        block_hash = bytes(block_hash)
+        if len(block_hash) != MOONCAKE_BLOCK_HASH_BYTES:
+            raise ValueError(
+                f'previous hashes must contain {MOONCAKE_BLOCK_HASH_BYTES} bytes')
+        block_hashes.append(block_hash)
+    if len(block_hashes) > full_block_count:
+        raise ValueError('previous_hashes exceed the complete token blocks')
+
+    parent_hash = block_hashes[-1] if block_hashes else None
+
+    first_new_block = len(block_hashes)
+    if first_new_block == full_block_count:
+        return tuple(block_hashes)
+
+    first_new_token = first_new_block * block_size
+    complete_token_end = full_block_count * block_size
+    packed_numpy_tokens = None
+    if (isinstance(token_ids, np.ndarray) and token_ids.ndim == 1
+            and token_ids.dtype.kind in ('i', 'u')):
+        packed_numpy_tokens = memoryview(
+            _pack_numpy_token_suffix(
+                token_ids,
+                first_new_token,
+                complete_token_end,
+            ))
+
+    block_struct = _token_block_struct(block_size)
+    encoded_block_size = struct.pack('>I', block_size)
+    encoded_identity = struct.pack('>I', len(identity)) + identity
+    packed_block_bytes = block_struct.size
+    for block_index in range(first_new_block, full_block_count):
+        digest = hashlib.sha256()
+        digest.update(_BLOCK_HASH_SCHEMA)
+        if parent_hash is not None:
+            digest.update(parent_hash)
+        digest.update(encoded_block_size)
+        if packed_numpy_tokens is not None:
+            packed_offset = (block_index - first_new_block) * packed_block_bytes
+            digest.update(
+                packed_numpy_tokens[packed_offset:packed_offset + packed_block_bytes])
+        else:
+            start = block_index * block_size
+            digest.update(
+                _pack_python_token_block(
+                    token_ids[start:start + block_size],
+                    block_struct,
+                ))
+        digest.update(encoded_identity)
+        parent_hash = digest.digest()
+        block_hashes.append(parent_hash)
+    return tuple(block_hashes)
+
+
+@dataclass(frozen=True)
+class MooncakeStoreKeyMetadata:
+    """Stable namespace shared by Mooncake lookup and later transfers."""
+
+    model_name: str
+    cache_prefix: str
+    tp_size: int
+    block_size: int
+    kv_head_replica_num: int = 1
+
+    def __post_init__(self) -> None:
+        validate_kv_head_replica_num(self.kv_head_replica_num, self.tp_size)
+
+    @property
+    def num_kv_head_shards(self) -> int:
+        """Return the number of distinct KV-head namespaces."""
+        return self.tp_size // self.kv_head_replica_num
+
+
+def build_store_key(
+    metadata: MooncakeStoreKeyMetadata,
+    kv_head_rank: int,
+    block_hash: bytes | bytearray | memoryview,
+) -> str:
+    """Build a vLLM-compatible key for one unique KV-head shard."""
+    block_hash = bytes(block_hash)
+    if len(block_hash) != MOONCAKE_BLOCK_HASH_BYTES:
+        raise ValueError(f'block_hash must contain {MOONCAKE_BLOCK_HASH_BYTES} bytes')
+
+    prefix = f'{metadata.cache_prefix}@' if metadata.cache_prefix else ''
+    return (
+        f'{prefix}{metadata.model_name}'
+        f'@tp_rank:{kv_head_rank}'
+        '@group:0'
+        f'@{block_hash.hex()}'
+    )
 
 
 class BlobBlockHashes(Sequence[bytes]):

@@ -4,12 +4,75 @@ import pytest
 import torch
 
 import lmdeploy.pytorch.paging.scheduler as scheduler_module
+from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.engine.inputs_maker import _make_state_prefix_cache_save_plan
 from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.paging.state_manager import StateManager
+
+
+class _AsyncLookupConnector:
+
+    def __init__(self, results):
+        self.results = iter(results)
+        self.pending_ids = set()
+        self.lookup_calls = []
+        self.cancelled = []
+        self.finished = []
+
+    def on_new_request(self, request):
+        pass
+
+    def is_lookup_pending(self, request_id):
+        return request_id in self.pending_ids
+
+    def get_num_new_matched_tokens(self, request, num_computed_tokens):
+        self.lookup_calls.append((request.seq_id, num_computed_tokens))
+        result = next(self.results)
+        if result[0] is None:
+            self.pending_ids.add(request.seq_id)
+        else:
+            self.pending_ids.discard(request.seq_id)
+        return result
+
+    def cancel_lookup(self, request_id):
+        self.pending_ids.discard(request_id)
+        self.cancelled.append(request_id)
+
+    def request_finished(self, request, block_ids):
+        self.finished.append((request.seq_id, tuple(block_ids)))
+        return False, None
+
+    def shutdown(self):
+        pass
+
+
+def _make_async_lookup_scheduler(connector, *, enable_prefix_caching=True):
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    block_size = 4
+    return Scheduler(
+        scheduler_config=SchedulerConfig(
+            max_batches=1,
+            max_session_len=64,
+            max_request_output_len=16,
+            eviction_type='recompute',
+        ),
+        cache_config=CacheConfig(
+            max_batches=1,
+            block_size=block_size,
+            num_cpu_blocks=0,
+            num_gpu_blocks=16,
+            enable_prefix_caching=enable_prefix_caching,
+            kv_transfer_config=KVTransferConfig(
+                kv_connector='MooncakeStoreConnector',
+                kv_role='kv_both',
+            ),
+        ),
+        seq_meta=SequenceMeta(block_size, strategy=ARSequenceStrategy()),
+        kv_connector=connector,
+    )
 
 
 class TestScheduler:
@@ -617,6 +680,130 @@ def test_scheduler_prefix_match_rollback_clears_recompute_overlap_window():
     assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
+
+
+def test_async_lookup_pending_rolls_back_a_new_request_once():
+    connector = _AsyncLookupConnector([(None, False), (0, False)])
+    scheduler = _make_async_lookup_scheduler(connector)
+    seq = scheduler.add_session(70).add_sequence(torch.arange(9))
+
+    first = scheduler.schedule(is_prefill=True)
+    assert first.running == []
+    assert scheduler.last_schedule_had_pending_lookup
+    assert seq.num_history_ids == 0
+    assert seq.num_blocks == 0
+    assert seq.prefix_cache.trie_cursor is None
+    assert seq.prefix_cache.match_start_step == -1
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+
+    second = scheduler.schedule(is_prefill=True)
+    assert second.running == []
+    assert connector.lookup_calls == [(seq.seq_id, 0)]
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+
+    connector.pending_ids.clear()
+    third = scheduler.schedule(is_prefill=True)
+    assert third.running == [seq]
+    assert connector.lookup_calls == [(seq.seq_id, 0), (seq.seq_id, 0)]
+
+
+def test_async_lookup_pending_request_does_not_block_later_waiter():
+    connector = _AsyncLookupConnector([(None, False), (0, False)])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+    )
+    pending = scheduler.add_session(74).add_sequence(torch.arange(9))
+    schedulable = scheduler.add_session(75).add_sequence(torch.arange(9, 18))
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [schedulable]
+    assert pending.status == MessageStatus.WAITING
+    assert schedulable.status == MessageStatus.READY
+    assert pending.seq_id in connector.pending_ids
+    assert connector.lookup_calls == [
+        (pending.seq_id, 0),
+        (schedulable.seq_id, 0),
+    ]
+    assert scheduler.last_schedule_had_pending_lookup
+
+
+def test_async_lookup_precisely_restores_a_multiturn_local_prefix():
+    connector = _AsyncLookupConnector([(None, False), (4, True)])
+    scheduler = _make_async_lookup_scheduler(connector)
+    tokens = torch.arange(13)
+    seq = scheduler.add_session(71).add_sequence(tokens)
+
+    seq.kv_token_limit = 4
+    scheduler.block_manager.allocate(seq)
+    scheduler.block_trie.allocate(seq)
+    seq.set_step(4)
+    seq.kv_token_limit = 5
+    seq.cached_tokens = 3
+    seq.model_meta = {'state': 'keep'}
+    seq.prefix_cache.recompute_overlap.fresh_block_range = range(0, 1)
+    seq.prefix_cache.recompute_overlap.trie_block_map[0] = seq.logical_blocks[0]
+    baseline_blocks = seq.logical_blocks.get_real_blocks().copy()
+    baseline_cursor = seq.prefix_cache.trie_cursor
+
+    cached = scheduler.add_session(72).add_sequence(tokens[:9])
+    scheduler.block_manager.allocate(cached)
+    scheduler.block_trie.allocate(cached)
+    cached.state.stop()
+    matched_block = cached.logical_blocks[1]
+    matched_ref_count = scheduler.block_manager.allocator.get_ref_count(
+        cached.logical_blocks.get_real_blocks()[1:2]).copy()
+    scheduler.block_trie.stats.reset()
+
+    first = scheduler.schedule(is_prefill=True)
+    assert first.running == []
+    assert scheduler.last_schedule_had_pending_lookup
+    assert seq.num_history_ids == 4
+    assert seq.num_blocks == 1
+    assert torch.equal(torch.from_numpy(seq.logical_blocks.get_real_blocks()),
+                       torch.from_numpy(baseline_blocks))
+    assert seq.prefix_cache.trie_cursor is baseline_cursor
+    assert seq.prefix_cache.match_start_step == -1
+    assert seq.prefix_cache.recompute_overlap.fresh_block_range == range(0, 1)
+    assert seq.prefix_cache.recompute_overlap.trie_block_map == {0: baseline_blocks[0]}
+    assert seq.cached_tokens == 3
+    assert seq.kv_token_limit == 5
+    assert seq.model_meta == {'state': 'keep'}
+    assert scheduler.block_manager.allocator.get_ref_count(
+        cached.logical_blocks.get_real_blocks()[1:2]).tolist() == matched_ref_count.tolist()
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+
+    second = scheduler.schedule(is_prefill=True)
+    assert second.running == []
+    assert connector.lookup_calls == [(seq.seq_id, 8)]
+    assert seq.num_history_ids == 4
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+
+    connector.pending_ids.clear()
+    seq.kv_token_limit = None
+    seq.prefix_cache.recompute_overlap.clear_tracking()
+    third = scheduler.schedule(is_prefill=True)
+    assert third.running == [seq]
+    assert connector.lookup_calls == [(seq.seq_id, 8), (seq.seq_id, 8)]
+    assert seq.num_history_ids == 8
+    assert matched_block in seq.logical_blocks.get_real_blocks()
+
+
+def test_stop_and_end_session_cancel_lookup_before_request_cleanup():
+    connector = _AsyncLookupConnector([(None, False)])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+    )
+    seq = scheduler.add_session(73).add_sequence(torch.arange(9))
+    scheduler.schedule(is_prefill=True)
+
+    scheduler.stop_session(73)
+    assert connector.cancelled == [seq.seq_id]
+
+    scheduler.end_session(73)
+    assert connector.finished == [(seq.seq_id, ())]
 
 
 def test_scheduler_recomputes_prefill_budget_after_prefix_hit():

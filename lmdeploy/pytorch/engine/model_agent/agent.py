@@ -1261,6 +1261,7 @@ class BaseModelAgent:
                 global_rank=self.rank,
                 tp_rank=tp_rank,
                 tp_size=tp,
+                kv_head_replica_num=self.model_config.num_replicate_key_value_heads,
             )
             if self.kv_connector is not None:
                 self.kv_connector.register_kv_caches(self.cache_engine.connector_kv_caches)

@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import torch
 
+import lmdeploy.pytorch.engine.engine_loop as engine_loop_module
 import lmdeploy.pytorch.engine.inputs_maker as inputs_maker_module
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
@@ -330,6 +331,41 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
 
     assert result == ('forward_inputs', ['long-seq'])
     assert events == ['collect_migration_done', 'send_next_inputs']
+
+
+def test_engine_loop_uses_short_yield_only_for_pending_lookup(monkeypatch):
+    sleeps = []
+
+    class _BlockManager:
+        num_gpu_blocks = 8
+
+        def __init__(self):
+            self.reads = 0
+
+        def get_num_free_gpu_blocks(self):
+            self.reads += 1
+            return 4
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    block_manager = _BlockManager()
+    scheduler = SimpleNamespace(
+        last_schedule_had_pending_lookup=True,
+        block_manager=block_manager,
+    )
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = scheduler
+    monkeypatch.setattr(engine_loop_module.asyncio, 'sleep', record_sleep)
+
+    asyncio.run(loop._wait_for_schedulable_prefill())
+    assert sleeps == [0.001]
+    assert block_manager.reads == 0
+
+    scheduler.last_schedule_had_pending_lookup = False
+    asyncio.run(loop._wait_for_schedulable_prefill())
+    assert sleeps == [0.001, 0.1]
+    assert block_manager.reads == 1
 
 
 def test_engine_loop_reset_runtime_state_delegates_to_inputs_maker():

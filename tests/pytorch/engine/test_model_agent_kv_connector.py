@@ -71,6 +71,7 @@ def test_factory_forwards_worker_rank_context(monkeypatch):
         'global_rank': 7,
         'tp_rank': 3,
         'tp_size': 8,
+        'kv_head_replica_num': 1,
     }
 
 
@@ -80,7 +81,7 @@ def _bare_model_agent():
     agent = BaseModelAgent.__new__(BaseModelAgent)
     agent.all_context = nullcontext
     agent.cache_config = _enabled_config()
-    agent.model_config = object()
+    agent.model_config = SimpleNamespace(num_replicate_key_value_heads=4)
     agent.rank = 7
     agent.cache_stream = object()
     agent.dist_config = SimpleNamespace(attn_tp=8)
@@ -145,7 +146,12 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
     assert cache_call[2]['world_size'] == 8
     factory_call = events[3]
     assert factory_call[1] is KVConnectorRole.WORKER
-    assert factory_call[3] == {'global_rank': 7, 'tp_rank': 3, 'tp_size': 8}
+    assert factory_call[3] == {
+        'global_rank': 7,
+        'tp_rank': 3,
+        'tp_size': 8,
+        'kv_head_replica_num': 4,
+    }
     assert events[4] == ('register', row_mapping)
     assert agent.kv_connector is new_connector
     assert agent.cache_engine is cache_engine

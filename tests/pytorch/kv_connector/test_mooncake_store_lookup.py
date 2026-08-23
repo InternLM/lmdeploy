@@ -149,11 +149,13 @@ def test_async_lookup_is_pending_and_submitted_only_once(lookup_pair_factory):
     try:
         assert client.lookup(2, 64, hashes) is None
         assert store_worker.lookup_started.wait(timeout=2)
+        assert client.is_pending(2)
         assert client.lookup(2, 64, hashes) is None
         assert store_worker.lookup_calls == [(64, hashes)]
 
         gate.set()
         assert _poll_lookup(client, 2, 64, hashes) == 23
+        assert not client.is_pending(2)
     finally:
         gate.set()
 

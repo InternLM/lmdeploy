@@ -19,7 +19,14 @@ import zmq
 from lmdeploy.pytorch.kv_connector.base import KVCacheValue, RequestId
 from lmdeploy.utils import get_logger
 
-from .data import BlobBlockHashes, MooncakeStoreConfig, MooncakeStoreConnectorMetadata, MooncakeStoreRegistration
+from .data import (
+    BlobBlockHashes,
+    MooncakeStoreConfig,
+    MooncakeStoreConnectorMetadata,
+    MooncakeStoreKeyMetadata,
+    MooncakeStoreRegistration,
+    build_store_key,
+)
 from .protocol import LOOKUP_MSG, RESET_MSG, RESP_ERR, RESP_OK
 
 if TYPE_CHECKING:
@@ -128,6 +135,7 @@ class MooncakeStoreWorker:
         global_rank: int = 0,
         tp_rank: int = 0,
         tp_size: int = 1,
+        kv_head_replica_num: int = 1,
         store_factory: StoreFactory | None = None,
     ) -> None:
         kv_transfer_config = cast('KVTransferConfig', cache_config.kv_transfer_config)
@@ -137,6 +145,8 @@ class MooncakeStoreWorker:
             raise ValueError('tp_size must be greater than 0')
         if tp_rank < 0 or tp_rank >= tp_size:
             raise ValueError(f'tp_rank must be in [0, {tp_size}), got {tp_rank}')
+        if cache_config.states_shapes:
+            raise ValueError('Mooncake Store does not support linear-attention state caches')
 
         self._cache_config = cache_config
         self.global_rank = global_rank
@@ -144,7 +154,16 @@ class MooncakeStoreWorker:
         self.tp_size = tp_size
         self.lookup_server: LookupKeyServer | None = None
 
-        config_path = kv_transfer_config.kv_connector_extra_config.get('mooncake_config_path')
+        extra_config = kv_transfer_config.kv_connector_extra_config
+        self.key_metadata = MooncakeStoreKeyMetadata(
+            model_name=extra_config.get('model_name', 'unnamed-model'),
+            cache_prefix=extra_config.get('cache_prefix', ''),
+            tp_size=tp_size,
+            block_size=cache_config.block_size,
+            kv_head_replica_num=kv_head_replica_num,
+        )
+
+        config_path = extra_config.get('mooncake_config_path')
         self.store_config = MooncakeStoreConfig.load_from_config(config_path)
         local_hostname = _get_local_hostname()
         factory = store_factory if store_factory is not None else _load_mooncake_store_factory()
@@ -324,8 +343,73 @@ class MooncakeStoreWorker:
         return set()
 
     def lookup(self, token_len: int, block_hashes: Sequence[bytes]) -> int:
-        """Return no external hit until task 6 defines the stored key space."""
-        return 0
+        """Return the longest prefix present for every unique KV-head shard."""
+        store = self.store
+        if store is None:
+            return 0
+
+        key_metadata = self.key_metadata
+        full_blocks = min(token_len // key_metadata.block_size, len(block_hashes))
+        if full_blocks == 0:
+            return 0
+
+        unique_kv_ranks = key_metadata.num_kv_head_shards
+        keys = [
+            build_store_key(key_metadata, rank, block_hashes[block_index])
+            for block_index in range(full_blocks)
+            for rank in range(unique_kv_ranks)
+        ]
+        logger.info(
+            'Mooncake Store interaction before: operation=lookup_batch_is_exist '
+            'global_rank=%d tp_rank=%d tp_size=%d token_len=%d blocks=%d candidate_keys=%d',
+            *self._rank_fields(),
+            token_len,
+            full_blocks,
+            len(keys),
+        )
+        start = time.perf_counter()
+        try:
+            exists_states = self.store.batch_is_exist(keys)
+            if len(exists_states) != len(keys):
+                raise ValueError(
+                    f'batch_is_exist returned {len(exists_states)} states for {len(keys)} keys')
+        except Exception as e:
+            logger.error(
+                'Mooncake Store interaction after: operation=lookup_batch_is_exist '
+                'global_rank=%d tp_rank=%d tp_size=%d token_len=%d blocks=%d candidate_keys=%d '
+                'status=error elapsed_ms=%.3f error=%s',
+                *self._rank_fields(),
+                token_len,
+                full_blocks,
+                len(keys),
+                (time.perf_counter() - start) * 1000,
+                e,
+                exc_info=True,
+            )
+            return 0
+
+        matched_blocks = 0
+        for block_index in range(full_blocks):
+            offset = block_index * unique_kv_ranks
+            if not all(
+                    exists_states[offset + rank] == 1
+                    for rank in range(unique_kv_ranks)):
+                break
+            matched_blocks += 1
+        matched_tokens = matched_blocks * key_metadata.block_size
+        logger.info(
+            'Mooncake Store interaction after: operation=lookup_batch_is_exist '
+            'global_rank=%d tp_rank=%d tp_size=%d token_len=%d blocks=%d candidate_keys=%d '
+            'status=ok matched_blocks=%d matched_tokens=%d elapsed_ms=%.3f',
+            *self._rank_fields(),
+            token_len,
+            full_blocks,
+            len(keys),
+            matched_blocks,
+            matched_tokens,
+            (time.perf_counter() - start) * 1000,
+        )
+        return matched_tokens
 
     def shutdown(self) -> None:
         """Release Mooncake resources exactly once."""
@@ -612,6 +696,11 @@ class LookupKeyClient:
         future = self.futures.pop(req_id, None)
         if future is not None:
             future.cancel()
+
+    def is_pending(self, req_id: RequestId) -> bool:
+        """Return whether a request's lookup Future is still running."""
+        future = self.futures.get(req_id)
+        return future is not None and not future.done()
 
     def _reset(self) -> bool:
         rpc_socket = self._ensure_socket()

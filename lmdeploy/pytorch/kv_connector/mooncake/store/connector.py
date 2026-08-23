@@ -14,7 +14,7 @@ from lmdeploy.pytorch.kv_connector.base import (
     RequestId,
 )
 
-from .data import MooncakeStoreConnectorMetadata
+from .data import MooncakeStoreConnectorMetadata, validate_kv_head_replica_num
 from .scheduler import MooncakeStoreScheduler
 from .worker import MooncakeStoreWorker
 
@@ -35,6 +35,7 @@ class MooncakeStoreConnector(KVConnectorBase):
         global_rank: int = 0,
         tp_rank: int = 0,
         tp_size: int = 1,
+        kv_head_replica_num: int = 1,
     ) -> None:
         super().__init__(role)
 
@@ -44,6 +45,7 @@ class MooncakeStoreConnector(KVConnectorBase):
         if kv_transfer_config.kv_connector != 'MooncakeStoreConnector':
             raise ValueError(
                 f'MooncakeStoreConnector cannot use kv_connector={kv_transfer_config.kv_connector!r}')
+        validate_kv_head_replica_num(kv_head_replica_num, tp_size)
 
         self.kv_role = kv_transfer_config.kv_role
 
@@ -57,6 +59,7 @@ class MooncakeStoreConnector(KVConnectorBase):
                 global_rank=global_rank,
                 tp_rank=tp_rank,
                 tp_size=tp_size,
+                kv_head_replica_num=kv_head_replica_num,
             )
 
     def _require_scheduler(self) -> MooncakeStoreScheduler:
@@ -93,6 +96,12 @@ class MooncakeStoreConnector(KVConnectorBase):
 
     def on_new_request(self, request: SchedulerSequence) -> None:
         return self._require_scheduler().on_new_request(request)
+
+    def is_lookup_pending(self, request_id: RequestId) -> bool:
+        return self._require_scheduler().is_lookup_pending(request_id)
+
+    def cancel_lookup(self, request_id: RequestId) -> None:
+        return self._require_scheduler().cancel_lookup(request_id)
 
     def update_connector_output(self, connector_output: Any) -> None:
         return self._require_scheduler().update_connector_output(connector_output)

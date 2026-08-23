@@ -110,6 +110,9 @@ def test_connector_rejects_a_different_connector_configuration():
 def test_scheduler_empty_implementations_are_fail_closed(cache_config):
     connector = MooncakeStoreConnector(KVConnectorRole.SCHEDULER, cache_config)
     request = MagicMock(seq_id=17)
+    request.history_multimodals.empty.return_value = True
+    request.history_embeddings = []
+    request.get_prefix_cache_max_match_step.return_value = 0
 
     assert connector.get_num_new_matched_tokens(request, 0) == (0, False)
     assert connector.update_state_after_alloc(request, [1, 2], 0) is None
@@ -154,6 +157,8 @@ def test_scheduler_methods_delegate_arguments_and_results(cache_config):
     scheduler.update_state_after_alloc = MagicMock(return_value=None)
     scheduler.build_connector_meta = MagicMock(return_value=metadata)
     scheduler.on_new_request = MagicMock(return_value=None)
+    scheduler.is_lookup_pending = MagicMock(return_value=True)
+    scheduler.cancel_lookup = MagicMock(return_value=None)
     scheduler.update_connector_output = MagicMock(return_value=None)
     scheduler.request_finished = MagicMock(return_value=(True, {'stored': True}))
     scheduler.shutdown = MagicMock(return_value=None)
@@ -169,6 +174,11 @@ def test_scheduler_methods_delegate_arguments_and_results(cache_config):
 
     assert connector.on_new_request(request) is None
     scheduler.on_new_request.assert_called_once_with(request)
+
+    assert connector.is_lookup_pending(17)
+    scheduler.is_lookup_pending.assert_called_once_with(17)
+    assert connector.cancel_lookup(17) is None
+    scheduler.cancel_lookup.assert_called_once_with(17)
 
     connector_output = object()
     assert connector.update_connector_output(connector_output) is None

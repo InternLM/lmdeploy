@@ -157,6 +157,14 @@ class KVConnectorBase(ABC):
         it."""
         return None
 
+    def is_lookup_pending(self, request_id: RequestId) -> bool:
+        """Return whether an asynchronous prefix lookup is still running."""
+        return False
+
+    def cancel_lookup(self, request_id: RequestId) -> None:
+        """Discard scheduler-side lookup state for an aborted request."""
+        return None
+
     def update_connector_output(self, connector_output: Any) -> None:
         """Consume an executor-aggregated output from worker connectors."""
         return None

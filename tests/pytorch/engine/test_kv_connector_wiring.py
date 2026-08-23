@@ -4,7 +4,7 @@ from unittest.mock import Mock
 import pytest
 
 from lmdeploy.messages import KVTransferConfig, PytorchEngineConfig
-from lmdeploy.pytorch.config import CacheConfig
+from lmdeploy.pytorch.config import CacheConfig, DistConfig
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
 from lmdeploy.pytorch.engine.engine import Engine
 from lmdeploy.pytorch.kv_connector import prepare_kv_connector_config
@@ -44,6 +44,42 @@ def test_prepare_kv_connector_config_generates_one_short_unique_path():
     assert first_path.endswith('.sock')
     assert len(first_path.removeprefix('ipc://').encode()) < 100
     assert second_path != first_path
+
+
+def test_prepare_mooncake_namespace_and_async_constraints():
+    cache_config = _make_mooncake_cache_config()
+
+    prepare_kv_connector_config(
+        cache_config,
+        model_path='/models/tenant/glm-5.2',
+        dist_config=DistConfig(tp=8),
+    )
+
+    extra_config = cache_config.kv_transfer_config.kv_connector_extra_config
+    assert extra_config['model_name'] == 'glm-5.2'
+    assert extra_config['lookup_async'] is True
+
+    invalid = _make_mooncake_cache_config()
+    invalid.kv_transfer_config.kv_connector_extra_config['lookup_async'] = False
+    with pytest.raises(ValueError, match='lookup_async=true'):
+        prepare_kv_connector_config(invalid)
+
+    with pytest.raises(ValueError, match='tensor parallelism only'):
+        prepare_kv_connector_config(
+            _make_mooncake_cache_config(),
+            dist_config=DistConfig(tp=2, dp=2),
+        )
+
+
+def test_prepare_mooncake_rejects_invalid_explicit_model_name():
+    cache_config = _make_mooncake_cache_config()
+    cache_config.kv_transfer_config.kv_connector_extra_config['model_name'] = None
+
+    with pytest.raises(ValueError, match='model_name'):
+        prepare_kv_connector_config(
+            cache_config,
+            model_path='/models/test-model',
+        )
 
 
 def test_runtime_lookup_path_does_not_mutate_reused_engine_config():
@@ -95,6 +131,7 @@ def test_scheduler_shutdown_releases_injected_connector_once():
 
     connector.shutdown.assert_called_once_with()
     assert scheduler.kv_connector is None
+    assert not scheduler._external_lookup_enabled
 
 
 def test_engine_loop_finally_shuts_down_scheduler_before_executor():

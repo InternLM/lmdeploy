@@ -232,6 +232,23 @@ class BaseBlockManager:
         """Free all physical blocks allocated for the session."""
         raise NotImplementedError('Not implemented.')
 
+    def truncate(self, msg: SchedulerSequence, target_num_blocks: int) -> np.ndarray:
+        """Release only the logical-block suffix after
+        ``target_num_blocks``."""
+        logical_blocks = msg.logical_blocks
+        if target_num_blocks < 0 or target_num_blocks > len(logical_blocks):
+            raise ValueError(
+                f'target_num_blocks must be in [0, {len(logical_blocks)}], '
+                f'got {target_num_blocks}')
+        released = np.asarray(
+            logical_blocks.get_real_blocks()[target_num_blocks:],
+            dtype=np.int64,
+        ).copy()
+        if len(released) > 0:
+            self.allocator.free(released)
+        logical_blocks.resize(target_num_blocks)
+        return released
+
     def try_swap_out(self, msg: SchedulerSequence):
         """Try swap msg out."""
         raise NotImplementedError('Not implemented.')

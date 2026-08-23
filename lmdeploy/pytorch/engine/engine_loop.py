@@ -413,6 +413,17 @@ class EngineLoop:
         self.scheduler.collect_migration_done()
         return await self.inputs_maker.prefetch_next_inputs()
 
+    async def _wait_for_schedulable_prefill(self):
+        """Yield briefly for lookup I/O or back off for cache pressure."""
+        scheduler = self.scheduler
+        if scheduler.last_schedule_had_pending_lookup:
+            await asyncio.sleep(0.001)
+            return
+        logger.warning(f'no next prefill running request, Maybe cache is full, '
+                       f'free gpu cache blocks: {scheduler.block_manager.get_num_free_gpu_blocks()}, '
+                       f'total gpu cache blocks: {scheduler.block_manager.num_gpu_blocks}')
+        await asyncio.sleep(0.1)
+
     def _publish_forward_checkpoints(self, running: 'SeqList', has_state_checkpoint_save: bool):
         """Publish per-forward prefix-cache ownership before prefetching."""
         state_checkpoints = self.scheduler.block_trie.state_checkpoints
@@ -472,14 +483,6 @@ class EngineLoop:
         forward_inputs = None
         next_running = None
 
-        async def __no_running_warning():
-            # TODO (JimyMa): add watermark check event instead of async sleep.
-            # self.perfill_watermark_event.wait()
-            logger.warning(f'no next prefill running request, Maybe cache is full, '
-                           f'free gpu cache blocks: {scheduler.block_manager.get_num_free_gpu_blocks()}, '
-                           f'total gpu cache blocks: {scheduler.block_manager.num_gpu_blocks}')
-            await asyncio.sleep(0.1)
-
         while not self.stop_event.is_set():
             if self._sleep_requested:
                 # Drop prefetched work from before sleep. Sleep ends scheduler
@@ -498,7 +501,7 @@ class EngineLoop:
                 if next_running is None:
                     if self._sleep_requested:
                         continue
-                    await __no_running_warning()
+                    await self._wait_for_schedulable_prefill()
                     continue
 
             scheduler.activate_seqs(next_running)

@@ -12,6 +12,9 @@ from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     DEFAULT_GLOBAL_SEGMENT_SIZE,
     DEFAULT_LOCAL_BUFFER_SIZE,
     MooncakeStoreConfig,
+    MooncakeStoreKeyMetadata,
+    build_prefix_block_hashes,
+    build_store_key,
 )
 from lmdeploy.pytorch.kv_connector.mooncake.store.worker import MooncakeStoreWorker
 
@@ -26,14 +29,19 @@ class FakeStore:
         register_error_at=None,
         close_error=None,
         close_ret=0,
+        lookup_results=None,
+        lookup_error=None,
     ):
         self.setup_ret = setup_ret
         self.register_failure_at = register_failure_at
         self.register_error_at = register_error_at
         self.close_error = close_error
         self.close_ret = close_ret
+        self.lookup_results = lookup_results
+        self.lookup_error = lookup_error
         self.setup_calls = []
         self.register_calls = []
+        self.lookup_calls = []
         self.close_calls = 0
 
     def setup(self, *args):
@@ -53,6 +61,14 @@ class FakeStore:
         if self.close_error is not None:
             raise self.close_error
         return self.close_ret
+
+    def batch_is_exist(self, keys):
+        self.lookup_calls.append(list(keys))
+        if self.lookup_error is not None:
+            raise self.lookup_error
+        if self.lookup_results is None:
+            return [0] * len(keys)
+        return self.lookup_results
 
 
 class FakeTensor:
@@ -408,6 +424,79 @@ def test_lookup_server_starts_after_registration_only_on_global_rank_zero(tmp_pa
 
     rank_zero_worker.shutdown()
     rank_one_worker.shutdown()
+
+
+@pytest.mark.parametrize(
+    ('replica_num', 'unique_ranks'),
+    [(1, 8), (4, 2), (8, 1)],
+)
+def test_lookup_expands_unique_kv_namespaces_block_major(
+    tmp_path,
+    replica_num,
+    unique_ranks,
+):
+    store = FakeStore(lookup_results=[1] * (3 * unique_ranks))
+    worker, _ = make_worker(
+        tmp_path,
+        store=store,
+        tp_size=8,
+        kv_head_replica_num=replica_num,
+    )
+    block_hashes = build_prefix_block_hashes(range(192), 64)
+
+    assert worker.lookup(192, block_hashes) == 192
+    assert store.lookup_calls == [[
+        build_store_key(worker.key_metadata, rank, block_hashes[block_index])
+        for block_index in range(3)
+        for rank in range(unique_ranks)
+    ]]
+    worker.shutdown()
+
+
+def test_lookup_requires_all_namespaces_and_a_contiguous_prefix(tmp_path):
+    store = FakeStore(lookup_results=[1, 1, 1, 0, 1, 1])
+    worker, _ = make_worker(
+        tmp_path,
+        store=store,
+        tp_size=8,
+        kv_head_replica_num=4,
+    )
+
+    assert worker.lookup(192, build_prefix_block_hashes(range(192), 64)) == 64
+    worker.shutdown()
+
+
+@pytest.mark.parametrize(
+    'store',
+    [
+        FakeStore(lookup_results=[1]),
+        FakeStore(lookup_error=RuntimeError('lookup failed')),
+    ],
+)
+def test_lookup_external_errors_fail_closed(tmp_path, store):
+    worker, _ = make_worker(
+        tmp_path,
+        store=store,
+        tp_size=8,
+        kv_head_replica_num=4,
+    )
+
+    assert worker.lookup(128, build_prefix_block_hashes(range(128), 64)) == 0
+    worker.shutdown()
+
+
+def test_store_key_matches_vllm_namespace_without_unsupported_geometry():
+    metadata = MooncakeStoreKeyMetadata(
+        model_name='test-model',
+        cache_prefix='tenant-a',
+        tp_size=8,
+        block_size=4,
+        kv_head_replica_num=4,
+    )
+    block_hash = build_prefix_block_hashes(range(4), 4)[0]
+
+    assert build_store_key(metadata, 1, block_hash) == (
+        f'tenant-a@test-model@tp_rank:1@group:0@{block_hash.hex()}')
 
 
 def test_lookup_server_start_failure_propagates_without_cleanup(tmp_path, monkeypatch):

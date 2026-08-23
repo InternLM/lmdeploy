@@ -324,6 +324,9 @@ class SchedulerSession:
         status = MessageStatus.WAITING if migration_request is None else MessageStatus.MIGRATION_WAITING
         seq.set_state(build_seq_state(self.scheduler, seq, status))
         self.seq_manager.add_sequence(seq)
+        connector = self.scheduler.kv_connector
+        if connector is not None:
+            connector.on_new_request(seq)
 
         # metrics
         seq.record_event(EventType.QUEUED)
