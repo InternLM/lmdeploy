@@ -334,9 +334,6 @@ class CudaGraphMixin:
 class PiecewiseCudaGraphMixin(CudaGraphMixin):
     """Opt a standard decoder model into the shared piecewise graph path.
 
-    Models using this mixin must expose the conventional decoder forward
-    inputs, one paged ``Attention`` per KV-cache layer, an input embedding,
-    and the existing CUDA graph output-buffer contract. Extra forward arguments
-    may be immutable plan constants; request-varying arguments need explicit
-    stable-buffer ownership before the model opts in.
+    Models using this mixin must expose the conventional decoder forward inputs, an input embedding, and the existing
+    CUDA graph output-buffer contract. Selected CUDA operators own any required eager boundaries.
     """

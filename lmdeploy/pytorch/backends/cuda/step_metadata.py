@@ -171,7 +171,11 @@ class CudaStepMetaPlan:
         return True
 
     @classmethod
-    def from_implementations(cls, implementations: Iterable[Any]) -> 'CudaStepMetaPlan':
+    def from_implementations(
+        cls,
+        implementations: Iterable[Any],
+        piecewise_implementations: Iterable[Any] = (),
+    ) -> 'CudaStepMetaPlan':
         """Resolve builders registered while constructing one CUDA model."""
         attention_owners: list[tuple[Any, CudaAttentionMetaBuilder[Any, Any]]] = []
         step_updaters: list[CudaStepMetaUpdater] = []
@@ -218,6 +222,11 @@ class CudaStepMetaPlan:
             output_keys[provider.output_key] = provider.key
             updater_keys.add(provider.key)
             step_updaters.append(provider)
+
+        for impl in piecewise_implementations:
+            if id(impl) not in visited_impls:
+                visited_impls.add(id(impl))
+                unique_implementations.append(impl)
 
         if not attention_owners:
             return cls(tuple(), tuple(), fallback_reason='no implementation-selected attention metadata contract')
@@ -296,6 +305,8 @@ class CudaStepMetaPlan:
 
 _active_implementations: ContextVar[list[Any] | None] = ContextVar(
     'cuda_step_meta_implementations', default=None)
+_active_piecewise_implementations: ContextVar[list[Any] | None] = ContextVar(
+    'cuda_piecewise_graph_implementations', default=None)
 
 
 def register_step_metadata_impl(impl: Any) -> None:
@@ -308,15 +319,28 @@ def register_step_metadata_impl(impl: Any) -> None:
     implementations.append(impl)
 
 
+def register_piecewise_graph_impl(impl: Any) -> None:
+    """Register a PCG operator that does not own step metadata."""
+    implementations = _active_piecewise_implementations.get()
+    if implementations is not None:
+        implementations.append(impl)
+
+
 @contextmanager
 def collect_step_metadata(ctx_mgr: 'StepContextManager'):
     """Collect one model's CUDA implementations and attach its resolved
     plan."""
     ctx_mgr.backend_step_meta_plan = None
     implementations: list[Any] = []
-    token = _active_implementations.set(implementations)
+    piecewise_implementations: list[Any] = []
+    metadata_token = _active_implementations.set(implementations)
+    piecewise_token = _active_piecewise_implementations.set(piecewise_implementations)
     try:
         yield
-        ctx_mgr.backend_step_meta_plan = CudaStepMetaPlan.from_implementations(implementations)
+        ctx_mgr.backend_step_meta_plan = CudaStepMetaPlan.from_implementations(
+            implementations,
+            piecewise_implementations,
+        )
     finally:
-        _active_implementations.reset(token)
+        _active_piecewise_implementations.reset(piecewise_token)
+        _active_implementations.reset(metadata_token)

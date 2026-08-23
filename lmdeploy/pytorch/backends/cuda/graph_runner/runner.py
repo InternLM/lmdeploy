@@ -59,8 +59,8 @@ def _validate_speculative_decoding(model_config: ModelConfig) -> None:
     require_fa3_for_speculative_decoding()
 
 
-def _make_piecewise_graph_manager(model: torch.nn.Module, cache_config: CacheConfig,
-                                  backend_config: BackendConfig) -> PiecewiseGraphManager | None:
+def _make_piecewise_graph_manager(model: torch.nn.Module, cache_config: CacheConfig, backend_config: BackendConfig,
+                                  device: torch.device) -> PiecewiseGraphManager | None:
     """Build the optional PCG runtime only for an eligible CUDA model."""
     max_capture_tokens = backend_config.piecewise_cudagraph_max_tokens
     if max_capture_tokens is None or backend_config.eager_mode or backend_config.device_type != 'cuda':
@@ -86,7 +86,7 @@ def _make_piecewise_graph_manager(model: torch.nn.Module, cache_config: CacheCon
     if not step_meta_plan.enable_piecewise_cuda_graph():
         return None
 
-    return PiecewiseGraphManager(runtime)
+    return PiecewiseGraphManager(runtime, torch.cuda.Stream(device=device))
 
 
 def _update_deepep_mode(context: StepContext) -> None:
@@ -126,7 +126,7 @@ class CUDAGraphRunner(GraphRunner):
         self._full_graph_pool_handle = torch.cuda.graph_pool_handle()
         self._full_graph_runners: dict[Any, CUDASingleGraphRunner] = {}
 
-        self._piecewise_graph_manager = _make_piecewise_graph_manager(model, cache_config, backend_config)
+        self._piecewise_graph_manager = _make_piecewise_graph_manager(model, cache_config, backend_config, device)
 
         # strategy factory
         build_ctx = model.ctx_mgr.build_ctx

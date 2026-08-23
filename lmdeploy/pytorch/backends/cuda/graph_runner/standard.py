@@ -23,12 +23,17 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.models.utils.cudagraph import PiecewiseCudaGraphMixin
 
 
-_STANDARD_FORWARD_INPUT_NAMES = frozenset({
-    'input_ids',
-    'position_ids',
+_GRAPH_TOKEN_INPUT_AXES = {
+    'input_ids': 1,
+    'position_ids': 1,
+    'mrope_position_ids': 1,
+}
+_FRAME_INPUT_NAMES = (
     'past_key_values',
     'attn_metadata',
-})
+    'state_ids',
+)
+_STANDARD_FORWARD_INPUT_NAMES = frozenset(_GRAPH_TOKEN_INPUT_AXES) | frozenset(_FRAME_INPUT_NAMES)
 _FORWARD_CONSTANT_TYPES = (bool, int, float, str, bytes, torch.dtype, torch.device)
 _DEFAULT_TOKEN_STRIDE = 512
 
@@ -38,6 +43,7 @@ class _StandardGraphDescriptor:
     """Immutable inputs that select one standard decoder plan."""
 
     token_bucket: int
+    graph_input_names: tuple[str, ...]
     forward_constants: tuple[tuple[str, Any], ...]
 
 
@@ -51,7 +57,7 @@ class _StandardGraphPlan:
 
 
 class StandardDecoderPiecewiseGraphRuntime:
-    """Run the shared dense-decoder prefill PCG path."""
+    """Run the shared standard-decoder prefill PCG path."""
 
     def __init__(
         self,
@@ -81,7 +87,7 @@ class StandardDecoderPiecewiseGraphRuntime:
         context: StepContext,
         kwargs: Mapping[str, Any],
     ) -> _StandardGraphDescriptor | None:
-        """Select one supported single-rank dense-prefill plan."""
+        """Select one supported standard-prefill plan."""
         if context.enable_microbatch or context.is_chunk:
             return None
         if context.local_adapter_ids is not None and not context.is_dummy:
@@ -92,10 +98,11 @@ class StandardDecoderPiecewiseGraphRuntime:
             return None
 
         raw_tokens = kwargs['input_ids'].size(1)
+        graph_input_names = tuple(name for name in _GRAPH_TOKEN_INPUT_AXES if kwargs.get(name) is not None)
         token_bucket = self._round_up_token_bucket(raw_tokens)
         if token_bucket is None:
             return None
-        return _StandardGraphDescriptor(token_bucket, forward_constants)
+        return _StandardGraphDescriptor(token_bucket, graph_input_names, forward_constants)
 
     def warmup(
         self,
@@ -106,16 +113,14 @@ class StandardDecoderPiecewiseGraphRuntime:
         semantics."""
         context = self.model.ctx_mgr.current_context()
         input_ids = kwargs['input_ids']
-        position_ids = kwargs['position_ids']
-        bucket_inputs = self._make_bucket_inputs(input_ids, position_ids, descriptor.token_bucket)
+        bucket_inputs = self._make_bucket_inputs(kwargs, descriptor)
 
         with torch.inference_mode(), piecewise_graph_execution(
                 raw_tokens=input_ids.size(1), token_bucket=descriptor.token_bucket):
             self._forward_bucket(
                 context,
-                kwargs['past_key_values'],
-                kwargs['attn_metadata'],
-                descriptor.forward_constants,
+                self._get_frame_inputs(kwargs),
+                descriptor,
                 *bucket_inputs,
             )
 
@@ -124,28 +129,22 @@ class StandardDecoderPiecewiseGraphRuntime:
         descriptor: _StandardGraphDescriptor,
         kwargs: Mapping[str, Any],
         bridge_pool: ReusableBridgePool,
+        stream: torch.cuda.Stream,
     ) -> PiecewiseGraphBuild:
         """Capture one startup prefill and return its already-materialized
         output."""
         context = self.model.ctx_mgr.current_context()
         input_ids = kwargs['input_ids']
-        position_ids = kwargs['position_ids']
-        past_key_values = kwargs['past_key_values']
-        live_metadata = kwargs['attn_metadata']
-        bucket_inputs = self._make_bucket_inputs(input_ids, position_ids, descriptor.token_bucket)
+        frame_inputs = self._get_frame_inputs(kwargs)
+        bucket_inputs = self._make_bucket_inputs(kwargs, descriptor)
         raw_tokens = input_ids.size(1)
 
-        def capture_forward(
-            static_input_ids: torch.Tensor,
-            static_position_ids: torch.Tensor,
-        ) -> torch.Tensor:
+        def capture_forward(*static_inputs: torch.Tensor) -> torch.Tensor:
             return self._forward_bucket(
                 context,
-                past_key_values,
-                live_metadata,
-                descriptor.forward_constants,
-                static_input_ids,
-                static_position_ids,
+                frame_inputs,
+                descriptor,
+                *static_inputs,
             )
 
         with piecewise_graph_execution(raw_tokens=raw_tokens, token_bucket=descriptor.token_bucket):
@@ -154,6 +153,8 @@ class StandardDecoderPiecewiseGraphRuntime:
                 bucket_inputs,
                 warmup_iterations=0,
                 bridge_pool=bridge_pool,
+                frame_inputs=frame_inputs,
+                stream=stream,
             )
 
         plan = _StandardGraphPlan(
@@ -171,14 +172,14 @@ class StandardDecoderPiecewiseGraphRuntime:
     ) -> dict[str, torch.Tensor]:
         """Bind one live batch, replay in order, and trim the output."""
         input_ids = kwargs['input_ids']
-        position_ids = kwargs['position_ids']
         raw_tokens = input_ids.size(1)
+        frame_inputs = self._get_frame_inputs(kwargs)
 
         def fill_inputs(static_inputs: tuple[torch.Tensor, ...]) -> None:
-            self._fill_bucket_inputs(static_inputs, input_ids, position_ids)
+            self._fill_bucket_inputs(static_inputs, kwargs, plan.descriptor)
 
         with piecewise_graph_execution(raw_tokens=raw_tokens, token_bucket=plan.descriptor.token_bucket):
-            plan.graph.replay_with_input_binder(fill_inputs)
+            plan.graph.replay_with_input_binder(fill_inputs, frame_inputs=frame_inputs)
 
         return self.model.get_outputs_cudagraph(plan.output_buffers, input_ids=input_ids)
 
@@ -193,6 +194,11 @@ class StandardDecoderPiecewiseGraphRuntime:
             constants.append((name, value))
         return tuple(constants)
 
+    @staticmethod
+    def _get_frame_inputs(kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        """Build the request frame used to late-bind eager call arguments."""
+        return {name: kwargs[name] for name in _FRAME_INPUT_NAMES if name in kwargs}
+
     def _round_up_token_bucket(self, raw_tokens: int) -> int | None:
         if not 0 < raw_tokens <= self.max_capture_tokens:
             return None
@@ -202,54 +208,53 @@ class StandardDecoderPiecewiseGraphRuntime:
     @classmethod
     def _make_bucket_inputs(
         cls,
-        input_ids: torch.Tensor,
-        position_ids: torch.Tensor,
-        token_bucket: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        bucket_input_ids = input_ids.new_zeros(1, token_bucket)
-        bucket_position_ids = position_ids.new_zeros(1, token_bucket)
-        bucket_inputs = (bucket_input_ids, bucket_position_ids)
-        cls._fill_bucket_inputs(bucket_inputs, input_ids, position_ids)
+        inputs: Mapping[str, Any],
+        descriptor: _StandardGraphDescriptor,
+    ) -> tuple[torch.Tensor, ...]:
+        bucket_inputs = []
+        for name in descriptor.graph_input_names:
+            value = inputs[name]
+            shape = list(value.shape)
+            shape[_GRAPH_TOKEN_INPUT_AXES[name]] = descriptor.token_bucket
+            bucket_inputs.append(value.new_zeros(shape))
+        bucket_inputs = tuple(bucket_inputs)
+        cls._fill_bucket_inputs(bucket_inputs, inputs, descriptor)
         return bucket_inputs
 
     @staticmethod
     def _fill_bucket_inputs(
-        bucket_inputs: tuple[torch.Tensor, torch.Tensor],
-        input_ids: torch.Tensor,
-        position_ids: torch.Tensor,
+        bucket_inputs: tuple[torch.Tensor, ...],
+        inputs: Mapping[str, Any],
+        descriptor: _StandardGraphDescriptor,
     ) -> None:
         """Copy one logical request and deterministically clear its tail."""
-        bucket_input_ids, bucket_position_ids = bucket_inputs
-        raw_tokens = input_ids.size(1)
-        bucket_input_ids.zero_()
-        bucket_input_ids[:, :raw_tokens].copy_(input_ids)
-        bucket_position_ids.zero_()
-        bucket_position_ids[:, :raw_tokens].copy_(position_ids)
+        for bucket_input, name in zip(bucket_inputs, descriptor.graph_input_names, strict=True):
+            value = inputs[name]
+            token_axis = _GRAPH_TOKEN_INPUT_AXES[name]
+            bucket_input.zero_()
+            bucket_input.narrow(token_axis, 0, value.size(token_axis)).copy_(value)
 
     def _forward_bucket(
         self,
         context: StepContext,
-        past_key_values: Any,
-        attention_metadata: Any,
-        forward_constants: tuple[tuple[str, Any], ...],
-        input_ids: torch.Tensor,
-        position_ids: torch.Tensor,
+        frame_inputs: Mapping[str, Any],
+        descriptor: _StandardGraphDescriptor,
+        *graph_inputs: torch.Tensor,
     ) -> torch.Tensor:
+        graph_inputs = dict(zip(descriptor.graph_input_names, graph_inputs, strict=True))
+        input_ids = graph_inputs['input_ids']
+        position_ids = graph_inputs['position_ids']
         bucket_context = replace(
             context,
             input_ids=input_ids,
             position_ids=position_ids,
             attention_mask=None,
-            kv_caches=past_key_values,
-            attn_metadata=attention_metadata,
-            _outputs={},
+            kv_caches=frame_inputs['past_key_values'],
+            attn_metadata=frame_inputs['attn_metadata'],
+            mrope_position_ids=graph_inputs.get('mrope_position_ids'),
         )
         with self.model.ctx_mgr.context(bucket_context):
-            model_inputs = dict(forward_constants)
-            model_inputs.update(
-                input_ids=input_ids,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                attn_metadata=attention_metadata,
-            )
+            model_inputs = dict(descriptor.forward_constants)
+            model_inputs.update(frame_inputs)
+            model_inputs.update(graph_inputs)
             return self.model(**model_inputs)

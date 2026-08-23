@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from collections.abc import Hashable
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass
-from functools import lru_cache
-from typing import ClassVar
+from functools import lru_cache, partial
+from typing import Any, ClassVar
 
 import torch
 import triton
@@ -10,8 +10,14 @@ import triton.language as tl
 
 from lmdeploy.utils import get_logger
 
-from ..gated_delta_rule import GatedDeltaRuleBuilder, GatedDeltaRuleImpl
-from .step_metadata import CudaStepMetaUpdater, register_step_metadata_impl
+from ..gated_delta_rule import (
+    GatedDeltaMeta,
+    GatedDeltaMetaBuilder,
+    GatedDeltaMetaImpl,
+    GatedDeltaRuleBuilder,
+    GatedDeltaRuleImpl,
+)
+from .step_metadata import CudaStepMetaUpdater, register_piecewise_graph_impl, register_step_metadata_impl
 from .utils import has_tilelang
 
 logger = get_logger('lmdeploy')
@@ -58,6 +64,72 @@ class GatedDeltaStepMetaUpdater(CudaStepMetaUpdater):
     def update(self, step_context, sequence_metadata) -> None:
         if not step_context.is_decoding:
             prepare_chunked_gated_delta_rule(sequence_metadata.cu_seqlens_q)
+
+
+class CudaGatedDeltaMetaImpl(GatedDeltaMetaImpl):
+    """Build explicit gated-delta metadata, eagerly during piecewise
+    prefill."""
+
+    def __init__(self) -> None:
+        self._piecewise_forward: Callable[..., GatedDeltaMeta] | None = None
+        register_piecewise_graph_impl(self)
+
+    @staticmethod
+    def _build(
+        num_tokens: int,
+        conv_kernel_size: int,
+        state_ids: torch.Tensor,
+        attn_metadata: Any,
+    ) -> GatedDeltaMeta:
+        return GatedDeltaMeta(num_tokens, conv_kernel_size, state_ids, attn_metadata)
+
+    def forward(
+        self,
+        num_tokens: int,
+        conv_kernel_size: int,
+        state_ids: torch.Tensor,
+        attn_metadata: Any,
+    ) -> GatedDeltaMeta:
+        if self._piecewise_forward is None:
+            return self._build(num_tokens, conv_kernel_size, state_ids, attn_metadata)
+        return self._piecewise_forward(num_tokens, conv_kernel_size, state_ids, attn_metadata)
+
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Return whether metadata can be produced outside graph pieces."""
+        return True
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Install an eager producer whose result stays outside graph
+        pieces."""
+        if self._piecewise_forward is not None:
+            return
+
+        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        @eager_boundary(eager_only_output=True)
+        def build_eager(
+            conv_kernel_size: int,
+            state_ids: torch.Tensor,
+            attn_metadata: Any,
+        ) -> GatedDeltaMeta:
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            return self._build(execution.raw_tokens, conv_kernel_size, state_ids, attn_metadata)
+
+        def piecewise_forward(
+            num_tokens: int,
+            conv_kernel_size: int,
+            state_ids: torch.Tensor,
+            attn_metadata: Any,
+        ) -> GatedDeltaMeta:
+            if get_piecewise_graph_execution() is None:
+                return self._build(num_tokens, conv_kernel_size, state_ids, attn_metadata)
+            return build_eager(conv_kernel_size, state_ids, attn_metadata)
+
+        self._piecewise_forward = piecewise_forward
 
 
 @lru_cache
@@ -204,12 +276,151 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
         self.chunk_func = chunk_gated_delta_rule
         self.recurrent_func = fused_recurrent_gated_delta_rule
+        self._piecewise_prefill: Callable[..., torch.Tensor] | None = None
 
         register_step_metadata_impl(self)
 
     def get_step_metadata_provider(self):
         """Describe preparation required by this selected implementation."""
         return GatedDeltaStepMetaUpdater()
+
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Return whether this CUDA implementation can run in an eager
+        island."""
+        return True
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Install the CUDA-owned prefill boundary used by PCG."""
+        if self._piecewise_prefill is not None:
+            return
+
+        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            PaddedTensorOutputAdapter,
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        original_prefill = super().prefill
+
+        @eager_boundary(
+            adapter_factory=partial(PaddedTensorOutputAdapter, token_axis=1),
+            reuse_bridge_after_next_step=True,
+        )
+        def run_eager_prefill(
+            query: torch.Tensor,
+            key: torch.Tensor,
+            value: torch.Tensor,
+            b: torch.Tensor,
+            a: torch.Tensor,
+            dt_bias: torch.Tensor,
+            a_log_exp: torch.Tensor,
+            recurrent_state: torch.Tensor,
+            gated_delta_meta: GatedDeltaMeta,
+            kv_ratio: int,
+            use_qk_l2norm_in_kernel: bool,
+        ) -> torch.Tensor:
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            raw_tokens = execution.raw_tokens
+            return original_prefill(
+                query[:, :raw_tokens],
+                key[:, :raw_tokens],
+                value[:, :raw_tokens],
+                b[:, :raw_tokens],
+                a[:, :raw_tokens],
+                dt_bias,
+                a_log_exp,
+                recurrent_state,
+                gated_delta_meta,
+                kv_ratio,
+                use_qk_l2norm_in_kernel,
+            )
+
+        def piecewise_prefill(
+            query: torch.Tensor,
+            key: torch.Tensor,
+            value: torch.Tensor,
+            b: torch.Tensor,
+            a: torch.Tensor,
+            dt_bias: torch.Tensor,
+            a_log_exp: torch.Tensor,
+            recurrent_state: torch.Tensor,
+            gated_delta_meta: GatedDeltaMeta,
+            kv_ratio: int,
+            use_qk_l2norm_in_kernel: bool,
+        ) -> torch.Tensor:
+            if get_piecewise_graph_execution() is None:
+                return original_prefill(
+                    query,
+                    key,
+                    value,
+                    b,
+                    a,
+                    dt_bias,
+                    a_log_exp,
+                    recurrent_state,
+                    gated_delta_meta,
+                    kv_ratio,
+                    use_qk_l2norm_in_kernel,
+                )
+            return run_eager_prefill(
+                query,
+                key,
+                value,
+                b,
+                a,
+                dt_bias,
+                a_log_exp,
+                recurrent_state,
+                gated_delta_meta,
+                kv_ratio,
+                use_qk_l2norm_in_kernel,
+            )
+
+        self._piecewise_prefill = piecewise_prefill
+
+    def prefill(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        b: torch.Tensor,
+        a: torch.Tensor,
+        dt_bias: torch.Tensor,
+        a_log_exp: torch.Tensor,
+        recurrent_state: torch.Tensor,
+        gated_delta_meta: GatedDeltaMeta,
+        kv_ratio: int,
+        use_qk_l2norm_in_kernel: bool,
+    ) -> torch.Tensor:
+        """Run ordinary or piecewise prefill through the selected CUDA op."""
+        if self._piecewise_prefill is None:
+            return super().prefill(
+                query,
+                key,
+                value,
+                b,
+                a,
+                dt_bias,
+                a_log_exp,
+                recurrent_state,
+                gated_delta_meta,
+                kv_ratio,
+                use_qk_l2norm_in_kernel,
+            )
+        return self._piecewise_prefill(
+            query,
+            key,
+            value,
+            b,
+            a,
+            dt_bias,
+            a_log_exp,
+            recurrent_state,
+            gated_delta_meta,
+            kv_ratio,
+            use_qk_l2norm_in_kernel,
+        )
 
     def prepare_inputs(
         self,
@@ -344,3 +555,10 @@ class CudaGatedDeltaRuleBuilder(GatedDeltaRuleBuilder):
     @staticmethod
     def build() -> GatedDeltaRuleImpl:
         return CudaGatedDeltaRuleImpl()
+
+
+class CudaGatedDeltaMetaBuilder(GatedDeltaMetaBuilder):
+
+    @staticmethod
+    def build() -> GatedDeltaMetaImpl:
+        return CudaGatedDeltaMetaImpl()

@@ -99,6 +99,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.CausalConv1d:
             from .causal_conv1d import CausalConv1dCudaBuilder
             return CausalConv1dCudaBuilder
+        elif layer_type == OpType.GatedDeltaMeta:
+            from .gated_delta_rule import CudaGatedDeltaMetaBuilder
+            return CudaGatedDeltaMetaBuilder
         elif layer_type == OpType.GatedDeltaRule:
             from .gated_delta_rule import CudaGatedDeltaRuleBuilder
             return CudaGatedDeltaRuleBuilder
@@ -220,7 +223,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         from .step_metadata import CudaStepMetaPlan
 
         ctx_mgr = get_step_ctx_manager()
-        plan = getattr(ctx_mgr, 'backend_step_meta_plan', None)
+        plan = ctx_mgr.backend_step_meta_plan
         if isinstance(plan, CudaStepMetaPlan) and plan.is_supported:
             return plan
         return None
