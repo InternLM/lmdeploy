@@ -7,6 +7,7 @@ import pytest
 
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
+from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVLoadResult
 from lmdeploy.pytorch.kv_connector.mooncake.store import scheduler as scheduler_module
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import build_prefix_block_hashes
 from lmdeploy.pytorch.kv_connector.mooncake.store.scheduler import MooncakeStoreScheduler
@@ -131,4 +132,34 @@ def test_scheduler_cancel_retains_hashes_until_request_finishes():
         ((request.seq_id, ), {}),
         ((request.seq_id, ), {}),
     ]
+    scheduler.shutdown()
+
+
+def test_scheduler_dispatches_load_and_bypasses_lookup_after_failure():
+    scheduler = MooncakeStoreScheduler(_cache_config())
+    request = _request(range(13))
+    scheduler.client.lookup = Mock(return_value=12)
+
+    assert scheduler.get_num_new_matched_tokens(request, 4) == (8, True)
+    scheduler.update_state_after_alloc(request, (31, 32), 8)
+
+    metadata = scheduler.build_connector_meta(SimpleNamespace())
+    assert metadata is not None
+    assert len(metadata.load_requests) == 1
+    load_request = metadata.load_requests[0]
+    assert load_request.request_id == request.seq_id
+    assert load_request.block_ids == (31, 32)
+    assert scheduler.build_connector_meta(SimpleNamespace()).load_requests == ()
+
+    assert scheduler.update_connector_output(
+        KVConnectorOutput(invalid_block_ids={32})) == ()
+    assert scheduler.update_connector_output(
+        KVConnectorOutput(finished_receiving={request.seq_id})) == (
+            KVLoadResult(request.seq_id, False),
+        )
+
+    assert scheduler.get_num_new_matched_tokens(request, 4) == (0, False)
+    assert scheduler.client.lookup.call_count == 1
+    assert scheduler.get_num_new_matched_tokens(request, 8) == (0, False)
+    assert scheduler.client.lookup.call_count == 1
     scheduler.shutdown()

@@ -125,11 +125,13 @@ def test_scheduler_shutdown_releases_injected_connector_once():
     connector = Mock()
     scheduler = Scheduler.__new__(Scheduler)
     scheduler.kv_connector = connector
+    scheduler.kv_load_coordinator = Mock()
 
     scheduler.shutdown()
     scheduler.shutdown()
 
     connector.shutdown.assert_called_once_with()
+    assert scheduler.kv_load_coordinator.clear.call_count == 2
     assert scheduler.kv_connector is None
     assert not scheduler._external_lookup_enabled
 

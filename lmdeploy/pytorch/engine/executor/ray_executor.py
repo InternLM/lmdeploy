@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import os
+from collections import deque
 from typing import Any
 
 import ray
@@ -16,6 +17,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, Misc
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.kv_connector import KVConnectorOutputAggregator
 from lmdeploy.pytorch.ray import RayContext, get_device_str
 from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.utils import get_logger, try_import_deeplink
@@ -275,6 +277,8 @@ class RayExecutor(ExecutorBase):
             self.dag = None
             self._prefetch_task: asyncio.Task = None
             self.remote_outs: asyncio.Queue = None
+            self._connector_steps: deque[bool] = deque()
+            self._kv_output_aggregator = KVConnectorOutputAggregator(len(self.workers))
 
             logger.info('Init distributed environment by device.')
             self.rank_offset = dist_config.dp_rank * attn_tp
@@ -372,6 +376,8 @@ class RayExecutor(ExecutorBase):
     async def sleep(self, level: int = 1):
         """Sleep."""
         await self.collective_rpc_async('sleep', (level, ))
+        self._connector_steps.clear()
+        self._kv_output_aggregator.clear()
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
@@ -518,12 +524,27 @@ class RayExecutor(ExecutorBase):
         self._prev_out = [
             worker.forward_async.remote(self._prev_inputs) for worker in self.workers
         ]
+        self._connector_steps.append(inputs.get('kv_connector_metadata') is not None)
 
     async def get_output_async(self):
         """Get output async."""
-        ret = await self.workers[0].get_outputs.remote()
-        ret = ret.to_tensor()
-        return ret
+        connector_step = self._connector_steps.popleft()
+        if not connector_step:
+            ret = await self.workers[0].get_outputs.remote()
+            return ret.to_tensor()
+
+        outputs = await asyncio.gather(*[
+            worker.get_outputs.remote()
+            for worker in self.workers
+        ])
+        outputs = [output.to_tensor() for output in outputs]
+        connector_output = self._kv_output_aggregator.aggregate([
+            output.kv_connector_output
+            for output in outputs
+        ])
+        output = outputs[0]
+        output.kv_connector_output = connector_output
+        return output
 
     @contextlib.contextmanager
     def remote_log(self, msg: str):

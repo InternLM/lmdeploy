@@ -8,6 +8,7 @@ from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.engine.inputs_maker import _make_state_prefix_cache_save_plan
+from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVLoadResult
 from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.paging.state_manager import StateManager
@@ -15,12 +16,14 @@ from lmdeploy.pytorch.paging.state_manager import StateManager
 
 class _AsyncLookupConnector:
 
-    def __init__(self, results):
+    def __init__(self, results, failed_ids=()):
         self.results = iter(results)
+        self.failed_ids = set(failed_ids)
         self.pending_ids = set()
         self.lookup_calls = []
         self.cancelled = []
         self.finished = []
+        self.allocations = []
 
     def on_new_request(self, request):
         pass
@@ -41,6 +44,21 @@ class _AsyncLookupConnector:
         self.pending_ids.discard(request_id)
         self.cancelled.append(request_id)
 
+    def update_state_after_alloc(self, request, block_ids, num_external_tokens):
+        self.allocations.append((request.seq_id, tuple(block_ids), num_external_tokens))
+
+    def build_connector_meta(self, scheduler_output):
+        return None
+
+    def update_connector_output(self, connector_output):
+        return tuple(
+            KVLoadResult(
+                request_id=request_id,
+                success=request_id not in self.failed_ids,
+            )
+            for request_id in (connector_output.finished_receiving or set())
+        )
+
     def request_finished(self, request, block_ids):
         self.finished.append((request.seq_id, tuple(block_ids)))
         return False, None
@@ -49,21 +67,29 @@ class _AsyncLookupConnector:
         pass
 
 
-def _make_async_lookup_scheduler(connector, *, enable_prefix_caching=True):
+def _make_async_lookup_scheduler(
+    connector,
+    *,
+    enable_prefix_caching=True,
+    max_batches=1,
+    num_gpu_blocks=16,
+    max_prefill_token_num=8192,
+):
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 4
     return Scheduler(
         scheduler_config=SchedulerConfig(
-            max_batches=1,
+            max_batches=max_batches,
             max_session_len=64,
             max_request_output_len=16,
             eviction_type='recompute',
         ),
         cache_config=CacheConfig(
-            max_batches=1,
+            max_batches=max_batches,
             block_size=block_size,
             num_cpu_blocks=0,
-            num_gpu_blocks=16,
+            num_gpu_blocks=num_gpu_blocks,
+            max_prefill_token_num=max_prefill_token_num,
             enable_prefix_caching=enable_prefix_caching,
             kv_transfer_config=KVTransferConfig(
                 kv_connector='MooncakeStoreConnector',
@@ -784,10 +810,244 @@ def test_async_lookup_precisely_restores_a_multiturn_local_prefix():
     seq.kv_token_limit = None
     seq.prefix_cache.recompute_overlap.clear_tracking()
     third = scheduler.schedule(is_prefill=True)
-    assert third.running == [seq]
+    assert third.running == []
     assert connector.lookup_calls == [(seq.seq_id, 8), (seq.seq_id, 8)]
     assert seq.num_history_ids == 8
     assert matched_block in seq.logical_blocks.get_real_blocks()
+    assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    assert connector.allocations[0][2] == 4
+
+    scheduler.update_connector_output(
+        KVConnectorOutput(finished_receiving={seq.seq_id}))
+    assert seq.num_history_ids == 12
+    assert seq.status == MessageStatus.WAITING
+
+    fourth = scheduler.schedule(is_prefill=True)
+    assert fourth.running == [seq]
+
+
+def test_async_load_keeps_a_private_partial_block_at_the_suffix_start():
+    connector = _AsyncLookupConnector([(7, True)])
+    scheduler = _make_async_lookup_scheduler(connector)
+    tokens = torch.arange(13)
+    cached = scheduler.add_session(76).add_sequence(tokens)
+    scheduler.block_manager.allocate(cached)
+    scheduler.block_trie.allocate(cached)
+    cached.state.stop()
+
+    seq = scheduler.add_session(77).add_sequence(tokens)
+    seq.kv_token_limit = 5
+    scheduler.block_manager.allocate(seq)
+    scheduler.block_trie.allocate(seq)
+    seq.set_step(5)
+    seq.kv_token_limit = None
+    private_block = int(scheduler.block_manager.get_block_table(seq)[1])
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == []
+    assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    assert seq.num_blocks == 3
+    assert connector.lookup_calls == [(seq.seq_id, 5)]
+    load_blocks = connector.allocations[0][1]
+    assert load_blocks == tuple(
+        int(block_id)
+        for block_id in scheduler.block_manager.get_block_table(seq)[1:3]
+    )
+    assert load_blocks[0] == private_block
+
+
+def test_async_load_requires_capacity_for_the_complete_prefill():
+    connector = _AsyncLookupConnector([(8, True)])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+        num_gpu_blocks=3,
+    )
+    seq = scheduler.add_session(76).add_sequence(torch.arange(13))
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == []
+    assert seq.status == MessageStatus.WAITING
+    assert seq.num_blocks == 0
+    assert connector.allocations == []
+
+
+def test_async_load_soft_reservation_does_not_block_regular_prefill():
+    connector = _AsyncLookupConnector([(8, True), (0, False)])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+        num_gpu_blocks=5,
+    )
+    loading = scheduler.add_session(77).add_sequence(torch.arange(13))
+    later = scheduler.add_session(78).add_sequence(torch.arange(8))
+
+    first = scheduler.schedule(is_prefill=True)
+    assert first.running == []
+    assert loading.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    assert loading.num_blocks == 2
+    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 2
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 3
+
+    second = scheduler.schedule(is_prefill=True)
+    assert second.running == [later]
+    assert later.status == MessageStatus.READY
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 1
+    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 2
+
+    scheduler.update_connector_output(
+        KVConnectorOutput(finished_receiving={loading.seq_id}))
+    assert loading.num_history_ids == 8
+    assert loading.cached_tokens == 8
+
+
+def test_soft_reservation_blocks_new_load_until_capacity_is_released():
+    connector = _AsyncLookupConnector([
+        (4, True),
+        (12, True),
+        (12, True),
+    ])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+        num_gpu_blocks=6,
+    )
+    first = scheduler.add_session(86).add_sequence(torch.arange(13))
+
+    scheduler.schedule(is_prefill=True)
+    assert first.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    assert first.num_blocks == 1
+    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 3
+
+    second = scheduler.add_session(87).add_sequence(torch.arange(17))
+    blocked = scheduler.schedule(is_prefill=True)
+    assert blocked.running == []
+    assert second.status == MessageStatus.WAITING
+    assert second.num_blocks == 0
+    assert [allocation[0] for allocation in connector.allocations] == [first.seq_id]
+
+    scheduler.end_session(86)
+    scheduler.update_connector_output(
+        KVConnectorOutput(finished_receiving={first.seq_id}))
+    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 0
+
+    retried = scheduler.schedule(is_prefill=True)
+    assert retried.running == []
+    assert second.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    assert second.num_blocks == 3
+    assert [allocation[0] for allocation in connector.allocations] == [
+        first.seq_id,
+        second.seq_id,
+    ]
+
+
+def test_failed_async_load_preserves_local_prefix_and_releases_remote_tail():
+    connector = _AsyncLookupConnector([(4, True)])
+    scheduler = _make_async_lookup_scheduler(connector)
+    tokens = torch.arange(13)
+    cached = scheduler.add_session(79).add_sequence(tokens[:9])
+    scheduler.block_manager.allocate(cached)
+    scheduler.block_trie.allocate(cached)
+    cached.state.stop()
+    seq = scheduler.add_session(80).add_sequence(tokens)
+    scheduler.schedule(is_prefill=True)
+    connector.failed_ids.add(seq.seq_id)
+
+    scheduler.update_connector_output(
+        KVConnectorOutput(finished_receiving={seq.seq_id}))
+
+    assert seq.status == MessageStatus.WAITING
+    assert seq.num_history_ids == 8
+    assert seq.num_blocks == 2
+    assert seq.cached_tokens == 8
+    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 0
+
+
+def test_async_load_soft_reservation_shrinks_across_chunks():
+    connector = _AsyncLookupConnector([(4, True)])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+        max_prefill_token_num=4,
+    )
+    seq = scheduler.add_session(81).add_sequence(torch.arange(13))
+
+    scheduler.schedule(is_prefill=True)
+    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 3
+    scheduler.update_connector_output(
+        KVConnectorOutput(finished_receiving={seq.seq_id}))
+
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 2
+    seq.set_step(8)
+    scheduler.release_completed_prefill_reservations([seq])
+    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 2
+
+    assert scheduler.reserve_long_context_chunk(seq, chunk_size=4)
+    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 1
+    seq.set_step(12)
+    assert scheduler.reserve_long_context_chunk(seq, chunk_size=1, is_last_chunk=True)
+    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 0
+
+
+def test_end_session_waits_for_active_async_load_before_freeing_blocks():
+    connector = _AsyncLookupConnector([(8, True)])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+    )
+    seq = scheduler.add_session(82).add_sequence(torch.arange(13))
+    scheduler.schedule(is_prefill=True)
+
+    scheduler.end_session(82)
+    assert 82 in scheduler.sessions
+    assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    assert seq.num_blocks == 2
+    assert connector.finished == []
+
+    scheduler.update_connector_output(
+        KVConnectorOutput(finished_receiving={seq.seq_id}))
+    assert 82 not in scheduler.sessions
+    assert connector.finished == [(seq.seq_id, ())]
+
+
+def test_worker_drain_finishes_an_ended_session_with_a_dropped_load_output():
+    connector = _AsyncLookupConnector([(8, True)])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+    )
+    seq = scheduler.add_session(85).add_sequence(torch.arange(13))
+    scheduler.schedule(is_prefill=True)
+    scheduler.end_session(85)
+
+    scheduler.finish_deferred_loads_after_worker_drain()
+
+    assert 85 not in scheduler.sessions
+    assert connector.finished == [(seq.seq_id, ())]
+    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 0
+
+
+def test_completed_async_load_is_admitted_before_an_older_waiter():
+    connector = _AsyncLookupConnector([(8, True)])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+        num_gpu_blocks=4,
+    )
+    loaded = scheduler.add_session(83).add_sequence(torch.arange(13))
+    scheduler.schedule(is_prefill=True)
+    scheduler.update_connector_output(
+        KVConnectorOutput(finished_receiving={loaded.seq_id}))
+    newcomer = scheduler.add_session(84).add_sequence(torch.arange(4))
+    newcomer.arrive_time = loaded.arrive_time - 1
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [loaded]
+    assert newcomer.status == MessageStatus.WAITING
 
 
 def test_stop_and_end_session_cancel_lookup_before_request_cleanup():

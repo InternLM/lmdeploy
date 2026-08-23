@@ -8,7 +8,13 @@ import pytest
 
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
-from lmdeploy.pytorch.kv_connector import KVConnectorRole, build_kv_connector
+from lmdeploy.pytorch.kv_connector import (
+    KVConnectorMetadata,
+    KVConnectorOutput,
+    KVConnectorOutputAggregator,
+    KVConnectorRole,
+    build_kv_connector,
+)
 
 
 def _cache_config(transfer_config=None):
@@ -276,6 +282,87 @@ def test_sleep_shuts_down_connector_before_dropping_cache(monkeypatch):
     assert agent.cache_engine is None
     assert agent.state_cache_engine is None
     assert agent.spec_agent.cache_engine is None
+
+
+def test_connector_output_aggregator_waits_for_every_tp_rank():
+    aggregator = KVConnectorOutputAggregator(world_size=2)
+
+    first = aggregator.aggregate([
+        KVConnectorOutput(finished_receiving={11}, invalid_block_ids={3}),
+        KVConnectorOutput(invalid_block_ids={4}),
+    ])
+    second = aggregator.aggregate([
+        KVConnectorOutput(),
+        KVConnectorOutput(finished_receiving={11}),
+    ])
+
+    assert first.finished_receiving is None
+    assert first.invalid_block_ids == {3, 4}
+    assert second.finished_receiving == {11}
+
+
+def test_model_agent_connector_only_step_returns_progress_on_nonzero_tp_rank(monkeypatch):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    events = []
+    metadata = KVConnectorMetadata()
+
+    class _Connector:
+
+        def bind_connector_metadata(self, value):
+            events.append(('bind', value))
+
+        def handle_preemptions(self, value):
+            events.append(('preemptions', value))
+
+        def start_load_kv(self):
+            events.append('start_load')
+
+        def get_finished(self, finished_ids):
+            events.append(('finished', finished_ids))
+            return None, {11}
+
+        def get_block_ids_with_load_errors(self):
+            events.append('errors')
+            return {3}
+
+        def clear_connector_metadata(self):
+            events.append('clear')
+
+    outputs = []
+    agent = agent_module.BaseModelAgent.__new__(agent_module.BaseModelAgent)
+    agent.rank = 1
+    agent.kv_connector = _Connector()
+    agent._push_output = outputs.append
+    dist_context = SimpleNamespace(
+        dist_config=SimpleNamespace(attn_tp=2, dp=1),
+    )
+    monkeypatch.setattr(
+        agent_module,
+        'get_dist_manager',
+        lambda: SimpleNamespace(current_context=lambda: dist_context),
+    )
+
+    asyncio.run(agent._async_step(
+        inputs=None,
+        delta=None,
+        kv_connector_metadata=metadata,
+    ))
+
+    assert events == [
+        ('bind', metadata),
+        ('preemptions', metadata),
+        'start_load',
+        ('finished', set()),
+        'errors',
+        'clear',
+    ]
+    assert len(outputs) == 1
+    assert outputs[0].next_token_ids is None
+    assert outputs[0].kv_connector_output == KVConnectorOutput(
+        finished_receiving={11},
+        invalid_block_ids={3},
+    )
 
 
 def test_release_shuts_down_connector_before_dropping_cache(monkeypatch):

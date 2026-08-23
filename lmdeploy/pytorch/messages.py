@@ -182,6 +182,7 @@ class MessageStatus(enum.Enum):
     """Status of a sequence."""
 
     WAITING = enum.auto()
+    WAITING_FOR_REMOTE_KVS = enum.auto()
     READY = enum.auto()
     STOPPED = enum.auto()
     RUNNING = enum.auto()

@@ -10,7 +10,9 @@ from lmdeploy.pytorch.kv_connector.base import (
     KVCacheValue,
     KVConnectorBase,
     KVConnectorMetadata,
+    KVConnectorOutput,
     KVConnectorRole,
+    KVLoadResult,
     RequestId,
 )
 
@@ -91,7 +93,10 @@ class MooncakeStoreConnector(KVConnectorBase):
     ) -> None:
         return self._require_scheduler().update_state_after_alloc(request, block_ids, num_external_tokens)
 
-    def build_connector_meta(self, scheduler_output: SchedulerOutput) -> MooncakeStoreConnectorMetadata:
+    def build_connector_meta(
+        self,
+        scheduler_output: SchedulerOutput,
+    ) -> MooncakeStoreConnectorMetadata | None:
         return self._require_scheduler().build_connector_meta(scheduler_output)
 
     def on_new_request(self, request: SchedulerSequence) -> None:
@@ -103,7 +108,10 @@ class MooncakeStoreConnector(KVConnectorBase):
     def cancel_lookup(self, request_id: RequestId) -> None:
         return self._require_scheduler().cancel_lookup(request_id)
 
-    def update_connector_output(self, connector_output: Any) -> None:
+    def update_connector_output(
+        self,
+        connector_output: KVConnectorOutput,
+    ) -> tuple[KVLoadResult, ...]:
         return self._require_scheduler().update_connector_output(connector_output)
 
     def request_finished(
@@ -122,6 +130,12 @@ class MooncakeStoreConnector(KVConnectorBase):
         if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
             raise TypeError('connector_metadata must be a MooncakeStoreConnectorMetadata')
         return self._require_worker().handle_preemptions(connector_metadata)
+
+    def start_load_kv(self) -> None:
+        connector_metadata = self._get_connector_metadata()
+        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
+            raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
+        return self._require_worker().start_load_kv(connector_metadata)
 
     def get_finished(
         self,

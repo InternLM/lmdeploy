@@ -7,7 +7,7 @@ import pytest
 
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
-from lmdeploy.pytorch.kv_connector import KVConnectorMetadata, KVConnectorRole
+from lmdeploy.pytorch.kv_connector import KVConnectorMetadata, KVConnectorOutput, KVConnectorRole
 from lmdeploy.pytorch.kv_connector.mooncake.store import worker as worker_module
 from lmdeploy.pytorch.kv_connector.mooncake.store.connector import MooncakeStoreConnector
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import MooncakeStoreConnectorMetadata
@@ -107,7 +107,7 @@ def test_connector_rejects_a_different_connector_configuration():
         MooncakeStoreConnector(KVConnectorRole.SCHEDULER, cache_config)
 
 
-def test_scheduler_empty_implementations_are_fail_closed(cache_config):
+def test_scheduler_without_transfer_work_is_fail_closed(cache_config):
     connector = MooncakeStoreConnector(KVConnectorRole.SCHEDULER, cache_config)
     request = MagicMock(seq_id=17)
     request.history_multimodals.empty.return_value = True
@@ -116,9 +116,9 @@ def test_scheduler_empty_implementations_are_fail_closed(cache_config):
 
     assert connector.get_num_new_matched_tokens(request, 0) == (0, False)
     assert connector.update_state_after_alloc(request, [1, 2], 0) is None
-    assert isinstance(connector.build_connector_meta(object()), MooncakeStoreConnectorMetadata)
+    assert connector.build_connector_meta(object()) is None
     assert connector.on_new_request(request) is None
-    assert connector.update_connector_output(object()) is None
+    assert connector.update_connector_output(KVConnectorOutput()) == ()
     assert connector.request_finished(request, [1, 2]) == (False, None)
     assert connector.shutdown() is None
 
@@ -200,6 +200,7 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
     metadata = MooncakeStoreConnectorMetadata()
     worker.register_kv_caches = MagicMock(return_value=None)
     worker.handle_preemptions = MagicMock(return_value=None)
+    worker.start_load_kv = MagicMock(return_value=None)
     worker.get_finished = MagicMock(return_value=({1}, {2}))
     worker.get_block_ids_with_load_errors = MagicMock(return_value={7, 8})
     worker.shutdown = MagicMock(return_value=None)
@@ -211,6 +212,8 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
     worker.handle_preemptions.assert_called_once_with(metadata)
 
     connector.bind_connector_metadata(metadata)
+    assert connector.start_load_kv() is None
+    worker.start_load_kv.assert_called_once_with(metadata)
     assert connector.get_finished({1, 3}) == ({1}, {2})
     worker.get_finished.assert_called_once_with({1, 3}, metadata)
 
@@ -243,18 +246,15 @@ def test_get_finished_rejects_other_connector_metadata(cache_config):
         connector.handle_preemptions(OtherConnectorMetadata())
 
 
-def test_metadata_is_fresh_and_pickle_serializable(cache_config):
+def test_empty_scheduler_has_no_metadata(cache_config):
     connector = MooncakeStoreConnector(KVConnectorRole.SCHEDULER, cache_config)
 
     first = connector.build_connector_meta(object())
     second = connector.build_connector_meta(object())
-    restored = pickle.loads(pickle.dumps(first))
 
-    assert isinstance(first, MooncakeStoreConnectorMetadata)
-    assert isinstance(second, MooncakeStoreConnectorMetadata)
-    assert first is not second
-    assert isinstance(restored, MooncakeStoreConnectorMetadata)
-    assert restored is not first
+    assert first is None
+    assert second is None
+    assert pickle.loads(pickle.dumps(MooncakeStoreConnectorMetadata())) == MooncakeStoreConnectorMetadata()
 
 
 def test_wrong_side_method_calls_fail_fast(cache_config):

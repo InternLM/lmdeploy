@@ -90,6 +90,19 @@ class WaitingState(StateBase):
     def evict(self):
         self.to_state(WaitingState)
 
+    def begin_remote_load(self):
+        """Protect allocated destinations until every TP rank completes."""
+        self.to_state(RemoteLoadingState)
+
+
+class RemoteLoadingState(StateBase):
+    """Sequence with an asynchronous external write into its KV blocks."""
+
+    status = MessageStatus.WAITING_FOR_REMOTE_KVS
+
+    def finish_remote_load(self):
+        self.to_state(WaitingState)
+
 
 class ReadyState(StateBase):
     """State for ready sequences."""

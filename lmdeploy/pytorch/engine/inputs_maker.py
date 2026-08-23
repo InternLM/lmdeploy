@@ -262,9 +262,14 @@ class _ForwardInputsResult:
     extra_inputs: object | None = None
     swap_in_map: dict = field(default_factory=dict)
     swap_out_map: dict = field(default_factory=dict)
+    kv_connector_metadata: object | None = None
 
     def is_empty(self):
-        return self.inputs is None and self.delta is None
+        return (
+            self.inputs is None
+            and self.delta is None
+            and self.kv_connector_metadata is None
+        )
 
     def set_work(self,
                  running: 'SeqList',
@@ -346,7 +351,13 @@ class _ForwardInputsTask:
         if self.result.inputs is not None and not self.result.inputs.is_decoding:
             maker._decode_count = 0
 
-        if self.result.is_empty():
+        result = self.result
+        result.kv_connector_metadata = self.scheduler.build_connector_meta(
+            result.running,
+            result.swap_in_map,
+            result.swap_out_map,
+        )
+        if result.is_empty():
             return None
         return self._build_payload()
 
@@ -599,7 +610,11 @@ class _ForwardInputsTask:
     def _build_payload(self):
         maker = self.maker
         result = self.result
-        sampling_inputs = maker.sampling_strategy.make_sampling_inputs(result.running)
+        has_model_work = result.inputs is not None or result.delta is not None
+        if has_model_work:
+            sampling_inputs = maker.sampling_strategy.make_sampling_inputs(result.running)
+        else:
+            sampling_inputs = None
         if result.inputs is not None:
             stopping_criteria = maker.model_agent_strategy.make_stopping_criteria(result.running)
         else:
@@ -618,6 +633,7 @@ class _ForwardInputsTask:
             extra_inputs=result.extra_inputs,
             return_routed_experts=self._need_routed_experts(),
             return_ce_loss=self._need_ce_loss(),
+            kv_connector_metadata=result.kv_connector_metadata,
         )
 
 

@@ -1198,6 +1198,7 @@ class TestMemDecodeModelAgentLifecycle:
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
         agent.rank = 0
+        agent.kv_connector = None
         agent.cache_engine = 'base_cache'
         agent.memdecode_agent = _MemDecodeAgent()
         agent._async_model_forward = _async_model_forward

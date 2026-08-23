@@ -11,6 +11,7 @@ The interface intentionally contains only the lifecycle needed by lmdeploy's PyT
 import enum
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -36,6 +37,88 @@ class KVConnectorMetadata(ABC):
     Implementations must remain serializable because distributed executors may send an instance to model workers through
     multiprocessing RPC.
     """
+
+
+@dataclass
+class KVConnectorOutput:
+    """Worker connector progress returned by one executor step.
+
+    Completion sets are rank-local until the executor aggregates every TP
+    worker.  ``invalid_block_ids`` may arrive before the request-level receive
+    completion and is therefore consumed by the scheduler-side connector.
+    """
+
+    finished_sending: set[RequestId] | None = None
+    finished_receiving: set[RequestId] | None = None
+    invalid_block_ids: set[int] = field(default_factory=set)
+
+
+@dataclass(frozen=True)
+class KVLoadResult:
+    """Backend-neutral terminal result for one asynchronous KV load."""
+
+    request_id: RequestId
+    success: bool
+
+
+class KVConnectorOutputAggregator:
+    """Aggregate request completions that may arrive on different TP steps."""
+
+    def __init__(self, world_size: int) -> None:
+        self.world_size = world_size
+        self._sending_ranks: dict[RequestId, set[int]] = {}
+        self._receiving_ranks: dict[RequestId, set[int]] = {}
+
+    def _aggregate_completions(
+        self,
+        rank_completions: Sequence[set[RequestId] | None],
+        rank_state: dict[RequestId, set[int]],
+    ) -> set[RequestId] | None:
+        completed = set()
+        for rank, request_ids in enumerate(rank_completions):
+            for request_id in request_ids or ():
+                ranks = rank_state.setdefault(request_id, set())
+                ranks.add(rank)
+                if len(ranks) == self.world_size:
+                    completed.add(request_id)
+        for request_id in completed:
+            rank_state.pop(request_id, None)
+        return completed or None
+
+    def aggregate(
+        self,
+        outputs: Sequence[KVConnectorOutput | None],
+    ) -> KVConnectorOutput:
+        if len(outputs) != self.world_size:
+            raise ValueError(
+                f'expected {self.world_size} TP connector outputs, got {len(outputs)}')
+        sending_by_rank: list[set[RequestId] | None] = []
+        receiving_by_rank: list[set[RequestId] | None] = []
+        invalid_block_ids = set()
+        for output in outputs:
+            if output is None:
+                sending_by_rank.append(None)
+                receiving_by_rank.append(None)
+                continue
+            sending_by_rank.append(output.finished_sending)
+            receiving_by_rank.append(output.finished_receiving)
+            invalid_block_ids.update(output.invalid_block_ids)
+        return KVConnectorOutput(
+            finished_sending=self._aggregate_completions(
+                sending_by_rank,
+                self._sending_ranks,
+            ),
+            finished_receiving=self._aggregate_completions(
+                receiving_by_rank,
+                self._receiving_ranks,
+            ),
+            invalid_block_ids=invalid_block_ids,
+        )
+
+    def clear(self) -> None:
+        """Discard partial completions when pending executor work is reset."""
+        self._sending_ranks.clear()
+        self._receiving_ranks.clear()
 
 
 class KVConnectorBase(ABC):
@@ -84,6 +167,10 @@ class KVConnectorBase(ABC):
     def handle_preemptions(self, connector_metadata: KVConnectorMetadata) -> None:
         """Handle preempted requests before their GPU blocks are
         overwritten."""
+        return None
+
+    def start_load_kv(self) -> None:
+        """Submit loads described by the currently bound metadata."""
         return None
 
     def get_finished(
@@ -136,14 +223,13 @@ class KVConnectorBase(ABC):
 
         ``block_ids`` are physical scheduler block IDs. A connector is
         responsible for translating them to the cache engine's kernel-page
-        layout when the two block sizes differ. For an asynchronous load, the
-        scheduler may call this hook once for the externally matched range and
-        again after the transfer when it allocates additional compute blocks.
+        layout when the two block sizes differ. For an asynchronous load they
+        cover exactly the externally matched destination range.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def build_connector_meta(self, scheduler_output: 'SchedulerOutput') -> KVConnectorMetadata:
+    def build_connector_meta(self, scheduler_output: 'SchedulerOutput') -> KVConnectorMetadata | None:
         """Build serializable worker metadata for the current scheduler step.
 
         Implementations must not mutate ``scheduler_output``. They may consume
@@ -165,9 +251,12 @@ class KVConnectorBase(ABC):
         """Discard scheduler-side lookup state for an aborted request."""
         return None
 
-    def update_connector_output(self, connector_output: Any) -> None:
-        """Consume an executor-aggregated output from worker connectors."""
-        return None
+    def update_connector_output(
+        self,
+        connector_output: KVConnectorOutput,
+    ) -> tuple[KVLoadResult, ...]:
+        """Consume executor-aggregated progress and return terminal loads."""
+        return ()
 
     def request_finished(
         self,

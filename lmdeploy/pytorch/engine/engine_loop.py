@@ -443,7 +443,11 @@ class EngineLoop:
         """Publish outputs."""
         if out is None:
             return
+        self.scheduler.update_connector_output(out.kv_connector_output)
+        if out.next_token_ids is None:
+            return
         step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
+        self.scheduler.release_completed_prefill_reservations(running)
         self.resp_queue.put_nowait(step_outputs)
 
     async def _main_loop_get_outputs(
@@ -455,7 +459,9 @@ class EngineLoop:
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
         cache_inputs = forward_inputs['cache_inputs']
-        self.inputs_maker.update_running_seqs(running, model_inputs)
+        has_model_work = model_inputs is not None or delta is not None
+        if has_model_work:
+            self.inputs_maker.update_running_seqs(running, model_inputs)
         has_state_checkpoint_save = (cache_inputs is not None
                                      and cache_inputs.state_save_plan is not None)
 
@@ -463,10 +469,12 @@ class EngineLoop:
         # input is queued, matched checkpoints can be published before waiting
         # for GPU output; save checkpoints keep a producer pin until the output
         # event boundary so prefetch cannot evict/reuse their destination slots.
-        self._publish_forward_checkpoints(running, has_state_checkpoint_save)
+        if has_model_work:
+            self._publish_forward_checkpoints(running, has_state_checkpoint_save)
         forward_inputs, next_running = await self._prefetch_next_inputs()
         out = await self.executor.get_output_async()
-        self._release_forward_save_pins(running)
+        if has_model_work:
+            self._release_forward_save_pins(running)
         self._finish_forward_output(out, running, model_inputs, delta)
         # out might come from shared memory, need to explicitly delete to release memory in time
         del out

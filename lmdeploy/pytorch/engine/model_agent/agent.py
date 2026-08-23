@@ -24,7 +24,7 @@ from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
-from lmdeploy.pytorch.kv_connector import KVConnectorRole, build_kv_connector
+from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVConnectorRole, build_kv_connector
 from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
@@ -44,6 +44,7 @@ from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_l
 
 from .dp_utils import DistGatherScalar, DPForwardMeta, GatheredDPForwardMeta
 from .inputs_maker import build_inputs_maker
+from .kv_connector import finish_kv_connector_step, start_kv_connector_step
 from .profiler import AgentProfiler
 from .scoring import compute_input_ce_loss
 
@@ -94,8 +95,8 @@ class BatchedLogProbs:
 
 @dataclass
 class BatchedOutputs:
-    next_token_ids: torch.Tensor
-    stopped: torch.Tensor
+    next_token_ids: torch.Tensor | None
+    stopped: torch.Tensor | None
     stop_pos: torch.Tensor | None = None
     logits: torch.Tensor | None = None
     model_metas: list[dict[str, Any]] = None
@@ -104,6 +105,16 @@ class BatchedOutputs:
     extra_outputs: ExtraOutputs | None = None
     all_routed_experts: torch.Tensor | None = None
     ce_loss: torch.Tensor | None = None
+    kv_connector_output: KVConnectorOutput | None = None
+
+    @classmethod
+    def connector_only(cls, output: KVConnectorOutput) -> 'BatchedOutputs':
+        """Build a lightweight envelope for a no-model-forward step."""
+        return cls(
+            next_token_ids=None,
+            stopped=None,
+            kv_connector_output=output,
+        )
 
     def to_cpu(self):
         """To cpu."""
@@ -764,7 +775,7 @@ class BaseModelAgent:
         extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
 
         if inputs.is_dummy:
-            return inputs, extra_inputs, stopping_criteria, None, next_token_ids
+            return inputs, extra_inputs, stopping_criteria, None, next_token_ids, None
 
         # post broadcast for spec agent
         with self.spec_agent.post_broadcast(extra_inputs, self.dist_ctx, need_broadcast_next):
@@ -785,18 +796,17 @@ class BaseModelAgent:
         logger.debug(f'<ForwardTask> rank[{rank}]: Output')
         extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
 
-        self._push_output(
-            BatchedOutputs(next_token_ids=output_token_ids,
-                           logits=logits if return_logits else None,
-                           stopped=stopped,
-                           stop_pos=stop_pos,
-                           model_metas=model_metas,
-                           logprobs=logprobs,
-                           all_routed_experts=all_routed_experts,
-                           extra_outputs=extra_outputs,
-                           ce_loss=ce_loss))
+        batched_output = BatchedOutputs(next_token_ids=output_token_ids,
+                                        logits=logits if return_logits else None,
+                                        stopped=stopped,
+                                        stop_pos=stop_pos,
+                                        model_metas=model_metas,
+                                        logprobs=logprobs,
+                                        all_routed_experts=all_routed_experts,
+                                        extra_outputs=extra_outputs,
+                                        ce_loss=ce_loss)
 
-        return inputs, extra_inputs, stopping_criteria, extra_outputs, next_token_ids
+        return inputs, extra_inputs, stopping_criteria, extra_outputs, next_token_ids, batched_output
 
     async def _step_postprocess_without_output(
         self,
@@ -844,6 +854,7 @@ class BaseModelAgent:
         return_ce_loss: bool = False,
         extra_inputs: ExtraInputs = None,
         cache_inputs: CacheCheckpointInputs | None = None,
+        kv_connector_metadata=None,
     ):
         """Asyc forward task."""
 
@@ -854,6 +865,15 @@ class BaseModelAgent:
         need_broadcast_next = (tp > 1)
         dp = dist_config.dp
         need_update_inputs = False
+        connector_step = start_kv_connector_step(
+            self.kv_connector,
+            kv_connector_metadata,
+        )
+        if inputs is None and delta is None:
+            connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+            assert connector_output is not None
+            self._push_output(BatchedOutputs.connector_only(connector_output))
+            return
 
         if inputs is None:
             # decoding step, update prev_inputs with delta
@@ -913,6 +933,9 @@ class BaseModelAgent:
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output
+            connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+            if connector_output is not None:
+                self._push_output(BatchedOutputs.connector_only(connector_output))
             return
 
         logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
@@ -935,6 +958,7 @@ class BaseModelAgent:
                 stopping_criteria,
                 extra_outputs,
                 next_token_ids,
+                batched_output,
             ) = await asyncio.shield(
                 self._step_postprocess_with_output(
                     last_logits,
@@ -951,6 +975,7 @@ class BaseModelAgent:
                     extra_inputs=extra_inputs,
                 ))
         else:
+            batched_output = None
             (
                 inputs,
                 next_token_ids,
@@ -967,6 +992,9 @@ class BaseModelAgent:
 
         if inputs.is_dummy:
             # skip dummy forward output
+            connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+            if connector_output is not None:
+                self._push_output(BatchedOutputs.connector_only(connector_output))
             return
 
         sampling_delta = sampling_inputs.get_delta()
@@ -993,6 +1021,13 @@ class BaseModelAgent:
                 model_metas,
                 extra_outputs,
             )
+
+        connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+        if batched_output is not None:
+            batched_output.kv_connector_output = connector_output
+            self._push_output(batched_output)
+        elif connector_output is not None:
+            self._push_output(BatchedOutputs.connector_only(connector_output))
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""

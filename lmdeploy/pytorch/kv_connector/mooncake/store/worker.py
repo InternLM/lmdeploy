@@ -28,6 +28,7 @@ from .data import (
     build_store_key,
 )
 from .protocol import LOOKUP_MSG, RESET_MSG, RESP_ERR, RESP_OK
+from .worker_threads import KVCacheStoreRecvingThread
 
 if TYPE_CHECKING:
     from lmdeploy.messages import KVTransferConfig
@@ -149,10 +150,18 @@ class MooncakeStoreWorker:
             raise ValueError('Mooncake Store does not support linear-attention state caches')
 
         self._cache_config = cache_config
+        self.kv_role = kv_transfer_config.kv_role
         self.global_rank = global_rank
         self.tp_rank = tp_rank
         self.tp_size = tp_size
         self.lookup_server: LookupKeyServer | None = None
+        self.kv_recv_thread: KVCacheStoreRecvingThread | None = None
+        self._registered_regions: tuple[MooncakeStoreRegistration, ...] | None = None
+        self._row_block_sizes: tuple[int, ...] | None = None
+        self._completion_lock = threading.Lock()
+        self._inflight_loads: set[RequestId] = set()
+        self._completed_loads: dict[RequestId, set[int]] = {}
+        self._load_error_block_ids: set[int] = set()
 
         extra_config = kv_transfer_config.kv_connector_extra_config
         self.key_metadata = MooncakeStoreKeyMetadata(
@@ -176,6 +185,51 @@ class MooncakeStoreWorker:
     def _start_lookup_server(self) -> None:
         if self.global_rank == 0 and self.lookup_server is None:
             self.lookup_server = LookupKeyServer(self, self._cache_config)
+
+    def _prepare_receiver_layout(
+        self,
+        registrations: tuple[MooncakeStoreRegistration, ...],
+    ) -> tuple[int, ...]:
+        num_gpu_blocks = self._cache_config.num_gpu_blocks
+        row_block_sizes = []
+        for registration in registrations:
+            block_size, remainder = divmod(registration.size, num_gpu_blocks)
+            row_block_sizes.append(block_size)
+        return tuple(row_block_sizes)
+
+    def _mark_load_finished(
+        self,
+        request_id: RequestId,
+        failed_block_ids: set[int],
+    ) -> None:
+        with self._completion_lock:
+            self._inflight_loads.discard(request_id)
+            self._completed_loads[request_id] = failed_block_ids
+
+    def _start_receiver(self) -> None:
+        if self.kv_role not in ('kv_consumer', 'kv_both') or self.kv_recv_thread is not None:
+            return
+        registrations = self._registered_regions
+        row_block_sizes = self._row_block_sizes
+        if registrations is None or row_block_sizes is None:
+            raise RuntimeError('Mooncake receiver cannot start before KV cache registration')
+        store = self.store
+        if store is None:
+            raise RuntimeError('Mooncake Store is closed')
+
+        receiver = KVCacheStoreRecvingThread(
+            store=store,
+            registrations=registrations,
+            row_block_sizes=row_block_sizes,
+            num_gpu_blocks=self._cache_config.num_gpu_blocks,
+            key_metadata=self.key_metadata,
+            global_rank=self.global_rank,
+            tp_rank=self.tp_rank,
+            tp_size=self.tp_size,
+            completion_callback=self._mark_load_finished,
+        )
+        receiver.start()
+        self.kv_recv_thread = receiver
 
     def _create_store(self, store_factory: StoreFactory) -> Any:
         logger.info(
@@ -311,10 +365,14 @@ class MooncakeStoreWorker:
             raise ValueError('No KV cache rows were provided for Mooncake Store registration')
 
         registrations, backing_storages = self._build_registrations(kv_caches)
+        row_block_sizes = self._prepare_receiver_layout(registrations)
         total = len(registrations)
         total_bytes = sum(registration.size for registration in registrations)
         for index, registration in enumerate(registrations, start=1):
             self._register_buffer(registration, index, total)
+        self._registered_regions = registrations
+        self._row_block_sizes = row_block_sizes
+        self._start_receiver()
         self._start_lookup_server()
         logger.info(
             'Mooncake KV cache registration complete: global_rank=%d tp_rank=%d tp_size=%d '
@@ -326,21 +384,41 @@ class MooncakeStoreWorker:
         )
 
     def handle_preemptions(self, connector_metadata: MooncakeStoreConnectorMetadata) -> None:
-        """Handle no preemption state until transfer support is implemented."""
+        """Loads are retained until terminal completion, including
+        cancellation."""
         return None
+
+    def start_load_kv(self, connector_metadata: MooncakeStoreConnectorMetadata) -> None:
+        """Submit each new request to the background receiver once."""
+        for request in connector_metadata.load_requests:
+            request_id = request.request_id
+            with self._completion_lock:
+                if request_id in self._inflight_loads or request_id in self._completed_loads:
+                    continue
+                self._inflight_loads.add(request_id)
+            self.kv_recv_thread.add_request(request)
 
     def get_finished(
         self,
         finished_req_ids: set[RequestId],
         connector_metadata: MooncakeStoreConnectorMetadata,
     ) -> tuple[set[RequestId] | None, set[RequestId] | None]:
-        """Report no asynchronous completion before transfers are
-        implemented."""
-        return None, None
+        """Return rank-local receive completions since the previous poll."""
+        with self._completion_lock:
+            if not self._completed_loads:
+                return None, None
+            completed = set(self._completed_loads)
+            for failed_blocks in self._completed_loads.values():
+                self._load_error_block_ids.update(failed_blocks)
+            self._completed_loads.clear()
+        return None, completed
 
     def get_block_ids_with_load_errors(self) -> set[int]:
-        """Report no load errors before external loading is implemented."""
-        return set()
+        """Return and clear physical blocks whose latest load failed."""
+        with self._completion_lock:
+            block_ids = self._load_error_block_ids
+            self._load_error_block_ids = set()
+        return block_ids
 
     def lookup(self, token_len: int, block_hashes: Sequence[bytes]) -> int:
         """Return the longest prefix present for every unique KV-head shard."""
@@ -417,6 +495,11 @@ class MooncakeStoreWorker:
         self.lookup_server = None
         if lookup_server is not None:
             lookup_server.close()
+
+        receiver = self.kv_recv_thread
+        self.kv_recv_thread = None
+        if receiver is not None:
+            receiver.close()
 
         store = self.store
         self.store = None

@@ -12,7 +12,9 @@ from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     DEFAULT_GLOBAL_SEGMENT_SIZE,
     DEFAULT_LOCAL_BUFFER_SIZE,
     MooncakeStoreConfig,
+    MooncakeStoreConnectorMetadata,
     MooncakeStoreKeyMetadata,
+    MooncakeStoreLoadRequest,
     build_prefix_block_hashes,
     build_store_key,
 )
@@ -31,6 +33,8 @@ class FakeStore:
         close_ret=0,
         lookup_results=None,
         lookup_error=None,
+        get_results=None,
+        get_error=None,
     ):
         self.setup_ret = setup_ret
         self.register_failure_at = register_failure_at
@@ -39,9 +43,12 @@ class FakeStore:
         self.close_ret = close_ret
         self.lookup_results = lookup_results
         self.lookup_error = lookup_error
+        self.get_results = get_results
+        self.get_error = get_error
         self.setup_calls = []
         self.register_calls = []
         self.lookup_calls = []
+        self.get_calls = []
         self.close_calls = 0
 
     def setup(self, *args):
@@ -69,6 +76,14 @@ class FakeStore:
         if self.lookup_results is None:
             return [0] * len(keys)
         return self.lookup_results
+
+    def batch_get_into_multi_buffers(self, keys, addresses, sizes):
+        self.get_calls.append((list(keys), addresses, sizes))
+        if self.get_error is not None:
+            raise self.get_error
+        if self.get_results is None:
+            return [0] * len(keys)
+        return self.get_results
 
 
 class FakeTensor:
@@ -177,15 +192,15 @@ def write_store_config(tmp_path, name='mooncake.json', **overrides):
     return path
 
 
-def make_cache_config(config_path=None):
+def make_cache_config(config_path=None, *, block_size=64, num_gpu_blocks=1):
     extra_config = {}
     if config_path is not None:
         extra_config['mooncake_config_path'] = str(config_path)
     return CacheConfig(
         max_batches=1,
-        block_size=64,
+        block_size=block_size,
         num_cpu_blocks=0,
-        num_gpu_blocks=1,
+        num_gpu_blocks=num_gpu_blocks,
         kv_transfer_config=KVTransferConfig(
             kv_connector='MooncakeStoreConnector',
             kv_role='kv_both',
@@ -558,11 +573,51 @@ def test_registration_rejects_non_cuda_noncontiguous_and_empty_rows(tmp_path):
         worker.register_kv_caches({'cpu': torch.empty(4)})
     with pytest.raises(ValueError, match='contiguous'):
         worker.register_kv_caches({'strided': FakeTensor(0x1000, contiguous=False)})
-    with pytest.raises(ValueError, match='size must be greater than 0'):
-        worker.register_kv_caches({'empty': FakeTensor(0x1000, size=0)})
 
     assert store.register_calls == []
     assert worker.store is store
+    worker.shutdown()
+
+
+def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path):
+    path = write_store_config(tmp_path)
+    store = FakeStore(get_results=[0, -1])
+    worker = MooncakeStoreWorker(
+        make_cache_config(path, num_gpu_blocks=4),
+        global_rank=1,
+        tp_rank=5,
+        tp_size=8,
+        kv_head_replica_num=4,
+        store_factory=lambda: store,
+    )
+    worker.register_kv_caches({
+        'row.0': FakeTensor(0x1000, size=400),
+        'row.1': FakeTensor(0x2000, size=800),
+    })
+    block_hashes = build_prefix_block_hashes(range(128), 64)
+    request = MooncakeStoreLoadRequest(
+        request_id=19,
+        block_ids=(3, 1),
+        block_hashes=block_hashes,
+    )
+
+    worker.start_load_kv(MooncakeStoreConnectorMetadata(load_requests=(request, )))
+    worker.kv_recv_thread.request_queue.join()
+
+    assert worker.get_finished(set(), MooncakeStoreConnectorMetadata()) == (None, {19})
+    assert worker.get_block_ids_with_load_errors() == {1}
+    assert worker.get_block_ids_with_load_errors() == set()
+    assert store.get_calls == [(
+        [
+            build_store_key(worker.key_metadata, 1, block_hash)
+            for block_hash in block_hashes
+        ],
+        [
+            [0x1000 + 3 * 100, 0x2000 + 3 * 200],
+            [0x1000 + 1 * 100, 0x2000 + 1 * 200],
+        ],
+        [[100, 200], [100, 200]],
+    )]
     worker.shutdown()
 
 

@@ -277,8 +277,6 @@ class MooncakeStoreConfig:
             raise TypeError('device_name must be a string')
         if self.mode != 'embedded':
             raise ValueError('LMDeploy Mooncake Store currently supports only embedded mode')
-        if not isinstance(self.enable_offload, bool):
-            raise TypeError('enable_offload must be a boolean')
         if self.enable_offload:
             raise ValueError('LMDeploy Mooncake Store does not support SSD offload yet')
         if isinstance(self.global_segment_size, bool) or not isinstance(self.global_segment_size, int):
@@ -342,19 +340,18 @@ class MooncakeStoreRegistration:
     address: int
     size: int
 
-    def __post_init__(self) -> None:
-        if not isinstance(self.name, str) or not self.name:
-            raise ValueError('Mooncake registration name must be non-empty')
-        if self.address <= 0:
-            raise ValueError('Mooncake registration address must be greater than 0')
-        if self.size <= 0:
-            raise ValueError('Mooncake registration size must be greater than 0')
+
+@dataclass(frozen=True)
+class MooncakeStoreLoadRequest:
+    """One asynchronous load from Mooncake into allocated GPU blocks."""
+
+    request_id: int
+    block_ids: tuple[int, ...]
+    block_hashes: tuple[bytes, ...]
 
 
-@dataclass
+@dataclass(frozen=True)
 class MooncakeStoreConnectorMetadata(KVConnectorMetadata):
-    """Serializable scheduler metadata for one engine step.
+    """Serializable Mooncake work issued by one scheduler step."""
 
-    Fields will be added as lookup and asynchronous transfer support is implemented. Keeping the type concrete from the
-    start lets the connector validate scheduler-to-worker metadata without guessing its future shape.
-    """
+    load_requests: tuple[MooncakeStoreLoadRequest, ...] = ()

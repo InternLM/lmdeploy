@@ -19,6 +19,8 @@ from lmdeploy.pytorch.engine.inputs_maker import (
     _make_state_prefix_cache_restore_plan,
     _make_state_prefix_cache_save_plan,
 )
+from lmdeploy.pytorch.engine.model_agent.agent import BatchedOutputs
+from lmdeploy.pytorch.kv_connector import KVConnectorOutput
 from lmdeploy.pytorch.messages import MessageStatus, StateCheckpointRestore, StateCheckpointSaveReservation
 
 
@@ -150,6 +152,9 @@ class _FakeScheduler:
     def num_running(self):
         return self._num_running
 
+    def build_connector_meta(self, running, swap_in_map=None, swap_out_map=None):
+        return None
+
 
 class _FakeEngineStrategy:
 
@@ -243,6 +248,35 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
         ('unpin_saves', True),
     ]
     assert not state_checkpoints.pinned
+
+
+def test_engine_loop_routes_connector_only_output_without_model_postprocess():
+    seen = []
+
+    class _Scheduler:
+
+        def update_connector_output(self, output):
+            seen.append(output)
+
+        def release_completed_prefill_reservations(self, running):
+            raise AssertionError('connector-only output has no completed model prefill')
+
+    def fail_model_postprocess(*args, **kwargs):
+        raise AssertionError('connector-only output must skip model postprocess')
+
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = _Scheduler()
+    loop._make_infer_outputs = fail_model_postprocess
+    connector_output = KVConnectorOutput(finished_receiving={11})
+
+    loop._finish_forward_output(
+        BatchedOutputs.connector_only(connector_output),
+        running=[],
+        model_inputs=None,
+        delta=None,
+    )
+
+    assert seen == [connector_output]
 
 
 def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save():

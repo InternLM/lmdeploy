@@ -30,20 +30,24 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
         while len(evictable_seqs) > 0:
             evict_seq = evictable_seqs.pop(0)
 
+            if self.scheduler.kv_load_coordinator.is_remote_ready(evict_seq):
+                continue
+
             # skip sequence with no blocks
             if evict_seq.num_blocks == 0:
                 continue
 
             if block_trie.enabled:
                 evict_seq.prefix_cache.suppress_match_stats = True
+            self.scheduler.kv_load_coordinator.release(evict_seq)
             evict_seq.state.free()
-            num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
+            num_req = num_required_blocks - block_manager.get_num_free_gpu_blocks()
             if num_req <= 0:
                 success = True
                 break
 
             block_trie.evict(num_req)
-            num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
+            num_req = num_required_blocks - block_manager.get_num_free_gpu_blocks()
             if num_req <= 0:
                 success = True
                 break
@@ -81,6 +85,9 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
         while len(evictable_seqs) > 0:
             evict_seq = evictable_seqs.pop(0)
 
+            if self.scheduler.kv_load_coordinator.is_remote_ready(evict_seq):
+                continue
+
             # skip sequence with no blocks
             if evict_seq.num_blocks == 0 and evict_seq.logical_state < 0:
                 continue
@@ -88,19 +95,20 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             # free sequence
             if block_trie.enabled:
                 evict_seq.prefix_cache.suppress_match_stats = True
+            self.scheduler.kv_load_coordinator.release(evict_seq)
             evict_seq.state.free()
             has_free_state = has_runtime_state or state_manager.get_num_free_runtime() > 0
             if not has_free_state:
                 block_trie.state_checkpoints.evict(1)
                 has_free_state = state_manager.get_num_free_runtime() > 0
-            num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
+            num_req = num_required_blocks - block_manager.get_num_free_gpu_blocks()
             if num_req <= 0:
                 success = True
                 break
 
             # clear cached prefix
             block_trie.evict(num_req)
-            num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
+            num_req = num_required_blocks - block_manager.get_num_free_gpu_blocks()
             if num_req <= 0:
                 success = True
                 break
