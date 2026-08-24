@@ -115,7 +115,7 @@ elif [[ "${CUDA_VERSION_SHORT}" == cu13* ]]; then
 fi
 
 # install tile-kernels for deepseekv4
-pip install tile-kernels
+pip install "tile-kernels==1.0.0"
 
 python - <<'PY'
 import os
