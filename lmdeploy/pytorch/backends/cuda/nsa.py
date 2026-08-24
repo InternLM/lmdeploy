@@ -274,18 +274,34 @@ class DSAIndexerMetaBuilder(
 
 class TritonNSAIndexFP8(BaseNSAIndexFP8):
 
-    def __init__(self, topk: int, softmax_scale: float, block_size: int, fill: int) -> None:
+    def __init__(self, topk: int, softmax_scale: float, block_size: int,
+                 fill: int,
+                 allow_short_prefill_scoring_skip: bool = False) -> None:
         super().__init__()
         self.topk = topk
         self.softmax_scale = softmax_scale
         self.block_size = block_size
         self.fill = fill
+        self._allow_short_prefill_scoring_skip = allow_short_prefill_scoring_skip
         # TODO: configable scale fmt
         self.scale_fmt = 'ue8m0'
         self.max_logits_bytes = _envs.dsa_indexer_max_logits_mb * (1 << 20)
         self._sparse_index_topk = _get_sparse_index_topk(topk)
         self._step_meta_group: int | None = None
         register_step_metadata_impl(self)
+
+    def _should_skip_scoring(self, meta: NSAIndexMeta) -> bool:
+        """Whether dense prefill makes index scoring unnecessary."""
+        return (self._allow_short_prefill_scoring_skip and not meta.is_decoding
+                and meta.max_kv_seqlen <= self.topk)
+
+    def _maybe_score_and_select(self, q: Tensor, q_s: Tensor,
+                                indexer_k_cache: Tensor,
+                                meta: NSAIndexMeta) -> Tensor | None:
+        """Score after the caller has preserved K for future decode."""
+        if self._should_skip_scoring(meta):
+            return None
+        return self._score_and_select(q, q_s, indexer_k_cache, meta)
 
     def get_step_metadata_provider(self):
         """Describe metadata required by the selected DSA indexer."""
@@ -427,7 +443,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         return self._select_topk(scores, meta)
 
     def forward(self, q: Tensor, k: Tensor, weights: Tensor,
-                indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
+                indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor | None:
         assert q.dim() == 3
         assert k.dim() == 2
         k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
@@ -451,11 +467,11 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                   block_offsets=meta.block_offset,
                                   group_size=self.block_size,
                                   scale_fmt=self.scale_fmt)
-        return self._score_and_select(q, q_s, indexer_k_cache, meta)
+        return self._maybe_score_and_select(q, q_s, indexer_k_cache, meta)
 
     def forward_fused(self, q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor,
                       sin: Tensor, indexer_k_cache: Tensor, norm_eps: float, head_gate_scale: float,
-                      rope_interleaved: bool, meta: NSAIndexMeta) -> Tensor:
+                      rope_interleaved: bool, meta: NSAIndexMeta) -> Tensor | None:
         """Prepare FP8 Q and write K cache without allocating rotated BF16
         Q/K."""
         k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
@@ -480,11 +496,19 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                     max_q_seqlen=meta.max_q_seqlen,
                                     eps=norm_eps,
                                     rope_interleaved=rope_interleaved)
-        return self._score_and_select(q, q_s, indexer_k_cache, meta)
+        return self._maybe_score_and_select(q, q_s, indexer_k_cache, meta)
 
 
 class TritonNSAIndexFP8Builder(BaseNSAIndexFP8Builder):
 
     @staticmethod
-    def build(topk: int, softmax_scale: float, block_size: int = 128, fill: int = -1) -> BaseNSAIndexFP8:
-        return TritonNSAIndexFP8(topk, softmax_scale=softmax_scale, block_size=block_size, fill=fill)
+    def build(topk: int, softmax_scale: float, block_size: int = 128,
+              fill: int = -1,
+              allow_short_prefill_scoring_skip: bool = False) -> BaseNSAIndexFP8:
+        return TritonNSAIndexFP8(
+            topk,
+            softmax_scale=softmax_scale,
+            block_size=block_size,
+            fill=fill,
+            allow_short_prefill_scoring_skip=allow_short_prefill_scoring_skip,
+        )

@@ -26,12 +26,14 @@ def test_flash_mla_builder_selects_sparse_impl(monkeypatch):
     dense_impl = Mock(return_value=dense_output)
     sparse_impl = Mock(return_value=sparse_output)
     monkeypatch.setattr(attention_module, '_enable_fa3', lambda *args: False)
+    monkeypatch.setattr(attention_module, 'use_fa3', True)
     monkeypatch.setattr(mla_module, 'FlashMLAImpl', dense_impl)
     monkeypatch.setattr(sparse_mla_module, 'FlashMLASparseImpl', sparse_impl)
     kwargs = dict(num_heads=64, head_size=576, num_kv_heads=1, use_flash_mla=True)
 
     assert TritonAttentionBuilder.build(**kwargs) is dense_output
     assert TritonAttentionBuilder.build(**kwargs, mla_index_topk=2048) is sparse_output
+    assert sparse_impl.call_args.kwargs['use_fa3'] is True
 
 
 def test_flash_mla_decode_index_mapping(monkeypatch):
@@ -163,3 +165,30 @@ def test_bf16_sparse_decode_skips_fp8_flashmla_metadata():
 
     assert metadata.block_offsets.dtype == torch.int32
     assert not hasattr(metadata, 'tile_scheduler_metadata')
+
+
+def test_sparse_mla_prefill_routes_by_kv_length(monkeypatch):
+    dense_output = object()
+    sparse_output = object()
+    dense_prefill = Mock(return_value=dense_output)
+    monkeypatch.setattr(mla_module.FlashMLAImpl, '_forward_prefill', dense_prefill)
+    impl = object.__new__(FlashMLASparseImpl)
+    impl.mla_index_topk = 2048
+    impl._flatten_prefill_kv_cache = Mock(return_value=(Mock(), Mock()))
+    impl._prefill_sparse = Mock(return_value=sparse_output)
+    query, k_cache, v_cache, nsa_indices = (Mock() for _ in range(4))
+
+    dense = impl._forward_prefill(query,
+                                  k_cache,
+                                  v_cache,
+                                  SimpleNamespace(max_kv_seqlen=2048),
+                                  nsa_indices=None)
+    sparse = impl._forward_prefill(query,
+                                   k_cache,
+                                   v_cache,
+                                   SimpleNamespace(max_kv_seqlen=2049),
+                                   nsa_indices=nsa_indices)
+
+    assert dense is dense_output
+    assert sparse is sparse_output
+    assert dense_prefill.call_args.kwargs['nsa_indices'] is None

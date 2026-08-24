@@ -137,7 +137,9 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
             if mla_index_topk is not None:
                 logger.debug('Build FlashMLASparseImpl Attention')
                 from .sparse_mla import FlashMLASparseImpl
-                return FlashMLASparseImpl(mla_index_topk=mla_index_topk, **common_args)
+                return FlashMLASparseImpl(mla_index_topk=mla_index_topk,
+                                          use_fa3=use_fa3,
+                                          **common_args)
             logger.debug('Build FlashMLAImpl Attention')
             from .mla import FlashMLAImpl
             return FlashMLAImpl(use_fa3=use_fa3, **common_args)

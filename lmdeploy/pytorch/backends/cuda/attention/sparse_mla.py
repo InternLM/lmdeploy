@@ -100,7 +100,8 @@ class FlashMLAIndexMapper:
 class FlashMLASparseImpl(FlashMLAImpl):
     """Sparse DSA attention using FlashMLA kernels.
 
-    Prefill: ``flash_mla_sparse_fwd`` over flattened BF16 KV.
+    Prefill: dense MLA when top-k covers the sequence; otherwise
+    ``flash_mla_sparse_fwd`` over flattened BF16 KV.
     Decode: ``flash_mla_sparse_fwd`` over a zero-copy BF16 cache view, or
     ``flash_mla_with_kvcache`` over the packed FP8 cache.
     """
@@ -226,6 +227,16 @@ class FlashMLASparseImpl(FlashMLAImpl):
                          k_scales_zeros: torch.Tensor = None,
                          v_scales_zeros: torch.Tensor = None) -> torch.Tensor:
         """Forward pass for sparse MLA prefill."""
+        if attn_metadata.max_kv_seqlen <= self.mla_index_topk:
+            # Top-k contains every valid key, so dense attention is equivalent
+            # and avoids sparse index mapping and kernel overhead.
+            return super()._forward_prefill(query,
+                                            k_cache,
+                                            v_cache,
+                                            attn_metadata,
+                                            nsa_indices=None,
+                                            k_scales_zeros=k_scales_zeros,
+                                            v_scales_zeros=v_scales_zeros)
         if nsa_indices is None:
             raise RuntimeError('Sparse MLA requires DSA top-k indices.')
         flatten_k, _ = self._flatten_prefill_kv_cache(

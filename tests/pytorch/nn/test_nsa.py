@@ -184,6 +184,72 @@ def test_indexer_meta_skips_reused_mtp_topk():
     assert not nsa.should_skip_nsa_indexer([dict(skip_topk=False)])
 
 
+@pytest.mark.parametrize(
+    ('allow_skip', 'is_decoding', 'max_kv_seqlen', 'should_skip'),
+    [(True, False, 2048, True), (True, False, 2049, False),
+     (True, True, 2048, False), (False, False, 2048, False)])
+def test_short_prefill_caches_indexer_k_before_optional_scoring(
+        monkeypatch, allow_skip, is_decoding, max_kv_seqlen, should_skip):
+    from lmdeploy.pytorch.backends.cuda import nsa as cuda_nsa
+
+    prepare_q = torch.tensor(0)
+    monkeypatch.setattr(cuda_nsa, '_get_dsa_indexer_k_cache_views',
+                        lambda *_: (torch.empty(0), torch.empty(1, 1)))
+    monkeypatch.setattr(cuda_nsa, 'prepare_dsa_indexer_q',
+                        lambda *args, **kwargs: (prepare_q, prepare_q))
+
+    k_cache_calls = []
+
+    def prepare_k_cache(*args, **kwargs):
+        k_cache_calls.append((args, kwargs))
+
+    monkeypatch.setattr(cuda_nsa, 'prepare_dsa_indexer_k_cache',
+                        prepare_k_cache)
+
+    impl = object.__new__(cuda_nsa.TritonNSAIndexFP8)
+    impl.topk = 2048
+    impl.softmax_scale = 1.0
+    impl._allow_short_prefill_scoring_skip = allow_skip
+    selected = torch.tensor(1)
+    score_calls = []
+
+    def score_and_select(*args):
+        score_calls.append(args)
+        return selected
+
+    impl._score_and_select = score_and_select
+    meta = SimpleNamespace(
+        is_decoding=is_decoding,
+        max_kv_seqlen=max_kv_seqlen,
+        cu_seqlen_q=torch.tensor([0, 1]),
+        k_seqlens=torch.tensor([1]),
+        block_offset=torch.tensor([[0]]),
+        max_q_seqlen=1,
+    )
+
+    output = impl.forward_fused(
+        torch.empty(1),
+        torch.empty(1),
+        torch.empty(1),
+        torch.empty(1),
+        torch.empty(1),
+        torch.empty(1),
+        torch.empty(1),
+        torch.empty(1),
+        norm_eps=1e-6,
+        head_gate_scale=1.0,
+        rope_interleaved=False,
+        meta=meta,
+    )
+
+    assert len(k_cache_calls) == 1
+    assert len(score_calls) == (0 if should_skip else 1)
+    if should_skip:
+        assert output is None
+    else:
+        assert output is selected
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA backend')
 def test_sparse_index_topk_is_resolved_at_init(monkeypatch):
     from lmdeploy.pytorch.backends.cuda import nsa as cuda_nsa

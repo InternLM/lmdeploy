@@ -85,14 +85,14 @@ class BaseNSAIndexFP8(ABC):
 
     @abstractmethod
     def forward(self, q: Tensor, k: Tensor, weights: Tensor,
-                indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
+                indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor | None:
         """forward."""
         raise NotImplementedError('Not implemented.')
 
     @abstractmethod
     def forward_fused(self, q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor,
                       sin: Tensor, indexer_k_cache: Tensor, norm_eps: float, head_gate_scale: float,
-                      rope_interleaved: bool, meta: NSAIndexMeta) -> Tensor:
+                      rope_interleaved: bool, meta: NSAIndexMeta) -> Tensor | None:
         """Forward with fused DSA indexer preparation."""
         raise NotImplementedError('Not implemented.')
 
@@ -100,6 +100,7 @@ class BaseNSAIndexFP8Builder:
 
     @staticmethod
     @abstractmethod
-    def build(topk: int, softmax_scale: float, block_size: int = 128, fill: int = -1) -> BaseNSAIndexFP8:
+    def build(topk: int, softmax_scale: float, block_size: int = 128, fill: int = -1,
+              allow_short_prefill_scoring_skip: bool = False) -> BaseNSAIndexFP8:
         """Build layer implementation."""
         raise NotImplementedError('Not implemented.')
