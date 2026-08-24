@@ -86,7 +86,7 @@ def _make_piecewise_graph_manager(model: torch.nn.Module, cache_config: CacheCon
     if not step_meta_plan.enable_piecewise_cuda_graph():
         return None
 
-    return PiecewiseGraphManager(runtime, torch.cuda.Stream(device=device))
+    return PiecewiseGraphManager(runtime)
 
 
 def _update_deepep_mode(context: StepContext) -> None:

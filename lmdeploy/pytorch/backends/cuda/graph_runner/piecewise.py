@@ -477,12 +477,14 @@ class PiecewiseGraphPlan:
         plan."""
         frame_inputs = {} if frame_inputs is None else frame_inputs
         caller_stream = torch.cuda.current_stream(self._device)
-        self._stream.wait_stream(caller_stream)
+        if self._stream is not caller_stream:
+            self._stream.wait_stream(caller_stream)
         with torch.cuda.stream(self._stream), torch.inference_mode():
             bind(self._static_inputs)
             for step in self.steps:
                 step.run(frame_inputs)
-        caller_stream.wait_stream(self._stream)
+        if self._stream is not caller_stream:
+            caller_stream.wait_stream(self._stream)
         return self.output
 
 
@@ -719,7 +721,7 @@ class PiecewiseGraphRuntime(Protocol):
 class PiecewiseGraphManager:
     """Own shared PCG resources and every runner-local prepared plan."""
 
-    def __init__(self, runtime: PiecewiseGraphRuntime, stream: torch.cuda.Stream) -> None:
+    def __init__(self, runtime: PiecewiseGraphRuntime, stream: torch.cuda.Stream | None = None) -> None:
         self._runtime = runtime
         self._plans: dict[Hashable, Any] = {}
         self._bridge_pool = ReusableBridgePool()
@@ -740,7 +742,8 @@ class PiecewiseGraphManager:
     def prepare(self, descriptor: Hashable, kwargs: Mapping[str, Any]) -> Any:
         """Warm up and publish one plan; any failure aborts engine warmup."""
         self._runtime.warmup(descriptor, kwargs)
-        build = self._runtime.build(descriptor, kwargs, self._bridge_pool, self._stream)
+        stream = self._stream if self._stream is not None else torch.cuda.current_stream()
+        build = self._runtime.build(descriptor, kwargs, self._bridge_pool, stream)
         self._plans[descriptor] = build.plan
         return build.output
 

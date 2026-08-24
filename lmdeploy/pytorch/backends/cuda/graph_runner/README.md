@@ -21,7 +21,7 @@ buffers, capture lifecycle, and failure rules differ.
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `runner.py`                      | Three-way dispatch, legacy full-graph cache, optional piecewise manager, and whole-runner reset                                  |
 | `full_graph.py`                  | One complete CUDA graph's metadata, buffers, warmup, capture, and replay                                                         |
-| `piecewise.py`                   | Generic segmented tracing, ordered plan steps, eager argument binding, and manager-owned replay stream and bridge storage        |
+| `piecewise.py`                   | Generic segmented tracing, ordered plan steps, eager argument binding, and manager-owned bridge storage                          |
 | `standard.py`                    | The shared standard-decoder prefill policy: token buckets, graph inputs, request frame, output slicing, and descriptor selection |
 | `models/utils/cudagraph.py`      | Model-facing capability mixins and the existing full-graph input/output buffer contract                                          |
 | `backends/cuda/step_metadata.py` | Atomic capability discovery and eager-boundary installation for the selected CUDA implementations                                |
@@ -116,17 +116,19 @@ For a prepared descriptor, replay:
 
 1. fills the plan-owned top-level graph input buffers;
 2. binds the live request frame;
-3. executes every graph and eager step in recorded order on the manager's PCG stream;
-4. orders the caller stream after the PCG stream; and
-5. returns the logical raw-token view of the reusable output buffers.
+3. executes every graph and eager step in recorded order on the engine's main
+   forward stream; and
+4. returns the logical raw-token view of the reusable output buffers.
 
 Model Python `forward` is not rerun during serving replay.
 
-Every plan in one `PiecewiseGraphManager` shares the same dedicated stream.
-This matches the shared bridge lifetime and makes cross-plan GPU ordering
-explicit under the serialized-forward contract. CUDA graph-private pools
-remain plan-local because different token buckets may replay in arbitrary
-request order.
+Capture and replay both run on the engine's main forward stream
+(`ModelAgent.stream`), the same non-default stream the full decode graph uses.
+The manager resolves that stream lazily from the current stream at `prepare()`
+time, so no dedicated PCG stream is allocated. Because the plan stream is the
+caller stream, the cross-stream waits collapse to no-ops on the steady path.
+CUDA graph-private pools remain plan-local because different token buckets may
+replay in arbitrary request order.
 
 The outer `forward_piecewise_cudagraph` profiler range covers input binding,
 the complete ordered plan, and output projection. Nested `piecewise::graph:*`
