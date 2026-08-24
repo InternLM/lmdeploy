@@ -8,7 +8,6 @@ from http import HTTPStatus
 
 import shortuuid
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
 
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.serve.core.chat_runner import (
@@ -36,8 +35,10 @@ from lmdeploy.serve.openai.protocol import (
 from lmdeploy.serve.openai.utils import maybe_filter_parallel_tool_calls
 from lmdeploy.serve.utils.server_utils import validate_json_request
 
+from .fanout import fanout_chat_completions
 from .logits_processors import logit_bias_logits_processor
 from .logprobs import _create_chat_completion_logprobs, _create_output_token_logprobs
+from .streaming_response import ManagedStreamingResponse
 from .validation import check_request
 
 
@@ -62,7 +63,7 @@ def register(router: APIRouter, server_context) -> None:
           probable tokens with probabilities that add up to top_p or higher
           are kept for generation.
         - **n** (int): How many chat completion choices to generate for each input
-          message. **Only support one here**.
+          message. Accepts values from 1 to 128.
         - **stream**: whether to stream the results or not. Default to false.
         - **stream_options**: Options for streaming response. Only set this when you
           set stream: true.
@@ -130,10 +131,23 @@ def register(router: APIRouter, server_context) -> None:
         - **presence_penalty** (replaced with repetition_penalty)
         - **frequency_penalty** (replaced with repetition_penalty)
         """
-        error_check_ret = validate_request(request, server_context,
-                                           check_request)
+        json_request = await raw_request.json()
+        error_check_ret = validate_request(
+            request,
+            server_context,
+            check_request,
+            json_request=json_request,
+        )
         if error_check_ret is not None:
             return error_check_ret
+        if request.n is not None and request.n > 1:
+            return await fanout_chat_completions(
+                chat_completions_v1,
+                request,
+                raw_request,
+                json_request,
+            )
+
         # Resolve input: messages has priority over input_ids/image_data
         messages_empty = request.messages is None or len(request.messages) == 0
         resolved_input_ids = None
@@ -162,7 +176,6 @@ def register(router: APIRouter, server_context) -> None:
                     })
                 resolved_input_ids = None  # image_data conversion takes over
 
-        json_request = await raw_request.json()
         migration_request = json_request.pop('migration_request', None)
         with_cache = json_request.pop('with_cache', False)
         preserve_cache = json_request.pop('preserve_cache', False)
@@ -308,8 +321,10 @@ def register(router: APIRouter, server_context) -> None:
 
         # Streaming response
         if request.stream:
-            return StreamingResponse(completion_stream_generator(),
-                                     media_type='text/event-stream')
+            return ManagedStreamingResponse(
+                completion_stream_generator(),
+                cleanup_callbacks=[chat_runner.close],
+                media_type='text/event-stream')
 
         # Non-streaming response
         try:

@@ -65,8 +65,13 @@ class WorkerWrapperBase:
 
             init_process_group(rank, self.world_size)
 
-        ccl_backend = get_backend(self.device_type).ccl_backend()
-        self.dist_ctx = DistContext.build(self.rank, self.dist_config, ccl_backend)
+        backend = get_backend(self.device_type)
+        self.dist_ctx = DistContext.build(
+            rank=self.rank,
+            dist_config=self.dist_config,
+            ccl_backend=backend.ccl_backend(),
+            communicator_builder=backend.build_communicator,
+        )
 
     def pack_output(self, output: dict):
         """Pack output."""
