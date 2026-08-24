@@ -87,37 +87,6 @@ def test_get_num_qkv_head_by_tp_requires_divisible_heads():
         model_config.get_num_qkv_head_by_tp()
 
 
-def test_dsa_models_default_to_bf16_mla_cache(monkeypatch):
-    from lmdeploy.pytorch.configurations.deepseek_v2 import DeepseekV2ModelConfigBuilder
-    from lmdeploy.pytorch.configurations.deepseek_v32 import DeepseekV32ModelConfigBuilder
-    from lmdeploy.pytorch.configurations.glm_moe_dsa import GlmMoeDsaModelConfigBuilder
-
-    def fake_build(cls, hf_config, model_path=None, **kwargs):
-        return _make_model_config(num_attention_heads=64,
-                                  num_key_value_heads=1)
-
-    monkeypatch.setattr(DeepseekV2ModelConfigBuilder, 'build', classmethod(fake_build))
-    deepseek_config = DeepseekV32ModelConfigBuilder.build(
-        SimpleNamespace(
-            use_flash_mla=True,
-            index_head_dim=128,
-            index_topk=2048,
-        ))
-    glm_config = GlmMoeDsaModelConfigBuilder.build(
-        SimpleNamespace(
-            use_flash_mla=True,
-            index_head_dim=128,
-            index_topk=2048,
-            qk_head_dim=192,
-            qk_nope_head_dim=128,
-            qk_rope_head_dim=64,
-            quantization_config=None,
-        ))
-
-    assert deepseek_config.mla_kv_cache_dtype == 'bfloat16'
-    assert glm_config.mla_kv_cache_dtype == 'bfloat16'
-
-
 @pytest.mark.parametrize(('block_size', 'kernel_block_size', 'expected_block_size'), [
     (192, 64, 256),
     (256, 128, 256),

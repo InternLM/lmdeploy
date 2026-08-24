@@ -39,6 +39,11 @@ def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int) -> int:
     """Return the query rows fitting in a bounded FP32 score tensor."""
     if max_kv_seqlen <= 0:
         return 1
+    # DeepGEMM materializes an aligned [query_rows, max_kv_seqlen] output
+    # before top-k selection:
+    # https://github.com/deepseek-ai/DeepGEMM/blob/88965b078186ee7510ab9fc4f1d5ebc19adfa8d1/csrc/apis/attention.hpp#L155-L171
+    # Bounding flattened KV alone therefore does not bound the M * N logits
+    # allocation; limit M so its FP32 payload stays within the runtime budget.
     _fp32_bytes = 4
     return max(1, max_logits_bytes // (max_kv_seqlen * _fp32_bytes))
 
@@ -379,6 +384,8 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
             meta: NSAIndexMeta,
             score_meta: _DeepGemmContiguousScoreMeta) -> Tensor:
         """Bound prefill score memory by chunking only the query rows."""
+        # Keep KV contiguous for DeepGEMM's TMA descriptors; slicing only Q
+        # avoids the alignment failures caused by per-request KV views.
         flat_k, flat_k_s = self._flatten_prefill_k(
             indexer_k_cache, q.size(-1), meta)
         max_rows = _get_max_score_rows(score_meta.max_kv_seqlen,
