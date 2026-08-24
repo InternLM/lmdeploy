@@ -34,14 +34,13 @@ from ..nsa import (
 
 logger = get_logger('lmdeploy')
 
-_FP32_BYTES = 4
-
 
 def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int) -> int:
     """Return the query rows fitting in a bounded FP32 score tensor."""
     if max_kv_seqlen <= 0:
         return 1
-    return max(1, max_logits_bytes // (max_kv_seqlen * _FP32_BYTES))
+    _fp32_bytes = 4
+    return max(1, max_logits_bytes // (max_kv_seqlen * _fp32_bytes))
 
 
 def _get_dsa_indexer_k_cache_views(indexer_k_cache: Tensor,
@@ -303,44 +302,6 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         assert isinstance(meta, NSAIndexMeta)
         return meta
 
-    def _compute_scores(self, q: Tensor, q_s: Tensor,
-                        indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
-        """Compute dense index scores with DeepGEMM or the Triton fallback."""
-        score_meta = meta.score_meta
-        if isinstance(score_meta, _DeepGemmContiguousScoreMeta):
-            flat_k, flat_k_s = self._flatten_prefill_k(
-                indexer_k_cache, q.size(-1), meta)
-            return self._compute_contiguous_scores(
-                q, q_s, flat_k, flat_k_s, score_meta)
-        if isinstance(score_meta, _DeepGemmPagedScoreMeta):
-            # Paged MQA reads the packed cache directly and requires its compact
-            # ``entries * (D + 4)`` byte block stride.
-            return _get_deep_gemm().fp8_fp4_paged_mqa_logits(
-                q=(q[:, None], None),
-                kv_cache=indexer_k_cache,
-                weights=q_s,
-                context_lens=score_meta.context_lens,
-                block_table=score_meta.block_offsets,
-                schedule_meta=score_meta.schedule,
-                max_context_len=score_meta.max_kv_seqlen,
-                clean_logits=False,
-                logits_dtype=torch.float32,
-            )
-
-        _warn_triton_index_scoring()
-        k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
-            indexer_k_cache, q.size(-1))
-        return fp8_index(q,
-                         q_s,
-                         k_cache,
-                         k_s_cache[..., 0],
-                         meta.cu_seqlen_q,
-                         meta.k_seqlens,
-                         meta.block_offset,
-                         max_q_seqlen=meta.max_q_seqlen,
-                         max_k_seqlen=meta.max_kv_seqlen,
-                         causal=True)
-
     def _flatten_prefill_k(self, indexer_k_cache: Tensor, head_dim: int,
                            meta: NSAIndexMeta) -> tuple[Tensor, Tensor]:
         """Flatten the paged indexer K cache once for prefill scoring."""
@@ -355,7 +316,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
             out_size=meta.kv_flatten_size,
         )
 
-    def _compute_contiguous_scores(
+    def _compute_prefill_scores(
             self,
             q: Tensor,
             q_s: Tensor,
@@ -363,7 +324,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
             flat_k_s: Tensor,
             score_meta: _DeepGemmContiguousScoreMeta,
             row_slice: slice = slice(None)) -> Tensor:
-        """Compute one contiguous DeepGEMM score-row slice."""
+        """Compute one DeepGEMM prefill score-row slice."""
         return _get_deep_gemm().fp8_fp4_mqa_logits(
             q=(q, None),
             kv=(flat_k, flat_k_s),
@@ -397,7 +358,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                             fill=self.fill,
                             descending=True)
 
-    def _score_and_select_contiguous(
+    def _score_and_select_prefill(
             self, q: Tensor, q_s: Tensor, indexer_k_cache: Tensor,
             meta: NSAIndexMeta,
             score_meta: _DeepGemmContiguousScoreMeta) -> Tensor:
@@ -408,7 +369,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                        self.max_logits_bytes)
         num_rows = q.size(0)
         if num_rows <= max_rows:
-            scores = self._compute_contiguous_scores(
+            scores = self._compute_prefill_scores(
                 q, q_s, flat_k, flat_k_s, score_meta)
             return self._select_topk(scores, meta)
 
@@ -420,7 +381,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         for start in range(0, num_rows, max_rows):
             end = min(start + max_rows, num_rows)
             row_slice = slice(start, end)
-            scores = self._compute_contiguous_scores(
+            scores = self._compute_prefill_scores(
                 q[row_slice], q_s[row_slice], flat_k, flat_k_s,
                 score_meta, row_slice)
             selected = self._select_topk(scores, meta, row_slice)
@@ -432,9 +393,37 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                           indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
         score_meta = meta.score_meta
         if isinstance(score_meta, _DeepGemmContiguousScoreMeta):
-            return self._score_and_select_contiguous(
+            return self._score_and_select_prefill(
                 q, q_s, indexer_k_cache, meta, score_meta)
-        scores = self._compute_scores(q, q_s, indexer_k_cache, meta)
+
+        if isinstance(score_meta, _DeepGemmPagedScoreMeta):
+            # Paged MQA reads the packed cache directly and requires its compact
+            # ``entries * (D + 4)`` byte block stride.
+            scores = _get_deep_gemm().fp8_fp4_paged_mqa_logits(
+                q=(q[:, None], None),
+                kv_cache=indexer_k_cache,
+                weights=q_s,
+                context_lens=score_meta.context_lens,
+                block_table=score_meta.block_offsets,
+                schedule_meta=score_meta.schedule,
+                max_context_len=score_meta.max_kv_seqlen,
+                clean_logits=False,
+                logits_dtype=torch.float32,
+            )
+        else:
+            _warn_triton_index_scoring()
+            k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
+                indexer_k_cache, q.size(-1))
+            scores = fp8_index(q,
+                               q_s,
+                               k_cache,
+                               k_s_cache[..., 0],
+                               meta.cu_seqlen_q,
+                               meta.k_seqlens,
+                               meta.block_offset,
+                               max_q_seqlen=meta.max_q_seqlen,
+                               max_k_seqlen=meta.max_kv_seqlen,
+                               causal=True)
         return self._select_topk(scores, meta)
 
     def forward(self, q: Tensor, k: Tensor, weights: Tensor,

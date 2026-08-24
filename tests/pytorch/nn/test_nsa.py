@@ -145,9 +145,11 @@ def test_deepgemm_prefill_scores_match_triton():
     k_cache.copy_(torch.randn_like(k_cache.float()).to(k_cache.dtype))
     k_s_cache.copy_(torch.rand_like(k_s_cache) * 0.01)
     impl = cuda_nsa.TritonNSAIndexFP8(
-        topk=2, softmax_scale=1.0, block_size=128, fill=-1)
+        topk=2048, softmax_scale=1.0, block_size=128, fill=-1)
 
-    deepgemm_scores = impl._compute_scores(q, q_s, packed_cache, meta)
+    flat_k, flat_k_s = impl._flatten_prefill_k(packed_cache, q.size(-1), meta)
+    deepgemm_scores = impl._compute_prefill_scores(
+        q, q_s, flat_k, flat_k_s, meta.score_meta)
     expected_topk = impl._select_topk(deepgemm_scores, meta)
     impl.max_logits_bytes = 2 * meta.max_kv_seqlen * 4
     chunked_topk = impl._score_and_select(q, q_s, packed_cache, meta)
@@ -155,7 +157,18 @@ def test_deepgemm_prefill_scores_match_triton():
                                expected_topk.sort().values)
 
     meta.score_meta = None
-    triton_scores = impl._compute_scores(q, q_s, packed_cache, meta)
+    triton_scores = cuda_nsa.fp8_index(
+        q,
+        q_s,
+        k_cache,
+        k_s_cache[..., 0],
+        meta.cu_seqlen_q,
+        meta.k_seqlens,
+        meta.block_offset,
+        max_q_seqlen=meta.max_q_seqlen,
+        max_k_seqlen=meta.max_kv_seqlen,
+        causal=True,
+    )
     assert deepgemm_scores.shape == triton_scores.shape == (5, 8)
     for row, row_len in enumerate(meta.indexer_kv_seqlens.tolist()):
         torch.testing.assert_close(
