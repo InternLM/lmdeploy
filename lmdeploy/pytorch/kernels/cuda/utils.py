@@ -56,3 +56,8 @@ def supports_tma(device=None):
         return False
 
     return get_device_props(device)['compute_capability'][0] >= 9
+
+@functools.lru_cache
+def supports_pdl():
+    """Whether Triton programmatic dependent launch is available."""
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9

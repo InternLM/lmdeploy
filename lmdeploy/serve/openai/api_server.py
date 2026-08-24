@@ -13,11 +13,9 @@ if TYPE_CHECKING:
     from lmdeploy.serve.parsers import ResponseParser
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.encoders import jsonable_encoder
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Mount
 
@@ -31,13 +29,18 @@ from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.anthropic import create_anthropic_router
 from lmdeploy.serve.core import AsyncEngine, EngineHealthMonitor
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.core.generation_config import (
     resolve_default_gen_config,
 )
 from lmdeploy.serve.openai.endpoints import create_openai_router
 from lmdeploy.serve.openai.responses import create_responses_router
 from lmdeploy.serve.openai.utils import get_model_list
-from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware
+from lmdeploy.serve.utils.server_utils import (
+    AuthenticationMiddleware,
+    EngineSleepingMiddleware,
+    protocol_error_response,
+)
 from lmdeploy.utils import get_logger
 
 if TYPE_CHECKING:
@@ -145,13 +148,15 @@ def register_to_proxy(context: ServerContext):
 async def validation_exception_handler(request: Request,
                                        exc: RequestValidationError):
     """Handler for RequestValidationError."""
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content=jsonable_encoder({
-            'detail': exc.errors(),
-            'body': exc.body
-        }),
-    )
+    first_error = next(iter(exc.errors()), {})
+    if not isinstance(first_error, dict):
+        first_error = {'msg': str(first_error)}
+    location = '.'.join(str(part) for part in first_error.get('loc', ())
+                        if part != 'body')
+    detail = first_error.get('msg', 'Invalid request body.')
+    message = f'{location}: {detail}' if location else detail
+    error = RequestError(ErrorCode.INVALID_REQUEST, message)
+    return protocol_error_response(request.url.path, error)
 
 
 class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):

@@ -1,15 +1,110 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
+from collections.abc import Hashable
+from dataclasses import dataclass
 
+import torch
 from torch import Tensor
 
+from lmdeploy.pytorch.backends.cuda.step_metadata import (
+    CudaAttentionMetaBuilder,
+    CudaSequenceMetadata,
+    register_step_metadata_impl,
+)
+from lmdeploy.pytorch.consts import DSA_INDEX_SCALE_BYTES
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
-from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import prepare_dsa_indexer_k_cache, prepare_dsa_indexer_q
+from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import (
+    flatten_dsa_indexer_k_cache,
+    prepare_dsa_indexer_k_cache,
+    prepare_dsa_indexer_q,
+)
 from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
+from lmdeploy.utils import get_logger
 
-from ..nsa import BaseNSAIndexFP8, BaseNSAIndexFP8Builder, NSAIndexMeta
+from ..nsa import (
+    BaseNSAIndexFP8,
+    BaseNSAIndexFP8Builder,
+    NSAIndexMeta,
+    build_nsa_index_meta,
+    should_skip_nsa_indexer,
+)
+
+logger = get_logger('lmdeploy')
+
+
+def _get_dsa_indexer_k_cache_views(indexer_k_cache: Tensor,
+                                   head_dim: int) -> tuple[Tensor, Tensor]:
+    """Return FP8 K and FP32 scale views of a packed DSA indexer-K cache.
+
+    Raw block layout: ``[all FP8 K][all FP32 scales]``.
+    """
+    if indexer_k_cache.dtype != torch.uint8:
+        raise TypeError(f'Packed DSA indexer-K cache must be uint8, got {indexer_k_cache.dtype}.')
+    if indexer_k_cache.dim() != 4 or indexer_k_cache.size(2) != 1:
+        raise ValueError('Packed DSA indexer-K cache must have shape [num_blocks, entries, 1, head_dim + 4].')
+    if indexer_k_cache.size(-1) != head_dim + DSA_INDEX_SCALE_BYTES:
+        raise ValueError(f'Packed DSA indexer-K cache last dim must be {head_dim + DSA_INDEX_SCALE_BYTES}, '
+                         f'got {indexer_k_cache.size(-1)}.')
+
+    num_blocks, entries_per_block = indexer_k_cache.shape[:2]
+    flat = indexer_k_cache.view(num_blocks, -1)
+    value_bytes = entries_per_block * head_dim
+    scale_bytes = entries_per_block * DSA_INDEX_SCALE_BYTES
+    values = flat[:, :value_bytes].view(torch.float8_e4m3fn).view(
+        num_blocks, entries_per_block, head_dim)
+    scales = flat[:, value_bytes:value_bytes + scale_bytes].view(
+        torch.float32).view(num_blocks, entries_per_block, 1)
+    return values, scales
+
+
+@dataclass
+class _DeepGemmPagedScoreMeta:
+    """Layer-invariant metadata consumed by paged MQA scoring."""
+    context_lens: Tensor
+    block_offsets: Tensor
+    schedule: Tensor
+    max_kv_seqlen: int
+
+
+@dataclass
+class _DeepGemmContiguousScoreMeta:
+    """Contiguous-MQA metadata shared by prefill indexer layers."""
+    k_starts: Tensor
+    k_ends: Tensor
+    max_kv_seqlen: int
+
+
+_DeepGemmScoreMeta = _DeepGemmPagedScoreMeta | _DeepGemmContiguousScoreMeta
+
+
+@dataclass
+class _DSAIndexerGraphBuffer:
+    """Stable CUDA graph buffers owned by the DSA indexer metadata builder."""
+    indexer_kv_seqlens: Tensor
+    block_offsets: Tensor | None
+    schedule: Tensor | None
+
+
+@functools.lru_cache
+def _get_deep_gemm():
+    try:
+        import deep_gemm
+    except ImportError:
+        return None
+    required = ('fp8_fp4_mqa_logits', 'fp8_fp4_paged_mqa_logits',
+                'get_paged_mqa_logits_metadata', 'get_num_sms')
+    if not all(hasattr(deep_gemm, name) for name in required):
+        return None
+    return deep_gemm
+
+
+@functools.lru_cache
+def _warn_triton_index_scoring():
+    logger.warning(
+        'DSA index scoring is using the Triton FP8 index kernel instead of '
+        'DeepGEMM MQA logits.')
 
 
 @functools.lru_cache
@@ -26,6 +121,148 @@ def _get_sparse_index_topk(topk: int):
     return None
 
 
+def _build_deep_gemm_score_meta(
+        meta: NSAIndexMeta,
+        block_offsets_buffer: Tensor | None = None,
+        schedule_buffer: Tensor | None = None
+) -> _DeepGemmScoreMeta | None:
+    """Build layer-invariant DeepGEMM index-scoring metadata."""
+    deep_gemm = _get_deep_gemm()
+    if deep_gemm is None or not meta.block_offset.is_cuda:
+        return None
+
+    if not meta.is_decoding:
+        k_starts = torch.repeat_interleave(
+            meta.cu_seqlen_k[:-1],
+            meta.q_seqlens,
+            output_size=meta.indexer_kv_seqlens.numel(),
+        ).to(torch.int32)
+        return _DeepGemmContiguousScoreMeta(
+            k_starts=k_starts,
+            k_ends=k_starts + meta.indexer_kv_seqlens,
+            max_kv_seqlen=meta.max_kv_seqlen,
+        )
+
+    # DeepGEMM expects context lengths in [batch, next_n] layout.
+    context_lens = meta.indexer_kv_seqlens.unsqueeze(-1)
+    block_offsets = meta.block_offset
+    if context_lens.size(0) != block_offsets.size(0):
+        expanded = torch.repeat_interleave(
+            block_offsets,
+            meta.q_seqlens,
+            dim=0,
+            output_size=context_lens.size(0),
+        )
+        if block_offsets_buffer is not None:
+            block_offsets_buffer.copy_(expanded)
+            block_offsets = block_offsets_buffer
+        else:
+            block_offsets = expanded
+    if block_offsets.dtype != torch.int32:
+        block_offsets = block_offsets.to(torch.int32)
+
+    schedule = deep_gemm.get_paged_mqa_logits_metadata(
+        context_lens, meta.block_size, deep_gemm.get_num_sms())
+    if schedule_buffer is not None:
+        schedule_buffer.copy_(schedule)
+        schedule = schedule_buffer
+    return _DeepGemmPagedScoreMeta(
+        context_lens=context_lens,
+        block_offsets=block_offsets,
+        schedule=schedule,
+        max_kv_seqlen=meta.block_offset.size(1) * meta.block_size,
+    )
+
+
+@dataclass(frozen=True)
+class DSAIndexerMetaBuilder(
+        CudaAttentionMetaBuilder[_DSAIndexerGraphBuffer, NSAIndexMeta | None]):
+    """Own per-step and CUDA graph metadata for the selected DSA indexer."""
+
+    @property
+    def key(self) -> Hashable:
+        return type(self)
+
+    def build(self, step_context,
+              sequence_metadata: CudaSequenceMetadata) -> NSAIndexMeta | None:
+        if should_skip_nsa_indexer(step_context.model_metas):
+            return None
+        cache_config = step_context.cache_config
+        meta = build_nsa_index_meta(
+            num_tokens=step_context.input_ids.size(1),
+            is_decoding=step_context.is_decoding,
+            block_size=cache_config.block_size,
+            num_gpu_blocks=cache_config.num_gpu_blocks,
+            sequence_metadata=sequence_metadata,
+        )
+        meta.score_meta = _build_deep_gemm_score_meta(meta)
+        return meta
+
+    def apply_legacy_metadata(self, attn_metadata,
+                              metadata: NSAIndexMeta | None) -> None:
+        pass
+
+    def make_cudagraph_buffer(self, graph_meta, input_buffers,
+                              step_context) -> _DSAIndexerGraphBuffer:
+        deep_gemm = _get_deep_gemm()
+        block_offsets = None
+        schedule = None
+        if deep_gemm is not None:
+            if graph_meta.decode_query_len > 1:
+                block_offsets = torch.empty(
+                    graph_meta.max_tokens,
+                    graph_meta.num_blocks,
+                    dtype=torch.int32,
+                    device=graph_meta.device,
+                )
+            schedule = torch.empty(
+                deep_gemm.get_num_sms() + 1,
+                2,
+                dtype=torch.int32,
+                device=graph_meta.device,
+            )
+        return _DSAIndexerGraphBuffer(
+            indexer_kv_seqlens=torch.empty(
+                graph_meta.max_tokens,
+                dtype=torch.int32,
+                device=graph_meta.device,
+            ),
+            block_offsets=block_offsets,
+            schedule=schedule,
+        )
+
+    def fill_cudagraph_buffer(self, graph_meta, input_buffers, step_context,
+                              buffer: _DSAIndexerGraphBuffer) -> NSAIndexMeta | None:
+        if should_skip_nsa_indexer(step_context.model_metas):
+            return None
+        sequence_metadata = CudaSequenceMetadata(
+            block_offsets=input_buffers['block_offsets'],
+            q_start_loc=input_buffers['q_start_loc'],
+            q_seqlens=input_buffers['q_seqlens'],
+            kv_start_loc=None,
+            kv_seqlens=input_buffers['kv_seqlens'],
+            kv_flatten_size=None,
+            cu_seqlens_q=input_buffers['cu_seqlens_q'],
+            cu_seqlens_k=input_buffers['cu_seqlens_k'],
+            max_kv_seqlen=graph_meta.num_blocks * graph_meta.block_size,
+        )
+        meta = build_nsa_index_meta(
+            num_tokens=graph_meta.max_tokens,
+            is_decoding=True,
+            block_size=step_context.cache_config.block_size,
+            num_gpu_blocks=step_context.cache_config.num_gpu_blocks,
+            sequence_metadata=sequence_metadata,
+        )
+        buffer.indexer_kv_seqlens.copy_(meta.indexer_kv_seqlens)
+        meta.indexer_kv_seqlens = buffer.indexer_kv_seqlens
+        meta.score_meta = _build_deep_gemm_score_meta(
+            meta,
+            block_offsets_buffer=buffer.block_offsets,
+            schedule_buffer=buffer.schedule,
+        )
+        return meta
+
+
 class TritonNSAIndexFP8(BaseNSAIndexFP8):
 
     def __init__(self, topk: int, softmax_scale: float, block_size: int, fill: int) -> None:
@@ -37,40 +274,106 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         # TODO: configable scale fmt
         self.scale_fmt = 'ue8m0'
         self._sparse_index_topk = _get_sparse_index_topk(topk)
+        self._step_meta_group: int | None = None
+        register_step_metadata_impl(self)
 
-    def _forward_index(self, q: Tensor, q_s: Tensor, k_cache: Tensor, k_s_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
-        cu_seqlen_q = meta.cu_seqlen_q
-        q_seqlens = meta.q_seqlens
-        k_seqlens = meta.k_seqlens
-        block_offset = meta.block_offset
-        max_q_seqlen = meta.max_q_seqlen
-        max_kv_seqlen = meta.max_kv_seqlen
+    def get_step_metadata_provider(self):
+        """Describe metadata required by the selected DSA indexer."""
+        return DSAIndexerMetaBuilder()
 
-        scores = fp8_index(q,
-                           q_s,
-                           k_cache,
-                           k_s_cache[..., 0],
-                           cu_seqlen_q,
-                           k_seqlens,
-                           block_offset,
-                           max_q_seqlen=max_q_seqlen,
-                           max_k_seqlen=max_kv_seqlen,
-                           causal=True)
-        indexer_kv_seqlens = meta.indexer_kv_seqlens
+    def bind_step_meta_group(self, group_id: int) -> None:
+        """Bind this implementation to its deduplicated metadata group."""
+        self._step_meta_group = group_id
+
+    def get_step_metadata(self, attn_metadata) -> NSAIndexMeta:
+        """Return the DSA metadata prepared for this operator group."""
+        assert self._step_meta_group is not None
+        meta = attn_metadata.kernel_metadata[self._step_meta_group]
+        assert isinstance(meta, NSAIndexMeta)
+        return meta
+
+    def _compute_scores(self, q: Tensor, q_s: Tensor,
+                        indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
+        """Compute dense index scores with DeepGEMM or the Triton fallback."""
+        score_meta = meta.score_meta
+        if isinstance(score_meta, _DeepGemmContiguousScoreMeta):
+            k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
+                indexer_k_cache, q.size(-1))
+            flat_k, flat_k_s = flatten_dsa_indexer_k_cache(
+                k_cache,
+                k_s_cache[..., 0],
+                meta.cu_seqlen_k,
+                meta.k_seqlens,
+                meta.block_offset,
+                out_size=meta.kv_flatten_size,
+            )
+            return _get_deep_gemm().fp8_fp4_mqa_logits(
+                q=(q, None),
+                kv=(flat_k, flat_k_s),
+                weights=q_s,
+                cu_seq_len_k_start=score_meta.k_starts,
+                cu_seq_len_k_end=score_meta.k_ends,
+                clean_logits=False,
+                max_seqlen_k=score_meta.max_kv_seqlen,
+                logits_dtype=torch.float32,
+            )
+        if isinstance(score_meta, _DeepGemmPagedScoreMeta):
+            # Paged MQA reads the packed cache directly and requires its compact
+            # ``entries * (D + 4)`` byte block stride.
+            return _get_deep_gemm().fp8_fp4_paged_mqa_logits(
+                q=(q[:, None], None),
+                kv_cache=indexer_k_cache,
+                weights=q_s,
+                context_lens=score_meta.context_lens,
+                block_table=score_meta.block_offsets,
+                schedule_meta=score_meta.schedule,
+                max_context_len=score_meta.max_kv_seqlen,
+                clean_logits=False,
+                logits_dtype=torch.float32,
+            )
+
+        _warn_triton_index_scoring()
+        k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
+            indexer_k_cache, q.size(-1))
+        return fp8_index(q,
+                         q_s,
+                         k_cache,
+                         k_s_cache[..., 0],
+                         meta.cu_seqlen_q,
+                         meta.k_seqlens,
+                         meta.block_offset,
+                         max_q_seqlen=meta.max_q_seqlen,
+                         max_k_seqlen=meta.max_kv_seqlen,
+                         causal=True)
+
+    def _select_topk(self, scores: Tensor, meta: NSAIndexMeta) -> Tensor:
+        """Select sparse-attention positions from dense index scores."""
         if self._sparse_index_topk is not None:
             return self._sparse_index_topk(scores,
-                                           q_seqlens,
-                                           indexer_kv_seqlens,
+                                           meta.q_seqlens,
+                                           meta.indexer_kv_seqlens,
                                            self.topk,
                                            fill=self.fill,
                                            descending=True,
                                            sorted=False)
-        return bitonic_topk(scores, q_seqlens, indexer_kv_seqlens, self.topk, fill=self.fill, descending=True)
+        return bitonic_topk(scores,
+                            meta.q_seqlens,
+                            meta.indexer_kv_seqlens,
+                            self.topk,
+                            fill=self.fill,
+                            descending=True)
 
-    def forward(self, q: Tensor, k: Tensor, weights: Tensor, k_cache: Tensor, k_s_cache: Tensor,
-                meta: NSAIndexMeta) -> Tensor:
+    def _score_and_select(self, q: Tensor, q_s: Tensor,
+                          indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
+        scores = self._compute_scores(q, q_s, indexer_k_cache, meta)
+        return self._select_topk(scores, meta)
+
+    def forward(self, q: Tensor, k: Tensor, weights: Tensor,
+                indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
         assert q.dim() == 3
         assert k.dim() == 2
+        k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
+            indexer_k_cache, k.size(-1))
         q_shape = q.shape
         q = q.reshape(-1, q_shape[-1])
         q, q_s = quant_fp8(q, self.block_size, dtype=k_cache.dtype, trans_scale=True, scale_fmt=self.scale_fmt)
@@ -90,13 +393,15 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                   block_offsets=meta.block_offset,
                                   group_size=self.block_size,
                                   scale_fmt=self.scale_fmt)
-        return self._forward_index(q, q_s, k_cache, k_s_cache, meta)
+        return self._score_and_select(q, q_s, indexer_k_cache, meta)
 
     def forward_fused(self, q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor,
-                      sin: Tensor, k_cache: Tensor, k_s_cache: Tensor, norm_eps: float, head_gate_scale: float,
+                      sin: Tensor, indexer_k_cache: Tensor, norm_eps: float, head_gate_scale: float,
                       rope_interleaved: bool, meta: NSAIndexMeta) -> Tensor:
         """Prepare FP8 Q and write K cache without allocating rotated BF16
         Q/K."""
+        k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
+            indexer_k_cache, k.size(-1))
         q, q_s = prepare_dsa_indexer_q(q,
                                        weights,
                                        cos,
@@ -117,7 +422,8 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                     max_q_seqlen=meta.max_q_seqlen,
                                     eps=norm_eps,
                                     rope_interleaved=rope_interleaved)
-        return self._forward_index(q, q_s, k_cache, k_s_cache, meta)
+        return self._score_and_select(q, q_s, indexer_k_cache, meta)
+
 
 class TritonNSAIndexFP8Builder(BaseNSAIndexFP8Builder):
 

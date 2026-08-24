@@ -79,15 +79,17 @@ def _is_sm90() -> bool:
 def _should_fuse_silu(w1_linear: Linear, act_type: str, is_moe: bool = False) -> bool:
     """Determine if fused SiLU should be used for w1+w3 fusion.
 
-    Gold standard condition (from GEMM kernel constraints — trust it):
-
-    act_type == SiLU && (int4 || mxfp4 || fp8 || moe)
-
-    Packing depends on format: FP8 uses [g128|u128|...] and SM90 BF16 uses
-    [g64|u64|...]; int4/mxfp4 use element interleave. Controllable via
+    Packing depends on format: SM90 FP8 uses [g128|u128|...] and SM90 BF16
+    uses [g64|u64|...]; int4/mxfp4 use element interleave. Controllable via
     config.fuse_silu after commit.
     """
     if act_type not in ('', 'silu', 'SiLU'):
+        return False
+
+    # Pre-SM90 FP8 weight-only GEMM is implemented through a transposed kernel
+    # twin. Gated-SiLU pairs outputs along N and therefore cannot be applied by
+    # that twin. Keep w1/w3 fused in chunk layout and run Activation separately.
+    if w1_linear.weight_format.name == 'fp8' and not _is_sm90():
         return False
 
     # SM90 BF16 dense uses the native fused-SiLU kernel. Other dense
