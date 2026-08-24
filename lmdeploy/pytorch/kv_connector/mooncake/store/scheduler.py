@@ -66,10 +66,14 @@ class MooncakeStoreScheduler:
         self.client = LookupKeyClient(cache_config)
         self._request_hash_trackers: dict[int, _RequestHashTracker] = {}
         self._lookup_plans: dict[RequestId, _LookupPlan] = {}
+        # A request cannot progress while its single active load is pending,
+        # so the request ID also uniquely identifies the load operation.
         self._pending_loads: dict[RequestId, MooncakeStoreLoadRequest] = {}
         self._inflight_loads: dict[RequestId, MooncakeStoreLoadRequest] = {}
         self._invalid_block_ids: set[int] = set()
         self._failed_load_requests: set[RequestId] = set()
+        # Saves do not block request progress. Chunked prefill may therefore
+        # create several in-flight saves for one request, each with its own ID.
         self._next_save_id = 0
         self._scheduled_save_blocks: dict[RequestId, int] = {}
         self._inflight_save_ids: set[int] = set()

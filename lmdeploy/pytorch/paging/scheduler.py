@@ -405,7 +405,10 @@ class _PrefillAdmissionAttempt:
         stats_snapshot = self._gate_match_stats_snapshot
         if stats_snapshot is None:
             stats_snapshot = scheduler.block_trie.stats.snapshot()
-            if not self._has_private_local_tail():
+            # A completed external load has already published the accepted
+            # prefix interval. Matching again would restart accounting at the
+            # remote step and drop the restored tokens from request metrics.
+            if not self._remote_ready and not self._has_private_local_tail():
                 scheduler.block_trie.match(seq)
 
         if scheduler._external_lookup_enabled:
@@ -546,7 +549,8 @@ class _PrefillAdmissionAttempt:
     def _match_prefix_for_prefill_gate(self):
         """Tentatively match once so a request can be rechecked by a gate."""
         scheduler = self.scheduler
-        if not scheduler.block_trie.enabled or self._has_private_local_tail():
+        if (self._remote_ready or not scheduler.block_trie.enabled
+                or self._has_private_local_tail()):
             return None
         stats_snapshot = scheduler.block_trie.stats.snapshot()
         scheduler.block_trie.match(self.seq)

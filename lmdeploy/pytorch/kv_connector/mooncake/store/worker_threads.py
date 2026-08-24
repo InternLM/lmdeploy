@@ -312,7 +312,6 @@ class KVCacheStoreSendingThread(threading.Thread):
         # The query does not touch KV memory and can overlap the forward. The
         # direct GPU read must wait until all preceding compute-stream writes
         # are visible.
-        assert missing is not None
         if missing:
             self._put_missing(request, keys, block_ids, missing)
 

@@ -836,6 +836,54 @@ def test_async_lookup_precisely_restores_a_multiturn_local_prefix():
     assert fourth.running == [seq]
 
 
+def test_external_cached_tokens_survive_remote_ready_admission():
+    connector = _AsyncLookupConnector([(8, True)])
+    scheduler = _make_async_lookup_scheduler(connector)
+    seq = scheduler.add_session(73).add_sequence(torch.arange(13))
+
+    started = scheduler.schedule(is_prefill=True)
+    assert started.running == []
+
+    scheduler.update_connector_output(
+        KVConnectorOutput(finished_receiving={seq.seq_id}))
+    assert seq.num_history_ids == 8
+    assert seq.cached_tokens == 8
+    assert seq.prefix_cache.match_start_step == 0
+
+    admitted = scheduler.schedule(is_prefill=True)
+
+    assert admitted.running == [seq]
+    assert seq.cached_tokens == 8
+    assert seq.prefix_cache.match_start_step == 0
+
+
+def test_external_cached_tokens_survive_prefill_budget_rejection():
+    connector = _AsyncLookupConnector([(8, True), (8, True)])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        max_batches=2,
+        max_prefill_token_num=8,
+    )
+    admitted_seq = scheduler.add_session(74).add_sequence(torch.arange(13))
+    waiting_seq = scheduler.add_session(75).add_sequence(torch.arange(20, 33))
+
+    started = scheduler.schedule(is_prefill=True)
+    assert started.running == []
+    scheduler.update_connector_output(
+        KVConnectorOutput(
+            finished_receiving={admitted_seq.seq_id, waiting_seq.seq_id}))
+
+    admitted = scheduler.schedule(is_prefill=True)
+
+    assert admitted.running == [admitted_seq]
+    assert waiting_seq.status == MessageStatus.WAITING
+    assert waiting_seq.num_history_ids == 8
+    assert waiting_seq.num_blocks == 2
+    assert waiting_seq.cached_tokens == 8
+    assert waiting_seq.prefix_cache.match_start_step == 0
+    assert scheduler.kv_load_coordinator.is_remote_ready(waiting_seq)
+
+
 def test_async_load_keeps_a_private_partial_block_at_the_suffix_start():
     connector = _AsyncLookupConnector([(7, True)])
     scheduler = _make_async_lookup_scheduler(connector)

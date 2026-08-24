@@ -9,7 +9,6 @@ import pytest
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.kv_connector import (
-    KVConnectorMetadata,
     KVConnectorOutput,
     KVConnectorResult,
     KVConnectorRole,
@@ -230,27 +229,6 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
 
     assert connector.shutdown() is None
     worker.shutdown.assert_called_once_with()
-
-
-def test_get_finished_requires_bound_metadata(cache_config):
-    connector = MooncakeStoreConnector(KVConnectorRole.WORKER, cache_config)
-
-    with pytest.raises(AssertionError):
-        connector.get_finished()
-
-
-def test_get_finished_rejects_other_connector_metadata(cache_config):
-
-    class OtherConnectorMetadata(KVConnectorMetadata):
-        pass
-
-    connector = MooncakeStoreConnector(KVConnectorRole.WORKER, cache_config)
-    connector.bind_connector_metadata(OtherConnectorMetadata())
-
-    with pytest.raises(TypeError):
-        connector.get_finished()
-    with pytest.raises(TypeError):
-        connector.start_save_kv()
 
 
 def test_empty_scheduler_has_no_metadata(cache_config):

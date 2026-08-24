@@ -57,10 +57,11 @@ class KVConnectorOutput:
     """Worker connector progress returned by one executor step.
 
     Completion sets are rank-local until the executor aggregates every TP
-    worker. Save completions use operation IDs because one request can own
-    several concurrent chunk saves. ``invalid_block_ids`` may arrive before
-    the request-level receive completion and is therefore consumed by the
-    scheduler-side connector.
+    worker. Load completions use request IDs because a request is paused while
+    its single active load completes. Save completions need operation IDs
+    because chunked prefill can enqueue several overlapping saves for the same
+    request. ``invalid_block_ids`` may arrive before the request-level receive
+    completion and is therefore consumed by the scheduler-side connector.
     """
 
     completed_save_ids: set[KVOperationId] | None = None

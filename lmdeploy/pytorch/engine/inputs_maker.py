@@ -357,7 +357,7 @@ class _ForwardInputsTask:
         if (connector_enabled and result.inputs is not None
                 and not result.inputs.is_decoding and not result.inputs.is_dummy):
             token_lens = result.inputs.history_lengths + result.inputs.seq_length
-            connector_token_lens = tuple(int(token_len) for token_len in token_lens.tolist())
+            connector_token_lens = tuple(token_lens.tolist())
         result.kv_connector_metadata = self.scheduler.build_connector_meta(
             result.running,
             result.swap_in_map,

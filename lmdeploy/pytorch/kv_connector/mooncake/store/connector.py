@@ -129,20 +129,13 @@ class MooncakeStoreConnector(KVConnectorBase):
 
     def start_load_kv(self) -> None:
         connector_metadata = self._get_connector_metadata()
-        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
-            raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
         return self._require_worker().start_load_kv(connector_metadata)
 
     def start_save_kv(self) -> None:
         connector_metadata = self._get_connector_metadata()
-        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
-            raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
         return self._require_worker().start_save_kv(connector_metadata)
 
     def get_finished(self) -> KVConnectorOutput:
-        connector_metadata = self._get_connector_metadata()
-        if not isinstance(connector_metadata, MooncakeStoreConnectorMetadata):
-            raise TypeError('bound connector metadata must be a MooncakeStoreConnectorMetadata')
         return self._require_worker().get_finished()
 
     def shutdown(self) -> None:
