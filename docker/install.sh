@@ -114,6 +114,9 @@ elif [[ "${CUDA_VERSION_SHORT}" == cu13* ]]; then
     pip install "nvidia-nccl-cu13>=2.30.4"
 fi
 
+# install tile-kernels for deepseekv4
+pip install tile-kernels
+
 python - <<'PY'
 import os
 from importlib.metadata import distributions, version
