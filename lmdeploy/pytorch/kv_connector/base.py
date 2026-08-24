@@ -59,8 +59,10 @@ class KVConnectorOutput:
     Completion sets are rank-local until the executor aggregates every TP
     worker. Load completions use request IDs because a request is paused while
     its single active load completes. Save completions need operation IDs
-    because chunked prefill can enqueue several overlapping saves for the same
-    request. ``invalid_block_ids`` may arrive before the request-level receive
+    because chunked prefill can enqueue several concurrent saves for the same
+    request. Save completion is terminal whether the Store write succeeded or
+    failed, allowing the scheduler to release its block lease in either case.
+    ``invalid_block_ids`` may arrive before the request-level receive
     completion and is therefore consumed by the scheduler-side connector.
     """
 
@@ -151,13 +153,7 @@ class KVConnectorBase(ABC):
     def __init__(self, role: KVConnectorRole) -> None:
         if not isinstance(role, KVConnectorRole):
             raise TypeError(f'role must be a KVConnectorRole, got {type(role).__name__}')
-        self._role = role
         self._connector_metadata: KVConnectorMetadata | None = None
-
-    @property
-    def role(self) -> KVConnectorRole:
-        """Return the role of this connector instance."""
-        return self._role
 
     # Worker-side metadata lifecycle.
 
@@ -173,10 +169,6 @@ class KVConnectorBase(ABC):
         """Return currently bound metadata for use inside a connector."""
         assert self._connector_metadata is not None, 'connector metadata is not bound'
         return self._connector_metadata
-
-    def has_connector_metadata(self) -> bool:
-        """Return whether scheduler metadata is currently bound."""
-        return self._connector_metadata is not None
 
     # Worker-side methods.
 
@@ -217,8 +209,9 @@ class KVConnectorBase(ABC):
         The first value is ``None`` while an asynchronous lookup is pending.
         The second value indicates that loading will continue asynchronously
         across scheduler steps; it must be false when the hit length is zero.
-        This method may be called repeatedly and must be side-effect free until
-        a lookup result is available.
+        This method may be called repeatedly. An implementation may submit one
+        request-local lookup, but repeated polls must not duplicate that work
+        or mutate paging state before a result is available.
         """
         raise NotImplementedError
 

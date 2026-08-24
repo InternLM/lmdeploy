@@ -26,9 +26,17 @@ def _cache_config(role='kv_both'):
     )
 
 
-def _request(token_ids, *, adapter_name=None, multimodal=False, embeddings=False):
+def _request(
+    token_ids,
+    *,
+    seq_id=17,
+    adapter_name=None,
+    multimodal=False,
+    embeddings=False,
+):
     return SimpleNamespace(
-        seq_id=17,
+        seq_id=seq_id,
+        num_history_ids=0,
         adapter_name=adapter_name,
         all_ids=np.asarray(token_ids, dtype=np.int64),
         history_multimodals=SimpleNamespace(empty=lambda: not multimodal),
@@ -121,11 +129,15 @@ def test_scheduler_filters_non_consumers_and_non_text_requests(
     embeddings,
 ):
     scheduler = MooncakeStoreScheduler(_cache_config(role))
-    scheduler.client.lookup = Mock(side_effect=AssertionError('lookup must not run'))
+    if scheduler.client is not None:
+        scheduler.client.lookup = Mock(side_effect=AssertionError('lookup must not run'))
     request = _request(range(9), multimodal=multimodal, embeddings=embeddings)
 
     assert scheduler.get_num_new_matched_tokens(request, 0) == (0, False)
-    scheduler.client.lookup.assert_not_called()
+    if role == 'kv_producer':
+        assert scheduler.client is None
+    else:
+        scheduler.client.lookup.assert_not_called()
     scheduler.shutdown()
 
 
@@ -149,7 +161,7 @@ def test_scheduler_cancel_retains_hashes_until_request_finishes():
     scheduler.shutdown()
 
 
-def test_scheduler_dispatches_load_and_bypasses_lookup_after_failure():
+def test_scheduler_load_failure_falls_back_until_next_request():
     scheduler = MooncakeStoreScheduler(_cache_config())
     request = _request(range(13))
     scheduler.client.lookup = Mock(return_value=12)
@@ -174,10 +186,26 @@ def test_scheduler_dispatches_load_and_bypasses_lookup_after_failure():
         load_results=(KVLoadResult(request.seq_id, False), ),
     )
 
+    retry_save = scheduler.build_connector_meta(
+        _scheduler_output(
+            running=(request, ),
+            token_lens=(12, ),
+            block_ids=((30, 31, 32), ),
+            logical_block_ids=((40, 41, 42), ),
+        )).save_requests[0]
+    assert retry_save.start_block == 1
+    assert retry_save.block_ids == (31, 32)
+
     assert scheduler.get_num_new_matched_tokens(request, 4) == (0, False)
     assert scheduler.client.lookup.call_count == 1
+    request.num_history_ids = 5
     assert scheduler.get_num_new_matched_tokens(request, 8) == (0, False)
     assert scheduler.client.lookup.call_count == 1
+
+    next_request = _request(range(13), seq_id=18)
+    scheduler.on_new_request(next_request)
+    assert scheduler.get_num_new_matched_tokens(next_request, 4) == (8, True)
+    assert scheduler.client.lookup.call_count == 2
     scheduler.shutdown()
 
 
@@ -235,6 +263,35 @@ def test_scheduler_builds_incremental_save_operations_and_poll_metadata():
     scheduler.shutdown()
 
 
+def test_new_request_restarts_save_planning_from_first_block():
+    scheduler = MooncakeStoreScheduler(_cache_config('kv_producer'))
+    request = _request(range(17))
+    output = _scheduler_output(
+        running=(request, ),
+        token_lens=(10, ),
+        block_ids=((31, 32, 33, 34), ),
+        logical_block_ids=((41, 42, 43, 44), ),
+    )
+    first = scheduler.build_connector_meta(output).save_requests[0]
+
+    output.connector_token_lens = (14, )
+    second = scheduler.build_connector_meta(output).save_requests[0]
+    assert (first.start_block, second.start_block) == (0, 2)
+
+    scheduler.update_connector_output(
+        KVConnectorOutput(completed_save_ids={first.save_id, second.save_id}))
+    assert scheduler.build_connector_meta(output) is None
+
+    scheduler.request_finished(request)
+    next_request = _request(range(17), seq_id=18)
+    scheduler.on_new_request(next_request)
+    output.running = [next_request]
+    save = scheduler.build_connector_meta(output).save_requests[0]
+    assert save.start_block == 0
+    assert save.block_ids == (31, 32, 33)
+    scheduler.shutdown()
+
+
 def test_finished_request_keeps_immutable_save_operation_until_completion():
     scheduler = MooncakeStoreScheduler(_cache_config('kv_producer'))
     request = _request(range(9))
@@ -259,19 +316,26 @@ def test_finished_request_keeps_immutable_save_operation_until_completion():
 def test_worker_drain_discards_save_ids_whose_outputs_were_dropped():
     scheduler = MooncakeStoreScheduler(_cache_config('kv_producer'))
     request = _request(range(9))
-    metadata = scheduler.build_connector_meta(
-        _scheduler_output(
-            running=(request, ),
-            token_lens=(8, ),
-            block_ids=((1, 2), ),
-            logical_block_ids=((11, 12), ),
-        ))
+    output = _scheduler_output(
+        running=(request, ),
+        token_lens=(8, ),
+        block_ids=((1, 2), ),
+        logical_block_ids=((11, 12), ),
+    )
+    metadata = scheduler.build_connector_meta(output)
     assert metadata.save_requests
     assert scheduler.build_connector_meta(_scheduler_output()) is not None
 
     scheduler.finish_transfers_after_worker_drain()
 
     assert scheduler.build_connector_meta(_scheduler_output()) is None
+    assert scheduler.build_connector_meta(output) is None
+
+    next_request = _request(range(9), seq_id=18)
+    scheduler.on_new_request(next_request)
+    output.running = [next_request]
+    save = scheduler.build_connector_meta(output).save_requests[0]
+    assert save.start_block == 0
     scheduler.shutdown()
 
 
@@ -303,6 +367,31 @@ def test_successful_remote_load_is_not_saved_back_and_save_filters_non_text():
             block_ids=((1, 2, 3, 4), ),
             logical_block_ids=((11, 12, 13, 14), ),
         )) is None
+    scheduler.shutdown()
+
+
+def test_shorter_remote_prefix_rewinds_future_save_boundary():
+    scheduler = MooncakeStoreScheduler(_cache_config())
+    request = _request(range(17))
+    scheduler.client.lookup = Mock(side_effect=(12, 4))
+
+    assert scheduler.get_num_new_matched_tokens(request, 0) == (12, True)
+    scheduler.update_state_after_alloc(request, (21, 22, 23), 12)
+    scheduler.build_connector_meta(_scheduler_output())
+    scheduler.update_connector_output(
+        KVConnectorOutput(finished_receiving={request.seq_id}))
+
+    assert scheduler.get_num_new_matched_tokens(request, 4) == (0, False)
+    metadata = scheduler.build_connector_meta(
+        _scheduler_output(
+            running=(request, ),
+            token_lens=(13, ),
+            block_ids=((21, 22, 23, 24), ),
+            logical_block_ids=((31, 32, 33, 34), ),
+        ))
+    save = metadata.save_requests[0]
+    assert save.start_block == 1
+    assert save.block_ids == (22, 23)
     scheduler.shutdown()
 
 

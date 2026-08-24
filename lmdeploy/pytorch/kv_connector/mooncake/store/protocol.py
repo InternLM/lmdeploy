@@ -6,9 +6,6 @@ a payload field.
 """
 
 LOOKUP_MSG = b'lookup'
-RESET_MSG = b'reset'
-
-RESP_OK = b'\x01'
 RESP_ERR = b'\x00'
 
-__all__ = ['LOOKUP_MSG', 'RESET_MSG', 'RESP_ERR', 'RESP_OK']
+__all__ = ['LOOKUP_MSG', 'RESP_ERR']

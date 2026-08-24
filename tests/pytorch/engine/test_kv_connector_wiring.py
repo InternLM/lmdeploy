@@ -21,11 +21,11 @@ def _make_cache_config(kv_transfer_config=None):
     )
 
 
-def _make_mooncake_cache_config():
+def _make_mooncake_cache_config(role='kv_both'):
     return _make_cache_config(
         KVTransferConfig(
             kv_connector='MooncakeStoreConnector',
-            kv_role='kv_both',
+            kv_role=role,
         ))
 
 
@@ -69,6 +69,62 @@ def test_prepare_mooncake_namespace_and_async_constraints():
             _make_mooncake_cache_config(),
             dist_config=DistConfig(tp=2, dp=2),
         )
+
+    with pytest.raises(ValueError, match='does not support.*mp'):
+        prepare_kv_connector_config(
+            _make_mooncake_cache_config(),
+            dist_config=DistConfig(tp=2),
+            distributed_executor_backend='mp',
+        )
+
+
+def test_prepare_producer_does_not_create_lookup_endpoint():
+    cache_config = _make_mooncake_cache_config('kv_producer')
+    cache_config.kv_transfer_config.kv_connector_extra_config['lookup_async'] = False
+
+    prepare_kv_connector_config(cache_config)
+
+    extra_config = cache_config.kv_transfer_config.kv_connector_extra_config
+    assert extra_config == {'lookup_async': False}
+
+
+def test_engine_rejects_effective_mp_backend_before_executor_build(
+    tmp_path,
+    monkeypatch,
+):
+    from lmdeploy.pytorch.engine import engine as engine_module
+
+    checker = Mock()
+    monkeypatch.setattr(
+        engine_module,
+        'EngineChecker',
+        lambda **kwargs: checker,
+    )
+    resolve_backend = Mock(return_value='mp')
+    monkeypatch.setattr(
+        engine_module,
+        'get_distributed_executor_backend',
+        resolve_backend,
+    )
+    engine_config = PytorchEngineConfig(
+        max_batch_size=1,
+        tp=2,
+        kv_transfer_config=KVTransferConfig(
+            kv_connector='MooncakeStoreConnector',
+            kv_role='kv_both',
+        ),
+    )
+
+    with pytest.raises(ValueError, match='does not support.*mp'):
+        Engine(str(tmp_path), engine_config)
+
+    checker.handle.assert_called_once_with()
+    resolve_backend.assert_called_once_with(
+        2,
+        1,
+        'cuda',
+        engine_module.logger,
+    )
 
 
 def test_prepare_mooncake_rejects_invalid_explicit_model_name():

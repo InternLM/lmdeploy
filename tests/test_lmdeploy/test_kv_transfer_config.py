@@ -48,8 +48,8 @@ def test_kv_transfer_config_normalizes_dict_and_reaches_cache_config():
     assert transfer_config.is_kv_transfer_instance
     assert transfer_config.is_kv_producer
     assert transfer_config.is_kv_consumer
-    assert transfer_config.get_from_extra_config('lookup_async') is True
-    assert transfer_config.get_from_extra_config('lookup_rpc_port') == 12345
+    assert transfer_config.kv_connector_extra_config['lookup_async'] is True
+    assert transfer_config.kv_connector_extra_config['lookup_rpc_port'] == 12345
 
     cache_config = ConfigBuilder.build_cache_config(engine_config)
     restored_cache_config = pickle.loads(pickle.dumps(cache_config))
@@ -69,6 +69,7 @@ def test_kv_transfer_extra_config_default_is_not_shared():
     ('config', 'error', 'match'),
     [
         ({'kv_connector': 'MooncakeStoreConnector'}, ValueError, 'kv_role must be specified'),
+        ({'kv_role': 'kv_consumer'}, ValueError, 'kv_connector must be specified'),
         ({'kv_connector': ' ', 'kv_role': 'kv_both'}, ValueError, 'non-empty string'),
         ({'kv_connector': 'MooncakeStoreConnector', 'kv_role': 'invalid'}, ValueError, 'unsupported kv_role'),
         ({

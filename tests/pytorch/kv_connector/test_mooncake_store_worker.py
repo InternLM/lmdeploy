@@ -229,7 +229,13 @@ def write_store_config(tmp_path, name='mooncake.json', **overrides):
     return path
 
 
-def make_cache_config(config_path=None, *, block_size=64, num_gpu_blocks=1):
+def make_cache_config(
+    config_path=None,
+    *,
+    block_size=64,
+    num_gpu_blocks=1,
+    role='kv_both',
+):
     extra_config = {}
     if config_path is not None:
         extra_config['mooncake_config_path'] = str(config_path)
@@ -240,17 +246,17 @@ def make_cache_config(config_path=None, *, block_size=64, num_gpu_blocks=1):
         num_gpu_blocks=num_gpu_blocks,
         kv_transfer_config=KVTransferConfig(
             kv_connector='MooncakeStoreConnector',
-            kv_role='kv_both',
+            kv_role=role,
             kv_connector_extra_config=extra_config,
         ),
     )
 
 
-def make_worker(tmp_path, store=None, **worker_kwargs):
+def make_worker(tmp_path, store=None, *, role='kv_both', **worker_kwargs):
     path = write_store_config(tmp_path)
     store = store or FakeStore()
     worker = MooncakeStoreWorker(
-        make_cache_config(path),
+        make_cache_config(path, role=role),
         store_factory=lambda: store,
         **worker_kwargs,
     )
@@ -478,6 +484,17 @@ def test_lookup_server_starts_after_registration_only_on_global_rank_zero(tmp_pa
     rank_one_worker.shutdown()
 
 
+def test_producer_worker_does_not_start_lookup_server(tmp_path):
+    worker, _ = make_worker(tmp_path, role='kv_producer')
+
+    worker.register_kv_caches({'row': FakeTensor(0x1000)})
+
+    assert worker.lookup_server is None
+    assert worker.kv_recv_thread is None
+    assert worker.kv_send_thread is not None
+    worker.shutdown()
+
+
 @pytest.mark.parametrize(
     ('replica_num', 'unique_ranks'),
     [(1, 8), (4, 2), (8, 1)],
@@ -537,7 +554,7 @@ def test_lookup_external_errors_fail_closed(tmp_path, store):
     worker.shutdown()
 
 
-def test_store_key_matches_vllm_namespace_without_unsupported_geometry():
+def test_store_key_uses_lmdeploy_namespace_without_unsupported_geometry():
     metadata = MooncakeStoreKeyMetadata(
         model_name='test-model',
         cache_prefix='tenant-a',
@@ -723,8 +740,8 @@ def test_async_save_waits_for_forward_and_writes_only_owned_missing_blocks(
     worker.shutdown()
 
 
-@pytest.mark.parametrize('failure_stage', ['lookup', 'put'])
-def test_async_save_failure_is_terminal_and_does_not_leak_completion(
+@pytest.mark.parametrize('failure_stage', ['lookup', 'put', 'partial_put'])
+def test_async_save_failure_is_a_terminal_completion(
     tmp_path,
     monkeypatch,
     failure_stage,
@@ -735,6 +752,7 @@ def test_async_save_failure_is_terminal_and_does_not_leak_completion(
         lookup_results=[0],
         lookup_error=(RuntimeError('lookup failed')
                       if failure_stage == 'lookup' else None),
+        put_results=([-1] if failure_stage == 'partial_put' else None),
         put_error=(RuntimeError('put failed')
                    if failure_stage == 'put' else None),
     )

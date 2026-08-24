@@ -47,6 +47,8 @@ class KVTransferConfig:
     def __post_init__(self) -> None:
         """Validate connector configuration."""
         supported_roles = ('kv_producer', 'kv_consumer', 'kv_both')
+        if self.kv_connector is None and self.kv_role is not None:
+            raise ValueError('kv_connector must be specified when kv_role is set')
         if self.kv_connector is not None:
             if not isinstance(self.kv_connector, str) or not self.kv_connector.strip():
                 raise ValueError('kv_connector must be a non-empty string')
@@ -71,10 +73,6 @@ class KVTransferConfig:
     def is_kv_consumer(self) -> bool:
         """Return whether this engine loads KV cache through the connector."""
         return self.kv_connector is not None and self.kv_role in ('kv_consumer', 'kv_both')
-
-    def get_from_extra_config(self, key: str, default: Any = None) -> Any:
-        """Return a connector-specific setting."""
-        return self.kv_connector_extra_config.get(key, default)
 
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]

@@ -30,7 +30,7 @@ from ..strategies import build_strategy_factory
 from .base import EngineBase
 from .config_builder import ConfigBuilder
 from .engine_checker import EngineChecker
-from .executor import build_executor
+from .executor import build_executor, get_distributed_executor_backend
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
@@ -139,10 +139,21 @@ class Engine(EngineBase):
         cache_config = ConfigBuilder.build_cache_config(engine_config)
         backend_config = ConfigBuilder.build_backend_config(engine_config)
         dist_config = ConfigBuilder.build_dist_config(engine_config)
+        distributed_executor_backend = engine_config.distributed_executor_backend
+        transfer_config = cache_config.kv_transfer_config
+        if (distributed_executor_backend is None and transfer_config is not None
+                and transfer_config.is_kv_transfer_instance):
+            distributed_executor_backend = get_distributed_executor_backend(
+                dist_config.world_size,
+                dist_config.dp,
+                engine_config.device_type,
+                logger,
+            )
         prepare_kv_connector_config(
             cache_config,
             model_path=model_path,
             dist_config=dist_config,
+            distributed_executor_backend=distributed_executor_backend,
         )
         memdecode_config = ConfigBuilder.build_memdecode_config(model_path,
                                                                 engine_config,
@@ -172,7 +183,7 @@ class Engine(EngineBase):
             misc_config=misc_config,
             adapters=adapters,
             device_type=engine_config.device_type,
-            distributed_executor_backend=engine_config.distributed_executor_backend,
+            distributed_executor_backend=distributed_executor_backend,
             dtype=engine_config.dtype,
             specdecode_config=self.specdecode_config,
             trust_remote_code=trust_remote_code,

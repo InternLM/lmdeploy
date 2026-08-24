@@ -216,7 +216,7 @@ class KVCacheStoreSendingThread(threading.Thread):
         keys: list[str],
         block_ids: list[int],
         missing: list[int],
-    ) -> None:
+    ) -> bool:
         missing_keys = [keys[index] for index in missing]
         addresses = []
         sizes = []
@@ -297,8 +297,9 @@ class KVCacheStoreSendingThread(threading.Thread):
             total_bytes,
             (time.perf_counter() - start) * 1000,
         )
+        return not failed
 
-    def _save(self, task: _SaveTask) -> None:
+    def _save(self, task: _SaveTask) -> bool:
         request = task.request
         keys, block_ids = self._owned_entries(request)
         missing = None
@@ -313,7 +314,8 @@ class KVCacheStoreSendingThread(threading.Thread):
         # direct GPU read must wait until all preceding compute-stream writes
         # are visible.
         if missing:
-            self._put_missing(request, keys, block_ids, missing)
+            return self._put_missing(request, keys, block_ids, missing)
+        return True
 
     def run(self) -> None:
         while True:
@@ -333,8 +335,9 @@ class KVCacheStoreSendingThread(threading.Thread):
                     request.request_id,
                     (time.perf_counter() - item.enqueue_time) * 1000,
                 )
+                success = False
                 try:
-                    self._save(item)
+                    success = self._save(item)
                 except Exception:
                     logger.exception(
                         'Mooncake KV save reached terminal failure: '
@@ -347,12 +350,13 @@ class KVCacheStoreSendingThread(threading.Thread):
                 self.completion_callback(request.save_id)
                 logger.info(
                     'Mooncake KV save completed: global_rank=%d tp_rank=%d tp_size=%d '
-                    'save_id=%d request_id=%s',
+                    'save_id=%d request_id=%s status=%s',
                     self.global_rank,
                     self.tp_rank,
                     self.tp_size,
                     request.save_id,
                     request.request_id,
+                    'ok' if success else 'error',
                 )
             finally:
                 self.request_queue.task_done()

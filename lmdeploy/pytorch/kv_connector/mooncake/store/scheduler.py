@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Scheduler-side asynchronous lookup for the Mooncake Store connector."""
+"""Scheduler-side lookup, load, and save lifecycle for Mooncake Store."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from .data import (
     MooncakeStoreSaveRequest,
     build_prefix_block_hashes,
 )
-from .worker import LookupKeyClient
+from .lookup import LookupKeyClient
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.config import CacheConfig
@@ -56,14 +56,17 @@ class MooncakeStoreScheduler:
         if cache_config.window_size > 1:
             raise ValueError('Mooncake Store does not support sliding-window KV caches')
 
-        lookup_async = kv_transfer_config.kv_connector_extra_config.get('lookup_async', True)
-        if lookup_async is not True:
-            raise ValueError('Mooncake Store requires lookup_async=true')
+        if kv_transfer_config.is_kv_consumer:
+            lookup_async = kv_transfer_config.kv_connector_extra_config.get('lookup_async', True)
+            if lookup_async is not True:
+                raise ValueError('Mooncake Store requires lookup_async=true')
 
         self._cache_config = cache_config
         self._kv_transfer_config = kv_transfer_config
-        self.lookup_async = True
-        self.client = LookupKeyClient(cache_config)
+        self.client = (
+            LookupKeyClient(cache_config)
+            if kv_transfer_config.is_kv_consumer else None
+        )
         self._request_hash_trackers: dict[int, _RequestHashTracker] = {}
         self._lookup_plans: dict[RequestId, _LookupPlan] = {}
         # A request cannot progress while its single active load is pending,
@@ -71,11 +74,15 @@ class MooncakeStoreScheduler:
         self._pending_loads: dict[RequestId, MooncakeStoreLoadRequest] = {}
         self._inflight_loads: dict[RequestId, MooncakeStoreLoadRequest] = {}
         self._invalid_block_ids: set[int] = set()
+        # A failed load falls back to local compute for the rest of this
+        # sequence. A later conversation turn has a new request ID.
         self._failed_load_requests: set[RequestId] = set()
         # Saves do not block request progress. Chunked prefill may therefore
         # create several in-flight saves for one request, each with its own ID.
         self._next_save_id = 0
-        self._scheduled_save_blocks: dict[RequestId, int] = {}
+        # The next block eligible for save in each request. Scheduling advances
+        # it optimistically; save failures are retried only by a later request.
+        self._next_save_block: dict[RequestId, int] = {}
         self._inflight_save_ids: set[int] = set()
 
     def get_num_new_matched_tokens(
@@ -116,13 +123,15 @@ class MooncakeStoreScheduler:
             req_id,
             token_len,
             block_hashes,
-            non_block=self.lookup_async,
+            non_block=True,
         )
         if remote_token_len is None:
             return None, False
 
         num_external_tokens = max(0, int(remote_token_len) - int(num_computed_tokens))
         if num_external_tokens == 0:
+            if self._kv_transfer_config.is_kv_producer:
+                self._next_save_block[req_id] = int(remote_token_len) // block_size
             return 0, False
         self._lookup_plans[req_id] = _LookupPlan(
             remote_token_len=int(remote_token_len),
@@ -217,7 +226,7 @@ class MooncakeStoreScheduler:
 
             request_id = int(request.seq_id)
             full_blocks = int(token_len) // block_size
-            first_block = self._scheduled_save_blocks.get(request_id, 0)
+            first_block = self._next_save_block.get(request_id, 0)
             if full_blocks <= first_block:
                 continue
             if full_blocks > len(request_blocks) or full_blocks > len(request_logical_blocks):
@@ -242,7 +251,7 @@ class MooncakeStoreScheduler:
                     logical_block_ids=tuple(request_logical_blocks[first_block:full_blocks]),
                     block_hashes=block_hashes[first_block:full_blocks],
                 ))
-            self._scheduled_save_blocks[request_id] = full_blocks
+            self._next_save_block[request_id] = full_blocks
             self._inflight_save_ids.add(save_id)
         return tuple(save_requests)
 
@@ -265,21 +274,23 @@ class MooncakeStoreScheduler:
         )
 
     def on_new_request(self, request: SchedulerSequence) -> None:
-        """Drop stale request-local hashes before first scheduling."""
+        """Reset request-local lookup and save planning state."""
         req_id = int(request.seq_id)
         self._request_hash_trackers.pop(req_id, None)
         self._lookup_plans.pop(req_id, None)
         self._failed_load_requests.discard(req_id)
-        self._scheduled_save_blocks.pop(req_id, None)
+        self._next_save_block.pop(req_id, None)
         return None
 
     def is_lookup_pending(self, request_id: int) -> bool:
         """Return whether the request's lookup Future is still running."""
-        return self.client.is_pending(int(request_id))
+        client = self.client
+        return client is not None and client.is_pending(int(request_id))
 
     def cancel_lookup(self, request_id: int) -> None:
         """Cancel only the current lookup, retaining incremental hashes."""
-        self.client.discard(int(request_id))
+        if self.client is not None:
+            self.client.discard(int(request_id))
 
     def update_connector_output(
         self,
@@ -305,12 +316,15 @@ class MooncakeStoreScheduler:
             self._invalid_block_ids.difference_update(request_blocks)
             if failed:
                 self._failed_load_requests.add(req_id)
-            else:
-                current = self._scheduled_save_blocks.get(req_id, 0)
-                self._scheduled_save_blocks[req_id] = max(
-                    current,
-                    request.remote_block_count,
+                local_block_count = (
+                    request.remote_block_count - len(request.block_ids)
                 )
+                if self._kv_transfer_config.is_kv_producer:
+                    self._next_save_block[req_id] = local_block_count
+            else:
+                self._failed_load_requests.discard(req_id)
+                if self._kv_transfer_config.is_kv_producer:
+                    self._next_save_block[req_id] = request.remote_block_count
             results.append(KVLoadResult(request_id=req_id, success=not failed))
         return KVConnectorResult(
             load_results=tuple(results),
@@ -323,7 +337,8 @@ class MooncakeStoreScheduler:
     ) -> None:
         """Discard request-local lookup and save-boundary state."""
         req_id = int(request.seq_id)
-        self.client.discard(req_id)
+        if self.client is not None:
+            self.client.discard(req_id)
         self._request_hash_trackers.pop(req_id, None)
         self._lookup_plans.pop(req_id, None)
         pending = self._pending_loads.pop(req_id, None)
@@ -332,7 +347,7 @@ class MooncakeStoreScheduler:
         if load_request is not None:
             self._invalid_block_ids.difference_update(load_request.block_ids)
         self._failed_load_requests.discard(req_id)
-        self._scheduled_save_blocks.pop(req_id, None)
+        self._next_save_block.pop(req_id, None)
         return None
 
     def finish_transfers_after_worker_drain(self) -> None:
@@ -344,12 +359,13 @@ class MooncakeStoreScheduler:
 
     def shutdown(self) -> None:
         """Cancel pending lookups and release the scheduler client."""
-        self.client.close()
+        if self.client is not None:
+            self.client.close()
         self._request_hash_trackers.clear()
         self._lookup_plans.clear()
         self._pending_loads.clear()
         self._inflight_loads.clear()
         self._invalid_block_ids.clear()
         self._failed_load_requests.clear()
-        self._scheduled_save_blocks.clear()
+        self._next_save_block.clear()
         self._inflight_save_ids.clear()

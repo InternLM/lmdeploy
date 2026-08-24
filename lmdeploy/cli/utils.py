@@ -833,7 +833,10 @@ class ArgumentHelper:
             type=json.loads,
             default=None,
             help='External KV-cache connector configuration for the PyTorch engine. '
-            'For Mooncake Store use '
+            'Mooncake Store requires MOONCAKE_CONFIG_PATH (or '
+            'kv_connector_extra_config.mooncake_config_path) and does not support '
+            'distributed_executor_backend="mp". '
+            'Example: '
             "'{\"kv_connector\":\"MooncakeStoreConnector\",\"kv_role\":\"kv_both\"}'.")
 
 

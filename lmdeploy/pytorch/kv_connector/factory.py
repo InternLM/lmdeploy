@@ -17,22 +17,26 @@ def prepare_kv_connector_config(
     *,
     model_path: str | None = None,
     dist_config: DistConfig | None = None,
+    distributed_executor_backend: str | None = None,
 ) -> None:
     """Prepare runtime values before the config is copied to workers."""
     transfer_config = cache_config.kv_transfer_config
     if transfer_config is None or not transfer_config.is_kv_transfer_instance:
         return
     if transfer_config.kv_connector == 'MooncakeStoreConnector':
-        from .mooncake.store.worker import prepare_lookup_rpc_path
-
         if dist_config is not None and (dist_config.dp != 1 or dist_config.ep != 1):
             raise ValueError('Mooncake Store currently supports tensor parallelism only')
+        if distributed_executor_backend == 'mp':
+            raise ValueError(
+                'Mooncake Store does not support distributed_executor_backend="mp"; '
+                'use "ray" for multi-GPU execution')
 
         extra_config = transfer_config.kv_connector_extra_config
-        lookup_async = extra_config.get('lookup_async', True)
-        if lookup_async is not True:
-            raise ValueError('Mooncake Store requires lookup_async=true')
-        extra_config['lookup_async'] = True
+        if transfer_config.is_kv_consumer:
+            lookup_async = extra_config.get('lookup_async', True)
+            if lookup_async is not True:
+                raise ValueError('Mooncake Store requires lookup_async=true')
+            extra_config['lookup_async'] = True
 
         cache_prefix = extra_config.get('cache_prefix', '')
         if not isinstance(cache_prefix, str):
@@ -49,7 +53,10 @@ def prepare_kv_connector_config(
                 raise ValueError('cannot derive model_name from model_path')
             extra_config['model_name'] = default_model_name
 
-        prepare_lookup_rpc_path(cache_config)
+        if transfer_config.is_kv_consumer:
+            from .mooncake.store.lookup import prepare_lookup_rpc_path
+
+            prepare_lookup_rpc_path(cache_config)
 
 
 def build_kv_connector(

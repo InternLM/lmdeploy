@@ -12,8 +12,8 @@ import zmq
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import BlobBlockHashes
-from lmdeploy.pytorch.kv_connector.mooncake.store.protocol import LOOKUP_MSG, RESET_MSG, RESP_ERR
-from lmdeploy.pytorch.kv_connector.mooncake.store.worker import LookupKeyClient, LookupKeyServer
+from lmdeploy.pytorch.kv_connector.mooncake.store.lookup import LookupKeyClient, LookupKeyServer
+from lmdeploy.pytorch.kv_connector.mooncake.store.protocol import LOOKUP_MSG, RESP_ERR
 
 
 def _make_cache_config(endpoint: str, timeout_ms: int = 5000) -> CacheConfig:
@@ -33,18 +33,6 @@ def _make_cache_config(endpoint: str, timeout_ms: int = 5000) -> CacheConfig:
     )
 
 
-class _FakeStore:
-
-    def __init__(self):
-        self.remove_calls = []
-        self.remove_error = None
-
-    def remove_all(self, *, force):
-        self.remove_calls.append(force)
-        if self.remove_error is not None:
-            raise self.remove_error
-
-
 class _FakeStoreWorker:
 
     def __init__(self, results=()):
@@ -52,8 +40,6 @@ class _FakeStoreWorker:
         self.lookup_calls = []
         self.lookup_started = threading.Event()
         self.lookup_gate = None
-        self.store = _FakeStore()
-        self.kv_send_thread = None
 
     def lookup(self, token_len, block_hashes):
         self.lookup_calls.append((token_len, [bytes(block_hash) for block_hash in block_hashes]))
@@ -233,16 +219,9 @@ def test_duplicate_endpoint_is_rejected_without_disrupting_owner():
         first_server.close()
 
 
-def test_reset_returns_ack_or_error_and_unknown_tag_is_rejected(lookup_pair_factory):
+def test_unknown_tag_is_rejected_without_disrupting_lookup(lookup_pair_factory):
     store_worker = _FakeStoreWorker([13])
     client, _, endpoint = lookup_pair_factory(store_worker)
-
-    assert client.reset() is True
-    assert store_worker.store.remove_calls == [True]
-
-    store_worker.store.remove_error = RuntimeError('reset failed')
-    assert client.reset() is False
-    assert store_worker.store.remove_calls == [True, True]
 
     context = zmq.Context()
     socket = context.socket(zmq.REQ)
@@ -250,10 +229,6 @@ def test_reset_returns_ack_or_error_and_unknown_tag_is_rejected(lookup_pair_fact
     socket.setsockopt(zmq.RCVTIMEO, 2000)
     try:
         socket.connect(endpoint)
-        socket.send_multipart([RESET_MSG, b'unexpected'])
-        assert socket.recv() == RESP_ERR
-        assert store_worker.store.remove_calls == [True, True]
-
         socket.send_multipart([b'unknown'])
         assert socket.recv() == RESP_ERR
     finally:
