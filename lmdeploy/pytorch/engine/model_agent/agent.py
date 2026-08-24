@@ -14,6 +14,7 @@ import pybase64
 import torch
 import torch.distributed as dist
 from torch.profiler import record_function
+from tqdm.auto import tqdm
 
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
@@ -447,7 +448,7 @@ class BaseModelAgent:
         """Warm the prefill shapes requested by the active graph runner."""
         token_sizes = sorted(self.patched_model.get_prefill_warmup_token_sizes(), reverse=True)
         if token_sizes:
-            for num_tokens in token_sizes:
+            for num_tokens in tqdm(token_sizes, desc='Warming up prefill', disable=self.rank != 0):
                 inputs = self.inputs_strategy.make_dummy(
                     1,
                     is_decoding=False,
@@ -506,7 +507,7 @@ class BaseModelAgent:
             if self.cache_config.role == EngineRole.Prefill:
                 # do not warmup decoding for prefill engine
                 capture_batch_sizes = []
-            for num_tokens in capture_batch_sizes:
+            for num_tokens in tqdm(capture_batch_sizes, desc='Warming up decoding', disable=self.rank != 0):
                 inputs = self.inputs_strategy.make_dummy(num_tokens,
                                                          is_decoding=True,
                                                          device='cuda',
