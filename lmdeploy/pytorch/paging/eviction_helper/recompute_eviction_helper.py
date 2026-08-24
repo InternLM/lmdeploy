@@ -41,13 +41,13 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
                 evict_seq.prefix_cache.suppress_match_stats = True
             self.scheduler.kv_load_coordinator.release(evict_seq)
             evict_seq.state.free()
-            num_req = num_required_blocks - block_manager.get_num_free_gpu_blocks()
+            num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
                 success = True
                 break
 
             block_trie.evict(num_req)
-            num_req = num_required_blocks - block_manager.get_num_free_gpu_blocks()
+            num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
                 success = True
                 break
@@ -101,14 +101,14 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             if not has_free_state:
                 block_trie.state_checkpoints.evict(1)
                 has_free_state = state_manager.get_num_free_runtime() > 0
-            num_req = num_required_blocks - block_manager.get_num_free_gpu_blocks()
+            num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
                 success = True
                 break
 
             # clear cached prefix
             block_trie.evict(num_req)
-            num_req = num_required_blocks - block_manager.get_num_free_gpu_blocks()
+            num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
                 success = True
                 break

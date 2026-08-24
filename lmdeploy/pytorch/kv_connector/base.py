@@ -73,7 +73,16 @@ class KVConnectorOutput:
 
 @dataclass(frozen=True)
 class KVLoadResult:
-    """Backend-neutral terminal result for one asynchronous KV load."""
+    """Backend-neutral terminal result for one asynchronous KV load.
+
+    Attributes:
+        request_id: Key-like identity of the load. It is the owning
+            ``SchedulerSequence.seq_id``; a request has at most one active
+            external load, so no separate load-operation ID is needed.
+        success: Value-like terminal status. ``True`` lets paging publish the
+            loaded prefix, while ``False`` makes paging discard it and fall
+            back to local computation.
+    """
 
     request_id: RequestId
     success: bool
@@ -81,18 +90,45 @@ class KVLoadResult:
 
 @dataclass(frozen=True)
 class KVConnectorResult:
-    """Backend-neutral scheduler updates produced by a connector."""
+    """Backend-neutral updates passed from a connector to paging.
+
+    Attributes:
+        load_results: Terminal load records. In each record,
+            ``KVLoadResult.request_id`` is the key-like request identity and
+            ``KVLoadResult.success`` is its value-like outcome.
+        completed_save_ids: Terminal save operation IDs. Each element matches a ``KVSaveBlockLease``
+            ``operation_id``; membership alone tells paging to release that
+            operation's pinned logical blocks. There is no value because save
+            completion is terminal whether the Store write succeeded or
+            failed. One request may own several IDs during chunked prefill.
+    """
 
     load_results: tuple[KVLoadResult, ...] = ()
     completed_save_ids: frozenset[KVOperationId] = frozenset()
 
 
 class KVConnectorOutputAggregator:
-    """Aggregate request completions that may arrive on different TP steps."""
+    """Accumulate rank-local completions until every worker reports them.
+
+    Worker connectors return only completions observed since their previous
+    poll. TP workers may finish the same operation on different engine steps,
+    so this executor-owned object remembers which worker slots have reported
+    each ID. An ID is emitted once all ``world_size`` slots have reported it,
+    then its accumulated state is removed.
+
+    Save and load completions use different identities: saves use operation
+    IDs because one request may have several concurrent save waves, while loads
+    use request IDs because one request has at most one active external load.
+    """
 
     def __init__(self, world_size: int) -> None:
+        # Number of rank-local outputs required to publish one completion.
         self.world_size = world_size
+        # Save operation ID -> executor worker slots that reported it terminal.
+        # The slots are positions in ``outputs``, not distributed global ranks.
         self._saving_ranks: dict[KVOperationId, set[int]] = {}
+        # Load request ID -> executor worker slots that finished receiving it.
+        # Load success is carried separately by ``invalid_block_ids``.
         self._receiving_ranks: dict[RequestId, set[int]] = {}
 
     def _aggregate_completions(
@@ -100,6 +136,14 @@ class KVConnectorOutputAggregator:
         rank_completions: Sequence[set[RequestId] | None],
         rank_state: dict[RequestId, set[int]],
     ) -> set[RequestId] | None:
+        """Return IDs newly reported by every worker slot.
+
+        ``rank_completions[rank]`` contains the IDs newly reported by that
+        worker slot. ``rank_state`` maps each ID to all slots accumulated over
+        previous calls. Completed IDs are removed from ``rank_state`` after
+        being returned. Although the annotation uses ``RequestId``, the same
+        integer-ID logic is also used for save operation IDs.
+        """
         completed = set()
         for rank, request_ids in enumerate(rank_completions):
             for request_id in request_ids or ():
@@ -115,6 +159,12 @@ class KVConnectorOutputAggregator:
         self,
         outputs: Sequence[KVConnectorOutput | None],
     ) -> KVConnectorOutput:
+        """Merge one rank-local output per worker into all-rank progress.
+
+        Save/load completions wait for every worker. Invalid destination block IDs are unioned and published immediately
+        because one rank failure is sufficient to make a load unusable; the scheduler-side connector keeps them until
+        the corresponding request-level completion arrives.
+        """
         if len(outputs) != self.world_size:
             raise ValueError(
                 f'expected {self.world_size} TP connector outputs, got {len(outputs)}')

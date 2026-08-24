@@ -38,7 +38,12 @@ class _RequestHashTracker:
 
 @dataclass(frozen=True)
 class _LookupPlan:
-    """Immutable positive lookup result retained through block allocation."""
+    """Positive lookup snapshot waiting for paging block allocation.
+
+    The remote boundary and its block hashes must come from the same lookup.
+    ``update_state_after_alloc`` consumes this snapshot exactly once after the
+    paging scheduler has assigned destination GPU blocks.
+    """
 
     remote_token_len: int
     block_hashes: tuple[bytes, ...]
@@ -68,6 +73,8 @@ class MooncakeStoreScheduler:
             if kv_transfer_config.is_kv_consumer else None
         )
         self._request_hash_trackers: dict[int, _RequestHashTracker] = {}
+        # Positive lookup snapshots keyed by request ID. A snapshot can survive
+        # several schedule attempts while paging waits for allocation capacity.
         self._lookup_plans: dict[RequestId, _LookupPlan] = {}
         # A request cannot progress while its single active load is pending,
         # so the request ID also uniquely identifies the load operation.
@@ -90,7 +97,13 @@ class MooncakeStoreScheduler:
         request: SchedulerSequence,
         num_computed_tokens: int,
     ) -> tuple[int | None, bool]:
-        """Poll the remote prefix beyond the locally matched GPU prefix."""
+        """Poll the remote prefix beyond the locally matched GPU prefix.
+
+        ``num_computed_tokens`` is an exact token position and may lie inside a
+        block. The returned delta is therefore not necessarily block aligned;
+        paging aligns the actual load range before calling
+        ``update_state_after_alloc``.
+        """
         if not self._kv_transfer_config.is_kv_consumer:
             return 0, False
         if (not request.history_multimodals.empty()
@@ -99,6 +112,8 @@ class MooncakeStoreScheduler:
 
         block_size = self._cache_config.block_size
         token_len = request.get_prefix_cache_max_match_step()
+        # Mooncake stores complete KV blocks, so do not query the incomplete
+        # block at the end of the request.
         token_len = token_len // block_size * block_size
         if token_len < block_size or num_computed_tokens >= token_len:
             return 0, False
@@ -109,6 +124,10 @@ class MooncakeStoreScheduler:
 
         plan = self._lookup_plans.get(req_id)
         if plan is not None:
+            # Allocation may have failed after an earlier positive lookup. Reuse
+            # that result while it still extends the local prefix. Once local KV
+            # catches up, discard the stale plan and lookup the current (possibly
+            # longer) request prefix below.
             if plan.remote_token_len > num_computed_tokens:
                 return plan.remote_token_len - num_computed_tokens, True
             self._lookup_plans.pop(req_id)
@@ -125,14 +144,21 @@ class MooncakeStoreScheduler:
             block_hashes,
             non_block=True,
         )
+        # ``None`` means the asynchronous RPC is still running; zero is a
+        # completed lookup with no remotely reusable suffix.
         if remote_token_len is None:
             return None, False
 
+        # Keep the exact token delta for scheduler accounting. If the local
+        # position is inside a block, paging expands the load start down to the
+        # previous block boundary and loads that whole block.
         num_external_tokens = max(0, int(remote_token_len) - int(num_computed_tokens))
         if num_external_tokens == 0:
             if self._kv_transfer_config.is_kv_producer:
                 self._next_save_block[req_id] = int(remote_token_len) // block_size
             return 0, False
+        # Retain the boundary and hashes together until paging binds this lookup
+        # result to concrete destination block IDs.
         self._lookup_plans[req_id] = _LookupPlan(
             remote_token_len=int(remote_token_len),
             block_hashes=block_hashes,

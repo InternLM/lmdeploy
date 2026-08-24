@@ -32,13 +32,7 @@ KVTransferRole = Literal['kv_producer', 'kv_consumer', 'kv_both']
 
 @dataclass
 class KVTransferConfig:
-    """Configuration for an external KV-cache connector.
-
-    This is the subset of vLLM's ``KVTransferConfig`` used by LMDeploy's
-    connector interface. Connector-specific settings belong in
-    ``kv_connector_extra_config`` so the common engine configuration does not
-    depend on Mooncake or any other connector implementation.
-    """
+    """Configuration for an external KV-cache connector."""
 
     kv_connector: str | None = None
     kv_role: KVTransferRole | None = None
