@@ -88,7 +88,7 @@ def test_fused_moe_blocked_fp8_compact_transposed_mma_matches_normal():
     device = torch.device('cuda')
     quant_dtype = torch.float8_e4m3fn
     tokens, top_k = 13, 3
-    num_experts, in_features, out_features = 8, 256, 128
+    num_experts, in_features, out_features = 8, 2048, 128
     block_m, block_n = 16, 128
 
     _, a, a_scale = _make_A(tokens, in_features, 128, quant_dtype, device)
