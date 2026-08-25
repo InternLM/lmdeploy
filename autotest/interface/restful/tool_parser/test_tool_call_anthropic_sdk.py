@@ -21,6 +21,7 @@ from utils.anthropic_messages import (
     USER_ASK_WEATHER_DALLAS_VLM,
     WEATHER_TOOL_ANTHROPIC,
     WEATHER_TOOL_SINGLE_LOCATION_ANTHROPIC,
+    anthropic_extra_body,
     assert_parallel_weather_tool_inputs,
     assert_tool_use_message,
     assert_warm_yes_answer,
@@ -692,7 +693,7 @@ async def _async_weather_tool_single_location_non_stream(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         messages=[{'role': 'user', 'content': USER_ASK_WEATHER_DALLAS}],
         tools=[WEATHER_TOOL_SINGLE_LOCATION_ANTHROPIC],
     )
@@ -712,7 +713,7 @@ async def _async_tool_choice_force_named_tool(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC],
@@ -734,7 +735,7 @@ async def _async_tool_choice_any(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC],
@@ -756,7 +757,7 @@ async def _async_messages_tool_non_stream_with_user_image(log_file: str, image_u
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_VLM_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         system=ANTHROPIC_SYSTEM_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC],
         messages=[{
@@ -786,7 +787,7 @@ async def _async_messages_tool_non_stream_with_user_image_base64(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_VLM_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         system=ANTHROPIC_SYSTEM_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC],
         messages=[{
@@ -820,7 +821,7 @@ async def _async_messages_tool_non_stream(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC],
@@ -841,7 +842,7 @@ async def _async_messages_tool_stream(log_file: str):
     stream = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC],
@@ -881,7 +882,7 @@ async def _async_parallel_same_tool_non_stream(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         system=ANTHROPIC_SYSTEM_PARALLEL_WEATHER,
         messages=ANTHROPIC_MESSAGES_PARALLEL_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC],
@@ -895,7 +896,7 @@ async def _async_parallel_same_tool_stream(log_file: str):
     stream = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         system=ANTHROPIC_SYSTEM_PARALLEL_WEATHER,
         messages=ANTHROPIC_MESSAGES_PARALLEL_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC],
@@ -919,7 +920,7 @@ async def _async_parallel_mixed_tools_non_stream(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         system=ANTHROPIC_SYSTEM_PARALLEL_MIXED,
         messages=ANTHROPIC_MESSAGES_PARALLEL_MIXED,
         tools=[WEATHER_TOOL_ANTHROPIC, CALCULATOR_TOOL_ANTHROPIC],
@@ -934,7 +935,7 @@ async def _async_full_roundtrip_single_tool_result(log_file: str):
     msg1 = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
         tools=tools,
@@ -955,7 +956,7 @@ async def _async_full_roundtrip_single_tool_result(log_file: str):
     msg2 = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=turn2_messages,
         tools=tools,
@@ -969,7 +970,7 @@ async def _async_full_roundtrip_parallel_tool_results(log_file: str):
     msg1 = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         system=ANTHROPIC_SYSTEM_PARALLEL_WEATHER,
         messages=ANTHROPIC_MESSAGES_PARALLEL_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC],
@@ -1002,7 +1003,7 @@ async def _async_full_roundtrip_parallel_tool_results(log_file: str):
     msg2 = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body=anthropic_extra_body(temperature=0),
         system=ANTHROPIC_SYSTEM_PARALLEL_WEATHER,
         messages=turn2_messages,
         tools=[WEATHER_TOOL_ANTHROPIC],
@@ -1040,7 +1041,7 @@ async def _async_vlm_base64_solid_color_stream(log_file: str) -> tuple[str, str]
     stream = await client.messages.create(
         model=model_name,
         max_tokens=16384,
-        temperature=0.01,
+        extra_body=anthropic_extra_body(temperature=0.01),
         stream=True,
         messages=[{
             'role': 'user',
