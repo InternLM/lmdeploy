@@ -7,6 +7,7 @@ from utils.config_utils import (
     get_case_str_by_config,
     get_eval_preset_config,
     get_func_config_list,
+    get_gpus_per_instance,
     get_model_path_from_config,
     get_workerid,
     resolve_eval_config_name,
@@ -120,9 +121,9 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
     case_name = get_case_str_by_config(run_config)
 
     if test_type == 'infer':
-        tp = int(parallel_config['tp'])
+        gpus_per_instance = get_gpus_per_instance(parallel_config)
         total_gpus = int(os.environ.get('TOTAL_GPU_COUNT', '8'))
-        work_num = int(total_gpus / tp)
+        work_num = int(total_gpus / gpus_per_instance)
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), constant.PROXY_PORT,
                                                       f'{case_name}_infer')
         run_config_new = run_config.copy()
@@ -726,13 +727,8 @@ def test_pytorch_restful_prefix_cache_tp2(config, run_config, worker_id):
     'run_config',
     get_func_config_list('pytorch', {'tp': 2, 'dp': 4, 'ep': 8}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
 )
-def test_pytorch_restful_prefix_cache_tp2dp4ep8(shared_proxy_manager, config, run_config, worker_id):
-    _run_proxy_distributed_test(config=config,
-                                run_config=run_config,
-                                worker_id=worker_id,
-                                test_type='infer',
-                                manager=shared_proxy_manager,
-                                eval_subpath='prefix_cache')
+def test_pytorch_restful_prefix_cache_tp2dp4ep8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='prefix_cache')
 
 
 @pytest.mark.infer
@@ -743,13 +739,8 @@ def test_pytorch_restful_prefix_cache_tp2dp4ep8(shared_proxy_manager, config, ru
     'run_config',
     get_func_config_list('turbomind', {'tp': 2, 'dp': 4, 'ep': 8}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
 )
-def test_turbomind_restful_prefix_cache_tp2dp4ep8(shared_proxy_manager, config, run_config, worker_id):
-    _run_proxy_distributed_test(config=config,
-                                run_config=run_config,
-                                worker_id=worker_id,
-                                test_type='infer',
-                                manager=shared_proxy_manager,
-                                eval_subpath='prefix_cache')
+def test_turbomind_restful_prefix_cache_tp2dp4ep8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='prefix_cache')
 
 
 @pytest.mark.eval

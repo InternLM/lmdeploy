@@ -1404,32 +1404,42 @@ def get_config() -> dict[str, Any]:
     return config_copy
 
 
+def get_gpus_per_instance(parallel_config: dict[str, int] | None) -> int:
+    """GPU count for one api_server instance (align with launch_server dp
+    layout)."""
+    parallel_config = parallel_config or {}
+    dp = parallel_config.get('dp', 1)
+    tp = parallel_config.get('tp', 1)
+    ep = parallel_config.get('ep', 1)
+    return max(dp, tp, ep)
+
+
 def get_cuda_prefix_by_workerid(worker_id: str | None, parallel_config: dict[str, int] | None = None) -> str | None:
     """Get cuda/ascend visible devices env prefix by worker id & parallel
     config."""
     para_conf = parallel_config or {}
     device_type = os.environ.get('DEVICE', 'cuda')
 
-    tp_num = para_conf.get('tp')
-    if not tp_num:
+    gpus_per_instance = get_gpus_per_instance(para_conf)
+    if gpus_per_instance <= 0:
         return ''
 
-    cuda_id = get_cuda_id_by_workerid(worker_id, tp_num)
+    cuda_id = get_cuda_id_by_workerid(worker_id, gpus_per_instance)
     if not cuda_id:
         return ''
 
     return f'ASCEND_RT_VISIBLE_DEVICES={cuda_id}' if device_type == 'ascend' else f'CUDA_VISIBLE_DEVICES={cuda_id}'
 
 
-def get_cuda_id_by_workerid(worker_id: str | None, tp_num: int = 1) -> str | None:
-    """Get cuda id str by worker id and tp num, return None if invalid worker
-    id."""
+def get_cuda_id_by_workerid(worker_id: str | None, gpus_per_instance: int = 1) -> str | None:
+    """Get cuda id str by worker id and GPUs per instance, return None if
+    invalid worker id."""
     if worker_id is None or 'gw' not in worker_id:
         return None
 
     base_id = int(worker_id.replace('gw', ''))
-    cuda_num = base_id * tp_num
-    return ','.join([str(cuda_num + i) for i in range(tp_num)])
+    cuda_num = base_id * gpus_per_instance
+    return ','.join([str(cuda_num + i) for i in range(gpus_per_instance)])
 
 
 def get_workerid(worker_id: str | None) -> int:
@@ -1479,19 +1489,19 @@ def set_device_env_variable(worker_id: str | None, parallel_config: dict[str, in
     """Set device environment variable based on the device type."""
     device = os.environ.get('DEVICE', 'cuda')
 
-    tp_num = 1
+    gpus_per_instance = 1
     if parallel_config is not None:
         if isinstance(parallel_config, int):
-            tp_num = parallel_config
+            gpus_per_instance = parallel_config
         elif isinstance(parallel_config, dict):
-            tp_num = parallel_config.get('tp', 1)
+            gpus_per_instance = get_gpus_per_instance(parallel_config)
 
     if device == 'ascend':
-        device_id = get_cuda_id_by_workerid(worker_id, tp_num)
+        device_id = get_cuda_id_by_workerid(worker_id, gpus_per_instance)
         if device_id is not None:
             os.environ['ASCEND_RT_VISIBLE_DEVICES'] = device_id
     else:
-        cuda_id = get_cuda_id_by_workerid(worker_id, tp_num)
+        cuda_id = get_cuda_id_by_workerid(worker_id, gpus_per_instance)
         if cuda_id is not None:
             os.environ['CUDA_VISIBLE_DEVICES'] = cuda_id
 
