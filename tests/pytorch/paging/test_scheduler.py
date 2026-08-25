@@ -857,6 +857,33 @@ def test_external_cached_tokens_survive_remote_ready_admission():
     assert seq.prefix_cache.match_start_step == 0
 
 
+def test_remote_ready_long_prefill_respects_short_only_turn():
+    connector = _AsyncLookupConnector([(8, True)])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        max_prefill_token_num=4,
+    )
+    seq = scheduler.add_session(74).add_sequence(torch.arange(17))
+
+    started = scheduler.schedule(is_prefill=True)
+    assert started.running == []
+    scheduler.update_connector_output(
+        KVConnectorOutput(finished_receiving={seq.seq_id}))
+    assert seq.num_history_ids == 8
+    assert scheduler.kv_load_coordinator.is_remote_ready(seq)
+
+    short_turn = scheduler.schedule(is_prefill=True, allow_long_prefill=False)
+
+    assert short_turn.running == []
+    assert seq.status == MessageStatus.WAITING
+    assert seq.num_history_ids == 8
+    assert scheduler.kv_load_coordinator.is_remote_ready(seq)
+
+    long_turn = scheduler.schedule(is_prefill=True)
+    assert long_turn.running == [seq]
+    assert seq.status == MessageStatus.READY
+
+
 def test_external_cached_tokens_survive_prefill_budget_rejection():
     connector = _AsyncLookupConnector([(8, True), (8, True)])
     scheduler = _make_async_lookup_scheduler(

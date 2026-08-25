@@ -289,7 +289,7 @@ class _PrefillAdmissionAttempt:
         self.token_count = token_count
         self.has_admitted = has_admitted
         self._remote_ready = scheduler.kv_load_coordinator.is_remote_ready(seq)
-        self.allow_long_prefill = allow_long_prefill or self._remote_ready
+        self.allow_long_prefill = allow_long_prefill
         self._alloc_size = prealloc_size
         self._gate_match_stats_snapshot = None
         self._gate_match_rollback_result = None
