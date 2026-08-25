@@ -312,6 +312,12 @@ class BaseResponseParser(ResponseParser):
 
         self._initialize_reasoning_token_counter()
 
+    @property
+    def invalid_tool_names(self) -> set[str]:
+        if self.tool_parser is None:
+            return set()
+        return self.tool_parser.invalid_tool_names
+
     def stream_chunk(
         self,
         delta_text: str,
@@ -588,9 +594,11 @@ class BaseResponseParser(ResponseParser):
             if (self.profile.tool_payload_format == 'json'
                 and self._is_complete_json_object(self.tool_parser._tool_payload)):
                 out.extend(self.tool_parser.decode_tool_incremental(added_text='', final=True))
+                out = self.tool_parser.filter_tool_call_deltas(out)
                 self.tool_parser.finish_tool_call()
                 self._mode = self.MODE_PLAIN
-            return out, True
+                return out, True
+            return self.tool_parser.filter_tool_call_deltas(out), True
 
         idx = self._pending.find(close_tag)
 
@@ -599,12 +607,14 @@ class BaseResponseParser(ResponseParser):
                 return [], False
             emit = self._pending
             self._pending = ''
-            return self.tool_parser.decode_tool_incremental(added_text=emit, final=False), True
+            calls = self.tool_parser.decode_tool_incremental(added_text=emit, final=False)
+            return self.tool_parser.filter_tool_call_deltas(calls), True
 
         # Final chunk inside tool block.
         inner = self._pending[:idx]
         self._pending = self._pending[idx + len(close_tag):]
         calls = self.tool_parser.decode_tool_incremental(added_text=inner, final=True)
+        calls = self.tool_parser.filter_tool_call_deltas(calls)
         self.tool_parser.finish_tool_call()
         self._mode = self.MODE_PLAIN
         return calls, True
@@ -751,11 +761,9 @@ class BaseResponseParser(ResponseParser):
                 close_idx = n
                 tool_payload = text[open_idx + len(open_tag):].strip()
             parsed_call = self.tool_parser.parse_tool_call_complete(tool_payload) if self.tool_parser else None
-            if parsed_call:
-                if isinstance(parsed_call, list):
-                    tool_calls.extend(parsed_call)
-                else:
-                    tool_calls.append(parsed_call)
+            if parsed_call and self.tool_parser is not None:
+                parsed_calls = parsed_call if isinstance(parsed_call, list) else [parsed_call]
+                tool_calls.extend(self.tool_parser.filter_tool_calls(parsed_calls))
                 pos = close_idx + len(close_tag) if close_tag else n
             else:
                 # Tool call parsing failed — fall back to plain text.

@@ -11,6 +11,22 @@ from .helpers import first_stream_delta
 
 MODEL_ID = 'zai-org/GLM-4.7'
 GLM52_MODEL_ID = 'zai-org/GLM-5.2-FP8'
+CURRENT_TOOLS = [
+    {
+        'type': 'function',
+        'function': {
+            'name': 'search',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'query': {
+                        'type': 'string'
+                    }
+                },
+            },
+        },
+    },
+]
 
 
 @pytest.fixture()
@@ -64,6 +80,41 @@ def _make_response_parser_with_reasoning(chat_template_kwargs=None):
         stream=True,
         tool_choice='auto',
         chat_template_kwargs=chat_template_kwargs or {},
+    )
+    return cls(request=request)
+
+
+def _make_response_parser_with_stale_tool_history():
+    cls = ResponseParserManager.get('default')
+    cls.reasoning_parser_cls = None
+    cls.tool_parser_cls = ToolParserManager.get('glm47')
+    request = ChatCompletionRequest(
+        model=GLM52_MODEL_ID,
+        messages=[
+            {
+                'role': 'assistant',
+                'tool_calls': [{
+                    'id': 'stale-call',
+                    'type': 'function',
+                    'function': {
+                        'name': 'img_gen',
+                        'arguments': '{}',
+                    },
+                }],
+            },
+            {
+                'role': 'tool',
+                'tool_call_id': 'stale-call',
+                'content': 'image generated',
+            },
+            {
+                'role': 'user',
+                'content': 'Modify the previous image.',
+            },
+        ],
+        stream=True,
+        tools=CURRENT_TOOLS,
+        tool_choice='auto',
     )
     return cls(request=request)
 
@@ -265,6 +316,26 @@ class TestGlm47ResponseParserStreaming:
         assert emitted_name == 'no_schema_tool'
         assert emitted_args == '{"zip": "77004", "active": "true"}'
 
+    def test_stream_chunk_mixed_tool_names_only_keeps_current_tool(self):
+        parser = _make_response_parser_with_stale_tool_history()
+        chunks = [
+            '<tool_call>img_gen',
+            '<arg_key>prompt</arg_key><arg_value>edit image</arg_value>',
+            '</tool_call>',
+            '<tool_call>search',
+            '<arg_key>query</arg_key><arg_value>weather</arg_value>',
+            '</tool_call>',
+        ]
+
+        deltas = [delta for chunk in chunks for delta, _ in parser.stream_chunk(chunk, [])]
+        calls = [call for delta in deltas for call in (delta.tool_calls or [])]
+        emitted_names = [call.function.name for call in calls if call.function and call.function.name]
+        emitted_args = ''.join(call.function.arguments or '' for call in calls if call.function)
+
+        assert emitted_names == ['search']
+        assert json.loads(emitted_args) == {'query': 'weather'}
+        assert parser.invalid_tool_names == {'img_gen'}
+
 
 class TestGlm47ToolParserComplete:
     """Complete-parse tests for glm47 tool payloads."""
@@ -287,6 +358,25 @@ class TestGlm47ToolParserComplete:
         assert tool_calls[0].function.name == 'get_weather'
         assert json.loads(tool_calls[0].function.arguments) == {'location': 'Beijing'}
         assert parser.validate_complete(text) is True
+
+    def test_parse_complete_mixed_tool_names_only_keeps_current_tool(self):
+        parser = _make_response_parser_with_stale_tool_history()
+        text = (
+            '<tool_call>img_gen'
+            '<arg_key>prompt</arg_key><arg_value>edit image</arg_value>'
+            '</tool_call>'
+            '<tool_call>search'
+            '<arg_key>query</arg_key><arg_value>weather</arg_value>'
+            '</tool_call>'
+        )
+
+        content, tool_calls, reasoning = parser.parse_complete(text)
+
+        assert content is None
+        assert reasoning is None
+        assert tool_calls is not None
+        assert [call.function.name for call in tool_calls] == ['search']
+        assert parser.invalid_tool_names == {'img_gen'}
 
     def test_parse_tool_call_complete_with_arguments(self):
         parser = Glm47ToolParser()

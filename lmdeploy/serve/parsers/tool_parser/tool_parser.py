@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import partial_json_parser
 import shortuuid
@@ -16,6 +16,7 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
+from lmdeploy.utils import get_logger
 
 from ..response_parser import BaseResponseParser
 
@@ -23,10 +24,13 @@ if TYPE_CHECKING:
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
 ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.parsers.tool_parser'])
+logger = get_logger('lmdeploy')
 
 
 class ToolParser:
     """Base class for model-specific tool parsers."""
+
+    validate_tool_names: ClassVar[bool] = False
 
     def __init__(self):
         self._tool_payload: str = ''
@@ -34,10 +38,62 @@ class ToolParser:
         self._active_tool_index: int = -1
         self._name_emitted: bool = False
         self._args_emitted_len: int = 0
+        self._allowed_tool_names: set[str] | None = None
+        self._stream_tool_allowed: dict[int, bool] = {}
+        self.invalid_tool_names: set[str] = set()
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request payload before rendering, if needed."""
-        return BaseResponseParser.dump_tools(request)
+        request = BaseResponseParser.dump_tools(request)
+        if self.validate_tool_names:
+            self._allowed_tool_names = self._get_allowed_tool_names(request)
+        return request
+
+    @staticmethod
+    def _get_allowed_tool_names(request: ChatCompletionRequest) -> set[str] | None:
+        """Return names exposed by the effective request tool list."""
+        if request.tools is None:
+            return None
+
+        names: set[str] = set()
+        for tool in request.tools:
+            if isinstance(tool, dict):
+                function = tool.get('function', tool)
+                name = function.get('name') if isinstance(function, dict) else None
+            else:
+                name = tool.function.name
+            if isinstance(name, str):
+                names.add(name)
+        return names
+
+    def is_valid_tool_name(self, name: str) -> bool:
+        """Return whether a name is allowed by the effective request tools."""
+        if not self.validate_tool_names or self._allowed_tool_names is None:
+            return True
+        if name in self._allowed_tool_names:
+            return True
+        if name not in self.invalid_tool_names:
+            logger.warning(f'Ignoring tool call {name!r}: name is not present in request.tools.')
+            self.invalid_tool_names.add(name)
+        return False
+
+    def filter_tool_call_deltas(self, calls: list[DeltaToolCall]) -> list[DeltaToolCall]:
+        """Drop streamed calls whose names are absent from request tools."""
+        if not self.validate_tool_names or self._allowed_tool_names is None:
+            return calls
+
+        filtered: list[DeltaToolCall] = []
+        for call in calls:
+            function = call.function
+            if function is not None and function.name:
+                self._stream_tool_allowed[call.index] = self.is_valid_tool_name(function.name)
+            if self._stream_tool_allowed.get(call.index) is True:
+                filtered.append(call)
+        return filtered
+
+    def filter_tool_calls(self, calls: list[ToolCall]) -> list[ToolCall]:
+        """Drop complete calls whose names are absent from request tools."""
+        return [call for call in calls if self.is_valid_tool_name(call.function.name)]
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
@@ -61,6 +117,7 @@ class ToolParser:
         self._name_emitted = False
         self._args_emitted_len = 0
         self._tool_payload = ''
+        self._stream_tool_allowed.clear()
 
     def finish_tool_call(self) -> None:
         """Mark end of a tool-call block."""
