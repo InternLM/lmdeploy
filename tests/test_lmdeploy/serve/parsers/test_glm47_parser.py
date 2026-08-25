@@ -27,6 +27,14 @@ CURRENT_TOOLS = [
         },
     },
 ]
+PARSER_TOOLS = [
+    {
+        'type': 'function',
+        'function': {
+            'name': name,
+        },
+    } for name in ('get_weather', 'get_current_temperature', 'no_schema_tool')
+]
 
 
 @pytest.fixture()
@@ -38,6 +46,7 @@ def response_parser():
         model=MODEL_ID,
         messages=[],
         stream=True,
+        tools=PARSER_TOOLS,
         tool_choice='auto',
     )
     return cls(request=request)
@@ -52,6 +61,7 @@ def response_parser_with_reasoning():
         model=MODEL_ID,
         messages=[],
         stream=True,
+        tools=PARSER_TOOLS,
         tool_choice='auto',
         chat_template_kwargs={'enable_thinking': True},
     )
@@ -78,6 +88,7 @@ def _make_response_parser_with_reasoning(chat_template_kwargs=None):
         model=GLM52_MODEL_ID,
         messages=[],
         stream=True,
+        tools=PARSER_TOOLS,
         tool_choice='auto',
         chat_template_kwargs=chat_template_kwargs or {},
     )
@@ -334,6 +345,7 @@ class TestGlm47ResponseParserStreaming:
 
         assert emitted_names == ['search']
         assert json.loads(emitted_args) == {'query': 'weather'}
+        assert {call.index for call in calls} == {0}
         assert parser.invalid_tool_names == {'img_gen'}
 
 
@@ -376,6 +388,27 @@ class TestGlm47ToolParserComplete:
         assert reasoning is None
         assert tool_calls is not None
         assert [call.function.name for call in tool_calls] == ['search']
+        assert parser.invalid_tool_names == {'img_gen'}
+
+    @pytest.mark.parametrize('tools', [None, []])
+    def test_parse_complete_without_tools_rejects_tool_call(self, tools):
+        cls = ResponseParserManager.get('default')
+        cls.reasoning_parser_cls = None
+        cls.tool_parser_cls = ToolParserManager.get('glm47')
+        request = ChatCompletionRequest(
+            model=GLM52_MODEL_ID,
+            messages=[],
+            tools=tools,
+            tool_choice='auto',
+        )
+        parser = cls(request=request)
+
+        content, tool_calls, reasoning = parser.parse_complete(
+            '<tool_call>img_gen</tool_call>')
+
+        assert content is None
+        assert tool_calls is None
+        assert reasoning is None
         assert parser.invalid_tool_names == {'img_gen'}
 
     def test_parse_tool_call_complete_with_arguments(self):

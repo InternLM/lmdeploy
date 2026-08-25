@@ -38,8 +38,9 @@ class ToolParser:
         self._active_tool_index: int = -1
         self._name_emitted: bool = False
         self._args_emitted_len: int = 0
-        self._allowed_tool_names: set[str] | None = None
-        self._stream_tool_allowed: dict[int, bool] = {}
+        self._allowed_tool_names: set[str] = set()
+        self._stream_tool_indices: dict[int, int | None] = {}
+        self._next_stream_tool_index = 0
         self.invalid_tool_names: set[str] = set()
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
@@ -50,10 +51,10 @@ class ToolParser:
         return request
 
     @staticmethod
-    def _get_allowed_tool_names(request: ChatCompletionRequest) -> set[str] | None:
+    def _get_allowed_tool_names(request: ChatCompletionRequest) -> set[str]:
         """Return names exposed by the effective request tool list."""
         if request.tools is None:
-            return None
+            return set()
 
         names: set[str] = set()
         for tool in request.tools:
@@ -68,7 +69,7 @@ class ToolParser:
 
     def is_valid_tool_name(self, name: str) -> bool:
         """Return whether a name is allowed by the effective request tools."""
-        if not self.validate_tool_names or self._allowed_tool_names is None:
+        if not self.validate_tool_names:
             return True
         if name in self._allowed_tool_names:
             return True
@@ -79,15 +80,21 @@ class ToolParser:
 
     def filter_tool_call_deltas(self, calls: list[DeltaToolCall]) -> list[DeltaToolCall]:
         """Drop streamed calls whose names are absent from request tools."""
-        if not self.validate_tool_names or self._allowed_tool_names is None:
+        if not self.validate_tool_names:
             return calls
 
         filtered: list[DeltaToolCall] = []
         for call in calls:
             function = call.function
-            if function is not None and function.name:
-                self._stream_tool_allowed[call.index] = self.is_valid_tool_name(function.name)
-            if self._stream_tool_allowed.get(call.index) is True:
+            if function is not None and function.name and call.index not in self._stream_tool_indices:
+                if self.is_valid_tool_name(function.name):
+                    self._stream_tool_indices[call.index] = self._next_stream_tool_index
+                    self._next_stream_tool_index += 1
+                else:
+                    self._stream_tool_indices[call.index] = None
+            visible_index = self._stream_tool_indices.get(call.index)
+            if visible_index is not None:
+                call.index = visible_index
                 filtered.append(call)
         return filtered
 
@@ -117,7 +124,6 @@ class ToolParser:
         self._name_emitted = False
         self._args_emitted_len = 0
         self._tool_payload = ''
-        self._stream_tool_allowed.clear()
 
     def finish_tool_call(self) -> None:
         """Mark end of a tool-call block."""
