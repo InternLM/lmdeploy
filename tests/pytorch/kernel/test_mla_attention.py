@@ -102,6 +102,7 @@ def test_fp8_sparse_decode_pads_tp_query_heads_for_aligned_kernel():
     impl.nsa_updater.update_decode.return_value = torch.zeros(2, 3, 4, dtype=torch.int32)
     impl.flash_mla_with_kvcache = Mock(
         return_value=(torch.empty(2, 3, 64, 512, dtype=torch.bfloat16), None))
+    impl._step_meta_group = None
 
     query = torch.empty(6, 8, 576, dtype=torch.bfloat16)
     k_cache = torch.empty(2, 16, 1, 656, dtype=torch.uint8)
@@ -111,6 +112,7 @@ def test_fp8_sparse_decode_pads_tp_query_heads_for_aligned_kernel():
         block_offsets=torch.zeros(2, 1, dtype=torch.int32),
         tile_scheduler_metadata=object(),
         num_splits=None,
+        kernel_metadata=(),
     )
 
     output = impl._decode_paged_flash_mla(query, k_cache, torch.zeros(6, 4, dtype=torch.int32), metadata)
