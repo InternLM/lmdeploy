@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
-from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.distributed import get_dp_world_rank, get_ep_world_rank
 
 from .piecewise import (
@@ -63,19 +62,17 @@ class StandardDecoderPiecewiseGraphRuntime:
         self,
         model: PiecewiseCudaGraphMixin,
         max_capture_tokens: int,
-        cache_quant_policy: QuantPolicy = QuantPolicy.NONE,
         token_stride: int = _DEFAULT_TOKEN_STRIDE,
     ) -> None:
         if token_stride < 1:
             raise ValueError('token_stride must be positive')
         self.model = model
         self.max_capture_tokens = max_capture_tokens
-        self.cache_quant_policy = cache_quant_policy
         self.token_stride = token_stride
 
     def get_capture_token_sizes(self) -> list[int]:
         """Return fixed-stride token buckets, including the configured cap."""
-        if (self.max_capture_tokens == 0 or self.cache_quant_policy != QuantPolicy.NONE
+        if (self.max_capture_tokens == 0
                 or get_dp_world_rank()[0] != 1 or get_ep_world_rank()[0] != 1):
             return []
         sizes = list(range(self.token_stride, self.max_capture_tokens, self.token_stride))
@@ -88,7 +85,7 @@ class StandardDecoderPiecewiseGraphRuntime:
         kwargs: Mapping[str, Any],
     ) -> _StandardGraphDescriptor | None:
         """Select one supported standard-prefill plan."""
-        if context.enable_microbatch or context.is_chunk:
+        if context.enable_microbatch:
             return None
         if context.local_adapter_ids is not None and not context.is_dummy:
             return None

@@ -77,7 +77,6 @@ def _make_piecewise_graph_manager(model: torch.nn.Module, cache_config: CacheCon
     runtime = StandardDecoderPiecewiseGraphRuntime(
         model,
         min(max_capture_tokens, cache_config.max_prefill_token_num),
-        cache_config.quant_policy,
     )
     if not runtime.get_capture_token_sizes():
         return None
