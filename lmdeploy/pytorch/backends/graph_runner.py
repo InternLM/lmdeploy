@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 import torch
@@ -28,6 +30,30 @@ def _get_capture_batch_size_impl(max_batches: int):
         batch_size *= 2
     ret.append(max_batches)
     return ret
+
+
+_preparing_prefill: ContextVar[bool] = ContextVar('graph_runner_preparing_prefill', default=False)
+
+
+@contextmanager
+def prefill_preparation_scope():
+    """Mark graph-runner startup prefill warmup.
+
+    ModelAgent enters this only around its startup graph-requested prefill
+    warmup loop. The CUDA runner builds a missing piecewise plan only inside
+    this scope; a serving-time dummy (for example an empty DP rank) never
+    captures.
+    """
+    token = _preparing_prefill.set(True)
+    try:
+        yield
+    finally:
+        _preparing_prefill.reset(token)
+
+
+def is_preparing_prefill() -> bool:
+    """Return whether the current call sits inside a prefill preparation scope."""
+    return _preparing_prefill.get()
 
 
 class GraphRunner:

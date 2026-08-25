@@ -18,7 +18,7 @@ from lmdeploy.pytorch.config import (
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
 
-from ...graph_runner import GraphRunner
+from ...graph_runner import GraphRunner, is_preparing_prefill
 from .full_graph import CUDASingleGraphRunner, build_decode_model_forward
 
 if TYPE_CHECKING:
@@ -258,7 +258,7 @@ class CUDAGraphRunner(GraphRunner):
             manager = self._piecewise_graph_manager
             if manager.has_plan(descriptor):
                 return manager.replay(descriptor, kwargs)
-            if context.is_dummy:
+            if is_preparing_prefill():
                 return manager.prepare(descriptor, kwargs)
 
         # Serving never captures. If startup warmup was skipped or this call is

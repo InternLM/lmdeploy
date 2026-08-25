@@ -17,6 +17,7 @@ from torch.profiler import record_function
 from tqdm.auto import tqdm
 
 from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.graph_runner import prefill_preparation_scope
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
@@ -448,21 +449,22 @@ class BaseModelAgent:
         """Warm the prefill shapes requested by the active graph runner."""
         token_sizes = sorted(self.patched_model.get_prefill_warmup_token_sizes(), reverse=True)
         if token_sizes:
-            for num_tokens in tqdm(token_sizes, desc='Warming up prefill', disable=self.rank != 0):
-                inputs = self.inputs_strategy.make_dummy(
-                    1,
-                    is_decoding=False,
-                    device='cuda',
-                    vocab_size=self.model_config.vocab_size,
-                    max_q_seqlen=num_tokens,
-                    meta=self.make_dummy_meta,
-                )
-                start = time.perf_counter()
-                logger.debug('Warmup prefill num_tokens=%d start.', num_tokens)
-                self._forward_impl(inputs)
-                torch.cuda.synchronize()
-                logger.debug('Warmup prefill num_tokens=%d done in %.2f seconds.', num_tokens,
-                             time.perf_counter() - start)
+            with prefill_preparation_scope():
+                for num_tokens in tqdm(token_sizes, desc='Warming up prefill', disable=self.rank != 0):
+                    inputs = self.inputs_strategy.make_dummy(
+                        1,
+                        is_decoding=False,
+                        device='cuda',
+                        vocab_size=self.model_config.vocab_size,
+                        max_q_seqlen=num_tokens,
+                        meta=self.make_dummy_meta,
+                    )
+                    start = time.perf_counter()
+                    logger.debug('Warmup prefill num_tokens=%d start.', num_tokens)
+                    self._forward_impl(inputs)
+                    torch.cuda.synchronize()
+                    logger.debug('Warmup prefill num_tokens=%d done in %.2f seconds.', num_tokens,
+                                 time.perf_counter() - start)
         else:
             inputs = self.inputs_strategy.make_dummy(self.cache_config.max_batches,
                                                      is_decoding=False,
