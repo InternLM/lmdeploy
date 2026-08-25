@@ -167,6 +167,32 @@ def test_bf16_sparse_decode_skips_fp8_flashmla_metadata():
     assert not hasattr(metadata, 'tile_scheduler_metadata')
 
 
+def test_bf16_mla_flatten_uses_shared_k_latent_as_value():
+    impl = object.__new__(mla_module.FlashMLAImpl)
+    impl.v_head_size = 512
+    flatten_k = torch.empty(3, 1, 576, dtype=torch.bfloat16)
+    impl.flatten_kv_cache = Mock(
+        return_value=(flatten_k, torch.empty(3, 1, 0, dtype=torch.bfloat16)))
+    metadata = SimpleNamespace(
+        kv_start_loc=torch.tensor([0]),
+        kv_seqlens=torch.tensor([3]),
+        block_offsets=torch.tensor([[0]]),
+        kv_flatten_size=3,
+        quant_policy=0,
+    )
+
+    _, flatten_v = impl._flatten_prefill_kv_cache(
+        torch.empty(1, 4, 1, 576, dtype=torch.bfloat16),
+        torch.empty(1, 4, 1, 0, dtype=torch.bfloat16),
+        metadata,
+        out_dtype=torch.bfloat16,
+        kv_layout='hsd',
+    )
+
+    assert flatten_v.shape == (3, 1, 512)
+    assert flatten_v.untyped_storage().data_ptr() == flatten_k.untyped_storage().data_ptr()
+
+
 def test_sparse_mla_prefill_routes_by_kv_length(monkeypatch):
     dense_output = object()
     sparse_output = object()

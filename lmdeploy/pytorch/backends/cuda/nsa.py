@@ -435,6 +435,11 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
             )
         else:
             _warn_triton_index_scoring()
+            score_bytes = q.size(0) * meta.max_kv_seqlen * 4
+            if score_bytes > self.max_logits_bytes:
+                raise RuntimeError(
+                    'DSA index scoring exceeds the configured logits memory budget; '
+                    'a compatible DeepGEMM installation is required.')
             k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
                 indexer_k_cache, q.size(-1))
             scores = fp8_index(q,

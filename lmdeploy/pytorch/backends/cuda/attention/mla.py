@@ -422,6 +422,10 @@ class FlashMLAImpl(TritonAttentionImpl):
                 quant_policy=quant_policy,
                 flatten_kv_layout=kv_layout,
             )
+            if flatten_v.size(-1) == 0:
+                # BF16 MLA stores the latent value in the leading K payload;
+                # its standalone V cache is intentionally empty.
+                flatten_v = flatten_k[..., :self.v_head_size]
 
         return flatten_k, flatten_v
 

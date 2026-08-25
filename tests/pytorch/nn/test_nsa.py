@@ -178,6 +178,10 @@ def test_deepgemm_prefill_scores_match_triton():
             atol=1e-3,
         )
 
+    impl.max_logits_bytes = triton_scores.numel() * triton_scores.element_size() - 1
+    with pytest.raises(RuntimeError, match='DeepGEMM installation is required'):
+        impl._score_and_select(q, q_s, packed_cache, meta)
+
 
 def test_indexer_meta_skips_reused_mtp_topk():
     assert nsa.should_skip_nsa_indexer([dict(skip_topk=True)])
