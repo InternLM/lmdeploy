@@ -94,7 +94,8 @@ class GlmMoeDsaIndexer(nn.Module):
             block_size=128,
             fill=-1,
             # MTP may reuse its first iteration's indices in later drafts.
-            allow_short_prefill_scoring_skip=layer_idx < config.num_hidden_layers,
+            allow_short_prefill_scoring_skip=(layer_idx < config.num_hidden_layers
+                                              and _envs.sparse_mla_backend != 'tilelang'),
         )
 
     def _apply_rotary_pos_emb(self, q_pe: torch.Tensor, k_pe: torch.Tensor,

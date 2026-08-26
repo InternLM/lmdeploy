@@ -3,6 +3,7 @@ import functools
 
 import torch
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.attention import AttentionBuilder
 from lmdeploy.utils import get_logger
 
@@ -135,6 +136,12 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
 
         if use_flash_mla is True:
             if mla_index_topk is not None:
+                if _envs.sparse_mla_backend == 'tilelang':
+                    logger.debug('Build TileLangSparseMLAImpl Attention')
+                    from .sparse_mla import TileLangSparseMLAImpl
+                    return TileLangSparseMLAImpl(mla_index_topk=mla_index_topk,
+                                                 use_fa3=use_fa3,
+                                                 **common_args)
                 logger.debug('Build FlashMLASparseImpl Attention')
                 from .sparse_mla import FlashMLASparseImpl
                 return FlashMLASparseImpl(mla_index_topk=mla_index_topk,
