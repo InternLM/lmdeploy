@@ -2,7 +2,7 @@ import pytest
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import ResponseParserManager
-from lmdeploy.serve.parsers.reasoning_parser import KimiK2ReasoningParser, ReasoningParserManager
+from lmdeploy.serve.parsers.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.parsers.response_parser import validate_parser_names
 from lmdeploy.serve.parsers.tool_parser import KimiK2ToolParser, ToolParserManager
 
@@ -66,7 +66,7 @@ def make_parser():
               stream=False,
               with_reasoning=True,
               with_tools=False):
-        cls.reasoning_parser_cls = ReasoningParserManager.get('kimi_k2') if with_reasoning else None
+        cls.reasoning_parser_cls = ReasoningParserManager.get('default') if with_reasoning else None
         cls.tool_parser_cls = ToolParserManager.get('kimi_k2') if with_tools else None
         request = ChatCompletionRequest(
             model=MODEL_ID,
@@ -87,38 +87,26 @@ def make_parser():
 
 
 @pytest.mark.parametrize('name', ['kimi_k2', 'kimi-k2'])
-def test_kimi_parser_aliases_are_registered(name):
-    assert ReasoningParserManager.get(name) is KimiK2ReasoningParser
+def test_kimi_tool_parser_aliases_are_registered(name):
     assert ToolParserManager.get(name) is KimiK2ToolParser
-    assert validate_parser_names(reasoning_parser_name=name, tool_parser_name=name) == (name, name)
+    assert validate_parser_names(reasoning_parser_name='default', tool_parser_name=name) == ('default', name)
 
 
 @pytest.mark.parametrize(
-    ('kwargs', 'starts_in_reasoning'),
+    ('chat_template_kwargs', 'expected_enable_thinking'),
     [
-        ({}, True),
+        (None, None),
         ({'thinking': True}, True),
         ({'thinking': False}, False),
     ],
 )
-def test_kimi_reasoning_mode_switches(kwargs, starts_in_reasoning):
-    parser = KimiK2ReasoningParser(**kwargs)
-    assert parser.starts_in_reasoning_mode() is starts_in_reasoning
-
-
-@pytest.mark.parametrize(
-    ('chat_template_kwargs', 'expected'),
-    [
-        (None, True),
-        ({'thinking': True}, True),
-        ({'thinking': False}, False),
-    ],
-)
-def test_request_template_mode_matches_parser(make_parser, chat_template_kwargs,
-                                              expected):
+def test_default_reasoning_parser_accepts_kimi_thinking_option(
+        make_parser, chat_template_kwargs, expected_enable_thinking):
     parser = make_parser(chat_template_kwargs=chat_template_kwargs, with_tools=True)
 
-    assert parser.profile.starts_in_reasoning_mode is expected
+    assert type(parser.reasoning_parser) is ReasoningParser
+    assert parser.profile.starts_in_reasoning_mode is True
+    assert parser.enable_thinking is expected_enable_thinking
     assert parser.request.skip_special_tokens is False
     assert parser.request.spaces_between_special_tokens is False
 
@@ -179,6 +167,25 @@ def test_tool_section_implicitly_ends_reasoning(make_parser):
     assert content is None
     assert tool_calls is not None and len(tool_calls) == 1
     assert tool_calls[0].function.name == 'weather.lookup'
+
+
+def test_streaming_tool_section_implicitly_ends_reasoning(make_parser):
+    parser = make_parser(stream=True, with_tools=True)
+    chunks = [
+        'need weather<|tool_calls_section_be',
+        'gin|><|tool_call_begin|>functions.weather.lookup:3',
+        '<|tool_call_argument_begin|>{"city":"Paris"}<|tool_call_end|>',
+        '<|tool_calls_section_end|>',
+    ]
+
+    deltas = []
+    for chunk in chunks:
+        deltas.extend(parser.stream_chunk(chunk, []))
+
+    assert ''.join(delta.reasoning_content or '' for delta, _ in deltas) == 'need weather'
+    tool_deltas = [call for delta, emitted in deltas if emitted for call in delta.tool_calls or []]
+    assert [call.id for call in tool_deltas if call.id] == ['functions.weather.lookup:3']
+    assert ''.join(call.function.arguments or '' for call in tool_deltas) == '{"city":"Paris"}'
 
 
 def test_complete_response_with_multiple_tool_calls(make_parser):

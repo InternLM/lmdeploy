@@ -287,7 +287,8 @@ class BaseResponseParser(ResponseParser):
         rcls = type(self).reasoning_parser_cls
         tcls = type(self).tool_parser_cls
         self._kwargs = type(self).chat_template_kwargs_from_request(request)
-        self.enable_thinking: bool | None = self._kwargs.get('enable_thinking', None)
+        self.enable_thinking: bool | None = self._kwargs.get(
+            'enable_thinking', self._kwargs.get('thinking', None))
         if self._kwargs.get('thinking') is True:
             self.enable_thinking = True
         self.reasoning_parser: ReasoningParser | None = rcls(**self._kwargs) if rcls else None
