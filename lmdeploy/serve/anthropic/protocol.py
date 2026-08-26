@@ -7,10 +7,12 @@ import time
 from typing import Any, Literal
 
 import shortuuid
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic_core import PydanticCustomError
 
 RoutedExperts = list[list[list[int]]] | str | None
 MessageStopReason = Literal['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'parse_error']
+LOCAL_THINKING_SIGNATURE = 'lmdeploy-local'
 
 
 class AnthropicError(BaseModel):
@@ -104,7 +106,7 @@ class MessagesRequest(BaseModel):
     system: str | list[ContentBlockParam] | None = None
     stop_sequences: list[str] | None = None
     stream: bool = False
-    temperature: float | None = 1.0
+    temperature: float | None = None
     top_p: float | None = None
     top_k: int | None = None
     metadata: dict[str, Any] | None = None
@@ -156,6 +158,7 @@ class MessageThinkingBlock(BaseModel):
 
     type: Literal['thinking'] = 'thinking'
     thinking: str
+    signature: str = LOCAL_THINKING_SIGNATURE
 
 
 class MessageToolUseBlock(BaseModel):
@@ -352,6 +355,13 @@ class CountTokensRequest(BaseModel):
     messages: list[MessageParam]
     system: str | list[ContentBlockParam] | None = None
     tools: list[ToolParam] | None = None
+
+    @field_validator('messages')
+    @classmethod
+    def validate_messages(cls, messages: list[MessageParam]) -> list[MessageParam]:
+        if not messages:
+            raise PydanticCustomError('empty_messages', 'at least one message is required')
+        return messages
 
 
 class CountTokensResponse(BaseModel):

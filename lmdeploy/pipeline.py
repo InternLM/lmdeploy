@@ -18,6 +18,7 @@ from typing_extensions import deprecated
 from .archs import autoget_backend_config, get_task
 from .messages import GenerationConfig, PytorchEngineConfig, Response, SpeculativeConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
+from .serve.core.exceptions import ErrorCode, RequestError
 from .serve.processors import MultimodalProcessor
 from .utils import get_logger, get_model
 
@@ -40,6 +41,7 @@ class Pipeline:
                  max_log_len: int | None = None,
                  trust_remote_code: bool = False,
                  speculative_config: SpeculativeConfig | None = None,
+                 allowed_media_domains: list[str] | None = None,
                  **kwargs):
         """Initialize Pipeline.
 
@@ -51,6 +53,7 @@ class Pipeline:
             max_log_len: Max number of prompt characters or prompt tokens being printed in log.
             trust_remote_code: whether to trust remote code from model repositories.
             speculative_config: Speculative decoding configuration.
+            allowed_media_domains: Optional HTTP(S) media URL domain allowlist.
             **kwargs: Additional keyword arguments.
         """
 
@@ -82,11 +85,13 @@ class Pipeline:
                                            max_log_len=max_log_len,
                                            trust_remote_code=trust_remote_code,
                                            speculative_config=speculative_config,
+                                           allowed_media_domains=allowed_media_domains,
                                            **kwargs)
         self.internal_thread = _EventLoopThread(daemon=True)
         self.limiter: asyncio.Semaphore = None
         self.session_mgr = self.async_engine.session_mgr
         self.backend_config = self.async_engine.backend_config
+        self.allowed_media_domains = allowed_media_domains
         self.async_engine.start_loop(self.internal_thread.loop, use_async_api=False)
 
     def infer(self,
@@ -112,7 +117,7 @@ class Pipeline:
         """
         is_single = self._is_single(prompts)
         # format prompts to openai message format, which is a list of dicts
-        prompts = MultimodalProcessor.format_prompts(prompts)
+        prompts = MultimodalProcessor.format_prompts(prompts, allowed_media_domains=self.allowed_media_domains)
         pbar = tqdm.tqdm(total=len(prompts)) if use_tqdm else None
         outputs = []
         try:
@@ -162,7 +167,7 @@ class Pipeline:
         Returns:
             Iterator: A generator that yields the output (i.e. instance of class ``Response``) of the inference.
         """
-        prompts = MultimodalProcessor.format_prompts(prompts)
+        prompts = MultimodalProcessor.format_prompts(prompts, allowed_media_domains=self.allowed_media_domains)
         requests = self._request_generator(prompts,
                                            sessions=sessions,
                                            gen_config=gen_config,
@@ -176,6 +181,27 @@ class Pipeline:
         """Close the pipeline."""
         self.internal_thread.close()
         self.async_engine.close()
+
+    @staticmethod
+    def _history_to_messages(history, prompt, allowed_media_domains=None):
+        def _messages(prompt):
+            messages = []
+            for item in MultimodalProcessor.format_prompts(
+                    prompt, allowed_media_domains=allowed_media_domains):
+                if isinstance(item, str):
+                    messages.append({'role': 'user', 'content': item})
+                elif isinstance(item, dict):
+                    messages.append(item)
+                else:
+                    messages.extend(item)
+            return messages
+
+        messages = []
+        for user_prompt, assistant_text in history:
+            messages.extend(_messages(user_prompt))
+            messages.append({'role': 'assistant', 'content': assistant_text})
+        messages.extend(_messages(prompt))
+        return messages
 
     def chat(self,
              prompt: str | tuple[str, Image | list[Image]],
@@ -201,18 +227,14 @@ class Pipeline:
             session = self.session_mgr.get()
         session.update(prompt=prompt, response=None)
 
-        prompt = MultimodalProcessor.format_prompts(prompt)
-
-        sequence_start = session.step == 0
-        generator = self.stream_infer(prompts=prompt,
+        messages = self._history_to_messages(
+            session.history, prompt, allowed_media_domains=self.allowed_media_domains)
+        generator = self.stream_infer(prompts=messages,
                                       sessions=session,
                                       gen_config=gen_config,
                                       stream_response=stream_response,
                                       adapter_name=adapter_name,
                                       multiplex=True,
-                                      sequence_start=sequence_start,
-                                      sequence_end=False,
-                                      step=session.step,
                                       **kwargs)
 
         def _gen():
@@ -226,7 +248,6 @@ class Pipeline:
                 raise
             else:
                 session.response = resp
-                session.step += resp.generate_token_len + resp.input_token_len
                 session.history.append((session.prompt, resp.text))
 
         if stream_response:
@@ -309,9 +330,11 @@ class Pipeline:
     async def generate(self, *args, **kwargs):
         """Generate responses as an async generator.
 
-        This method delegates to async_engine.generate and forwards all yielded values.
+        This method preprocesses the input and forwards generated values.
         """
-        async for item in self.async_engine.generate(*args, **kwargs):
+        stream_response = kwargs.pop('stream_response', True)
+        request = await self.async_engine.preprocess(*args, **kwargs)
+        async for item in self.async_engine.generate(request, stream_response=stream_response):
             yield item
 
     @staticmethod
@@ -353,8 +376,7 @@ class Pipeline:
 
         for prompt, gen_cfg, session in zip(prompts, gen_configs, sessions):
             # Use session_id is for backward compatibility. We will remove it in the future.
-            # Since AsyncEngine.generate defines session_id in the argument lists, here we
-            # use session_id to pass the session to the AsyncEngine.generate. It's
+            # AsyncEngine.preprocess accepts session_id, so use that name to pass the session.
             yield dict(session_id=session, messages=prompt, gen_config=gen_cfg, **kwargs)
 
     def _get_limiter(self):
@@ -364,14 +386,43 @@ class Pipeline:
 
     def _infer(self, requests: Iterator[dict], multiplex: bool, pbar=None, loop=None) -> Iterator[Iterator[Response]]:
 
-        async def _sync_resp(g, que: Queue, idx: int, sem: asyncio.Semaphore):
-            async for out in g:
-                que.put(out.to_response(idx))
-            sem.release()
-            if not multiplex:
-                que.put(None)  # sentinel of inner generator
-            if pbar:
-                pbar.update(1)
+        async def _sync_resp(req: dict, que: Queue, idx: int, sem: asyncio.Semaphore):
+            input_token_len = 0
+            try:
+                req = dict(req)
+                stream_response = req.pop('stream_response', True)
+                request = await self.async_engine.preprocess(**req)
+                input_token_len = request.input_token_len
+                async for out in self.async_engine.generate(request, stream_response=stream_response):
+                    que.put(out.to_response(idx))
+            except RequestError as e:
+                que.put(
+                    Response(text='',
+                             generate_token_len=0,
+                             input_token_len=input_token_len,
+                             finish_reason='error',
+                             token_ids=[],
+                             index=idx,
+                             error_code=e.code.value,
+                             error_message=e.message))
+            except Exception:
+                logger.exception('Unexpected Pipeline inference error')
+                error = RequestError(ErrorCode.INTERNAL_ERROR)
+                que.put(
+                    Response(text='',
+                             generate_token_len=0,
+                             input_token_len=input_token_len,
+                             finish_reason='error',
+                             token_ids=[],
+                             index=idx,
+                             error_code=error.code.value,
+                             error_message=error.message))
+            finally:
+                sem.release()
+                if not multiplex:
+                    que.put(None)  # sentinel of inner generator
+                if pbar:
+                    pbar.update(1)
 
         que = Queue()
 
@@ -380,12 +431,11 @@ class Pipeline:
             tasks = []
             for idx, req in enumerate(requests):
                 await sem.acquire()
-                gen = self.async_engine.generate(**req)
                 dst = que if multiplex else Queue()
                 if not multiplex:
                     que.put(iter(dst.get, None))
                 # create a task to send the responses
-                task = asyncio.create_task(_sync_resp(gen, dst, idx, sem))
+                task = asyncio.create_task(_sync_resp(req, dst, idx, sem))
                 tasks.append(task)
             if not multiplex:  # sentinel of outer generator
                 que.put(None)

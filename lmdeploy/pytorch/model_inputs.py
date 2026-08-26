@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from collections.abc import Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
@@ -101,6 +101,29 @@ class VisionModelInputs:
 
         return VisionModelInputs(**out_dict)
 
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of vision tensor fields."""
+        for f in fields(self):
+            key = f.name
+            value = getattr(self, key)
+            if isinstance(value, torch.Tensor):
+                if value.is_cuda:
+                    value.record_stream(stream)
+            elif key == 'input_embedding_ranges':
+                for tensor in value or ():
+                    if tensor.is_cuda:
+                        tensor.record_stream(stream)
+            elif key == 'input_embeddings':
+                for tensors in value or ():
+                    for tensor in tensors:
+                        if tensor.is_cuda:
+                            tensor.record_stream(stream)
+            elif key == 'input_multimodals':
+                for multimodals in value or ():
+                    for items in multimodals.values():
+                        for item in items:
+                            item.record_stream(stream)
+
     def get_inputs(self, history_lengths: torch.Tensor, seq_lengths: torch.Tensor):
         """Get vision embedding inputs."""
         input_embeddings = None
@@ -142,9 +165,6 @@ class ModelInputsDelta:
     is_decoding: bool = True
     # sliding window
     num_ignored_history: torch.Tensor | None = None
-    # Compact SSM prefix-cache checkpoint save pairs for decode forwards.
-    state_prefix_cache_save_src_offsets: Sequence[int] | None = None
-    state_prefix_cache_save_offsets: Sequence[int] | None = None
 
     @property
     def seq_length(self):
@@ -171,6 +191,13 @@ class ModelInputsDelta:
             out_dict[k] = v
 
         return ModelInputsDelta(**out_dict)
+
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of tensor fields."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, torch.Tensor) and value.is_cuda:
+                value.record_stream(stream)
 
     def log_info(self):
         """Get log info."""
@@ -199,14 +226,6 @@ class ModelInputs:
     is_dummy: bool = False
     # Runtime SSM state slot ids for each sequence in the batch.
     state_offsets: torch.Tensor | None = None
-    # Frozen checkpoint slot ids to restore from before forward. Compact, no sentinels.
-    state_prefix_cache_offsets: Sequence[int] | None = None
-    # Runtime state slot ids to restore into before forward. Compact, no sentinels.
-    state_prefix_cache_dst_offsets: Sequence[int] | None = None
-    # Runtime state slot ids to save from after forward. Compact, no sentinels.
-    state_prefix_cache_save_src_offsets: Sequence[int] | None = None
-    # Reserved checkpoint slot ids to save into after forward. Compact, no sentinels.
-    state_prefix_cache_save_offsets: Sequence[int] | None = None
     target_hidden_states: torch.Tensor | None = None
     target_position_ids: torch.Tensor | None = None
     target_inputs_embeds: torch.Tensor | None = None
@@ -236,10 +255,6 @@ class ModelInputs:
             history_lengths=self.history_lengths + step_seqlens,
             max_kv_seqlen=self.max_kv_seqlen + self.max_q_seqlen,
             sum_kv_seqlen=self.sum_kv_seqlen + self.max_q_seqlen * self.seq_length.numel(),
-            state_prefix_cache_offsets=None,
-            state_prefix_cache_dst_offsets=None,
-            state_prefix_cache_save_src_offsets=None,
-            state_prefix_cache_save_offsets=None,
             mrope_pos_ids=mrope_pos_ids,
         )
 
@@ -257,6 +272,16 @@ class ModelInputs:
             out_dict[k] = v
 
         return ModelInputs(**out_dict)
+
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of model tensor fields."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, torch.Tensor):
+                if value.is_cuda:
+                    value.record_stream(stream)
+            elif isinstance(value, VisionModelInputs):
+                value.record_stream(stream)
 
     def build_dp_meta(self, num_tokens: list[int]):
         """Build dp meta."""
@@ -300,6 +325,7 @@ class StepContext:
     is_decoding: bool
     sum_kv_seqlen: int
     max_kv_seqlen: int | None = None
+    max_q_seqlen: int | None = None
     local_adapter_ids: torch.LongTensor | None = None
     input_embeddings: torch.Tensor | None = None
     input_embedding_indexing: torch.Tensor | None = None
@@ -318,6 +344,10 @@ class StepContext:
     state_caches: list | None = None
     state_offsets: torch.LongTensor | None = None
 
+    # named cache views for models with block_cache_specs / state_cache_specs
+    block_caches: Mapping[str, torch.Tensor] | None = None
+    named_state_caches: Mapping[str, torch.Tensor] | None = None
+
     # mrope
     mrope_position_ids: torch.Tensor | None = None
 
@@ -325,6 +355,10 @@ class StepContext:
 
     # chunk with multimodal
     is_chunk_multimodal: bool = False
+    is_dummy: bool = False
+    is_chunk: bool = False
+    is_first_chunk: bool = False
+    is_last_chunk: bool = False
 
     @classmethod
     def new(
@@ -380,6 +414,7 @@ class StepContext:
             is_decoding=inputs.is_decoding,
             sum_kv_seqlen=inputs.sum_kv_seqlen,
             max_kv_seqlen=inputs.max_kv_seqlen,
+            max_q_seqlen=inputs.max_q_seqlen,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,
@@ -392,6 +427,10 @@ class StepContext:
             target_inputs_embeds=inputs.target_inputs_embeds,
             mrope_position_ids=inputs.mrope_pos_ids,
             is_chunk_multimodal=inputs.is_chunk_multimodal,
+            is_dummy=inputs.is_dummy,
+            is_chunk=inputs.is_chunk,
+            is_first_chunk=inputs.is_first_chunk,
+            is_last_chunk=inputs.is_last_chunk,
         )
 
         ret = get_backend().update_step_context(ret)
@@ -477,6 +516,7 @@ class StepContextManager(CtxMgrBase[StepContext]):
         super().__init__(None)
         build_ctx = build_ctx or BuildModelContext()
         self.build_ctx = build_ctx
+        self.backend_step_meta_plan: object | None = None
 
     @record_function('build_step_context')
     def build_context(

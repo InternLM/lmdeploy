@@ -184,10 +184,14 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
     # Extra params
     # Normalize CLI-style kebab-case keys to PytorchEngineConfig attribute
     param_name_map = {'device': 'device_type', 'cache_block_seq_len': 'block_size'}
+    # YAML/CLI ``null`` means a bare flag (same as ``--enable-prefix-caching``).
+    flag_true_on_null = {'enable_prefix_caching'}
     set_attrs = set()
     for key, value in extra_params.items():
         attr_name = key.replace('-', '_')
         attr_name = param_name_map.get(attr_name, attr_name)
+        if attr_name in flag_true_on_null and (value is None or value == 'null'):
+            value = True
         try:
             setattr(backend_config, attr_name, value)
             set_attrs.add(attr_name)

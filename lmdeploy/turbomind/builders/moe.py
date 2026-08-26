@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-from ._base import Builder, SplitSide
+from ._base import Builder, ParallelGroup, SplitSide
 
 # ---------------------------------------------------------------------------
 # MoeBuilder -- gate, non-expert params
@@ -10,6 +10,24 @@ from ._base import Builder, SplitSide
 
 class MoeBuilder(Builder):
     """MoE weight loading builder."""
+
+    def __init__(self, config, ctx, ep: ParallelGroup | None = None):
+        super().__init__(config, ctx)
+        self.ep = ep or ParallelGroup(1, None)
+        if self.ep.size > 1 and config.expert_num % self.ep.size != 0:
+            raise ValueError(
+                f'num_experts={config.expert_num} must be divisible by '
+                f'ep={self.ep.size}')
+        self.config.ep_size = self.ep.size
+
+    def _cfg_for_rank(self, gpu_idx: int):
+        """Set this GPU context's EP rank when EP is active."""
+        if self.ep.size <= 1:
+            return super()._cfg_for_rank(gpu_idx)
+        else:
+            cfg = self.config.clone()
+            cfg.ep_rank = self.ep.ranks[gpu_idx]
+            return cfg
 
     def add_gate(self, name, linear):
         """Commit a gate linear (broadcast, no split)."""
@@ -20,3 +38,21 @@ class MoeBuilder(Builder):
         if split_side is not None and not isinstance(split_side, SplitSide):
             split_side = None  # specs may pass None for broadcast
         self._add_tensor(name, tensor, split_side)
+
+    def range(self, num_experts):
+        for e in range(num_experts):
+            active_mask = self._expert_active_mask(e)
+            if not any(active_mask):
+                continue
+            with self._ctx.active_mask_scope(active_mask):
+                yield e
+
+    def _expert_active_mask(self, expert_idx: int):
+        ep_size = self.ep.size
+        if ep_size <= 1:
+            return [True] * len(self._ctx.devices)
+        ranks = self.ep.ranks
+        assert ranks is not None
+        local = self.config.expert_num // ep_size
+        return [rank * local <= expert_idx < (rank + 1) * local
+                for rank in ranks]

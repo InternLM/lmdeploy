@@ -12,9 +12,9 @@
 namespace turbomind::attention {
 
 constexpr int kHeadDim = 256;
-constexpr int kCTA_S   = 64;
+constexpr int kCTA_S   = 32;
 constexpr int kWARP_S  = 16;
-constexpr int kStages  = 3;
+constexpr int kStages  = 2;
 
 // Qh = (Qh_+7)/8*8: Qh_=1..8 → Qh=8, Qh_=9 → Qh=16
 // For 256 head dim, we use Qh=1 and Qh=9 (which maps to 16)

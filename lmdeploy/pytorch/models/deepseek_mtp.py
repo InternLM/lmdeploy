@@ -11,6 +11,7 @@ from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
     Attention,
+    ParallelLMHead,
     RMSNorm,
     RopeType,
     SiluAndMul,
@@ -22,7 +23,6 @@ from lmdeploy.pytorch.nn.linear import (
     build_down_linear,
     build_gateup_linear,
     build_o_proj,
-    build_rowwise_linear,
 )
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
@@ -360,7 +360,11 @@ class SharedHead(nn.Module):
         super().__init__()
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
         # build lm_head
-        self.head = build_rowwise_linear(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
+        self.head = ParallelLMHead(config.vocab_size,
+                                   config.hidden_size,
+                                   bias=False,
+                                   dtype=dtype,
+                                   device=device)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         return self.norm(hidden_states)
@@ -369,8 +373,7 @@ class SharedHead(nn.Module):
 def build_deepseek_rotary_embedding(config: PretrainedConfig):
     """Build deepseek rotary embedding."""
     emb_type = RopeType.LinearScaling
-    rope_dim = config.qk_rope_head_dim if getattr(config, 'use_mla', True) else (config.hidden_size //
-                                                                                 config.num_attention_heads)
+    rope_dim = config.qk_rope_head_dim
     rope_max_pos_emb = config.max_position_embeddings
     rope_base = get_rope_theta(config)
 
@@ -765,7 +768,7 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
                 name = self._rewrite_spec_layer_name(layer_idx, name)
             if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
-            elif '.self_attn' in name and getattr(config, 'use_mla', True):
+            elif '.self_attn' in name:
                 # attention
                 self._load_weight_attention(name, loaded_weight, params_dict, update_pe_mapping)
             else:

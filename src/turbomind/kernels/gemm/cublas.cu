@@ -8,7 +8,7 @@
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/matrix_ptr.h"
-#include "src/turbomind/kernels/gemm/registry.h"
+#include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -56,11 +56,15 @@ public:
                const MatrixLayout& Cdesc,
                void*               D,
                const MatrixLayout& Ddesc,
+               void*               W,
+               const MatrixLayout& Wdesc,
                int                 swizzle,
                int                 splits,
                Workspace&          workspace,
                cudaStream_t        stream) override
     {
+        (void)W;
+        (void)Wdesc;
         cublasOperation_t transa = Adesc.order == kColMajor ? CUBLAS_OP_N : CUBLAS_OP_T;
         cublasOperation_t transb = Bdesc.order == kColMajor ? CUBLAS_OP_N : CUBLAS_OP_T;
 
@@ -162,11 +166,6 @@ private:
     size_t         workspace_size_{};
 };
 
-void Registry::cublas_float()
-{
-    Add(std::make_unique<CublasKernel>());
-}
-
 #if defined(ENABLE_CUBLAS_GROUPED)
 
 // Grouped GEMM via cublasGemmGroupedBatchedEx (CUDA 12.5+, SM100).
@@ -227,13 +226,16 @@ public:
                const MatrixLayout& Cdesc,
                void*               D,
                const MatrixLayout& Ddesc,
+               void*               W,
+               const MatrixLayout& Wdesc,
                int                 swizzle,
                int                 splits,
                Workspace&          workspace,
                cudaStream_t        stream) override
     {
-        if (!Adesc.offsets || !Ddesc.offsets || Adesc.offsets == reinterpret_cast<int*>(1)
-            || Ddesc.offsets == reinterpret_cast<int*>(1)) {
+        (void)W;
+        (void)Wdesc;
+        if (!Adesc.offsets || !Ddesc.offsets) {
             fprintf(
                 stderr,
                 "[TM][GEMM] CublasGrouped: missing or invalid offsets (Adesc.offsets=%p Ddesc.offsets=%p) num=%d rows=%d\n",
@@ -310,9 +312,9 @@ public:
         const int N = Bdesc.cols;
         const int K = Adesc.cols;
 
-        if (ptr_offsets[group_count] != Adesc.rows) {
+        if (ptr_offsets[group_count] > Adesc.rows) {
             fprintf(stderr,
-                    "[TM][GEMM] CublasGrouped: offsets[%d]=%d != Adesc.rows=%d (would OOB)\n",
+                    "[TM][GEMM] CublasGrouped: offsets[%d]=%d exceeds Adesc.rows=%d (would OOB)\n",
                     group_count,
                     ptr_offsets[group_count],
                     Adesc.rows);
@@ -471,11 +473,17 @@ private:
     size_t         workspace_size_{};
 };
 
-void Registry::sm100_cublas_grouped_float()
-{
-    Add(std::make_unique<CublasGroupedKernel>());
-}
-
 #endif  // ENABLE_CUBLAS_GROUPED
+
+namespace {
+Registrar reg([](Collector& c, int arch) {
+    c.add(std::make_unique<CublasKernel>());
+#if defined(ENABLE_CUBLAS_GROUPED)
+    if (Sm100::is_compatible(arch)) {
+        c.add(std::make_unique<CublasGroupedKernel>());
+    }
+#endif
+});
+}  // namespace
 
 }  // namespace turbomind::gemm

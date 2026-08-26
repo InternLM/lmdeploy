@@ -2,6 +2,7 @@
 import asyncio
 import time
 from collections import deque
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from multiprocessing.reduction import ForkingPickler
@@ -20,8 +21,10 @@ from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
 from lmdeploy.pytorch.spec_decode import build_spec_agent
@@ -46,6 +49,7 @@ from .scoring import compute_input_ce_loss
 logger = get_logger('lmdeploy')
 
 _H2D_TRANSFER_KEY = '_h2d_transfer'
+_H2D_INPUT_KEYS = ('inputs', 'delta', 'cache_inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs')
 
 
 @dataclass
@@ -161,6 +165,30 @@ def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: d
         cache_engine.events.wait()
 
 
+def _restore_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None,
+                              cache_engine: CacheEngine, state_cache_engine: StateCacheEngine) -> None:
+    """Restore one-forward KV and state checkpoints before model execution."""
+    if cache_inputs is None or inputs.is_dummy:
+        return
+
+    if cache_inputs.kv_restore_plan is not None:
+        cache_engine.copy_logical_blocks(cache_inputs.kv_restore_plan)
+    if cache_inputs.state_restore_plan is not None:
+        state_cache_engine.copy_caches(*cache_inputs.state_restore_plan)
+
+
+def _save_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None,
+                           cache_engine: CacheEngine, state_cache_engine: StateCacheEngine) -> None:
+    """Save one-forward KV and state checkpoints after model execution."""
+    if cache_inputs is None or inputs.is_dummy:
+        return
+
+    if cache_inputs.kv_save_plan is not None:
+        cache_engine.copy_logical_blocks(cache_inputs.kv_save_plan)
+    if cache_inputs.state_save_plan is not None:
+        state_cache_engine.copy_caches(*cache_inputs.state_save_plan)
+
+
 @torch.inference_mode()
 def model_forward(
     model: torch.nn.Module,
@@ -168,6 +196,7 @@ def model_forward(
     cache_engine: CacheEngine,
     state_cache_engine: StateCacheEngine,
     stream: torch.cuda.Stream = None,
+    cache_inputs: CacheCheckpointInputs | None = None,
 ):
     """Perform model forward."""
     stream = stream or torch.cuda.current_stream()
@@ -183,16 +212,16 @@ def model_forward(
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
 
-        with ctx_mgr.context(context):
-            if (not inputs.is_dummy and inputs.state_offsets is not None
-                    and inputs.state_prefix_cache_offsets is not None):
-                # Restore frozen SSM prefix state into this request's runtime
-                # slot on the forward stream.  The input maker already
-                # compacted valid src/dst pairs on CPU, so no CUDA boolean
-                # indexing/nonzero synchronization is needed here.
-                state_cache_engine.copy_caches(inputs.state_prefix_cache_offsets,
-                                               inputs.state_prefix_cache_dst_offsets)
+        # Attach named cache views for models that declare block_cache_specs / state_cache_specs.
+        context.block_caches = cache_engine.block_caches
+        context.named_state_caches = state_cache_engine.named_state_caches
 
+        with ctx_mgr.context(context):
+            # Some backends synchronize while building context. Queue restore
+            # afterward so that synchronization does not absorb copy latency;
+            # forward-stream ordering still keeps every model consumer behind
+            # the restore.
+            _restore_cache_checkpoint(inputs, cache_inputs, cache_engine, state_cache_engine)
             model_metas = model.update_model_metas(
                 past_key_values=cache_engine.gpu_cache,
                 context=context,
@@ -207,13 +236,7 @@ def model_forward(
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
             if getattr(context, 'is_model_meta_updated', False):
                 model_metas = context.model_metas
-            if (not inputs.is_dummy and inputs.state_offsets is not None
-                    and inputs.state_prefix_cache_save_offsets is not None):
-                # Save the post-forward runtime state into reserved checkpoint
-                # slots.  The scheduler publishes these slots only after the
-                # executor output boundary confirms the copy was enqueued.
-                state_cache_engine.copy_caches(inputs.state_prefix_cache_save_src_offsets,
-                                               inputs.state_prefix_cache_save_offsets)
+            _save_cache_checkpoint(inputs, cache_inputs, cache_engine, state_cache_engine)
             output['model_metas'] = model_metas
             output['seq_length'] = context.q_seqlens[:len(inputs.seq_length)]
             # for draft model reuse
@@ -230,6 +253,23 @@ def _try_to_cuda(val, non_blocking: bool = False):
         return val.to_device('cuda', non_blocking=non_blocking)
     else:
         raise RuntimeError(f'Can not cast {type(val)} to cuda.')
+
+
+def _record_forward_input_stream(forward_inputs: Mapping[str, Any], stream: torch.cuda.Stream) -> None:
+    """Register the forward stream with each H2D payload owner."""
+    for key in _H2D_INPUT_KEYS:
+        value = forward_inputs.get(key)
+        if value is None:
+            continue
+        if isinstance(value, torch.Tensor):
+            if value.is_cuda:
+                value.record_stream(stream)
+            continue
+
+        record_stream = getattr(value, 'record_stream', None)
+        if not callable(record_stream):
+            raise TypeError(f'H2D input {key!r} must be a tensor or implement record_stream().')
+        record_stream(stream)
 
 
 SwapMap = dict[int, int]
@@ -263,6 +303,9 @@ class BaseModelAgent:
 
         self.model_config = model_config
         self.cache_config = cache_config
+        memdecode_config = misc_config.memdecode_config
+        if memdecode_config is not None and specdecode_config is not None:
+            raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
         # use raw tokenizer
         if dist_ctx.dist_config.world_size > 1:
             monkey_patch_hf_modules_cache()
@@ -341,20 +384,37 @@ class BaseModelAgent:
                                            self.inputs_strategy,
                                            self.agent_strategy,
                                            misc_config=misc_config,
-                                           device=device)
+                                           device=device,
+                                           guided_decoding_manager=self.guided_decoding_manager)
+        self.memdecode_agent = build_memdecode_agent(
+            memdecode_config,
+            backend_config,
+            dist_ctx,
+            device=device,
+            base_model_config=model_config,
+        )
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState()
 
-        # decoding inputs
-        self.step_inputs = self.strategy_factory.build_step_inputs()
+        self._init_runtime_state()
 
-        # long context
+        # make dummy meta
+        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
+
+    def _init_runtime_state(self):
+        """Initialize request-local decode and chunk state."""
+        self.step_inputs = self.strategy_factory.build_step_inputs()
         self._prev_chunk_output: dict = None
         # chunked-prefill ppl: last logit row of the previous chunk, used to score the cross-chunk boundary token
         self._prev_chunk_last_logit: torch.Tensor | None = None
 
-        # make dummy meta
-        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
+    def reset_runtime_state(self):
+        """Discard request-local decode and chunk state after sleep cancels
+        sessions."""
+        self.step_inputs = self.strategy_factory.build_step_inputs()
+        self._prev_chunk_output = None
+        self._prev_chunk_last_logit = None
+        self.spec_agent.reset_runtime_state()
 
     @contextmanager
     def all_context(self):
@@ -367,6 +427,8 @@ class BaseModelAgent:
         """Set all cache config."""
         self.cache_config = cache_config
         self.spec_agent.set_cache_config(spec_cache_config)
+        if self.memdecode_agent is not None:
+            self.memdecode_agent.set_cache_config(cache_config)
 
     def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig | None = None):
         """Set model config."""
@@ -462,12 +524,27 @@ class BaseModelAgent:
         self,
         inputs: ModelInputs,
         return_logits: bool,
+        cache_inputs: CacheCheckpointInputs | None = None,
     ):
         """Model forward."""
-        ret = await self.async_forward(inputs)
+        if self.memdecode_agent is not None and return_logits:
+            raise RuntimeError('MemDecode does not support returned prompt logits yet.')
+
+        ret = await self.async_forward(inputs, cache_inputs=cache_inputs)
 
         if not return_logits:
             ret = self._postprocess_forward_output(ret, inputs)
+
+        if self.memdecode_agent is not None:
+            base_hidden_states = ret['hidden_states']
+            base_logits = self.get_logits(base_hidden_states)
+
+            return await self.memdecode_agent.fuse_with_base(
+                inputs=inputs,
+                base_output=ret,
+                base_logits=base_logits,
+                postprocess_output=self._postprocess_forward_output,
+            )
 
         hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, inputs)
 
@@ -764,6 +841,7 @@ class BaseModelAgent:
         return_routed_experts: bool = False,
         return_ce_loss: bool = False,
         extra_inputs: ExtraInputs = None,
+        cache_inputs: CacheCheckpointInputs | None = None,
     ):
         """Asyc forward task."""
 
@@ -812,6 +890,8 @@ class BaseModelAgent:
 
         # swap caches
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+        if self.memdecode_agent is not None:
+            cache_swapping(self.memdecode_agent.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         # inference
         logger.debug(f'<ForwardTask> rank[{rank}]: model forward. '
@@ -826,7 +906,8 @@ class BaseModelAgent:
         output = await self._async_model_forward(
             inputs,
             return_logits=return_logits or return_ce_loss,
-            )
+            cache_inputs=cache_inputs,
+        )
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output
@@ -924,6 +1005,7 @@ class BaseModelAgent:
                 if h2d_transfer is not None:
                     self._keep_h2d_transfer(h2d_transfer)
                     self.stream.wait_event(h2d_transfer.event)
+                    _record_forward_input_stream(forward_inputs, self.stream)
 
                 await self._async_step(**forward_inputs, )
                 if forward_event is not None:
@@ -948,20 +1030,28 @@ class BaseModelAgent:
             self._pending_h2d_transfers.popleft()
 
     async def _async_loop_inputs_preprocess(self, forward_event: asyncio.Event = None):
-        """Async loop inputs preprocess."""
+        """Move queued CPU-side forward inputs to the CUDA-ready queue.
+
+        ``set_forward_inputs`` writes to ``_pre_in_que``. Until this coroutine
+        finishes H2D/preprocessing and pushes the item to ``_in_que``, the DP
+        input maker treats ``_pre_in_que`` as pending real work and avoids
+        falling back to dummy inputs.
+        """
         non_blocking = True
-        keys = ['inputs', 'delta', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
         while True:
             forward_inputs = await self._pre_in_que.get()
             forward_inputs_cuda = {}
             forward_inputs_cuda.update(forward_inputs)
-            h2d_refs = {k: forward_inputs_cuda[k] for k in keys if forward_inputs_cuda.get(k) is not None}
+            h2d_refs = {
+                key: forward_inputs_cuda[key]
+                for key in _H2D_INPUT_KEYS if forward_inputs_cuda.get(key) is not None
+            }
             logger.debug('preprocessing forward inputs.')
             with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('inputs_H2D'):
-                for k in keys:
-                    if k not in forward_inputs_cuda:
+                for key in _H2D_INPUT_KEYS:
+                    if key not in forward_inputs_cuda:
                         continue
-                    forward_inputs_cuda[k] = _try_to_cuda(forward_inputs_cuda[k], non_blocking=non_blocking)
+                    forward_inputs_cuda[key] = _try_to_cuda(forward_inputs_cuda[key], non_blocking=non_blocking)
                 h2d_event = torch.cuda.Event()
                 h2d_event.record()
                 forward_inputs_cuda[_H2D_TRANSFER_KEY] = _H2DTransfer(h2d_event, h2d_refs)
@@ -1123,6 +1213,8 @@ class BaseModelAgent:
             self.spec_agent.build_model(self.misc_config.empty_init,
                                         self.patched_model,
                                         build_model_ctx=self.build_model_ctx)
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.build_model(self.misc_config.empty_init, build_model_ctx=self.build_model_ctx)
 
     def build_graph_runner(self):
         """Build graph runner."""
@@ -1134,6 +1226,8 @@ class BaseModelAgent:
                                                             backend_config=self.backend_config,
                                                             device=self.device)
             self.spec_agent.build_graph_runner()
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.build_graph_runner()
 
     def build_cache_engine(self):
         """Build cache engine."""
@@ -1148,29 +1242,33 @@ class BaseModelAgent:
                                             tp_rank=dist_ctx.attn_tp_group.rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
-            self.state_cache_engine = StateCacheEngine(self.cache_config)
+            self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
 
             self.spec_agent.build_cache_engine(self.cache_stream)
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.set_cache_config(self.cache_config)
+                self.memdecode_agent.build_cache_engine(self.cache_stream)
 
-    def _forward_impl(self, inputs: ModelInputs):
+    def _forward_impl(self, inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None = None):
         output = model_forward(
             self.patched_model,
             inputs,
             self.cache_engine,
             state_cache_engine=self.state_cache_engine,
             stream=self.stream,
+            cache_inputs=cache_inputs,
         )
         return output
 
-    async def async_forward(self, inputs: ModelInputs):
+    async def async_forward(self, inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None = None):
         """Model forward.
 
         Args:
-            inputs (dict): The input data comes from _make_inputs.
-            swap_in_map (SwapMap): Cache maps to swap in.
-            swap_out_map (SwapMap): Cache maps to swap out.
+            inputs (ModelInputs): Persistent model execution inputs.
+            cache_inputs (CacheCheckpointInputs | None): One-forward cache
+                checkpoint operations.
         """
-        output = self._forward_impl(inputs)
+        output = self._forward_impl(inputs, cache_inputs=cache_inputs)
         await asyncio.sleep(0)
         return output
 
@@ -1186,10 +1284,14 @@ class BaseModelAgent:
     def reset_graph_runner(self):
         """Reset graph runner to prevent tp hanging."""
         with self.all_context():
+            self._prev_chunk_output = None
+            self._prev_chunk_last_logit = None
             if hasattr(self.patched_model, 'reset'):
                 self.patched_model.reset()
 
             self.spec_agent.reset_graph_runner()
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.reset_graph_runner()
 
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
@@ -1403,6 +1505,8 @@ class BaseModelAgent:
     @torch.inference_mode()
     async def sleep(self, level: int = 1):
         """Sleep."""
+        if self.memdecode_agent is not None:
+            raise NotImplementedError('MemDecode sleep/wakeup is not supported yet.')
         self.state.is_sleeping = True
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
@@ -1420,6 +1524,7 @@ class BaseModelAgent:
         self._drain_queues()
         torch.cuda.synchronize()
         self._release_completed_h2d_transfers()
+        self.reset_runtime_state()
         # force clean _update_params_ipc tensor and event after all gpu jobs done
         self._update_params_ipc_tensor = None
         self._update_params_ipc_event = None
@@ -1429,6 +1534,8 @@ class BaseModelAgent:
     @torch.inference_mode()
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
+        if self.memdecode_agent is not None:
+            raise NotImplementedError('MemDecode sleep/wakeup is not supported yet.')
         if tags is None:
             tags = ['weights', 'kv_cache']
 
@@ -1460,6 +1567,8 @@ class BaseModelAgent:
     def release(self):
         """release."""
         self.reset_graph_runner()
+        if self.memdecode_agent is not None:
+            self.memdecode_agent.release()
         self.patched_model = None
         self.cache_engine = None
         self.state_cache_engine = None

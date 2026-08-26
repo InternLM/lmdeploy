@@ -5,6 +5,7 @@
 #include <memory>
 
 #include <stdexcept>
+#include <vector>
 
 #include <cuda_runtime.h>
 
@@ -54,6 +55,16 @@ public:
                            int          group,
                            cudaStream_t stream) = 0;
 
+    virtual void AllGatherV(const void*                sendbuff,
+                            void*                      recvbuff,
+                            const std::vector<size_t>& counts,
+                            DataType                   type,
+                            int                        group,
+                            cudaStream_t               stream)
+    {
+        throw std::runtime_error("not implemented");
+    }
+
     virtual void ReduceScatter(const void*  sendbuff,  //
                                void*        recvbuff,
                                size_t       recvcount,
@@ -64,11 +75,22 @@ public:
         throw std::runtime_error("not implemented");
     }
 
+    virtual void ReduceScatterV(const void*                sendbuff,
+                                void*                      recvbuff,
+                                const std::vector<size_t>& counts,
+                                DataType                   type,
+                                int                        group,
+                                cudaStream_t               stream)
+    {
+        throw std::runtime_error("not implemented");
+    }
+
     virtual void AllreduceResidualBiasRMSnorm(void*        hidden,
                                               void*        residual,
                                               const void*  bias,
                                               const void*  weights,
                                               float        eps,
+                                              bool         zero_centered,
                                               int          dim,
                                               int          token_num,
                                               DataType     dtype,
@@ -83,6 +105,7 @@ public:
                                                 const void*  bias,
                                                 const void*  weights,
                                                 float        eps,
+                                                bool         zero_centered,
                                                 int          dim,
                                                 DataType     type,
                                                 int          group0,

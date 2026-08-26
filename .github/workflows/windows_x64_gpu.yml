@@ -8,7 +8,6 @@ on:
       - 'cmake/**'
       - 'examples/**'
       - '3rdparty/**'
-      - 'tests/csrc/**'
   pull_request:
     paths:
       - '.github/workflows/windows_x64_gpu.yml'
@@ -17,7 +16,6 @@ on:
       - 'cmake/**'
       - 'examples/**'
       - '3rdparty/**'
-      - 'tests/csrc/**'
 concurrency:
   group: windows-x64-gpu-${{ github.ref }}
   cancel-in-progress: true
@@ -29,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cudaver: [12.6.2, 12.8.1]
+        cudaver: [12.8.1]
     name: cuda-${{ matrix.cudaver }}
     runs-on: windows-2022
     steps:

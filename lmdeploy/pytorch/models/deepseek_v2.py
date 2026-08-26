@@ -8,7 +8,6 @@ from os import getenv
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
@@ -18,6 +17,7 @@ from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
     Attention,
     ParallelEmbedding,
+    ParallelLMHead,
     RMSNorm,
     RopeType,
     SiluAndMul,
@@ -30,9 +30,9 @@ from lmdeploy.pytorch.nn.linear import (
     build_down_linear,
     build_gateup_linear,
     build_o_proj,
-    build_rowwise_linear,
 )
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
+from lmdeploy.pytorch.nn.moe.route import RouterGemm
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -358,6 +358,11 @@ class DeepseekV2BMM(nn.Module):
 
     def _update_batch(self, batch: int):
         """Update out features."""
+        dist_config = get_dist_manager().current_config()
+        if dist_config.dp > 1:
+            # MLA Q projections use dp_disable_tp=True, so DP mode keeps
+            # q_nope full-head; absorb BMM weights must use the same layout.
+            return batch
         world_size, _ = get_tp_world_rank('attn')
         batch = batch // world_size
         return batch
@@ -368,8 +373,10 @@ class DeepseekV2BMM(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
         """Weight loader."""
-        world_size, rank = get_tp_world_rank('attn')
-        weight = weight.chunk(world_size, 0)[rank]
+        dist_config = get_dist_manager().current_config()
+        if dist_config.dp == 1:
+            world_size, rank = get_tp_world_rank('attn')
+            weight = weight.chunk(world_size, 0)[rank]
         param.data.copy_(weight)
 
     def forward(self, x: torch.Tensor, output: torch.Tensor):
@@ -573,6 +580,16 @@ class DeepseekV2Attention(nn.Module):
         return attn_output
 
 
+def _get_moe_router_dtype(config: Any) -> torch.dtype | None:
+    router_dtype = getattr(config, 'moe_router_dtype', None)
+    if getattr(config, 'model_type', None) == 'glm_moe_dsa':
+        # Older GLM-5/5.2 configs require FP32 routing but do not expose moe_router_dtype.
+        return torch.float32
+    if router_dtype == 'float32':
+        return torch.float32
+    return None
+
+
 class MoEGate(nn.Module):
     """Deepseek Gate."""
 
@@ -598,7 +615,8 @@ class MoEGate(nn.Module):
         self.norm_topk_prob = config.norm_topk_prob
         self.gating_dim = config.hidden_size
         self.weight = nn.Parameter(
-            torch.empty((self.n_routed_experts, self.gating_dim), dtype=torch.float32, device=device))
+            torch.empty((self.n_routed_experts, self.gating_dim), dtype=dtype, device=device))
+        self.router_gemm = RouterGemm(out_dtype=_get_moe_router_dtype(config))
         if self.topk_method == 'noaux_tc':
             from lmdeploy.pytorch.nn.moe.route import NoauxTCRouter
             self.e_score_correction_bias = nn.Parameter(
@@ -636,9 +654,9 @@ class MoEGate(nn.Module):
             topk_weight = topk_weight * self.routed_scaling_factor
         return topk_weight
 
-    def forward(self, hidden_states: torch.Tensor):
+    def forward(self, hidden_states: torch.Tensor, routed_experts: torch.Tensor = None):
         """forward."""
-        router_logits = F.linear(hidden_states.to(self.weight.dtype), self.weight)
+        router_logits = self.router_gemm(hidden_states, self.weight)
         if self.fake_eplb:
             # Forcefully manipulate router_logits to simulate expert load balancing (EPLB).
             # This is a benchmark-only hack to achieve optimal performance metrics.
@@ -666,6 +684,9 @@ class MoEGate(nn.Module):
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
 
+        if routed_experts is not None:
+            routed_experts.copy_(topk_idx)
+
         if self.eplb_dispatch_info is not None:
             topk_idx = EPLBManager.topk_ids_logical_to_physical(topk_idx, self.eplb_dispatch_info)
 
@@ -675,8 +696,14 @@ class MoEGate(nn.Module):
 class DeepseekV2MoE(nn.Module):
     """Deepseek v2 MoE."""
 
-    def __init__(self, config: Any, layer_idx, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: Any,
+                 layer_idx,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 all_reduce: bool = True):
         super().__init__()
+        self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.moe_intermediate_size
@@ -726,16 +753,19 @@ class DeepseekV2MoE(nn.Module):
                 is_shared_expert=True,
             )
 
-        if dp == 1 and world_size > 1:
+        if all_reduce and dp == 1 and world_size > 1:
             self._all_reduce = True
         else:
             self._all_reduce = False
 
-    def forward(self, hidden_states: torch.Tensor):
+    def forward(self, hidden_states: torch.Tensor, all_routed_experts: torch.Tensor = None):
         """forward."""
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
-        topk_weights, topk_ids = self.gate(hidden_states)
+        routed_experts = None
+        if all_routed_experts is not None:
+            routed_experts = all_routed_experts[:, self.layer_idx, :]
+        topk_weights, topk_ids = self.gate(hidden_states, routed_experts=routed_experts)
 
         out_states = self.experts(
             hidden_states,
@@ -762,7 +792,8 @@ class DeepseekV2MLP(nn.Module):
                  intermediate_size: int = None,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 is_shared_expert: bool = False):
+                 is_shared_expert: bool = False,
+                 all_reduce: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         if is_shared_expert:
@@ -778,7 +809,6 @@ class DeepseekV2MLP(nn.Module):
                 is_tp = False
                 all_reduce = False
         else:
-            all_reduce = True
             is_tp = True
 
         # gate up
@@ -1123,11 +1153,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         self.ctx_mgr = ctx_mgr
         self.model = DeepseekV2Model(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = ParallelLMHead(config.vocab_size,
+                                      config.hidden_size,
+                                      bias=False,
+                                      dtype=dtype,
+                                      device=device)
+        if config.tie_word_embeddings:
+            self.lm_head.tie_weights(self.model.get_input_embeddings())
         self._load_buffers = dict()
 
     def forward(
@@ -1278,11 +1310,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if '.kv_b_proj' in name:
                 quantization_config = self.quantization_config
                 quant_method = None
+                fp8_quant_scope = None
                 if quantization_config is not None:
                     quant_method = quantization_config.get('quant_method')
+                    fp8_quant_scope = quantization_config.get('fp8_quant_scope')
 
                 loaded_weight = loaded_weight.to(device)
-                if quant_method == 'fp8':
+                if quant_method == 'fp8' and fp8_quant_scope != 'moe_only':
                     # update blocked fp8 weight
                     __load_kcvc_blocked_fp8(name, loaded_weight)
                 else:

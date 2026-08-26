@@ -59,7 +59,7 @@ class InferOutput:
     req_metrics: RequestMetrics = None
 
     # expert ids
-    routed_experts: torch.Tensor = None
+    routed_experts: np.ndarray = None
 
     # summed, unnormalized cross-entropy (NLL) of the input prompt
     ce_loss: float = None
@@ -138,7 +138,16 @@ class Engine(EngineBase):
         cache_config = ConfigBuilder.build_cache_config(engine_config)
         backend_config = ConfigBuilder.build_backend_config(engine_config)
         dist_config = ConfigBuilder.build_dist_config(engine_config)
+        memdecode_config = ConfigBuilder.build_memdecode_config(model_path,
+                                                                engine_config,
+                                                                cache_config,
+                                                                dist_config,
+                                                                trust_remote_code=trust_remote_code,
+                                                                )
+        if memdecode_config is not None and speculative_config is not None:
+            raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
         misc_config = ConfigBuilder.build_misc_config(engine_config)
+        misc_config.memdecode_config = memdecode_config
         # spec decode
         self.specdecode_config = ConfigBuilder.build_specdecode_config(model_path,
                                                                        speculative_config,
@@ -567,6 +576,8 @@ class Engine(EngineBase):
         # cancel all remain sessions
         self._cancel_and_end_all_sessions()
         await self.executor.sleep(level)
+        if self._engine_loop is not None:
+            self._engine_loop.reset_runtime_state()
         logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))
 
     def wakeup(self, tags: list[str] | None = None):

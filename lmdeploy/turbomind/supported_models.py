@@ -8,6 +8,9 @@ SUPPORTED_ARCHS = dict(
     # Qwen2 / Qwen2-MoE
     Qwen2ForCausalLM='qwen2',
     Qwen2MoeForCausalLM='qwen2-moe',
+    # Qwen2-vl / Qwen2.5-vl
+    Qwen2VLForConditionalGeneration='qwen2_vl',
+    Qwen2_5_VLForConditionalGeneration='qwen2_vl',
     # Qwen3
     Qwen3ForCausalLM='qwen3',
     Qwen3MoeForCausalLM='qwen3-moe',
@@ -15,6 +18,7 @@ SUPPORTED_ARCHS = dict(
     Qwen3_5ForConditionalGeneration='qwen3_5',
     Qwen3_5MoeForConditionalGeneration='qwen3_5-moe',
     InternS2PreviewForConditionalGeneration='qwen3_5-moe',
+    InternS2MobiusForConditionalGeneration='interns2_mobius',
     # InternVL family
     InternVLChatModel='internvl',
     InternVLForConditionalGeneration='internvl',

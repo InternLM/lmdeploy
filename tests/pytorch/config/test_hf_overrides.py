@@ -85,3 +85,33 @@ def test_fp32_lm_head_hf_override_survives_mtp_draft_config(monkeypatch):
     assert BuildModelContext(fp32_lm_head=specdecode_config.model_config.fp32_lm_head).fp32_lm_head
     assert BuildModelContext(fp32_lm_head=main_model_config.fp32_lm_head).fp32_lm_head
     assert hf_overrides['fp32_lm_head']
+
+
+def test_config_builder_qwen35_mtp_reuses_main_dist_config(monkeypatch):
+    from types import SimpleNamespace
+
+    from lmdeploy.pytorch.engine import config_builder as config_builder_mod
+
+    dist_config = DistConfig(dp=2, ep=2)
+    cache_config = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
+    speculative_config = SimpleNamespace(method='qwen3_5_mtp', model=None, num_speculative_tokens=3)
+    engine_config = SimpleNamespace(dtype='auto', model_format=None, hf_overrides=None)
+    captured = {}
+    expected = object()
+
+    def fake_from_config(**kwargs):
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(config_builder_mod.SpecDecodeConfig, 'from_config', staticmethod(fake_from_config))
+
+    result = config_builder_mod.ConfigBuilder.build_specdecode_config(
+        target_model='target-model',
+        speculative_config=speculative_config,
+        engine_config=engine_config,
+        cache_config=cache_config,
+        dist_config=dist_config,
+    )
+
+    assert result is expected
+    assert captured['dist_config'] is dist_config

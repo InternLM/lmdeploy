@@ -22,7 +22,7 @@ class QuantPolicy(enum.IntEnum):
     NONE = 0
     INT4 = 4  # 4-bit KV cache
     INT8 = 8  # 8-bit KV cache
-    FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale)
+    FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale. DSA uses the fp8_ds_mla layout)
     FP8_E5M2 = 17  # FP8 KV cache (float8_e5m2, per-tensor scale)
     TURBO_QUANT = 42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
 
@@ -247,6 +247,29 @@ class TurbomindEngineConfig:
             a k/v block, default to 64
         enable_prefix_caching: enable cache prompts for block reuse,
             default to False
+        cache_checkpoint_interval: minimum token gap between reusable
+            recurrent-state checkpoints (CacheRegistry checkpoint_min_interval).
+            Must be > 0. Default 4096.
+        cache_prompt: partial prompt-boundary publication mode, one of
+            'all' | 'auto'. 'all' publishes the reusable partial fork_to node at
+            B = prompt_len - cache_prompt_boundary_skip whenever B is mid-block
+            (and arms a recurrent-state checkpoint clamp when B is block-aligned),
+            so a duplicate prompt skips prefill (costs one extra prefill forward +
+            a partial block). 'auto' (default) does that only when the partial
+            block holds image tokens (reusing vision-encoded KV) and is inert for
+            text-only prompts. Requires enable_prefix_caching.
+        cache_prompt_boundary_skip: number of trailing prompt tokens treated as
+            the volatile generation-prompt suffix (e.g. a chat template's
+            `<think>\n`) and excluded from the reusable prompt-boundary node, so
+            the node ends at prompt_len - cache_prompt_boundary_skip. Default 1
+            (exclude only the last token). Applies when cache_prompt is 'all' or
+            'auto'.
+        cache_generation: generated-block caching mode, one of
+            'all' | 'auto' | 'none'. 'all' indexes full generated blocks and the
+            terminal partial block, and adopts the terminal recurrent frontier
+            checkpoint (exact multi-turn resume, costs a partial block). 'auto'
+            (default) indexes full generated blocks only. 'none' indexes no
+            generated blocks at all. Requires enable_prefix_caching.
         quant_policy: default to 0. For TurboMind, when k/v is quantized
             into int4 or int8, set it to 4 or 8, respectively
         rope_scaling_factor: scaling factor used for dynamic ntk,
@@ -281,6 +304,7 @@ class TurbomindEngineConfig:
     tp: int = 1
     dp: int = 1
     cp: int = 1
+    ep: int = 1
     device_num: int = None
     attn_tp_size: int = None
     attn_cp_size: int = None
@@ -298,6 +322,10 @@ class TurbomindEngineConfig:
     cache_chunk_size: int = -1
     cache_block_seq_len: int = 64
     enable_prefix_caching: bool = False
+    cache_checkpoint_interval: int = 4096
+    cache_prompt: str = 'auto'
+    cache_prompt_boundary_skip: int = 1
+    cache_generation: str = 'auto'
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
@@ -318,6 +346,7 @@ class TurbomindEngineConfig:
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
+        assert self.ep >= 1, 'ep must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
         try:
             self.quant_policy = QuantPolicy(self.quant_policy)
@@ -331,6 +360,10 @@ class TurbomindEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
+        assert self.cache_prompt in ('all', 'auto'), 'invalid cache_prompt'
+        assert self.cache_generation in ('all', 'auto', 'none'), 'invalid cache_generation'
+        assert self.cache_checkpoint_interval > 0, 'invalid cache_checkpoint_interval'
+        assert self.cache_prompt_boundary_skip >= 1, 'invalid cache_prompt_boundary_skip'
         assert self.async_ in (0, 1), 'async_ must be 0 (disabled) or 1 (enabled)'
 
 
@@ -394,7 +427,7 @@ class PytorchEngineConfig:
             If unspecified, will use the default version.
         quant_policy: default to 0. When k/v is quantized into int4,
             int8, fp8, or fp8_e5m2, set it to 4, 8, 16, or 17,
-            respectively
+            respectively. For DSA models, fp8 selects the fp8_ds_mla layout.
         distributed_executor_backend: backend of distributed backend,
             options: ['uni', 'mp', 'ray']
         empty_init: Whether to load the model weights, you should set
@@ -529,8 +562,10 @@ class ResponseType(enum.Enum):
     INPUT_LENGTH_ERROR = enum.auto()
     INTERNAL_ENGINE_ERROR = enum.auto()
     CANCEL = enum.auto()
-    PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE = enum.auto()
+    PREFIX_CACHE_CONFLICT = enum.auto()
     NO_QUEUE = enum.auto()
+    NOT_SUPPORTED = enum.auto()
+    OUT_OF_MEMORY = enum.auto()
 
 
 @dataclass
@@ -555,7 +590,7 @@ class Response:
     text: str
     generate_token_len: int
     input_token_len: int
-    finish_reason: Literal['stop', 'length'] | None = None
+    finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
     token_ids: list[int] = field(default_factory=list)
     logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
@@ -563,6 +598,8 @@ class Response:
     index: int = 0
     routed_experts: Any = None
     cached_tokens: int = 0
+    error_code: str | None = None
+    error_message: str | None = None
 
     def __str__(self):
         return f'text={self.text}\n{self._format_none_text_fields()}'
@@ -618,6 +655,8 @@ class Response:
             self.logprobs = self.logprobs or []
             self.logprobs += other.logprobs
         self.routed_experts = other.routed_experts
+        self.error_code = other.error_code
+        self.error_message = other.error_message
         return self
 
 
@@ -659,10 +698,7 @@ class EngineEvent:
 class ScheduleMetrics:
     active_seqs: int = 0
     waiting_seqs: int = 0
-    total_blocks: int = 0
-    active_blocks: int = 0
-    cached_blocks: int = 0
-    free_blocks: int = 0
+    cache_usage: float = 0.0
     prefix_cache_hit_rate: float = 0
     scheduler_tick: int = 0
 

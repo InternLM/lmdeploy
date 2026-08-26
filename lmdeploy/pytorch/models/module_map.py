@@ -54,7 +54,6 @@ MODULE_MAP.update({
 })
 
 # glm4.7
-
 MODULE_MAP.update({'Glm4MoeLiteForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'})
 
 # glm4.7 mtp
@@ -63,7 +62,10 @@ MODULE_MAP.update({
 })
 
 # glm5
-MODULE_MAP.update({'GlmMoeDsaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32.DeepseekV32ForCausalLM'})
+MODULE_MAP.update({'GlmMoeDsaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm_moe_dsa.GlmMoeDsaForCausalLM'})
+
+# glm5 mtp
+MODULE_MAP.update({'GlmMoeDsaMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm_moe_dsa_mtp.GlmMoeDsaMTPModel'})
 
 # internlm2
 MODULE_MAP.update({
@@ -115,8 +117,19 @@ MODULE_MAP.update({'DeepseekV3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deep
 # deepseek-v32
 MODULE_MAP.update({'DeepseekV32ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32.DeepseekV32ForCausalLM'})
 
+# deepseek-v4
+MODULE_MAP.update({'DeepseekV4ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v4.DeepseekV4ForCausalLM'})
+
 # deepseek-vl2
 MODULE_MAP.update({'DeepseekVLV2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_vl2.DeepseekVLV2ForCausalLM'})
+
+# hy3
+MODULE_MAP.update({
+    'HYV3ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.hy3.HYV3ForCausalLM',
+    'HYV3MTP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.hy3_mtp.HYV3MTP',
+})
 
 # llava
 MODULE_MAP.update({
@@ -185,14 +198,22 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'InternS2PreviewForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
-})
-MODULE_MAP.update({
     'InternS2PreviewForCausalLM':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
 })
 
 MODULE_MAP.update({
     'Qwen3_5MTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_mtp.Qwen3_5MTPModel',
+})
+
+# meta moe / interns2 mobius
+MODULE_MAP.update({
+    'MetaMoeForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.meta_moe.MetaMoeForConditionalGeneration',
+    'InternS2MobiusForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns2_mobius.InternS2MobiusForConditionalGeneration',
+    'InternS2MobiusForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns2_mobius.InternS2MobiusForConditionalGeneration',
 })
 
 # qwen3 omni moe thinker

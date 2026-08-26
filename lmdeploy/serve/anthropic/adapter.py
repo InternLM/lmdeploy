@@ -9,6 +9,7 @@ from typing import Any
 import shortuuid
 
 from lmdeploy.messages import GenerationConfig
+from lmdeploy.serve.core.generation_config import build_generation_config
 from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
 
 from .protocol import (
@@ -28,7 +29,7 @@ def get_model_list(server_context) -> list[str]:
     """Return available model names from the server context."""
 
     model_names = [server_context.async_engine.model_name]
-    cfg = server_context.async_engine.backend_config
+    cfg = server_context.engine_config
     model_names += getattr(cfg, 'adapters', None) or []
     return model_names
 
@@ -341,21 +342,21 @@ def to_lmdeploy_messages(request: MessagesRequest | CountTokensRequest) -> list[
     return lm_messages
 
 
-def to_generation_config(request: MessagesRequest) -> GenerationConfig:
+def to_generation_config(
+    request: MessagesRequest,
+    default_gen_config: dict | None = None,
+    **kwargs: Any,
+) -> GenerationConfig:
     """Map Anthropic messages request to LMDeploy generation config."""
-
-    return GenerationConfig(
+    return build_generation_config(
+        request,
+        default_gen_config or {},
         max_new_tokens=request.max_tokens,
-        do_sample=True,
-        top_k=40 if request.top_k is None else request.top_k,
-        top_p=1.0 if request.top_p is None else request.top_p,
-        temperature=1.0 if request.temperature is None else request.temperature,
         stop_words=request.stop_sequences,
         include_stop_str_in_output=request.include_stop_str_in_output or False,
-        skip_special_tokens=True,
-        spaces_between_special_tokens=True,
         return_routed_experts=request.return_routed_experts or False,
         logprobs=1 if request.return_logprob else None,
+        **kwargs,
     )
 
 
@@ -363,7 +364,7 @@ def count_input_tokens(async_engine, messages: list[dict[str, str]]) -> int:
     """Approximate Anthropic token counting using LMDeploy
     tokenizer/template."""
 
-    prompt = async_engine.chat_template.messages2prompt(messages, sequence_start=True)
+    prompt = async_engine.chat_template.messages2prompt(messages)
     token_ids = async_engine.tokenizer.encode(prompt, add_bos=True)
     return len(token_ids)
 

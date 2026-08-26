@@ -10,8 +10,31 @@ def build_spec_agent(specdecode_config: SpecDecodeConfig,
                      inputs_strategy,
                      agent_strategy,
                      misc_config: MiscConfig,
-                     device: str = 'cuda'):
-    """Build spec agent."""
+                     device: str = 'cuda',
+                     guided_decoding_manager=None):
+    """Build a rank-local speculative decoding agent.
+
+    Args:
+        specdecode_config (SpecDecodeConfig): Speculative decoding config. If
+            ``None``, speculative decoding is disabled.
+        backend_config (BackendConfig): Backend config used by the draft model.
+        dist_ctx (DistContext): Rank-local distributed context of the target
+            model.
+        inputs_strategy: Strategy for preparing model inputs.
+        agent_strategy: Strategy for model-agent operations such as
+            post-broadcast.
+        misc_config (MiscConfig): Misc runtime config.
+        device (str): Device used by the draft model.
+        guided_decoding_manager: Optional guided-decoding manager. It is passed
+            only to proposer-owning ``SpecModelAgent`` ranks so the draft
+            proposer and target rejection sampling share one guided helper.
+
+    Returns:
+        A ``SpecModelAgent`` on ranks that own a draft proposer. Returns a
+        ``BaseSpecModelAgent`` when speculative decoding is disabled, or on
+        follower ranks that participate in target-side broadcasts but do not
+        own a draft proposer.
+    """
     enable = False
     if specdecode_config is not None:
         draft_tp = specdecode_config.dist_config.tp
@@ -27,10 +50,11 @@ def build_spec_agent(specdecode_config: SpecDecodeConfig,
                               agent_strategy,
                               misc_config,
                               dist_ctx,
-                              device=device)
-    else:
-        from .base import BaseSpecModelAgent
-        return BaseSpecModelAgent(specdecode_config,
+                              device=device,
+                              guided_decoding_manager=guided_decoding_manager)
+
+    from .base import BaseSpecModelAgent
+    return BaseSpecModelAgent(specdecode_config,
                               backend_config,
                               inputs_strategy,
                               agent_strategy,

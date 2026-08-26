@@ -61,8 +61,8 @@ struct GmemIteratorSm70 {
 
     const char* src_data_;
 
-    int src_offset_;
-    int dst_offset_;
+    int64_t src_offset_;
+    int     dst_offset_;
 
     int offset_c_;
     int offset_s_;
@@ -138,7 +138,7 @@ struct GmemIteratorSm70 {
             }
         }
 
-        const int src_offset = is_indexed ? offsets.x : offsets.x + offsets.y * ld;
+        const int64_t src_offset = is_indexed ? offsets.x : offsets.x + (int64_t)offsets.y * ld;
 
         src_offset_ = src_offset * bitsof<T> / bitsof<char>;
 
@@ -153,12 +153,12 @@ struct GmemIteratorSm70 {
             for (int s = 0; s < ITER_S; ++s) {
                 const int  ss    = cta_cs.y + offset_s_ + s * Map::kDeltaS;
                 const int  idx   = (mat.idxs && pred_(s, 0)) ? __ldg(mat.idxs + ss) : ss;
-                const auto tmp   = data + cs2idx({cta_cs.x, idx}, ld);
+                const auto tmp   = data + cs2idx<int64_t>({cta_cs.x, idx}, ld);
                 src_data_vec_[s] = reinterpret_cast<const char*>((T*)tmp) + src_offset_;
             }
         }
         else {
-            auto src_data = data + cs2idx(to_cs(pack(offset)), ld);
+            auto src_data = data + cs2idx<int64_t>(to_cs(pack(offset)), ld);
             src_data_     = reinterpret_cast<const char*>((T*)src_data) + src_offset_;
         }
     }

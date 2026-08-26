@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 from typing import Any
 
 import torch
@@ -13,6 +15,7 @@ from ...model_inputs import ModelInputs, step_ctx_manager
 from ...models.patch import build_patched_model, update_custom_module_map
 from ...strategies.base.model_agent import ExtraInputs
 from ...weight_loader.model_weight_loader import load_model_weights
+from ..guided_spec_helper import GuidedSpecHelper
 
 SPEC_PROPOSERS = Registry('spec_proposers')
 
@@ -23,21 +26,23 @@ logger = get_logger('lmdeploy')
 def draft_model_forward(
     model: torch.nn.Module,
     inputs: ModelInputs,
+    cache_engine: CacheEngine,
     model_config: ModelConfig | None = None,
-    cache_engine: CacheEngine | None = None,
 ):
     """Perform model forward."""
     stream = torch.cuda.current_stream()
     with torch.cuda.stream(stream), step_ctx_manager(model.ctx_mgr):
         # forward
         ctx_mgr = model.ctx_mgr
-        kv_caches = None if cache_engine is None else cache_engine.gpu_cache
+        kv_caches = cache_engine.gpu_cache
         context = ctx_mgr.build_context(
             inputs=inputs,
             model_config=model_config,
             cache_config=cache_engine.cache_config,
             kv_caches=kv_caches,
         )
+        # Attach named cache views for models that declare block_cache_specs.
+        context.block_caches = cache_engine.block_caches
         with ctx_mgr.context(context):
             model_metas = None
             model_metas = model.update_model_metas(
@@ -64,6 +69,8 @@ class BaseSpecProposer:
         self.lm_head = None
         self.num_speculative_tokens = specdecode_config.num_speculative_tokens
         self.target_model = None
+        # Set by SpecModelAgent after construction
+        self.guided_helper = GuidedSpecHelper()
 
     def build_model(self, empty_init: bool, target_model: torch.nn.Module = None, build_model_ctx=None):
         if self.specdecode_config is None:
@@ -85,15 +92,16 @@ class BaseSpecProposer:
         self.model = patched_model
         self.target_model = target_model
 
-    def get_outputs(self,
+    async def get_outputs(self,
                     model_outputs: dict[str, torch.Tensor],
                     model_inputs: ModelInputs,
-                    extra_inputs: ExtraInputs = None):
+                    extra_inputs: ExtraInputs = None,
+                    guided_processors: dict | None = None):
         """Get outputs."""
         raise NotImplementedError()
 
     @record_function('draft_model_forward')
-    def _forward(self, model_inputs: ModelInputs, cache_engine: CacheEngine = None):
+    def _forward(self, model_inputs: ModelInputs, cache_engine: CacheEngine):
         """Forward."""
         return draft_model_forward(
             self.model,

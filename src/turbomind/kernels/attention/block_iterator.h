@@ -67,11 +67,11 @@ struct BlockIteratorFactory {
     BlockLayout_ block_layout_;
     char**       block_ptrs_;
     const int*   cu_block_nums_;
-    int          layer_idx_;
+    int          offset_;
 
     __device__ auto Create(int batch_idx, int head_idx)
     {
-        block::Head<T, Tkv, BlockLayout> head{block_layout_, layer_idx_, head_idx};
+        block::Head<T, Tkv, BlockLayout> head{block_layout_, offset_, head_idx};
 
         char** block_ptrs = block_ptrs_ + cu_block_nums_[batch_idx];
 
@@ -91,7 +91,7 @@ struct CreateCacheIterFactory<CacheIterFactory, std::void_t<typename CacheIterFa
             BlockLayout{BlockConfig{param.num_kv_heads, param.block_iter_params.block_len}},
             param.block_iter_params.block_ptrs,
             param.block_iter_params.cu_block_nums,
-            param.block_iter_params.layer_id,
+            param.block_iter_params.offset,
         };
     }
 };

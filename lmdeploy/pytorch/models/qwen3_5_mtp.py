@@ -41,7 +41,7 @@ class Qwen3_5MtpDecoderLayer(Qwen3_5DecoderLayer):
                                           )
 
         # build MLP
-        if 'moe' in config.model_type.lower():
+        if 'moe' in config.model_type.lower() or hasattr(config, 'moe_intermediate_size'):
             self.mlp = Qwen3_5MoeSparseMoeBlock(config,
                                                 layer_idx,
                                                 dtype=dtype,

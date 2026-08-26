@@ -22,6 +22,7 @@ from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
+from .parallel_config import derive_parallel_config
 from .supported_models import is_supported
 
 # TODO: find another way import _turbomind
@@ -35,6 +36,7 @@ from .tokenizer_info import TokenizerInfo  # noqa: E402
 logger = get_logger('lmdeploy')
 
 MAX_LOGPROBS = 1024
+_FP32_MAMBA_SSM_DTYPE = os.getenv('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', '0') == '1'
 
 
 def _construct_stop_or_bad_words(words: list[int] = None):
@@ -66,9 +68,11 @@ def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
 
 
 def complete_parallel_config(cfg: TurbomindEngineConfig):
-    if any((cfg.attn_dp_size, cfg.attn_tp_size, cfg.mlp_dp_size, cfg.mlp_tp_size, cfg.outer_dp_size)):
+    if any((cfg.attn_dp_size, cfg.attn_tp_size, cfg.attn_cp_size, cfg.mlp_dp_size, cfg.mlp_tp_size,
+            cfg.outer_dp_size)):
         cfg.attn_dp_size = cfg.attn_dp_size or 1
         cfg.attn_tp_size = cfg.attn_tp_size or 1
+        cfg.attn_cp_size = cfg.attn_cp_size or 1
         cfg.mlp_dp_size = cfg.mlp_dp_size or 1
         cfg.mlp_tp_size = cfg.mlp_tp_size or 1
         cfg.outer_dp_size = cfg.outer_dp_size or 1
@@ -83,24 +87,17 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 def update_parallel_config(cfg: TurbomindEngineConfig):
     cfg.device_num = len(cfg.devices) * cfg.nnodes if cfg.devices else cfg.device_num
     if not complete_parallel_config(cfg):
-        total = cfg.dp * cfg.tp
-        if not cfg.device_num:
-            count = torch.cuda.device_count() * cfg.nnodes
-            if total < count:
-                count = total
-            cfg.device_num = count
-        assert total % cfg.device_num == 0
-        overlap = total // cfg.device_num
-        attn_dp_size = overlap
-        mlp_tp_size = overlap
-        inner_tp_size = cfg.tp // mlp_tp_size
-        cfg.outer_dp_size = cfg.dp // attn_dp_size
-        cfg.attn_dp_size = attn_dp_size
-        cfg.attn_tp_size = inner_tp_size // cfg.cp
-        cfg.attn_cp_size = cfg.cp
-        cfg.mlp_dp_size = 1
-        cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
-    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
+        available = torch.cuda.device_count() * cfg.nnodes
+        parallel = derive_parallel_config(cfg.dp, cfg.tp, cfg.ep, cfg.cp, cfg.device_num, available)
+        cfg.device_num = parallel.device_num
+        cfg.outer_dp_size = parallel.outer_dp_size
+        cfg.attn_dp_size = parallel.attn_dp_size
+        cfg.attn_tp_size = parallel.attn_tp_size
+        cfg.attn_cp_size = parallel.attn_cp_size
+        cfg.mlp_dp_size = parallel.mlp_dp_size
+        cfg.mlp_tp_size = parallel.mlp_tp_size
+    if cfg.ep > 1:
+        assert cfg.nnodes == 1, 'ep > 1 is only supported in single-node mode'
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
     # update devices
     cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
@@ -166,6 +163,7 @@ class TurboMind:
         self.source_model = model_loader.model
         self.is_dummy = self.model_comm.is_dummy_node()
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
+        self._grammar_compiler = None
         if not _engine_config.empty_init:
             with torch.cuda.device(self.devices[0]):
                 model_loader.export()
@@ -173,6 +171,16 @@ class TurboMind:
             self._create_engine()
 
         self.session_len = _engine_config.session_len
+        self.health_executor = ThreadPoolExecutor(max_workers=1)
+
+    @property
+    def grammar_compiler(self):
+        """Lazy-initialized GrammarCompiler shared across all requests."""
+        if self._grammar_compiler is None:
+            tokenizer_info = TokenizerInfo.from_huggingface(
+                self.tokenizer.model.model, vocab_size=self._vocab_size)
+            self._grammar_compiler = _xgr.GrammarCompiler(tokenizer_info)
+        return self._grammar_compiler
 
     def _process_weights(self):
         """Process weight."""
@@ -227,9 +235,12 @@ class TurboMind:
         dtype_map = {
             'bfloat16': _tm.DataType.TYPE_BF16,
             'float16': _tm.DataType.TYPE_FP16,
+            'float32': _tm.DataType.TYPE_FP32,
         }
+        state_dtype = 'float32' if _FP32_MAMBA_SSM_DTYPE else engine_config.dtype
         ec = _tm.EngineConfig()
         ec.data_type = dtype_map[engine_config.dtype]
+        ec.state_dtype = dtype_map[state_dtype]
         ec.cache_block_seq_len = engine_config.cache_block_seq_len
         ec.quant_policy = engine_config.quant_policy
         ec.max_batch_size = engine_config.max_batch_size
@@ -238,6 +249,10 @@ class TurboMind:
         ec.cache_max_block_count = engine_config.cache_max_entry_count
         ec.cache_chunk_size = engine_config.cache_chunk_size
         ec.enable_prefix_caching = engine_config.enable_prefix_caching
+        ec.cache_checkpoint_interval = engine_config.cache_checkpoint_interval
+        ec.cache_prompt = engine_config.cache_prompt
+        ec.cache_prompt_boundary_skip = engine_config.cache_prompt_boundary_skip
+        ec.cache_generation = engine_config.cache_generation
         ec.enable_metrics = engine_config.enable_metrics
         ec.num_tokens_per_iter = engine_config.num_tokens_per_iter
         ec.max_prefill_iters = engine_config.max_prefill_iters
@@ -247,13 +262,15 @@ class TurboMind:
         ec.attn_tp_size = engine_config.attn_tp_size
         ec.attn_cp_size = engine_config.attn_cp_size
         ec.mlp_tp_size = engine_config.mlp_tp_size
+        ec.ep_size = engine_config.ep
         ec.devices = engine_config.devices
         ec.nnodes = engine_config.nnodes
         ec.node_rank = engine_config.node_rank
         ec.communicator = engine_config.communicator
 
         logger.info(f'turbomind engine config:\n\n'
-                    f'dtype={engine_config.dtype}, session_len={engine_config.session_len}, '
+                    f'dtype={engine_config.dtype}, state_dtype={state_dtype}, '
+                    f'session_len={engine_config.session_len}, '
                     f'max_batch_size={engine_config.max_batch_size}, '
                     f'devices={engine_config.devices}, '
                     f'tp={engine_config.attn_tp_size}, '
@@ -392,9 +409,8 @@ class TurboMind:
         tm_metrics = self.model_comm.get_schedule_metrics(0)
         return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
                                waiting_seqs=tm_metrics.waiting_seqs,
-                               total_blocks=tm_metrics.total_blocks,
-                               active_blocks=tm_metrics.active_blocks,
-                               free_blocks=tm_metrics.free_blocks,
+                               cache_usage=tm_metrics.cache_usage,
+                               prefix_cache_hit_rate=tm_metrics.prefix_cache_hit_rate,
                                scheduler_tick=tm_metrics.scheduler_tick)
 
     def _get_health_status(self) -> dict:
@@ -419,7 +435,10 @@ class TurboMind:
 
     async def get_health_status(self) -> dict:
         """Get backend health status without blocking the event loop."""
-        return await asyncio.to_thread(self._get_health_status)
+        # MultimodalProcessor may submit a large number of tasks to the default thread pool, causing
+        # the _get_health_status task to be selected after the DEFAULT_PROBE_TIMEOUT has already elapsed.
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.health_executor, self._get_health_status)
 
 
 def _get_logits(outputs, offset: int):
@@ -508,14 +527,16 @@ def _get_metrics(metrics):
 
     def _func(out: EngineOutput, step: int, **kwargs):
         nonlocal is_first
+        cached_tokens = metrics.cached_tokens
         if not is_first:
-            out.req_metrics = RequestMetrics(token_timestamp=time.time())
+            out.req_metrics = RequestMetrics(token_timestamp=time.time(), cached_tokens=cached_tokens)
         else:
-            events = [
-                EngineEvent(EventType.QUEUED, metrics.enqueue_time / 1000000),
-                EngineEvent(EventType.SCHEDULED, metrics.scheduled_time / 1000000),
-            ]
-            out.req_metrics = RequestMetrics(token_timestamp=time.time(), engine_events=events)
+            events = [EngineEvent(EventType.QUEUED, metrics.enqueue_time / 1000000)]
+            if metrics.scheduled_time:
+                events.append(EngineEvent(EventType.SCHEDULED, metrics.scheduled_time / 1000000))
+            out.req_metrics = RequestMetrics(token_timestamp=time.time(),
+                                             engine_events=events,
+                                             cached_tokens=cached_tokens)
             is_first = False
 
     return _func
@@ -567,14 +588,13 @@ class TurboMindInstance:
             0: ResponseType.SUCCESS,
             1: ResponseType.SESSION_NOT_EXIST,
             2: ResponseType.SESSION_REPEAT,
-            3: ResponseType.SESSION_REPEAT,
-            4: ResponseType.INTERNAL_ENGINE_ERROR,
             5: ResponseType.INTERNAL_ENGINE_ERROR,
             6: ResponseType.INPUT_LENGTH_ERROR,
             7: ResponseType.FINISH,
             8: ResponseType.CANCEL,
-            9: ResponseType.PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE,
+            9: ResponseType.PREFIX_CACHE_CONFLICT,
             10: ResponseType.NO_QUEUE,
+            11: ResponseType.OUT_OF_MEMORY,
             -1: ResponseType.INTERNAL_ENGINE_ERROR,
         }
 
@@ -633,19 +653,11 @@ class TurboMindInstance:
 
         return values, ranges
 
-    def prepare_mrope(self, input_meta: dict[str, Any], input_len: int):
-        mrope_position_ids = input_meta['mrope_position_ids']
-        mrope_position_delta = input_meta['mrope_position_delta']
-        assert mrope_position_ids.size(-1) == input_len
-        mrope_position_ids = mrope_position_ids.t().contiguous()
-        return mrope_position_ids, mrope_position_delta
-
     def prepare_inputs(self,
                        input_ids,
                        gen_config: GenerationConfig,
                        input_embeddings=None,
-                       input_embedding_ranges=None,
-                       input_meta: dict[str, Any] = None):
+                       input_embedding_ranges=None):
         """Convert inputs format."""
         assert isinstance(input_ids, Sequence)
 
@@ -659,26 +671,14 @@ class TurboMindInstance:
             inputs['input_embeddings'] = input_embeddings.cpu()
             inputs['input_embedding_ranges'] = input_embedding_ranges
 
-        if input_meta and 'mrope_position_ids' in input_meta:
-            mrope_position_ids, mrope_position_delta = self.prepare_mrope(input_meta, input_len)
-            inputs['mrope_position_ids'] = mrope_position_ids.type(torch.int32)
-            inputs['mrope_position_delta'] = mrope_position_delta.type(torch.int32)
-            inputs['mrope_length'] = torch.IntTensor([mrope_position_ids.shape[0]])
-
         return inputs, input_len
 
     async def async_cancel(self, session_id: int = None):
         self.model_inst.cancel()
 
-    def async_end_cb(self, fut: asyncio.Future, status: int):
-        """Executing on engine's signaling thread."""
-        logger.info(f'[async_end_cb] session ended, status = {status}')
-        fut.get_loop().call_soon_threadsafe(fut.set_result, status)
-
     async def async_end(self, session_id):
-        fut = asyncio.get_running_loop().create_future()
-        self.model_inst.end(partial(self.async_end_cb, fut), session_id)
-        await fut
+        """TurboMind is stateless; there is no engine-side session to end."""
+        return
 
     def async_signal_cb(self, s: StreamingSemaphore):
         """Executing on engine's signaling thread."""
@@ -689,11 +689,7 @@ class TurboMindInstance:
                                  input_ids,
                                  input_embeddings=None,
                                  input_embedding_ranges=None,
-                                 input_meta: dict[str, Any] = None,
                                  multimodal: list[dict[str, Any]] = None,
-                                 sequence_start: bool = True,
-                                 sequence_end: bool = False,
-                                 step=0,
                                  gen_config: GenerationConfig = None,
                                  stream_output=False,
                                  **kwargs):
@@ -705,10 +701,6 @@ class TurboMindInstance:
             input_embeddings (list[numpy.ndarray]): embeddings features
             input_embedding_ranges (list[tuple[int,int]]): the begin/end
               offsets of input_embeddings to input_ids
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
-            step (int): the offset of the k/v cache
-            stop (bool): indicator for cancelling the session
             gen_config (GenerationConfig): generation config
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
@@ -719,15 +711,11 @@ class TurboMindInstance:
         inputs, input_len = self.prepare_inputs(input_ids=input_ids,
                                                 input_embeddings=input_embeddings,
                                                 input_embedding_ranges=input_embedding_ranges,
-                                                input_meta=input_meta,
                                                 gen_config=gen_config)
 
         if gen_config.response_format is not None:
-            tokenizer = self.tm_model.tokenizer
-            vocab_size = self.tm_model._vocab_size
-
             try:
-                tokenizer_info = TokenizerInfo.from_huggingface(tokenizer.model.model, vocab_size=vocab_size)
+                compiler = self.tm_model.grammar_compiler
                 decode_grammar_type = gen_config.response_format['type']
                 if decode_grammar_type == 'json_schema':
                     decode_grammar = gen_config.response_format[decode_grammar_type]['schema']
@@ -735,8 +723,6 @@ class TurboMindInstance:
                     decode_grammar = gen_config.response_format[decode_grammar_type]
                 elif decode_grammar_type == 'json_object':
                     decode_grammar = '{"type" : "object", "additionalProperties": true}'
-
-                compiler = _xgr.GrammarCompiler(tokenizer_info)
 
                 if decode_grammar_type == 'json_schema':
                     decode_grammar = json.dumps(decode_grammar)
@@ -753,11 +739,11 @@ class TurboMindInstance:
 
                 self.model_inst.set_grammar(grammar)
             except ValueError as e:
-                logger.warning(f'Failed to initialize guided decoding for tokenizer {tokenizer}, '
+                logger.warning(f'Failed to initialize guided decoding, '
                                f'disable guided decoding: {e}')
                 gen_config.response_format = None
 
-        session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
+        session = _tm.SessionParam(id=session_id, step=0)
 
         inputs = _np_dict_to_tm_dict(inputs)
         mm_inputs = self.tm_model.mm_input_converter(multimodal)
@@ -778,7 +764,7 @@ class TurboMindInstance:
         state = None
 
         output_ids = []
-        prev_len = step + input_len
+        prev_len = input_len
         try:
             while True:
                 await sem.acquire()

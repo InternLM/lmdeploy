@@ -115,7 +115,7 @@ class Glm4MoeLiteModel(TextModel):
     def moe(self, pfx):
         cfg = self._moe_cfg.clone()
 
-        m = MoeBuilder(cfg, self._ctx)
+        m = MoeBuilder(cfg, self._ctx, ep=self._ep)
 
         m.add_gate('gate', self._linear(pfx + 'gate'))
 
@@ -123,7 +123,7 @@ class Glm4MoeLiteModel(TextModel):
         m.add_param('score_correction_bias', correction)
 
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for e in range(cfg.expert_num):
+        for e in m.range(cfg.expert_num):
             experts[e] = self.ffn(pfx + 'experts' + e,
                                   self.cfg.moe_intermediate_size, is_expert=True)
         m.experts = experts.build()

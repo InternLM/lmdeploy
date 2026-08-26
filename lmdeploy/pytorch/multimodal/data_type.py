@@ -99,6 +99,20 @@ class MultiModalData:
         out_dict['meta'] = new_meta
         return MultiModalData(**out_dict)
 
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of multimodal tensor fields."""
+        tensors = [self.data] if isinstance(self.data, Tensor) else self.data
+        for tensor in tensors:
+            if tensor.is_cuda:
+                tensor.record_stream(stream)
+
+        for value in (self.meta or {}).values():
+            if isinstance(value, Tensor):
+                if value.is_cuda:
+                    value.record_stream(stream)
+            elif hasattr(value, 'record_stream'):
+                value.record_stream(stream)
+
 
 MultiModalInputs = dict[str, list[MultiModalData]]
 

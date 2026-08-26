@@ -8,6 +8,7 @@ import uuid
 import aiohttp
 import requests
 from openai import OpenAI
+from utils.config_utils import get_model_path_from_config
 from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_PORT
 
 from lmdeploy.serve.openai.protocol import (
@@ -412,14 +413,139 @@ def assert_tool_name_single_delta(stream, expected_name: str) -> None:
     for chunk in stream:
         if not chunk.choices:
             continue
-        tool_calls_delta = _stream_delta_field(chunk.choices[0].delta, 'tool_calls')
-        if tool_calls_delta:
-            for tc in tool_calls_delta:
-                if tc.function and tc.function.name:
-                    name_events.append(tc.function.name)
+        name_events.extend(_iter_tool_function_fields(chunk.choices[0].delta, 'name'))
     assert len(name_events) == 1, f'Expected one function-name delta, got {name_events!r}'
     assert name_events[0] == expected_name, (
         f'Expected function name {expected_name!r}, got {name_events[0]!r}')
+
+
+def _stream_part_field(part, field: str):
+    """Read a field from an OpenAI SDK model or a plain SSE dict."""
+    if isinstance(part, dict):
+        return part[field] if field in part else None
+    return _stream_object_field(part, field)
+
+
+def _tool_call_function_field(tc, field: str):
+    if isinstance(tc, dict):
+        if 'function' not in tc:
+            return None
+        fn = tc['function']
+        if not isinstance(fn, dict) or field not in fn:
+            return None
+        return fn[field]
+    if tc.function is None:
+        return None
+    return getattr(tc.function, field, None)
+
+
+def _normalize_stream_delta_choice_pairs(stream_or_chunks) -> list[tuple]:
+    """Materialize an OpenAI SDK stream into ``(delta, choice)`` pairs."""
+    if isinstance(stream_or_chunks, list):
+        items = stream_or_chunks
+    else:
+        items = list(stream_or_chunks)
+
+    pairs = []
+    for item in items:
+        if isinstance(item, tuple) and len(item) == 2:
+            pairs.append(item)
+            continue
+        if isinstance(item, dict):
+            choices = item['choices']
+            if not choices:
+                continue
+            choice = choices[0]
+            pairs.append((choice['delta'], choice))
+            continue
+        if not item.choices:
+            continue
+        pairs.append((item.choices[0].delta, item.choices[0]))
+    return pairs
+
+
+def _stream_tool_call_index(tc, default: int = 0) -> int:
+    if isinstance(tc, dict):
+        idx = tc.get('index')
+    else:
+        idx = getattr(tc, 'index', None)
+    return default if idx is None else idx
+
+
+def _iter_tool_function_fields(delta, field: str):
+    """Yield non-empty tool function field values from one stream delta."""
+    for tc in _stream_part_field(delta, 'tool_calls') or ():
+        value = _tool_call_function_field(tc, field)
+        if value:
+            yield value
+
+
+def _collect_stream_argument_chunks_by_index(
+        stream_or_chunks) -> dict[int, list[str]]:
+    """Group streaming ``arguments`` deltas by tool_call index."""
+    by_idx: dict[int, list[str]] = {}
+    for delta, _choice in _normalize_stream_delta_choice_pairs(stream_or_chunks):
+        for tc in _stream_part_field(delta, 'tool_calls') or ():
+            value = _tool_call_function_field(tc, 'arguments')
+            if not value:
+                continue
+            idx = _stream_tool_call_index(tc)
+            by_idx.setdefault(idx, []).append(value)
+    return by_idx
+
+
+def assert_tool_arguments_incremental(stream_or_chunks, *, min_arg_deltas: int = 2) -> list[str]:
+    """Tool ``arguments`` must arrive across multiple SSE deltas."""
+    by_idx = _collect_stream_argument_chunks_by_index(stream_or_chunks)
+    arg_chunks: list[str] = []
+    for idx in sorted(by_idx):
+        chunks = by_idx[idx]
+        arg_chunks.extend(chunks)
+        json.loads(''.join(chunks))
+
+    assert len(arg_chunks) >= min_arg_deltas, (
+        f'Expected >={min_arg_deltas} tool argument SSE deltas, got {len(arg_chunks)}: '
+        f'{arg_chunks!r}')
+    return arg_chunks
+
+
+def assert_tool_arguments_json_joinable(stream_or_chunks) -> list[str]:
+    """Per-index joined ``arguments`` must be valid JSON (parallel-safe)."""
+    by_idx = _collect_stream_argument_chunks_by_index(stream_or_chunks)
+    arg_chunks: list[str] = []
+    for idx in sorted(by_idx):
+        chunks = by_idx[idx]
+        arg_chunks.extend(chunks)
+        json.loads(''.join(chunks))
+    return arg_chunks
+
+
+def validate_stream_tool_call_chunks(
+    stream_or_chunks,
+    *,
+    check_incremental_arguments: bool = False,
+) -> None:
+    """SSE protocol checks during streaming tool-call argument phase."""
+    assert_tool_arguments_json_joinable(stream_or_chunks)
+    if check_incremental_arguments:
+        assert_tool_arguments_incremental(stream_or_chunks)
+
+
+def _stream_protocol_chunks(result: dict) -> list | None:
+    """Return stored raw stream chunks for protocol checks."""
+    if result['raw_sse_chunks']:
+        return result['raw_sse_chunks']
+    if result['raw_chunks']:
+        return result['raw_chunks']
+    return None
+
+
+def _assert_stream_tool_call_protocol(result: dict, *, require_tool_call: bool) -> None:
+    if not require_tool_call:
+        return
+    chunks = _stream_protocol_chunks(result)
+    if chunks:
+        validate_stream_tool_call_chunks(chunks)
 
 
 def _assert_stream_finish_reason(result: dict, expected_finish_reason: str | None) -> None:
@@ -460,11 +586,10 @@ _TOKENIZER_CACHE: dict[str, object] = {}
 
 
 def resolve_tokenizer_model_path(config: dict, model_case: str) -> str:
-    """Local HF path for tokenizer: ``{model_path}/{model_case}``."""
+    """Tokenizer path: HF repo id (``hf_hub``) or ``{model_path}/{model_case}`` (join)."""
     if os.path.isabs(model_case):
         return model_case
-    model_root = config['model_path']
-    return os.path.join(model_root, model_case)
+    return get_model_path_from_config(config, model_case)
 
 
 def get_tokenizer(tokenizer_path: str):
@@ -610,6 +735,8 @@ def _new_stream_tool_call_result() -> dict:
         'content': '',
         'chunk_count': 0,
         'raw_text': '',
+        'raw_chunks': [],
+        'raw_sse_chunks': [],
         'output_ids': [],
         'routed_experts': None,
         'prompt_tokens': 0,
@@ -648,9 +775,8 @@ def _stream_choice_extension(choice, field: str):
 
 
 def _stream_delta_field(delta, field: str):
-    """Read lmdeploy-only stream fields on ``delta`` (e.g.
-    ``reasoning_content``)."""
-    return _stream_object_field(delta, field)
+    """Read a field from an OpenAI SDK delta or a plain SSE dict delta."""
+    return _stream_part_field(delta, field)
 
 
 def _merge_stream_choice(
@@ -741,8 +867,10 @@ def _finalize_stream_tool_call_result(result: dict, tool_calls: dict) -> dict:
 def collect_stream_tool_call(stream):
     tool_calls = {}
     result = _new_stream_tool_call_result()
+    raw_chunks = []
 
     for chunk in stream:
+        raw_chunks.append(chunk)
         result['chunk_count'] += 1
         if chunk.usage is not None:
             if chunk.usage.prompt_tokens:
@@ -754,6 +882,7 @@ def collect_stream_tool_call(stream):
             continue
         _merge_stream_choice(chunk.choices[0], result, tool_calls)
 
+    result['raw_chunks'] = raw_chunks
     result['stream_complete'] = True
     return _finalize_stream_tool_call_result(result, tool_calls)
 
@@ -791,6 +920,7 @@ def collect_stream_tool_call_http(
     tool_calls = {}
     result = _new_stream_tool_call_result()
     raw_lines: list[str] = []
+    raw_sse_chunks: list[dict] = []
 
     with requests.post(url, json=payload, headers=headers, stream=True, timeout=timeout) as resp:
         if resp.status_code != 200:
@@ -816,6 +946,7 @@ def collect_stream_tool_call_http(
             except json.JSONDecodeError:
                 continue
 
+            raw_sse_chunks.append(item)
             _apply_stream_chunk(item, result, tool_calls)
 
     if log_file:
@@ -825,6 +956,7 @@ def collect_stream_tool_call_http(
         except Exception:
             pass
 
+    result['raw_sse_chunks'] = raw_sse_chunks
     result['prompt_tokens_computed'] = prompt_tokens_computed
     if prompt_tokens_computed and not result['prompt_tokens']:
         result['prompt_tokens'] = prompt_tokens_computed
@@ -945,6 +1077,7 @@ async def collect_stream_tool_call_http_async(
     tool_calls: dict = {}
     result = _new_stream_tool_call_result()
     raw_lines: list[str] = []
+    raw_sse_chunks: list[dict] = []
     buffer = b''
     client_timeout = aiohttp.ClientTimeout(total=timeout)
 
@@ -976,6 +1109,7 @@ async def collect_stream_tool_call_http_async(
                 except json.JSONDecodeError:
                     continue
 
+                raw_sse_chunks.append(item)
                 _apply_stream_chunk(item, result, tool_calls)
 
             if result['stream_complete']:
@@ -988,6 +1122,7 @@ async def collect_stream_tool_call_http_async(
         except Exception:
             pass
 
+    result['raw_sse_chunks'] = raw_sse_chunks
     result['prompt_tokens_computed'] = prompt_tokens_computed
     if prompt_tokens_computed and not result['prompt_tokens']:
         result['prompt_tokens'] = prompt_tokens_computed
@@ -1092,7 +1227,7 @@ def attach_decoded_validation(
         return result
     if enable_thinking is False:
         return result
-    output_ids = result.get('output_ids') or []
+    output_ids = result['output_ids']
     if not output_ids:
         return result
     tokenizer = get_tokenizer(tokenizer_path)
@@ -1178,6 +1313,7 @@ def validate_stream_tool_call_result(
     tools: list | None = None,
 ) -> None:
     _assert_stream_finish_reason(result, expected_finish_reason)
+    _assert_stream_tool_call_protocol(result, require_tool_call=require_tool_call)
 
     if require_tool_call:
         assert result['function_name'], 'stream ended without function name'
@@ -1338,7 +1474,10 @@ def validate_reference_turn_result(
 
 
 def append_concurrent_turn_to_messages(messages: list, result: dict) -> None:
-    ast_msg = {'role': 'assistant', 'content': result['content']}
+    content = result['content']
+    if content is None:
+        content = ''
+    ast_msg = {'role': 'assistant', 'content': content}
     if result['reasoning_content']:
         ast_msg['reasoning_content'] = result['reasoning_content']
 
@@ -1640,10 +1779,8 @@ def build_messages_with_tool_response(
             'content': "What's the weather like in Dallas, TX?",
         },
         {
-            'role':
-            'assistant',
-            'content':
-            None,
+            'role': 'assistant',
+            'content': '',
             'tool_calls': [{
                 'id': tool_call_id,
                 'type': 'function',
@@ -1678,10 +1815,8 @@ def build_messages_with_parallel_tool_responses():
             'content': "What's the weather in Dallas, TX and San Francisco, CA?",
         },
         {
-            'role':
-            'assistant',
-            'content':
-            None,
+            'role': 'assistant',
+            'content': '',
             'tool_calls': [
                 {
                     'id': 'call_001',

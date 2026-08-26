@@ -18,11 +18,16 @@ class FakeAsyncEngine:
 
     def __init__(self):
         self.generate_kwargs = None
+        self.preprocess_kwargs = None
         self.prompt = None
         self.session_mgr = FakeSessionManager()
 
-    def generate(self, prompt, session, **kwargs):
+    async def preprocess(self, prompt, session, **kwargs):
         self.prompt = prompt
+        self.preprocess_kwargs = kwargs
+        return SimpleNamespace(prompt=prompt, session=session)
+
+    def generate(self, request, **kwargs):
         self.generate_kwargs = kwargs
 
         async def _generator():
@@ -41,6 +46,7 @@ class PassthroughResponseParser:
 
     tool_parser_cls = None
     last_request = None
+    reasoning_tokens = None
 
     def __init__(self, request):
         self.request = request
@@ -64,7 +70,16 @@ class FakeServerContext:
 
     def __init__(self):
         self.async_engine = FakeAsyncEngine()
+        self.default_gen_config = {}
         self.sessions = []
+
+    @property
+    def engine_config(self):
+        return self.async_engine.backend_config
+
+    @property
+    def session_manager(self):
+        return self.async_engine.session_mgr
 
     def create_session(self, session_id):
         session = FakeSession(session_id)

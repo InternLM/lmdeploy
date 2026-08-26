@@ -12,12 +12,17 @@ namespace turbomind {
 
 class ModelWeight;
 class DecoderLayerWeight;
+class CacheRegistry;
 
 class UnifiedDecoder {
 public:
     using WeightType = DecoderLayerWeight;
 
-    UnifiedDecoder(const EngineParam& engine, const Context& ctx, int phases, const ModelWeight& model_weight);
+    UnifiedDecoder(CacheRegistry&     registry,
+                   const EngineParam& engine,
+                   const Context&     ctx,
+                   int                phases,
+                   const ModelWeight& model_weight);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
@@ -26,6 +31,7 @@ public:
 private:
     const size_t layer_num_;
     const size_t hidden_units_;
+    const bool   output_norm_zero_centered_;
 
     const int attn_tp_size_;
     const int attn_dp_size_;
@@ -50,6 +56,7 @@ private:
                                   const Tensor& bias,
                                   const Tensor& weight,
                                   float         eps,
+                                  bool          zero_centered,
                                   int           token_num,
                                   int           t0,
                                   int           t1,

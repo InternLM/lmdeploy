@@ -26,6 +26,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/batch.h"
+#include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/kernels/attention/cp_utils.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/attention_weight.h"
@@ -55,14 +56,11 @@ public:
 
     ~UnifiedAttentionLayer();
 
-    UnifiedAttentionLayer(int                           quant_policy,
-                          const std::vector<int>&       layer_types,
-                          int                           layer_num,
-                          std::vector<AttentionWeight*> attn_weights,
+    UnifiedAttentionLayer(std::vector<AttentionWeight*> weights,
+                          CacheRegistry&                registry,
                           const EngineParam&            engine,
                           const Context&                context,
-                          int                           phases,
-                          bool                          init);
+                          int                           phases);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
@@ -85,7 +83,6 @@ private:
     const EngineParam      engine_param_;
     const Context&         context_;
     int&                   is_warm_up_;
-    const bool             init_;
 
     LlamaLinear& linear_;
     const int    arch_{};
@@ -100,18 +97,19 @@ private:
 
     std::vector<std::shared_ptr<AttentionData>> data_;
 
-    std::vector<int> cache_layer_ids_;
+    size_t prefix_cache_offset_{};
+
+    Buffer_<void*> block_ptrs_buf_;
+    Buffer_<int>   block_ptrs_offsets_buf_;
 
     ///////////////////////////////////////////////////////
     /// temp runtime buffers (allocated in constructor)
     Tensor_<float> partial_O_;
     Tensor_<float> partial_ML_;
     Tensor_<int>   split_cnt_;
-    Tensor         tmp_attn_;
 
     Buffer_<float> rope_base_buf_;
-    Buffer_<int>   mrope_position_delta_buf_;
-    Buffer_<int>   mrope_length_buf_;
+    Buffer_<int>   mrope_default_buf_;
 
     CpPostContext cp_fn_ctx_;  // context parallel
 };

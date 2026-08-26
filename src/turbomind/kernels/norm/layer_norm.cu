@@ -8,6 +8,7 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/norm/layer_norm.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -228,7 +229,7 @@ void invokeLayerNorm(
         auto launch = [&](auto has_bias_c) {
             // Redeclare these as constexpr inside this nested lambda. MSVC odr-uses
             // (captures) constexpr locals read from an enclosing lambda and then
-            // refuses them as non-type template arguments; see rms_norm.cu (RMSNormQK).
+            // refuses them as non-type template arguments; see rms_norm.cu (QkRMSNorm).
             constexpr int  kThreads = 512;
             constexpr int  kVecSize = 16 / sizeof(T);
             constexpr bool kHasBias = decltype(has_bias_c)::value;
@@ -254,6 +255,7 @@ void invokeLayerNorm(
     };
 
     TM_DISPATCH_DTYPES(x.dtype(), invoke, half_t, bfloat16_t);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void invokeResidualBiasLayerNorm(void*        hidden_states,
@@ -286,7 +288,7 @@ void invokeResidualBiasLayerNorm(void*        hidden_states,
         auto launch = [&](auto has_norm_bias_c, auto has_residual_bias_c) {
             // Redeclare these as constexpr inside this nested lambda. MSVC odr-uses
             // (captures) constexpr locals read from an enclosing lambda and then
-            // refuses them as non-type template arguments; see rms_norm.cu (RMSNormQK).
+            // refuses them as non-type template arguments; see rms_norm.cu (QkRMSNorm).
             constexpr int  kThreads         = 512;
             constexpr int  kVecSize         = 16 / sizeof(T);
             constexpr bool kHasNormBias     = decltype(has_norm_bias_c)::value;
@@ -319,6 +321,7 @@ void invokeResidualBiasLayerNorm(void*        hidden_states,
     };
 
     TM_DISPATCH_DTYPES(dtype, invoke, half_t, bfloat16_t);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 }  // namespace turbomind

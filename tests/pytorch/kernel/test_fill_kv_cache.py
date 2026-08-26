@@ -257,6 +257,13 @@ class TestFillKVCacheInt8(TestFillKVCache):
 
 class TestFillKVCacheInt4(TestFillKVCacheInt8):
 
+    @pytest.fixture(autouse=True)
+    def initialize(self):
+        # Exact int4 packed-byte checks are brittle when random inputs land on
+        # affine quantization thresholds. Keep this path deterministic.
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+
     @pytest.fixture
     def k_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim):
         shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim // 2)
@@ -284,6 +291,33 @@ class TestFillKVCacheInt4(TestFillKVCacheInt8):
         torch.testing.assert_close(v_scales_zeros, gt[3])
         torch.testing.assert_close(k_caches, gt[0])
         torch.testing.assert_close(v_caches, gt[1])
+
+
+class TestFillKVCacheInt4NonPow2(TestFillKVCacheInt4):
+    """Int4 with a packed head width that is not a power of two.
+
+    BLOCK_D then covers lanes past the end of the head. The states are kept away from zero so that those lanes would
+    widen the quantization range if they took part in it.
+    """
+
+    @pytest.fixture
+    def k_states(self, num_tokens, num_heads, head_dim):
+        yield torch.rand(num_tokens, num_heads, head_dim).cuda() * 2 + 1
+
+    @pytest.fixture
+    def v_states(self, k_states):
+        yield torch.rand_like(k_states) * 2 + 1
+
+    @pytest.mark.parametrize('head_dim', [96, 128], indirect=True)
+    @pytest.mark.parametrize(['seq_lens', 'history_lens'], [
+        ((1, 1, 1, 1), (1, 16, 31, 24)),
+        ((1, 8, 16, 24), (1, 16, 31, 24)),
+    ],
+                             indirect=True)
+    def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, k_scales_zeros, v_scales_zeros, block_offsets,
+                           q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt, nbits):
+        super().test_fill_kv_cache(k_states, v_states, k_caches, v_caches, k_scales_zeros, v_scales_zeros,
+                                   block_offsets, q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt, nbits)
 
 
 class TestFillKVCacheInt42(TestFillKVCacheInt4):

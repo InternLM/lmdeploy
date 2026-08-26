@@ -38,6 +38,11 @@ class LinearBlockedF8Builder(ABC):
 
     @staticmethod
     @abstractmethod
-    def build(in_features: int, out_features: int, bias: bool = True, dtype: torch.dtype = None):
+    def build(in_features: int,
+              out_features: int,
+              block_size: int = 128,
+              bias: bool = True,
+              dtype: torch.dtype = None,
+              fp8_dtype: torch.dtype = torch.float8_e4m3fn):
         """build."""
         raise NotImplementedError
