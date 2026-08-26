@@ -7,6 +7,7 @@ from utils.config_utils import (
     get_case_str_by_config,
     get_eval_preset_config,
     get_func_config_list,
+    get_gpus_per_instance,
     get_model_path_from_config,
     get_workerid,
     resolve_eval_config_name,
@@ -87,14 +88,11 @@ def _run_proxy_distributed_test(config,
                 os.makedirs(eval_path, exist_ok=True)
             case_name = get_case_str_by_config(run_config)
 
-            extra_config = {'max-num-workers': 16}
-
             result, msg = eval_test(model_path,
                                     eval_path,
                                     case_name,
                                     port=constant.PROXY_PORT,
                                     test_type=test_type,
-                                    extra_config=extra_config,
                                     eval_config_name=eval_config_name,
                                     **preset_config)
             assert result, f'❌ {test_type} test failed: {msg}'
@@ -119,14 +117,13 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
         eval_path = os.path.join(eval_path, eval_subpath)
         os.makedirs(eval_path, exist_ok=True)
 
-    total_gpus = int(os.environ.get('TOTAL_GPU_COUNT', '8'))
-    work_num = int(total_gpus / run_config.get('parallel_config', {}).get('tp', 1))
-
-    extra_config = {'max-num-workers': min(work_num * 16, 64)}
-
+    parallel_config = run_config['parallel_config']
     case_name = get_case_str_by_config(run_config)
 
     if test_type == 'infer':
+        gpus_per_instance = get_gpus_per_instance(parallel_config)
+        total_gpus = int(os.environ.get('TOTAL_GPU_COUNT', '8'))
+        work_num = int(total_gpus / gpus_per_instance)
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), constant.PROXY_PORT,
                                                       f'{case_name}_infer')
         run_config_new = run_config.copy()
@@ -154,7 +151,6 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
                       case_name,
                       port=constant.PROXY_PORT,
                       test_type=test_type,
-                      extra_config=extra_config,
                       eval_config_name=eval_config_name,
                       **preset_config)
         finally:
@@ -171,7 +167,6 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
                       case_name,
                       port=constant.PROXY_PORT,
                       test_type=test_type,
-                      extra_config=extra_config,
                       eval_config_name=eval_config_name,
                       **preset_config)
             return
@@ -190,7 +185,6 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
                           case_name,
                           port=port,
                           test_type=test_type,
-                          extra_config=extra_config,
                           eval_config_name=eval_config_name,
                           **preset_config)
             else:
@@ -256,7 +250,7 @@ def test_turbomind_infer_cp2tp8(config, run_config, worker_id):
         'turbomind',
         {'tp': 2, 'dp': 4, 'ep': 8},
         func_type='evaluate'))
-def test_turbomind_infer_tp2dp4ep8(config, run_config, worker_id):
+def test_turbomind_restful_distributed_tp2dp4ep8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'infer')
 
 
@@ -690,7 +684,7 @@ def test_turbomind_eval_cp2tp8(config, run_config, worker_id):
         'turbomind',
          {'tp': 2, 'dp': 4, 'ep': 8},
         func_type='evaluate'))
-def test_turbomind_eval_tp2dp4ep8(config, run_config, worker_id):
+def test_turbomind_eval_distributed_tp2dp4ep8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
 
@@ -746,7 +740,7 @@ def test_pytorch_restful_prefix_cache_tp2dp4ep8(shared_proxy_manager, config, ru
     'run_config',
     get_func_config_list('turbomind', {'tp': 2, 'dp': 4, 'ep': 8}, func_type='evaluate', extra=_PREFIX_CACHE_EXTRA),
 )
-def test_turbomind_infer_prefix_cache_tp2dp4ep8(config, run_config, worker_id):
+def test_turbomind_restful_prefix_cache_tp2dp4ep8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'infer', eval_subpath='prefix_cache')
 
 

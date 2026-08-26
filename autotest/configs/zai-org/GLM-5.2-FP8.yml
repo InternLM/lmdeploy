@@ -1,0 +1,31 @@
+# HF model id: zai-org/GLM-5.2-FP8
+
+h:
+- model_type: chat
+  engine_config:
+    dp: 8
+    ep: 8
+    extra:
+      max-batch-size: 32
+      quant-policy: fp8
+      cache-max-entry-count: 0.7
+      speculative-algorithm: deepseek_mtp
+      speculative-num-draft-tokens: 5
+      enable-prefix-caching: true
+      reasoning-parser: default
+      tool-call-parser: glm47
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - prefix_cache
+  gen_config:
+    temperature: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true

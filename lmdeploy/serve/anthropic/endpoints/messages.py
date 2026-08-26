@@ -63,7 +63,7 @@ def _validate_extended_outputs(request: MessagesRequest, server_context):
     return None
 
 
-def register(router: APIRouter, server_context) -> None:
+def register(router: APIRouter, server_context, *, merge_inline_system: bool = False) -> None:
     """Register endpoint onto router."""
 
     @router.post('/v1/messages', dependencies=[Depends(validate_json_request)])
@@ -143,7 +143,7 @@ def register(router: APIRouter, server_context) -> None:
                 resolved_input_ids = None
         else:
             try:
-                parser_messages = to_openai_messages(request)
+                parser_messages = to_openai_messages(request, merge_inline_system=merge_inline_system)
             except ValueError as err:
                 return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
 

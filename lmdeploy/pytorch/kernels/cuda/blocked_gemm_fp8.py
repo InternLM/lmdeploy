@@ -450,12 +450,12 @@ def blocked_gemm_fp8(A: Tensor,
 
     from .utils import supports_tma
 
-    run_tma = supports_tma()
+    run_tma = supports_tma(A.device.index)
     run_tma = run_tma and A.is_contiguous() and B.T.is_contiguous()
 
     # run_tma = False
     if run_tma:
-        from .utils import TensorDescriptor
+        from triton.tools.tensor_descriptor import TensorDescriptor
 
         dummy_block = (1, 1)
         desc_a = TensorDescriptor.from_tensor(A, block_shape=dummy_block)
