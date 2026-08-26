@@ -11,7 +11,12 @@ logger = get_logger('lmdeploy')
 @lru_cache
 def register_config(model_type: str):
     """Register an LMDeploy-owned Transformers config when available."""
-    logger.debug(f'Can not register config for model_type: {model_type}')
+    if model_type == 'kimi_k2':
+        # Standalone Kimi EAGLE checkpoints do not provide an auto_map.
+        from .configuration_kimi_k2 import KimiK2Config
+        AutoConfig.register(KimiK2Config.model_type, KimiK2Config)
+    else:
+        logger.debug(f'Can not register config for model_type: {model_type}')
 
 
 def config_from_pretrained(pretrained_model_name_or_path: str, **kwargs):

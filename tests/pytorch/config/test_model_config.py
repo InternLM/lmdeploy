@@ -3,7 +3,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from lmdeploy.pytorch.config import CacheConfig, DistConfig, ModelConfig
+from lmdeploy.hf_configs import config_from_pretrained
+from lmdeploy.hf_configs.configuration_kimi_k2 import KimiK2Config
+from lmdeploy.pytorch.config import CacheConfig, DistConfig, ModelConfig, QuantizationConfig
 from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
 from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as update_deepseek_v4_cache_config
 
@@ -94,6 +96,94 @@ def test_get_num_qkv_head_by_tp_requires_divisible_heads():
 
     with pytest.raises(AssertionError):
         model_config.get_num_qkv_head_by_tp()
+
+
+def test_kimi_k2_standalone_eagle_config(tmp_path):
+    hf_config = KimiK2Config(
+        architectures=['Eagle3DeepseekV2ForCausalLM'],
+        vocab_size=163840,
+        num_hidden_layers=1,
+        num_attention_heads=64,
+        num_key_value_heads=64,
+        max_position_embeddings=262144,
+        rope_parameters={
+            'rope_type': 'yarn',
+            'factor': 64.0,
+            'original_max_position_embeddings': 4096,
+            'beta_fast': 1.0,
+            'beta_slow': 1.0,
+            'mscale': 1.0,
+            'mscale_all_dim': 1.0,
+            'rope_theta': 50000.0,
+        },
+        dtype='bfloat16',
+    )
+    hf_config.save_pretrained(tmp_path)
+
+    loaded_config = config_from_pretrained(tmp_path)
+    assert isinstance(loaded_config, KimiK2Config)
+    assert loaded_config.model_type == 'kimi_k2'
+    assert loaded_config.rope_parameters['rope_type'] == 'yarn'
+
+    model_config = ModelConfig.from_pretrained(
+        tmp_path,
+        is_draft_model=True,
+        spec_method='eagle3',
+    )
+    assert model_config.num_layers == 1
+    assert model_config.vocab_size == 163840
+    assert model_config.model_paradigm == 'ar_spec'
+
+
+def test_kimi_compressed_tensors_metadata_uses_existing_quant_config():
+    compressed_config = {
+        'quant_method': 'compressed-tensors',
+        'format': 'pack-quantized',
+        'quantization_status': 'compressed',
+        'config_groups': {
+            'group_0': {
+                'targets': ['Linear'],
+                'input_activations': None,
+                'output_activations': None,
+                'weights': {
+                    'num_bits': 4,
+                    'group_size': 32,
+                    'strategy': 'group',
+                    'symmetric': True,
+                    'dynamic': False,
+                    'type': 'int',
+                },
+            },
+        },
+        'ignore': [
+            r're:.*self_attn.*',
+            r're:.*mlp\.(gate|up|gate_up|down)_proj.*',
+        ],
+    }
+    hf_config = SimpleNamespace(
+        text_config=SimpleNamespace(quantization_config=compressed_config),
+    )
+
+    quant_config = QuantizationConfig.from_config(hf_config)
+
+    assert quant_config.bits == 4
+    assert quant_config.group_size == 32
+    assert quant_config.get_quant_method(
+        'language_model.model.layers.0.mlp.experts',
+        module_kind='moe',
+    ) == 'compressed-tensors'
+    assert quant_config.get_quant_method(
+        'language_model.model.layers.0.self_attn.q_a_proj',
+        module_kind='linear',
+    ) is None
+    assert quant_config.get_quant_method(
+        'language_model.model.layers.0.mlp.gate_proj',
+        module_kind='linear',
+    ) is None
+    assert quant_config.get_quant_method(
+        'language_model.model.layers.0.input_layernorm',
+        module_kind='norm',
+    ) is None
 
 
 @pytest.mark.parametrize(('block_size', 'kernel_block_size'), [
