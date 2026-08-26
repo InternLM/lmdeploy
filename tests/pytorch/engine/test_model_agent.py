@@ -116,7 +116,7 @@ def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
 
 
 def test_build_spec_agent_allows_guided_spec_followers_without_proposer():
-    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.config import BackendConfig, DistConfig, SpecDecodeConfig
     from lmdeploy.pytorch.distributed import DistContext
     from lmdeploy.pytorch.spec_decode import build_spec_agent
 
@@ -129,7 +129,7 @@ def test_build_spec_agent_allows_guided_spec_followers_without_proposer():
     )
     spec_agent = build_spec_agent(
         specdecode_config,
-        backend_config=None,
+        backend_config=BackendConfig(),
         dist_ctx=DistContext(rank=1, dist_config=DistConfig(tp=2)),
         inputs_strategy=None,
         agent_strategy=None,
@@ -139,18 +139,21 @@ def test_build_spec_agent_allows_guided_spec_followers_without_proposer():
     )
     assert spec_agent.is_enabled()
     assert spec_agent.proposer is None
+    assert not hasattr(spec_agent, 'rejection_sampler')
     assert not hasattr(spec_agent, 'guided_helper')
 
 
 def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
     import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
-    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.config import BackendConfig, DistConfig, SpecDecodeConfig
     from lmdeploy.pytorch.distributed import DistContext
     from lmdeploy.pytorch.spec_decode import build_spec_agent
 
     guided_manager = object()
     proposer = SimpleNamespace(guided_helper=None)
+    rejection_sampler = object()
     monkeypatch.setattr(spec_agent_mod, 'build_specdecode_proposer', lambda *args, **kwargs: proposer)
+    monkeypatch.setattr(spec_agent_mod, 'RejectionSampler', lambda *args: rejection_sampler)
     inputs_strategy = SimpleNamespace(create_make_dummy_meta=lambda model_config: None)
     specdecode_config = SpecDecodeConfig(
         model='draft-model',
@@ -161,7 +164,7 @@ def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
 
     spec_agent = build_spec_agent(
         specdecode_config,
-        backend_config=None,
+        backend_config=BackendConfig(),
         dist_ctx=DistContext(rank=0, dist_config=DistConfig(tp=2)),
         inputs_strategy=inputs_strategy,
         agent_strategy=None,
@@ -171,6 +174,7 @@ def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
     )
 
     assert spec_agent.proposer is proposer
+    assert spec_agent.rejection_sampler is rejection_sampler
     assert spec_agent.guided_helper.manager is guided_manager
     assert proposer.guided_helper is spec_agent.guided_helper
 

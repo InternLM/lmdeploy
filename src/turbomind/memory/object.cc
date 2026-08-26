@@ -59,24 +59,24 @@ struct ObjectSpec {
 
 struct MemoryState {
     static constexpr size_t kPageSize      = 32 << 20UL;
-    static constexpr size_t kMinSlabSize   = 32 << 20UL;
     static constexpr size_t kMaxSlabSize   = 1 << 30UL;
     static constexpr size_t kMaxEmptySlabs = 0;
     static constexpr float  kUtilThresh    = .95f;
 
     Buffer                     mem_;
+    size_t                     page_size_;
     PageAllocator              pages_;
     std::vector<SlabAllocator> slabs_;
 
-    explicit MemoryState(Buffer memory):
-        mem_{std::move(memory)}, pages_{mem_.raw_data(), (size_t)mem_.byte_size(), kPageSize}
+    explicit MemoryState(Buffer memory, size_t page_size):
+        mem_{std::move(memory)}, page_size_{page_size}, pages_{mem_.raw_data(), (size_t)mem_.byte_size(), page_size_}
     {
     }
 
     int add_slab_class(size_t aligned)
     {
         const int slab = static_cast<int>(slabs_.size());
-        slabs_.emplace_back(aligned, kMinSlabSize, kMaxSlabSize, kUtilThresh, kMaxEmptySlabs);
+        slabs_.emplace_back(aligned, page_size_, kMaxSlabSize, kUtilThresh, kMaxEmptySlabs);
         return slab;
     }
 
@@ -132,7 +132,7 @@ struct ObjectAllocator::Impl {
     std::unordered_map<size_t, int> simple_id_;
     size_t                          live_bytes_{};
 
-    explicit Impl(Buffer memory): space_{std::move(memory)} {}
+    explicit Impl(Buffer memory, size_t page_size): space_{std::move(memory), page_size} {}
 
     static size_t align_up(size_t size, size_t align)
     {
@@ -307,7 +307,12 @@ struct ScratchAllocator::Impl {
 ObjectAllocator::~ObjectAllocator() = default;
 ObjectAllocator::ObjectAllocator()  = default;
 
-ObjectAllocator::ObjectAllocator(Buffer region): impl_{std::make_unique<Impl>(std::move(region))} {}
+ObjectAllocator::ObjectAllocator(Buffer region): ObjectAllocator{std::move(region), MemoryState::kPageSize} {}
+
+ObjectAllocator::ObjectAllocator(Buffer region, size_t page_size):
+    impl_{std::make_unique<Impl>(std::move(region), page_size)}
+{
+}
 
 ObjectAllocator::ObjectAllocator(ObjectAllocator&&) noexcept = default;
 ObjectAllocator& ObjectAllocator::operator=(ObjectAllocator&&) noexcept = default;

@@ -7,12 +7,12 @@ import triton.language as tl
 
 from lmdeploy.pytorch import envs as _envs
 
-from .activation import silu_and_mul
-from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize, moe_reduce
-from .w8a8_triton_kernels import (
+from ..activation import silu_and_mul
+from ..w8a8_triton_kernels import (
     per_tensor_quant_fp8,
     per_token_quant_int8,
 )
+from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize, moe_reduce
 
 _USE_COMPILED_STATIC_FP8_QUANT = (
     _envs.moe_static_fp8_use_compiled_quant

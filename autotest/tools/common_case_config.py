@@ -114,7 +114,7 @@ TURBOMIND_FALLBACK_TEST_LLM_GPU2 = [{
     'communicator': 'nccl',
     'quant_policy': 8,
     'parallel_config': {
-        'tp': 1
+        'tp': 2
     },
     'extra_params': {}
 }]
@@ -293,7 +293,7 @@ BASE_REASONING_TEST_LLM = [{
     'communicator': 'nccl',
     'quant_policy': 0,
     'parallel_config': {
-        'tp': 1
+        'tp': 2
     },
     'extra_params': {
         'reasoning-parser': 'qwen-qwq'

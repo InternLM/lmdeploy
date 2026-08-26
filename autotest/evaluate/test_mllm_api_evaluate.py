@@ -7,6 +7,7 @@ from utils.config_utils import (
     get_case_str_by_config,
     get_eval_preset_config,
     get_func_config_list,
+    get_gpus_per_instance,
     get_model_path_from_config,
     get_workerid,
     resolve_eval_config_name,
@@ -28,7 +29,7 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), constant.PROXY_PORT,
                                                       f'{case_name}_infer')
         total_gpus = int(os.environ.get('TOTAL_GPU_COUNT', '8'))
-        work_num = int(total_gpus / run_config.get('parallel_config', {}).get('tp', 1))
+        work_num = int(total_gpus / get_gpus_per_instance(run_config['parallel_config']))
         run_config_new = run_config.copy()
         if 'extra_params' not in run_config_new:
             run_config_new['extra_params'] = {}

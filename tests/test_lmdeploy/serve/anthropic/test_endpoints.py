@@ -82,6 +82,16 @@ class _FakeChatTemplate:
         return '\n'.join(parts)
 
 
+class _SystemFirstChatTemplate(_FakeChatTemplate):
+
+    def messages2prompt(self, messages, **kwargs):
+        for index, message in enumerate(messages):
+            if message['role'] == 'system' and index != 0:
+                raise ValueError('System message must be at the beginning.')
+        parts = [f"{item['role']}:{item['content']}" for item in messages]
+        return '\n'.join(parts)
+
+
 class _FakeEngine:
 
     def __init__(
@@ -89,13 +99,14 @@ class _FakeEngine:
             *,
             logprobs_mode='raw_logprobs',
             enable_return_routed_experts: bool = True,
+            chat_template=None,
     ):
         self.model_name = 'fake-model'
         self.backend_config = SimpleNamespace(adapters=['adapter-model'],
                                              logprobs_mode=logprobs_mode,
                                              enable_return_routed_experts=enable_return_routed_experts)
         self.tokenizer = _FakeTokenizer()
-        self.chat_template = _FakeChatTemplate()
+        self.chat_template = chat_template or _FakeChatTemplate()
         self.preprocess_calls = []
         self.generate_calls = []
 
@@ -158,11 +169,13 @@ class _FakeServerContext:
             response_parser_cls=_BasicParser,
             logprobs_mode='raw_logprobs',
             enable_return_routed_experts: bool = True,
+            chat_template=None,
     ):
         self.session_mgr = _FakeSessionManager()
         self.async_engine = _FakeEngine(
             logprobs_mode=logprobs_mode,
             enable_return_routed_experts=enable_return_routed_experts,
+            chat_template=chat_template,
         )
         self.async_engine.session_mgr = self.session_mgr
         self.default_gen_config = {}
@@ -565,6 +578,68 @@ def test_messages_beta_accepts_system_role_message():
             'content': 'hi',
         },
     ]
+
+
+def test_messages_merges_inline_system_for_system_first_template():
+    context = _FakeServerContext(chat_template=_SystemFirstChatTemplate())
+    response = _post_messages(
+        _make_client(server_context=context),
+        system='Top-level.',
+        messages=[
+            {
+                'role': 'user',
+                'content': 'first',
+            },
+            {
+                'role': 'system',
+                'content': 'Inline.',
+            },
+            {
+                'role': 'user',
+                'content': 'second',
+            },
+        ],
+    )
+
+    assert response.status_code == 200
+    args, _kwargs = context.async_engine.preprocess_calls[-1]
+    assert args[0] == [
+        {
+            'role': 'system',
+            'content': 'Top-level.Inline.',
+        },
+        {
+            'role': 'user',
+            'content': 'first',
+        },
+        {
+            'role': 'user',
+            'content': 'second',
+        },
+    ]
+
+
+def test_messages_count_tokens_merges_inline_system_for_system_first_template():
+    context = _FakeServerContext(chat_template=_SystemFirstChatTemplate())
+    response = _post_count_tokens(
+        _make_client(server_context=context),
+        messages=[
+            {
+                'role': 'user',
+                'content': 'first',
+            },
+            {
+                'role': 'system',
+                'content': 'Inline.',
+            },
+            {
+                'role': 'user',
+                'content': 'second',
+            },
+        ],
+    )
+
+    assert response.status_code == 200
 
 
 def test_messages_non_stream_with_reasoning_and_tool_use_blocks():

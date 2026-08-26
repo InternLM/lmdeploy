@@ -6,7 +6,7 @@ import torch
 import triton
 import triton.language as tl
 
-from .activation import silu_and_mul
+from ..activation import silu_and_mul
 
 
 def get_cuda_autotune_config():
@@ -99,68 +99,86 @@ def _sorted_idx_phase1_kernel(
     ExpertIds,
     Counts,
     LocalPos,
-    N,
-    BLOCK_SIZE: tl.constexpr,
+    num_routes,
+    BLOCK_R: tl.constexpr,
 ):
     """Phase 1: sort within CTA, atomic-count per expert, store local position."""
     pid = tl.program_id(0)
-    lane = tl.arange(0, BLOCK_SIZE)
-    offs = pid * BLOCK_SIZE + lane
-    mask = offs < N
+    lane = tl.arange(0, BLOCK_R)
+    route_offsets = pid * BLOCK_R + lane
+    route_mask = route_offsets < num_routes
 
     # Pack (expert_id, local_lane) into one int32 for key-value sort
-    expert_ids = tl.load(ExpertIds + offs, mask=mask, other=0).to(tl.int32)
-    packed = tl.where(mask, expert_ids * BLOCK_SIZE + lane, 0x7FFFFFFF)
+    expert_ids = tl.load(ExpertIds + route_offsets, mask=route_mask, other=0).to(tl.int32)
+    packed = tl.where(route_mask, expert_ids * BLOCK_R + lane, 0x7FFFFFFF)
 
     # Sort groups same-expert threads for atomic coalescing
     sorted_packed = tl.sort(packed)
-    sorted_expert = (sorted_packed // BLOCK_SIZE).to(tl.int64)
-    sorted_local_idx = sorted_packed % BLOCK_SIZE
+    sorted_expert = sorted_packed // BLOCK_R
+    sorted_local_idx = sorted_packed % BLOCK_R
     sorted_valid = sorted_packed < 0x7FFFFFFF
 
     # Atomic count: Counts starts at 0, each thread adds 1, gets back local position
-    local_pos = tl.atomic_add(Counts + sorted_expert, 1, mask=sorted_valid)
+    local_pos = tl.atomic_add(Counts + sorted_expert,
+                              1,
+                              mask=sorted_valid,
+                              sem='relaxed',
+                              scope='gpu')
 
-    # Store local_pos at original global index for phase 2
-    orig = (pid * BLOCK_SIZE + sorted_local_idx).to(tl.int64)
-    tl.store(LocalPos + orig, local_pos, mask=sorted_valid)
+    # Store local_pos at the original route index for the scatter pass
+    original_offset = pid * BLOCK_R + sorted_local_idx
+    tl.store(LocalPos + original_offset, local_pos, mask=sorted_valid)
 
 
 @triton.jit
-def _sorted_idx_phase2_kernel(
+def _route_prefix_kernel(
+    Counts,
+    ExpStart,
+    ExpEnd,
+    BlockEnd,
+    num_experts,
+    local_num_experts,
+    expert_offset,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_E: tl.constexpr,
+    BLOCK_LE: tl.constexpr,
+    BUILD_BLOCKS: tl.constexpr,
+):
+    """Build global expert and optional local block prefixes in one CTA."""
+    expert_offsets = tl.arange(0, BLOCK_E)
+    expert_mask = expert_offsets < num_experts
+    counts = tl.load(Counts + expert_offsets, mask=expert_mask, other=0)
+    exp_end = tl.cumsum(counts, axis=0)
+    tl.store(ExpStart + expert_offsets, exp_end - counts, mask=expert_mask)
+    tl.store(ExpEnd + expert_offsets, exp_end, mask=expert_mask)
+
+    if BUILD_BLOCKS:
+        local_expert_offsets = tl.arange(0, BLOCK_LE)
+        local_expert_mask = local_expert_offsets < local_num_experts
+        local_counts = tl.load(Counts + expert_offset + local_expert_offsets,
+                               mask=local_expert_mask,
+                               other=0)
+        block_counts = (local_counts + BLOCK_SIZE_M - 1) // BLOCK_SIZE_M
+        block_end = tl.cumsum(block_counts, axis=0)
+        tl.store(BlockEnd + local_expert_offsets, block_end, mask=local_expert_mask)
+
+
+@triton.jit
+def _scatter_sorted_idx_kernel(
     ExpertIds,
     LocalPos,
-    ExpEnd,
-    Counts,
-    Out,
     ExpStart,
-    N,
-    num_experts,
-    BLOCK_SIZE: tl.constexpr,
-    BLOCK_E: tl.constexpr,
+    SortedIdx,
+    num_routes,
+    BLOCK_R: tl.constexpr,
 ):
-    """Phase 2: scatter sorted_idx using cumsum result + compute exp_start."""
-    pid = tl.program_id(0)
-    lane = tl.arange(0, BLOCK_SIZE)
-    offs = pid * BLOCK_SIZE + lane
-    mask = offs < N
-
-    # Compute exp_start = exp_end - counts (only first block writes it)
-    if pid == 0:
-        e_offs = tl.arange(0, BLOCK_E)
-        e_mask = e_offs < num_experts
-        end_val = tl.load(ExpEnd + e_offs, mask=e_mask)
-        cnt_val = tl.load(Counts + e_offs, mask=e_mask)
-        tl.store(ExpStart + e_offs, end_val - cnt_val, mask=e_mask)
-
-    # Scatter: sorted_idx[exp_start[e] + local_pos] = orig_idx
-    expert_ids = tl.load(ExpertIds + offs, mask=mask, other=0).to(tl.int64)
-    local_pos = tl.load(LocalPos + offs, mask=mask, other=0)
-    end_val = tl.load(ExpEnd + expert_ids, mask=mask)
-    cnt_val = tl.load(Counts + expert_ids, mask=mask)
-    dst = end_val - cnt_val + local_pos
-
-    tl.store(Out + dst, offs, mask=mask)
+    """Scatter route indices using global expert starts and local positions."""
+    route_offsets = tl.program_id(0) * BLOCK_R + tl.arange(0, BLOCK_R)
+    route_mask = route_offsets < num_routes
+    expert_ids = tl.load(ExpertIds + route_offsets, mask=route_mask, other=0).to(tl.int32)
+    local_pos = tl.load(LocalPos + route_offsets, mask=route_mask, other=0)
+    exp_start = tl.load(ExpStart + expert_ids, mask=route_mask, other=0)
+    tl.store(SortedIdx + exp_start + local_pos, route_offsets, mask=route_mask)
 
 
 @triton.autotune(
@@ -328,29 +346,117 @@ def fused_moe_kernel_launcher(
 
 
 @triton.jit
-def _fill_block_meta_kernel(
-    ExpStart,
+def _scatter_and_fill_block_meta_kernel(
+    ExpertIds,
+    LocalPos,
     Counts,
+    ExpStart,
+    BlockEnd,
+    SortedIdx,
+    BlockExpertIds,
+    BlockOffsets,
+    num_routes,
+    num_route_blocks,
+    local_num_experts,
+    expert_offset,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_R: tl.constexpr,
+    BLOCK_B: tl.constexpr,
+):
+    """Scatter routes and build local compact-block metadata."""
+    pid = tl.program_id(0)
+    if pid < num_route_blocks:
+        route_offsets = pid * BLOCK_R + tl.arange(0, BLOCK_R)
+        route_mask = route_offsets < num_routes
+        expert_ids = tl.load(ExpertIds + route_offsets, mask=route_mask, other=0).to(tl.int32)
+        local_pos = tl.load(LocalPos + route_offsets, mask=route_mask, other=0)
+        exp_start = tl.load(ExpStart + expert_ids, mask=route_mask, other=0)
+        tl.store(SortedIdx + exp_start + local_pos, route_offsets, mask=route_mask)
+
+    if pid < local_num_experts:
+        actual_expert = pid + expert_offset
+        count = tl.load(Counts + actual_expert)
+        n_blocks = tl.cdiv(count, BLOCK_SIZE_M)
+        block_end = tl.load(BlockEnd + pid)
+        block_base = block_end - n_blocks
+        exp_start = tl.load(ExpStart + actual_expert)
+
+        block_offsets = tl.arange(0, BLOCK_B)
+        block_mask = block_offsets < n_blocks
+        tl.store(BlockExpertIds + block_base + block_offsets, pid, mask=block_mask)
+        tl.store(BlockOffsets + block_base + block_offsets,
+                 exp_start + block_offsets * BLOCK_SIZE_M,
+                 mask=block_mask)
+
+
+@triton.jit
+def _single_cta_route_prepare_kernel(
+    ExpertIds,
+    Cursors,
+    SortedIdx,
+    ExpStart,
+    ExpEnd,
     BlockEnd,
     BlockExpertIds,
     BlockOffsets,
-    expert_offset: tl.constexpr,
+    num_routes,
+    num_experts,
     BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_B: tl.constexpr,
+    BLOCK_E: tl.constexpr,
+    BLOCK_R: tl.constexpr,
+    BUILD_BLOCKS: tl.constexpr,
 ):
-    """Build compact routed-block metadata from per-expert token counts."""
-    local_exp = tl.program_id(0)
-    actual_exp = local_exp + expert_offset
-    count = tl.load(Counts + actual_exp)
-    n_blocks = tl.cdiv(count, BLOCK_SIZE_M)
-    block_end = tl.load(BlockEnd + local_exp)
-    block_base = block_end - n_blocks
-    exp_start = tl.load(ExpStart + actual_exp)
+    """Build sorted routes and optional block metadata in one CTA."""
+    expert_offsets = tl.arange(0, BLOCK_E)
+    expert_mask = expert_offsets < num_experts
+    tl.store(Cursors + expert_offsets, 0, mask=expert_mask)
+    tl.debug_barrier()
 
-    offs = tl.arange(0, BLOCK_B)
-    mask = offs < n_blocks
-    tl.store(BlockExpertIds + block_base + offs, local_exp, mask=mask)
-    tl.store(BlockOffsets + block_base + offs, exp_start + offs * BLOCK_SIZE_M, mask=mask)
+    # Keep each route's expert and local rank live across the prefix scan. This
+    # removes both the histogram pass and the second ExpertIds load.
+    route_offsets = tl.arange(0, BLOCK_R)
+    route_mask = route_offsets < num_routes
+    expert_ids = tl.load(ExpertIds + route_offsets,
+                         mask=route_mask,
+                         other=0).to(tl.int32)
+    local_pos = tl.atomic_add(Cursors + expert_ids,
+                              1,
+                              mask=route_mask,
+                              sem='relaxed',
+                              scope='cta')
+    tl.debug_barrier()
+
+    counts = tl.load(Cursors + expert_offsets, mask=expert_mask, other=0)
+    exp_end = tl.cumsum(counts, axis=0)
+    exp_start = exp_end - counts
+    tl.store(ExpStart + expert_offsets, exp_start, mask=expert_mask)
+    tl.store(ExpEnd + expert_offsets, exp_end, mask=expert_mask)
+    if BUILD_BLOCKS:
+        block_counts = (counts + BLOCK_SIZE_M - 1) // BLOCK_SIZE_M
+        block_end = tl.cumsum(block_counts, axis=0)
+        tl.store(BlockEnd + expert_offsets, block_end, mask=expert_mask)
+    tl.debug_barrier()
+
+    route_exp_start = tl.load(ExpStart + expert_ids, mask=route_mask, other=0)
+    sorted_pos = route_exp_start + local_pos
+    tl.store(SortedIdx + sorted_pos, route_offsets, mask=route_mask)
+
+    if BUILD_BLOCKS:
+        block_base = tl.where(
+            expert_ids == 0,
+            0,
+            tl.load(BlockEnd + expert_ids - 1,
+                    mask=route_mask & (expert_ids != 0),
+                    other=0),
+        )
+        is_block_start = route_mask & (local_pos % BLOCK_SIZE_M == 0)
+        block_id = block_base + local_pos // BLOCK_SIZE_M
+        tl.store(BlockExpertIds + block_id,
+                 expert_ids,
+                 mask=is_block_start)
+        tl.store(BlockOffsets + block_id,
+                 sorted_pos,
+                 mask=is_block_start)
 
 
 @triton.jit
@@ -499,9 +605,19 @@ def fused_moe_compact_kernel_launcher(
     )
 
 
+def _launch_parallel_route_rank(expert_ids: torch.Tensor, num_experts: int):
+    """Count and rank routes independently across parallel CTAs."""
+    num_routes = expert_ids.numel()
+    block_r = triton.next_power_of_2(min(num_experts, 256))
+    grid = (triton.cdiv(num_routes, block_r), )
+    counts = torch.zeros(num_experts, dtype=torch.int32, device=expert_ids.device)
+    local_pos = torch.empty(num_routes, dtype=torch.int32, device=expert_ids.device)
+    _sorted_idx_phase1_kernel[grid](expert_ids, counts, local_pos, num_routes, BLOCK_R=block_r)
+    return counts, local_pos, block_r, grid
+
 
 def _get_sorted_idx_triton(topk_ids: torch.Tensor, num_experts: int):
-    """Get sorted idx with 2-phase Triton kernels (4 kernel launches total)."""
+    """Build sorted route indices with four CUDA graph nodes."""
     if topk_ids.dim() != 2:
         raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
     if topk_ids.size(1) > num_experts:
@@ -509,32 +625,224 @@ def _get_sorted_idx_triton(topk_ids: torch.Tensor, num_experts: int):
             f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
             f'and num_experts={num_experts}')
 
-    topk_ids = topk_ids.flatten()
-    N = topk_ids.numel()
+    expert_ids = topk_ids.flatten()
+    num_routes = expert_ids.numel()
+    counts, local_pos, block_r, grid = _launch_parallel_route_rank(expert_ids, num_experts)
 
-    BLOCK_SIZE = triton.next_power_of_2(min(num_experts, 256))
-    grid = (triton.cdiv(N, BLOCK_SIZE),)
+    exp_start = torch.empty(num_experts, dtype=torch.int32, device=expert_ids.device)
+    exp_end = torch.empty(num_experts, dtype=torch.int32, device=expert_ids.device)
+    _route_prefix_kernel[(1, )](
+        counts,
+        exp_start,
+        exp_end,
+        exp_start,
+        num_experts,
+        num_experts,
+        0,
+        BLOCK_SIZE_M=1,
+        BLOCK_E=triton.next_power_of_2(num_experts),
+        BLOCK_LE=1,
+        BUILD_BLOCKS=False,
+        num_warps=8,
+    )
 
-    # Phase 1: sort + atomic histogram + store local positions
-    # counts starts at 0; after phase1, counts[e] = number of tokens for expert e
-    counts = torch.zeros(num_experts, dtype=topk_ids.dtype, device=topk_ids.device)
-    local_pos = torch.empty(N, dtype=topk_ids.dtype, device=topk_ids.device)
-    _sorted_idx_phase1_kernel[grid](topk_ids, counts, local_pos, N, BLOCK_SIZE=BLOCK_SIZE)
-
-    # cumsum to get exp_end
-    exp_end = torch.cumsum(counts, dim=0)
-
-    # Phase 2: scatter sorted_idx + compute exp_start
-    sorted_idx = torch.empty(N, dtype=topk_ids.dtype, device=topk_ids.device)
-    exp_start = torch.empty(num_experts, dtype=topk_ids.dtype, device=topk_ids.device)
-    BLOCK_E = triton.next_power_of_2(num_experts)
-    _sorted_idx_phase2_kernel[grid](
-        topk_ids, local_pos, exp_end, counts,
-        sorted_idx, exp_start, N, num_experts,
-        BLOCK_SIZE=BLOCK_SIZE, BLOCK_E=BLOCK_E,
+    sorted_idx = torch.empty(num_routes, dtype=torch.int32, device=expert_ids.device)
+    _scatter_sorted_idx_kernel[grid](
+        expert_ids,
+        local_pos,
+        exp_start,
+        sorted_idx,
+        num_routes,
+        BLOCK_R=block_r,
     )
 
     return sorted_idx, exp_start, exp_end
+
+
+def _get_sorted_idx_blocks_parallel(topk_ids: torch.Tensor,
+                                    num_experts: int,
+                                    local_num_experts: int,
+                                    expert_offset: int,
+                                    block_m: int):
+    """Build sorted route indices and compact block metadata in four graph
+    nodes."""
+    if topk_ids.dim() != 2:
+        raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
+    if topk_ids.size(1) > num_experts:
+        raise ValueError(
+            f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
+            f'and num_experts={num_experts}')
+
+    expert_ids = topk_ids.flatten()
+    num_routes = expert_ids.numel()
+    counts, local_pos, block_r, route_grid = _launch_parallel_route_rank(expert_ids, num_experts)
+
+    exp_start = torch.empty(num_experts, dtype=torch.int32, device=expert_ids.device)
+    exp_end = torch.empty(num_experts, dtype=torch.int32, device=expert_ids.device)
+    block_end = torch.empty(local_num_experts, dtype=torch.int32, device=expert_ids.device)
+    _route_prefix_kernel[(1, )](
+        counts,
+        exp_start,
+        exp_end,
+        block_end,
+        num_experts,
+        local_num_experts,
+        expert_offset,
+        BLOCK_SIZE_M=block_m,
+        BLOCK_E=triton.next_power_of_2(num_experts),
+        BLOCK_LE=triton.next_power_of_2(local_num_experts),
+        BUILD_BLOCKS=True,
+        num_warps=8,
+    )
+
+    max_blocks = triton.cdiv(num_routes, block_m) + local_num_experts
+    sorted_idx = torch.empty(num_routes, dtype=torch.int32, device=expert_ids.device)
+    block_expert_ids = torch.empty(max_blocks, dtype=torch.int32, device=expert_ids.device)
+    block_offsets = torch.empty(max_blocks, dtype=torch.int32, device=expert_ids.device)
+    block_b = triton.next_power_of_2(max(1, triton.cdiv(num_routes, block_m)))
+    num_route_blocks = route_grid[0]
+    grid = (max(num_route_blocks, local_num_experts), )
+    _scatter_and_fill_block_meta_kernel[grid](
+        expert_ids,
+        local_pos,
+        counts,
+        exp_start,
+        block_end,
+        sorted_idx,
+        block_expert_ids,
+        block_offsets,
+        num_routes,
+        num_route_blocks,
+        local_num_experts,
+        expert_offset,
+        BLOCK_SIZE_M=block_m,
+        BLOCK_R=block_r,
+        BLOCK_B=block_b,
+    )
+
+    return sorted_idx, exp_start, exp_end, block_end, block_expert_ids, block_offsets
+
+
+def _should_use_single_cta_sorted_idx(num_routes: int, num_experts: int):
+    """Use one CTA when it beats the parallel sorted-index preparation."""
+    return num_routes <= 2048 and num_experts <= 2048
+
+
+def _should_use_single_cta_sorted_idx_blocks(num_routes: int, num_experts: int):
+    """Use one CTA when it beats the parallel compact-block preparation."""
+    return num_routes <= 2048 and num_experts <= 2048
+
+
+def _single_cta_route_prepare_num_warps(block_r: int):
+    """Keep the retained route state below the register limit."""
+    if block_r >= 8192:
+        return 32
+    if block_r >= 4096:
+        return 16
+    return 8
+
+
+def _supports_single_cta_route_prepare(topk_ids: torch.Tensor):
+    """Return whether the measured Hopper preparation is available."""
+    return topk_ids.is_cuda and torch.cuda.get_device_capability(topk_ids.device)[0] == 9
+
+
+def _get_sorted_idx_single_cta(topk_ids: torch.Tensor,
+                               num_experts: int):
+    """Build bounded-route sorted-index metadata in one CTA."""
+    if topk_ids.dim() != 2:
+        raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
+    if topk_ids.size(1) > num_experts:
+        raise ValueError(
+            f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
+            f'and num_experts={num_experts}')
+    if num_experts > 2048:
+        raise ValueError(f'single-CTA metadata supports at most 2048 experts, got {num_experts}')
+
+    flatten_topk_ids = topk_ids.flatten()
+    num_routes = flatten_topk_ids.numel()
+    block_e = triton.next_power_of_2(num_experts)
+    block_r = max(256, triton.next_power_of_2(num_routes))
+    num_warps = _single_cta_route_prepare_num_warps(block_r)
+    device = topk_ids.device
+    cursors = torch.empty(num_experts, dtype=torch.int32, device=device)
+    sorted_idx = torch.empty(num_routes, dtype=torch.int32, device=device)
+    exp_start = torch.empty(num_experts, dtype=torch.int32, device=device)
+    exp_end = torch.empty(num_experts, dtype=torch.int32, device=device)
+    _single_cta_route_prepare_kernel[(1, )](
+        flatten_topk_ids,
+        cursors,
+        sorted_idx,
+        exp_start,
+        exp_end,
+        exp_start,
+        exp_start,
+        exp_start,
+        num_routes,
+        num_experts,
+        BLOCK_SIZE_M=1,
+        BLOCK_E=block_e,
+        BLOCK_R=block_r,
+        BUILD_BLOCKS=False,
+        num_warps=num_warps,
+    )
+    return sorted_idx, exp_start, exp_end
+
+
+def _get_sorted_idx_blocks_single_cta(topk_ids: torch.Tensor,
+                                      num_experts: int,
+                                      block_m: int):
+    """Build bounded-route sorted-index and compact-block metadata in one
+    CTA."""
+    if topk_ids.dim() != 2:
+        raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
+    if topk_ids.size(1) > num_experts:
+        raise ValueError(
+            f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
+            f'and num_experts={num_experts}')
+    if num_experts > 2048:
+        raise ValueError(f'single-CTA metadata supports at most 2048 experts, got {num_experts}')
+
+    flatten_topk_ids = topk_ids.flatten()
+    num_routes = flatten_topk_ids.numel()
+    block_e = triton.next_power_of_2(num_experts)
+    block_r = max(256, triton.next_power_of_2(num_routes))
+    num_warps = _single_cta_route_prepare_num_warps(block_r)
+    max_blocks = min(num_routes, triton.cdiv(num_routes, block_m) + num_experts)
+    device = topk_ids.device
+    cursors = torch.empty(num_experts, dtype=torch.int32, device=device)
+    sorted_idx = torch.empty(num_routes, dtype=torch.int32, device=device)
+    exp_start = torch.empty(num_experts, dtype=torch.int32, device=device)
+    exp_end = torch.empty(num_experts, dtype=torch.int32, device=device)
+    block_end = torch.empty(num_experts, dtype=torch.int32, device=device)
+    block_expert_ids = torch.empty(max_blocks, dtype=torch.int32, device=device)
+    block_offsets = torch.empty(max_blocks, dtype=torch.int32, device=device)
+    _single_cta_route_prepare_kernel[(1, )](
+        flatten_topk_ids,
+        cursors,
+        sorted_idx,
+        exp_start,
+        exp_end,
+        block_end,
+        block_expert_ids,
+        block_offsets,
+        num_routes,
+        num_experts,
+        BLOCK_SIZE_M=block_m,
+        BLOCK_E=block_e,
+        BLOCK_R=block_r,
+        BUILD_BLOCKS=True,
+        num_warps=num_warps,
+    )
+    return sorted_idx, exp_start, exp_end, block_end, block_expert_ids, block_offsets
+
+
+def _get_sorted_idx(topk_ids: torch.Tensor, num_experts: int):
+    """Build route metadata with the best preparation for the shape."""
+    if (_supports_single_cta_route_prepare(topk_ids)
+            and _should_use_single_cta_sorted_idx(topk_ids.numel(), num_experts)):
+        return _get_sorted_idx_single_cta(topk_ids, num_experts)
+    return _get_sorted_idx_triton(topk_ids, num_experts)
 
 
 def _get_sorted_idx_blocks(topk_ids: torch.Tensor,
@@ -542,58 +850,11 @@ def _get_sorted_idx_blocks(topk_ids: torch.Tensor,
                            local_num_experts: int,
                            expert_offset: int,
                            block_m: int):
-    """Get sorted route indices plus compact routed-block metadata."""
-    if topk_ids.dim() != 2:
-        raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
-    if topk_ids.size(1) > num_experts:
-        raise ValueError(
-            f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
-            f'and num_experts={num_experts}')
-
-    flatten_topk_ids = topk_ids.flatten()
-    num_routes = flatten_topk_ids.numel()
-
-    BLOCK_SIZE = triton.next_power_of_2(min(num_experts, 256))
-    grid = (triton.cdiv(num_routes, BLOCK_SIZE),)
-
-    counts = torch.zeros(num_experts, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
-    local_pos = torch.empty(num_routes, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
-    _sorted_idx_phase1_kernel[grid](flatten_topk_ids, counts, local_pos, num_routes, BLOCK_SIZE=BLOCK_SIZE)
-
-    exp_end = torch.cumsum(counts, dim=0)
-
-    sorted_idx = torch.empty(num_routes, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
-    exp_start = torch.empty(num_experts, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
-    BLOCK_E = triton.next_power_of_2(num_experts)
-    _sorted_idx_phase2_kernel[grid](
-        flatten_topk_ids, local_pos, exp_end, counts,
-        sorted_idx, exp_start, num_routes, num_experts,
-        BLOCK_SIZE=BLOCK_SIZE, BLOCK_E=BLOCK_E,
-    )
-
-    local_counts = counts[expert_offset:expert_offset + local_num_experts]
-    local_block_counts = torch.div(local_counts + block_m - 1, block_m, rounding_mode='floor')
-    block_end = torch.cumsum(local_block_counts, dim=0)
-
-    max_blocks = triton.cdiv(num_routes, block_m) + local_num_experts
-    block_expert_ids = torch.empty(max_blocks, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
-    block_offsets = torch.empty(max_blocks, dtype=flatten_topk_ids.dtype, device=flatten_topk_ids.device)
-    block_b = triton.next_power_of_2(max(1, triton.cdiv(num_routes, block_m)))
-    _fill_block_meta_kernel[(local_num_experts,)](
-        exp_start,
-        counts,
-        block_end,
-        block_expert_ids,
-        block_offsets,
-        expert_offset=expert_offset,
-        BLOCK_SIZE_M=block_m,
-        BLOCK_B=block_b,
-    )
-
-    return sorted_idx, exp_start, exp_end, block_end, block_expert_ids, block_offsets
-
-
-_get_sorted_idx = _get_sorted_idx_triton
+    """Build compact block metadata with the best preparation for the shape."""
+    if (_supports_single_cta_route_prepare(topk_ids) and local_num_experts == num_experts and expert_offset == 0
+            and _should_use_single_cta_sorted_idx_blocks(topk_ids.numel(), num_experts)):
+        return _get_sorted_idx_blocks_single_cta(topk_ids, num_experts, block_m)
+    return _get_sorted_idx_blocks_parallel(topk_ids, num_experts, local_num_experts, expert_offset, block_m)
 
 
 def _renormalize(topk_weights: torch.Tensor, renormalize: bool):
