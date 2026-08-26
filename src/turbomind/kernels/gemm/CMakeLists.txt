@@ -136,10 +136,13 @@ add_library(gemm2
 
 target_link_libraries(gemm2 PRIVATE parser nvidia::cutlass::cutlass CUDA::cuda_driver)
 
-# Retain file-scope Registrar objects (self-registration). Same pattern as attention_kernels.
-foreach(target IN LISTS GEMM2_KERNEL_TARGETS)
-    target_link_libraries(gemm2 PUBLIC $<LINK_LIBRARY:WHOLE_ARCHIVE,${target}>)
-endforeach()
+# Registry/kernel TUs are static plugins: they must be linked before libgemm2.a so
+# Kernel base symbols (vtable/GetName) resolve when consumers link executables.
+# INTERFACE_LINK_LIBRARIES_DIRECT places them ahead of gemm2 (same as linear_attn).
+# Keep every archive in one WHOLE_ARCHIVE expression.
+list(JOIN GEMM2_KERNEL_TARGETS "," GEMM2_KERNEL_TARGET_LIST)
+set_property(TARGET gemm2 PROPERTY INTERFACE_LINK_LIBRARIES_DIRECT
+        "$<LINK_LIBRARY:WHOLE_ARCHIVE,${GEMM2_KERNEL_TARGET_LIST}>")
 
 # cublasGemmGroupedBatchedEx (CUDA 12.5+): grouped batched GEMM for MoE on SM100
 set(_archs_100 "${CMAKE_CUDA_ARCHITECTURES}")
