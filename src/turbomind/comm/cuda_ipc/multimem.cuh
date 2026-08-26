@@ -78,8 +78,15 @@ inline __device__ void multimem_st(uint4* mc_ptr, const uint4& u)
         "multimem.st.weak.global.v4.f16x2 [%0], {%1,%2,%3,%4};" ::"l"(mc_ptr), "r"(u.x), "r"(u.y), "r"(u.z), "r"(u.w));
 }
 
-inline __device__ void multimem_st(uint2* mc_ptr, const uint2& u) {}
+inline __device__ void multimem_st(uint2* mc_ptr, const uint2& u)
+{
+    const uint64_t value = static_cast<uint64_t>(u.x) | (static_cast<uint64_t>(u.y) << 32);
+    asm volatile("multimem.st.weak.global.b64 [%0], %1;" : : "l"(mc_ptr), "l"(value) : "memory");
+}
 
-inline __device__ void multimem_st(uint* mc_ptr, const uint& u) {}
+inline __device__ void multimem_st(uint* mc_ptr, const uint& u)
+{
+    asm volatile("multimem.st.weak.global.b32 [%0], %1;" : : "l"(mc_ptr), "r"(u) : "memory");
+}
 
 }  // namespace turbomind

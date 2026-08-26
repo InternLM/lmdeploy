@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 
 from .activation import silu_and_mul
-from .fused_moe import _get_sorted_idx, _get_sorted_idx_blocks, _make_intermediate, _renormalize, moe_reduce
+from .moe.fused_moe import _get_sorted_idx, _get_sorted_idx_blocks, _make_intermediate, _renormalize, moe_reduce
 
 
 @triton.jit

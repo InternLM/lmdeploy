@@ -25,7 +25,7 @@ a100:
   engine_config:
     tp: 2
     extra:
-      reasoning-parser: qwen-qwq
+      reasoning-parser: default
       speculative-algorithm: qwen3_5_mtp
       speculative-num-draft-tokens: 4
       max-batch-size: 256
@@ -128,7 +128,7 @@ h:
   engine_config:
     tp: 2
     extra:
-      reasoning-parser: qwen-qwq
+      reasoning-parser: default
       speculative-algorithm: qwen3_5_mtp
       speculative-num-draft-tokens: 4
       max-batch-size: 256

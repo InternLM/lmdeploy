@@ -24,6 +24,7 @@ from ..strategies.base.model_agent import ExtraInputs
 from .base import BaseSpecModelAgent
 from .guided_spec_helper import GuidedSpecHelper
 from .proposers.base import build_specdecode_proposer
+from .reject_sampler import RejectionSampler
 
 if TYPE_CHECKING:
     pass
@@ -32,7 +33,7 @@ logger = get_logger('lmdeploy')
 
 # Fields that hold a single scalar value shared across the expanded batch.
 _SCALAR_FIELDS = frozenset({
-    'max_top_k', 'min_top_p', 'max_num_logprobs',
+    'max_top_k', 'has_greedy', 'min_top_p', 'max_num_logprobs',
     'max_repetition_ngram_size',
 })
 # Fields that are global (not per-batch-element) and should not be
@@ -80,72 +81,6 @@ def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) ->
     return SamplingInputs(**out_dict)
 
 
-def _slice_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int, is_last: bool = True) -> SamplingInputs:
-    """Slice expanded SamplingInputs.
-
-    After _expand_sampling_inputs repeats each batch element num_tokens
-    times, this function extracts a subset per batch element.
-
-    Args:
-        sampling_inputs: Expanded SamplingInputs with
-            batch_size * num_tokens elements.
-        num_tokens: Number of tokens per batch element.
-        is_last: If True (default), take the last token per batch element
-            (for bonus token sampling), returning batch_size elements.
-            If False, take the first num_tokens-1 tokens per batch element
-            (all except the last), returning
-            batch_size * (num_tokens - 1) elements.
-
-    Returns:
-        Sliced SamplingInputs.
-    """
-    if num_tokens == 1:
-        return sampling_inputs
-
-    from dataclasses import fields
-
-    batch_size = sampling_inputs.batch_size // num_tokens
-    out_dict = {}
-    for f in fields(sampling_inputs):
-        k = f.name
-        v = getattr(sampling_inputs, k)
-        if isinstance(v, torch.Tensor):
-            if is_last:
-                v = v[num_tokens - 1::num_tokens]
-            else:
-                shape = v.shape
-                v = v.view(batch_size, num_tokens, *shape[1:])
-                v = v[:, :-1].reshape(batch_size * (num_tokens - 1), *shape[1:])
-        elif k in _SCALAR_FIELDS or k in _GLOBAL_FIELDS:
-            pass
-        elif isinstance(v, np.ndarray) and v.ndim >= 1 and v.shape[0] == sampling_inputs.batch_size:
-            if is_last:
-                v = v[num_tokens - 1::num_tokens]
-            else:
-                v = v.reshape(batch_size, num_tokens, *v.shape[1:])[:, :-1].reshape(
-                    batch_size * (num_tokens - 1), *v.shape[1:])
-        elif isinstance(v, (list, tuple)):
-            # Skip if length doesn't match the expanded batch size (e.g.
-            # empty defaults or fields that were not per-batch).
-            if len(v) == sampling_inputs.batch_size:
-                if is_last:
-                    indices = list(range(num_tokens - 1, len(v), num_tokens))
-                    v = type(v)(v[i] for i in indices)
-                else:
-                    indices = []
-                    for b in range(batch_size):
-                        start = b * num_tokens
-                        indices.extend(range(start, start + num_tokens - 1))
-                    v = type(v)(v[i] for i in indices)
-        out_dict[k] = v
-
-    if is_last:
-        out_dict['batch_size'] = batch_size
-    else:
-        out_dict['batch_size'] = batch_size * (num_tokens - 1)
-    return SamplingInputs(**out_dict)
-
-
 class SpecModelAgent(BaseSpecModelAgent):
     """Speculative model agent."""
 
@@ -170,6 +105,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                          )
 
         self.guided_helper = GuidedSpecHelper(guided_decoding_manager)
+        self.rejection_sampler = RejectionSampler(backend_config.device_type)
         self.proposer = build_specdecode_proposer(specdecode_config, device=device)
         self.proposer.guided_helper = self.guided_helper
 
@@ -509,28 +445,13 @@ class SpecModelAgent(BaseSpecModelAgent):
                 )
                 processed_logits, raw_logprobs = await logits_processor(target_logits)
 
-            # Bonus logits already have grammar mask applied in guided path
-            bonus_logits = processed_logits[num_expand_sampling - 1::num_expand_sampling]  # [batch_size, vocab]
-
-            bonus_sampling_inputs = _slice_sampling_inputs(expanded_sampling_inputs, num_expand_sampling)
-
-            logits_processor = FusedLogitsProcessor(
-                bonus_sampling_inputs,
-                logprobs_mode=self.misc_config.logprobs_mode,
-            )
-
-            next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
-
             processed_logits = processed_logits.view(batch_size, num_expand_sampling, -1)
-            # Rejection sampling on processed logits (exclude bonus position)
-            target_draft_logits = processed_logits[:, :-1].contiguous()  # [batch, num_spec, vocab]
-            draft_sampling_inputs = _slice_sampling_inputs(expanded_sampling_inputs, num_expand_sampling, is_last=False)
-            output_token_ids, num_rejected_tokens, next_token_ids = self.rejection_sampler(
-                target_draft_logits,
-                extra_inputs.output_draft_token_ids,
-                next_token_ids,
-                sampling_inputs=draft_sampling_inputs,
-            )
+            output_token_ids, num_rejected_tokens, next_token_ids = (
+                self.rejection_sampler(
+                    processed_logits,
+                    extra_inputs.output_draft_token_ids,
+                    expanded_sampling_inputs,
+                ))
             last_token_indices = last_token_indices - num_rejected_tokens
 
             # Guided: accept final tokens on original matchers.

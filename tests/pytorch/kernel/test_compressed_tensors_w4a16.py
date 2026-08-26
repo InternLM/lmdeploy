@@ -527,7 +527,7 @@ def test_masked_w4a16_static_expert_layout_matches_reference_and_graph():
 
 @torch.inference_mode()
 def test_direct_packed_w4a16_kimi_combine_uses_fp32_semantics():
-    from lmdeploy.pytorch.kernels.cuda.fused_moe import moe_reduce
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import moe_reduce
 
     torch.manual_seed(17)
     device = torch.device('cuda')
@@ -615,7 +615,7 @@ def test_direct_packed_w4a16_single_expert_route():
 @torch.inference_mode()
 def test_direct_packed_w4a16_skewed_distinct_routes_and_down_reindex(top_k):
     from lmdeploy.pytorch.kernels.cuda.compressed_tensors_w4a16 import fused_moe_w4a16_kernel_launcher
-    from lmdeploy.pytorch.kernels.cuda.fused_moe import _get_sorted_idx
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _get_sorted_idx
 
     torch.manual_seed(3 + top_k)
     device = torch.device('cuda')
@@ -716,7 +716,7 @@ def test_direct_packed_w4a16_compacts_sparse_kimi_scale_routes(index_dtype):
         _w4a16_block_m,
         fused_moe_w4a16,
     )
-    from lmdeploy.pytorch.kernels.cuda.fused_moe import _get_sorted_idx_blocks
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _get_sorted_idx_blocks
 
     torch.manual_seed(13)
     device = torch.device('cuda')

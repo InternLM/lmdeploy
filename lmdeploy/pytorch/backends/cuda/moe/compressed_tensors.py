@@ -15,7 +15,7 @@ from lmdeploy.pytorch.kernels.cuda.compressed_tensors_w4a16 import (
     fused_moe_w4a16,
     fused_moe_w4a16_masked,
 )
-from lmdeploy.pytorch.kernels.cuda.fused_moe import _renormalize
+from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _renormalize
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 from .default import dispatch_ll

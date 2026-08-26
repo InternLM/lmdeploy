@@ -7,7 +7,7 @@ from torch import Tensor
 
 from lmdeploy.utils import get_logger
 
-from .utils import get_device_props
+from .utils import get_device_props, supports_pdl
 
 logger = get_logger('lmdeploy')
 
@@ -52,8 +52,14 @@ def _quant_fp8_kernel(
     ROUND_SCALE: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
     NUM_STAGES: tl.constexpr,
+    USE_PDL: tl.constexpr,
+    launch_pdl: tl.constexpr,
 ):
     """Quant fp8 kernel."""
+    if USE_PDL:
+        tl.extra.cuda.gdc_launch_dependents()
+        tl.extra.cuda.gdc_wait()
+
     group_id = tl.program_id(0) * num_groups_per_cta
     m_id_start = tl.program_id(1)
     m_id_stride = tl.num_programs(1)
@@ -101,7 +107,12 @@ def _quant_fp8_kernel(
         s_ptr += m_id_stride * stride_sm
 
 
-def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor, scale_fmt: str | None = None):
+def _quant_fp8_launcher(A: Tensor,
+                        group_size: int,
+                        out: Tensor,
+                        scales: Tensor,
+                        scale_fmt: str | None = None,
+                        launch_pdl: bool = False):
     """Quant online."""
     assert scale_fmt in (None, 'ue8m0')
     round_scale = 1 if scale_fmt == 'ue8m0' else 0
@@ -129,6 +140,7 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor,
     assert grid_size1 < 65536
     num_stages = min(4, max(1, triton.cdiv(M_out, grid_size1)))
     grid = (grid_size0, grid_size1)
+    use_pdl = launch_pdl and supports_pdl()
     _quant_fp8_kernel[grid](
         A,
         out,
@@ -148,6 +160,8 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor,
         ROUND_SCALE=round_scale,
         GROUP_SIZE=group_size,
         NUM_STAGES=num_stages,
+        USE_PDL=use_pdl,
+        launch_pdl=use_pdl,
         num_warps=num_warps,
         num_stages=num_stages,
     )
@@ -159,7 +173,8 @@ def quant_fp8(A: Tensor,
               group_size: int,
               dtype: torch.dtype = torch.float8_e4m3fn,
               trans_scale: bool = False,
-              scale_fmt: str | None = None):
+              scale_fmt: str | None = None,
+              launch_pdl: bool = False):
     """Quant fp8."""
     assert A.dim() == 2
     M, K = A.shape
@@ -174,13 +189,14 @@ def quant_fp8(A: Tensor,
         scales = torch.empty_strided((M, num_groups), (1, aligned_m), dtype=torch.float32, device=A.device)
     else:
         scales = A.new_empty(M, num_groups, dtype=torch.float32)
-    return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt)
+    return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt, launch_pdl=launch_pdl)
 
 
 def per_token_group_quant_fp8(A: Tensor,
                               group_size: int,
                               dtype: torch.dtype = torch.float8_e4m3fn,
-                              scale_fmt: str | None = None):
+                              scale_fmt: str | None = None,
+                              launch_pdl: bool = False):
     """Per-token-group FP8 quantization for tensors with arbitrary leading
     dims."""
     assert A.dim() >= 2
@@ -190,13 +206,19 @@ def per_token_group_quant_fp8(A: Tensor,
     assert K % group_size == 0
     out = torch.empty_like(A, dtype=dtype)
     scales = A.new_empty(*A.shape[:-1], K // group_size, dtype=torch.float32)
-    return _quant_fp8_launcher(A.view(M, K), group_size, out.view(M, K), scales.view(M, K // group_size), scale_fmt)
+    return _quant_fp8_launcher(A.view(M, K),
+                               group_size,
+                               out.view(M, K),
+                               scales.view(M, K // group_size),
+                               scale_fmt,
+                               launch_pdl=launch_pdl)
 
 
 def quant_fp8_tma(A: Tensor,
                   group_size: int,
                   dtype: torch.dtype = torch.float8_e4m3fn,
-                  scale_fmt: str | None = None):
+                  scale_fmt: str | None = None,
+                  launch_pdl: bool = False):
     """Quant fp8 tma."""
     from lmdeploy.pytorch.third_party.deep_gemm import ceil_div, get_m_alignment_for_contiguous_layout
     assert A.dim() == 2
@@ -207,7 +229,7 @@ def quant_fp8_tma(A: Tensor,
     aligned_M = ceil_div(M, alignment) * alignment
     out = A.new_empty(aligned_M, K, dtype=dtype)
     scales = A.new_empty(num_groups, aligned_M, dtype=torch.float32).T
-    return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt)
+    return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt, launch_pdl=launch_pdl)
 
 
 def _gemm_fp8_tma_pre_hook(nargs):
@@ -428,12 +450,12 @@ def blocked_gemm_fp8(A: Tensor,
 
     from .utils import supports_tma
 
-    run_tma = supports_tma()
+    run_tma = supports_tma(A.device.index)
     run_tma = run_tma and A.is_contiguous() and B.T.is_contiguous()
 
     # run_tma = False
     if run_tma:
-        from .utils import TensorDescriptor
+        from triton.tools.tensor_descriptor import TensorDescriptor
 
         dummy_block = (1, 1)
         desc_a = TensorDescriptor.from_tensor(A, block_shape=dummy_block)
