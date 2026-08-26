@@ -417,6 +417,9 @@ class EngineLoop:
         """Yield briefly for lookup I/O or back off for cache pressure."""
         scheduler = self.scheduler
         if scheduler.last_schedule_had_pending_lookup:
+            # A pending remote lookup is normal transient I/O, not cache
+            # exhaustion. Poll promptly without emitting the misleading cache
+            # warning or adding the full pressure backoff to TTFT.
             await asyncio.sleep(0.001)
             return
         logger.warning(f'no next prefill running request, Maybe cache is full, '
@@ -440,13 +443,19 @@ class EngineLoop:
                                running: 'SeqList',
                                model_inputs: 'ModelInputs | None',
                                delta: 'ModelInputsDelta | None'):
-        """Publish outputs."""
+        """Apply connector progress and publish model outputs."""
         if out is None:
             return
+        # A connector polling step intentionally has no token output. Consume
+        # its transfer completions first so newly loaded requests become
+        # schedulable even when no model forward ran in this executor step.
         self.scheduler.update_connector_output(out.kv_connector_output)
         if out.next_token_ids is None:
             return
         step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
+        # Sequence history is advanced by _make_infer_outputs. Only now can the
+        # scheduler prove that a prefill reached its reserved target and release
+        # the soft block reservation used while admitting external KV loads.
         self.scheduler.release_completed_prefill_reservations(running)
         self.resp_queue.put_nowait(step_outputs)
 
@@ -459,6 +468,8 @@ class EngineLoop:
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
         cache_inputs = forward_inputs['cache_inputs']
+        # Connector-only work shares the executor queue to preserve ordering,
+        # but owns neither model sequence state nor checkpoint pin transitions.
         has_model_work = model_inputs is not None or delta is not None
         if has_model_work:
             self.inputs_maker.update_running_seqs(running, model_inputs)

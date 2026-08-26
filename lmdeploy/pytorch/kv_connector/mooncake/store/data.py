@@ -184,7 +184,7 @@ def build_store_key(
     kv_head_rank: int,
     block_hash: bytes | bytearray | memoryview,
 ) -> str:
-    """Build LMDeploy's Mooncake key for one unique KV-head shard."""
+    """Build Mooncake key for one unique KV-head shard."""
     block_hash = bytes(block_hash)
     if len(block_hash) != MOONCAKE_BLOCK_HASH_BYTES:
         raise ValueError(f'block_hash must contain {MOONCAKE_BLOCK_HASH_BYTES} bytes')

@@ -262,6 +262,8 @@ class _ForwardInputsResult:
     extra_inputs: object | None = None
     swap_in_map: dict = field(default_factory=dict)
     swap_out_map: dict = field(default_factory=dict)
+    # In-flight KV I/O may need a connector-only executor step to make
+    # progress even when the scheduler selected no model work.
     kv_connector_metadata: object | None = None
 
     def is_empty(self):
@@ -356,8 +358,12 @@ class _ForwardInputsTask:
         connector_enabled = maker.scheduler.kv_connector is not None
         if (connector_enabled and result.inputs is not None
                 and not result.inputs.is_decoding and not result.inputs.is_dummy):
+            # A prefill writes KV through the end of its query. The connector
+            # uses this post-forward boundary to save newly completed blocks.
             token_lens = result.inputs.history_lengths + result.inputs.seq_length
             connector_token_lens = tuple(token_lens.tolist())
+        # Build metadata even without model work: a pending load/save still
+        # needs executor steps to submit work and poll asynchronous completion.
         result.kv_connector_metadata = self.scheduler.build_connector_meta(
             result.running,
             result.swap_in_map,

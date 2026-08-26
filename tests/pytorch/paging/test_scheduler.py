@@ -1,4 +1,5 @@
 import time
+from unittest.mock import Mock
 
 import pytest
 import torch
@@ -15,6 +16,7 @@ from lmdeploy.pytorch.kv_connector import (
     KVLoadResult,
     KVSaveBlockLease,
 )
+from lmdeploy.pytorch.kv_connector.mooncake.store.scheduler import MooncakeStoreScheduler
 from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.paging.state_manager import StateManager
@@ -743,6 +745,74 @@ def test_async_lookup_pending_rolls_back_a_new_request_once():
     assert connector.lookup_calls == [(seq.seq_id, 0), (seq.seq_id, 0)]
 
 
+def test_async_lookup_rebases_remote_hit_after_local_trie_grows(monkeypatch):
+    connector = MooncakeStoreScheduler(
+        CacheConfig(
+            max_batches=1,
+            block_size=4,
+            num_cpu_blocks=0,
+            num_gpu_blocks=16,
+            enable_prefix_caching=True,
+            kv_transfer_config=KVTransferConfig(
+                kv_connector='MooncakeStoreConnector',
+                kv_role='kv_both',
+            ),
+        ))
+    assert connector.client is not None
+    # The same asynchronous lookup first reports pending, then returns its
+    # absolute remote prefix boundary from the original snapshot.
+    monkeypatch.setattr(connector.client, 'lookup', Mock(side_effect=(None, 16)))
+    observed_results = []
+    get_matched_tokens = connector.get_num_new_matched_tokens
+
+    def _record_result(request, num_computed_tokens):
+        result = get_matched_tokens(request, num_computed_tokens)
+        observed_results.append((num_computed_tokens, result))
+        return result
+
+    monkeypatch.setattr(connector, 'get_num_new_matched_tokens', _record_result)
+    scheduler = _make_async_lookup_scheduler(connector)
+    tokens = torch.arange(17)
+
+    cached_to_8 = scheduler.add_session(80).add_sequence(tokens[:9])
+    scheduler.block_manager.allocate(cached_to_8)
+    scheduler.block_trie.allocate(cached_to_8)
+    cached_to_8.state.stop()
+
+    seq = scheduler.add_session(81).add_sequence(tokens)
+    first = scheduler.schedule(is_prefill=True)
+
+    assert first.running == []
+    assert seq.num_history_ids == 0
+    assert observed_results == [(8, (None, False))]
+
+    # While the remote lookup is pending, another sequence publishes the next
+    # complete local block. The retried match must now advance from 8 to 12.
+    cached_to_12 = scheduler.add_session(82).add_sequence(tokens[:13])
+    scheduler.block_manager.allocate(cached_to_12)
+    scheduler.block_trie.allocate(cached_to_12)
+    cached_to_12.state.stop()
+
+    second = scheduler.schedule(is_prefill=True)
+
+    assert second.running == []
+    assert seq.num_history_ids == 12
+    assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    assert observed_results == [
+        (8, (None, False)),
+        (12, (4, True)),
+    ]
+
+    metadata = connector.build_connector_meta(second)
+    assert metadata is not None
+    assert len(metadata.load_requests) == 1
+    load_request = metadata.load_requests[0]
+    block_table = scheduler.block_manager.get_block_table(seq)
+    assert load_request.block_ids == (int(block_table[3]), )
+    assert load_request.remote_block_count == 4
+    scheduler.shutdown()
+
+
 def test_async_lookup_pending_request_does_not_block_later_waiter():
     connector = _AsyncLookupConnector([(None, False), (0, False)])
     scheduler = _make_async_lookup_scheduler(
@@ -959,7 +1029,7 @@ def test_async_load_requires_capacity_for_the_complete_prefill():
     assert connector.allocations == []
 
 
-def test_async_load_soft_reservation_does_not_block_regular_prefill():
+def test_async_load_does_not_consume_model_batch_slot():
     connector = _AsyncLookupConnector([(8, True), (0, False)])
     scheduler = _make_async_lookup_scheduler(
         connector,
@@ -969,23 +1039,41 @@ def test_async_load_soft_reservation_does_not_block_regular_prefill():
     loading = scheduler.add_session(77).add_sequence(torch.arange(13))
     later = scheduler.add_session(78).add_sequence(torch.arange(8))
 
-    first = scheduler.schedule(is_prefill=True)
-    assert first.running == []
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [later]
     assert loading.status == MessageStatus.WAITING_FOR_REMOTE_KVS
     assert loading.num_blocks == 2
-    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 2
-    assert scheduler.block_manager.get_num_free_gpu_blocks() == 3
-
-    second = scheduler.schedule(is_prefill=True)
-    assert second.running == [later]
     assert later.status == MessageStatus.READY
-    assert scheduler.block_manager.get_num_free_gpu_blocks() == 1
     assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 2
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 1
 
     scheduler.update_connector_output(
         KVConnectorOutput(finished_receiving={loading.seq_id}))
     assert loading.num_history_ids == 8
     assert loading.cached_tokens == 8
+
+
+def test_multiple_async_loads_start_in_one_prefill_turn():
+    connector = _AsyncLookupConnector([(8, True), (8, True)])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+        max_batches=1,
+        num_gpu_blocks=16,
+    )
+    first = scheduler.add_session(91).add_sequence(torch.arange(13))
+    second = scheduler.add_session(92).add_sequence(torch.arange(20, 33))
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == []
+    assert first.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    assert second.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    assert [allocation[0] for allocation in connector.allocations] == [
+        first.seq_id,
+        second.seq_id,
+    ]
 
 
 def test_soft_reservation_blocks_new_load_until_capacity_is_released():

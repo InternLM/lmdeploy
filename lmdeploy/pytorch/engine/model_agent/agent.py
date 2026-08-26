@@ -95,6 +95,13 @@ class BatchedLogProbs:
 
 @dataclass
 class BatchedOutputs:
+    """One worker step's model result and optional KV-transfer progress.
+
+    ``next_token_ids`` and ``stopped`` are ``None`` only for a connector-only
+    step, where workers must report asynchronous KV progress although no model
+    forward ran.
+    """
+
     next_token_ids: torch.Tensor | None
     stopped: torch.Tensor | None
     stop_pos: torch.Tensor | None = None
@@ -796,6 +803,8 @@ class BaseModelAgent:
         logger.debug(f'<ForwardTask> rank[{rank}]: Output')
         extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
 
+        # Delay enqueueing until _async_step has attached this rank's connector
+        # progress. Distributed executors aggregate that field across TP ranks.
         batched_output = BatchedOutputs(next_token_ids=output_token_ids,
                                         logits=logits if return_logits else None,
                                         stopped=stopped,
@@ -865,11 +874,16 @@ class BaseModelAgent:
         need_broadcast_next = (tp > 1)
         dp = dist_config.dp
         need_update_inputs = False
+        # Connector metadata can describe either work for this forward or a
+        # polling-only step. Its presence also tells distributed executors to
+        # collect connector progress from every TP worker.
         connector_step = start_kv_connector_step(
             self.kv_connector,
             kv_connector_metadata,
         )
         if inputs is None and delta is None:
+            # Loads and saves finish asynchronously, so progress must still be
+            # returned when the scheduler has no model work to dispatch.
             connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
             assert connector_output is not None
             self._push_output(BatchedOutputs.connector_only(connector_output))
@@ -930,6 +944,8 @@ class BaseModelAgent:
             return_logits=return_logits or return_ce_loss,
             cache_inputs=cache_inputs,
         )
+        # The forward has now queued its KV writes on the current CUDA stream.
+        # The connector records a readiness event before its sender reads them.
         start_kv_connector_save(self.kv_connector, connector_step)
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
@@ -1023,6 +1039,9 @@ class BaseModelAgent:
                 extra_outputs,
             )
 
+        # This is a non-blocking progress poll. The TP leader carries model and
+        # connector output together; other TP ranks emit a connector-only
+        # envelope so the executor can wait for all-rank completion.
         connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
         if batched_output is not None:
             batched_output.kv_connector_output = connector_output
@@ -1569,6 +1588,8 @@ class BaseModelAgent:
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
         device = 'cpu' if level == 1 else 'meta'
+        # Stop producers of GPU work and wait for queued work before closing the
+        # connector threads that still reference registered cache addresses.
         self._drain_queues()
         torch.cuda.synchronize()
         self._release_completed_h2d_transfers()

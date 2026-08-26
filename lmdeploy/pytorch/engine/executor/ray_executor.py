@@ -277,7 +277,11 @@ class RayExecutor(ExecutorBase):
             self.dag = None
             self._prefetch_task: asyncio.Task = None
             self.remote_outs: asyncio.Queue = None
+            # Forwards and outputs are consumed in FIFO order. Remember which
+            # queued steps need all TP outputs instead of only the TP leader's.
             self._connector_steps: deque[bool] = deque()
+            # Rank-local connector completions may arrive on different steps.
+            # Keep partial reports here until every worker has reported an ID.
             self._kv_output_aggregator = KVConnectorOutputAggregator(len(self.workers))
 
             logger.info('Init distributed environment by device.')
@@ -376,6 +380,8 @@ class RayExecutor(ExecutorBase):
     async def sleep(self, level: int = 1):
         """Sleep."""
         await self.collective_rpc_async('sleep', (level, ))
+        # Workers drain their queues while sleeping, so their driver-side step
+        # markers and partially aggregated completions are stale as well.
         self._connector_steps.clear()
         self._kv_output_aggregator.clear()
 
@@ -542,6 +548,8 @@ class RayExecutor(ExecutorBase):
             output.kv_connector_output
             for output in outputs
         ])
+        # Model output is produced by the TP leader; only connector progress
+        # needs to be replaced with the all-worker aggregate.
         output = outputs[0]
         output.kv_connector_output = connector_output
         return output
