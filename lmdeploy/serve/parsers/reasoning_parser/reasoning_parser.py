@@ -13,7 +13,7 @@ ReasoningParserManager = Registry('reasoning_parser', locations=['lmdeploy.serve
 LEGACY_REASONING_PARSER_NAMES = ('qwen-qwq', 'intern-s1', 'deepseek-r1')
 
 
-@ReasoningParserManager.register_module(name=['default', 'kimi_k2', 'kimi-k2'])
+@ReasoningParserManager.register_module(name='default')
 class ReasoningParser:
     """Unified reasoning parser for all ``--reasoning-parser`` options."""
 
