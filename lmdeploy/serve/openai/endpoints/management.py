@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 
+from lmdeploy.serve.openai.errors import create_error_response
 from lmdeploy.serve.openai.protocol import (
     AbortRequest,
     DestroyWeightsUpdateGroupRequest,
@@ -15,7 +16,6 @@ from lmdeploy.serve.openai.protocol import (
     UpdateParamsRequest,
     UpdateWeightsFromDistributedRequest,
 )
-from lmdeploy.serve.openai.utils import create_error_response
 from lmdeploy.serve.utils.server_utils import validate_json_request
 
 

@@ -4,9 +4,9 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from .activation import fast_expf
-from .blocked_gemm_fp8 import fast_round_scale
-from .utils import get_device_props
+from ..activation import fast_expf
+from ..blocked_gemm_fp8 import fast_round_scale
+from ..utils import get_device_props
 
 
 @triton.jit(do_not_specialize=['M'])

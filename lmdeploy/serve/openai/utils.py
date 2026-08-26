@@ -1,15 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from http import HTTPStatus
 from typing import Any, TypeVar
-
-from fastapi.responses import JSONResponse
 
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponseChoice,
     ChatCompletionResponseStreamChoice,
-    ErrorResponse,
 )
 
 _ToolCallT = TypeVar('_ToolCallT')
@@ -23,17 +19,6 @@ def get_model_list(server_context) -> list[str]:
     cfg = server_context.engine_config
     model_names += getattr(cfg, 'adapters', None) or []
     return model_names
-
-
-def create_error_response(
-        status: HTTPStatus,
-        message: str,
-        error_type: str = 'invalid_request_error') -> JSONResponse:
-    """Create an OpenAI-compatible error response."""
-    payload = ErrorResponse(message=message,
-                            type=error_type,
-                            code=status.value)
-    return JSONResponse(payload.model_dump(), status_code=status.value)
 
 
 def filter_parallel_tool_calls(tool_calls: list[_ToolCallT] | None,

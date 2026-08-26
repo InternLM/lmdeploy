@@ -26,21 +26,23 @@ logger = get_logger('lmdeploy')
 def draft_model_forward(
     model: torch.nn.Module,
     inputs: ModelInputs,
+    cache_engine: CacheEngine,
     model_config: ModelConfig | None = None,
-    cache_engine: CacheEngine | None = None,
 ):
     """Perform model forward."""
     stream = torch.cuda.current_stream()
     with torch.cuda.stream(stream), step_ctx_manager(model.ctx_mgr):
         # forward
         ctx_mgr = model.ctx_mgr
-        kv_caches = None if cache_engine is None else cache_engine.gpu_cache
+        kv_caches = cache_engine.gpu_cache
         context = ctx_mgr.build_context(
             inputs=inputs,
             model_config=model_config,
             cache_config=cache_engine.cache_config,
             kv_caches=kv_caches,
         )
+        # Attach named cache views for models that declare block_cache_specs.
+        context.block_caches = cache_engine.block_caches
         with ctx_mgr.context(context):
             model_metas = None
             model_metas = model.update_model_metas(
@@ -99,7 +101,7 @@ class BaseSpecProposer:
         raise NotImplementedError()
 
     @record_function('draft_model_forward')
-    def _forward(self, model_inputs: ModelInputs, cache_engine: CacheEngine = None):
+    def _forward(self, model_inputs: ModelInputs, cache_engine: CacheEngine):
         """Forward."""
         return draft_model_forward(
             self.model,

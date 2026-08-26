@@ -69,7 +69,7 @@ def test_responses_tool_choice_none_does_not_require_tool_parser(
         ))
 
     assert response['output_text'] == 'ok'
-    assert context.async_engine.generate_kwargs['tools'] is None
+    assert context.async_engine.preprocess_kwargs['tools'] is None
 
 
 def test_responses_non_streaming_cleans_up_session(
@@ -190,7 +190,7 @@ def test_responses_forwards_repetition_penalty(responses_endpoint,
     response = asyncio.run(endpoint(request, fake_raw_request))
 
     assert response['output_text'] == 'ok'
-    assert context.async_engine.generate_kwargs[
+    assert context.async_engine.preprocess_kwargs[
         'gen_config'].repetition_penalty == 1.1
 
 

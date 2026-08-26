@@ -11,6 +11,35 @@ from transformers.generation.logits_process import (
 # yapf: enable
 
 
+def test_sampling_inputs_select_sampling_rows():
+    from lmdeploy.pytorch.engine.logits_process import SamplingInputs
+
+    inputs = SamplingInputs(
+        temperature=torch.arange(6),
+        top_k=torch.arange(6),
+        top_p=torch.arange(6) / 10,
+        min_p=torch.arange(6) / 20,
+        random_seeds=torch.arange(10, 16),
+        random_offsets=torch.arange(20, 26),
+        max_top_k=5,
+        has_greedy=True,
+        batch_size=6,
+    )
+
+    selected = inputs.select_sampling_rows(slice(2, None, 3))
+
+    assert selected.batch_size == 2
+    torch.testing.assert_close(selected.top_k, torch.tensor([2, 5]))
+    torch.testing.assert_close(selected.top_p, torch.tensor([0.2, 0.5]))
+    torch.testing.assert_close(selected.min_p, torch.tensor([0.1, 0.25]))
+    torch.testing.assert_close(selected.random_seeds, torch.tensor([12, 15]))
+    torch.testing.assert_close(selected.random_offsets, torch.tensor([22, 25]))
+    assert selected.max_top_k == 5
+    assert selected.has_greedy
+    assert selected.temperature is None
+    assert inputs.select_sampling_rows(slice(None)) is inputs
+
+
 def test_sampling_inputs_record_stream_records_only_tensor_fields():
     from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 

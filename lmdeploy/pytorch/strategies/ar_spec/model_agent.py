@@ -114,26 +114,33 @@ class ARSpecStoppingCriteria(ARStoppingCriteria):
 
         if token_ids.ndim == 1:
             token_ids = token_ids.unsqueeze(-1)
-        valid_tokens = token_ids > -1
-        num_appendable_ids_exp = self.num_appendable_ids.unsqueeze(-1) - torch.arange(
-            1, token_ids.size(1) + 1, device=token_ids.device)[None]
-        mask = num_appendable_ids_exp <= 0
-        mask[~valid_tokens] = False
-        if stop_words is not None:
-            # stop_words is batched and may contain negative padding -1
-            valid_stop_words = stop_words >= 0
-            # compare per row only for valid stop words
-            stop_mask = ((token_ids.unsqueeze(-1) == stop_words.unsqueeze(1)) & valid_stop_words.unsqueeze(1)).any(-1)
-            mask = torch.logical_or(mask, stop_mask)
-        # find the index of first `1`,  if not found, would be 0
-        index = torch.argmax(mask.int(), dim=-1, keepdim=True)
-        # update index of 0 to -1 if not found
-        stop_pos = torch.where(index == 0, mask[:, 0:1].int() - 1, index).ravel()
-        stopped = stop_pos != -1
-        num_valid_tokens = valid_tokens.sum(dim=-1)
+        # Rejection sampling owns the accepted-prefix length. Reuse it instead
+        # of rediscovering the count from placeholder token ids.
+        num_rejected_tokens = extra_inputs.num_rejected_tokens
+        assert num_rejected_tokens is not None
+        num_valid_tokens = token_ids.size(1) - num_rejected_tokens
         num_appendable_ids = self.num_appendable_ids - num_valid_tokens
-        one_ids = torch.clamp_max(num_appendable_ids, 0)
-        num_appendable_ids = torch.where(stopped, one_ids, num_appendable_ids)
+        length_stopped = num_appendable_ids <= 0
+        length_stop_pos = torch.clamp_min(self.num_appendable_ids - 1, 0)
+        if stop_words is None:
+            stop_pos = torch.where(length_stopped, length_stop_pos, -1)
+            return length_stopped, stop_pos, ARSpecStoppingCriteria(num_appendable_ids=num_appendable_ids)
+
+        # stop_words is batched and may contain negative padding -1
+        valid_stop_words = stop_words >= 0
+        # compare per row only for valid stop words
+        stop_mask = ((token_ids.unsqueeze(-1) == stop_words.unsqueeze(1))
+                     & valid_stop_words.unsqueeze(1)).any(-1)
+        stop_word_found, stop_word_pos = stop_mask.max(dim=-1)
+
+        no_stop_pos = token_ids.size(1)
+        stop_word_pos = torch.where(stop_word_found, stop_word_pos, no_stop_pos)
+        length_stop_pos = torch.where(length_stopped, length_stop_pos, no_stop_pos)
+        stop_pos = torch.minimum(stop_word_pos, length_stop_pos)
+        stopped = stop_pos < no_stop_pos
+        stop_pos = torch.where(stopped, stop_pos, -1)
+        stopped_num_appendable_ids = torch.clamp_max(num_appendable_ids, 0)
+        num_appendable_ids = torch.where(stopped, stopped_num_appendable_ids, num_appendable_ids)
         return stopped, stop_pos, ARSpecStoppingCriteria(num_appendable_ids=num_appendable_ids)
 
 

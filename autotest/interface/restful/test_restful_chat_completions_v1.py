@@ -1,12 +1,11 @@
 from typing import Literal
 
 import pytest
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 from utils.constant import BACKEND_LIST, BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
 from utils.restful_return_check import (
     assert_chat_completions_batch_return,
     assert_chat_completions_stream_return,
-    assert_chat_delta_error,
     assert_chat_message_error,
     get_chat_delta_text,
     get_chat_message_text,
@@ -383,8 +382,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      ],
                                                      temperature=0.01):
             continue
-        assert output.get('choices')[0].get('finish_reason') == 'error'
-        assert_chat_message_error(output.get('choices')[0])
+        assert_chat_message_error(output)
 
     def test_longtext_input_streaming(self, backend, model_case):
         api_client = APIClient(BASE_URL)
@@ -400,10 +398,8 @@ class TestRestfulInterfaceChatCompletions:
                                                      stream=True,
                                                      temperature=0.01):
             outputList.append(output)
-        assert_chat_completions_stream_return(outputList[0], model_name, is_last=True)
-        assert outputList[0].get('choices')[0].get('finish_reason') == 'error'
-        assert_chat_delta_error(outputList[0].get('choices')[0])
         assert len(outputList) == 1
+        assert_chat_message_error(outputList[0])
 
     def test_ignore_eos(self, backend, model_case):
         api_client = APIClient(BASE_URL)
@@ -901,42 +897,34 @@ class TestRestfulOpenAI:
     def test_longtext_input(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
-        outputs = client.chat.completions.create(model=model_name,
-                                                 messages=[
-                                                     {
-                                                         'role': 'user',
-                                                         'content': _OVERSIZE_CHAT_PROMPT,
-                                                     },
-                                                 ],
-                                                 max_tokens=100)
-        output = outputs.model_dump()
-        print(output)
-        assert output.get('choices')[0].get('finish_reason') == 'error'
-        assert_chat_message_error(output.get('choices')[0])
+        with pytest.raises(BadRequestError) as ei:
+            client.chat.completions.create(model=model_name,
+                                           messages=[
+                                               {
+                                                   'role': 'user',
+                                                   'content': _OVERSIZE_CHAT_PROMPT,
+                                               },
+                                           ],
+                                           max_tokens=100)
+        assert ei.value.status_code == 400
+        assert_chat_message_error(ei.value.body)
 
     @pytest.mark.pr_test
     def test_longtext_input_streaming(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
-
-        outputs = client.chat.completions.create(model=model_name,
-                                                 messages=[
-                                                     {
-                                                         'role': 'user',
-                                                         'content': _OVERSIZE_CHAT_PROMPT,
-                                                     },
-                                                 ],
-                                                 max_tokens=100,
-                                                 stream=True)
-
-        outputList = []
-        for output in outputs:
-            outputList.append(output.model_dump())
-
-        assert_chat_completions_stream_return(outputList[0], model_name, is_last=True)
-        assert outputList[0].get('choices')[0].get('finish_reason') == 'error'
-        assert_chat_delta_error(outputList[0].get('choices')[0])
-        assert len(outputList) == 1
+        with pytest.raises(BadRequestError) as ei:
+            client.chat.completions.create(model=model_name,
+                                           messages=[
+                                               {
+                                                   'role': 'user',
+                                                   'content': _OVERSIZE_CHAT_PROMPT,
+                                               },
+                                           ],
+                                           max_tokens=100,
+                                           stream=True)
+        assert ei.value.status_code == 400
+        assert_chat_message_error(ei.value.body)
 
     @pytest.mark.pr_test
     def test_max_tokens(self, backend, model_case):

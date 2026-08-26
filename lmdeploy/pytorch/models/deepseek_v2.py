@@ -8,7 +8,6 @@ from os import getenv
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
@@ -18,6 +17,7 @@ from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
     Attention,
     ParallelEmbedding,
+    ParallelLMHead,
     RMSNorm,
     RopeType,
     SiluAndMul,
@@ -30,9 +30,9 @@ from lmdeploy.pytorch.nn.linear import (
     build_down_linear,
     build_gateup_linear,
     build_o_proj,
-    build_rowwise_linear,
 )
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
+from lmdeploy.pytorch.nn.moe.route import RouterGemm
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -580,6 +580,16 @@ class DeepseekV2Attention(nn.Module):
         return attn_output
 
 
+def _get_moe_router_dtype(config: Any) -> torch.dtype | None:
+    router_dtype = getattr(config, 'moe_router_dtype', None)
+    if getattr(config, 'model_type', None) == 'glm_moe_dsa':
+        # Older GLM-5/5.2 configs require FP32 routing but do not expose moe_router_dtype.
+        return torch.float32
+    if router_dtype == 'float32':
+        return torch.float32
+    return None
+
+
 class MoEGate(nn.Module):
     """Deepseek Gate."""
 
@@ -605,7 +615,8 @@ class MoEGate(nn.Module):
         self.norm_topk_prob = config.norm_topk_prob
         self.gating_dim = config.hidden_size
         self.weight = nn.Parameter(
-            torch.empty((self.n_routed_experts, self.gating_dim), dtype=torch.float32, device=device))
+            torch.empty((self.n_routed_experts, self.gating_dim), dtype=dtype, device=device))
+        self.router_gemm = RouterGemm(out_dtype=_get_moe_router_dtype(config))
         if self.topk_method == 'noaux_tc':
             from lmdeploy.pytorch.nn.moe.route import NoauxTCRouter
             self.e_score_correction_bias = nn.Parameter(
@@ -645,7 +656,7 @@ class MoEGate(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, routed_experts: torch.Tensor = None):
         """forward."""
-        router_logits = F.linear(hidden_states.to(self.weight.dtype), self.weight)
+        router_logits = self.router_gemm(hidden_states, self.weight)
         if self.fake_eplb:
             # Forcefully manipulate router_logits to simulate expert load balancing (EPLB).
             # This is a benchmark-only hack to achieve optimal performance metrics.
@@ -685,7 +696,12 @@ class MoEGate(nn.Module):
 class DeepseekV2MoE(nn.Module):
     """Deepseek v2 MoE."""
 
-    def __init__(self, config: Any, layer_idx, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: Any,
+                 layer_idx,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 all_reduce: bool = True):
         super().__init__()
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
@@ -737,7 +753,7 @@ class DeepseekV2MoE(nn.Module):
                 is_shared_expert=True,
             )
 
-        if dp == 1 and world_size > 1:
+        if all_reduce and dp == 1 and world_size > 1:
             self._all_reduce = True
         else:
             self._all_reduce = False
@@ -776,7 +792,8 @@ class DeepseekV2MLP(nn.Module):
                  intermediate_size: int = None,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 is_shared_expert: bool = False):
+                 is_shared_expert: bool = False,
+                 all_reduce: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         if is_shared_expert:
@@ -792,7 +809,6 @@ class DeepseekV2MLP(nn.Module):
                 is_tp = False
                 all_reduce = False
         else:
-            all_reduce = True
             is_tp = True
 
         # gate up
@@ -1137,11 +1153,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         self.ctx_mgr = ctx_mgr
         self.model = DeepseekV2Model(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = ParallelLMHead(config.vocab_size,
+                                      config.hidden_size,
+                                      bias=False,
+                                      dtype=dtype,
+                                      device=device)
+        if config.tie_word_embeddings:
+            self.lm_head.tie_weights(self.model.get_input_embeddings())
         self._load_buffers = dict()
 
     def forward(

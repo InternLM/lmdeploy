@@ -6,8 +6,8 @@ import torch
 import triton
 import triton.language as tl
 
-from .activation import silu_and_mul
-from .blocked_gemm_fp8 import quant_fp8
+from ..activation import silu_and_mul
+from ..blocked_gemm_fp8 import quant_fp8
 from .fused_moe import _get_sorted_idx, _get_sorted_idx_blocks, _make_intermediate, _renormalize, moe_reduce
 
 
@@ -288,6 +288,7 @@ def fused_moe_blocked_fp8_compact_kernel(
     num_local_experts: tl.constexpr,
     reindex_a: tl.constexpr,
     reindex_c: tl.constexpr,
+    TRANSPOSE_MMA: tl.constexpr,
 ):
     """Compact routed-block MoE kernel for blocked FP8 weights."""
     block_id = tl.program_id(0)
@@ -315,14 +316,21 @@ def fused_moe_blocked_fp8_compact_kernel(
 
     local_exp = local_exp.to(tl.int64)
     exp_off = stride_be * local_exp
-    a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    if TRANSPOSE_MMA:
+        a_ptrs = A + (offs_k[:, None] * stride_ak + offs_am[None, :] * stride_am)
+        b_ptrs = B + exp_off + (offs_bn[:, None] * stride_bn + offs_k[None, :] * stride_bk)
+    else:
+        a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+        b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     offs_bsn = pid_n * BLOCK_SIZE_N // group_bn
     as_ptrs = A_scale + offs_am * stride_asm
     bs_ptrs = B_scale + stride_bse * local_exp + offs_bsn * stride_bsn
 
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    if TRANSPOSE_MMA:
+        accumulator = tl.zeros((BLOCK_SIZE_N, BLOCK_SIZE_M), dtype=tl.float32)
+    else:
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
     a_scale = tl.load(as_ptrs, mask=mask_sid, other=1.0)
     b_scale = tl.load(bs_ptrs)
@@ -344,11 +352,20 @@ def fused_moe_blocked_fp8_compact_kernel(
         a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid & (k_start < K), other=1.0)
         b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
 
-        a = tl.load(a_ptrs, mask=mask_sid[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K), other=0.0)
-        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
-
-        accumulator = tl.dot(a, b, acc=accumulator)
-        accumulator *= acc_ratio[:, None]
+        if TRANSPOSE_MMA:
+            a = tl.load(a_ptrs,
+                        mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K) & mask_sid[None, :],
+                        other=0.0)
+            b = tl.load(b_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+            accumulator = tl.dot(b, a, acc=accumulator)
+            accumulator *= acc_ratio[None, :]
+        else:
+            a = tl.load(a_ptrs,
+                        mask=mask_sid[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K),
+                        other=0.0)
+            b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+            accumulator = tl.dot(a, b, acc=accumulator)
+            accumulator *= acc_ratio[:, None]
 
         new_acc_scale = tl.maximum(a_scale * b_scale, 1e-12)
         acc_ratio = acc_scale / new_acc_scale
@@ -357,6 +374,8 @@ def fused_moe_blocked_fp8_compact_kernel(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
+    if TRANSPOSE_MMA:
+        accumulator = tl.trans(accumulator, (1, 0))
     c = accumulator * (acc_ratio * acc_scale)[:, None]
 
     if bias is not None:
@@ -394,6 +413,7 @@ def fused_moe_blocked_fp8_compact_kernel_launcher(
     block_n: int = 128,
     num_warps: int = 4,
     num_stages: int = 3,
+    transpose_mma: bool = False,
 ):
     """Launch compact routed-block MoE kernel for blocked FP8 weights."""
     E, N, K = B.shape
@@ -454,6 +474,7 @@ def fused_moe_blocked_fp8_compact_kernel_launcher(
         num_local_experts=E,
         reindex_a=reindex_a,
         reindex_c=reindex_c,
+        TRANSPOSE_MMA=transpose_mma,
         BLOCK_SIZE_M=block_m,
         BLOCK_SIZE_N=block_n,
         BLOCK_SIZE_K=group_bk,
@@ -504,16 +525,25 @@ def _compact_blocked_fp8_moe_config(num_routes: int, num_experts: int):
 
 
 def _compact_blocked_fp8_moe_both_config(num_routes: int, num_experts: int, gate_out_features: int):
-    """Choose compact configs measured for both GLM-5.2 projections."""
+    """Choose one compact config for both MoE projections."""
     avg_routes = triton.cdiv(num_routes, num_experts)
     # Lower TP degrees have wider local projections and favor the larger M tile.
     if gate_out_features > 512 or avg_routes > 16:
         block_m, block_n = 64, 128
     elif avg_routes > 8:
         block_m, block_n = 32, 128
+    elif avg_routes == 3:
+        block_m, block_n = 16, 128
     else:
         block_m, block_n = 16, 64
     return dict(block_m=block_m, block_n=block_n, num_warps=4, num_stages=3)
+
+
+def _compact_blocked_fp8_moe_gate_config(compact_config: dict, input_features: int):
+    """Use transposed MMA for measured small-M, long-K gate tiles."""
+    if compact_config['block_m'] > 32 or input_features < 2048:
+        return compact_config
+    return dict(compact_config, block_n=128, transpose_mma=True)
 
 
 def _blocked_fp8_moe_cta_estimates(num_tokens: int, num_routes: int, num_experts: int, local_experts: int,
@@ -597,11 +627,38 @@ def _should_use_compact_blocked_fp8_moe_down_by_shape(num_tokens: int, num_route
     return origin_ctas >= min_cta_ratio * compact_ctas
 
 
-def _should_use_compact_blocked_fp8_moe_both_by_shape(num_tokens: int, num_routes: int, num_experts: int,
-                                                      local_experts: int):
-    """Use compact scheduling in the measured full-expert density window."""
+def _select_compact_blocked_fp8_moe_both_config(num_tokens: int, num_routes: int, num_experts: int,
+                                                local_experts: int, gate_out_features: int, input_features: int):
+    """Select compact scheduling in measured broad-routing feature regions."""
     avg_routes = triton.cdiv(num_routes, num_experts)
-    return num_tokens >= 128 and num_experts == 256 and local_experts == num_experts and 4 <= avg_routes <= 48
+    if local_experts != num_experts or local_experts < 256:
+        return None
+    n_tiles = gate_out_features // 128
+    k_blocks = input_features // 128
+    if n_tiles >= 8:
+        max_avg_routes = 64 if k_blocks <= 24 else 48
+        use_compact = 2 <= avg_routes <= max_avg_routes
+    elif n_tiles != 4:
+        use_compact = False
+    elif k_blocks <= 24:
+        # The origin gate/up schedule switches from BM64 to BM128 above 64
+        # tokens. A compact BM64 schedule avoids that cliff and remains robust
+        # when routes are concentrated on a small expert subset.
+        if num_tokens > 64 and 2 <= avg_routes <= 64:
+            return dict(block_m=64, block_n=128, num_warps=4, num_stages=3)
+        use_compact = False
+    elif k_blocks == 32:
+        # At E=512 the origin gate wins in the middle density band, while
+        # compact gate/up wins again once the routed activation exceeds cache.
+        use_compact = avg_routes <= 64 or 140 <= avg_routes <= 160
+    elif k_blocks >= 48:
+        use_compact = 2 <= avg_routes <= 48
+    else:
+        use_compact = False
+
+    if not use_compact:
+        return None
+    return _compact_blocked_fp8_moe_both_config(num_routes, num_experts, gate_out_features)
 
 
 def _should_use_compact_blocked_fp8_moe_down(input: torch.Tensor, input_scale: torch.Tensor, w1: torch.Tensor,
@@ -647,14 +704,15 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
     gate_moe_cfg, down_moe_cfg = _origin_blocked_fp8_moe_configs(M, topk_ids.numel(), num_experts, E)
     supports_compact = _supports_compact_blocked_fp8_moe(input, input_scale, w1, w1_scale, w2, w2_scale, topk_ids,
                                                          num_experts, expert_offset)
-    use_compact_both = supports_compact and _should_use_compact_blocked_fp8_moe_both_by_shape(
-        M, topk_ids.numel(), num_experts, E)
+    compact_moe_cfg = None
+    if supports_compact:
+        compact_moe_cfg = _select_compact_blocked_fp8_moe_both_config(M, topk_ids.numel(), num_experts, E,
+                                                                      w1.size(1), w1.size(2))
+    use_compact_both = compact_moe_cfg is not None
     use_compact_down = (not use_compact_both and supports_compact
                         and _should_use_compact_blocked_fp8_moe_down_by_shape(M, topk_ids.numel(), num_experts, E,
                                                                             w2.size(1)))
-    if use_compact_both:
-        compact_moe_cfg = _compact_blocked_fp8_moe_both_config(topk_ids.numel(), num_experts, w1.size(1))
-    elif use_compact_down:
+    if use_compact_down:
         compact_moe_cfg = _compact_blocked_fp8_moe_config(topk_ids.numel(), num_experts)
 
     if use_compact_both or use_compact_down:
@@ -671,6 +729,7 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
     intermediate_cache1 = _make_intermediate((M, topk, N), dtype=out_dtype, device=device, zeros=not full_exp)
     # gate and up
     if use_compact_both:
+        gate_compact_moe_cfg = _compact_blocked_fp8_moe_gate_config(compact_moe_cfg, w1.size(2))
         fused_moe_blocked_fp8_compact_kernel_launcher(
             input,
             input_scale,
@@ -687,7 +746,7 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
             expert_offset=expert_offset,
             reindex_a=True,
             reindex_c=False,
-            **compact_moe_cfg,
+            **gate_compact_moe_cfg,
         )
     else:
         fused_moe_blocked_fp8_kernel_launcher(
