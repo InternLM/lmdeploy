@@ -8,10 +8,7 @@ import uuid
 import aiohttp
 import requests
 from openai import OpenAI
-from utils.config_utils import (
-    get_model_path_from_config,
-    model_enables_return_routed_experts,
-)
+from utils.config_utils import get_model_path_from_config
 from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_PORT
 
 from lmdeploy.serve.openai.protocol import (
@@ -30,21 +27,6 @@ from lmdeploy.serve.parsers.response_parser import (
 BASE_HTTP_URL = f"http://{os.getenv('MASTER_ADDR', 'localhost')}"
 PORT = os.getenv('LMDEPLOY_PORT', str(DEFAULT_PORT))
 BASE_URL = f'{BASE_HTTP_URL}:{PORT}'
-
-
-def model_supports_routed_experts(
-    backend: str,
-    model_case: str,
-    *,
-    required_suites: set[str] | frozenset[str] | None = frozenset({'toolcall'}),
-) -> bool:
-    """True when yaml enables ``return_routed_experts`` for this test
-    profile."""
-    return model_enables_return_routed_experts(
-        model_case,
-        backend,
-        required_suites=required_suites,
-    )
 
 LMDEPLOY_DECODE_DEFAULTS = {'spaces_between_special_tokens': False}
 

@@ -1,6 +1,7 @@
 import os
 
 import pytest
+from utils.config_utils import model_enables_return_routed_experts
 from utils.constant import BACKEND_LIST, DEFAULT_MAX_COMPLETION_TOKENS, TOOL_REASONING_MODEL_LIST
 from utils.tool_reasoning_definitions import (
     CONCURRENT_WEATHER_TOOL,
@@ -11,7 +12,6 @@ from utils.tool_reasoning_definitions import (
     collect_stream_tool_call,
     collect_stream_tool_call_http,
     make_logged_client,
-    model_supports_routed_experts,
     resolve_tokenizer_model_path,
     resolve_tool_parser_name,
     run_concurrent_http_error_workers,
@@ -332,7 +332,11 @@ class _ToolCallTestBase:
         return kwargs
 
     def _validate_experts(self) -> bool:
-        return model_supports_routed_experts(self._backend, self._model_case)
+        return model_enables_return_routed_experts(
+            self._model_case,
+            self._backend,
+            required_suites=frozenset({'toolcall'}),
+        )
 
     def _experts_validation_kwargs(self) -> dict:
         return {'validate_experts': self._validate_experts()}
