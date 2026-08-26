@@ -70,6 +70,7 @@ class _V4IndexScoreMeta:
     """CUDA backend metadata for paged index-score generation."""
 
     context_lens: torch.Tensor = None
+    topk_seqlens: torch.Tensor = None
     block_offsets: torch.Tensor = None
     schedule_metadata: object = None
     max_k_seqlen: int = None
@@ -255,12 +256,17 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
 
         if page_table.dtype != torch.int32:
             page_table = page_table.to(torch.int32)
-        context_lens = context_lens.to(torch.int32).unsqueeze(-1)
+        topk_seqlens = context_lens.to(torch.int32)
+        # DeepGEMM's scheduler cannot represent an all-empty workload. A
+        # one-entry dummy score is safe because top-k still uses the true
+        # visible lengths and discards it for empty rows.
+        context_lens = topk_seqlens.clamp_min(1).unsqueeze(-1)
         entries_per_block = meta.block_size // ratio
         schedule_metadata = deep_gemm.get_paged_mqa_logits_metadata(
             context_lens, entries_per_block, deep_gemm.get_num_sms())
         return _V4IndexScoreMeta(
             context_lens=context_lens,
+            topk_seqlens=topk_seqlens,
             block_offsets=page_table,
             schedule_metadata=schedule_metadata,
             max_k_seqlen=CudaV4AttentionMetadata._get_index_score_max_len(meta, ratio),

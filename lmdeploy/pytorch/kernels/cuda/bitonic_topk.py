@@ -5,15 +5,12 @@ import triton.language as tl
 from triton.language import core
 from triton.language.standard import _log2
 
-try:
-    # For Triton >= 3.6.0, core.get_int_dtype must be wrapped with
-    # triton.runtime.jit.constexpr_function to be usable as a constexpr helper
-    # inside @triton.jit kernels. This try/except keeps compatibility with
-    # older Triton versions where constexpr_function is not available.
-    get_int_dtype = triton.runtime.jit.constexpr_function(core.get_int_dtype)
-except Exception:
-    # fallback to original function if constexpr_function is not available (Triton < 3.6.0)
+constexpr_function = getattr(triton.runtime.jit, 'constexpr_function', None)
+if constexpr_function is None:
     get_int_dtype = core.get_int_dtype
+else:
+    # Required by Triton >= 3.6 for constexpr helpers called from JIT kernels.
+    get_int_dtype = constexpr_function(core.get_int_dtype)
 
 
 @triton.jit
@@ -177,12 +174,11 @@ def _bitonic_topk_kernel0(score_ptr,
 
 
 @triton.jit
-def _concate(a, b):
-    """concate."""
+def _concat(a, b):
+    """Concatenate two vectors."""
     c = tl.join(a, b)  # [k, 2]
     c = c.trans()  # [2, k]
-    # there are bugs in `tr.ravel` when triton<=3.2.0
-    c = tl.reshape(c, (a.numel + b.numel, ))
+    c = tl.ravel(c)
     return c
 
 
@@ -228,8 +224,8 @@ def _bitonic_topk_kernel1(score_ptr,
         new_scores = tl.load(score_ptrs, mask=mask, other=threshold)
         new_ids = tl.load(ids_ptrs, mask=mask, other=fill)
 
-        merged_scores = _concate(scores, new_scores)
-        merged_ids = _concate(ids, new_ids)
+        merged_scores = _concat(scores, new_scores)
+        merged_ids = _concat(ids, new_ids)
 
         merged_scores, merged_ids = _bitonic_merge(merged_scores, merged_ids, stage, descending, stage)
 

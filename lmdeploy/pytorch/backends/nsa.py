@@ -48,8 +48,12 @@ def _build_indexer_kv_seqlens(num_tokens: int, q_seqlens: Tensor,
 
 def build_nsa_index_meta(*, num_tokens: int, is_decoding: bool,
                          block_size: int, num_gpu_blocks: int,
-                         sequence_metadata) -> NSAIndexMeta:
-    """Build layer-invariant DSA metadata from a sequence layout."""
+                         sequence_metadata,
+                         indexer_kv_seqlens: Tensor | None = None) -> NSAIndexMeta:
+    """Build layer-invariant DSA metadata from a sequence layout.
+
+    Derive causal KV lengths with device-agnostic Torch operations unless the caller supplies them.
+    """
     q_seqlens = sequence_metadata.q_seqlens
     batch_size = q_seqlens.size(0)
     is_decoding = is_decoding or num_tokens == batch_size
@@ -58,15 +62,17 @@ def build_nsa_index_meta(*, num_tokens: int, is_decoding: bool,
                      if is_decoding else sequence_metadata.max_kv_seqlen)
     kv_flatten_size = (None if is_decoding else
                        sequence_metadata.kv_flatten_size)
+    if indexer_kv_seqlens is None:
+        indexer_kv_seqlens = _build_indexer_kv_seqlens(
+            num_tokens, q_seqlens, sequence_metadata.kv_seqlens,
+            sequence_metadata.cu_seqlens_q)
     return NSAIndexMeta(
         cu_seqlen_q=sequence_metadata.cu_seqlens_q,
         q_seqlens=q_seqlens,
         k_seqlens=sequence_metadata.kv_seqlens,
         cu_seqlen_k=sequence_metadata.cu_seqlens_k,
         block_offset=sequence_metadata.block_offsets,
-        indexer_kv_seqlens=_build_indexer_kv_seqlens(
-            num_tokens, q_seqlens, sequence_metadata.kv_seqlens,
-            sequence_metadata.cu_seqlens_q),
+        indexer_kv_seqlens=indexer_kv_seqlens,
         max_q_seqlen=max_q_seqlen,
         max_kv_seqlen=max_kv_seqlen,
         kv_flatten_size=kv_flatten_size,

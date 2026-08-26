@@ -186,7 +186,8 @@ def run_pipeline_testcase_session_len(config, model, backend, file_name):
     for i in range(2):
         result &= response[i].finish_reason == 'error'
         result &= response[i].generate_token_len == 0
-        result &= response[i].text == 'internal error happened, status code ResponseType.INPUT_LENGTH_ERROR'
+        result &= response[i].error_code == 'context_length_exceeded'
+        result &= 'context length' in response[i].error_message.lower()
     save_pipeline_common_log(config, file_name, result, response)
     pipe.close()
 

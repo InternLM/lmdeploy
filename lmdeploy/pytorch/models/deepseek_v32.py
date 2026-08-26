@@ -244,7 +244,12 @@ class Indexer(nn.Module):
 
 class DeepseekV32Attention(DeepseekV2Attention):
 
-    def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: Any,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 all_reduce: bool = True):
         nn.Module.__init__(self)
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
@@ -348,6 +353,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
             device=device,
             is_tp=True,
             quant_config=quantization_config,
+            all_reduce=all_reduce,
         )
 
         self.indexer = self._build_indexer(config, layer_idx, dtype, device)
@@ -459,28 +465,40 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
         nn.Module.__init__(self)
         self.layer_idx = layer_idx
         quantization_config = None
+        # Row-wise TP outputs normally reduce inside their projections. An
+        # optimized communicator lets the following RMSNorm consume that
+        # reduction instead. Attention is consumed in this layer.
+        defer_attn_all_reduce = RMSNorm.can_handle_all_reduce('attn')
+        # MLP is consumed by the next target layer, so terminal and MTP blocks
+        # must still reduce their outputs.
+        defer_mlp_all_reduce = (layer_idx < config.num_hidden_layers - 1
+                                and RMSNorm.can_handle_all_reduce('mlp'))
 
         # build attention layer
-        self.self_attn = self.attention_cls(config, layer_idx, dtype=dtype, device=device)
+        self.self_attn = self.attention_cls(
+            config, layer_idx, dtype=dtype, device=device, all_reduce=not defer_attn_all_reduce)
 
         # mlp
-        self.mlp = (DeepseekV2MoE(config, layer_idx, dtype=dtype, device=device) if
+        self.mlp = (DeepseekV2MoE(
+            config, layer_idx, dtype=dtype, device=device, all_reduce=not defer_mlp_all_reduce) if
                     (config.n_routed_experts is not None and layer_idx >= config.first_k_dense_replace
-                     and layer_idx % config.moe_layer_freq == 0) else DeepseekV2MLP(config, dtype=dtype, device=device))
+                     and layer_idx % config.moe_layer_freq == 0) else DeepseekV2MLP(
+                         config, dtype=dtype, device=device, all_reduce=not defer_mlp_all_reduce))
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
                                        config.rms_norm_eps,
                                        quant_config=quantization_config,
                                        dtype=torch.float32,
-                                       device=device)
+                                       device=device,
+                                       all_reduce_group='mlp')
 
         # build attention layer norm
         self.post_attention_layernorm = RMSNorm(config.hidden_size,
                                                 config.rms_norm_eps,
                                                 dtype=torch.float32,
-                                                device=device)
-
+                                                device=device,
+                                                all_reduce_group='attn')
 
 class DeepseekV32Model(DeepseekV2Model):
     decoder_layer_cls = DeepseekV32DecoderLayer

@@ -294,6 +294,11 @@ class TurbomindEngineConfig:
             it to True if you want to update weights after create the pipeline
         language_model_only: Whether to run as text-only LLM without loading
             vision/multimodal encoder modules.
+        communicator: collective communicator, It can be one of the following values,
+            ['nccl', 'cuda-ipc']. The `cuda-ipc` option only supports single-node
+            multi-gpu communication.
+        moe_a2a_backend: the backend of moe a2a communication, It can be one of the
+            following values, ['auto', 'default', 'deepep'].
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model
         enable_metrics: enable metrics system
@@ -339,6 +344,7 @@ class TurbomindEngineConfig:
     empty_init: bool = False
     language_model_only: bool = False
     communicator: str = 'nccl'
+    moe_a2a_backend: str = 'auto'
     hf_overrides: dict[str, Any] | None = None
     enable_metrics: bool = True
 
@@ -365,6 +371,8 @@ class TurbomindEngineConfig:
         assert self.cache_checkpoint_interval > 0, 'invalid cache_checkpoint_interval'
         assert self.cache_prompt_boundary_skip >= 1, 'invalid cache_prompt_boundary_skip'
         assert self.async_ in (0, 1), 'async_ must be 0 (disabled) or 1 (enabled)'
+        assert self.moe_a2a_backend in ('auto', 'default', 'deepep'), \
+            'invalid moe_a2a_backend'
 
 
 @dataclass
@@ -590,7 +598,7 @@ class Response:
     text: str
     generate_token_len: int
     input_token_len: int
-    finish_reason: Literal['stop', 'length'] | None = None
+    finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
     token_ids: list[int] = field(default_factory=list)
     logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
@@ -598,6 +606,8 @@ class Response:
     index: int = 0
     routed_experts: Any = None
     cached_tokens: int = 0
+    error_code: str | None = None
+    error_message: str | None = None
 
     def __str__(self):
         return f'text={self.text}\n{self._format_none_text_fields()}'
@@ -653,6 +663,8 @@ class Response:
             self.logprobs = self.logprobs or []
             self.logprobs += other.logprobs
         self.routed_experts = other.routed_experts
+        self.error_code = other.error_code
+        self.error_message = other.error_message
         return self
 
 

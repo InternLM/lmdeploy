@@ -10,6 +10,7 @@ import shortuuid
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
+from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
@@ -23,7 +24,7 @@ from ..adapter import (
     to_openai_messages,
     to_openai_tools,
 )
-from ..errors import create_error_response
+from ..errors import create_error_response, create_request_error_response
 from ..protocol import MessagesRequest, MessagesResponse, MessageTextBlock, MessageUsage
 from ..streaming import stream_messages_response
 
@@ -62,7 +63,7 @@ def _validate_extended_outputs(request: MessagesRequest, server_context):
     return None
 
 
-def register(router: APIRouter, server_context) -> None:
+def register(router: APIRouter, server_context, *, merge_inline_system: bool = False) -> None:
     """Register endpoint onto router."""
 
     @router.post('/v1/messages', dependencies=[Depends(validate_json_request)])
@@ -142,7 +143,7 @@ def register(router: APIRouter, server_context) -> None:
                 resolved_input_ids = None
         else:
             try:
-                parser_messages = to_openai_messages(request)
+                parser_messages = to_openai_messages(request, merge_inline_system=merge_inline_system)
             except ValueError as err:
                 return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
 
@@ -169,21 +170,30 @@ def register(router: APIRouter, server_context) -> None:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
         parsed_request = response_parser.request
 
+        gen_config = to_generation_config(
+            request,
+            default_gen_config=server_context.default_gen_config,
+            skip_special_tokens=parsed_request.skip_special_tokens,
+            spaces_between_special_tokens=parsed_request.spaces_between_special_tokens,
+        )
         session = server_context.create_session()
         adapter_name = None if request.model == server_context.async_engine.model_name else request.model
         engine_messages = None if resolved_input_ids is not None else parsed_request.messages
+        try:
+            preprocessed = await server_context.async_engine.preprocess(
+                engine_messages,
+                session,
+                gen_config=gen_config,
+                tools=parsed_request.tools,
+                do_preprocess=False if resolved_input_ids is not None else True,
+                adapter_name=adapter_name,
+                input_ids=resolved_input_ids,
+            )
+        except RequestError as error:
+            return create_request_error_response(error)
         result_generator = server_context.async_engine.generate(
-            engine_messages,
-            session,
-            gen_config=to_generation_config(
-                request,
-                default_gen_config=server_context.default_gen_config,
-            ),
-            tools=parsed_request.tools,
+            preprocessed,
             stream_response=True,
-            do_preprocess=False if resolved_input_ids is not None else True,
-            adapter_name=adapter_name,
-            input_ids=resolved_input_ids,
         )
 
         request_id = f'msg_{shortuuid.random()}'
@@ -212,18 +222,21 @@ def register(router: APIRouter, server_context) -> None:
         final_token_ids: list[int] = []
         final_logprobs: list[dict[int, float]] = []
         final_res = None
-        async with aclosing(with_request_cleanup(result_generator, [result_generator], [session],
-                                                 session_mgr)) as generator:
-            async for res in generator:
-                if await raw_request.is_disconnected():
-                    await session.async_abort()
-                    return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-                final_res = res
-                text += res.response or ''
-                if res.token_ids:
-                    final_token_ids.extend(res.token_ids)
-                if res.logprobs:
-                    final_logprobs.extend(res.logprobs)
+        try:
+            async with aclosing(with_request_cleanup(result_generator, [result_generator], [session],
+                                                     session_mgr)) as generator:
+                async for res in generator:
+                    if await raw_request.is_disconnected():
+                        await session.async_abort()
+                        return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+                    final_res = res
+                    text += res.response or ''
+                    if res.token_ids:
+                        final_token_ids.extend(res.token_ids)
+                    if res.logprobs:
+                        final_logprobs.extend(res.logprobs)
+        except RequestError as error:
+            return create_request_error_response(error)
 
         if final_res is None:
             return create_error_response(HTTPStatus.INTERNAL_SERVER_ERROR, 'No generation output from engine.')

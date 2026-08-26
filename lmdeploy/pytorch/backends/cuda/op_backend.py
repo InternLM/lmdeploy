@@ -55,6 +55,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.MultinomialSampling:
             from .multinomial_sampling import TritonMultinomialSamplingBuilder
             return TritonMultinomialSamplingBuilder
+        elif layer_type == OpType.RejectionSampling:
+            from .rejection_sampling import CudaRejectionSamplingBuilder
+            return CudaRejectionSamplingBuilder
         elif layer_type == OpType.SiluAndMul:
             from .activation import TritonSiluAndMulBuilder
             return TritonSiluAndMulBuilder
@@ -67,6 +70,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.FusedMoEW8A8:
             from .moe import TritonFusedMoEW8A8Builder
             return TritonFusedMoEW8A8Builder
+        elif layer_type == OpType.FusedMoEW4A16:
+            from .moe import TritonFusedMoEW4A16Builder
+            return TritonFusedMoEW4A16Builder
         elif layer_type == OpType.FusedMoEStaticF8:
             from .moe import TritonFusedMoEStaticF8Builder
             return TritonFusedMoEStaticF8Builder
@@ -99,6 +105,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.HcPrePost:
             from .hc_prepost import TritonHcPrePostBuilder
             return TritonHcPrePostBuilder
+        elif layer_type == OpType.RouterGemm:
+            from .moe_router import CudaRouterGemmBuilder
+            return CudaRouterGemmBuilder
         elif layer_type == OpType.RouterNoauxTC:
             from .moe_router import TritonRouterNoauxTCBuilder
             return TritonRouterNoauxTCBuilder
@@ -123,6 +132,23 @@ class CudaOpsBackend(DefaultOpsBackend):
         """Get V4 attention metadata class."""
         from .attention.v4 import CudaV4AttentionMetadata
         return CudaV4AttentionMetadata
+
+    @classmethod
+    def build_communicator(cls, cpu_group, device_group, dist_config):
+        """Build a CUDA communicator."""
+        from .comm.communicator import build_cuda_communicator
+        communicator = build_cuda_communicator(
+            cpu_group=cpu_group,
+            device_group=device_group,
+            dist_config=dist_config,
+        )
+        if communicator is not None:
+            return communicator
+        return super().build_communicator(
+            cpu_group=cpu_group,
+            device_group=device_group,
+            dist_config=dist_config,
+        )
 
     @staticmethod
     def get_k_block_shape(

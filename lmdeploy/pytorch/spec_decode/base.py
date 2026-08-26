@@ -10,7 +10,6 @@ from ..engine.logits_process import SamplingInputs
 from ..model_inputs import ModelInputs
 from ..strategies.base.model_agent import ExtraInputs, ModelAgentStrategy
 from ..strategies.base.model_inputs import ModelInputsStrategy
-from .reject_sampler import RejectionSampler
 
 
 def _build_draft_dist_ctx(dist_ctx: DistContext, specdecode_config: SpecDecodeConfig) -> DistContext:
@@ -22,7 +21,13 @@ def _build_draft_dist_ctx(dist_ctx: DistContext, specdecode_config: SpecDecodeCo
     if specdecode_config.method in ('qwen3_5_mtp', 'hy3_mtp') or draft_dist_config == dist_ctx.dist_config:
         return dist_ctx
 
-    return DistContext.build(rank=dist_ctx.rank, dist_config=draft_dist_config)
+    if dist_ctx.communicator_builder is None:
+        return DistContext.build(rank=dist_ctx.rank, dist_config=draft_dist_config)
+    return DistContext.build(
+        rank=dist_ctx.rank,
+        dist_config=draft_dist_config,
+        communicator_builder=dist_ctx.communicator_builder,
+    )
 
 
 class BaseSpecModelAgent:
@@ -51,7 +56,6 @@ class BaseSpecModelAgent:
         self.inputs_strategy = inputs_strategy
         self.agent_strategy = agent_strategy
         self.misc_config = misc_config
-        self.rejection_sampler = RejectionSampler()
         self.proposer = None
         self.model_config = specdecode_config.model_config if specdecode_config is not None else None
         self.cache_config = specdecode_config.cache_config if specdecode_config is not None else None

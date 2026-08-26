@@ -4,7 +4,11 @@ from collections.abc import Mapping
 
 import torch
 
-from lmdeploy.pytorch.consts import V4_INDEX_KV_R4_CACHE_NAME, V4_INDEX_KV_R4_SCALE_CACHE_NAME
+from lmdeploy.pytorch.consts import (
+    V4_INDEX_KV_R4_CACHE_NAME,
+    V4_INDEX_KV_R4_SCALE_CACHE_NAME,
+    V4_INDEX_SCALE_BYTES,
+)
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
@@ -29,29 +33,32 @@ class _V4PagedMQALogitsWarmup:
 
     _METADATA_ROW_ALIGNMENT = 32
 
-    @staticmethod
-    def _get_shape(model_config) -> tuple[int, int, int] | None:
-        hf_config = getattr(model_config, 'hf_config', None)
-        if getattr(hf_config, 'model_type', None) != 'deepseek_v4':
-            return None
-        if 4 not in getattr(hf_config, 'compress_ratios', ()):
+    def __init__(self, compress_ratio: int, num_heads: int, head_dim: int):
+        self.compress_ratio = compress_ratio
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+
+    def _get_shape(self, model_config) -> tuple[int, int, int] | None:
+        block_size = model_config.block_size
+        if block_size % self.compress_ratio != 0:
+            logger.warning(
+                'Skip DeepGEMM V4 paged-MQA warmup: block_size=%s is not '
+                'divisible by compress_ratio=%s.', block_size,
+                self.compress_ratio)
             return None
 
-        block_size = getattr(model_config, 'block_size', 256)
-        entries_per_block = block_size // 4
-        num_heads = getattr(hf_config, 'index_n_heads', None)
-        head_dim = getattr(hf_config, 'index_head_dim', 128)
-        if num_heads not in (32, 64):
+        entries_per_block = block_size // self.compress_ratio
+        if self.num_heads not in (32, 64):
             logger.warning(
-                'Skip DeepGEMM V4 paged-MQA warmup: unsupported index_n_heads=%s.',
-                num_heads)
+                'Skip DeepGEMM V4 paged-MQA warmup: unsupported num_heads=%s.',
+                self.num_heads)
             return None
         if entries_per_block not in (32, 64):
             logger.warning(
                 'Skip DeepGEMM V4 paged-MQA warmup: unsupported entries_per_block=%s.',
                 entries_per_block)
             return None
-        return entries_per_block, num_heads, head_dim
+        return entries_per_block, self.num_heads, self.head_dim
 
     def _warm_metadata(self, deep_gemm, entries_per_block: int, max_rows: int):
         alignment = self._METADATA_ROW_ALIGNMENT
@@ -59,7 +66,10 @@ class _V4PagedMQALogitsWarmup:
         rows = list(range(alignment, max_aligned_rows + 1, alignment))
         random.shuffle(rows)
         for row_count in rows:
-            context_lens = torch.zeros(row_count, 1, dtype=torch.int32, device='cuda')
+            # DeepGEMM's metadata scheduler cannot represent an all-empty
+            # workload. Use one valid compressed cache page per row.
+            context_lens = torch.full(
+                (row_count, 1), entries_per_block, dtype=torch.int32, device='cuda')
             deep_gemm.get_paged_mqa_logits_metadata(
                 context_lens, entries_per_block, deep_gemm.get_num_sms())
 
@@ -77,7 +87,7 @@ class _V4PagedMQALogitsWarmup:
             dtype=torch.float8_e4m3fn, device='cuda')
         weights = torch.empty(row_count, num_heads, dtype=torch.float32, device='cuda')
         fused_kv_cache = torch.empty(
-            max_blocks, entries_per_block, 1, head_dim + 4,
+            max_blocks, entries_per_block, 1, head_dim + V4_INDEX_SCALE_BYTES,
             dtype=torch.uint8, device='cuda')
         deep_gemm.fp8_paged_mqa_logits(
             q, fused_kv_cache, weights, context_lens, block_table,
@@ -92,7 +102,8 @@ class _V4PagedMQALogitsWarmup:
         entries_per_block, num_heads, head_dim = shape
 
         max_rows = max(warmup_meta.max_num_tokens, warmup_meta.max_batch_size)
-        max_context_len = max(warmup_meta.max_num_tokens // 4, 1)
+        max_context_len = max(
+            warmup_meta.max_num_tokens // self.compress_ratio, 1)
         logger.info(
             'Warming up DeepGEMM V4 paged-MQA logits: rows<=%s stride=%s, '
             'heads=%s, head_dim=%s, entries_per_block=%s.',
@@ -108,15 +119,19 @@ class _V4PagedMQALogitsWarmup:
 
 class TritonV4IndexerImpl(BaseV4Indexer):
 
-    def __init__(self, index_topk: int, compress_ratio: int) -> None:
+    def __init__(self, index_topk: int, compress_ratio: int, num_heads: int,
+                 head_dim: int) -> None:
         super().__init__()
         self.index_topk = index_topk
         self.compress_ratio = compress_ratio
         if compress_ratio == 4:
             warmup_mgr = get_warmup_manager()
-            key = 'deepgemm_v4_paged_mqa_logits'
+            key = f'deepgemm_v4_paged_mqa_logits_{num_heads}_{head_dim}'
             if key not in warmup_mgr:
-                warmup_mgr[key] = _V4PagedMQALogitsWarmup().warmup
+                warmup_mgr[key] = _V4PagedMQALogitsWarmup(
+                    compress_ratio=compress_ratio,
+                    num_heads=num_heads,
+                    head_dim=head_dim).warmup
 
     def forward(self,
                 query: torch.Tensor,
@@ -174,7 +189,8 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 
             score_meta = getattr(meta, 'index_score_meta', None)
             if (score_meta is None or score_meta.context_lens is None or score_meta.block_offsets is None
-                    or score_meta.schedule_metadata is None or score_meta.max_k_seqlen is None):
+                    or score_meta.schedule_metadata is None or score_meta.max_k_seqlen is None
+                    or score_meta.topk_seqlens is None):
                 raise RuntimeError('Packed V4 index scoring requires CUDA index-score metadata.')
             q_mqa = q_3d.view(q_3d.size(0), 1, q_3d.size(1), q_3d.size(2))
             scores = deep_gemm.fp8_paged_mqa_logits(
@@ -186,7 +202,7 @@ class TritonV4IndexerImpl(BaseV4Indexer):
                 score_meta.schedule_metadata,
                 score_meta.max_k_seqlen,
                 False)
-            topk_seqlens = score_meta.context_lens.squeeze(-1)
+            topk_seqlens = score_meta.topk_seqlens
         else:
             # fp8_index fallback for the legacy split value/scale cache layout.
             if index_kv_scale_cache is None:
@@ -227,5 +243,12 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 class TritonV4IndexerBuilder(BaseV4IndexerBuilder):
 
     @staticmethod
-    def build(index_topk: int, compress_ratio: int) -> BaseV4Indexer:
-        return TritonV4IndexerImpl(index_topk=index_topk, compress_ratio=compress_ratio)
+    def build(index_topk: int,
+              compress_ratio: int,
+              num_heads: int,
+              head_dim: int) -> BaseV4Indexer:
+        return TritonV4IndexerImpl(
+            index_topk=index_topk,
+            compress_ratio=compress_ratio,
+            num_heads=num_heads,
+            head_dim=head_dim)

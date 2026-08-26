@@ -13,6 +13,7 @@ from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
 from lmdeploy.pytorch.backends.compressor import V4CompressorMetadata
 from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
 from lmdeploy.pytorch.backends.rotary_embedding import RopeType, YarnParameters
+from lmdeploy.pytorch.configurations.deepseek_v4 import get_v4_compress_ratios
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, HcPrePost, RMSNorm, SiluAndMul, rms_scale
@@ -83,7 +84,7 @@ class V4Args:
     vocab_size: int
     moe_inter_dim: int
     n_layers: int
-    n_hash_layers: int
+    mlp_layer_types: tuple[str, ...]
     n_routed_experts: int
     n_shared_experts: int
     n_activated_experts: int
@@ -268,8 +269,11 @@ class Indexer(nn.Module):
         )
         self.compressor = Compressor(args, layer_id, compress_ratio, self.head_dim,
                                      dtype=dtype, device=device, rotate=True)
-        self.indexer_fwd = NativeV4Indexer(index_topk=self.index_topk,
-                                           compress_ratio=self.compress_ratio)
+        self.indexer_fwd = NativeV4Indexer(
+            index_topk=self.index_topk,
+            compress_ratio=self.compress_ratio,
+            num_heads=self.n_heads,
+            head_dim=self.head_dim)
         self.apply_rotary = ApplyRotaryEmb()
 
     def forward(self,
@@ -490,7 +494,7 @@ class Gate(nn.Module):
         self.topk = args.n_activated_experts
         self.score_func = args.score_func
         self.route_scale = args.route_scale
-        self.hash = layer_id < args.n_hash_layers
+        self.hash = args.mlp_layer_types[layer_id] == 'hash_moe'
         self.weight = nn.Parameter(torch.empty(args.n_routed_experts, args.dim, device=device), requires_grad=False)
         if self.hash:
             self.tid2eid = nn.Parameter(torch.empty(args.vocab_size,
@@ -666,13 +670,14 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         if isinstance(device, str):
             device = torch.device(device)
         self.device = device
+        compress_rope_params = config.rope_parameters['compress']
         self.args = V4Args(
             dim=config.hidden_size,
             n_heads=config.num_attention_heads,
             vocab_size=config.vocab_size,
             moe_inter_dim=config.moe_intermediate_size,
             n_layers=config.num_hidden_layers,
-            n_hash_layers=config.num_hash_layers,
+            mlp_layer_types=tuple(config.mlp_layer_types),
             n_routed_experts=config.n_routed_experts,
             n_shared_experts=config.n_shared_experts,
             n_activated_experts=config.num_experts_per_tok,
@@ -686,13 +691,13 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             o_groups=config.o_groups,
             o_lora_rank=config.o_lora_rank,
             window_size=config.sliding_window,
-            compress_ratios=tuple(config.compress_ratios),
+            compress_ratios=tuple(get_v4_compress_ratios(config)),
             compress_rope_theta=config.compress_rope_theta,
-            original_seq_len=config.rope_scaling['original_max_position_embeddings'],
+            original_seq_len=compress_rope_params['original_max_position_embeddings'],
             rope_theta=config.rope_theta,
-            rope_factor=config.rope_scaling['factor'],
-            beta_fast=config.rope_scaling['beta_fast'],
-            beta_slow=config.rope_scaling['beta_slow'],
+            rope_factor=compress_rope_params['factor'],
+            beta_fast=compress_rope_params['beta_fast'],
+            beta_slow=compress_rope_params['beta_slow'],
             index_n_heads=config.index_n_heads,
             index_head_dim=config.index_head_dim,
             index_topk=config.index_topk,
