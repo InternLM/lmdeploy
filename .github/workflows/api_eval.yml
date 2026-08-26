@@ -165,9 +165,6 @@ jobs:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
         eval_suite: ${{ fromJSON(github.event.inputs.eval_suite == 'base' && '["base"]' || github.event.inputs.eval_suite == 'chat' && '["chat"]' || '["chat","base"]') }}
         gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
-        transformers: ["", "legacy"]
-    env:
-      TEST_ENV: ${{ matrix.transformers }}
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -200,10 +197,6 @@ jobs:
           cd opencompass
           python3 -m pip install .
           python3 -m pip install langdetect
-      - name: Downgrade transformers
-        if: ${{matrix.transformers == 'legacy'}}
-        run: |
-          pip install transformers==4.57.6
       - name: Check env
         run: |
           python3 -m pip list
