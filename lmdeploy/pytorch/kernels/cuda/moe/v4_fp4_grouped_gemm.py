@@ -2,8 +2,8 @@
 
 import torch
 
-from .blocked_gemm_fp8 import quant_fp8
-from .v4_fp4_fused_moe import fused_moe_v4_fp4_kernel_launcher
+from ..blocked_gemm_fp8 import quant_fp8
+from .v4_fp4 import fused_moe_v4_fp4_kernel_launcher
 from .v4_swiglu_quant import v4_swiglu_and_quant_fp8
 
 

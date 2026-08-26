@@ -94,7 +94,7 @@ class TestNoauxTC:
         yield reference_noaux_tc_routing(logits, bias, **kwargs)
 
     def test_noaux_tc_router(self, logits, bias, kwargs, gt):
-        from lmdeploy.pytorch.kernels.cuda.fused_noaux_tc import fused_noaux_tc_routing
+        from lmdeploy.pytorch.kernels.cuda.moe.route_noaux_tc import fused_noaux_tc_routing
 
         out_weights, out_ids = fused_noaux_tc_routing(logits, bias, **kwargs)
         gt_weights, gt_ids = gt
