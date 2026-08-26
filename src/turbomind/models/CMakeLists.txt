@@ -76,4 +76,15 @@ if(BUILD_TEST)
             cuda_utils
             fmt::fmt
             CUDA::cudart)
+
+    add_executable(test_muse_glimmer_kernels
+            qwenvit/test_muse_glimmer_kernels.cu
+            qwenvit/qwenvit_kernels.cu)
+    set_property(TARGET test_muse_glimmer_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+    target_link_libraries(test_muse_glimmer_kernels PRIVATE
+            activation
+            core
+            cuda_utils
+            fmt::fmt
+            CUDA::cudart)
 endif()

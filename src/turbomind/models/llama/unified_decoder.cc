@@ -12,6 +12,7 @@
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
+#include "src/turbomind/models/ffn_weight.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
@@ -43,6 +44,8 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
     layer_num_(model_weight.num_layer),
     hidden_units_(model_weight.hidden_units),
     output_norm_zero_centered_(model_weight.norm->zero_centered_),
+    output_norm_eps_(model_weight.norm->norm_eps_),
+    has_post_norm_(model_weight.layer(0)->post_attention_norm != nullptr),
     attn_tp_size_(engine.attn_tp_size),
     attn_dp_size_(engine.attn_dp_size),
     attn_dp_rank_(engine.attn_dp_rank),
@@ -59,6 +62,8 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
 
     for (int i = 0; i < model_weight.num_layer; ++i) {
         auto layer = model_weight.layer(i);
+        TM_CHECK_EQ(layer->post_attention_norm != nullptr, has_post_norm_);
+        TM_CHECK_EQ(layer->post_ffn_norm != nullptr, has_post_norm_);
         if (layer->moe_ffn) {
             moe_weights.push_back(layer->moe_ffn.get());
         }
@@ -216,6 +221,11 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         local_hidden_states = global_hidden_states;
     }
 
+    Tensor post_norm_residual;
+    if (has_post_norm_) {
+        post_norm_residual = {{local_token_num, (int)hidden_units_}, dtype, kDEVICE};
+    }
+
     TM_LOG_DEBUG("local_token_num=%d, global_token_num=%d", (int)local_token_num, (int)global_token_num);
 
     TM_DEBUG_TENSOR(local_residual, "res", 1);
@@ -275,16 +285,44 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
             out_bias = weights.at(layer)->attention->wo->bias;
         }
 
-        AllreduceResidualRMSnorm(global_hidden_states,
-                                 local_residual,
-                                 out_bias,
-                                 weights.at(layer)->ffn_norm->weight,
-                                 weights.at(layer)->ffn_norm->norm_eps_,
-                                 weights.at(layer)->ffn_norm->zero_centered_,
-                                 local_token_num,
-                                 attn_tp_group_,
-                                 0,
-                                 local_token_nums.data());
+        if (has_post_norm_) {
+            TM_CUDA_CHECK(cudaMemsetAsync(post_norm_residual.raw_data(), 0, post_norm_residual.byte_size(), stream));
+            const auto& post_norm = *weights.at(layer)->post_attention_norm;
+            AllreduceResidualRMSnorm(global_hidden_states,
+                                     post_norm_residual,
+                                     out_bias,
+                                     post_norm.weight,
+                                     post_norm.norm_eps_,
+                                     post_norm.zero_centered_,
+                                     local_token_num,
+                                     attn_tp_group_,
+                                     0,
+                                     local_token_nums.data());
+
+            const auto& pre_ffn_norm = *weights.at(layer)->ffn_norm;
+            invokeResidualBiasRMSNorm(local_hidden_states.raw_data(),
+                                      local_residual.raw_data(),
+                                      pre_ffn_norm.weight.raw_data(),
+                                      nullptr,
+                                      dtype,
+                                      hidden_units_,
+                                      local_token_num,
+                                      pre_ffn_norm.norm_eps_,
+                                      pre_ffn_norm.zero_centered_,
+                                      stream);
+        }
+        else {
+            AllreduceResidualRMSnorm(global_hidden_states,
+                                     local_residual,
+                                     out_bias,
+                                     weights.at(layer)->ffn_norm->weight,
+                                     weights.at(layer)->ffn_norm->norm_eps_,
+                                     weights.at(layer)->ffn_norm->zero_centered_,
+                                     local_token_num,
+                                     attn_tp_group_,
+                                     0,
+                                     local_token_nums.data());
+        }
 
         TM_DEBUG_TENSOR(local_residual, Concat("residual0", layer), 2);
         TM_DEBUG_TENSOR(local_hidden_states, Concat("norm1", layer), 2);
@@ -325,16 +363,48 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         const bool scale_zero_centered =
             !last ? weights.at(layer + 1)->attention_norm->zero_centered_ : output_norm_zero_centered_;
 
-        AllreduceResidualRMSnorm(global_hidden_states,
-                                 local_residual,
-                                 {},
-                                 scale_weight,
-                                 weights.at(layer)->ffn_norm->norm_eps_,
-                                 scale_zero_centered,
-                                 local_token_num,
-                                 0,
-                                 attn_tp_group_,
-                                 local_token_nums.data());
+        if (has_post_norm_) {
+            TM_CUDA_CHECK(cudaMemsetAsync(post_norm_residual.raw_data(), 0, post_norm_residual.byte_size(), stream));
+            Tensor ffn_bias;
+            if (weights.at(layer)->feed_forward) {
+                ffn_bias = weights.at(layer)->feed_forward->w2->bias;
+            }
+            const auto& post_norm = *weights.at(layer)->post_ffn_norm;
+            AllreduceResidualRMSnorm(global_hidden_states,
+                                     post_norm_residual,
+                                     ffn_bias,
+                                     post_norm.weight,
+                                     post_norm.norm_eps_,
+                                     post_norm.zero_centered_,
+                                     local_token_num,
+                                     0,
+                                     attn_tp_group_,
+                                     local_token_nums.data());
+
+            const float scale_eps = !last ? weights.at(layer + 1)->attention_norm->norm_eps_ : output_norm_eps_;
+            invokeResidualBiasRMSNorm(local_hidden_states.raw_data(),
+                                      local_residual.raw_data(),
+                                      scale_weight.raw_data(),
+                                      nullptr,
+                                      dtype,
+                                      hidden_units_,
+                                      local_token_num,
+                                      scale_eps,
+                                      scale_zero_centered,
+                                      stream);
+        }
+        else {
+            AllreduceResidualRMSnorm(global_hidden_states,
+                                     local_residual,
+                                     {},
+                                     scale_weight,
+                                     weights.at(layer)->ffn_norm->norm_eps_,
+                                     scale_zero_centered,
+                                     local_token_num,
+                                     0,
+                                     attn_tp_group_,
+                                     local_token_nums.data());
+        }
         TM_CUDA_CHECK(cudaGetLastError());
 
         TM_DEBUG_TENSOR(local_residual, Concat("residual1", layer), 2);

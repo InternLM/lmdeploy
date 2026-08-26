@@ -134,7 +134,7 @@ ______________________________________________________________________
 
 ## 单个视频
 
-> **注意：** 原生视频输入目前仅支持 **Qwen3-VL**、**Qwen3.5**、**Qwen3-Omni**、**InternS1-Pro** 和 **Intern-S2-Preview** 模型。
+> **注意：** 原生视频输入目前仅支持 **Muse-Glimmer**、**Qwen3-VL**、**Qwen3.5**、**Qwen3-Omni**、**InternS1-Pro** 和 **Intern-S2-Preview** 模型。
 
 <details>
 <summary>完整示例</summary>
@@ -177,7 +177,7 @@ ______________________________________________________________________
 
 ## 多个视频
 
-> **注意：** 原生视频输入目前仅支持 **Qwen3-VL**、**Qwen3.5**、**Qwen3-Omni**、**InternS1-Pro** 和 **Intern-S2-Preview** 模型。
+> **注意：** 原生视频输入目前仅支持 **Muse-Glimmer**、**Qwen3-VL**、**Qwen3.5**、**Qwen3-Omni**、**InternS1-Pro** 和 **Intern-S2-Preview** 模型。
 
 <details>
 <summary>完整示例</summary>
@@ -223,7 +223,7 @@ ______________________________________________________________________
 
 ## 图像与视频混合
 
-> **注意：** 原生图像/视频混合输入目前仅支持 **Qwen3-VL**、**Qwen3.5**、**Qwen3-Omni**、**InternS1-Pro** 和 **Intern-S2-Preview** 模型。
+> **注意：** 原生图像/视频混合输入目前仅支持 **Muse-Glimmer**、**Qwen3-VL**、**Qwen3.5**、**Qwen3-Omni**、**InternS1-Pro** 和 **Intern-S2-Preview** 模型。
 
 <details>
 <summary>完整示例</summary>

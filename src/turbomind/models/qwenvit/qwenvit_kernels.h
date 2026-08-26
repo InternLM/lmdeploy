@@ -71,6 +71,7 @@ void invokeFastPosEmbedIdxWeight(int*         idx_out,     // [total_n * 4]
                                  int          num_grids,
                                  int          total_n,
                                  int          num_grid_per_side,
+                                 bool         zero_padded,
                                  cudaStream_t stream);
 
 // Fuses the spatial-merge permutation, the bilinear-weighted sum, and the
@@ -84,6 +85,7 @@ void invokeFusedPosEmbedMerge(void*        hidden_states,      // [batch, hidden
                               int          batch,
                               int          hidden,
                               DataType     dtype,
+                              bool         weights_fp32,
                               cudaStream_t stream);
 
 // =====================================================================================
@@ -103,7 +105,19 @@ void invokeQwenVitRotaryPosEmb(void*        cos_sin,  // [total_hw, head_dim]
                                int          total_hw,
                                int          head_dim,
                                float        theta,
+                               bool         axes_w_first,
+                               int          position_offset,
                                cudaStream_t stream);
+
+// Muse-Glimmer pixel shuffle. Produces [tokens / merge^2, hidden * merge^2]
+// with the merge dimension innermost for each hidden channel.
+void invokeQwenVitPixelShuffle(Tensor&       out,
+                               const Tensor& in,
+                               const int*    grid_thws,
+                               const int*    grid_offsets,
+                               int           num_grids,
+                               int           spatial_merge_size,
+                               cudaStream_t  stream);
 
 // =====================================================================================
 // mrope position ids (mrope_position_ids)

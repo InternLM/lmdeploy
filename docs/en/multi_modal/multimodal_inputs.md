@@ -134,7 +134,7 @@ ______________________________________________________________________
 
 ## Single Video
 
-> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, **InternS1-Pro**, and **Intern-S2-Preview** models only.
+> **Note:** Native video input is currently supported for **Muse-Glimmer**, **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, **InternS1-Pro**, and **Intern-S2-Preview** models only.
 
 <details>
 <summary>Complete example</summary>
@@ -177,7 +177,7 @@ ______________________________________________________________________
 
 ## Multiple Videos
 
-> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, **InternS1-Pro**, and **Intern-S2-Preview** models only.
+> **Note:** Native video input is currently supported for **Muse-Glimmer**, **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, **InternS1-Pro**, and **Intern-S2-Preview** models only.
 
 <details>
 <summary>Complete example</summary>
@@ -223,7 +223,7 @@ ______________________________________________________________________
 
 ## Mixed Image and Video
 
-> **Note:** Native mixed image/video input is currently supported for **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, **InternS1-Pro**, and **Intern-S2-Preview** models only.
+> **Note:** Native mixed image/video input is currently supported for **Muse-Glimmer**, **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, **InternS1-Pro**, and **Intern-S2-Preview** models only.
 
 <details>
 <summary>Complete example</summary>

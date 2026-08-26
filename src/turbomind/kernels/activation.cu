@@ -9,9 +9,35 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
-#include <type_traits>
-
 namespace turbomind {
+
+template<class T>
+__global__ void LogitTransformKernel(T* logits, int64_t n, float scale, float softcap)
+{
+    const int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        float value = (float)logits[idx] * scale;
+        if (softcap > 0.f) {
+            value = softcap * tanhf(value / softcap);
+        }
+        logits[idx] = (T)value;
+    }
+}
+
+void invokeLogitTransform(Tensor& logits, float scale, float softcap, cudaStream_t stream)
+{
+    if (!logits || logits.size() == 0 || (scale == 1.f && softcap <= 0.f)) {
+        return;
+    }
+    auto invoke = [&](auto t) {
+        using T                = decltype(t);
+        constexpr int kThreads = 256;
+        const int     blocks   = (int)cdiv(logits.size(), (ssize_t)kThreads);
+        LogitTransformKernel<<<blocks, kThreads, 0, stream>>>(logits.data<T>(), logits.size(), scale, softcap);
+    };
+    TM_DISPATCH_PRIMARY_DTYPES(logits.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
+}
 
 template<class T>
 struct SiluGptOss {
