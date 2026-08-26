@@ -1,4 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import sys
+from types import SimpleNamespace
+
 import torch
 
 from lmdeploy.messages import QuantPolicy
@@ -49,12 +52,33 @@ def _num_cache_blocks(block_offsets):
     return int(block_offsets.max().item()) + 1
 
 
+def test_fa3_normalizes_softcap_during_initialization(monkeypatch):
+    fake_interface = SimpleNamespace(
+        flash_attn_varlen_func=lambda *args, **kwargs: None,
+        flash_attn_with_kvcache=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        'lmdeploy.pytorch.third_party.flash_attn_interface',
+        fake_interface,
+    )
+
+    for configured, expected in ((-1.0, 0.0), (0.0, 0.0), (30.0, 30.0)):
+        impl = FA3Impl(
+            num_heads=2,
+            head_size=8,
+            logit_softcapping=configured,
+        )
+        assert impl.logit_softcapping == expected
+
+
 def test_fa3_prefill_uses_guarded_flatten_buffer_and_max_kv_seqlen():
     """Regression test for FA3 prefill with recycled paged KV blocks."""
     impl = FA3Impl.__new__(FA3Impl)
     impl.scale = 1.0
     impl.causal = True
     impl.sliding_window = None
+    # Match the state of an initialized FA3Impl.
     impl.logit_softcapping = 0.0
 
     q_seqlens = _make_prefill_seqlens()
@@ -77,6 +101,7 @@ def test_fa3_prefill_uses_guarded_flatten_buffer_and_max_kv_seqlen():
     def fake_flash_attn_varlen_func(**kwargs):
         captured['flash_max_seqlen_k'] = kwargs['max_seqlen_k']
         captured['flash_k_size'] = kwargs['k'].size(0)
+        captured['flash_softcap'] = kwargs['softcap']
         return torch.empty_like(kwargs['q'])
 
     impl.flatten_kv_cache = fake_flatten_kv_cache
@@ -89,3 +114,35 @@ def test_fa3_prefill_uses_guarded_flatten_buffer_and_max_kv_seqlen():
     assert captured['flatten_out_size'] == _guarded_flatten_size(q_seqlens)
     assert captured['flash_k_size'] == _guarded_flatten_size(q_seqlens)
     assert captured['flash_max_seqlen_k'] == metadata.max_kv_seqlen
+    assert captured['flash_softcap'] == 0.0
+
+
+def test_fa3_speculative_decode_uses_normalized_disabled_softcap():
+    impl = FA3Impl.__new__(FA3Impl)
+    impl.scale = 1.0
+    impl.causal = True
+    impl.sliding_window = None
+    # Match the state of an initialized FA3Impl.
+    impl.logit_softcapping = 0.0
+
+    captured = {}
+
+    def fake_flash_attn_with_kvcache(query, k_cache, v_cache, **kwargs):
+        captured['softcap'] = kwargs['softcap']
+        return torch.empty_like(query)
+
+    impl.flash_attn_with_kvcache_v3 = fake_flash_attn_with_kvcache
+    metadata = SimpleNamespace(
+        quant_policy=QuantPolicy.NONE,
+        block_offsets=torch.tensor([[0], [1]], dtype=torch.int32),
+        kv_seqlens=torch.tensor([5, 7], dtype=torch.int32),
+        scheduler_metadata=None,
+    )
+    query = torch.empty((4, 2, 8), dtype=torch.float16)
+    k_cache = torch.empty((2, _BLOCK_SIZE, 2, 8), dtype=torch.float16)
+    v_cache = torch.empty_like(k_cache)
+
+    output = impl._decoding_speculative(query, k_cache, v_cache, metadata, max_q_seqlen=2)
+
+    assert output.shape == (2, 2, 2, 8)
+    assert captured['softcap'] == 0.0

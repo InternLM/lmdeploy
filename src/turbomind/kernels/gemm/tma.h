@@ -8,6 +8,14 @@
 
 namespace turbomind::gemm {
 
+// `cuTensorMapEncodeTiled` requires global strides to be multiples of 16 bytes. TMA-based
+// kernels size the strides from the leading extents of the (contiguous) operands, so the
+// requirement can be checked against the problem shape at dispatch time.
+inline bool is_tma_stride_feasible(DataType type, int extent)
+{
+    return byte_size(type, extent) % 16 == 0;
+}
+
 #if __CUDACC_VER_MAJOR__ >= 12
 
 CUtensorMap make_2d_tma_desc(void*              global_address,

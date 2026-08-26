@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import warnings
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from pydantic import BaseModel, ConfigDict
@@ -11,9 +12,9 @@ from lmdeploy.serve.core.generation_config import (
     merge_gen_config,
     resolve_default_gen_config,
 )
+from lmdeploy.serve.openai.endpoints.generate import check_request as check_generate_request
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, GenerateReqInput
 from lmdeploy.serve.openai.responses import ResponsesRequest
-from lmdeploy.serve.openai.serving_generate import check_request as check_generate_request
 
 _DEFAULTS = GenerationConfig()
 
@@ -30,11 +31,19 @@ class _FakeSessionManager:
 
 class _FakeServerContext:
 
-    def get_engine_config(self):
-        return _FakeEngineConfig()
+    def __init__(self):
+        self.async_engine = SimpleNamespace(
+            backend_config=_FakeEngineConfig(),
+            session_mgr=_FakeSessionManager(),
+        )
 
-    def get_session_manager(self):
-        return _FakeSessionManager()
+    @property
+    def engine_config(self):
+        return self.async_engine.backend_config
+
+    @property
+    def session_manager(self):
+        return self.async_engine.session_mgr
 
 
 def test_merge_gen_config_priority():

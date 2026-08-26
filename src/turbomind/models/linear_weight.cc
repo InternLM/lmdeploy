@@ -89,6 +89,7 @@ void LinearWeight::copy_metadata_to(LinearWeight& dst) const
     dst.epilogue      = epilogue;
     dst.has_bias_     = has_bias_;
     dst.is_grouped_   = is_grouped_;
+    dst.prepared_     = prepared_;
     dst.k_desc        = k_desc;
     dst.q_desc        = q_desc;
 }
@@ -100,6 +101,10 @@ void LinearWeight::copy_metadata_to(LinearWeight& dst) const
 void LinearWeight::prepare()
 {
     if (!weight) {
+        return;
+    }
+
+    if (prepared_) {
         return;
     }
 
@@ -119,6 +124,7 @@ void LinearWeight::prepare()
         if (weight.dtype() == data_type) {
             k_desc.type = data_type;
         }
+        prepared_ = true;
         return;
     }
 
@@ -127,6 +133,20 @@ void LinearWeight::prepare()
     // TM_GEMM_WEIGHT_PACK=0: keep load-time storage; no transpose / tiled pack.
     if (gemm::WeightPackEnv() == 0) {
         return;
+    }
+
+    if (weight_format.dtype == kFloat8_e4m3 && input_dtype() != kFloat8_e4m3) {
+        // Pre-SM90 kernels implement weight-only FP8 x (B)F16 GEMM. They
+        // consume K-group scales, whereas checkpoints carry 128x128 block
+        // scales for the native FP8 path. Expand each N-block scale over
+        // its 128 output channels and describe the converted format as
+        // K-groupwise before selecting/packing the legacy kernel layout.
+        // Checkpoints may store block scales as bf16/fp16 (Qwen3.5 FP8);
+        // BlockscaleToGroupscale dispatches over the source dtype directly.
+        const int group_size         = weight_format.block_sizes.at(0);
+        scales                       = BlockscaleToGroupscale(scales, data_type, group_size);
+        weight_format.block_sizes[1] = 1;
+        weight_format.scales.dtype   = data_type;
     }
 
     if (weight_format.dtype == kFloat8_e4m3 && input_dtype() == kFloat8_e4m3) {
@@ -147,9 +167,6 @@ void LinearWeight::prepare()
 
         TM_CHECK_EQ(scales.dtype(), kFloat);
         process(scales, q_desc, float{});
-    }
-    else if (weight_format.dtype == kFloat8_e4m3) {
-        // FP8 non-native path (non-SM90)
     }
     else {
         // General quantization format conversion path.
@@ -302,6 +319,8 @@ void LinearWeight::prepare()
             q_desc = qd;
         }
     }
+
+    prepared_ = true;
 }
 
 TM_MODULE_REGISTER(LinearWeight, core::LinearConfig);

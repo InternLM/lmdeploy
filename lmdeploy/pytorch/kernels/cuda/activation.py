@@ -2,16 +2,10 @@
 import torch
 import triton
 import triton.language as tl
-from packaging import version
 
 from .utils import get_device_props
 
-TRITON_VERSION = version.parse(triton.__version__)
-
-if TRITON_VERSION >= version.parse('3.0.0'):
-    fast_expf = tl.math.exp
-else:
-    fast_expf = tl.math.fast_expf
+fast_expf = tl.math.exp
 
 
 @triton.jit

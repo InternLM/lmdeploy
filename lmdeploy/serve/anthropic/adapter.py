@@ -29,7 +29,7 @@ def get_model_list(server_context) -> list[str]:
     """Return available model names from the server context."""
 
     model_names = [server_context.async_engine.model_name]
-    cfg = server_context.async_engine.backend_config
+    cfg = server_context.engine_config
     model_names += getattr(cfg, 'adapters', None) or []
     return model_names
 
@@ -345,6 +345,7 @@ def to_lmdeploy_messages(request: MessagesRequest | CountTokensRequest) -> list[
 def to_generation_config(
     request: MessagesRequest,
     default_gen_config: dict | None = None,
+    **kwargs: Any,
 ) -> GenerationConfig:
     """Map Anthropic messages request to LMDeploy generation config."""
     return build_generation_config(
@@ -353,10 +354,9 @@ def to_generation_config(
         max_new_tokens=request.max_tokens,
         stop_words=request.stop_sequences,
         include_stop_str_in_output=request.include_stop_str_in_output or False,
-        skip_special_tokens=True,
-        spaces_between_special_tokens=True,
         return_routed_experts=request.return_routed_experts or False,
         logprobs=1 if request.return_logprob else None,
+        **kwargs,
     )
 
 

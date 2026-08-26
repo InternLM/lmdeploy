@@ -13,6 +13,14 @@ _ChatCompletionResponseChoiceT = TypeVar('_ChatCompletionResponseChoiceT', ChatC
                                          ChatCompletionResponseStreamChoice)
 
 
+def get_model_list(server_context) -> list[str]:
+    """Return the model and adapter names exposed by a server."""
+    model_names = [server_context.async_engine.model_name]
+    cfg = server_context.engine_config
+    model_names += getattr(cfg, 'adapters', None) or []
+    return model_names
+
+
 def filter_parallel_tool_calls(tool_calls: list[_ToolCallT] | None,
                                parallel_tool_calls: bool | None) -> list[_ToolCallT] | None:
     """Filter to the first tool call only when parallel_tool_calls is false."""

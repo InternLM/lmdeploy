@@ -25,7 +25,7 @@ from lmdeploy.pytorch.disagg.config import DistServeRDMAConfig, EngineRole, RDMA
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.disagg.conn.proxy_conn import PDConnectionPool
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
-from lmdeploy.serve.openai.api_server import create_error_response
+from lmdeploy.serve.openai.errors import create_error_response
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
     CompletionRequest,
@@ -587,7 +587,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
       probable tokens with probabilities that add up to top_p or higher
       are kept for generation.
     - **n** (int): How many chat completion choices to generate for each input
-      message. **Only support one here**.
+      message. Accepts values from 1 to 128, except in DistServe mode.
     - **stream**: whether to stream the results or not. Default to false.
     - **max_completion_tokens** (int | None): output token nums. Default to None.
     - **max_tokens** (int | None): output token nums. Default to None.
@@ -650,6 +650,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     check_response = await node_manager.check_request_model(request.model)
     if check_response is not None:
         return check_response
+    if (node_manager.serving_strategy == ServingStrategy.DistServe
+            and request.n is not None and request.n > 1):
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            'n > 1 is not supported with the DistServe serving strategy.')
 
     if node_manager.serving_strategy == ServingStrategy.Hybrid:
         node_url = node_manager.get_node_url(request.model)

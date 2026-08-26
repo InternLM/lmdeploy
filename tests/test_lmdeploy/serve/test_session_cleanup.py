@@ -2,7 +2,7 @@ import asyncio
 from contextlib import aclosing, suppress
 
 from lmdeploy.messages import GenerationConfig
-from lmdeploy.serve.core.exceptions import SafeRunException
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError, SafeRunException
 from lmdeploy.serve.managers import SessionManager
 
 
@@ -80,53 +80,6 @@ async def _run_idle_async_close_removes_session_and_allows_reuse():
 
 def test_idle_async_close_removes_session_and_allows_reuse():
     asyncio.run(_run_idle_async_close_removes_session_and_allows_reuse())
-
-
-async def _run_api_wrapper_cleanup_after_cancel():
-    from lmdeploy.serve.openai.api_server import VariableInterface, _with_request_cleanup
-
-    session_mgr = SessionManager()
-    session = session_mgr.get(260606)
-    closed = asyncio.Event()
-    never = asyncio.Event()
-
-    class _FakeAsyncEngine:
-        pass
-
-    async def result_generator():
-        try:
-            yield 'engine'
-            await never.wait()
-        finally:
-            closed.set()
-
-    async def response_generator():
-        async for item in result:
-            yield item
-
-    result = result_generator()
-
-    origin_async_engine = VariableInterface.async_engine
-    VariableInterface.async_engine = _FakeAsyncEngine()
-    VariableInterface.async_engine.session_mgr = session_mgr
-    try:
-        wrapped = _with_request_cleanup(response_generator(), [result], [session])
-        assert await wrapped.__anext__() == 'engine'
-
-        next_task = asyncio.create_task(wrapped.__anext__())
-        await asyncio.sleep(0)
-        next_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await next_task
-
-        await asyncio.wait_for(closed.wait(), timeout=1)
-        assert session_mgr.sessions == {}
-    finally:
-        VariableInterface.async_engine = origin_async_engine
-
-
-def test_api_wrapper_cleanup_runs_after_cancel():
-    asyncio.run(_run_api_wrapper_cleanup_after_cancel())
 
 
 async def _run_request_cleanup_removes_unstarted_generator_session():
@@ -209,9 +162,8 @@ async def _run_prompt_cancel_updates_metrics():
         engine.prompt_processor = _FakePromptProcessor()
         engine.request_logger = _FakeRequestLogger()
 
-        generator = engine.generate('hello', 260606)
         with suppress(asyncio.CancelledError):
-            await generator.__anext__()
+            await engine.preprocess('hello', 260606)
 
         stats = metrics_processor.scheduler_stats
         assert stats.num_total_reqs == 1
@@ -237,23 +189,27 @@ async def _run_max_new_tokens_zero_cleans_up_session():
         engine = AsyncEngine.__new__(AsyncEngine)
         engine.session_mgr = SessionManager()
         engine.session_mgr.build_request_handle_pool(_FakeEngine(), 1)
-        engine._determine_gen_config = lambda session, input_ids, gen_config=None: gen_config
+        engine.session_len = 4096
+        engine._determine_gen_config = lambda input_ids, gen_config=None: gen_config
+        engine.backend_config = type('_BackendConfig', (), {'enable_prefix_caching': False})()
+        engine.request_logger = type('_RequestLogger', (), {'log_inputs': lambda *args, **kwargs: None})()
 
         session = engine.session_mgr.get(260606)
-        generator = engine.generate(None,
+        try:
+            await engine.preprocess(None,
                                     session,
                                     input_ids=[1, 2],
                                     gen_config=GenerationConfig(max_new_tokens=0))
-
-        out = await generator.__anext__()
-
-        assert out.input_token_len == 2
-        assert out.finish_reason == 'length'
+        except RequestError as error:
+            assert error.code is ErrorCode.INVALID_REQUEST
+            assert error.message == 'max_new_tokens must be at least 1, got 0.'
+        else:
+            raise AssertionError('Expected zero max_new_tokens to fail preprocessing.')
         assert not hasattr(session, 'step')
         assert engine.session_mgr.sessions == {}
     finally:
         metrics_processor.scheduler_stats = old_stats
 
 
-def test_max_new_tokens_zero_cleans_up_session():
+def test_invalid_max_new_tokens_cleans_up_session():
     asyncio.run(_run_max_new_tokens_zero_cleans_up_session())

@@ -11,6 +11,7 @@ from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
     Attention,
+    ParallelLMHead,
     RMSNorm,
     RopeType,
     SiluAndMul,
@@ -22,7 +23,6 @@ from lmdeploy.pytorch.nn.linear import (
     build_down_linear,
     build_gateup_linear,
     build_o_proj,
-    build_rowwise_linear,
 )
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
@@ -360,7 +360,11 @@ class SharedHead(nn.Module):
         super().__init__()
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
         # build lm_head
-        self.head = build_rowwise_linear(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
+        self.head = ParallelLMHead(config.vocab_size,
+                                   config.hidden_size,
+                                   bias=False,
+                                   dtype=dtype,
+                                   device=device)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         return self.norm(hidden_states)

@@ -1,12 +1,27 @@
+# Base images
+ARG CUDA_VERSION=cu128
+
+FROM nvidia/cuda:13.0.3-devel-ubuntu24.04 AS cu130
+ENV CUDA_VERSION_SHORT=cu130
+ENV PYTORCH_CUDA_VERSION=cu130
+
 FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS cu128
+ENV CUDA_VERSION_SHORT=cu128
+# PyTorch 2.12 no longer publishes cu128 wheels; cu126 is its CUDA 12 build.
+ENV PYTORCH_CUDA_VERSION=cu126
+
+# Backward-compatible stage aliases.
+FROM cu130 AS cu13
+FROM cu128 AS cu12.8
+FROM cu128 AS cu12
+
+FROM ${CUDA_VERSION}
 
 # environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC \
     PATH=/opt/py3/bin:/root/.local/bin:${PATH} \
-    TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas \
-    CUDA_VERSION_SHORT=cu128 \
-    PYTORCH_CUDA_VERSION=cu126
+    TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
 
 # Install dependencies and create python virtual environment
 RUN --mount=type=cache,target=/var/cache/apt \

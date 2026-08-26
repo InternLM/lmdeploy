@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from:
 # https://github.com/vllm-project/vllm/blob/main/vllm/attention/backends/abstract.py
+import contextlib
 from abc import ABC, abstractmethod
 from enum import Enum, auto
 
@@ -28,7 +29,9 @@ class OpType(Enum):
     SoftmaxTopK = auto()
     FusedMoE = auto()
     FusedMoEW8A8 = auto()
+    FusedMoEStaticF8 = auto()
     LinearBlockedF8 = auto()
+    LinearStaticF8 = auto()
     FusedMoEBlockedF8 = auto()
     FusedMoEV4FP4 = auto()
     NSAIndexFP8 = auto()
@@ -37,8 +40,10 @@ class OpType(Enum):
     V4Compressor = auto()
     HcPrePost = auto()
     Embedding = auto()
+    CacheBlockCopy = auto()
 
     # MoE router
+    RouterGemm = auto()
     RouterNoauxTC = auto()
 
     # Gated Delta
@@ -106,6 +111,22 @@ class OpsBackend(ABC):
         attention meta should be built here.
         """
         return step_context
+
+    @staticmethod
+    @contextlib.contextmanager
+    def model_build_context(ctx_mgr):
+        """Open an optional backend-owned scope around model construction."""
+        yield
+
+    @classmethod
+    def build_communicator(cls, cpu_group, device_group, dist_config):
+        """Build a device communicator."""
+        from .communicator import build_communicator
+        return build_communicator(
+            cpu_group=cpu_group,
+            device_group=device_group,
+            dist_config=dist_config,
+        )
 
     @staticmethod
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,

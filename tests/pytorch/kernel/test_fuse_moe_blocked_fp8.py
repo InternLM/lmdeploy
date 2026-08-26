@@ -447,8 +447,9 @@ def test_fused_moe_blocked_fp8_compact_down_matches_fused_moe_with_local_experts
 
 
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
+@pytest.mark.parametrize('seq_len', [80, 128])
 @torch.inference_mode()
-def test_fused_moe_blocked_fp8_compact_both_matches_fused_moe():
+def test_fused_moe_blocked_fp8_compact_both_matches_fused_moe(seq_len):
     from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import (
         _should_use_compact_blocked_fp8_moe_both_by_shape,
         fused_moe_blocked_fp8,
@@ -461,7 +462,6 @@ def test_fused_moe_blocked_fp8_compact_both_matches_fused_moe():
     quant_dtype = torch.float8_e4m3fn
     group_size = 128
 
-    seq_len = 128
     in_size = 128
     hidden_size = 256
     out_size = 128

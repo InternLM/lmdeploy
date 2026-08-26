@@ -27,6 +27,28 @@ from lmdeploy.serve.parsers.response_parser import _parse_tool_call_arguments_di
 
 BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
 
+_STDERR_NOISE_MARKERS = (
+    '[transformers]',
+    'You are using a model of type',
+    'This may be expected if you are loading a checkpoint',
+    'The argument `trust_remote_code` is to be used with Auto classes',
+)
+
+
+def _sanitize_server_log(content: str) -> str:
+    """Prefer real errors over leading HF/transformers warning noise."""
+    if not content:
+        return content
+    lines = content.splitlines()
+    useful = [ln for ln in lines if not any(m in ln for m in _STDERR_NOISE_MARKERS)]
+    if not useful:
+        return content.strip()[-4000:]
+    for i, ln in enumerate(useful):
+        if ('Traceback ' in ln or 'ERROR' in ln or 'Error:' in ln or 'RuntimeError' in ln
+                or 'lmdeploy: error:' in ln):
+            return '\n'.join(useful[i:]).strip()[-4000:]
+    return '\n'.join(useful).strip()[-4000:]
+
 
 def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
     port = DEFAULT_PORT + get_workerid(worker_id)
@@ -112,18 +134,21 @@ def stop_restful_api(pid, startRes):
 
 
 def terminate_restful_api(worker_id):
+    """Ask api_server to exit. Treat already-dead servers as success.
+
+    Concurrent/xdist runs often kill the process before ``/terminate``; asserting on Connection refused turns cleanup
+    into a false failure.
+    """
     port = DEFAULT_PORT + get_workerid(worker_id)
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
-    response = None
-    request_error = None
     try:
-        response = requests.get(f'{http_url}/terminate')
+        response = requests.get(f'{http_url}/terminate', timeout=10)
     except requests.exceptions.RequestException as exc:
-        request_error = exc
-    if request_error is not None:
-        assert False, f'terminate request failed: {request_error}'
-    assert response is not None and response.status_code == 200, f'terminate with {response}'
+        print(f'terminate skipped (server likely already stopped): {exc}')
+        return
+    if response.status_code != 200:
+        print(f'terminate returned unexpected status {response.status_code}: {response.text[:200]}')
 
 
 def run_all_step(log_path, case_name, cases_info, port: int = DEFAULT_PORT):
@@ -1294,7 +1319,7 @@ def run_llm_test(config, run_config, common_case_config, worker_id):
                          common_case_config,
                          port=DEFAULT_PORT + get_workerid(worker_id))
         else:
-            assert False, f'Failed to start RESTful API server: {content}'
+            assert False, f'Failed to start RESTful API server: {_sanitize_server_log(content)}'
     finally:
         if pid > 0:
             terminate_restful_api(worker_id)
@@ -1308,7 +1333,7 @@ def run_mllm_test(config, run_config, worker_id):
                             config.get('resource_path'),
                             port=DEFAULT_PORT + get_workerid(worker_id))
         else:
-            assert False, f'Failed to start RESTful API server: {content}'
+            assert False, f'Failed to start RESTful API server: {_sanitize_server_log(content)}'
     finally:
         if pid > 0:
             terminate_restful_api(worker_id)
@@ -1320,7 +1345,7 @@ def run_reasoning_case(config, run_config, worker_id):
         if pid > 0:
             _run_reasoning_case(config.get('log_path'), port=DEFAULT_PORT + get_workerid(worker_id))
         else:
-            assert False, f'Failed to start RESTful API server: {content}'
+            assert False, f'Failed to start RESTful API server: {_sanitize_server_log(content)}'
     finally:
         if pid > 0:
             terminate_restful_api(worker_id)
@@ -1332,7 +1357,7 @@ def run_tools_case(config, run_config, worker_id):
         if pid > 0:
             _run_tools_case(config.get('log_path'), port=DEFAULT_PORT + get_workerid(worker_id))
         else:
-            assert False, f'Failed to start RESTful API server: {content}'
+            assert False, f'Failed to start RESTful API server: {_sanitize_server_log(content)}'
     finally:
         if pid > 0:
             terminate_restful_api(worker_id)
@@ -1344,7 +1369,7 @@ def run_logprob_test(config, run_config, worker_id):
         if pid > 0:
             _run_logprobs_test(port=DEFAULT_PORT + get_workerid(worker_id))
         else:
-            assert False, f'Failed to start RESTful API server: {content}'
+            assert False, f'Failed to start RESTful API server: {_sanitize_server_log(content)}'
     finally:
         if pid > 0:
             terminate_restful_api(worker_id)

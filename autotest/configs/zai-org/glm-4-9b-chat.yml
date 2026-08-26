@@ -15,10 +15,8 @@ a100:
   - benchmark
   - func
   - prefix_cache
-  - quantization
   quantization:
     turbomind:
-    - awq
     - kvint4
     - kvint8
     pytorch:

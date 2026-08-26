@@ -25,9 +25,13 @@ GuidedDecoding::GuidedDecoding(const BaseGenerationParam& base, const comm::Host
     bitmask_buf_    = {{max_batch_size_, bitmask_size}, kCPUpinned};
     output_ids_buf_ = {max_batch_size_, kCPUpinned};
 
+    d2h_stream_    = core::Stream::create();
+    sampling_done_ = core::Event::create();
+    d2h_done_      = core::Event::create();
+
     for (int i = 0; i < phases; ++i) {
         auto& d    = data_.emplace_back(std::make_shared<Data>());
-        d->bitmask = empty_like(bitmask_buf_);
+        d->bitmask = empty_like(bitmask_buf_, kDEVICE);
     }
 }
 
@@ -52,6 +56,11 @@ void GuidedDecoding::Setup(int phase, TensorMap& env)
 void GuidedDecoding::FillMask(int phase, TensorMap& env)
 {
     if (auto& d = *data_.at(phase); d.active) {
+        // Only the first `generation_size` (= logits.shape(0)) slots are actively
+        // generating; matchers beyond this index belong to idle/prefill requests
+        // whose output_ids are stale and whose bitmasks are never applied.
+        const int gs = env.at("logits").shape(0);
+
         static_assert(sizeof(ssize_t) == sizeof(int64_t));
         DLTensor dlbitmask{bitmask_buf_.data(),
                            DLDevice{kDLCPU, 0},
@@ -60,10 +69,11 @@ void GuidedDecoding::FillMask(int phase, TensorMap& env)
                            (int64_t*)bitmask_buf_.shape().data(),
                            nullptr,
                            0};
+
         if (tp_group_->rank() == 0) {
-            for (size_t i = 0; i < d.matchers.size(); ++i) {
-                if (const auto& matcher = d.matchers[i]; matcher && !matcher->IsTerminated()) {
-                    matcher->FillNextTokenBitmask(&dlbitmask, i);
+            for (int i = 0; i < gs; ++i) {
+                if (const auto& m = d.matchers[i]; m && !m->IsTerminated()) {
+                    m->FillNextTokenBitmask(&dlbitmask, i);
                 }
                 else {
                     std::fill_n(bitmask_buf_.data() + i * bitmask_buf_.stride(0),
@@ -91,16 +101,40 @@ void GuidedDecoding::ApplyMask(int phase, TensorMap& env)
     }
 }
 
-void GuidedDecoding::Update(int phase, TensorMap& env)
+void GuidedDecoding::ScheduleUpdate(int phase, TensorMap& env)
 {
-    if (auto& d = *data_.at(phase); d.active) {
-        Copy(env.at("output_ids").buffer(), d.matchers.size(), output_ids_buf_);
-        core::Context::stream().Sync();
-        if (tp_group_->rank() == 0) {
-            for (size_t i = 0; i < d.matchers.size(); ++i) {
-                if (const auto& matcher = d.matchers[i]; matcher && !matcher->IsTerminated()) {
-                    matcher->AcceptToken(output_ids_buf_[i]);
-                }
+    if (auto& d = *data_.at(phase); d.active && tp_group_->rank() == 0) {
+        // Record event on main stream after sampling GPU work is submitted.
+        // The secondary stream will wait for this before issuing the D2H copy,
+        // ensuring it reads the output_ids written by sampling.
+        sampling_done_.Record(core::Context::stream());
+
+        // D2H copy on secondary stream — overlaps with subsequent GPU kernels
+        // on the main stream (AppendTokenIds, stop_criteria).
+        // Only copy the first `generation_size` entries: sampling writes exactly
+        // that many output_ids, and entries beyond it contain stale values.
+        const int gs = env.at("logits").shape(0);
+        d2h_stream_.Wait(sampling_done_);
+        Copy(env.at("output_ids").buffer(), gs, output_ids_buf_, d2h_stream_);
+        d2h_done_.Record(d2h_stream_);
+    }
+}
+
+void GuidedDecoding::FinishUpdate(int phase, TensorMap& env)
+{
+    if (auto& d = *data_.at(phase); d.active && tp_group_->rank() == 0) {
+        // Wait only for the D2H copy to complete — the main stream's
+        // AppendTokenIds + stop_criteria may still be executing on GPU.
+        d2h_done_.Sync();
+
+        // Accept tokens for active matchers.
+        // Only iterate over the first `generation_size` (= logits.shape(0)) slots —
+        // beyond that index the output_ids buffer contains stale data from prior steps.
+        const int gs = env.at("logits").shape(0);
+
+        for (int i = 0; i < gs; ++i) {
+            if (const auto& m = d.matchers[i]; m && !m->IsTerminated()) {
+                m->AcceptToken(output_ids_buf_[i]);
             }
         }
     }
