@@ -92,9 +92,9 @@ lmdeploy serve api_server internlm/internlm2_5-7b-chat --cache-max-entry-count 0
 
 ### Api 服务器获取超时
 
-API 服务器的图像 URL 获取超时可通过环境变量 `LMDEPLOY_FETCH_TIMEOUT` 进行配置。默认情况下，请求可能需要长达 10 秒才会超时。
+API 服务器远程媒体获取超时可通过 `LMDEPLOY_IMAGE_FETCH_TIMEOUT`（图像）和 `LMDEPLOY_VIDEO_FETCH_TIMEOUT`（视频）进行配置。默认情况下，图像请求可能需要长达 10 秒才会超时，视频请求可能需要长达 30 秒才会超时。
 
-请参阅 [lmdeploy/multimodal/utils.py](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/multimodal/utils.py) 了解用法。
+请参阅 [lmdeploy/multimodal/media/connection.py](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/multimodal/media/connection.py) 了解用法。
 
 ## 量化
 
