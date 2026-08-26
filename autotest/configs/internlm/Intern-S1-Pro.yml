@@ -24,8 +24,9 @@ h:
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
+        enable-return-routed-experts: true
         tool-call-parser: qwen3
-        reasoning-parser: intern-s1
+        reasoning-parser: default
     - suites:
       - anthropic
       extra:
@@ -56,8 +57,9 @@ h:
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
+        enable-return-routed-experts: true
         tool-call-parser: qwen3
-        reasoning-parser: intern-s1
+        reasoning-parser: default
     - suites:
       - anthropic
       extra:

@@ -150,6 +150,9 @@ class DeepGemmLinearBlockedF8Impl(CudaLinearBlockedF8Impl):
                  out_dtype: torch.dtype = torch.bfloat16,
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn):
         super().__init__(in_features, out_features, block_size, out_dtype, fp8_dtype)
+        from lmdeploy.pytorch.third_party.deep_gemm import PDL_ENABLED
+
+        self.pdl_enabled = PDL_ENABLED
 
         warmup_mgr = get_warmup_manager()
         key = f'deepgemm_blockedfp8_gemm_{in_features}_{out_features}_{block_size}_{out_dtype}_{fp8_dtype}'
@@ -185,7 +188,8 @@ class DeepGemmLinearBlockedF8Impl(CudaLinearBlockedF8Impl):
         input_quant, input_scale = quant_fp8_tma(x,
                                                  self.block_size,
                                                  dtype=weight.dtype,
-                                                 scale_fmt=self.scale_fmt)
+                                                 scale_fmt=self.scale_fmt,
+                                                 launch_pdl=self.pdl_enabled)
         out = deep_gemm_fp8(input_quant, input_scale, weight, scale, out_dtype=x.dtype)
         return out[:x.size(0)]
 

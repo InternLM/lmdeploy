@@ -10,7 +10,6 @@ from utils.tool_reasoning_definitions import (
     DEFAULT_TOOL_CALL_CONCURRENCY,
     DEFAULT_TOOL_CALL_HTTP_ERROR_WORKERS,
     HttpToolCallError,
-    RoutedExpertsNotSupported,
     collect_stream_tool_call_http_async,
     validate_reference_turn_result,
     validate_stream_tool_call_with_tokens,
@@ -78,6 +77,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
             prompt_tokens,
             expected_function_name='get_weather',
             **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
+            **self._experts_validation_kwargs(),
         )
 
     @pytest.mark.experts
@@ -91,15 +91,13 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
             use_input_ids=False,
         )
         prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
-        try:
-            validate_stream_tool_call_with_tokens(
-                r,
-                prompt_tokens=prompt_tokens,
-                expected_function_name='get_weather',
-                **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
-            )
-        except RoutedExpertsNotSupported as exc:
-            pytest.skip(str(exc))
+        validate_stream_tool_call_with_tokens(
+            r,
+            prompt_tokens=prompt_tokens,
+            expected_function_name='get_weather',
+            **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
+            **self._experts_validation_kwargs(),
+        )
 
     @pytest.mark.experts
     def test_parser_drop_via_decoded_output_ids(self, backend, model_case):
@@ -118,6 +116,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
             prompt_tokens,
             expected_function_name='get_weather',
             **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
+            **self._experts_validation_kwargs(),
         )
 
     @pytest.mark.experts
@@ -142,6 +141,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
                 prompt_tokens,
                 expected_function_name='get_weather',
                 **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
+                **self._experts_validation_kwargs(),
             )
             self._append_assistant_and_tool_messages(messages, r)
             last_tool = messages[-1]

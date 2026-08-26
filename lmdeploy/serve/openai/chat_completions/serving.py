@@ -9,7 +9,6 @@ from http import HTTPStatus
 
 import shortuuid
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
 
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.serve.core.exceptions import RequestError
@@ -35,8 +34,10 @@ from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger
 
+from .fanout import fanout_chat_completions
 from .logits_processors import logit_bias_logits_processor
 from .logprobs import _create_chat_completion_logprobs, _create_output_token_logprobs
+from .streaming_response import ManagedStreamingResponse
 from .validation import check_request
 
 logger = get_logger('lmdeploy')
@@ -63,7 +64,7 @@ def register(router: APIRouter, server_context) -> None:
           probable tokens with probabilities that add up to top_p or higher
           are kept for generation.
         - **n** (int): How many chat completion choices to generate for each input
-          message. **Only support one here**.
+          message. Accepts values from 1 to 128.
         - **stream**: whether to stream the results or not. Default to false.
         - **stream_options**: Options for streaming response. Only set this when you
           set stream: true.
@@ -131,10 +132,23 @@ def register(router: APIRouter, server_context) -> None:
         - **presence_penalty** (replaced with repetition_penalty)
         - **frequency_penalty** (replaced with repetition_penalty)
         """
-        error_check_ret = validate_request(request, server_context,
-                                           check_request)
+        json_request = await raw_request.json()
+        error_check_ret = validate_request(
+            request,
+            server_context,
+            check_request,
+            json_request=json_request,
+        )
         if error_check_ret is not None:
             return error_check_ret
+        if request.n is not None and request.n > 1:
+            return await fanout_chat_completions(
+                chat_completions_v1,
+                request,
+                raw_request,
+                json_request,
+            )
+
         # Resolve input: messages has priority over input_ids/image_data
         messages_empty = (request.messages is None or request.messages == ''
                           or (isinstance(request.messages, list)
@@ -165,7 +179,6 @@ def register(router: APIRouter, server_context) -> None:
                 # input_ids only — engine requires messages=None
                 request.messages = None
 
-        json_request = await raw_request.json()
         migration_request = json_request.pop('migration_request', None)
         with_cache = json_request.pop('with_cache', False)
         preserve_cache = json_request.pop('preserve_cache', False)
@@ -247,9 +260,10 @@ def register(router: APIRouter, server_context) -> None:
                 mm_processor_kwargs=request.mm_processor_kwargs)
         except RequestError as error:
             return create_request_error_response(error)
+
         result_generator = server_context.async_engine.generate(
-            preprocessed,
-            stream_response=True)  # always use stream to enable batching
+                preprocessed,
+                stream_response=True)  # always use stream to enable batching
         include_usage = bool(request.stream_options
                              and request.stream_options.include_usage)
 
@@ -383,11 +397,12 @@ def register(router: APIRouter, server_context) -> None:
 
         # Streaming response
         if request.stream:
-            stream_generator = with_request_cleanup(
-                completion_stream_generator(), [result_generator], [session],
-                server_context.session_manager)
-            return StreamingResponse(stream_generator,
-                                     media_type='text/event-stream')
+            return ManagedStreamingResponse(
+                completion_stream_generator(),
+                result_generators=[result_generator],
+                sessions=[session],
+                session_mgr=server_context.session_manager,
+                media_type='text/event-stream')
 
         # Non-streaming response
         final_logprobs = []
