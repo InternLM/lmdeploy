@@ -345,6 +345,11 @@ def eval_test(model_path,
                     eval_path, eval_config_name)
                 print(f'dataset_size_path={cfg.infer["partitioner"]["dataset_size_path"]}')
 
+                if not _should_skip_num_workers_override(eval_config_name, case_name):
+                    num_workers = extra_config.get('max-num-workers', 8)
+                    cfg.NUM_WORKERS = num_workers
+                    cfg.infer['partitioner']['num_worker'] = num_workers
+
                 _sanitize_cfg_for_dump(cfg)
                 cfg.dump(temp_config_path)
                 print(f'Modified config saved to: {temp_config_path}')
