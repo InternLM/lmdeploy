@@ -496,6 +496,23 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                 return default_weight_loader(param, loaded_weight)
 
             world_size, rank = mod.get_tp_world_rank()
+
+            # AWQ stores the output features on the *last* dim, not dim0:
+            # qweight is (in_features, out_features // elem_per_int), scales is
+            # (in_features // group_size, out_features) and qzeros matches
+            # qweight. Split along that dim instead, scaling the sections by the
+            # packing factor for the int32-packed tensors. Mirrors
+            # MergedAwqLinear.weight_loader.
+            if hasattr(mod, 'elem_per_int'):
+                if getattr(param, '_weight_type', None) in ('scales', 'bias'):
+                    split_sections = sections
+                else:
+                    # qweight / qzeros are packed along the output dim
+                    split_sections = [s // mod.elem_per_int for s in sections]
+                parts = loaded_weight.split(split_sections, dim=-1)
+                parts = [p.chunk(world_size, -1)[rank] for p in parts]
+                return default_weight_loader(param, torch.cat(parts, dim=-1))
+
             split_sections = sections
             # scale tensor has dim0 shrunk by block_size
             if (loaded_weight.dim() == 2
