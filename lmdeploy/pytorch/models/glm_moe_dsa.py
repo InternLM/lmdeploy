@@ -89,7 +89,14 @@ class GlmMoeDsaIndexer(nn.Module):
         self.k_norm = LayerNorm(self.head_dim, device=device)
         self.softmax_scale = self.head_dim**-0.5
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
-        self.indexer_topk = IndexerTopKFP8(self.index_topk, self.softmax_scale, block_size=128, fill=-1)
+        self.indexer_topk = IndexerTopKFP8(
+            self.index_topk,
+            self.softmax_scale,
+            block_size=128,
+            fill=-1,
+            # MTP may reuse its first iteration's indices in later drafts.
+            allow_short_prefill_scoring_skip=layer_idx < config.num_hidden_layers,
+        )
 
     def _apply_rotary_pos_emb(self, q_pe: torch.Tensor, k_pe: torch.Tensor,
                               freqs_cis: tuple[torch.Tensor, torch.Tensor]):
@@ -151,6 +158,8 @@ class DSATopKIndicesBuffer(nn.Module):
     def __init__(self, topk: int):
         super().__init__()
         self.topk = topk
+        # None means no full indexer has written the current buffer yet.
+        self._has_indices: bool | None = None
         self.register_buffer('indices', None, persistent=False)
 
     def _target_capacity(self, num_tokens: int) -> int:
@@ -173,14 +182,19 @@ class DSATopKIndicesBuffer(nn.Module):
             self.indices = torch.empty(capacity, self.topk, dtype=torch.int32, device=device)
         return self.indices[:num_tokens]
 
-    def write(self, topk_indices: torch.Tensor) -> torch.Tensor:
-        """Copy freshly computed top-k indices into the shared buffer."""
+    def write(self, topk_indices: torch.Tensor | None) -> torch.Tensor | None:
+        """Store indices, or mark a dense prefill as index-free."""
+        self._has_indices = topk_indices is not None
+        if topk_indices is None:
+            return None
         buffer = self.ensure(topk_indices.size(0), topk_indices.device)
         buffer.copy_(topk_indices)
         return buffer
 
-    def read(self, num_tokens: int, device: torch.device) -> torch.Tensor:
-        """Read indices previously written by a full indexer layer."""
+    def read(self, num_tokens: int, device: torch.device) -> torch.Tensor | None:
+        """Read the current indices for a shared indexer layer."""
+        if self._has_indices is False:
+            return None
         if self.indices is None or self.indices.size(0) < num_tokens or self.indices.device != device:
             raise RuntimeError('DSA top-k indices are reused before the shared buffer is populated.')
         return self.indices[:num_tokens]
