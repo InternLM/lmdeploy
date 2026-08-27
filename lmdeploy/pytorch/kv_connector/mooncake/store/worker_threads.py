@@ -127,7 +127,7 @@ class KVCacheStoreSendingThread(threading.Thread):
                     ready_event=ready_event,
                     enqueue_time=time.perf_counter(),
                 ))
-        logger.info(
+        logger.debug(
             'Mooncake KV save enqueued: global_rank=%d tp_rank=%d tp_size=%d '
             'save_id=%d request_id=%s blocks=%d',
             self.global_rank,
@@ -159,7 +159,7 @@ class KVCacheStoreSendingThread(threading.Thread):
         return keys, block_ids
 
     def _find_missing(self, request: MooncakeStoreSaveRequest, keys: list[str]) -> list[int]:
-        logger.info(
+        logger.debug(
             'Mooncake Store interaction before: operation=save_batch_is_exist '
             'global_rank=%d tp_rank=%d tp_size=%d save_id=%d request_id=%s keys=%d',
             self.global_rank,
@@ -195,7 +195,7 @@ class KVCacheStoreSendingThread(threading.Thread):
             )
             raise
         missing = [index for index, state in enumerate(states) if state == 0]
-        logger.info(
+        logger.debug(
             'Mooncake Store interaction after: operation=save_batch_is_exist '
             'global_rank=%d tp_rank=%d tp_size=%d save_id=%d request_id=%s '
             'status=ok keys=%d missing=%d elapsed_ms=%.3f',
@@ -231,7 +231,7 @@ class KVCacheStoreSendingThread(threading.Thread):
             sizes.append(block_sizes)
 
         total_bytes = sum(sum(block_sizes) for block_sizes in sizes)
-        logger.info(
+        logger.debug(
             'Mooncake Store interaction before: operation=save_batch_put_from_multi_buffers '
             'global_rank=%d tp_rank=%d tp_size=%d save_id=%d request_id=%s '
             'keys=%d fragments_per_key=%d bytes=%d',
@@ -281,7 +281,7 @@ class KVCacheStoreSendingThread(threading.Thread):
             )
             raise
         failed = [result for result in results if result < 0]
-        log = logger.info if not failed else logger.error
+        log = logger.debug if not failed else logger.error
         log(
             'Mooncake Store interaction after: operation=save_batch_put_from_multi_buffers '
             'global_rank=%d tp_rank=%d tp_size=%d save_id=%d request_id=%s '
@@ -325,7 +325,7 @@ class KVCacheStoreSendingThread(threading.Thread):
                     return
                 assert isinstance(item, _SaveTask)
                 request = item.request
-                logger.info(
+                logger.debug(
                     'Mooncake KV save dequeued: global_rank=%d tp_rank=%d tp_size=%d '
                     'save_id=%d request_id=%s queue_wait_ms=%.3f',
                     self.global_rank,
@@ -348,7 +348,7 @@ class KVCacheStoreSendingThread(threading.Thread):
                         request.request_id,
                     )
                 self.completion_callback(request.save_id)
-                logger.info(
+                logger.debug(
                     'Mooncake KV save completed: global_rank=%d tp_rank=%d tp_size=%d '
                     'save_id=%d request_id=%s status=%s',
                     self.global_rank,
@@ -419,7 +419,7 @@ class KVCacheStoreRecvingThread(threading.Thread):
             if self._closed:
                 raise RuntimeError('Mooncake KV-cache receiver is closed')
             self.request_queue.put(_LoadTask(request, time.perf_counter()))
-        logger.info(
+        logger.debug(
             'Mooncake KV load enqueued: global_rank=%d tp_rank=%d tp_size=%d '
             'request_id=%s blocks=%d',
             self.global_rank,
@@ -450,7 +450,7 @@ class KVCacheStoreRecvingThread(threading.Thread):
             sizes.append(block_sizes)
 
         total_bytes = sum(sum(block_sizes) for block_sizes in sizes)
-        logger.info(
+        logger.debug(
             'Mooncake Store interaction before: operation=load_batch_get_into_multi_buffers '
             'global_rank=%d tp_rank=%d tp_size=%d request_id=%s keys=%d '
             'fragments_per_key=%d bytes=%d',
@@ -490,7 +490,7 @@ class KVCacheStoreRecvingThread(threading.Thread):
 
         failed_indices = [index for index, result in enumerate(results) if result < 0]
         failed_blocks = {request.block_ids[index] for index in failed_indices}
-        log = logger.info if not failed_blocks else logger.error
+        log = logger.debug if not failed_blocks else logger.error
         log(
             'Mooncake Store interaction after: operation=load_batch_get_into_multi_buffers '
             'global_rank=%d tp_rank=%d tp_size=%d request_id=%s status=%s '
@@ -515,7 +515,7 @@ class KVCacheStoreRecvingThread(threading.Thread):
                     return
                 assert isinstance(item, _LoadTask)
                 request = item.request
-                logger.info(
+                logger.debug(
                     'Mooncake KV load dequeued: global_rank=%d tp_rank=%d tp_size=%d '
                     'request_id=%s queue_wait_ms=%.3f',
                     self.global_rank,
@@ -536,7 +536,7 @@ class KVCacheStoreRecvingThread(threading.Thread):
                         request.request_id,
                     )
                 self.completion_callback(request.request_id, failed_blocks)
-                logger.info(
+                logger.debug(
                     'Mooncake KV load completed: global_rank=%d tp_rank=%d tp_size=%d '
                     'request_id=%s status=%s failed_blocks=%d',
                     self.global_rank,

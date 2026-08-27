@@ -171,8 +171,8 @@ class RecordingLogger:
         del kwargs
         self.messages.append((level, message % args))
 
-    def info(self, message, *args, **kwargs):
-        self._record('info', message, *args, **kwargs)
+    def debug(self, message, *args, **kwargs):
+        self._record('debug', message, *args, **kwargs)
 
     def error(self, message, *args, **kwargs):
         self._record('error', message, *args, **kwargs)
@@ -401,6 +401,7 @@ def test_store_create_setup_and_close_are_logged_with_ranks(tmp_path, patch_work
         '127.0.0.1:50051',
     )]
     worker.shutdown()
+    assert {level for level, _ in patch_worker_runtime.messages} == {'debug'}
     messages = [message for _, message in patch_worker_runtime.messages]
     for operation in ('create', 'setup', 'close'):
         assert any(f'interaction before: operation={operation}' in message for message in messages)
