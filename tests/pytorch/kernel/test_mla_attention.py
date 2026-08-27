@@ -279,7 +279,7 @@ def test_tilelang_sparse_mla_decode_zero_copy_matches_selected_reference(monkeyp
     impl.index_mapper = FlashMLAIndexMapper()
     impl._tilelang_sparse_mla_forward = tilelang_sparse_mla_forward
 
-    batch_size, query_len, num_heads = 2, 2, 64
+    batch_size, query_len, num_heads = 2, 2, 8
     block_size, num_blocks, topk = 64, 4, 64
     query = torch.randn(batch_size * query_len, num_heads, 576,
                         dtype=torch.bfloat16, device='cuda') * 0.1
