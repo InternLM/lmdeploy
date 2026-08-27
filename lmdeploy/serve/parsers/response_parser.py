@@ -312,12 +312,6 @@ class BaseResponseParser(ResponseParser):
 
         self._initialize_reasoning_token_counter()
 
-    @property
-    def invalid_tool_names(self) -> set[str]:
-        if self.tool_parser is None:
-            return set()
-        return self.tool_parser.invalid_tool_names
-
     def stream_chunk(
         self,
         delta_text: str,

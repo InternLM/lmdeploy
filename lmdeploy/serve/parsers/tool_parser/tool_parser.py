@@ -41,7 +41,7 @@ class ToolParser:
         self._allowed_tool_names: set[str] = set()
         self._stream_tool_indices: dict[int, int | None] = {}
         self._next_stream_tool_index = 0
-        self.invalid_tool_names: set[str] = set()
+        self._invalid_tool_names: set[str] = set()
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request payload before rendering, if needed."""
@@ -73,9 +73,9 @@ class ToolParser:
             return True
         if name in self._allowed_tool_names:
             return True
-        if name not in self.invalid_tool_names:
+        if name not in self._invalid_tool_names:
             logger.warning(f'Ignoring tool call {name!r}: name is not present in request.tools.')
-            self.invalid_tool_names.add(name)
+            self._invalid_tool_names.add(name)
         return False
 
     def filter_tool_call_deltas(self, calls: list[DeltaToolCall]) -> list[DeltaToolCall]:

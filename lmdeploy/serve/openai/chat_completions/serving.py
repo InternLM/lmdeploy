@@ -346,9 +346,6 @@ def register(router: APIRouter, server_context) -> None:
                                              or request.return_routed_experts))
                 if should_validate_complete and not response_parser.validate_complete():
                     res.finish_reason = 'parse_error'
-                if (res.finish_reason in ('stop', 'length')
-                        and getattr(response_parser, 'invalid_tool_names', None)):
-                    res.finish_reason = 'parse_error'
 
                 for delta_index, (delta_message,
                                   tool_emitted) in enumerate(stream_deltas):
@@ -447,9 +444,6 @@ def register(router: APIRouter, server_context) -> None:
                 (request.return_token_ids or request.return_routed_experts))
             if should_validate_complete and not response_parser.validate_complete(
                     raw_text):
-                final_res.finish_reason = 'parse_error'
-            if (final_res.finish_reason in ('stop', 'length')
-                    and getattr(response_parser, 'invalid_tool_names', None)):
                 final_res.finish_reason = 'parse_error'
             if isinstance(tool_calls, list) and len(tool_calls):
                 if final_res.finish_reason == 'stop':
