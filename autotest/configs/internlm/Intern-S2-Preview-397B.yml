@@ -5,6 +5,7 @@ h:
   - chat
   - vl
   engine_config:
+    tp: 2
     dp: 4
     ep: 8
     extra:
@@ -23,6 +24,49 @@ h:
   - mllm_evaluate
   interface:
     pytorch:
+    - suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: interns2-preview
+        reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 2
+    dp: 4
+    ep: 8
+    extra:
+      max-batch-size: 256
+      cache-max-entry-count: 0.7
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - longtext_evaluate
+  - mllm_evaluate
+  interface:
+    turbomind:
     - suites:
       - base
       - logprob

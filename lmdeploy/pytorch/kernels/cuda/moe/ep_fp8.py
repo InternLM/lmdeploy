@@ -4,9 +4,9 @@ import torch
 import triton
 import triton.language as tl
 
-from .activation import silu_and_mul
-from .blocked_gemm_fp8 import per_token_group_quant_fp8
-from .fused_moe_ep import ep_gather
+from ..activation import silu_and_mul
+from ..blocked_gemm_fp8 import per_token_group_quant_fp8
+from .ep import ep_gather
 
 
 @triton.jit

@@ -46,4 +46,9 @@ if (CALL_FROM_SETUP_PY)
       BUILD_RPATH "\$ORIGIN"
       INSTALL_RPATH "${_INSTALL_CUDA_RPATH}"
   )
+else()
+  set_target_properties(${PROJECT_NAME} PROPERTIES
+      BUILD_RPATH "\$ORIGIN"
+      INSTALL_RPATH "\$ORIGIN"
+  )
 endif ()

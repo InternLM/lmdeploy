@@ -6,7 +6,7 @@ from lmdeploy.pytorch.backends.moe import (
     FusedMoEStaticF8Builder,
     FusedMoEStaticF8Impl,
 )
-from lmdeploy.pytorch.kernels.cuda.w8a8_fused_moe import (
+from lmdeploy.pytorch.kernels.cuda.moe.w8a8 import (
     fused_moe_static_fp8,
 )
 

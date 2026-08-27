@@ -49,6 +49,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.MultinomialSampling:
             from .multinomial_sampling import TritonMultinomialSamplingBuilder
             return TritonMultinomialSamplingBuilder
+        elif layer_type == OpType.RejectionSampling:
+            from .rejection_sampling import CudaRejectionSamplingBuilder
+            return CudaRejectionSamplingBuilder
         elif layer_type == OpType.SiluAndMul:
             from .activation import TritonSiluAndMulBuilder
             return TritonSiluAndMulBuilder
@@ -61,6 +64,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.FusedMoEW8A8:
             from .moe import TritonFusedMoEW8A8Builder
             return TritonFusedMoEW8A8Builder
+        elif layer_type == OpType.FusedMoEW4A16:
+            from .moe import TritonFusedMoEW4A16Builder
+            return TritonFusedMoEW4A16Builder
         elif layer_type == OpType.FusedMoEStaticF8:
             from .moe import TritonFusedMoEStaticF8Builder
             return TritonFusedMoEStaticF8Builder
