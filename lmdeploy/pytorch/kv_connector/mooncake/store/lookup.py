@@ -62,8 +62,8 @@ def prepare_lookup_rpc_path(
     else:
         if isinstance(rpc_port, bool) or not isinstance(rpc_port, int) or rpc_port < 0:
             raise ValueError('lookup_rpc_port must be a non-negative integer')
-        socket_path = (
-            f'ipc:///tmp/lmd-mc-lookup-{rpc_port}-{socket.gethostname()}{dp_suffix}.sock')
+        host = socket.gethostname().split('.')[0][:24] or 'host'
+        socket_path = f'ipc:///tmp/lmd-mc-lookup-{rpc_port}-{host}{dp_suffix}.sock'
     extra_config['lookup_rpc_path'] = socket_path
     return socket_path
 

@@ -1018,6 +1018,16 @@ class BaseModelAgent:
                 self._push_output(BatchedOutputs.connector_only(connector_output))
             return
 
+        # This is a non-blocking progress poll. The TP leader carries model and
+        # connector output together; other TP ranks emit a connector-only
+        # envelope so the executor can wait for all-rank completion.
+        connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+        if batched_output is not None:
+            batched_output.kv_connector_output = connector_output
+            self._push_output(batched_output)
+        elif connector_output is not None:
+            self._push_output(BatchedOutputs.connector_only(connector_output))
+
         sampling_delta = sampling_inputs.get_delta()
         if need_update_inputs:
             self.step_inputs.step_decode(
@@ -1042,16 +1052,6 @@ class BaseModelAgent:
                 model_metas,
                 extra_outputs,
             )
-
-        # This is a non-blocking progress poll. The TP leader carries model and
-        # connector output together; other TP ranks emit a connector-only
-        # envelope so the executor can wait for all-rank completion.
-        connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
-        if batched_output is not None:
-            batched_output.kv_connector_output = connector_output
-            self._push_output(batched_output)
-        elif connector_output is not None:
-            self._push_output(BatchedOutputs.connector_only(connector_output))
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""

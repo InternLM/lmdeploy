@@ -74,6 +74,12 @@ class StateBase:
         """Free the state."""
         _free_seq(self.seq, self.scheduler)
 
+    def begin_remote_load(self):
+        raise NotImplementedError(f'begin_remote_load not implemented for state {self.status}')
+
+    def finish_remote_load(self):
+        raise NotImplementedError(f'finish_remote_load not implemented for state {self.status}')
+
 
 class WaitingState(StateBase):
     """State for waiting sequences."""
