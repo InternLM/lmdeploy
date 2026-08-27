@@ -16,10 +16,10 @@ from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.backends.moe import FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul_masked_post_quant_fwd
-from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import per_token_group_quant_fp8, quant_fp8
-from lmdeploy.pytorch.kernels.cuda.fused_moe import _renormalize
-from lmdeploy.pytorch.kernels.cuda.fused_moe_ep_fp8 import fused_moe_v3_fp8
+from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import fused_moe_blocked_fp8
+from lmdeploy.pytorch.kernels.cuda.moe.ep_fp8 import fused_moe_v3_fp8
+from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _renormalize
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 

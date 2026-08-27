@@ -33,6 +33,7 @@ h:
       extra:
         tool-call-parser: qwen3coder
         reasoning-parser: default
+        enable-return-routed-experts: true
   quantization:
     pytorch:
     - fp8

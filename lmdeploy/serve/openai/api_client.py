@@ -125,7 +125,7 @@ class APIClient:
                 probable tokens with probabilities that add up to top_p or
                 higher are kept for generation.
             n (int): How many chat completion choices to generate for each
-                input message. Only support one here.
+                input message. Accepts values from 1 to 128.
             stream: whether to stream the results or not. Default to false.
             max_completion_tokens (int | None): output token nums. Default to None.
             max_tokens (int | None): output token nums. Default to None.

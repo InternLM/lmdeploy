@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,6 +13,50 @@ from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
 from lmdeploy.utils import get_logger, is_bf16_supported
 
 logger = get_logger('lmdeploy')
+
+
+def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
+    """Parse the pre-packed W4A16 metadata needed by the inference backend."""
+    if quant_config.get('format') != 'pack-quantized':
+        raise ValueError('Only compressed-tensors `pack-quantized` format is supported.')
+    if quant_config.get('quantization_status') != 'compressed':
+        raise ValueError('Compressed-tensors checkpoint must have `compressed` status.')
+
+    config_groups = quant_config.get('config_groups')
+    if not isinstance(config_groups, Mapping) or set(config_groups) != {'group_0'}:
+        raise ValueError('Compressed-tensors config must contain exactly `config_groups.group_0`.')
+    group = config_groups['group_0']
+    if not isinstance(group, Mapping) or group.get('targets') != ['Linear']:
+        raise ValueError('Compressed-tensors `group_0` must target `Linear`.')
+    if group.get('input_activations') is not None or group.get('output_activations') is not None:
+        raise ValueError('Compressed-tensors activation quantization is not supported.')
+
+    weights = group.get('weights')
+    expected_weights = {
+        'num_bits': 4,
+        'group_size': 32,
+        'strategy': 'group',
+        'symmetric': True,
+        'dynamic': False,
+        'type': 'int',
+    }
+    if not isinstance(weights, Mapping):
+        raise ValueError('Compressed-tensors `group_0.weights` must be an object.')
+    for key, expected in expected_weights.items():
+        if weights.get(key) != expected:
+            raise ValueError(
+                f'Unsupported compressed-tensors `{key}`: expected {expected!r}, got {weights.get(key)!r}.')
+
+    ignored_layers = quant_config.get('ignore', [])
+    if not isinstance(ignored_layers, list) or not all(isinstance(rule, str) for rule in ignored_layers):
+        raise ValueError('Compressed-tensors `ignore` must be a list of strings.')
+    return weights['num_bits'], weights['group_size'], ignored_layers
+
+
+def _matches_compressed_tensors_ignore(rule: str, prefix: str) -> bool:
+    if rule.startswith('re:'):
+        return re.match(rule[3:], prefix) is not None
+    return rule == prefix
 
 
 def normalize_cudagraph_capture_batch_sizes(capture_sizes: list[int] | None, max_batches: int) -> list[int] | None:
@@ -741,17 +786,32 @@ class QuantizationConfig:
 
     @classmethod
     def from_config(cls, hf_config: Any):
+        quant_sources = []
         quant_config = getattr(hf_config, 'quantization_config', None)
-
-        if quant_config is None:
-            if hasattr(hf_config, 'llm_config') and hasattr(hf_config.llm_config, 'quantization_config'):
-                quant_config = hf_config.llm_config.quantization_config
-            elif hasattr(hf_config, 'text_config') and hasattr(hf_config.text_config, 'quantization_config'):
-                quant_config = hf_config.text_config.quantization_config
+        if quant_config is not None:
+            quant_sources.append(('quantization_config', quant_config))
+        for config_name in ('llm_config', 'text_config'):
+            nested_config = getattr(hf_config, config_name, None)
+            nested_quant_config = getattr(nested_config, 'quantization_config', None)
+            if nested_quant_config is not None:
+                quant_sources.append((f'{config_name}.quantization_config', nested_quant_config))
 
         # no quant config found in hf config
-        if quant_config is None:
+        if not quant_sources:
             return cls()
+
+        quant_config = quant_sources[0][1]
+        compressed_sources = [(path, config) for path, config in quant_sources
+                              if isinstance(config, Mapping) and config.get('quant_method') == 'compressed-tensors']
+        if compressed_sources:
+            if len(compressed_sources) != len(quant_sources):
+                paths = [path for path, _ in quant_sources]
+                raise ValueError(f'Conflicting quantization configs found at {paths}: compressed-tensors cannot be '
+                                 'combined with another quantization method')
+            quant_config = compressed_sources[0][1]
+            for path, candidate in compressed_sources[1:]:
+                if candidate != quant_config:
+                    raise ValueError(f'Conflicting compressed-tensors config found at `{path}`')
 
         quant_method = quant_config['quant_method']
         quant_dtype = quant_config.get('quant_dtype', None)
@@ -762,6 +822,7 @@ class QuantizationConfig:
 
         bits = None
         group_size = None
+        ignored_layers = None
 
         if quant_method == 'awq':
             bits = quant_config.get('bits', 4)
@@ -780,18 +841,22 @@ class QuantizationConfig:
                 quant_dtype = 'float8_e5m2'
             else:
                 raise TypeError(f'Unsupported fp8 fmt: {fmt}')
+        elif quant_method == 'compressed-tensors':
+            bits, group_size, ignored_layers = _parse_compressed_tensors_config(quant_config)
         else:
             raise TypeError(f'Unsupported quant method: {quant_method}')
 
-        resolved_quant_dtype = getattr(torch, quant_dtype, None)
-        if not isinstance(resolved_quant_dtype, torch.dtype):
-            raise ValueError(f'Invalid quant dtype "{quant_dtype}" resolved from model config; '
-                             'expected a torch.dtype attribute on torch.')
-        quant_dtype = resolved_quant_dtype
+        if quant_dtype is not None:
+            resolved_quant_dtype = getattr(torch, quant_dtype, None)
+            if not isinstance(resolved_quant_dtype, torch.dtype):
+                raise ValueError(f'Invalid quant dtype "{quant_dtype}" resolved from model config; '
+                                 'expected a torch.dtype attribute on torch.')
+            quant_dtype = resolved_quant_dtype
 
-        ignored_layers = quant_config.get('ignored_layers', [])
-        if not ignored_layers:
-            ignored_layers = quant_config.get('modules_to_not_convert', [])
+        if ignored_layers is None:
+            ignored_layers = quant_config.get('ignored_layers', [])
+            if not ignored_layers:
+                ignored_layers = quant_config.get('modules_to_not_convert', [])
 
         return cls(
             quant_method=quant_method,
@@ -810,6 +875,13 @@ class QuantizationConfig:
         """Get quant method for module."""
         if module_kind not in {'linear', 'moe', 'norm'}:
             raise ValueError(f'Unsupported quant module kind: {module_kind}')
+        if self.quant_method == 'compressed-tensors':
+            if module_kind == 'norm':
+                return None
+            if not prefix:
+                raise ValueError('compressed-tensors dispatch requires a non-empty canonical module prefix')
+            is_ignored = any(_matches_compressed_tensors_ignore(rule, prefix) for rule in self.ignored_layers)
+            return None if is_ignored else self.quant_method
         if self.quant_method == 'fp8' and self.fp8_quant_scope == 'moe_only' and module_kind != 'moe':
             quant_method = None
             return quant_method

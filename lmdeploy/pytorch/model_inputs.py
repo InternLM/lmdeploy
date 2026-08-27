@@ -389,11 +389,12 @@ class StepContext:
 
         # position ids
         attention_mask, position_ids = cls.get_mask_and_position_ids(inputs)
-        q_start_loc = q_seqlens.cumsum(0) - q_seqlens
+        q_start_loc = cls._get_q_start_loc(inputs)
 
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
-        kv_seqlens -= inputs.num_ignored_history
+        if cache_config.window_size > 0:
+            kv_seqlens -= inputs.num_ignored_history
 
         ret = StepContext(
             input_ids=inputs.input_ids,
@@ -439,6 +440,23 @@ class StepContext:
         if self.dp_meta is None:
             return self.is_decoding
         return self.dp_meta.dp_is_decoding
+
+    @staticmethod
+    def _get_q_start_loc(inputs: ModelInputs):
+        """Build query offsets, avoiding a scan for uniform layouts."""
+        q_seqlens = inputs.seq_length
+        num_tokens = inputs.input_ids.numel()
+        max_q_seqlen = inputs.max_q_seqlen
+        if max_q_seqlen * q_seqlens.numel() == num_tokens:
+            return torch.arange(
+                0,
+                num_tokens,
+                max_q_seqlen,
+                dtype=torch.long,
+                device=q_seqlens.device,
+            )
+
+        return q_seqlens.cumsum(0) - q_seqlens
 
     @classmethod
     def get_mask_and_position_ids(cls, inputs: ModelInputs):

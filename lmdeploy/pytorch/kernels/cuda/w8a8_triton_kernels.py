@@ -3,15 +3,10 @@ import torch
 import torch.nn.functional as F
 import triton
 import triton.language as tl
-from packaging import version
 
 from ..default.w8a8_kernels import per_channel_quant
 
-TRITON_VERSION = version.parse(triton.__version__)
-if TRITON_VERSION >= version.parse('3.0.0'):
-    tl_round = tl.extra.cuda.libdevice.round
-else:
-    tl_round = tl.math.round
+tl_round = tl.extra.cuda.libdevice.round
 
 
 @triton.autotune(

@@ -38,6 +38,7 @@ struct EngineConfig {
     X(int, attn_cp_size)                                                                                               \
     X(int, mlp_tp_size)                                                                                                \
     X(int, ep_size, 1)                                                                                                 \
+    X(std::string, moe_a2a_backend, "auto")                                                                            \
     X(std::vector<int>, devices)                                                                                       \
     X(int, nnodes)                                                                                                     \
     X(int, node_rank)                                                                                                  \

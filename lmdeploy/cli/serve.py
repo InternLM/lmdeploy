@@ -172,6 +172,7 @@ class SubCliServe:
         ArgumentHelper.max_prefill_iters(tb_group)
         ArgumentHelper.async_(tb_group)
         ArgumentHelper.communicator(tb_group)
+        ArgumentHelper.moe_a2a_backend(tb_group)
         ArgumentHelper.dist_init_addr(tb_group)
 
         # vlm args
@@ -295,6 +296,7 @@ class SubCliServe:
                                                    max_prefill_iters=args.max_prefill_iters,
                                                    async_=args.async_,
                                                    communicator=args.communicator,
+                                                   moe_a2a_backend=args.moe_a2a_backend,
                                                    language_model_only=args.language_model_only,
                                                    enable_metrics=not args.disable_metrics,
                                                    hf_overrides=args.hf_overrides)

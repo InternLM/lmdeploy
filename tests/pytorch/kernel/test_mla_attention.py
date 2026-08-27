@@ -5,37 +5,52 @@ from unittest.mock import Mock
 import pytest
 import torch
 
+from lmdeploy.pytorch.backends.cuda.attention import mla as mla_module
 from lmdeploy.pytorch.backends.cuda.attention.mla import FlashMLAImpl, NSAIndicesUpdater
 from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
 
 
-def test_nsa_decode_indices_update_repeats_block_table_for_spec_decode():
+def _disable_dynamic_compile(monkeypatch):
+    monkeypatch.setattr(mla_module, '_try_dynamic_compile', lambda func, *args, **kwargs: func)
+
+
+def test_nsa_decode_indices_update(monkeypatch):
+    _disable_dynamic_compile(monkeypatch)
     updater = NSAIndicesUpdater()
-    nsa_indices = torch.tensor([[0, 17, -1], [32, 1, 16], [0, 33, 47], [32, 1, 16]])
     block_offsets = torch.tensor([[100, 101, 102], [200, 201, 202]])
 
-    output = updater._update_decode_impl(nsa_indices, block_offsets, max_q_seqlen=2, block_size=16)
-
+    nsa_indices = torch.tensor([[0, 17, -1], [32, 1, 16], [0, 33, 47], [32, 1, 16]])
+    output = updater.update_decode(nsa_indices, block_offsets, max_q_seqlen=2, block_size=16)
     expected = torch.tensor([[[1600, 1617, -1], [1632, 1601, 1616]],
                              [[3200, 3233, 3247], [3232, 3201, 3216]]])
     assert torch.equal(output, expected)
 
-
-def test_nsa_decode_indices_update_keeps_single_token_shape():
-    updater = NSAIndicesUpdater()
     nsa_indices = torch.tensor([[0, 17], [32, -1]])
+    output = updater.update_decode(nsa_indices, block_offsets, max_q_seqlen=1, block_size=16)
+    assert torch.equal(output, torch.tensor([[[1600, 1617]], [[3232, -1]]]))
+
+
+def test_nsa_decode_indices_update_caches_query_modes(monkeypatch):
+    compile_func = Mock(side_effect=lambda func, *args, **kwargs: func)
+    monkeypatch.setattr(mla_module, '_try_dynamic_compile', compile_func)
+    updater = NSAIndicesUpdater()
     block_offsets = torch.tensor([[100, 101, 102], [200, 201, 202]])
+    single_indices = torch.tensor([[0, 17], [32, -1]])
+    multi_indices = torch.tensor([[0, 17], [32, 1], [0, 33], [32, 1]])
 
-    output = updater._update_decode_impl(nsa_indices, block_offsets, max_q_seqlen=1, block_size=16)
+    updater.update_decode(single_indices, block_offsets, max_q_seqlen=1, block_size=16)
+    updater.update_decode(single_indices, block_offsets, max_q_seqlen=1, block_size=16)
+    updater.update_decode(multi_indices, block_offsets, max_q_seqlen=2, block_size=16)
+    updater.update_decode(multi_indices.repeat_interleave(2, dim=0), block_offsets,
+                          max_q_seqlen=4, block_size=16)
 
-    expected = torch.tensor([[[1600, 1617]], [[3232, -1]]])
-    assert torch.equal(output, expected)
+    assert compile_func.call_count == 2
 
 
-def test_bf16_sparse_decode_uses_strided_cache_view():
+def test_bf16_sparse_decode_uses_strided_cache_view(monkeypatch):
+    _disable_dynamic_compile(monkeypatch)
     impl = object.__new__(FlashMLAImpl)
     impl.nsa_updater = NSAIndicesUpdater()
-    impl.nsa_updater._update_decode_strided_func = impl.nsa_updater._update_decode_strided_impl
     impl._flash_mla_sparse = Mock(return_value=torch.empty(4, 64, 512, dtype=torch.bfloat16))
 
     query = torch.empty(4, 64, 576, dtype=torch.bfloat16)
@@ -58,16 +73,16 @@ def test_bf16_sparse_decode_uses_strided_cache_view():
     assert torch.equal(global_indices, expected)
 
 
-def test_bf16_sparse_decode_strided_cache_matches_contiguous_cache():
+def test_bf16_sparse_decode_strided_cache_matches_contiguous_cache(monkeypatch):
     pytest.importorskip('flash_mla')
     if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
         pytest.skip('FlashMLA BF16 sparse attention requires an SM90 GPU')
 
+    _disable_dynamic_compile(monkeypatch)
     impl = object.__new__(FlashMLAImpl)
     impl.scale = 576**-0.5
     impl.flash_mla_sparse_fwd = None
     impl.nsa_updater = NSAIndicesUpdater()
-    impl.nsa_updater._update_decode_strided_func = impl.nsa_updater._update_decode_strided_impl
 
     batch_size = 2
     query_len = 2
@@ -87,7 +102,7 @@ def test_bf16_sparse_decode_strided_cache_matches_contiguous_cache():
     output = impl._decode_bf16_sparse_flash_mla(query, k_cache, nsa_indices, metadata)
 
     contiguous_k = k_cache.flatten(0, 1)
-    contiguous_indices = impl.nsa_updater._update_decode_impl(nsa_indices, block_offsets, query_len, block_size)
+    contiguous_indices = impl.nsa_updater.update_decode(nsa_indices, block_offsets, query_len, block_size)
     contiguous_indices = contiguous_indices.flatten(0, 1)[:, None]
     expected = impl._flash_mla_sparse(query, contiguous_k, contiguous_indices)
     torch.testing.assert_close(output, expected)

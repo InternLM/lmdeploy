@@ -178,26 +178,29 @@ class CudaGraphMixin:
         kv_seqlens: Tensor = attn_metadata.kv_seqlens
         input_buffers: BuffType = graph_meta.input_buffers
 
-        batch_size, num_blocks = block_offsets.size()
         num_tokens = input_ids.size(-1)
         decode_query_len = graph_meta.decode_query_len
         # fill buffer
+        # Random padding balances MoE routing; the fused deterministic fill
+        # below overwrites only the real token prefix.
         input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
-        input_buffers['input_ids'][:, :num_tokens] = input_ids
-        input_buffers['position_ids'][:, :num_tokens] = position_ids
-        # 0 is reserved for padding requests
-        # fill zero to prevent writing to the unexpected blocks
-        input_buffers['block_offsets'].zero_()
-        input_buffers['block_offsets'][:batch_size, :num_blocks] = block_offsets
-
-        qkv = torch.stack((q_start_loc, q_seqlens, kv_seqlens))
-        input_buffers['qkv_lens'].zero_()
-        # initialize q_seqlens and kv_seqlens to max_tokens // max_batchs
-        # to avoid out of bound in flash attention kernels
-        # padding kv should be the same as padding q so q-kv=0
-        input_buffers['qkv_seqlens'].fill_(graph_meta.max_tokens // graph_meta.max_batchs)
-        input_buffers['qkv_lens'][:, :batch_size] = qkv
-        input_buffers['cu_seqlens'][:, 1:] = input_buffers['qkv_seqlens'].cumsum(1)
+        from lmdeploy.pytorch.kernels.cuda.step_metadata.fill_graph_common_inputs import (
+            fill_graph_common_inputs,
+        )
+        fill_graph_common_inputs(
+            input_ids,
+            position_ids,
+            block_offsets,
+            q_start_loc,
+            q_seqlens,
+            kv_seqlens,
+            input_buffers['input_ids'],
+            input_buffers['position_ids'],
+            input_buffers['block_offsets'],
+            input_buffers['qkv_lens'],
+            input_buffers['cu_seqlens'],
+            decode_query_len,
+        )
         if inputs_embeds is not None:
             emb_size = inputs_embeds.size(-1)
             if 'inputs_embeds' not in input_buffers:

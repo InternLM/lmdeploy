@@ -4,7 +4,7 @@ from packaging import version
 from .base import BaseChecker
 
 MAX_TRITON_VERSION = '3.7.1'
-MIN_TRITON_VERSION = '3.0.0'
+MIN_TRITON_VERSION = '3.4.0'
 
 
 class TritonChecker(BaseChecker):

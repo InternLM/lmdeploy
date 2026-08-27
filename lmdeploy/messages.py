@@ -294,6 +294,11 @@ class TurbomindEngineConfig:
             it to True if you want to update weights after create the pipeline
         language_model_only: Whether to run as text-only LLM without loading
             vision/multimodal encoder modules.
+        communicator: collective communicator, It can be one of the following values,
+            ['nccl', 'cuda-ipc']. The `cuda-ipc` option only supports single-node
+            multi-gpu communication.
+        moe_a2a_backend: the backend of moe a2a communication, It can be one of the
+            following values, ['auto', 'default', 'deepep'].
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model
         enable_metrics: enable metrics system
@@ -339,6 +344,7 @@ class TurbomindEngineConfig:
     empty_init: bool = False
     language_model_only: bool = False
     communicator: str = 'nccl'
+    moe_a2a_backend: str = 'auto'
     hf_overrides: dict[str, Any] | None = None
     enable_metrics: bool = True
 
@@ -365,6 +371,8 @@ class TurbomindEngineConfig:
         assert self.cache_checkpoint_interval > 0, 'invalid cache_checkpoint_interval'
         assert self.cache_prompt_boundary_skip >= 1, 'invalid cache_prompt_boundary_skip'
         assert self.async_ in (0, 1), 'async_ must be 0 (disabled) or 1 (enabled)'
+        assert self.moe_a2a_backend in ('auto', 'default', 'deepep'), \
+            'invalid moe_a2a_backend'
 
 
 @dataclass
