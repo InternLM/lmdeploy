@@ -16,7 +16,6 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
-from lmdeploy.utils import get_logger
 
 from ..response_parser import BaseResponseParser
 
@@ -24,7 +23,6 @@ if TYPE_CHECKING:
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
 ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.parsers.tool_parser'])
-logger = get_logger('lmdeploy')
 
 
 class ToolParser:
@@ -41,7 +39,6 @@ class ToolParser:
         self._allowed_tool_names: set[str] = set()
         self._stream_tool_indices: dict[int, int | None] = {}
         self._next_stream_tool_index = 0
-        self._invalid_tool_names: set[str] = set()
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request payload before rendering, if needed."""
@@ -71,12 +68,7 @@ class ToolParser:
         """Return whether a name is allowed by the effective request tools."""
         if not self.validate_tool_names:
             return True
-        if name in self._allowed_tool_names:
-            return True
-        if name not in self._invalid_tool_names:
-            logger.warning(f'Ignoring tool call {name!r}: name is not present in request.tools.')
-            self._invalid_tool_names.add(name)
-        return False
+        return name in self._allowed_tool_names
 
     def filter_tool_call_deltas(self, calls: list[DeltaToolCall]) -> list[DeltaToolCall]:
         """Drop streamed calls whose names are absent from request tools."""
