@@ -1,9 +1,9 @@
-# HF model id: Qwen/Qwen3-8B-Base
+# HF model id: Qwen/Qwen3-0.6B-Base
 
 a100:
 - model_type: base
   engine_config:
-    tp: 2
+    tp: 1
   backends:
   - name: turbomind
     communicators:
