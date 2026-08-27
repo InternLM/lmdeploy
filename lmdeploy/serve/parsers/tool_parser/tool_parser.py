@@ -37,6 +37,8 @@ class ToolParser:
         self._name_emitted: bool = False
         self._args_emitted_len: int = 0
         self._allowed_tool_names: set[str] = set()
+        # Map raw model indices to contiguous indices exposed to clients.
+        # None marks a rejected call so its later argument deltas are also filtered.
         self._stream_tool_indices: dict[int, int | None] = {}
         self._next_stream_tool_index = 0
 
