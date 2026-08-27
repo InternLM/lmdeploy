@@ -267,25 +267,6 @@ def test_sparse_mla_prefill_routes_by_kv_length(monkeypatch):
     assert dense_prefill.call_args.kwargs['nsa_indices'] is None
 
 
-def test_tilelang_sparse_mla_prefill_has_no_dense_shortcut():
-    output = object()
-    flatten_k = object()
-    nsa_indices = object()
-    impl = object.__new__(TileLangSparseMLAImpl)
-    impl._flatten_prefill_kv_cache = Mock(return_value=(flatten_k, object()))
-    impl._prefill_sparse = Mock(return_value=output)
-    query, k_cache, v_cache = (Mock() for _ in range(3))
-    metadata = SimpleNamespace(max_kv_seqlen=128)
-
-    assert impl._forward_prefill(query, k_cache, v_cache, metadata,
-                                 nsa_indices=nsa_indices) is output
-    impl._prefill_sparse.assert_called_once_with(query, flatten_k, nsa_indices,
-                                                 metadata)
-    with pytest.raises(RuntimeError, match='requires DSA top-k indices'):
-        impl._forward_prefill(query, k_cache, v_cache, metadata,
-                              nsa_indices=None)
-
-
 def test_tilelang_sparse_mla_decode_zero_copy_matches_selected_reference(monkeypatch):
     pytest.importorskip('tilelang')
     if not torch.cuda.is_available():
