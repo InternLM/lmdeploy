@@ -9,7 +9,11 @@ from typing import Any
 import pytest
 import requests
 from transformers import AutoTokenizer
-from utils.config_utils import get_model_path_from_config
+from utils.config_utils import (
+    ROUTED_EXPERTS_UNSUPPORTED_SKIP,
+    get_model_path_from_config,
+    model_enables_return_routed_experts,
+)
 from utils.constant import BACKEND_LIST, BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
 from utils.toolkit import encode_text, parse_sse_stream
 
@@ -1250,7 +1254,10 @@ class TestGenerateComprehensive:
 
     @pytest.mark.experts
     @pytest.mark.not_turbomind
-    def test_request_returns_experts(self):
+    def test_request_returns_experts(self, backend):
+        if not model_enables_return_routed_experts(
+                self.model_name, backend, required_suites=frozenset({'experts'})):
+            pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
         print(f'\n[Model: {self.model_name}] Running request with experts test')
         resp1 = self._post({
             'prompt': 'Deterministic generation',
@@ -1265,13 +1272,16 @@ class TestGenerateComprehensive:
 
     @pytest.mark.experts
     @pytest.mark.not_turbomind
-    def test_request_returns_experts_max_tokens_cap_followup(self):
+    def test_request_returns_experts_max_tokens_cap_followup(self, backend):
         """Hit DEFAULT max_tokens with return_routed_experts; length/experts
         OK; follow-up OK.
 
         Catches regressions where length-capped MoE generation overshoots a few tokens and breaks routed_experts length
         or the next request.
         """
+        if not model_enables_return_routed_experts(
+                self.model_name, backend, required_suites=frozenset({'experts'})):
+            pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
         print(f'\n[Model: {self.model_name}] Running experts max_tokens='
               f'{DEFAULT_MAX_COMPLETION_TOKENS} length-cap / follow-up test')
         max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
@@ -1319,7 +1329,10 @@ class TestGenerateComprehensive:
 
     @pytest.mark.experts
     @pytest.mark.not_turbomind
-    def test_request_returns_experts_stream(self):
+    def test_request_returns_experts_stream(self, backend):
+        if not model_enables_return_routed_experts(
+                self.model_name, backend, required_suites=frozenset({'experts'})):
+            pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
         print(f'\n[Model: {self.model_name}] Running streaming request with experts test')
         resp = self._post(
             {

@@ -5,7 +5,7 @@ import torch
 import triton
 import triton.language as tl
 
-from .activation import silu_and_mul
+from ..activation import silu_and_mul
 
 
 @triton.jit

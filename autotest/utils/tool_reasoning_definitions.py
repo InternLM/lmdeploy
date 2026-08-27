@@ -664,6 +664,37 @@ def make_response_parser(
     return parser_cls(request=request)
 
 
+def assert_completion_reasoning_tokens(
+    usage,
+    *,
+    expect_reasoning: bool,
+    reasoning: str | None = None,
+    tokenizer_path: str | None = None,
+    model_case: str | None = None,
+) -> None:
+    """Assert ``usage.completion_tokens_details``; optionally ``rt ==
+    encode(reasoning)``."""
+    details = getattr(usage, 'completion_tokens_details', None)
+    if not expect_reasoning:
+        # Product may omit details or return reasoning_tokens=0 when thinking off.
+        if details is None:
+            return
+        rt = getattr(details, 'reasoning_tokens', None)
+        assert rt is None or rt == 0, f'expected no reasoning tokens when thinking off, got {details!r}'
+        return
+    assert details is not None, 'completion_tokens_details must be present when thinking'
+    rt = details.reasoning_tokens
+    assert isinstance(rt, int) and 0 < rt <= usage.completion_tokens, (
+        f'reasoning_tokens={rt!r} completion_tokens={usage.completion_tokens!r}')
+    assert isinstance(reasoning, str) and len(reasoning.strip()) > 0, (
+        f'reasoning_content must be present when thinking, got {reasoning!r}')
+    if model_case is None or 'gpt-oss' in model_case.lower():
+        return
+    assert tokenizer_path, 'tokenizer_path required for reasoning token oracle'
+    enc_rt = len(get_tokenizer(tokenizer_path).encode(reasoning, add_special_tokens=False))
+    assert rt == enc_rt, f'usage.reasoning_tokens={rt} != encode(reasoning)={enc_rt}'
+
+
 def supports_raw_reasoning_decode_validate(model_case: str) -> bool:
     """Whether raw ``output_ids`` decode should run reasoning markup checks."""
     return 'llama' not in model_case.lower()
@@ -898,6 +929,7 @@ def collect_stream_tool_call_http(
     use_input_ids: bool = False,
     tokenizer_path: str | None = None,
     reference_payload: bool = False,
+    return_routed_experts: bool = True,
     **payload_extra,
 ) -> dict:
     tok_path = tokenizer_path or api_model_name
@@ -909,6 +941,7 @@ def collect_stream_tool_call_http(
         use_input_ids=use_input_ids,
         tokenizer_path=tok_path,
         reference_payload=reference_payload,
+        return_routed_experts=return_routed_experts,
         **payload_extra,
     )
 
@@ -925,8 +958,6 @@ def collect_stream_tool_call_http(
     with requests.post(url, json=payload, headers=headers, stream=True, timeout=timeout) as resp:
         if resp.status_code != 200:
             body = resp.text
-            if resp.status_code == 400 and 'routed experts' in body.lower():
-                raise RoutedExpertsNotSupported(body)
             raise HttpToolCallError(resp.status_code, format_error_response(resp.status_code, body))
 
         for line in resp.iter_lines(decode_unicode=True):
@@ -978,9 +1009,13 @@ def _build_stream_tool_call_payload(
     use_input_ids: bool,
     tokenizer_path: str,
     reference_payload: bool = False,
+    return_routed_experts: bool = True,
     **payload_extra,
 ) -> tuple[dict, int]:
     prompt_tokens_computed = 0
+    token_fields = {'return_token_ids': True}
+    if return_routed_experts:
+        token_fields['return_routed_experts'] = True
     if use_input_ids:
         if messages is None:
             raise ValueError('messages required when use_input_ids=True')
@@ -992,8 +1027,7 @@ def _build_stream_tool_call_payload(
                 'input_ids': input_ids,
                 'messages': [],
                 'stream': True,
-                'return_token_ids': True,
-                'return_routed_experts': True,
+                **token_fields,
                 'stream_options': {'include_usage': True},
             }
         else:
@@ -1004,8 +1038,7 @@ def _build_stream_tool_call_payload(
                 'stream': True,
                 'temperature': 0,
                 'max_completion_tokens': DEFAULT_MAX_COMPLETION_TOKENS,
-                'return_token_ids': True,
-                'return_routed_experts': True,
+                **token_fields,
                 'stream_options': {'include_usage': True},
                 **LMDEPLOY_DECODE_DEFAULTS,
             }
@@ -1014,8 +1047,7 @@ def _build_stream_tool_call_payload(
             'model': api_model_name,
             'messages': messages,
             'stream': True,
-            'return_token_ids': True,
-            'return_routed_experts': True,
+            **token_fields,
             'stream_options': {'include_usage': True},
         }
     else:
@@ -1025,8 +1057,7 @@ def _build_stream_tool_call_payload(
             'stream': True,
             'temperature': 0,
             'max_completion_tokens': DEFAULT_MAX_COMPLETION_TOKENS,
-            'return_token_ids': True,
-            'return_routed_experts': True,
+            **token_fields,
             'stream_options': {'include_usage': True},
             **LMDEPLOY_DECODE_DEFAULTS,
         }
@@ -1055,6 +1086,7 @@ async def collect_stream_tool_call_http_async(
     use_input_ids: bool = False,
     tokenizer_path: str | None = None,
     reference_payload: bool = False,
+    return_routed_experts: bool = True,
     **payload_extra,
 ) -> dict:
     """Async SSE collector for streaming tool-call HTTP responses."""
@@ -1067,6 +1099,7 @@ async def collect_stream_tool_call_http_async(
         use_input_ids=use_input_ids,
         tokenizer_path=tok_path,
         reference_payload=reference_payload,
+        return_routed_experts=return_routed_experts,
         **payload_extra,
     )
     headers = {
@@ -1084,8 +1117,6 @@ async def collect_stream_tool_call_http_async(
     async with session.post(url, json=payload, headers=headers, timeout=client_timeout) as resp:
         if resp.status != 200:
             body = await _read_stream_tool_call_error_body(resp)
-            if resp.status == 400 and 'routed experts' in body.lower():
-                raise RoutedExpertsNotSupported(body)
             raise HttpToolCallError(resp.status, format_error_response(resp.status, body))
 
         async for raw_chunk in resp.content.iter_any():
@@ -1401,6 +1432,7 @@ def validate_stream_tool_call_with_tokens(
     result: dict,
     prompt_tokens: int | None = None,
     *,
+    validate_experts: bool = True,
     tokenizer_path: str | None = None,
     tool_parser_name: str | None = None,
     tools: list | None = None,
@@ -1416,7 +1448,8 @@ def validate_stream_tool_call_with_tokens(
     assert result['stream_complete'], 'stream ended before data: [DONE]'
     validate_output_ids_present(result)
     validate_output_ids_match_usage(result)
-    validate_routed_experts_length(result, prompt_tokens=prompt_tokens)
+    if validate_experts:
+        validate_routed_experts_length(result, prompt_tokens=prompt_tokens)
 
 
 def _tool_calls_for_reference_validation(tool_calls) -> list[dict]:
@@ -1438,6 +1471,7 @@ def validate_reference_turn_result(
     result: dict,
     prompt_tokens: int,
     *,
+    validate_experts: bool = True,
     expected_function_name: str | None = None,
     tokenizer_path: str | None = None,
     tool_parser_name: str | None = None,
@@ -1469,7 +1503,7 @@ def validate_reference_turn_result(
             tools=tools,
         )
 
-    if result['routed_experts'] is not None and prompt_tokens > 0:
+    if validate_experts and result['routed_experts'] is not None and prompt_tokens > 0:
         validate_routed_experts_length(result, prompt_tokens=prompt_tokens)
 
 
@@ -1529,6 +1563,8 @@ async def _async_concurrent_worker_turns(
     use_input_ids: bool,
     log_file: str | None,
     reference_payload: bool,
+    return_routed_experts: bool = True,
+    validate_experts: bool = True,
 ) -> bool:
     messages: list = []
     expected_name = tools[0]['function']['name'] if tools else None
@@ -1546,6 +1582,7 @@ async def _async_concurrent_worker_turns(
                 log_file=log_file,
                 tokenizer_path=tokenizer_path,
                 reference_payload=reference_payload,
+                return_routed_experts=return_routed_experts,
             )
         except HttpToolCallError as exc:
             raise AssertionError(
@@ -1561,6 +1598,7 @@ async def _async_concurrent_worker_turns(
                 tokenizer_path=tokenizer_path,
                 tool_parser_name=resolve_tool_parser_name(tokenizer_path),
                 tools=tools,
+                validate_experts=validate_experts,
             )
         except AssertionError as exc:
             raise AssertionError(f'worker {worker_id} turn {turn + 1}: {exc}') from exc
@@ -1581,6 +1619,8 @@ async def _run_concurrent_tool_call_workers_async(
     use_input_ids: bool = True,
     log_file: str | None = None,
     reference_payload: bool = True,
+    return_routed_experts: bool = True,
+    validate_experts: bool = True,
 ) -> tuple[int, int]:
     tok_path = tokenizer_path or api_model_name
     if num_workers is None:
@@ -1610,6 +1650,8 @@ async def _run_concurrent_tool_call_workers_async(
                 use_input_ids,
                 log_file,
                 reference_payload,
+                return_routed_experts,
+                validate_experts,
             ) for i in range(num_workers)
         ]
         await asyncio.gather(*tasks)
@@ -1692,6 +1734,8 @@ def run_concurrent_tool_call_workers(
     use_input_ids: bool = True,
     log_file: str | None = None,
     reference_payload: bool = True,
+    return_routed_experts: bool = True,
+    validate_experts: bool = True,
 ) -> tuple[int, int]:
     """Run N asyncio workers for multi-turn concurrent tool-call stress."""
     return asyncio.run(_run_concurrent_tool_call_workers_async(
@@ -1704,6 +1748,8 @@ def run_concurrent_tool_call_workers(
         use_input_ids=use_input_ids,
         log_file=log_file,
         reference_payload=reference_payload,
+        return_routed_experts=return_routed_experts,
+        validate_experts=validate_experts,
     ))
 
 

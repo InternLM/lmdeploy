@@ -17,6 +17,7 @@ from .glm4_v import GLM4VisionModel  # noqa F401
 from .interns1_pro import InternS1ProVisionModel  # noqa F401
 from .internvl import InternVLVisionModel  # noqa F401
 from .internvl3_hf import InternVL3VisionModel  # noqa F401
+from .kimi_k25 import KimiK25VisionModel  # noqa F401
 from .llama4 import LLama4VisionModel  # noqa F401
 from .llava import LlavaVisionModel  # noqa F401
 from .llava_hf import LlavaHfVisionModel  # noqa F401

@@ -121,6 +121,7 @@ class AscendOpsBackend(DlinferOpsBackend):
     total_slots = None
     max_batches = None
     dist_meta: DistMeta = None
+    fia_causal_masks: dict[torch.device, torch.Tensor] = {}
 
     @staticmethod
     def get_name() -> str:
@@ -189,6 +190,14 @@ class AscendOpsBackend(DlinferOpsBackend):
                 cls.total_slots = cls.total_slots.view(block_num, block_size)
             return cls.total_slots
 
+        def get_fia_causal_mask():
+            device = step_context.block_offsets.device
+            mask = cls.fia_causal_masks.get(device)
+            if mask is None:
+                mask = torch.triu(torch.ones(2048, 2048, dtype=torch.int8, device=device), diagonal=1)
+                cls.fia_causal_masks[device] = mask
+            return mask
+
         def get_cpu_seqlens(is_decoding, is_prefill_no_cache):
             """Get sequence lengths on CPU.
 
@@ -255,17 +264,10 @@ class AscendOpsBackend(DlinferOpsBackend):
                     slots = slot_tables[history_length:kv_seq_len]
                     kv_start_indices.append(slots)
 
-                if is_prefill_no_cache:
-                    attention_mask.append(
-                        torch.triu(torch.ones(max_q_seq_len,
-                                              max_kv_seq_len,
-                                              dtype=step_context.kv_caches[0][0].dtype,
-                                              device=step_context.block_offsets.device),
-                                   diagonal=max_kv_seq_len - max_q_seq_len + 1))
-                else:
-                    attention_mask.append(
-                        torch.triu(torch.ones(2048, 2048, dtype=torch.bool, device=step_context.block_offsets.device),
-                                   diagonal=1))
+                # Standard GQA/MHA, MLA and paged prefill all use FIA sparse
+                # mode 3. Reuse the fixed split-fuse causal-mask template
+                # across all steps, following vllm-ascend.
+                attention_mask.append(get_fia_causal_mask())
 
                 kv_start_indices = torch.cat(kv_start_indices)
 
@@ -516,7 +518,8 @@ class AscendOpsBackend(DlinferOpsBackend):
         AscendOpsBackend.enable_graph = not backend_config.eager_mode
         AscendOpsBackend.max_batches = cache_config.max_batches
         from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import AscendGraphRunner
-        return AscendGraphRunner(model, model_config, cache_config, backend_config, device)
+        is_mla = model_config.k_head_dim != model_config.v_head_dim
+        return AscendGraphRunner(model, model_config, cache_config, backend_config, device, is_mla=is_mla)
 
     @staticmethod
     def init():
@@ -526,6 +529,10 @@ class AscendOpsBackend(DlinferOpsBackend):
         linear attention (e.g. Qwen3.5 35B). If triton-ascend is not installed, a warning
         is emitted but non-linear-attention models are unaffected.
         """
+
+        from dlinfer.vendor.ascend.version import ensure_ascend_runtime
+
+        ensure_ascend_runtime()
 
         try:
             from torch_npu.contrib import transfer_to_npu  # noqa: F401

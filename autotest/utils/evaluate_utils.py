@@ -340,15 +340,15 @@ def eval_test(model_path,
 
                 _sync_ruler_tokenizer_model(cfg, model_path)
 
-                if not _should_skip_num_workers_override(eval_config_name, case_name):
-                    cfg.NUM_WORKERS = extra_config.get('max-num-workers', 8)
-                    cfg.infer['partitioner']['num_worker'] = extra_config.get(
-                        'max-num-workers', 8)
-
                 # Persist dataset-size cache under eval_path (opencompass NumWorkerPartitioner).
                 cfg.infer['partitioner']['dataset_size_path'] = _dataset_size_cache_path(
                     eval_path, eval_config_name)
                 print(f'dataset_size_path={cfg.infer["partitioner"]["dataset_size_path"]}')
+
+                if not _should_skip_num_workers_override(eval_config_name, case_name):
+                    num_workers = extra_config.get('max-num-workers', 8)
+                    cfg.NUM_WORKERS = num_workers
+                    cfg.infer['partitioner']['num_worker'] = num_workers
 
                 _sanitize_cfg_for_dump(cfg)
                 cfg.dump(temp_config_path)

@@ -8,8 +8,10 @@ def _reference_pre_reduce(x, pre, out_dtype):
 
 
 def _reference_post_expand(x, residual, post, comb):
+    # comb is [..., src, out]; the post-expand mixes residuals as
+    # matmul(comb.T, residual) == sum_src comb[src, out] * residual[src].
     y = post.unsqueeze(-1) * x.float().unsqueeze(-2)
-    y += torch.sum(comb.unsqueeze(-1) * residual.float().unsqueeze(-3), dim=-2)
+    y += torch.matmul(comb.float().transpose(-1, -2), residual.float())
     return y.to(x.dtype)
 
 

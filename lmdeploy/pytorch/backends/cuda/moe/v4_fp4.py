@@ -8,8 +8,8 @@ from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.backends.moe import FusedMoEBuilder
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
-from lmdeploy.pytorch.kernels.cuda.v4_fp4_fused_moe import fused_moe_v4_fp4
-from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import (
+from lmdeploy.pytorch.kernels.cuda.moe.v4_fp4 import fused_moe_v4_fp4
+from lmdeploy.pytorch.kernels.cuda.moe.v4_fp4_grouped_gemm import (
     fused_moe_v4_fp4_ep_low_latency,
     fused_moe_v4_fp4_ep_normal,
 )

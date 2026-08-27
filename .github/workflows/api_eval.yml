@@ -27,6 +27,15 @@ on:
           - infer
           - eval
         default: 'both'
+      eval_suite:
+        required: false
+        description: 'Run chat-model eval, base-model eval, or both. Default is "both"'
+        type: choice
+        options:
+          - both
+          - chat
+          - base
+        default: 'both'
       run_id:
         required: false
         description: 'Set custom run ID. If not provided, github.run_id will be used'
@@ -156,6 +165,7 @@ jobs:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
         layout: ['tp1', 'tp2', 'tp4', 'tp8']
         transformers: ["", "legacy"]
+        eval_suite: ${{ fromJSON(github.event.inputs.eval_suite == 'base' && '["base"]' || github.event.inputs.eval_suite == 'chat' && '["chat"]' || '["chat","base"]') }}
     env:
       TEST_ENV: ${{ matrix.transformers }}
     container:
@@ -207,12 +217,33 @@ jobs:
           ln -s /mnt/104/opencompass-data/data ./data
           ln -s /nvme/qa_test_models/resource/nltk_data /usr/share/nltk_data
           execution_mode="${{ github.event.inputs.execution_mode || 'both' }}"
+          eval_suite="${{ matrix.eval_suite }}"
           ulimit -n 65535
+
+          if [ "$eval_suite" = "chat" ]; then
+            test_files="autotest/evaluate/test_api_evaluate.py"
+          else
+            test_files="autotest/evaluate/test_api_base_evaluate.py"
+          fi
+
+          mark="${{ matrix.layout }} and ${{ matrix.backend }}"
+          case "${{ matrix.layout }}" in
+            tp1) xdist_n=8 ;;
+            tp2) xdist_n=4 ;;
+            tp4) xdist_n=2 ;;
+            tp8) xdist_n=1 ;;
+            *) xdist_n=1 ;;
+          esac
+
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "infer" ]; then
-            pytest autotest/evaluate/test_api_evaluate.py autotest/evaluate/test_api_base_evaluate.py -m "${{matrix.layout}} and ${{matrix.backend}} and infer" --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            if [ "$eval_suite" = "base" ]; then
+              pytest ${test_files} -m "${mark} and infer" -n "${xdist_n}" --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            else
+              pytest ${test_files} -m "${mark} and infer" --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            fi
           fi
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "eval" ]; then
-            pytest autotest/evaluate/test_api_evaluate.py autotest/evaluate/test_api_base_evaluate.py -m "${{matrix.layout}} and ${{matrix.backend}} and eval" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest ${test_files} -m "${mark} and eval" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi
           exit $overall_exit
       - name: Clear workspace

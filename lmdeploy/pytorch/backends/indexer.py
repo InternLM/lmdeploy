@@ -46,6 +46,9 @@ class BaseV4IndexerBuilder:
 
     @staticmethod
     @abstractmethod
-    def build(index_topk: int, compress_ratio: int) -> BaseV4Indexer:
+    def build(index_topk: int,
+              compress_ratio: int,
+              num_heads: int,
+              head_dim: int) -> BaseV4Indexer:
         """Build layer implementation."""
         raise NotImplementedError
