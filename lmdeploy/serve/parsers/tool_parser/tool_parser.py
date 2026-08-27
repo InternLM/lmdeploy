@@ -37,8 +37,6 @@ class ToolParser:
         self._name_emitted: bool = False
         self._args_emitted_len: int = 0
         self._allowed_tool_names: set[str] = set()
-        # Map raw model indices to contiguous indices exposed to clients.
-        # None marks a rejected call so its later argument deltas are also filtered.
         self._stream_tool_indices: dict[int, int | None] = {}
         self._next_stream_tool_index = 0
 
@@ -81,6 +79,8 @@ class ToolParser:
         for call in calls:
             function = call.function
             if function is not None and function.name and call.index not in self._stream_tool_indices:
+                # Assign accepted calls a contiguous client-visible index.
+                # Mark rejected calls as None to filter their later argument deltas.
                 if self.is_valid_tool_name(function.name):
                     self._stream_tool_indices[call.index] = self._next_stream_tool_index
                     self._next_stream_tool_index += 1
