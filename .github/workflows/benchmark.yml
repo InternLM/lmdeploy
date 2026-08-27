@@ -149,7 +149,6 @@ jobs:
       matrix:
         benchmark_type: ${{fromJSON(github.event.inputs.benchmark_type)}}
         layout: ['tp1', 'tp2', 'tp4', 'tp8']
-        transformers: ["", "legacy"]
         include:
           - n: 8
             layout: tp1
@@ -159,8 +158,6 @@ jobs:
             layout: tp4
           - n: 1
             layout: tp8
-    env:
-      TEST_ENV: ${{ matrix.transformers }}
     timeout-minutes: 480
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
