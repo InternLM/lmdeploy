@@ -191,7 +191,10 @@ class Indexer(nn.Module):
                                            self.softmax_scale,
                                            self.head_dim,
                                            block_size=128,
-                                           fill=-1)
+                                           fill=-1,
+                                           # MTP may reuse its first iteration's indices in later drafts.
+                                           allow_short_prefill_scoring_skip=layer_idx
+                                           < config.num_hidden_layers)
 
     def forward(self,
                 x: torch.Tensor,
@@ -342,7 +345,8 @@ class DeepseekV32Attention(DeepseekV2Attention):
                                   num_kv_heads=num_key_value_heads,
                                   v_head_size=config.kv_lora_rank,
                                   num_replicate_kv_heads=num_replicate_kv_heads,
-                                  use_flash_mla=use_flash_mla)
+                                  use_flash_mla=use_flash_mla,
+                                  mla_index_topk=config.index_topk)
 
         self.vc = DeepseekV2BMM(self.num_heads, config.kv_lora_rank, self.v_head_dim, dtype=dtype, device=device)
         self.o_proj = build_o_proj(

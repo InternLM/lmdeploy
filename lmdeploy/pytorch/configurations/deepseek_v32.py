@@ -38,7 +38,7 @@ class DeepseekV32ModelConfigBuilder(DeepseekV2ModelConfigBuilder):
         config = DeepseekV2ModelConfigBuilder.build(hf_config, model_path=model_path, **kwargs)
 
         assert hf_config.use_flash_mla, 'DeepSeek-V3.2 requires flash_mla to be available.'
-        config.mla_kv_cache_dtype = 'fp8_ds_mla'
+        config.mla_kv_cache_dtype = 'bfloat16'
         config.mla_index_topk = hf_config.index_topk
         config.check_env_func = _check_env_v32
         return config

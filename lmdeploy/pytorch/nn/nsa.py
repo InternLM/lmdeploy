@@ -10,11 +10,19 @@ from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 class IndexerTopKFP8(nn.Module):
 
-    def __init__(self, topk: int, softmax_scale: float, head_dim: int, block_size: int = 128, fill: int = -1):
+    def __init__(self, topk: int, softmax_scale: float, head_dim: int, block_size: int = 128,
+                 fill: int = -1,
+                 allow_short_prefill_scoring_skip: bool = False):
         super().__init__()
         backend = get_backend()
         index_builder = backend.get_layer_impl_builder(OpType.NSAIndexFP8)
-        self.index_impl = index_builder.build(topk, softmax_scale, block_size, fill)
+        self.index_impl = index_builder.build(
+            topk,
+            softmax_scale,
+            block_size,
+            fill,
+            allow_short_prefill_scoring_skip=allow_short_prefill_scoring_skip,
+        )
         self.head_dim = head_dim
         self._block_cache_binding: BlockCacheBinding | None = None
 
