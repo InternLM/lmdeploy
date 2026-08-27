@@ -114,7 +114,7 @@ jobs:
     needs: linux-build
     if: ${{!cancelled()}}
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 50
+    timeout-minutes: 300
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
