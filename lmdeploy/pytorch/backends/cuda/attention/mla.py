@@ -337,6 +337,58 @@ class FlashMLAImpl(TritonAttentionImpl):
         """Describe metadata required by this selected implementation."""
         return FlashMLAAttentionMetaBuilder(num_attention_heads=self.num_heads)
 
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Return whether this selected implementation supports PCG."""
+        return True
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Run FlashMLA as a PCG eager boundary.
+
+        Sparse FlashMLA returns a head-axis view (``attn_output[:, :num_q_heads]``)
+        and runs dynamic Triton/FlashMLA kernels, so it cannot live inside a
+        captured graph piece. Wrap ``forward`` to slice its token-axis inputs to
+        the active raw-token extent and bind the view output through a
+        view-tolerant bridge. ``k_cache``/``v_cache`` are stable paged caches and
+        ``attn_metadata`` is a replay-time frame input, so neither is sliced.
+        """
+        if self._piecewise_forward is not None:
+            return
+
+        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            ViewTolerantPaddedAdapter,
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        original_forward = self.forward
+
+        @eager_boundary(
+            adapter_factory=ViewTolerantPaddedAdapter,
+            reuse_bridge_after_next_step=True,
+        )
+        def run_eager_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor,
+                                k_cache: torch.Tensor, v_cache: torch.Tensor,
+                                attn_metadata: TritonAttentionMetadata, **kwargs) -> torch.Tensor:
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            raw_tokens = execution.raw_tokens
+            query = query[:raw_tokens]
+            key = key[:raw_tokens]
+            value = value[:raw_tokens]
+            nsa_indices = kwargs.get('nsa_indices', None)
+            if nsa_indices is not None:
+                kwargs['nsa_indices'] = nsa_indices[:raw_tokens]
+            return original_forward(query, key, value, k_cache, v_cache, attn_metadata, **kwargs)
+
+        def piecewise_forward(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor,
+                              v_cache: torch.Tensor, attn_metadata: TritonAttentionMetadata, **kwargs) -> torch.Tensor:
+            if get_piecewise_graph_execution() is None:
+                return original_forward(query, key, value, k_cache, v_cache, attn_metadata, **kwargs)
+            return run_eager_attention(query, key, value, k_cache, v_cache, attn_metadata, **kwargs)
+
+        self._piecewise_forward = piecewise_forward
+        self.forward = piecewise_forward
+
     def _get_scheduler_metadata(self, attn_metadata: TritonAttentionMetadata):
         kernel_metadata = self.get_step_kernel_metadata(attn_metadata)
         if kernel_metadata is None:

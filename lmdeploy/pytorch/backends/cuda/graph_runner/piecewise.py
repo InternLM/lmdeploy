@@ -148,6 +148,52 @@ class PaddedTensorOutputAdapter:
                                execution.token_bucket - execution.raw_tokens).zero_()
 
 
+class ViewTolerantPaddedAdapter:
+    """Bind a raw-token eager result into bucket-shaped stable storage.
+
+    Like :class:`PaddedTensorOutputAdapter`, but accepts view or aliased eager
+    outputs (e.g. an MLA head slice or a kernel-returned view) by copying their
+    data into a fresh bucket-shaped bridge. Operators whose eager results are
+    views rather than owned storages use this adapter instead.
+    """
+
+    def __init__(self, token_axis: int = 0) -> None:
+        self.token_axis = token_axis
+
+    def allocate(
+        self,
+        output: Any,
+        boundary_input_storages: frozenset[int],
+        bridge_pool: ReusableBridgePool | None = None,
+    ) -> torch.Tensor:
+        execution = _ACTIVE_EXECUTION.get()
+        if execution is None:
+            raise UnsupportedBoundaryError('padded output allocation requires an active piecewise execution')
+        if not isinstance(output, torch.Tensor):
+            raise UnsupportedBoundaryError('padded output adapter requires one tensor output')
+        if output.layout is not torch.strided:
+            raise UnsupportedBoundaryError(f'only strided tensor outputs are supported, got {output.layout}')
+        if output.ndim == 0 or not -output.ndim <= self.token_axis < output.ndim:
+            raise UnsupportedBoundaryError('padded output adapter has an invalid token axis')
+        token_axis = self.token_axis % output.ndim
+        if output.size(token_axis) != execution.raw_tokens:
+            raise UnsupportedBoundaryError('eager output does not match the active raw-token extent')
+
+        shape = list(output.shape)
+        shape[token_axis] = execution.token_bucket
+        if bridge_pool is None:
+            return output.new_empty(tuple(shape))
+        return bridge_pool.allocate_padded_tensor(output, shape, token_axis)
+
+    def copy(self, destination: Any, source: Any) -> None:
+        execution = _ACTIVE_EXECUTION.get()
+        token_axis = self.token_axis % destination.ndim
+        destination.narrow(token_axis, 0, execution.raw_tokens).copy_(source)
+        if execution.raw_tokens < execution.token_bucket:
+            destination.narrow(token_axis, execution.raw_tokens,
+                               execution.token_bucket - execution.raw_tokens).zero_()
+
+
 @dataclass(frozen=True)
 class BoundaryDeclaration:
     """Immutable metadata attached to one eager boundary."""

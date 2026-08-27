@@ -91,14 +91,21 @@ class BaseNSAIndexFP8(ABC):
 
     @abstractmethod
     def forward(self, q: Tensor, k: Tensor, weights: Tensor,
-                indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
-        """forward."""
+                indexer_k_cache: Tensor, attn_metadata=None,
+                meta: NSAIndexMeta | None = None) -> Tensor:
+        """forward.
+
+        Implementations recompute ``meta`` from ``attn_metadata`` when it is not
+        supplied, so a piecewise CUDA graph eager boundary can pass the live
+        ``attn_metadata`` frame input and avoid a stale captured ``meta``.
+        """
         raise NotImplementedError('Not implemented.')
 
     @abstractmethod
     def forward_fused(self, q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor,
                       sin: Tensor, indexer_k_cache: Tensor, norm_eps: float, head_gate_scale: float,
-                      rope_interleaved: bool, meta: NSAIndexMeta) -> Tensor:
+                      rope_interleaved: bool, attn_metadata=None,
+                      meta: NSAIndexMeta | None = None) -> Tensor:
         """Forward with fused DSA indexer preparation."""
         raise NotImplementedError('Not implemented.')
 

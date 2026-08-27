@@ -29,14 +29,18 @@ class IndexerTopKFP8(nn.Module):
         indexer_k_cache: Tensor,
         attn_metadata: AttentionMetadata = None,
     ):
-        """forward."""
-        meta = self.index_impl.get_step_metadata(attn_metadata)
-        ret = self.index_impl.forward(q,
-                                      k,
-                                      weights,
-                                      indexer_k_cache,
-                                      meta=meta)
-        return ret
+        """forward.
+
+        ``attn_metadata`` is threaded instead of a precomputed ``meta`` so a
+        piecewise CUDA graph eager boundary can recompute per-request metadata
+        at replay time from the live frame input (the captured ``meta`` object
+        would otherwise go stale across requests).
+        """
+        return self.index_impl.forward(q,
+                                       k,
+                                       weights,
+                                       indexer_k_cache,
+                                       attn_metadata=attn_metadata)
 
     def forward_fused(self,
                       q: Tensor,
@@ -52,7 +56,6 @@ class IndexerTopKFP8(nn.Module):
                       rope_interleaved: bool,
                       attn_metadata: AttentionMetadata = None):
         """Forward with fused DSA indexer preparation."""
-        meta = self.index_impl.get_step_metadata(attn_metadata)
         return self.index_impl.forward_fused(q,
                                              k,
                                              weights,
@@ -64,4 +67,4 @@ class IndexerTopKFP8(nn.Module):
                                              norm_eps=norm_eps,
                                              head_gate_scale=head_gate_scale,
                                              rope_interleaved=rope_interleaved,
-                                             meta=meta)
+                                             attn_metadata=attn_metadata)
