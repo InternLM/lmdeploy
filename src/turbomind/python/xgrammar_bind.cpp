@@ -130,5 +130,9 @@ PYBIND11_MODULE(_xgrammar, m)
         .def("compile_regex",
              &GrammarCompiler::CompileRegex,
              py::call_guard<py::gil_scoped_release>(),
-             py::arg("schema"));
+             py::arg("schema"))
+        .def("compile_structural_tag",
+             &GrammarCompiler::CompileStructuralTag,
+             py::call_guard<py::gil_scoped_release>(),
+             py::arg("structural_tag_json"));
 }
