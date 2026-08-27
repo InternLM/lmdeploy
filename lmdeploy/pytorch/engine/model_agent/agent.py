@@ -882,6 +882,7 @@ class BaseModelAgent:
             kv_connector_metadata,
         )
         if inputs is None and delta is None:
+            assert dp == 1, 'DP connector-only steps must carry dummy model inputs.'
             # Loads and saves finish asynchronously, so progress must still be
             # returned when the scheduler has no model work to dispatch.
             connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
@@ -914,6 +915,9 @@ class BaseModelAgent:
             inputs, is_all_sleeping = await self._prepare_dp_v1(inputs)
             # skip dummy forward.
             if inputs is None:
+                connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+                if connector_output is not None:
+                    self._push_output(BatchedOutputs.connector_only(connector_output))
                 if is_all_sleeping:
                     self.state.to_sleep.set()
                     await self.state.to_wakeup.wait()
@@ -1286,6 +1290,13 @@ class BaseModelAgent:
             if self.memdecode_agent is not None:
                 self.memdecode_agent.build_graph_runner()
 
+    def shutdown_kv_connector(self):
+        """Drain and close the local connector without releasing the model."""
+        self._drain_queues()
+        torch.cuda.synchronize()
+        self._release_completed_h2d_transfers()
+        self._shutdown_kv_connector()
+
     def _shutdown_kv_connector(self):
         """Shutdown the connector before releasing its registered caches."""
         if self.kv_connector is None:
@@ -1590,10 +1601,7 @@ class BaseModelAgent:
         device = 'cpu' if level == 1 else 'meta'
         # Stop producers of GPU work and wait for queued work before closing the
         # connector threads that still reference registered cache addresses.
-        self._drain_queues()
-        torch.cuda.synchronize()
-        self._release_completed_h2d_transfers()
-        self._shutdown_kv_connector()
+        self.shutdown_kv_connector()
         self.cache_engine = None
         self.state_cache_engine = None
         self.reset_graph_runner()

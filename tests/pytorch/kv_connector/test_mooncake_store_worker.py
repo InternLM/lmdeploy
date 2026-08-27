@@ -466,9 +466,9 @@ def test_sequence_values_are_flattened_to_rows(tmp_path):
     worker.shutdown()
 
 
-def test_lookup_server_starts_after_registration_only_on_global_rank_zero(tmp_path):
-    rank_zero_worker, _ = make_worker(tmp_path, global_rank=0, tp_rank=0, tp_size=2)
-    rank_one_worker, _ = make_worker(tmp_path, global_rank=1, tp_rank=1, tp_size=2)
+def test_lookup_server_starts_after_registration_only_on_local_tp_rank_zero(tmp_path):
+    rank_zero_worker, _ = make_worker(tmp_path, global_rank=2, tp_rank=0, tp_size=2)
+    rank_one_worker, _ = make_worker(tmp_path, global_rank=3, tp_rank=1, tp_size=2)
 
     assert rank_zero_worker.lookup_server is None
     assert rank_one_worker.lookup_server is None

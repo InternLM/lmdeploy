@@ -487,6 +487,19 @@ class RayExecutor(ExecutorBase):
                 logger.info('Ray release timeout after %.1f seconds, killing workers.', release_timeout)
                 [ray.kill(worker) for worker in self.workers]
         else:
+            transfer_config = self.cache_config.kv_transfer_config
+            if transfer_config is not None and transfer_config.is_kv_transfer_instance:
+                release_timeout = self._get_worker_release_timeout(self.cache_config)
+                try:
+                    self.collective_rpc('shutdown_kv_connector', timeout=release_timeout)
+                    logger.debug('RayExecutor DP worker connectors shut down.')
+                except ray.exceptions.ActorDiedError:
+                    logger.info('RayExecutor worker died before connector shutdown finished.')
+                except ray.exceptions.GetTimeoutError:
+                    logger.info(
+                        'Ray connector shutdown timeout after %.1f seconds, killing workers.',
+                        release_timeout,
+                    )
             [ray.kill(worker) for worker in self.workers]
 
         self.ray_ctx.shutdown()

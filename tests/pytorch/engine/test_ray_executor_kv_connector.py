@@ -132,6 +132,44 @@ def test_ray_executor_release_dp_workers_without_rpc(monkeypatch, ray_components
     assert executor.ray_ctx.shutdown_calls == 1
 
 
+@pytest.mark.parametrize('times_out', [False, True])
+def test_ray_executor_release_dp_shuts_down_connector_before_kill(
+    monkeypatch,
+    ray_components,
+    times_out,
+):
+    ray, ray_executor_module, ray_executor_cls = ray_components
+    transfer_config = KVTransferConfig(
+        kv_connector='MooncakeStoreConnector',
+        kv_role='kv_both',
+    )
+    executor = _make_executor(
+        ray_executor_cls,
+        _make_cache_config(transfer_config),
+        dp=2,
+    )
+    events = []
+
+    def shutdown_connector(*args, **kwargs):
+        events.append('shutdown')
+        if times_out:
+            raise ray.exceptions.GetTimeoutError
+
+    executor.collective_rpc.side_effect = shutdown_connector
+    kill = Mock(side_effect=lambda worker: events.append(('kill', worker)))
+    monkeypatch.setattr(ray_executor_module.ray, 'kill', kill)
+    monkeypatch.setattr(ray_executor_module._envs, 'ray_timeline_enable', False)
+
+    executor.release()
+
+    executor.collective_rpc.assert_called_once_with(
+        'shutdown_kv_connector',
+        timeout=45.0,
+    )
+    assert events == ['shutdown', *(('kill', worker) for worker in executor.workers)]
+    assert executor.ray_ctx.shutdown_calls == 1
+
+
 def test_ray_executor_aggregates_connector_output_from_every_tp_rank(ray_components):
     _, _, ray_executor_cls = ray_components
     rank_zero = BatchedOutputs(

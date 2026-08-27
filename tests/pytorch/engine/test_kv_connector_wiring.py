@@ -64,17 +64,56 @@ def test_prepare_mooncake_namespace_and_async_constraints():
     with pytest.raises(ValueError, match='lookup_async=true'):
         prepare_kv_connector_config(invalid)
 
-    with pytest.raises(ValueError, match='tensor parallelism only'):
-        prepare_kv_connector_config(
-            _make_mooncake_cache_config(),
-            dist_config=DistConfig(tp=2, dp=2),
-        )
-
     with pytest.raises(ValueError, match='does not support.*mp'):
         prepare_kv_connector_config(
             _make_mooncake_cache_config(),
             dist_config=DistConfig(tp=2),
             distributed_executor_backend='mp',
+        )
+
+
+def test_prepare_mooncake_uses_one_lookup_endpoint_per_dp_rank_with_ep():
+    first = _make_mooncake_cache_config()
+    second = _make_mooncake_cache_config()
+    first.kv_transfer_config.kv_connector_extra_config['lookup_rpc_port'] = 12345
+    second.kv_transfer_config.kv_connector_extra_config['lookup_rpc_port'] = 12345
+
+    prepare_kv_connector_config(
+        first,
+        dist_config=DistConfig(tp=2, dp=2, ep=2, dp_rank=0),
+    )
+    prepare_kv_connector_config(
+        second,
+        dist_config=DistConfig(tp=2, dp=2, ep=2, dp_rank=1),
+    )
+
+    first_path = first.kv_transfer_config.kv_connector_extra_config['lookup_rpc_path']
+    second_path = second.kv_transfer_config.kv_connector_extra_config['lookup_rpc_path']
+    assert first_path.endswith('-dp0.sock')
+    assert second_path.endswith('-dp1.sock')
+    assert first_path != second_path
+
+
+def test_prepare_mooncake_expands_explicit_lookup_path_per_dp_rank():
+    cache_config = _make_mooncake_cache_config()
+    cache_config.kv_transfer_config.kv_connector_extra_config['lookup_rpc_path'] = (
+        'ipc:///tmp/lmd-mc-lookup-{dp_rank}.sock')
+
+    prepare_kv_connector_config(
+        cache_config,
+        dist_config=DistConfig(tp=2, dp=2, dp_rank=1),
+    )
+
+    assert cache_config.kv_transfer_config.kv_connector_extra_config['lookup_rpc_path'] == (
+        'ipc:///tmp/lmd-mc-lookup-1.sock')
+
+    invalid = _make_mooncake_cache_config()
+    invalid.kv_transfer_config.kv_connector_extra_config['lookup_rpc_path'] = (
+        'ipc:///tmp/lmd-mc-lookup.sock')
+    with pytest.raises(ValueError, match=r"must contain '\{dp_rank\}'"):
+        prepare_kv_connector_config(
+            invalid,
+            dist_config=DistConfig(tp=2, dp=2),
         )
 
 

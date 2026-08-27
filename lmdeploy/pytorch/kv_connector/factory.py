@@ -24,8 +24,6 @@ def prepare_kv_connector_config(
     if transfer_config is None or not transfer_config.is_kv_transfer_instance:
         return
     if transfer_config.kv_connector == 'MooncakeStoreConnector':
-        if dist_config is not None and (dist_config.dp != 1 or dist_config.ep != 1):
-            raise ValueError('Mooncake Store currently supports tensor parallelism only')
         if distributed_executor_backend == 'mp':
             raise ValueError(
                 'Mooncake Store does not support distributed_executor_backend="mp"; '
@@ -56,7 +54,13 @@ def prepare_kv_connector_config(
         if transfer_config.is_kv_consumer:
             from .mooncake.store.lookup import prepare_lookup_rpc_path
 
-            prepare_lookup_rpc_path(cache_config)
+            dp_rank = 0 if dist_config is None else dist_config.dp_rank
+            dp_size = 1 if dist_config is None else dist_config.dp
+            prepare_lookup_rpc_path(
+                cache_config,
+                dp_rank=dp_rank,
+                dp_size=dp_size,
+            )
 
 
 def build_kv_connector(

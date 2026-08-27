@@ -284,6 +284,32 @@ def test_sleep_shuts_down_connector_before_dropping_cache(monkeypatch):
     assert agent.spec_agent.cache_engine is None
 
 
+def test_shutdown_kv_connector_drains_local_work_before_close(monkeypatch):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    events = []
+    agent = _bare_model_agent()
+    cache_engine = object()
+
+    class _Connector:
+
+        def shutdown(self):
+            assert agent.cache_engine is cache_engine
+            events.append('shutdown')
+
+    agent.kv_connector = _Connector()
+    agent.cache_engine = cache_engine
+    agent._drain_queues = lambda: events.append('drain')
+    agent._release_completed_h2d_transfers = lambda: events.append('release-h2d')
+    monkeypatch.setattr(agent_module.torch.cuda, 'synchronize', lambda: events.append('cuda-sync'))
+
+    agent.shutdown_kv_connector()
+
+    assert events == ['drain', 'cuda-sync', 'release-h2d', 'shutdown']
+    assert agent.kv_connector is None
+    assert agent.cache_engine is cache_engine
+
+
 def test_connector_output_aggregator_waits_for_every_tp_rank():
     aggregator = KVConnectorOutputAggregator(world_size=2)
 
@@ -362,6 +388,67 @@ def test_model_agent_connector_only_step_returns_progress_on_nonzero_tp_rank(mon
     assert outputs[0].kv_connector_output == KVConnectorOutput(
         finished_receiving={11},
         invalid_block_ids={3},
+    )
+
+
+def test_model_agent_dp_connector_only_step_finishes_after_rendezvous(monkeypatch):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    events = []
+    metadata = KVConnectorMetadata()
+    dummy_inputs = SimpleNamespace(is_dummy=True)
+
+    class _Connector:
+
+        def bind_connector_metadata(self, value):
+            events.append(('bind', value))
+
+        def start_load_kv(self):
+            events.append('start_load')
+
+        def get_finished(self):
+            events.append('finished')
+            return KVConnectorOutput(finished_receiving={11})
+
+        def clear_connector_metadata(self):
+            events.append('clear')
+
+    async def prepare_dp(inputs):
+        events.append(('prepare_dp', inputs))
+        return None, False
+
+    outputs = []
+    agent = agent_module.BaseModelAgent.__new__(agent_module.BaseModelAgent)
+    agent.rank = 2
+    agent.kv_connector = _Connector()
+    agent._prepare_dp_v1 = prepare_dp
+    agent._push_output = outputs.append
+    dist_context = SimpleNamespace(
+        dist_config=SimpleNamespace(attn_tp=1, dp=2),
+    )
+    monkeypatch.setattr(
+        agent_module,
+        'get_dist_manager',
+        lambda: SimpleNamespace(current_context=lambda: dist_context),
+    )
+
+    asyncio.run(agent._async_step(
+        inputs=dummy_inputs,
+        delta=None,
+        kv_connector_metadata=metadata,
+    ))
+
+    assert events == [
+        ('bind', metadata),
+        'start_load',
+        ('prepare_dp', dummy_inputs),
+        'finished',
+        'clear',
+    ]
+    assert len(outputs) == 1
+    assert outputs[0].next_token_ids is None
+    assert outputs[0].kv_connector_output == KVConnectorOutput(
+        finished_receiving={11},
     )
 
 

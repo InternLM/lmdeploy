@@ -124,7 +124,7 @@ class MooncakeStoreWorker:
 
     def _start_lookup_server(self) -> None:
         if (self.kv_role in ('kv_consumer', 'kv_both')
-                and self.global_rank == 0 and self.lookup_server is None):
+                and self.tp_rank == 0 and self.lookup_server is None):
             self.lookup_server = LookupKeyServer(self, self._cache_config)
 
     def _prepare_transfer_layout(

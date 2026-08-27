@@ -32,8 +32,13 @@ _LOOKUP_POLL_INTERVAL_MS = 100
 _LOOKUP_RPC_TIMEOUT_MS = 5000
 
 
-def prepare_lookup_rpc_path(cache_config: CacheConfig) -> str:
-    """Create one endpoint before ``CacheConfig`` is copied to consumers."""
+def prepare_lookup_rpc_path(
+    cache_config: CacheConfig,
+    *,
+    dp_rank: int = 0,
+    dp_size: int = 1,
+) -> str:
+    """Create one DP-local endpoint before copying ``CacheConfig``."""
     transfer_config = cast('KVTransferConfig', cache_config.kv_transfer_config)
     extra_config = transfer_config.kv_connector_extra_config
     configured_path = extra_config.get('lookup_rpc_path')
@@ -42,15 +47,23 @@ def prepare_lookup_rpc_path(cache_config: CacheConfig) -> str:
             raise ValueError("lookup_rpc_path must be a non-empty 'ipc://' URI")
         if configured_path == 'ipc://':
             raise ValueError("lookup_rpc_path must be a non-empty 'ipc://' URI")
+        if dp_size > 1:
+            if '{dp_rank}' not in configured_path:
+                raise ValueError(
+                    "lookup_rpc_path must contain '{dp_rank}' when data parallelism is enabled")
+            configured_path = configured_path.replace('{dp_rank}', str(dp_rank))
+            extra_config['lookup_rpc_path'] = configured_path
         return configured_path
 
     rpc_port = extra_config.get('lookup_rpc_port')
+    dp_suffix = f'-dp{dp_rank}' if dp_size > 1 else ''
     if rpc_port is None:
-        socket_path = f'ipc:///tmp/lmd-mc-lookup-{uuid4().hex}.sock'
+        socket_path = f'ipc:///tmp/lmd-mc-lookup-{uuid4().hex}{dp_suffix}.sock'
     else:
         if isinstance(rpc_port, bool) or not isinstance(rpc_port, int) or rpc_port < 0:
             raise ValueError('lookup_rpc_port must be a non-negative integer')
-        socket_path = f'ipc:///tmp/lmd-mc-lookup-{rpc_port}-{socket.gethostname()}.sock'
+        socket_path = (
+            f'ipc:///tmp/lmd-mc-lookup-{rpc_port}-{socket.gethostname()}{dp_suffix}.sock')
     extra_config['lookup_rpc_path'] = socket_path
     return socket_path
 
@@ -92,7 +105,7 @@ def _make_zmq_socket(
 
 
 class LookupKeyServer:
-    """ZMQ lookup server owned by consumer worker rank 0."""
+    """ZMQ lookup server owned by consumer worker local TP rank 0."""
 
     def __init__(self, store_worker: MooncakeStoreWorker, cache_config: CacheConfig) -> None:
         self.store_worker = store_worker

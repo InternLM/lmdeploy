@@ -727,6 +727,34 @@ class TestDPForwardInputsMaker:
 
         asyncio.run(_run())
 
+    def test_get_attaches_dummy_inputs_to_connector_only_step(self):
+        async def _run():
+            metadata = object()
+            connector_inputs = {
+                'inputs': None,
+                'delta': None,
+                'extra_inputs': None,
+                'return_logits': False,
+                'kv_connector_metadata': metadata,
+            }
+            dummy_inputs = {
+                'inputs': 'connector_dummy',
+                'extra_inputs': 'dummy_extra',
+                'return_logits': True,
+            }
+            maker = self._make_maker(dummy_forward_inputs=dummy_inputs)
+            maker._in_que.put_nowait(connector_inputs)
+
+            result = await asyncio.wait_for(maker.get(), timeout=1.0)
+
+            assert result is connector_inputs
+            assert result['inputs'] == 'connector_dummy'
+            assert result['extra_inputs'] == 'dummy_extra'
+            assert result['return_logits'] is True
+            assert result['kv_connector_metadata'] is metadata
+
+        asyncio.run(_run())
+
 
 class TestDPForwardMeta:
 
