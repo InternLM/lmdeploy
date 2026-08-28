@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import torch
 
+import lmdeploy.pytorch.engine.engine_loop as engine_loop_module
 import lmdeploy.pytorch.engine.inputs_maker as inputs_maker_module
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
@@ -18,6 +19,8 @@ from lmdeploy.pytorch.engine.inputs_maker import (
     _make_state_prefix_cache_restore_plan,
     _make_state_prefix_cache_save_plan,
 )
+from lmdeploy.pytorch.engine.model_agent.agent import BatchedOutputs
+from lmdeploy.pytorch.kv_connector import KVConnectorOutput
 from lmdeploy.pytorch.messages import MessageStatus, StateCheckpointRestore, StateCheckpointSaveReservation
 
 
@@ -124,6 +127,8 @@ class _FakeScheduler:
         self.waiting = waiting or []
         self._num_ready = num_ready
         self._num_running = num_running
+        self.kv_connector = None
+        self.connector_meta_calls = []
 
     def schedule(self,
                  is_prefill: bool,
@@ -149,6 +154,16 @@ class _FakeScheduler:
     def num_running(self):
         return self._num_running
 
+    def build_connector_meta(
+        self,
+        running,
+        swap_in_map=None,
+        swap_out_map=None,
+        connector_token_lens=(),
+    ):
+        self.connector_meta_calls.append(tuple(connector_token_lens))
+        return None
+
 
 class _FakeEngineStrategy:
 
@@ -173,10 +188,13 @@ class _FakeModelAgentStrategy:
 
 def _fake_model_inputs(is_chunk: bool = False):
     return SimpleNamespace(is_decoding=False,
+                           is_dummy=False,
                            is_chunk=is_chunk,
                            is_first_chunk=False,
                            is_last_chunk=False,
-                           is_chunk_multimodal=False)
+                           is_chunk_multimodal=False,
+                           history_lengths=torch.tensor([0]),
+                           seq_length=torch.tensor([1]))
 
 
 def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
@@ -242,6 +260,35 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
         ('unpin_saves', True),
     ]
     assert not state_checkpoints.pinned
+
+
+def test_engine_loop_routes_connector_only_output_without_model_postprocess():
+    seen = []
+
+    class _Scheduler:
+
+        def update_connector_output(self, output):
+            seen.append(output)
+
+        def release_completed_prefill_reservations(self, running):
+            raise AssertionError('connector-only output has no completed model prefill')
+
+    def fail_model_postprocess(*args, **kwargs):
+        raise AssertionError('connector-only output must skip model postprocess')
+
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = _Scheduler()
+    loop._make_infer_outputs = fail_model_postprocess
+    connector_output = KVConnectorOutput(finished_receiving={11})
+
+    loop._finish_forward_output(
+        BatchedOutputs.connector_only(connector_output),
+        running=[],
+        model_inputs=None,
+        delta=None,
+    )
+
+    assert seen == [connector_output]
 
 
 def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save():
@@ -330,6 +377,41 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
 
     assert result == ('forward_inputs', ['long-seq'])
     assert events == ['collect_migration_done', 'send_next_inputs']
+
+
+def test_engine_loop_uses_short_yield_only_for_pending_lookup(monkeypatch):
+    sleeps = []
+
+    class _BlockManager:
+        num_gpu_blocks = 8
+
+        def __init__(self):
+            self.reads = 0
+
+        def get_num_free_gpu_blocks(self):
+            self.reads += 1
+            return 4
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    block_manager = _BlockManager()
+    scheduler = SimpleNamespace(
+        last_schedule_had_pending_lookup=True,
+        block_manager=block_manager,
+    )
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = scheduler
+    monkeypatch.setattr(engine_loop_module.asyncio, 'sleep', record_sleep)
+
+    asyncio.run(loop._wait_for_schedulable_prefill())
+    assert sleeps == [0.001]
+    assert block_manager.reads == 0
+
+    scheduler.last_schedule_had_pending_lookup = False
+    asyncio.run(loop._wait_for_schedulable_prefill())
+    assert sleeps == [0.001, 0.1]
+    assert block_manager.reads == 1
 
 
 def test_engine_loop_reset_runtime_state_delegates_to_inputs_maker():
@@ -516,6 +598,44 @@ def test_single_forward_multimodal_long_context_stays_normal_prefill_for_spec_de
     assert not model_inputs.is_first_chunk
     assert not model_inputs.is_last_chunk
     assert not model_inputs.is_chunk_multimodal
+
+
+def test_prefill_passes_actual_computed_token_boundaries_to_kv_connector():
+    seq = _DummySeq(
+        history_ids=4,
+        token_ids=4,
+        all_multimodals={},
+        input_multimodals={},
+    )
+    model_inputs = SimpleNamespace(
+        is_decoding=False,
+        is_dummy=False,
+        is_chunk=False,
+        is_first_chunk=False,
+        is_last_chunk=False,
+        is_chunk_multimodal=False,
+        history_lengths=torch.tensor([4]),
+        seq_length=torch.tensor([4]),
+    )
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
+    maker.spec_decoding = False
+    maker.scheduler = _FakeScheduler([seq])
+    maker.scheduler.kv_connector = object()
+    maker.engine_strategy = _FakeEngineStrategy()
+    maker.sampling_strategy = _FakeSamplingStrategy()
+    maker.model_agent_strategy = _FakeModelAgentStrategy()
+    maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
+    maker.running_seqs = []
+    maker.to_evict_seqs = []
+    maker._decode_count = 0
+    maker.create_model_inputs = lambda seqs, is_prefill: model_inputs
+    maker._prepare_prefill_cache_inputs = lambda seqs: None
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [], [])
+
+    maker._make_forward_inputs(prefill=True)
+
+    assert maker.scheduler.connector_meta_calls == [(8, )]
 
 
 def test_spec_decoding_text_turn_ignores_previous_multimodal_chunk_limit():

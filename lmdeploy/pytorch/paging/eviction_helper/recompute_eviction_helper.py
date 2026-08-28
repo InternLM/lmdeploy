@@ -30,12 +30,21 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
         while len(evictable_seqs) > 0:
             evict_seq = evictable_seqs.pop(0)
 
+            # A completed remote load has published fresh KV into these blocks.
+            # Preserve it until prefill consumes the result instead of paying
+            # for the transfer again on a later scheduling turn.
+            if self.scheduler.kv_load_coordinator.is_remote_ready(evict_seq):
+                continue
+
             # skip sequence with no blocks
             if evict_seq.num_blocks == 0:
                 continue
 
             if block_trie.enabled:
                 evict_seq.prefix_cache.suppress_match_stats = True
+            # Eviction also ends the tracked prefill; otherwise its soft block
+            # reservation would outlive the local KV blocks freed below.
+            self.scheduler.kv_load_coordinator.release(evict_seq)
             evict_seq.state.free()
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
@@ -81,6 +90,11 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
         while len(evictable_seqs) > 0:
             evict_seq = evictable_seqs.pop(0)
 
+            # READY remote KV is already transferred and awaiting consumption;
+            # do not discard that result merely to admit another prefill.
+            if self.scheduler.kv_load_coordinator.is_remote_ready(evict_seq):
+                continue
+
             # skip sequence with no blocks
             if evict_seq.num_blocks == 0 and evict_seq.logical_state < 0:
                 continue
@@ -88,6 +102,9 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             # free sequence
             if block_trie.enabled:
                 evict_seq.prefix_cache.suppress_match_stats = True
+            # Keep coordinator ownership and its soft admission budget in sync
+            # with the KV blocks and SSM runtime state released by free().
+            self.scheduler.kv_load_coordinator.release(evict_seq)
             evict_seq.state.free()
             has_free_state = has_runtime_state or state_manager.get_num_free_runtime() > 0
             if not has_free_state:
