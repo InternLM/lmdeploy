@@ -15,7 +15,7 @@ from utils.config_utils import (
     model_enables_return_routed_experts,
 )
 from utils.constant import BACKEND_LIST, BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
-from utils.restful_return_check import encode_prompt
+from utils.restful_return_check import cap_completion_tokens_for_session
 from utils.toolkit import encode_text, parse_sse_stream
 
 
@@ -951,21 +951,24 @@ class TestGenerateComprehensive:
         assert reason_ignore == 'length', \
             f'ignore_eos=True must end due to length, actual: {reason_ignore}'
 
-    def test_max_tokens_default_cap_no_overshoot_followup(self):
+    def test_max_tokens_default_cap_no_overshoot_followup(self, config):
         """Hit DEFAULT max_tokens (8192) with ignore_eos; no overshoot; follow-
         up must succeed.
 
         Catches regressions where length-capped generation returns a few extra tokens and breaks the next request.
         """
-        print(f'\n[Model: {self.model_name}] Running max_tokens={DEFAULT_MAX_COMPLETION_TOKENS} '
+        prompt = 'Continue writing forever without stopping.'
+        max_tokens = cap_completion_tokens_for_session(
+            prompt, DEFAULT_MAX_COMPLETION_TOKENS,
+            config=config, model_id=self.model_name)
+        print(f'\n[Model: {self.model_name}] Running max_tokens={max_tokens} '
               'length-cap / follow-up test')
-        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
         # Align with existing generate/chat length checks (allow at most +1).
         overshoot_slack = 1
 
         resp = self._post(
             {
-                'prompt': 'Continue writing forever without stopping.',
+                'prompt': prompt,
                 'max_tokens': max_tokens,
                 'ignore_eos': True,
                 'stream': False,
@@ -1025,9 +1028,11 @@ class TestGenerateComprehensive:
         assert not any(pattern in generated_text for pattern in special_patterns), \
             'Expected no special pattern in the generated text but found one.'
 
-    def test_stop_token_ids(self):
+    def test_stop_token_ids(self, config):
         print(f'\n[Model: {self.model_name}] Running stop_token_ids test')
-        input_ids1, length1 = encode_prompt(BASE_URL, '.', add_bos=False)
+        model_path = get_model_path_from_config(config, self.model_name)
+        input_ids1 = encode_text(model_path, '.', add_special_tokens=False)
+        length1 = len(input_ids1)
         print(f'input_ids1={input_ids1}, length1={length1}')
 
         payload = {
@@ -1270,7 +1275,7 @@ class TestGenerateComprehensive:
 
     @pytest.mark.experts
     @pytest.mark.not_turbomind
-    def test_request_returns_experts_max_tokens_cap_followup(self, backend):
+    def test_request_returns_experts_max_tokens_cap_followup(self, backend, config):
         """Hit DEFAULT max_tokens with return_routed_experts; length/experts
         OK; follow-up OK.
 
@@ -1280,14 +1285,17 @@ class TestGenerateComprehensive:
         if not model_enables_return_routed_experts(
                 self.model_name, backend, required_suites=frozenset({'experts'})):
             pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
+        prompt = 'Continue writing forever without stopping.'
+        max_tokens = cap_completion_tokens_for_session(
+            prompt, DEFAULT_MAX_COMPLETION_TOKENS,
+            config=config, model_id=self.model_name)
         print(f'\n[Model: {self.model_name}] Running experts max_tokens='
-              f'{DEFAULT_MAX_COMPLETION_TOKENS} length-cap / follow-up test')
-        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
+              f'{max_tokens} length-cap / follow-up test')
         overshoot_slack = 1
 
         resp = self._post(
             {
-                'prompt': 'Continue writing forever without stopping.',
+                'prompt': prompt,
                 'max_tokens': max_tokens,
                 'ignore_eos': True,
                 'stream': False,

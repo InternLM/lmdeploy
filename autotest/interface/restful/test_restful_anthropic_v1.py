@@ -18,7 +18,10 @@ from utils.anthropic_messages import (
 )
 from utils.config_utils import get_config
 from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_MODEL_LIST
-from utils.restful_return_check import get_client_and_model
+from utils.restful_return_check import (
+    build_session_sized_user_content,
+    get_client_and_model,
+)
 
 ANTHROPIC_VERSION = '2023-06-01'
 
@@ -135,12 +138,7 @@ def _assert_count_tokens_json(data: dict) -> int:
     return n
 
 
-_LARGE_PAYLOAD_PREFIX = 'Reply with one word: OK. Context:\n'
 _LARGE_PAYLOAD_MAX_TOKENS = 8
-
-
-def _large_payload_user_content() -> str:
-    return f'{_LARGE_PAYLOAD_PREFIX}{"x" * (128 * 1024)}'
 
 
 def _assert_anthropic_error_envelope(body: dict) -> dict:
@@ -983,11 +981,14 @@ class TestRestfulAnthropicV1:
         )
         _assert_anthropic_invalid_request_error(resp)
 
-    def test_messages_large_user_payload(self, backend, model_case, deployed_model_name: str):
+    def test_messages_large_user_payload(self, backend, model_case, deployed_model_name: str, config):
         """Regression guard for large JSON bodies (CI-sized payload, not
         stress-test scale)."""
 
-        user_content = _large_payload_user_content()
+        user_content = build_session_sized_user_content(
+            config=config, model_id=model_case,
+            max_completion_tokens=_LARGE_PAYLOAD_MAX_TOKENS,
+        )
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),

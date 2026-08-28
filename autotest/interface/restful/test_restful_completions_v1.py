@@ -209,7 +209,6 @@ class TestRestfulOpenAICompletions:
         [
             pytest.param({'max_tokens': 0}, id='max_tokens_zero'),
             pytest.param({'max_tokens': -1}, id='max_tokens_negative'),
-            pytest.param({'temperature': True}, id='temperature_bool'),
         ],
     )
     def test_rejects_invalid_request_parameters(

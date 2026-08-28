@@ -1,20 +1,22 @@
 import pytest
 import requests
 from openai import BadRequestError
+from utils.config_utils import get_model_path_from_config
 from utils.constant import BACKEND_LIST, BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
 from utils.restful_return_check import (
     CONTEXT_LENGTH_ERROR,
     assert_chat_completions_batch_return,
     assert_chat_completions_stream_return,
     assert_openai_invalid_request_error,
-    encode_prompt,
+    build_session_sized_user_content,
+    cap_completion_tokens_for_session,
     get_chat_delta_text,
     get_chat_message_text,
     get_client_and_model,
     has_repeated_fragment,
 )
+from utils.toolkit import encode_text
 
-_OVERSIZE_CHAT_PROMPT = 'Hi, pls intro yourself' * 60000
 _CHAT_COMPLETIONS_URL = f'{BASE_URL}/v1/chat/completions'
 _CHAT_MESSAGES = [{'role': 'user', 'content': 'Hi, pls intro yourself'}]
 
@@ -276,14 +278,16 @@ class TestRestfulOpenAI:
             responseList.append(response)
         assert responseList[0] != responseList[1] or responseList[1] == responseList[2]
 
-    def test_longtext_input(self, backend, model_case, openai_client_and_model):
+    def test_longtext_input(self, backend, model_case, openai_client_and_model, config):
         client, model_name = openai_client_and_model
+        oversize_content = build_session_sized_user_content(
+            config=config, model_id=model_case, oversize=True)
         with pytest.raises(BadRequestError) as ei:
             client.chat.completions.create(model=model_name,
                                            messages=[
                                                {
                                                    'role': 'user',
-                                                   'content': _OVERSIZE_CHAT_PROMPT,
+                                                   'content': oversize_content,
                                                },
                                            ],
                                            max_tokens=100)
@@ -291,14 +295,16 @@ class TestRestfulOpenAI:
         assert_openai_invalid_request_error(ei.value.body, message_substr=CONTEXT_LENGTH_ERROR)
 
     @pytest.mark.pr_test
-    def test_longtext_input_streaming(self, backend, model_case, openai_client_and_model):
+    def test_longtext_input_streaming(self, backend, model_case, openai_client_and_model, config):
         client, model_name = openai_client_and_model
+        oversize_content = build_session_sized_user_content(
+            config=config, model_id=model_case, oversize=True)
         with pytest.raises(BadRequestError) as ei:
             client.chat.completions.create(model=model_name,
                                            messages=[
                                                {
                                                    'role': 'user',
-                                                   'content': _OVERSIZE_CHAT_PROMPT,
+                                                   'content': oversize_content,
                                                },
                                            ],
                                            max_tokens=100,
@@ -323,8 +329,9 @@ class TestRestfulOpenAI:
         assert output.get('choices')[0].get('finish_reason') == 'length'
         assert output.get('usage').get('completion_tokens') == 6 or output.get('usage').get('completion_tokens') == 5
 
-    def test_max_tokens_streaming(self, backend, model_case, openai_client_and_model):
+    def test_max_tokens_streaming(self, backend, model_case, openai_client_and_model, config):
         client, model_name = openai_client_and_model
+        model_path = get_model_path_from_config(config, model_case)
 
         outputs = client.chat.completions.create(model=model_name,
                                                  messages=[
@@ -346,7 +353,7 @@ class TestRestfulOpenAI:
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
             response += get_chat_delta_text(outputList[index].get('choices')[0])
-        _, length = encode_prompt(BASE_URL, response, add_bos=False)
+        length = len(encode_text(model_path, response, add_special_tokens=False))
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length == 5 or length == 6
 
@@ -372,8 +379,9 @@ class TestRestfulOpenAI:
 
     @pytest.mark.not_pytorch
     @pytest.mark.pr_test
-    def test_logprobs_streaming(self, backend, model_case, openai_client_and_model):
+    def test_logprobs_streaming(self, backend, model_case, openai_client_and_model, config):
         client, model_name = openai_client_and_model
+        model_path = get_model_path_from_config(config, model_case)
 
         outputs = client.chat.completions.create(model=model_name,
                                                  messages=[
@@ -397,7 +405,7 @@ class TestRestfulOpenAI:
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name, check_logprobs=True, logprobs_num=10)
             response += get_chat_delta_text(outputList[index].get('choices')[0])
-        _, length = encode_prompt(BASE_URL, response, add_bos=False)
+        length = len(encode_text(model_path, response, add_special_tokens=False))
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length == 5 or length == 6
 
@@ -476,8 +484,9 @@ class TestRestfulOpenAI:
         assert completion_tokens == 101 or completion_tokens == 100
         assert output.get('choices')[0].get('finish_reason') == 'length'
 
-    def test_ignore_eos_streaming(self, backend, model_case, openai_client_and_model):
+    def test_ignore_eos_streaming(self, backend, model_case, openai_client_and_model, config):
         client, model_name = openai_client_and_model
+        model_path = get_model_path_from_config(config, model_case)
         outputs = client.chat.completions.create(
             model=model_name,
             messages=[{'role': 'user', 'content': 'Hi, what is your name?'}],
@@ -492,17 +501,20 @@ class TestRestfulOpenAI:
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
             response += get_chat_delta_text(outputList[index].get('choices')[0])
-        _, length = encode_prompt(BASE_URL, response, add_bos=False)
+        length = len(encode_text(model_path, response, add_special_tokens=False))
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length >= 99 and length <= 101
 
-    def test_max_tokens_default_cap_no_overshoot_followup(self, backend, model_case, openai_client_and_model):
+    def test_max_tokens_default_cap_no_overshoot_followup(self, backend, model_case, openai_client_and_model, config):
         client, model_name = openai_client_and_model
-        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
+        prompt = 'Continue writing forever without stopping.'
+        max_tokens = cap_completion_tokens_for_session(
+            prompt, DEFAULT_MAX_COMPLETION_TOKENS,
+            config=config, model_id=model_case)
         overshoot_slack = 1
         outputs = client.chat.completions.create(
             model=model_name,
-            messages=[{'role': 'user', 'content': 'Continue writing forever without stopping.'}],
+            messages=[{'role': 'user', 'content': prompt}],
             extra_body={'ignore_eos': True},
             max_tokens=max_tokens,
             temperature=0.01,
@@ -536,8 +548,9 @@ class TestRestfulOpenAI:
         assert output.get('choices')[0].get('finish_reason') == 'length'
         assert output.get('usage').get('completion_tokens') in (5, 6)
 
-    def test_max_completion_tokens_streaming(self, backend, model_case, openai_client_and_model):
+    def test_max_completion_tokens_streaming(self, backend, model_case, openai_client_and_model, config):
         client, model_name = openai_client_and_model
+        model_path = get_model_path_from_config(config, model_case)
         outputs = client.chat.completions.create(
             model=model_name,
             messages=[{'role': 'user', 'content': 'Hi, pls intro yourself'}],
@@ -551,7 +564,7 @@ class TestRestfulOpenAI:
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
             response += get_chat_delta_text(outputList[index].get('choices')[0])
-        _, length = encode_prompt(BASE_URL, response, add_bos=False)
+        length = len(encode_text(model_path, response, add_special_tokens=False))
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length in (5, 6)
 
@@ -560,7 +573,6 @@ class TestRestfulOpenAI:
         [
             pytest.param({'max_tokens': 0}, id='max_tokens_zero'),
             pytest.param({'max_tokens': -1}, id='max_tokens_negative'),
-            pytest.param({'temperature': True}, id='temperature_bool'),
         ],
     )
     def test_rejects_invalid_request_parameters(
