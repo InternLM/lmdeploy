@@ -122,6 +122,13 @@ For a prepared descriptor, replay:
 
 Model Python `forward` is not rerun during serving replay.
 
+When DP ranks are in different local phases, the global step is still prefill.
+The locally decoding rank reuses the same token-bucket plan, while eager
+attention, state, and routed-expert boundaries select their live phase from
+request metadata. Speculative attention normalizes its
+`[batch, query_len, heads, dim]` result back to the flattened-token shape used
+by the captured projection.
+
 Capture and replay both run on the engine's main forward stream
 (`ModelAgent.stream`), the same non-default stream the full decode graph uses.
 The manager resolves that stream lazily from the current stream at `prepare()`
@@ -202,7 +209,10 @@ A boundary has one output policy:
    graph-visible storage.
 2. `PaddedTensorOutputAdapter(token_axis=...)` copies a raw-token tensor into a
    bucket-shaped bridge and clears the padded tail.
-3. `eager_only_output=True` stores a dynamic Python result in
+3. `ViewTolerantPaddedAdapter(token_axis=...)` has the same bucket contract but
+   accepts a view result, such as the process-wide DeepEP combine-buffer view,
+   and copies it into stable bridge storage.
+4. `eager_only_output=True` stores a dynamic Python result in
    `_EagerValueSlot`. Later eager steps can consume the current request's
    result, but a captured graph must not consume it.
 
@@ -255,15 +265,18 @@ Current static eligibility requires:
 
 - a model with `PiecewiseCudaGraphMixin`;
 - CUDA execution with eager mode disabled;
-- unquantized KV cache;
-- DP world size 1 and EP world size 1; and
 - PCG support from every selected CUDA implementation.
 
-TP is supported with one independent plan per rank. Request-time selection
-rejects microbatch prefill, chunked prefill, and live LoRA adapters because the
-current descriptor does not represent those modes. Dynamic extra forward
-arguments are rejected; immutable scalar-like extras are included in the
-descriptor.
+TP and default-mode DP/EP are supported with one independent plan per rank.
+DeepEP routed experts remain eager boundaries. The `DP_TP` layer mode is
+rejected before boundary installation because its live per-rank splits and
+collectives are not yet represented by the plan. This does not reject the
+default attention-TP groups formed by a DP2/EP4 deployment.
+
+Request-time selection rejects microbatch prefill, chunked prefill, and live
+LoRA adapters because the current descriptor does not represent those modes.
+Dynamic extra forward arguments are rejected; immutable scalar-like extras are
+included in the descriptor.
 
 Padding changes GEMM shapes and can change floating-point results. Compare PCG
 with the equivalent bucket-shaped eager execution when validating mechanism
@@ -320,7 +333,7 @@ to `piecewise.py` or `standard.py`.
 - Mixed eager-only and graph-visible leaves from one boundary result.
 - Recursive binding of nested request objects.
 - General alias/view-preserving output bridges.
-- DP, EP, DeepEP, and dynamic routed-expert output contracts.
+- `DP_TP` layer execution.
 - Dynamic extra standard-decoder forward arguments.
 - Arbitrary data-dependent changes to boundary order.
 - PCG on PyTorch 2.0; the non-owning CUDA view uses a private API available

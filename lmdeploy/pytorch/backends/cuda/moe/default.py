@@ -14,7 +14,7 @@ from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import register_piecewise_graph_impl
-from .ep_utils import DeepEPMoEPaddedAdapter, gather_outputs_by_attn_tp, split_inputs_by_attn_tp
+from .ep_utils import gather_outputs_by_attn_tp, split_inputs_by_attn_tp
 
 logger = get_logger('lmdeploy')
 
@@ -462,12 +462,13 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
             return
 
         from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            ViewTolerantPaddedAdapter,
             eager_boundary,
             get_piecewise_graph_execution,
         )
 
         @eager_boundary(
-            adapter_factory=DeepEPMoEPaddedAdapter,
+            adapter_factory=ViewTolerantPaddedAdapter,
             reuse_bridge_after_next_step=True,
         )
         def run_eager_moe(
@@ -483,9 +484,9 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         ):
             execution = get_piecewise_graph_execution()
             assert execution is not None
-            raw = execution.raw_tokens
-            return self._forward_moe(hidden_states[:raw], topk_weights[:raw], topk_ids[:raw], gate_up_weights,
-                                     down_weights, gate_up_bias, down_bias, expert_list, act_func)
+            raw_tokens = execution.raw_tokens
+            return self._forward_moe(hidden_states[:raw_tokens], topk_weights[:raw_tokens], topk_ids[:raw_tokens],
+                                     gate_up_weights, down_weights, gate_up_bias, down_bias, expert_list, act_func)
 
         def piecewise_forward(
             hidden_states: torch.Tensor,

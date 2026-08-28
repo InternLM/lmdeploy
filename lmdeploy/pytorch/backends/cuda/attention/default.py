@@ -189,7 +189,12 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             key = key[:raw_tokens]
             value = value[:raw_tokens]
 
-            return original_forward(query, key, value, k_cache, v_cache, attn_metadata, **kwargs)
+            output = original_forward(query, key, value, k_cache, v_cache, attn_metadata, **kwargs)
+            # Speculative decode returns [batch, query_len, heads, dim], while
+            # prefill and the following captured projection use flat tokens.
+            if output.ndim == 4:
+                output = output.flatten(0, 1)
+            return output
 
         def piecewise_forward(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor,
                               v_cache: torch.Tensor, attn_metadata: TritonAttentionMetadata,

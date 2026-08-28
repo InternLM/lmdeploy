@@ -13,6 +13,7 @@ from lmdeploy.pytorch.config import (
     BackendConfig,
     CacheConfig,
     ModelConfig,
+    TPMode,
     normalize_cudagraph_capture_batch_sizes,
 )
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
@@ -59,8 +60,8 @@ def _validate_speculative_decoding(model_config: ModelConfig) -> None:
     require_fa3_for_speculative_decoding()
 
 
-def _make_piecewise_graph_manager(model: torch.nn.Module, cache_config: CacheConfig, backend_config: BackendConfig,
-                                  device: torch.device) -> PiecewiseGraphManager | None:
+def _make_piecewise_graph_manager(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
+                                  backend_config: BackendConfig) -> PiecewiseGraphManager | None:
     """Build the optional PCG runtime only for an eligible CUDA model."""
     max_capture_tokens = backend_config.piecewise_cudagraph_max_tokens
     if max_capture_tokens is None or backend_config.eager_mode or backend_config.device_type != 'cuda':
@@ -69,6 +70,10 @@ def _make_piecewise_graph_manager(model: torch.nn.Module, cache_config: CacheCon
     from lmdeploy.pytorch.models.utils.cudagraph import PiecewiseCudaGraphMixin
 
     if not isinstance(model, PiecewiseCudaGraphMixin):
+        return None
+
+    dist_config = model_config.dist_config
+    if TPMode.DP_TP in (dist_config.mlp_tp_mode, dist_config.moe_tp_mode):
         return None
 
     from .piecewise import PiecewiseGraphManager
@@ -125,7 +130,8 @@ class CUDAGraphRunner(GraphRunner):
         self._full_graph_pool_handle = torch.cuda.graph_pool_handle()
         self._full_graph_runners: dict[Any, CUDASingleGraphRunner] = {}
 
-        self._piecewise_graph_manager = _make_piecewise_graph_manager(model, cache_config, backend_config, device)
+        self._piecewise_graph_manager = _make_piecewise_graph_manager(model, model_config, cache_config,
+                                                                      backend_config)
 
         # strategy factory
         build_ctx = model.ctx_mgr.build_ctx

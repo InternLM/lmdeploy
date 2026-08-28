@@ -6,51 +6,6 @@ from torch import distributed as dist
 from lmdeploy.pytorch.distributed import get_dist_manager
 
 
-class DeepEPMoEPaddedAdapter:
-    """Bind a raw-token DeepEP MoE result into bucket-shaped stable storage.
-
-    ``DeepEPTokenDispatcherNormal.combine`` returns ``hidden_states.view(self.hidden_shape)``,
-    a view of the process-wide DeepEP combine buffer that the next layer's combine overwrites.
-    Unlike :class:`PaddedTensorOutputAdapter`, this adapter accepts that view and copies it into
-    a stable bridge so the following graph piece can consume a fixed address.
-    """
-
-    def __init__(self, token_axis: int = 0) -> None:
-        self.token_axis = token_axis
-
-    def allocate(self, output, boundary_input_storages, bridge_pool=None):
-        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
-            UnsupportedBoundaryError,
-            get_piecewise_graph_execution,
-        )
-        execution = get_piecewise_graph_execution()
-        if execution is None:
-            raise UnsupportedBoundaryError('DeepEP MoE adapter requires an active piecewise execution')
-        if not isinstance(output, torch.Tensor):
-            raise UnsupportedBoundaryError('DeepEP MoE adapter requires one tensor output')
-        if output.layout is not torch.strided:
-            raise UnsupportedBoundaryError(f'only strided tensor outputs are supported, got {output.layout}')
-        if output.ndim == 0 or not -output.ndim <= self.token_axis < output.ndim:
-            raise UnsupportedBoundaryError('DeepEP MoE adapter has an invalid token axis')
-        token_axis = self.token_axis % output.ndim
-        if output.size(token_axis) != execution.raw_tokens:
-            raise UnsupportedBoundaryError('eager output does not match the active raw-token extent')
-        shape = list(output.shape)
-        shape[token_axis] = execution.token_bucket
-        if bridge_pool is None:
-            return output.new_empty(tuple(shape))
-        return bridge_pool.allocate_padded_tensor(output, shape, token_axis)
-
-    def copy(self, destination, source):
-        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import get_piecewise_graph_execution
-        execution = get_piecewise_graph_execution()
-        token_axis = self.token_axis % destination.ndim
-        destination.narrow(token_axis, 0, execution.raw_tokens).copy_(source)
-        if execution.raw_tokens < execution.token_bucket:
-            destination.narrow(token_axis, execution.raw_tokens,
-                               execution.token_bucket - execution.raw_tokens).zero_()
-
-
 def split_inputs_by_attn_tp(
     hidden_states: torch.Tensor,
     topk_weights: torch.Tensor,
