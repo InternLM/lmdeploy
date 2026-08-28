@@ -6,7 +6,6 @@ from __future__ import annotations
 import time
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
 
 from lmdeploy.serve.core.chat_runner import ChatRunner, ChatRunnerOptions
 from lmdeploy.serve.core.exceptions import RequestError
@@ -19,6 +18,7 @@ from lmdeploy.serve.openai.responses.request import (
 from lmdeploy.serve.openai.responses.response import make_response
 from lmdeploy.serve.openai.responses.streaming import stream_response
 from lmdeploy.serve.utils.server_utils import validate_json_request
+from lmdeploy.serve.utils.streaming_response import ManagedStreamingResponse
 
 
 class OpenAIServingResponses:
@@ -61,7 +61,11 @@ class OpenAIServingResponses:
                 finally:
                     await chat_runner.close()
 
-            return StreamingResponse(stream_generator(), media_type='text/event-stream')
+            return ManagedStreamingResponse(
+                stream_generator(),
+                cleanup_callbacks=[chat_runner.close],
+                media_type='text/event-stream',
+            )
 
         try:
             res = await chat_runner.collect(raw_request)

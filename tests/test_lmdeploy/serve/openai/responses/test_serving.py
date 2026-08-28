@@ -195,6 +195,21 @@ def test_responses_streaming_cleans_up_session(responses_endpoint,
     assert context.async_engine.session_mgr.removed == context.sessions
 
 
+def test_responses_unconsumed_streaming_response_cleans_up_session(
+        responses_endpoint, fake_raw_request):
+    endpoint, context = responses_endpoint
+
+    async def _close_without_consuming():
+        response = await endpoint(
+            ResponsesRequest(model='fake-model', input='Hi', stream=True),
+            fake_raw_request)
+        await response.close()
+
+    asyncio.run(_close_without_consuming())
+
+    assert context.async_engine.session_mgr.removed == context.sessions
+
+
 def test_responses_uses_parser_adjusted_messages_for_generation(
         responses_endpoint, fake_raw_request, passthrough_response_parser_cls):
 

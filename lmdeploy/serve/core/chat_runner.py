@@ -281,11 +281,14 @@ def _build_runner_generation_config(
     if isinstance(response_format, dict):
         request = request.model_copy(update={'response_format': None})
         gen_config_kwargs['response_format'] = response_format
+    stop_words = request.stop
+    if isinstance(stop_words, str):
+        stop_words = [stop_words]
     return build_generation_config(
         request,
         server_context.default_gen_config,
         max_new_tokens=max_new_tokens,
-        stop_words=request.stop,
+        stop_words=stop_words,
         **gen_config_kwargs,
     )
 

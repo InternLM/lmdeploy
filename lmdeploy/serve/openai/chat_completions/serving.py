@@ -34,11 +34,11 @@ from lmdeploy.serve.openai.protocol import (
 )
 from lmdeploy.serve.openai.utils import maybe_filter_parallel_tool_calls
 from lmdeploy.serve.utils.server_utils import validate_json_request
+from lmdeploy.serve.utils.streaming_response import ManagedStreamingResponse
 
 from .fanout import fanout_chat_completions
 from .logits_processors import logit_bias_logits_processor
 from .logprobs import _create_chat_completion_logprobs, _create_output_token_logprobs
-from .streaming_response import ManagedStreamingResponse
 from .validation import check_request
 
 

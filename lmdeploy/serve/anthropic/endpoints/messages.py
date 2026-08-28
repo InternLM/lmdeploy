@@ -7,12 +7,12 @@ from http import HTTPStatus
 
 import shortuuid
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
 
 from lmdeploy.serve.core.chat_runner import ChatRunner, ChatRunnerOptions
 from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.utils.server_utils import validate_json_request
+from lmdeploy.serve.utils.streaming_response import ManagedStreamingResponse
 
 from ..adapter import (
     build_message_content_blocks,
@@ -102,8 +102,9 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
                 finally:
                     await chat_runner.close()
 
-            return StreamingResponse(
+            return ManagedStreamingResponse(
                 stream_generator(),
+                cleanup_callbacks=[chat_runner.close],
                 media_type='text/event-stream',
             )
 

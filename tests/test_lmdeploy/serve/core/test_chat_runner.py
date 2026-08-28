@@ -142,6 +142,14 @@ def test_runner_forwards_parser_adjusted_response_format_to_engine():
     assert context.async_engine.preprocess_kwargs['gen_config'].response_format == response_format
 
 
+def test_runner_normalizes_string_stop_word_for_engine():
+    context = _FakeServerContext(_Parser)
+
+    asyncio.run(ChatRunner.prepare(context, _request(stop='END')))
+
+    assert context.async_engine.preprocess_kwargs['gen_config'].stop_words == ['END']
+
+
 def test_runner_maps_return_logprob_to_engine_logprobs():
     context = _FakeServerContext(_Parser)
 

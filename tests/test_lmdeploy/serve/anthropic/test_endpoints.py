@@ -694,6 +694,23 @@ def test_messages_streaming_usage_matches_anthropic_event_spec():
     assert len(context.session_mgr.removed) == 1
 
 
+def test_messages_unconsumed_streaming_response_cleans_up_session():
+    context = _FakeServerContext()
+    router = create_anthropic_router(context)
+    endpoint = next(route.endpoint for route in router.routes if route.path == '/v1/messages')
+
+    async def _close_without_consuming():
+        response = await endpoint(
+            MessagesRequest(**_messages_payload(stream=True)),
+            _FakeRawRequest(ANTHROPIC_HEADERS),
+        )
+        await response.close()
+
+    asyncio.run(_close_without_consuming())
+
+    assert len(context.session_mgr.removed) == 1
+
+
 def test_messages_streaming_with_reasoning_and_tool_use_events():
     client = _make_client(response_parser_cls=_ToolAndReasoningParser)
     status_code, body = _stream_messages_body(client, tools=[SEARCH_TOOL], return_token_ids=True)
