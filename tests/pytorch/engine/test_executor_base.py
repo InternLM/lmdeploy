@@ -66,7 +66,6 @@ def test_init_skips_model_warmup_for_empty_init():
         'build_model',
         'update_configs',
         'build_graph_runner',
-        'build_cache_engine',
     ]
 
 

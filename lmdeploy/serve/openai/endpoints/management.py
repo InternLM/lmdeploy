@@ -15,6 +15,8 @@ from lmdeploy.serve.openai.protocol import (
     InitWeightsUpdateGroupRequest,
     UpdateParamsRequest,
     UpdateWeightsFromDistributedRequest,
+    UpdateWeightsFromIPCRequest,
+    UpdateWeightsFromIPCStatus,
 )
 from lmdeploy.serve.utils.server_utils import validate_json_request
 
@@ -68,6 +70,83 @@ def register(router: APIRouter, server_context) -> None:
                 f'Disaggregated weight-update endpoints require backend="pytorch", got {backend!r}.'
             )
         return None
+
+    @router.get('/update_weights_from_ipc', response_model=UpdateWeightsFromIPCStatus)
+    async def get_update_weights_from_ipc_status():
+        """Check whether checkpoint-engine can safely start an IPC update."""
+        async_engine = server_context.async_engine
+        backend = getattr(async_engine, 'backend', None)
+        backend_config = getattr(async_engine, 'backend_config', None)
+        device_type = getattr(backend_config, 'device_type', None)
+        if backend != 'pytorch' or device_type != 'cuda':
+            return UpdateWeightsFromIPCStatus(
+                ready=False,
+                message='checkpoint-engine IPC updates require backend="pytorch" and device_type="cuda".',
+                backend=backend,
+                device_type=device_type,
+                is_sleeping=async_engine.is_sleeping,
+                sleeping_tags=sorted(async_engine.sleeping_tags),
+            )
+
+        worker_statuses = await async_engine.engine.get_checkpoint_engine_status()
+        worker_ready = bool(worker_statuses) and all(item['ready'] for item in worker_statuses)
+        topology_keys = ('world_size', 'tp', 'dp', 'dp_rank', 'ep')
+        topologies = {tuple(item[key] for key in topology_keys) for item in worker_statuses}
+        topology_ready = len(topologies) == 1
+        topology = dict(zip(topology_keys, next(iter(topologies)))) if topology_ready else {}
+        lifecycle_ready = async_engine.is_sleeping and 'kv_cache' in async_engine.sleeping_tags
+        ready = worker_ready and topology_ready and lifecycle_ready
+        if not worker_ready:
+            message = next((item['message'] for item in worker_statuses if not item['ready']),
+                           'No checkpoint-engine workers are available.')
+        elif not topology_ready:
+            message = 'LMDeploy workers reported inconsistent distributed topology.'
+        elif not lifecycle_ready:
+            message = ('Engine must be sleeping with kv_cache unavailable. For online updates call '
+                       'POST /sleep, then POST /wakeup?tags=weights.')
+        else:
+            message = 'checkpoint-engine IPC receiver is ready.'
+        versions = {item['checkpoint_engine_version'] for item in worker_statuses
+                    if item['checkpoint_engine_version'] is not None}
+        version = next(iter(versions)) if len(versions) == 1 else ','.join(sorted(versions)) or None
+        return UpdateWeightsFromIPCStatus(
+            ready=ready,
+            message=message,
+            backend=backend,
+            device_type=device_type,
+            checkpoint_engine_version=version,
+            is_sleeping=async_engine.is_sleeping,
+            sleeping_tags=sorted(async_engine.sleeping_tags),
+            device_uuids=[item['device_uuid'] for item in worker_statuses],
+            worker_ranks=[item['rank'] for item in worker_statuses],
+            **topology,
+        )
+
+    @router.post('/update_weights_from_ipc',
+                 dependencies=[Depends(validate_json_request)])
+    async def update_weights_from_ipc(request: UpdateWeightsFromIPCRequest,
+                                      raw_request: Request = None):
+        """Receive weights from checkpoint-engine through CUDA IPC."""
+        err = _check_pytorch_backend_for_disagg_weight_update()
+        if err is not None:
+            return err
+        async_engine = server_context.async_engine
+        device_type = getattr(async_engine.backend_config, 'device_type', None)
+        if device_type != 'cuda':
+            return create_error_response(
+                HTTPStatus.NOT_IMPLEMENTED,
+                f'checkpoint-engine IPC updates require device_type="cuda", got {device_type!r}.')
+
+        reject_reason = None
+        if not async_engine.is_sleeping or 'kv_cache' not in async_engine.sleeping_tags:
+            reject_reason = ('Engine is not prepared for a checkpoint-engine update. Call POST /sleep and '
+                             'POST /wakeup?tags=weights before updating online.')
+        success, message = await async_engine.engine.update_weights_from_ipc(request, reject_reason)
+        if success:
+            async_engine.complete_weights_update()
+        return JSONResponse(
+            content={'success': success, 'message': message},
+            status_code=HTTPStatus.OK if success else HTTPStatus.BAD_REQUEST)
 
     @router.post('/init_weights_update_group',
                  dependencies=[Depends(validate_json_request)])

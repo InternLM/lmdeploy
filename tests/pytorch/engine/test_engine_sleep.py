@@ -165,6 +165,15 @@ def test_engine_wakeup_all_delegates_warmup_to_executor_wakeup(event_loop):
     assert engine.events == [('wakeup', None), 'resume']
 
 
+def test_complete_weights_update_keeps_kv_cache_sleeping(event_loop):
+    engine, _ = _build_sleeping_test_engine(event_loop)
+    engine._sleeping_tags = {'weights', 'kv_cache'}
+
+    engine.complete_weights_update()
+
+    assert engine._sleeping_tags == {'kv_cache'}
+
+
 def test_mp_executor_wakeup_waits_for_kv_cache():
     executor = MPExecutor.__new__(MPExecutor)
     calls = []

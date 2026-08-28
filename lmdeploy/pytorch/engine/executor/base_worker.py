@@ -123,6 +123,14 @@ class WorkerWrapperBase:
         """Update params."""
         self.model_agent.update_params(request)
 
+    def get_checkpoint_engine_status(self):
+        """Get local checkpoint-engine readiness."""
+        return self.model_agent.get_checkpoint_engine_status()
+
+    def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        return self.model_agent.update_weights_from_ipc(request, reject_reason)
+
     def init_weights_update_group(self, request: Any):
         """Init disaggregated weights-update process group."""
         return self.model_agent.init_weights_update_group(request)

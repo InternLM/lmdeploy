@@ -1028,6 +1028,133 @@ class TestModelAgentWakeup:
         ]
 
 
+class TestCheckpointEngineWeightUpdate:
+
+    @staticmethod
+    def _make_agent(events):
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+        class _Module:
+
+            def update_weights(self):
+                events.append('module_update_weights')
+
+        class _Model:
+
+            def parameters(self):
+                yield SimpleNamespace(device=torch.device('cuda'))
+
+            def load_weights(self, weights):
+                events.append(('load_weights', [name for name, _ in weights]))
+
+            def named_modules(self):
+                return [('', self), ('linear', _Module())]
+
+        class _PatchedModel:
+
+            def __init__(self):
+                self.model = _Model()
+
+            def get_model(self):
+                return self.model
+
+        class _SpecAgent:
+            method = None
+
+            def is_enabled(self):
+                return False
+
+            def get_model(self):
+                return None
+
+        agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.patched_model = _PatchedModel()
+        agent.spec_agent = _SpecAgent()
+        agent.memdecode_agent = None
+        agent._checkpoint_engine_zmq_ctx = None
+
+        @contextmanager
+        def _all_context():
+            yield
+
+        agent.all_context = _all_context
+        agent.reset_graph_runner = lambda: events.append('reset_graph_runner')
+        return agent
+
+    def test_update_receives_buckets_and_finalizes_once(self, monkeypatch):
+        from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+        from lmdeploy.serve.openai.protocol import UpdateWeightsFromIPCRequest
+
+        events = []
+        agent = self._make_agent(events)
+
+        class _Context:
+            pass
+
+        context = _Context()
+
+        def _update_weights_from_ipc(zmq_ctx, zmq_handle, device_id, *, run, post_hook):
+            events.append(('receiver', zmq_ctx, zmq_handle, device_id))
+            run([('model.weight', torch.ones(1))])
+            post_hook()
+
+        modules = {
+            'zmq': SimpleNamespace(Context=lambda: context),
+            'checkpoint_engine.worker': SimpleNamespace(update_weights_from_ipc=_update_weights_from_ipc),
+        }
+        monkeypatch.setattr(agent_module.importlib, 'import_module', lambda name: modules[name])
+        monkeypatch.setattr(agent_module.ModelWeightLoader, '_rename_weights_iterator',
+                            staticmethod(lambda weights, _model: iter(weights)))
+        monkeypatch.setattr(torch.cuda, 'current_device', lambda: 1)
+        monkeypatch.setattr(torch.cuda, 'get_device_properties',
+                            lambda _device: SimpleNamespace(uuid='device-uuid'))
+        monkeypatch.setattr(torch.cuda, 'synchronize', lambda: events.append('synchronize'))
+        monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: events.append('empty_cache'))
+        request = UpdateWeightsFromIPCRequest(
+            zmq_handles={'GPU-device-uuid': 'ipc://checkpoint-engine.sock'})
+
+        success, message = agent.update_weights_from_ipc(request)
+
+        assert success is True
+        assert message == 'Succeeded to update weights from checkpoint-engine IPC.'
+        assert agent._checkpoint_engine_zmq_ctx is context
+        assert events == [
+            ('receiver', context, 'ipc://checkpoint-engine.sock', 1),
+            ('load_weights', ['model.weight']),
+            'module_update_weights',
+            'synchronize',
+            'reset_graph_runner',
+            'empty_cache',
+        ]
+
+    def test_rejected_update_does_not_load_weights(self, monkeypatch):
+        from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+        from lmdeploy.serve.openai.protocol import UpdateWeightsFromIPCRequest
+
+        events = []
+        agent = self._make_agent(events)
+
+        def _update_weights_from_ipc(_ctx, _handle, device_id, *, run, post_hook):
+            run([('model.weight', torch.ones(1))])
+
+        modules = {
+            'zmq': SimpleNamespace(Context=lambda: object()),
+            'checkpoint_engine.worker': SimpleNamespace(update_weights_from_ipc=_update_weights_from_ipc),
+        }
+        monkeypatch.setattr(agent_module.importlib, 'import_module', lambda name: modules[name])
+        monkeypatch.setattr(torch.cuda, 'current_device', lambda: 0)
+        monkeypatch.setattr(torch.cuda, 'get_device_properties',
+                            lambda _device: SimpleNamespace(uuid='device-uuid'))
+        request = UpdateWeightsFromIPCRequest(
+            zmq_handles={'GPU-device-uuid': 'ipc://checkpoint-engine.sock'})
+
+        success, message = agent.update_weights_from_ipc(request, 'engine is awake')
+
+        assert success is False
+        assert 'engine is awake' in message
+        assert not any(isinstance(event, tuple) and event[0] == 'load_weights' for event in events)
+
+
 class TestMemDecodeModelAgentLifecycle:
 
     def _make_agent(self, enabled=True):
@@ -1056,6 +1183,7 @@ class TestMemDecodeModelAgentLifecycle:
         agent.patched_model = object()
         agent.cache_engine = object()
         agent.state_cache_engine = object()
+        agent._checkpoint_engine_zmq_ctx = None
 
         @contextmanager
         def _all_context():

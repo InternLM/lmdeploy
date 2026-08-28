@@ -116,6 +116,14 @@ class ExecutorBase:
         """Update params."""
         raise NotImplementedError('Not Implemented.')
 
+    def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness from every local worker."""
+        raise NotImplementedError('Not Implemented.')
+
+    def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        raise NotImplementedError('Not Implemented.')
+
     def init_weights_update_group(self, request: Any):
         """Init disaggregated weights-update process group."""
         raise NotImplementedError('Not Implemented.')
@@ -466,6 +474,9 @@ class ExecutorBase:
         self.update_configs()
         logger.info('Building GraphRunner and warmup ops, please waiting.')
         self.build_graph_runner()
+        if self.misc_config.empty_init:
+            logger.info('Skip building KV cache and warming up model during empty init.')
+            return
         logger.info(f'Building CacheEngine with config: \n{self.cache_config}.')
         if self.specdecode_config:
             if spec_cache_config := self.specdecode_config.cache_config:
@@ -473,9 +484,6 @@ class ExecutorBase:
         if self.misc_config.memdecode_config is not None:
             logger.info('Building MemDecode memory KV/state cache engines.')
         self.build_cache_engine()
-        if self.misc_config.empty_init:
-            logger.info('Skip warming up model during empty init.')
-            return
         logger.info('Warming up model.')
         self.warmup()
 

@@ -682,6 +682,16 @@ class ArgumentHelper:
                                    'If True, cuda graph would be disabled')
 
     @staticmethod
+    def empty_init(parser):
+        """Add the PyTorch empty-weight initialization argument."""
+        return parser.add_argument(
+            '--empty-init',
+            action='store_true',
+            default=False,
+            help='Build the PyTorch runtime without loading model weights or KV cache. '
+            'Use checkpoint-engine IPC to load weights, then wake kv_cache explicitly.')
+
+    @staticmethod
     def communicator(parser):
         return parser.add_argument('--communicator',
                                    type=str,

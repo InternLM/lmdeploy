@@ -204,10 +204,11 @@ class Engine(EngineBase):
         self.engine_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
 
         self.req_manager = self._bind_request_manager()
-        # This state tracks only explicit Engine.sleep()/wakeup() calls. Do not
-        # infer sleeping from empty_init: empty_init still builds runtime
-        # resources and has its own weight-update workflow.
-        self._sleeping_tags = set()
+        # Empty init deliberately omits weights and KV cache readiness. Keep
+        # internal requests blocked until both resources have been completed.
+        self._sleeping_tags = _SLEEPING_TAGS.copy() if self.misc_config.empty_init else set()
+        if self._sleeping_tags:
+            self._block_new_inputs()
         self._weights_update_lock: asyncio.Lock | None = None
         self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
         self._multimodal_session_end_count = 0
@@ -517,10 +518,23 @@ class Engine(EngineBase):
             self._weights_update_lock = asyncio.Lock()
         return self._weights_update_lock
 
-    async def _run_weights_update(self, func, request: Any):
+    async def _run_weights_update(self, func, *args):
         """Run one serialized disaggregated weights-update operation."""
         async with self._get_weights_update_lock():
-            return await asyncio.to_thread(func, request)
+            return await asyncio.to_thread(func, *args)
+
+    async def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness from all local model workers."""
+        return await asyncio.to_thread(self.executor.get_checkpoint_engine_status)
+
+    async def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        return await self._run_weights_update(self.executor.update_weights_from_ipc,
+                                              request, reject_reason)
+
+    def complete_weights_update(self):
+        """Record successful initialization/update without waking KV cache."""
+        self._sleeping_tags.discard('weights')
 
     async def init_weights_update_group(self, request: Any):
         """Init disaggregated weights-update process group."""
