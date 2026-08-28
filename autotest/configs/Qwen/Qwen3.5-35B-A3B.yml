@@ -30,7 +30,6 @@ a100:
         enable-return-routed-experts: true
         tool-call-parser: qwen3coder
         reasoning-parser: default
-        enable_thinking: true
     - suites:
       - anthropic
       extra:
@@ -47,11 +46,17 @@ a100:
         logprobs-mode: raw_logprobs
         tool-call-parser: qwen3coder
         reasoning-parser: default
-        enable_thinking: true
     - suites:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
   quantization:
     turbomind:
     - kvint8
@@ -109,7 +114,6 @@ h:
         enable-return-routed-experts: true
         tool-call-parser: qwen3coder
         reasoning-parser: default
-        enable_thinking: true
     - suites:
       - anthropic
       extra:
@@ -126,7 +130,6 @@ h:
         logprobs-mode: raw_logprobs
         tool-call-parser: qwen3coder
         reasoning-parser: default
-        enable_thinking: true
     - suites:
       - anthropic
       extra:

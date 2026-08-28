@@ -198,7 +198,7 @@ Suites:
 
 - `toolcall` — `interface/restful/tool_parser/` (requires `tool-call-parser` in yaml `extra`; add `enable-return-routed-experts: true` when toolcall includes `@experts` cases)
 
-- `hard_schema` — walle MFJS tool-call schema validation (`tool_parser/test_tool_call_json_schema.py`; requires `tool-call-parser`; set `enable_thinking: true` in interface yaml for thinking models; runs full walle case set). Kimi-Vendor-Verifier checkout: `eval_resource/Kimi-Vendor-Verifier` (see `kimi_vendor_verifier_path` in `env_paths.yml`), overridable via `KIMI_VENDOR_VERIFIER_ROOT`; cases override via `WALLE_CASE_DIR`. One representative model per parser (see table below); all `internlm/*` configs with `toolcall` also enable `hard_schema`.
+- `hard_schema` — walle MFJS tool-call schema validation (`tool_parser/test_tool_call_json_schema.py`; requires `tool-call-parser`; for thinking models set `gen_config.chat-template-kwargs.enable_thinking: true` (not `interface.extra`); runs full walle case set). Kimi-Vendor-Verifier checkout: `eval_resource/Kimi-Vendor-Verifier` (see `kimi_vendor_verifier_path` in `env_paths.yml`), overridable via `KIMI_VENDOR_VERIFIER_ROOT`; cases override via `WALLE_CASE_DIR`. One representative model per parser (see table below); all `internlm/*` configs with `toolcall` also enable `hard_schema`.
 
   | `tool-call-parser` | Representative model                                    |
   | ------------------ | ------------------------------------------------------- |

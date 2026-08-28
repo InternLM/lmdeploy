@@ -23,7 +23,8 @@ h:
         enable-return-routed-experts: true
         tool-call-parser: deepseek-v4
         reasoning-parser: deepseek-v4
-        enable_thinking: true
   gen_config:
     temperature: 1.0
     top-p: 1.0
+    chat-template-kwargs:
+      enable_thinking: true

@@ -96,12 +96,13 @@ def _model_has_tool_call_parser(model_case: str, backend: str) -> bool:
     return any(extra.get('tool-call-parser') for _, extra in _interface_profiles(model_case, backend))
 
 
-def resolve_hard_schema_thinking(model_case: str, backend: str) -> tuple[bool, str]:
-    for _, extra in _interface_profiles(model_case, backend):
-        enabled = extra.get('enable_thinking', extra.get('enable-thinking'))
-        if enabled is True:
-            return True, 'opensource'
-        chat_kwargs = extra.get('chat-template-kwargs') or {}
-        if chat_kwargs.get('enable_thinking') is True:
+def _gen_config_enable_thinking(entry: dict[str, Any]) -> bool:
+    chat_kwargs = (entry.get('gen_config') or {}).get('chat-template-kwargs') or {}
+    return chat_kwargs.get('enable_thinking') is True
+
+
+def resolve_hard_schema_thinking(model_case: str, _backend: str) -> tuple[bool, str]:
+    for entry in iter_model_yaml_entries(model_case):
+        if _gen_config_enable_thinking(entry):
             return True, 'opensource'
     return False, 'opensource'
