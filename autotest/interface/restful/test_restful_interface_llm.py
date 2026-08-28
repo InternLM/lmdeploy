@@ -90,12 +90,12 @@ def test_restful_interface_distributed_dpep16(
     )
 
 
-@pytest.mark.gpu_num_distributed_dp4ep8
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize(
-    'run_config', _iface_configs({'dp': 4, 'ep': 8}), ids=_iface_id,
+    'run_config', _iface_configs({'tp': 2, 'dp': 4, 'ep': 8}), ids=_iface_id,
 )
-def test_restful_interface_distributed_dp4ep8(
+def test_restful_interface_distributed_tp2dp4ep8(
         shared_proxy_manager, config, run_config, worker_id):
     del worker_id
     run_interface_restful_proxy_distributed_test(

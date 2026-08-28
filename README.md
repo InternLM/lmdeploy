@@ -26,19 +26,20 @@ ______________________________________________________________________
 <details open>
 <summary><b>2026</b></summary>
 
+- \[2026/08\] Our paper, “[LMDeploy Accelerates Mixed-Precision LLM Inference with TurboMind](https://arxiv.org/pdf/2508.15601),” has been accepted to [EuroSys 2027](https://2027.eurosys.org/).
 - \[2026/04\] PyPI has expanded the storage quota for LMDeploy and wheel uploads have resumed. `v0.12.3` is now available on PyPI, so you can install it directly via `pip install lmdeploy`.
 - \[2026/02\] Support [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35)
-- \[2026/02\] Support [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) 4bit symmetric/asymmetric quantization. Refer [here](./docs/en/quantization/llm_compressor.md) for detailed guide
+- \[2026/02\] Support [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) 4bit symmetric/asymmetric quantization. Refer [here](./docs/en/quantization/llm_compressor.md) for a detailed guide
 
 </details>
 
 <details close>
 <summary><b>2025</b></summary>
 
-- \[2025/09\] TurboMind supports MXFP4 on NVIDIA GPUs starting from V100, achieving 1.5x the performmance of vLLM on H800 for openai gpt-oss models!
+- \[2025/09\] TurboMind supports MXFP4 on NVIDIA GPUs starting from V100, achieving 1.5x the performance of vLLM on H800 for openai gpt-oss models!
 - \[2025/06\] Comprehensive inference optimization for FP8 MoE Models
 - \[2025/06\] DeepSeek PD Disaggregation deployment is now supported through integration with [DLSlime](https://github.com/DeepLink-org/DLSlime) and [Mooncake](https://github.com/kvcache-ai/Mooncake). Huge thanks to both teams!
-- \[2025/04\] Enhance DeepSeek inference performance by integration deepseek-ai techniques: FlashMLA, DeepGemm, DeepEP, MicroBatch and eplb
+- \[2025/04\] Enhance DeepSeek inference performance by integrating deepseek-ai techniques: FlashMLA, DeepGemm, DeepEP, MicroBatch and eplb
 - \[2025/01\] Support DeepSeek V3 and R1
 
 </details>
@@ -55,7 +56,7 @@ ______________________________________________________________________
 - \[2024/07\] Support [InternVL2](docs/en/multi_modal/internvl.md) full-series models, InternLM-XComposer2.5 and [function call](docs/en/llm/api_server_tools.md) of InternLM2.5
 - \[2024/06\] PyTorch engine support DeepSeek-V2 and several VLMs, such as CogVLM2, Mini-InternVL, LlaVA-Next
 - \[2024/05\] Balance vision model when deploying VLMs with multiple GPUs
-- \[2024/05\] Support 4-bits weight-only quantization and inference on VLMs, such as InternVL v1.5, LLaVa, InternLMXComposer2
+- \[2024/05\] Support 4-bit weight-only quantization and inference on VLMs, such as InternVL v1.5, LLaVa, InternLMXComposer2
 - \[2024/04\] Support Llama3 and more VLMs, such as InternVL v1.1, v1.2, MiniGemini, InternLMXComposer2.
 - \[2024/04\] TurboMind adds online int8/int4 KV cache quantization and inference for all supported devices. Refer [here](docs/en/quantization/kv_quant.md) for detailed guide
 - \[2024/04\] TurboMind latest upgrade boosts GQA, rocketing the [internlm2-20b](https://huggingface.co/internlm/internlm2-20b) model inference to 16+ RPS, about 1.8x faster than vLLM.
@@ -174,6 +175,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Qwen3-VL (2B - 235B)</li>
   <li>Qwen3.5 (0.8B - 397B)</li>
   <li>Qwen3-Omni (30B-A3B)</li>
+  <li>Kimi-K2.6 (1T-A32B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
@@ -212,7 +214,7 @@ They differ in the types of supported models and the inference data type. Please
 
 ## Installation
 
-It is recommended installing lmdeploy using pip in a conda environment (python 3.10 - 3.13):
+It is recommended to install lmdeploy using pip in a conda environment (python 3.10 - 3.13):
 
 ```shell
 conda create -n lmdeploy python=3.12 -y
@@ -254,7 +256,7 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
   - [LLM Serving](docs/en/llm/api_server.md)
   - [VLM Serving](docs/en/multi_modal/api_server_vl.md)
   - [Quantization](docs/en/quantization)
-- Advance Guide
+- Advanced Guide
   - [Inference Engine - TurboMind](docs/en/inference/turbomind.md)
   - [Inference Engine - PyTorch](docs/en/inference/pytorch.md)
   - [Customize chat templates](docs/en/advance/chat_template.md)
@@ -292,9 +294,9 @@ We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.
 ```
 
 ```bibtex
-@article{zhang2025efficient,
-  title={Efficient Mixed-Precision Large Language Model Inference with TurboMind},
-  author={Zhang, Li and Jiang, Youhe and He, Guoliang and Chen, Xin and Lv, Han and Yao, Qian and Fu, Fangcheng and Chen, Kai},
+@article{zhang2025lmdeploy,
+  title={LMDeploy Accelerates Mixed-Precision LLM Inference with TurboMind},
+  author={Zhang, Li and Jiang, Youhe and He, Guoliang and Chen, Xin and Lv, Han and Yao, Qian and Ma, Ningsheng and Fu, Fangcheng and Chen, Kai},
   journal={arXiv preprint arXiv:2508.15601},
   year={2025}
 }

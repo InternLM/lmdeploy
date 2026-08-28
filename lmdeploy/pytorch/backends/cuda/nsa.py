@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.cuda.step_metadata import (
     CudaAttentionMetaBuilder,
     CudaSequenceMetadata,
@@ -21,6 +22,9 @@ from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import (
     prepare_dsa_indexer_q,
 )
 from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
+from lmdeploy.pytorch.kernels.cuda.step_metadata.fill_dsa_indexer_metadata import (
+    fill_dsa_indexer_metadata,
+)
 from lmdeploy.utils import get_logger
 
 from ..nsa import (
@@ -31,6 +35,19 @@ from ..nsa import (
 )
 
 logger = get_logger('lmdeploy')
+
+
+def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int) -> int:
+    """Return the query rows fitting in a bounded FP32 score tensor."""
+    if max_kv_seqlen <= 0:
+        return 1
+    # DeepGEMM materializes an aligned [query_rows, max_kv_seqlen] output
+    # before top-k selection:
+    # https://github.com/deepseek-ai/DeepGEMM/blob/88965b078186ee7510ab9fc4f1d5ebc19adfa8d1/csrc/apis/attention.hpp#L155-L171
+    # Bounding flattened KV alone therefore does not bound the M * N logits
+    # allocation; limit M so its FP32 payload stays within the runtime budget.
+    _fp32_bytes = 4
+    return max(1, max_logits_bytes // (max_kv_seqlen * _fp32_bytes))
 
 
 def _get_dsa_indexer_k_cache_views(indexer_k_cache: Tensor,
@@ -80,9 +97,14 @@ _DeepGemmScoreMeta = _DeepGemmPagedScoreMeta | _DeepGemmContiguousScoreMeta
 
 @dataclass
 class _DSAIndexerGraphBuffer:
-    """Stable CUDA graph buffers owned by the DSA indexer metadata builder."""
+    """Stable graph tensors referenced by DSA indexer metadata.
+
+    Single-token graphs alias the common ``kv_seqlens`` input buffer. Multi-
+    token graphs use dedicated indexer lengths and, when required, an expanded
+    block table.
+    """
     indexer_kv_seqlens: Tensor
-    block_offsets: Tensor | None
+    expanded_block_offsets: Tensor | None
     schedule: Tensor | None
 
 
@@ -122,7 +144,7 @@ def _get_sparse_index_topk(topk: int):
 
 def _build_deep_gemm_score_meta(
         meta: NSAIndexMeta,
-        block_offsets_buffer: Tensor | None = None,
+        expanded_block_offsets: Tensor | None = None,
         schedule_buffer: Tensor | None = None
 ) -> _DeepGemmScoreMeta | None:
     """Build layer-invariant DeepGEMM index-scoring metadata."""
@@ -146,17 +168,14 @@ def _build_deep_gemm_score_meta(
     context_lens = meta.indexer_kv_seqlens.unsqueeze(-1)
     block_offsets = meta.block_offset
     if context_lens.size(0) != block_offsets.size(0):
-        expanded = torch.repeat_interleave(
-            block_offsets,
-            meta.q_seqlens,
-            dim=0,
-            output_size=context_lens.size(0),
-        )
-        if block_offsets_buffer is not None:
-            block_offsets_buffer.copy_(expanded)
-            block_offsets = block_offsets_buffer
-        else:
-            block_offsets = expanded
+        if expanded_block_offsets is None:
+            expanded_block_offsets = torch.repeat_interleave(
+                block_offsets,
+                meta.q_seqlens,
+                dim=0,
+                output_size=context_lens.size(0),
+            )
+        block_offsets = expanded_block_offsets
     if block_offsets.dtype != torch.int32:
         block_offsets = block_offsets.to(torch.int32)
 
@@ -187,14 +206,46 @@ class DSAIndexerMetaBuilder(
         if should_skip_nsa_indexer(step_context.model_metas):
             return None
         cache_config = step_context.cache_config
+        num_tokens = step_context.input_ids.size(1)
+        is_multi_token_decode = (step_context.is_decoding
+                                 and step_context.max_q_seqlen > 1)
+        indexer_kv_seqlens = None
+        expanded_block_offsets = None
+        if is_multi_token_decode:
+            indexer_kv_seqlens = torch.empty(
+                num_tokens,
+                dtype=torch.int32,
+                device=sequence_metadata.q_seqlens.device,
+            )
+            if _get_deep_gemm() is not None:
+                expanded_block_offsets = torch.empty(
+                    num_tokens,
+                    sequence_metadata.block_offsets.size(1),
+                    dtype=torch.int32,
+                    device=sequence_metadata.block_offsets.device,
+                )
+            fill_dsa_indexer_metadata(
+                sequence_metadata.q_seqlens,
+                sequence_metadata.kv_seqlens,
+                sequence_metadata.cu_seqlens_q,
+                sequence_metadata.block_offsets,
+                indexer_kv_seqlens,
+                expanded_block_offsets,
+                num_tokens,
+                step_context.max_q_seqlen,
+            )
         meta = build_nsa_index_meta(
-            num_tokens=step_context.input_ids.size(1),
+            num_tokens=num_tokens,
             is_decoding=step_context.is_decoding,
             block_size=cache_config.block_size,
             num_gpu_blocks=cache_config.num_gpu_blocks,
             sequence_metadata=sequence_metadata,
+            indexer_kv_seqlens=indexer_kv_seqlens,
         )
-        meta.score_meta = _build_deep_gemm_score_meta(meta)
+        meta.score_meta = _build_deep_gemm_score_meta(
+            meta,
+            expanded_block_offsets=expanded_block_offsets,
+        )
         return meta
 
     def apply_legacy_metadata(self, attn_metadata,
@@ -204,11 +255,11 @@ class DSAIndexerMetaBuilder(
     def make_cudagraph_buffer(self, graph_meta, input_buffers,
                               step_context) -> _DSAIndexerGraphBuffer:
         deep_gemm = _get_deep_gemm()
-        block_offsets = None
+        expanded_block_offsets = None
         schedule = None
         if deep_gemm is not None:
             if graph_meta.decode_query_len > 1:
-                block_offsets = torch.empty(
+                expanded_block_offsets = torch.empty(
                     graph_meta.max_tokens,
                     graph_meta.num_blocks,
                     dtype=torch.int32,
@@ -220,13 +271,17 @@ class DSAIndexerMetaBuilder(
                 dtype=torch.int32,
                 device=graph_meta.device,
             )
-        return _DSAIndexerGraphBuffer(
-            indexer_kv_seqlens=torch.empty(
+        if graph_meta.decode_query_len == 1:
+            indexer_kv_seqlens = input_buffers['kv_seqlens']
+        else:
+            indexer_kv_seqlens = torch.empty(
                 graph_meta.max_tokens,
                 dtype=torch.int32,
                 device=graph_meta.device,
-            ),
-            block_offsets=block_offsets,
+            )
+        return _DSAIndexerGraphBuffer(
+            indexer_kv_seqlens=indexer_kv_seqlens,
+            expanded_block_offsets=expanded_block_offsets,
             schedule=schedule,
         )
 
@@ -245,18 +300,28 @@ class DSAIndexerMetaBuilder(
             cu_seqlens_k=input_buffers['cu_seqlens_k'],
             max_kv_seqlen=graph_meta.num_blocks * graph_meta.block_size,
         )
+        if graph_meta.decode_query_len > 1:
+            fill_dsa_indexer_metadata(
+                sequence_metadata.q_seqlens,
+                sequence_metadata.kv_seqlens,
+                sequence_metadata.cu_seqlens_q,
+                sequence_metadata.block_offsets,
+                buffer.indexer_kv_seqlens,
+                buffer.expanded_block_offsets,
+                graph_meta.max_tokens,
+                graph_meta.decode_query_len,
+            )
         meta = build_nsa_index_meta(
             num_tokens=graph_meta.max_tokens,
             is_decoding=True,
             block_size=step_context.cache_config.block_size,
             num_gpu_blocks=step_context.cache_config.num_gpu_blocks,
             sequence_metadata=sequence_metadata,
+            indexer_kv_seqlens=buffer.indexer_kv_seqlens,
         )
-        buffer.indexer_kv_seqlens.copy_(meta.indexer_kv_seqlens)
-        meta.indexer_kv_seqlens = buffer.indexer_kv_seqlens
         meta.score_meta = _build_deep_gemm_score_meta(
             meta,
-            block_offsets_buffer=buffer.block_offsets,
+            expanded_block_offsets=buffer.expanded_block_offsets,
             schedule_buffer=buffer.schedule,
         )
         return meta
@@ -264,17 +329,34 @@ class DSAIndexerMetaBuilder(
 
 class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
 
-    def __init__(self, topk: int, softmax_scale: float, block_size: int, fill: int) -> None:
+    def __init__(self, topk: int, softmax_scale: float, block_size: int,
+                 fill: int,
+                 allow_short_prefill_scoring_skip: bool = False) -> None:
         super().__init__()
         self.topk = topk
         self.softmax_scale = softmax_scale
         self.block_size = block_size
         self.fill = fill
+        self._allow_short_prefill_scoring_skip = allow_short_prefill_scoring_skip
         # TODO: configable scale fmt
         self.scale_fmt = 'ue8m0'
+        self.max_logits_bytes = _envs.dsa_indexer_max_logits_mb * (1 << 20)
         self._sparse_index_topk = _get_sparse_index_topk(topk)
         self._step_meta_group: int | None = None
         register_step_metadata_impl(self)
+
+    def _should_skip_scoring(self, meta: NSAIndexMeta) -> bool:
+        """Whether dense prefill makes index scoring unnecessary."""
+        return (self._allow_short_prefill_scoring_skip and not meta.is_decoding
+                and meta.max_kv_seqlen <= self.topk)
+
+    def _maybe_score_and_select(self, q: Tensor, q_s: Tensor,
+                                indexer_k_cache: Tensor,
+                                meta: NSAIndexMeta) -> Tensor | None:
+        """Score after the caller has preserved K for future decode."""
+        if self._should_skip_scoring(meta):
+            return None
+        return self._score_and_select(q, q_s, indexer_k_cache, meta)
 
     def get_step_metadata_provider(self):
         """Describe metadata required by the selected DSA indexer."""
@@ -291,35 +373,106 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
         assert isinstance(meta, NSAIndexMeta)
         return meta
 
-    def _compute_scores(self, q: Tensor, q_s: Tensor,
-                        indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
-        """Compute dense index scores with DeepGEMM or the Triton fallback."""
+    def _flatten_prefill_k(self, indexer_k_cache: Tensor, head_dim: int,
+                           meta: NSAIndexMeta) -> tuple[Tensor, Tensor]:
+        """Flatten the paged indexer K cache once for prefill scoring."""
+        k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
+            indexer_k_cache, head_dim)
+        return flatten_dsa_indexer_k_cache(
+            k_cache,
+            k_s_cache[..., 0],
+            meta.cu_seqlen_k,
+            meta.k_seqlens,
+            meta.block_offset,
+            out_size=meta.kv_flatten_size,
+        )
+
+    def _compute_prefill_scores(
+            self,
+            q: Tensor,
+            q_s: Tensor,
+            flat_k: Tensor,
+            flat_k_s: Tensor,
+            score_meta: _DeepGemmContiguousScoreMeta,
+            row_slice: slice = slice(None)) -> Tensor:
+        """Compute one DeepGEMM prefill score-row slice."""
+        return _get_deep_gemm().fp8_fp4_mqa_logits(
+            q=(q, None),
+            kv=(flat_k, flat_k_s),
+            weights=q_s,
+            cu_seq_len_k_start=score_meta.k_starts[row_slice],
+            cu_seq_len_k_end=score_meta.k_ends[row_slice],
+            clean_logits=False,
+            max_seqlen_k=score_meta.max_kv_seqlen,
+            logits_dtype=torch.float32,
+        )
+
+    def _select_topk(self, scores: Tensor, meta: NSAIndexMeta,
+                     row_slice: slice = slice(None)) -> Tensor:
+        """Select sparse-attention positions from dense index scores."""
+        kv_seqlens = meta.indexer_kv_seqlens[row_slice]
+        # Both selectors consume q_seqlens only when kv_seqlens still has one
+        # entry per request. DSA metadata already expands it to one entry per
+        # score row, including for a query-row chunk.
+        if self._sparse_index_topk is not None:
+            return self._sparse_index_topk(scores,
+                                           meta.q_seqlens,
+                                           kv_seqlens,
+                                           self.topk,
+                                           fill=self.fill,
+                                           descending=True,
+                                           sorted=False)
+        return bitonic_topk(scores,
+                            meta.q_seqlens,
+                            kv_seqlens,
+                            self.topk,
+                            fill=self.fill,
+                            descending=True)
+
+    def _score_and_select_prefill(
+            self, q: Tensor, q_s: Tensor, indexer_k_cache: Tensor,
+            meta: NSAIndexMeta,
+            score_meta: _DeepGemmContiguousScoreMeta) -> Tensor:
+        """Bound prefill score memory by chunking only the query rows."""
+        # Keep KV contiguous for DeepGEMM's TMA descriptors; slicing only Q
+        # avoids the alignment failures caused by per-request KV views.
+        flat_k, flat_k_s = self._flatten_prefill_k(
+            indexer_k_cache, q.size(-1), meta)
+        max_rows = _get_max_score_rows(score_meta.max_kv_seqlen,
+                                       self.max_logits_bytes)
+        num_rows = q.size(0)
+        if num_rows <= max_rows:
+            scores = self._compute_prefill_scores(
+                q, q_s, flat_k, flat_k_s, score_meta)
+            return self._select_topk(scores, meta)
+
+        logger.debug('Split DSA prefill scores into %d chunks with at most %d query rows.',
+                     (num_rows + max_rows - 1) // max_rows, max_rows)
+        out = torch.empty((num_rows, self.topk),
+                          dtype=torch.int32,
+                          device=q.device)
+        for start in range(0, num_rows, max_rows):
+            end = min(start + max_rows, num_rows)
+            row_slice = slice(start, end)
+            scores = self._compute_prefill_scores(
+                q[row_slice], q_s[row_slice], flat_k, flat_k_s,
+                score_meta, row_slice)
+            selected = self._select_topk(scores, meta, row_slice)
+            out[row_slice].copy_(selected)
+            del scores, selected
+        return out
+
+    def _score_and_select(self, q: Tensor, q_s: Tensor,
+                          indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
         score_meta = meta.score_meta
         if isinstance(score_meta, _DeepGemmContiguousScoreMeta):
-            k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
-                indexer_k_cache, q.size(-1))
-            flat_k, flat_k_s = flatten_dsa_indexer_k_cache(
-                k_cache,
-                k_s_cache[..., 0],
-                meta.cu_seqlen_k,
-                meta.k_seqlens,
-                meta.block_offset,
-                out_size=meta.kv_flatten_size,
-            )
-            return _get_deep_gemm().fp8_fp4_mqa_logits(
-                q=(q, None),
-                kv=(flat_k, flat_k_s),
-                weights=q_s,
-                cu_seq_len_k_start=score_meta.k_starts,
-                cu_seq_len_k_end=score_meta.k_ends,
-                clean_logits=False,
-                max_seqlen_k=score_meta.max_kv_seqlen,
-                logits_dtype=torch.float32,
-            )
+            return self._score_and_select_prefill(
+                q, q_s, indexer_k_cache, meta, score_meta)
+
         if isinstance(score_meta, _DeepGemmPagedScoreMeta):
             # Paged MQA reads the packed cache directly and requires its compact
             # ``entries * (D + 4)`` byte block stride.
-            return _get_deep_gemm().fp8_fp4_paged_mqa_logits(
+            scores = _get_deep_gemm().fp8_fp4_paged_mqa_logits(
                 q=(q[:, None], None),
                 kv_cache=indexer_k_cache,
                 weights=q_s,
@@ -330,45 +483,29 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
                 clean_logits=False,
                 logits_dtype=torch.float32,
             )
-
-        _warn_triton_index_scoring()
-        k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
-            indexer_k_cache, q.size(-1))
-        return fp8_index(q,
-                         q_s,
-                         k_cache,
-                         k_s_cache[..., 0],
-                         meta.cu_seqlen_q,
-                         meta.k_seqlens,
-                         meta.block_offset,
-                         max_q_seqlen=meta.max_q_seqlen,
-                         max_k_seqlen=meta.max_kv_seqlen,
-                         causal=True)
-
-    def _select_topk(self, scores: Tensor, meta: NSAIndexMeta) -> Tensor:
-        """Select sparse-attention positions from dense index scores."""
-        if self._sparse_index_topk is not None:
-            return self._sparse_index_topk(scores,
-                                           meta.q_seqlens,
-                                           meta.indexer_kv_seqlens,
-                                           self.topk,
-                                           fill=self.fill,
-                                           descending=True,
-                                           sorted=False)
-        return bitonic_topk(scores,
-                            meta.q_seqlens,
-                            meta.indexer_kv_seqlens,
-                            self.topk,
-                            fill=self.fill,
-                            descending=True)
-
-    def _score_and_select(self, q: Tensor, q_s: Tensor,
-                          indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
-        scores = self._compute_scores(q, q_s, indexer_k_cache, meta)
+        else:
+            _warn_triton_index_scoring()
+            score_bytes = q.size(0) * meta.max_kv_seqlen * 4
+            if score_bytes > self.max_logits_bytes:
+                raise RuntimeError(
+                    'DSA index scoring exceeds the configured logits memory budget; '
+                    'a compatible DeepGEMM installation is required.')
+            k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
+                indexer_k_cache, q.size(-1))
+            scores = fp8_index(q,
+                               q_s,
+                               k_cache,
+                               k_s_cache[..., 0],
+                               meta.cu_seqlen_q,
+                               meta.k_seqlens,
+                               meta.block_offset,
+                               max_q_seqlen=meta.max_q_seqlen,
+                               max_k_seqlen=meta.max_kv_seqlen,
+                               causal=True)
         return self._select_topk(scores, meta)
 
     def forward(self, q: Tensor, k: Tensor, weights: Tensor,
-                indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor:
+                indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor | None:
         assert q.dim() == 3
         assert k.dim() == 2
         k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
@@ -392,11 +529,11 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
                                   block_offsets=meta.block_offset,
                                   group_size=self.block_size,
                                   scale_fmt=self.scale_fmt)
-        return self._score_and_select(q, q_s, indexer_k_cache, meta)
+        return self._maybe_score_and_select(q, q_s, indexer_k_cache, meta)
 
     def forward_fused(self, q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor,
                       sin: Tensor, indexer_k_cache: Tensor, norm_eps: float, head_gate_scale: float,
-                      rope_interleaved: bool, meta: NSAIndexMeta) -> Tensor:
+                      rope_interleaved: bool, meta: NSAIndexMeta) -> Tensor | None:
         """Prepare FP8 Q and write K cache without allocating rotated BF16
         Q/K."""
         k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
@@ -421,4 +558,4 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
                                     max_q_seqlen=meta.max_q_seqlen,
                                     eps=norm_eps,
                                     rope_interleaved=rope_interleaved)
-        return self._score_and_select(q, q_s, indexer_k_cache, meta)
+        return self._maybe_score_and_select(q, q_s, indexer_k_cache, meta)

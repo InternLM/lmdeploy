@@ -11,6 +11,14 @@ from .helpers import first_stream_delta
 
 MODEL_ID = 'zai-org/GLM-4.7'
 GLM52_MODEL_ID = 'zai-org/GLM-5.2-FP8'
+PARSER_TOOLS = [
+    {
+        'type': 'function',
+        'function': {
+            'name': name,
+        },
+    } for name in ('get_weather', 'get_current_temperature', 'no_schema_tool')
+]
 
 
 @pytest.fixture()
@@ -22,6 +30,7 @@ def response_parser():
         model=MODEL_ID,
         messages=[],
         stream=True,
+        tools=PARSER_TOOLS,
         tool_choice='auto',
     )
     return cls(request=request)
@@ -36,6 +45,7 @@ def response_parser_with_reasoning():
         model=MODEL_ID,
         messages=[],
         stream=True,
+        tools=PARSER_TOOLS,
         tool_choice='auto',
         chat_template_kwargs={'enable_thinking': True},
     )
@@ -62,6 +72,7 @@ def _make_response_parser_with_reasoning(chat_template_kwargs=None):
         model=GLM52_MODEL_ID,
         messages=[],
         stream=True,
+        tools=PARSER_TOOLS,
         tool_choice='auto',
         chat_template_kwargs=chat_template_kwargs or {},
     )
@@ -265,6 +276,16 @@ class TestGlm47ResponseParserStreaming:
         assert emitted_name == 'no_schema_tool'
         assert emitted_args == '{"zip": "77004", "active": "true"}'
 
+    def test_stream_chunk_rejects_unavailable_tool(self, response_parser):
+        text = ('<tool_call>img_gen'
+                '<arg_key>prompt</arg_key><arg_value>edit image</arg_value>'
+                '</tool_call>')
+
+        deltas = [delta for delta, _ in response_parser.stream_chunk(text, [])]
+        calls = [call for delta in deltas for call in (delta.tool_calls or [])]
+
+        assert calls == []
+
 
 class TestGlm47ToolParserComplete:
     """Complete-parse tests for glm47 tool payloads."""
@@ -287,6 +308,12 @@ class TestGlm47ToolParserComplete:
         assert tool_calls[0].function.name == 'get_weather'
         assert json.loads(tool_calls[0].function.arguments) == {'location': 'Beijing'}
         assert parser.validate_complete(text) is True
+
+    def test_parse_complete_rejects_unavailable_tool(self, response_parser):
+        _, tool_calls, _ = response_parser.parse_complete(
+            '<tool_call>img_gen</tool_call>')
+
+        assert tool_calls is None
 
     def test_parse_tool_call_complete_with_arguments(self):
         parser = Glm47ToolParser()

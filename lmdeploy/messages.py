@@ -26,6 +26,49 @@ class QuantPolicy(enum.IntEnum):
     FP8_E5M2 = 17  # FP8 KV cache (float8_e5m2, per-tensor scale)
     TURBO_QUANT = 42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
 
+
+KVTransferRole = Literal['kv_producer', 'kv_consumer', 'kv_both']
+
+
+@dataclass
+class KVTransferConfig:
+    """Configuration for an external KV-cache connector."""
+
+    kv_connector: str | None = None
+    kv_role: KVTransferRole | None = None
+    kv_connector_extra_config: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Validate connector configuration."""
+        supported_roles = ('kv_producer', 'kv_consumer', 'kv_both')
+        if self.kv_connector is None and self.kv_role is not None:
+            raise ValueError('kv_connector must be specified when kv_role is set')
+        if self.kv_connector is not None:
+            if not isinstance(self.kv_connector, str) or not self.kv_connector.strip():
+                raise ValueError('kv_connector must be a non-empty string')
+            if self.kv_role is None:
+                raise ValueError('kv_role must be specified when kv_connector is set')
+        if self.kv_role is not None and self.kv_role not in supported_roles:
+            raise ValueError(f'unsupported kv_role: {self.kv_role}; supported roles are {supported_roles}')
+        if not isinstance(self.kv_connector_extra_config, dict):
+            raise TypeError('kv_connector_extra_config must be a dict')
+
+    @property
+    def is_kv_transfer_instance(self) -> bool:
+        """Return whether a connector is enabled for this engine."""
+        return self.kv_connector is not None and self.kv_role is not None
+
+    @property
+    def is_kv_producer(self) -> bool:
+        """Return whether this engine saves KV cache through the connector."""
+        return self.kv_connector is not None and self.kv_role in ('kv_producer', 'kv_both')
+
+    @property
+    def is_kv_consumer(self) -> bool:
+        """Return whether this engine loads KV cache through the connector."""
+        return self.kv_connector is not None and self.kv_role in ('kv_consumer', 'kv_both')
+
+
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
 tensor for the next token, and returns a modified tensor of logits to sample
@@ -294,6 +337,11 @@ class TurbomindEngineConfig:
             it to True if you want to update weights after create the pipeline
         language_model_only: Whether to run as text-only LLM without loading
             vision/multimodal encoder modules.
+        communicator: collective communicator, It can be one of the following values,
+            ['nccl', 'cuda-ipc']. The `cuda-ipc` option only supports single-node
+            multi-gpu communication.
+        moe_a2a_backend: the backend of moe a2a communication, It can be one of the
+            following values, ['auto', 'default', 'deepep'].
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model
         enable_metrics: enable metrics system
@@ -339,6 +387,7 @@ class TurbomindEngineConfig:
     empty_init: bool = False
     language_model_only: bool = False
     communicator: str = 'nccl'
+    moe_a2a_backend: str = 'auto'
     hf_overrides: dict[str, Any] | None = None
     enable_metrics: bool = True
 
@@ -365,6 +414,8 @@ class TurbomindEngineConfig:
         assert self.cache_checkpoint_interval > 0, 'invalid cache_checkpoint_interval'
         assert self.cache_prompt_boundary_skip >= 1, 'invalid cache_prompt_boundary_skip'
         assert self.async_ in (0, 1), 'async_ must be 0 (disabled) or 1 (enabled)'
+        assert self.moe_a2a_backend in ('auto', 'default', 'deepep'), \
+            'invalid moe_a2a_backend'
 
 
 @dataclass
@@ -454,6 +505,9 @@ class PytorchEngineConfig:
         dllm_denoising_steps: Dllm denoising steps.
         dllm_confidence_threshold: dllm unmasking threshold for
             dynamic unmasking.
+        kv_transfer_config: External KV-cache connector configuration. This is
+            supported only by the PyTorch engine. ``None`` disables external
+            KV-cache transfer.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -507,6 +561,7 @@ class PytorchEngineConfig:
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
+    kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
 
     def __post_init__(self):
         """Check input validation."""
@@ -548,6 +603,10 @@ class PytorchEngineConfig:
             self.kernel_block_size = 16
             logger.warning('Currently, camb device requires block_size and kernel_block_size to be 16, '
                            'setting both to 16.')
+        if isinstance(self.kv_transfer_config, dict):
+            self.kv_transfer_config = KVTransferConfig(**self.kv_transfer_config)
+        elif self.kv_transfer_config is not None and not isinstance(self.kv_transfer_config, KVTransferConfig):
+            raise TypeError('kv_transfer_config must be a KVTransferConfig, dict, or None')
 
 
 class ResponseType(enum.Enum):

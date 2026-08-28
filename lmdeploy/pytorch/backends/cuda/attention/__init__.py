@@ -72,7 +72,7 @@ def _build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl
     """Build the selected CUDA paged-attention implementation.
 
     Selection order:
-    1. use_flash_mla: Use FlashMLAImpl for MLA models
+    1. use_flash_mla: Use dense or sparse FlashMLA for MLA models
     2. enable_fa3: Use FA3Impl if FA3 is available and supported
     3. Default: Use TritonAttentionImpl as fallback
     """
@@ -91,6 +91,14 @@ def _build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl
     enable_fa3 = _enable_fa3(spec.alibi, spec.learnable_sink, spec.block_sparse_size, spec.head_dim)
 
     if spec.use_flash_mla is True:
+        if spec.mla_index_topk is not None:
+            logger.debug('Build FlashMLASparseImpl Attention')
+            from .sparse_mla import FlashMLASparseImpl
+            return FlashMLASparseImpl(
+                mla_index_topk=spec.mla_index_topk,
+                use_fa3=use_fa3,
+                **common_args,
+            )
         logger.debug('Build FlashMLAImpl Attention')
         from .mla import FlashMLAImpl
         return FlashMLAImpl(use_fa3=use_fa3, **common_args)

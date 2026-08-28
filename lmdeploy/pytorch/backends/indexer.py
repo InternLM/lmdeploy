@@ -50,3 +50,5 @@ class V4IndexerBuildSpec(BuildSpec[V4IndexerImpl]):
 
     index_top_k: int
     compress_ratio: int
+    num_heads: int
+    head_dim: int

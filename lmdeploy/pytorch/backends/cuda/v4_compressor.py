@@ -3,10 +3,9 @@ import torch
 
 from lmdeploy.pytorch.consts import V4_INDEX_SCALE_BYTES
 from lmdeploy.pytorch.kernels.cuda.v4_compressor import (
-    fill_compress_state,
     fill_compressed_kv,
     score_and_fill_state_decode,
-    score_kv,
+    score_and_fill_state_prefill,
 )
 
 from ..compressor import V4CompressorImpl, V4CompressorMetadata
@@ -61,11 +60,10 @@ class TritonV4CompressorImpl(V4CompressorImpl):
                 meta.cu_q_seqlens, meta.kv_seqlens, compressed_kv,
                 self.overlap)
         else:
-            score_kv(kv, score, ape, kv_state, score_state, state_ids,
-                     meta.cu_q_seqlens, meta.kv_seqlens, compressed_kv,
-                     self.overlap, meta.max_q_seqlen)
-            fill_compress_state(kv, score, ape, kv_state, score_state, state_ids,
-                                meta.cu_q_seqlens, meta.kv_seqlens)
+            score_and_fill_state_prefill(
+                kv, score, ape, kv_state, score_state, state_ids,
+                meta.cu_q_seqlens, meta.kv_seqlens, compressed_kv,
+                self.overlap, meta.max_q_seqlen)
         return compressed_kv
 
     def write_compressed_kv(

@@ -11,7 +11,6 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 
 ImplT = TypeVar('ImplT')
 
-
 class BuildSpec(Generic[ImplT]):
     """Build request whose type parameter is the result interface."""
 
@@ -82,6 +81,16 @@ class OpsBackend(ABC):
     def model_build_context(ctx_mgr):
         """Open an optional backend-owned scope around model construction."""
         yield
+
+    @classmethod
+    def build_communicator(cls, cpu_group, device_group, dist_config):
+        """Build a device communicator."""
+        from .communicator import build_communicator
+        return build_communicator(
+            cpu_group=cpu_group,
+            device_group=device_group,
+            dist_config=dist_config,
+        )
 
     @staticmethod
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,

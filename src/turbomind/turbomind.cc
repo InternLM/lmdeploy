@@ -259,6 +259,20 @@ void TurboMind::Impl::CreateContext(int index)
         p.attn_tp_rank  = p.model_tp_rank / p.attn_cp_size;
         p.mlp_tp_rank   = inner_rank % p.mlp_tp_size;
         p.ep_rank       = inner_rank / p.mlp_tp_size;
+        // Layout: (outer, ep, mlp_tp)
+        c.d_mlp_group = 0;
+        if (p.ep_size > 1) {
+            if (p.moe_a2a_backend == "auto") {
+                p.moe_a2a_backend = (p.nnodes > 1) ? "deepep" : "default";
+            }
+            c.h_ep_group = c.h_comm->Split(p.mlp_tp_rank, 0);
+            // For moe-args, we actually use `AllreduceResidualRMSnorm` to do the dispatch / combine
+            // For moe-a2a, we omit the all-gather before dispatch and omit the all-reduce after combine.
+            if (p.moe_a2a_backend == "deepep") {
+                TM_CHECK_EQ(communicator_type_, "nccl");
+                c.d_mlp_group = c.d_comm->Split(p.ep_rank, 0, 0);
+            }
+        }
     }
 
     if (c.h_tp_group->rank() == 0) {

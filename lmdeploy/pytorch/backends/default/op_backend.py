@@ -23,9 +23,10 @@ class DefaultOpsBackend(OpsBackend):
         from ..embedding import EmbeddingBuildSpec
         from ..linear import LinearBuildSpec
         from ..moe import SoftmaxTopKBuildSpec
-        from ..moe_router import RouterNoauxTCBuildSpec
+        from ..moe_router import RouterGemmBuildSpec, RouterNoauxTCBuildSpec
         from ..multinomial_sampling import MultinomialSamplingBuildSpec
         from ..norm import LayerNormBuildSpec, RMSNormBuildSpec
+        from ..rejection_sampling import RejectionSamplingBuildSpec
         from ..rotary_embedding import RotaryEmbeddingBuildSpec
         if isinstance(spec, SiluAndMulBuildSpec):
             from .activation import DefaultSiluAndMulImpl
@@ -48,6 +49,9 @@ class DefaultOpsBackend(OpsBackend):
         if isinstance(spec, MultinomialSamplingBuildSpec):
             from .multinomial_sampling import DefaultMultinomialSamplingImpl
             return cast(ImplT, DefaultMultinomialSamplingImpl())
+        if isinstance(spec, RejectionSamplingBuildSpec):
+            from .rejection_sampling import DefaultRejectionSamplingImpl
+            return cast(ImplT, DefaultRejectionSamplingImpl())
         if isinstance(spec, SoftmaxTopKBuildSpec):
             from .moe import DefaultSoftmaxTopKImpl
             return cast(ImplT, DefaultSoftmaxTopKImpl(spec.top_k, spec.dim, n_groups=spec.n_groups))
@@ -57,6 +61,9 @@ class DefaultOpsBackend(OpsBackend):
         if isinstance(spec, CacheBlockCopyBuildSpec):
             from .cache_block_copy import _build_cache_block_copy
             return cast(ImplT, _build_cache_block_copy(spec))
+        if isinstance(spec, RouterGemmBuildSpec):
+            from .moe_router import DefaultRouterGemmImpl
+            return cast(ImplT, DefaultRouterGemmImpl(out_dtype=spec.output_dtype))
         if isinstance(spec, RouterNoauxTCBuildSpec):
             from .moe_router import DefaultRouterNoauxTCImpl
             return cast(

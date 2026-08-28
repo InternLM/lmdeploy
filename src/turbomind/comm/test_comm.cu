@@ -150,7 +150,13 @@ struct TestComm {
         return std::make_tuple(h_comm, std::move(d_comm), h_split, d_split);
     }
 
-    void Run(int hidden_dim, int vocab_size, int tp, int warmup, int iters, std::vector<int> tokens)
+    void Run(int                hidden_dim,
+             int                vocab_size,
+             int                tp,
+             int                warmup,
+             int                iters,
+             std::vector<int>   tokens,
+             const std::string& backend)
     {
         int device_num{};
         cudaGetDeviceCount(&device_num);
@@ -161,7 +167,7 @@ struct TestComm {
             tp = device_num;
         }
 
-        std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 4, "cuda-ipc");
+        std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 4, backend);
 
         TM_CHECK_GT(h_comm_.size(), 0);
         TM_CHECK_GT(d_comm_.size(), 0);
@@ -175,13 +181,13 @@ struct TestComm {
         const int g = 0;
 
         TestAllReduce<half>(hidden_dim, 0);
-        // TestAllreduceResidualBiasRMSnorm<half>(hidden_dim, g);
-        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 0);
-        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
-        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
-        // TestAllGather<half>(hidden_dim / tp, g);  // tp embedding
-        // TestAllGather<half>(vocab_size / tp, g);
-        // TestBroadcast<half>(32768, g);
+        TestAllreduceResidualBiasRMSnorm<half>(hidden_dim, g);
+        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 0);
+        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
+        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
+        TestAllGather<half>(hidden_dim / tp, g);  // tp embedding
+        TestAllGather<half>(vocab_size / tp, g);
+        TestBroadcast<half>(32768, g);
     }
 
     template<class T>
@@ -912,6 +918,7 @@ struct TestComm {
                                                                group0,
                                                                group1,
                                                                local_token_nums.data(),
+                                                               local_token_nums.size(),
                                                                stream);
                     });
                     if (i >= warmup_) {
@@ -964,6 +971,14 @@ struct TestComm {
 
 int main(int argc, char* argv[])
 {
+    std::string backend("cuda-ipc");
+    if (argc > 1) {
+        backend = argv[argc - 1];
+    }
+    if (backend != "cuda-ipc" && backend != "nccl") {
+        printf("Invalid communicator: %s\n", backend.c_str());
+        return -1;
+    }
 
     TestComm test;
 
@@ -982,7 +997,8 @@ int main(int argc, char* argv[])
              //   {8192, 16384, 32768});
              //  {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 8192});
              {1,   2,   4,   6,   8,   12,   16,   24,   32,   48,   64,   96,   128,
-              192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 16384});
+              192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 16384},
+             backend);
 
     return 0;
 }

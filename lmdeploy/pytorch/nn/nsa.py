@@ -17,10 +17,18 @@ def get_dsa_indexer_k_cache(layer_idx: int) -> Tensor:
 
 class IndexerTopKFP8(nn.Module):
 
-    def __init__(self, topk: int, softmax_scale: float, block_size: int = 128, fill: int = -1):
+    def __init__(self, topk: int, softmax_scale: float, block_size: int = 128,
+                 fill: int = -1,
+                 allow_short_prefill_scoring_skip: bool = False):
         super().__init__()
         self.index_impl = get_backend().build_op(
-            NSAIndexFP8BuildSpec(top_k=topk, softmax_scale=softmax_scale, block_size=block_size, fill=fill),
+            NSAIndexFP8BuildSpec(
+                top_k=topk,
+                softmax_scale=softmax_scale,
+                block_size=block_size,
+                fill=fill,
+                allow_short_prefill_scoring_skip=allow_short_prefill_scoring_skip,
+            ),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
 

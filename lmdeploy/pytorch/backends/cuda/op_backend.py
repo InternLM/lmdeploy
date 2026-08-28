@@ -44,13 +44,15 @@ class CudaOpsBackend(DefaultOpsBackend):
             FusedMoEBuildSpec,
             FusedMoEStaticF8BuildSpec,
             FusedMoEV4FP4BuildSpec,
+            FusedMoEW4A16BuildSpec,
             FusedMoEW8A8BuildSpec,
         )
-        from ..moe_router import RouterNoauxTCBuildSpec
+        from ..moe_router import RouterGemmBuildSpec, RouterNoauxTCBuildSpec
         from ..multinomial_sampling import MultinomialSamplingBuildSpec
         from ..norm import RMSNormBuildSpec
         from ..nsa import NSAIndexFP8BuildSpec
         from ..qmodules import LinearW8A8BuildSpec, RMSNormW8A8BuildSpec
+        from ..rejection_sampling import RejectionSamplingBuildSpec
         from ..static_fp8_modules import LinearStaticF8BuildSpec
         if isinstance(spec, SiluAndMulBuildSpec):
             from .activation import TritonSiluAndMulImpl
@@ -67,11 +69,20 @@ class CudaOpsBackend(DefaultOpsBackend):
         if isinstance(spec, MultinomialSamplingBuildSpec):
             from .multinomial_sampling import TritonMultinomialSamplingImpl
             return cast(ImplT, TritonMultinomialSamplingImpl())
+        if isinstance(spec, RejectionSamplingBuildSpec):
+            from .rejection_sampling import CudaRejectionSamplingImpl
+            return cast(ImplT, CudaRejectionSamplingImpl())
         if isinstance(spec, NSAIndexFP8BuildSpec):
             from .nsa import TritonNSAIndexFP8Impl
             return cast(
                 ImplT,
-                TritonNSAIndexFP8Impl(spec.top_k, spec.softmax_scale, spec.block_size, spec.fill),
+                TritonNSAIndexFP8Impl(
+                    spec.top_k,
+                    spec.softmax_scale,
+                    spec.block_size,
+                    spec.fill,
+                    allow_short_prefill_scoring_skip=spec.allow_short_prefill_scoring_skip,
+                ),
             )
         if isinstance(spec, V4AttentionBuildSpec):
             from .attention.v4 import TritonV4AttentionImpl
@@ -81,13 +92,24 @@ class CudaOpsBackend(DefaultOpsBackend):
             )
         if isinstance(spec, V4IndexerBuildSpec):
             from .v4_indexer import TritonV4IndexerImpl
-            return cast(ImplT, TritonV4IndexerImpl(spec.index_top_k, spec.compress_ratio))
+            return cast(
+                ImplT,
+                TritonV4IndexerImpl(
+                    spec.index_top_k,
+                    spec.compress_ratio,
+                    spec.num_heads,
+                    spec.head_dim,
+                ),
+            )
         if isinstance(spec, V4CompressorBuildSpec):
             from .v4_compressor import TritonV4CompressorImpl
             return cast(ImplT, TritonV4CompressorImpl(spec.compress_ratio, spec.overlap, spec.head_dim))
         if isinstance(spec, HCPrePostBuildSpec):
             from .hc_prepost import TritonHCPrePostImpl
             return cast(ImplT, TritonHCPrePostImpl(spec.hc_mult, spec.sinkhorn_iters, spec.eps))
+        if isinstance(spec, RouterGemmBuildSpec):
+            from .moe_router import CudaRouterGemmImpl
+            return cast(ImplT, CudaRouterGemmImpl(out_dtype=spec.output_dtype))
         if isinstance(spec, RouterNoauxTCBuildSpec):
             from .moe_router import TritonRouterNoauxTCImpl
             return cast(
@@ -153,6 +175,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         if isinstance(spec, FusedMoEBuildSpec):
             from .moe.default import _build_fused_moe
             return cast(ImplT, _build_fused_moe(spec))
+        if isinstance(spec, FusedMoEW4A16BuildSpec):
+            from .moe.compressed_tensors import _build_fused_moe_w4a16
+            return cast(ImplT, _build_fused_moe_w4a16(spec))
         if isinstance(spec, FusedMoEW8A8BuildSpec):
             from .moe.w8a8 import _build_fused_moe_w8a8
             return cast(ImplT, _build_fused_moe_w8a8(spec))
@@ -196,6 +221,23 @@ class CudaOpsBackend(DefaultOpsBackend):
         """Get V4 attention metadata class."""
         from .attention.v4 import CudaV4AttentionMetadata
         return CudaV4AttentionMetadata
+
+    @classmethod
+    def build_communicator(cls, cpu_group, device_group, dist_config):
+        """Build a CUDA communicator."""
+        from .comm.communicator import build_cuda_communicator
+        communicator = build_cuda_communicator(
+            cpu_group=cpu_group,
+            device_group=device_group,
+            dist_config=dist_config,
+        )
+        if communicator is not None:
+            return communicator
+        return super().build_communicator(
+            cpu_group=cpu_group,
+            device_group=device_group,
+            dist_config=dist_config,
+        )
 
     @staticmethod
     def get_k_block_shape(

@@ -2,8 +2,20 @@
 import functools
 
 import torch
+import torch.nn.functional as F
 
-from ..moe_router import RouterNoauxTCImpl
+from ..moe_router import RouterGemmImpl, RouterNoauxTCImpl
+
+
+class DefaultRouterGemmImpl(RouterGemmImpl):
+    """Default router GEMM implementation."""
+
+    def forward(self, hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        """Compute router logits."""
+        output = F.linear(hidden_states.to(weight.dtype), weight)
+        if self.out_dtype is not None:
+            output = output.to(self.out_dtype)
+        return output
 
 
 def _compute_scores(scoring_func: str, logits: torch.Tensor):

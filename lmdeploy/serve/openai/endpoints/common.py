@@ -23,7 +23,8 @@ def build_serving_generation_config(request, server_context,
     )
 
 
-def validate_request(request, server_context, request_validator):
+def validate_request(request, server_context, request_validator,
+                     **validator_kwargs):
     """Validate the selected model and endpoint-specific request contract."""
     if hasattr(
             request,
@@ -32,7 +33,8 @@ def validate_request(request, server_context, request_validator):
             HTTPStatus.NOT_FOUND,
             f'The model {request.model!r} does not exist.')
 
-    error_message = request_validator(request, server_context)
+    error_message = request_validator(request, server_context,
+                                      **validator_kwargs)
     if error_message:
         return create_error_response(HTTPStatus.BAD_REQUEST, error_message)
     return None

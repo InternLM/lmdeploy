@@ -33,7 +33,6 @@ class GlmMoeDsaModelConfigBuilder(DeepseekV32ModelConfigBuilder):
         hf_config.head_dim = hf_config.qk_rope_head_dim
 
         config = super().build(hf_config, model_path=model_path, **kwargs)
-        config.mla_kv_cache_dtype = 'bfloat16'
         if is_draft_model:
             hf_config.architectures[0] = 'GlmMoeDsaMTPModel'
         return config

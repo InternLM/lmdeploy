@@ -165,6 +165,41 @@ class FusedMoEStaticF8BuildSpec(BuildSpec[FusedMoEStaticF8Impl]):
     quant_dtype: torch.dtype
 
 
+class FusedMoEW4A16Impl(ABC):
+    """Compressed-tensors fused MoE W4A16 implementation."""
+
+    @abstractmethod
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        topk_weights: torch.Tensor,
+        topk_ids: torch.LongTensor,
+        gate_up_packed: torch.Tensor,
+        gate_up_scale: torch.Tensor,
+        down_packed: torch.Tensor,
+        down_scale: torch.Tensor,
+    ):
+        """Run eager routed experts from packed INT4 weights."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class FusedMoEW4A16BuildSpec(BuildSpec[FusedMoEW4A16Impl]):
+    """Requirements for constructing compressed-tensors W4A16 MoE."""
+
+    top_k: int
+    num_experts: int
+    renormalize: bool
+    num_bits: int
+    group_size: int
+    hidden_dim: int
+    ep_size: int
+    ep_group: dist.ProcessGroup | None
+    output_dtype: torch.dtype
+    num_max_dispatch_tokens_per_rank: int
+    layer_idx: int
+
+
 class FusedMoEBlockedF8Impl(ABC):
     """Fused moe blocked f8 implementation."""
 

@@ -3,8 +3,23 @@
 import torch
 
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.backends.moe_router import RouterNoauxTCBuildSpec
+from lmdeploy.pytorch.backends.moe_router import RouterGemmBuildSpec, RouterNoauxTCBuildSpec
 from lmdeploy.pytorch.models.patch import get_build_model_context
+
+
+class RouterGemm(torch.nn.Module):
+    """Backend-dispatched router GEMM."""
+
+    def __init__(self, out_dtype: torch.dtype | None = None):
+        super().__init__()
+        self.impl = get_backend().build_op(
+            RouterGemmBuildSpec(output_dtype=out_dtype),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
+
+    def forward(self, hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        """Compute router logits."""
+        return self.impl.forward(hidden_states, weight)
 
 
 class NoauxTCRouter(torch.nn.Module):

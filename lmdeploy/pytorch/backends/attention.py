@@ -223,5 +223,6 @@ class PagedAttentionBuildSpec(BuildSpec[AttentionImpl[AttentionMetadata]]):
     logit_softcapping: float
     causal: bool
     use_flash_mla: bool
+    mla_index_topk: int | None
     learnable_sink: bool
     block_sparse_size: int
