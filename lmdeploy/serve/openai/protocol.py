@@ -158,10 +158,11 @@ class JsonSchema(BaseModel):
 
 class ResponseFormat(BaseModel):
     # regex_schema is extended by lmdeploy to support regex output
-    type: Literal['text', 'json_object', 'json_schema', 'regex_schema']
+    # structural_tag is extended by lmdeploy to support xgrammar structural tags
+    type: Literal['text', 'json_object', 'json_schema', 'regex_schema', 'structural_tag']
     json_schema: JsonSchema | None = None
     regex_schema: str | None = None
-
+    structural_tag: dict[str, Any] | None = None
 
 # str for url/base64, base64 should be data:image/jpeg;base64, dict should be {'url': url/base64, 'options': ...}
 ImageDataInputItem = str | dict
