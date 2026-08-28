@@ -212,21 +212,13 @@ class ConfigBuilder:
                                 trust_remote_code: bool = False,
                                 ):
         """Build spec decode config."""
-        def _build_draft_dist_ctx(dist_config):
-            # TODO support tp > 1, ep > 1 for other methods
-            if speculative_config.method in ('qwen3_5_mtp', 'hy3_mtp'):
-                draft_dist_config = dist_config
-            elif speculative_config.method == 'deepseek_mtp':
-                from lmdeploy.pytorch.transformers import config_from_pretrained
-                hf_config = config_from_pretrained(target_model, trust_remote_code=trust_remote_code)
-                draft_dist_config = dist_config if hf_config.model_type == 'glm_moe_dsa' else DistConfig()
-            else:
-                draft_dist_config = DistConfig()
-            return draft_dist_config
-
         specdecode_config = None
         if speculative_config is not None:
-            draft_dist_config = _build_draft_dist_ctx(dist_config)
+            # Target model aligned dist config for speculative decoding
+            if speculative_config.method in ('deepseek_mtp', 'qwen3_5_mtp', 'hy3_mtp'):
+                draft_dist_config = dist_config
+            else:
+                draft_dist_config = DistConfig()
             draft_model = speculative_config.model
             if draft_model and not os.path.exists(speculative_config.model):
                 draft_model = get_model(draft_model, engine_config.download_dir, engine_config.revision)

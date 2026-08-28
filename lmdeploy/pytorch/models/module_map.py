@@ -317,3 +317,6 @@ MODULE_MAP.update({'Eagle3LlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.lla
 
 # deepseek mtp
 MODULE_MAP.update({'DeepseekMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_mtp.DeepseekMTPModel'})
+MODULE_MAP.update({
+    'DeepseekV32MTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32_mtp.DeepseekV32MTPModel',
+})
