@@ -1570,6 +1570,8 @@ _EVAL_OC_SCALAR_KEYS = frozenset({
     'max_seq_len',
     'batch_size',
     'temperature',
+    'top_p',
+    'top_k',
 })
 
 
@@ -1647,6 +1649,10 @@ def get_eval_preset_config(
         if run_config.get('gen_config'):
             merged.update(_gen_config_to_vlmevalkit_kwargs(run_config['gen_config']))
         return merged
+
+    # Base TurboMindAPIModel: keep scalar sampling fields, skip OpenAISDK mapping.
+    if name == 'base' or name.startswith('base-'):
+        return _eval_table_scalar_params(preset) or copy.deepcopy(preset)
 
     if run_config.get('gen_config'):
         result = _eval_table_scalar_params(preset)
