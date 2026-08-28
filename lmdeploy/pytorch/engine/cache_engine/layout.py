@@ -49,26 +49,6 @@ class CacheAllocation:
         """Count owning pools without double-counting cache views."""
         return sum(pool.nbytes for pool in self.pools)
 
-    @property
-    def pool_view_groups(self) -> tuple[tuple[int, ...], ...]:
-        """Indices of ``tensor_views`` backed by each owning pool's storage.
-
-        A packed pool covers several views (k_cache + v_cache + quant
-        payloads); a row or contiguous pool backs exactly one. The grouping is
-        an allocation invariant derived from shared storage, not stored on the
-        layout, so it stays available to any consumer without widening the
-        ``pools`` / ``tensor_views`` contract.
-        """
-        pool_ptrs = [int(pool.tensor.untyped_storage().data_ptr()) for pool in self.pools]
-        groups: list[list[int]] = [[] for _ in pool_ptrs]
-        for view_index, view in enumerate(self.tensor_views):
-            view_ptr = int(view.untyped_storage().data_ptr())
-            for pool_index, pool_ptr in enumerate(pool_ptrs):
-                if pool_ptr == view_ptr:
-                    groups[pool_index].append(view_index)
-                    break
-        return tuple(tuple(group) for group in groups)
-
 
 @dataclass(frozen=True)
 class PackedBlockCacheLayout:

@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 
 import torch
@@ -31,31 +31,9 @@ from .migration import (
     validate_cache_pool_layouts,
 )
 from .plan import BlockCachePlan
-from .schema import CacheTensorSpec
 from .view import NamedCacheView
 
 logger = get_logger('lmdeploy')
-
-
-def _connector_pool_rows(
-    pool: CachePool,
-    spec: CacheTensorSpec,
-) -> Iterable[tuple[str, torch.Tensor]]:
-    """Yield ``(connector_key, row)`` for every movable entry of one pool.
-
-    A pool backs views that share one row identity: standard K/V specs have
-    ``consumer_rows is None`` and emit one ``standard_kv_cache.layer.{i}`` row
-    per model layer; an operator-owned spec emits one
-    ``block_cache.{name}.row.{r}`` row per declared consumer row. Pool shape
-    and contiguity are allocation invariants and are not re-checked here.
-    """
-    consumer_rows = spec.consumer_rows
-    for row_index, row in enumerate(pool.tensor):
-        if consumer_rows is None:
-            key = f'standard_kv_cache.layer.{row_index}'
-        else:
-            key = f'block_cache.{spec.name}.row.{consumer_rows[row_index]}'
-        yield key, row
 
 
 _KV_CACHE_QUANT_POLICY_DESCS = {
@@ -173,32 +151,28 @@ class CacheEngine:
 
     @property
     def connector_kv_caches(self) -> Mapping[str, torch.Tensor]:
-        """Return raw packed cache rows for an external KV connector.
+        """Return physical cache-pool rows for an external KV connector.
 
-        Each value is one contiguous ``[kernel_pages, packed_bytes]`` view of
-        an owning pool in :attr:`gpu_allocation`. Standard K/V (and any
-        co-located quantization payloads) share one packed pool and occupy one
-        row per model layer (``standard_kv_cache.layer.{i}``); operator-owned
-        block caches occupy one row per declared consumer row
-        (``block_cache.{name}.row.{r}``).
+        Each value is one owning-pool row containing all physical kernel pages for that row. Pool and row indices form
+        stable log-only keys; transfer identity comes from rank and content hashes. Both endpoints must realize the same
+        ordered layout.
 
-        The connector identifies blocks by rank and content hash, so the key
-        names are log-only; both PD sides build the same plan and therefore
-        the same row mapping. The mapping is ordered by pool declaration and
-        is structurally read-only; callers that register the temporary row
-        views must not keep them alive beyond the cache engine's lifetime.
+        Current connector registration requires row-major block pools whose movable kernel-page axis is 1. Empty pools
+        are omitted. The returned mapping is structurally read-only, and callers must not retain its temporary row views
+        beyond the cache engine's lifetime.
         """
-        tensor_specs = self.block_cache_plan.tensor_specs
         allocation = self.gpu_allocation
 
         connector_caches: dict[str, torch.Tensor] = {}
-        for pool, view_indices in zip(allocation.pools, allocation.pool_view_groups):
-            if not view_indices:
+        for pool_index, pool in enumerate(allocation.pools):
+            if pool.nbytes == 0:
                 continue
-            spec = tensor_specs[view_indices[0]]
-            for key, row in _connector_pool_rows(pool, spec):
-                if key in connector_caches:
-                    raise ValueError(f'duplicate connector cache key: {key}.')
+            if pool.entry_axis != 1:
+                raise ValueError(
+                    f'External KV connectors require cache pool {pool_index} '
+                    f'to use entry_axis=1, got {pool.entry_axis}.')
+            for row_index, row in enumerate(pool.tensor):
+                key = f'cache_pool.{pool_index}.row.{row_index}'
                 connector_caches[key] = row
 
         return MappingProxyType(connector_caches)
