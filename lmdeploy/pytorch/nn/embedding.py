@@ -3,6 +3,7 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
@@ -47,6 +48,7 @@ class ParallelEmbedding(nn.Module):
 
         dist_group = get_dist_group(layer_type=layer_type)
         self.tp_group = dist_group.gpu_group
+        self.tp_rank = dist_group.rank
 
         if is_tp and self.tp > 1:
             self.vocab_size_padded = pad_vocab_size(self.vocab_size, self.padding_size)
@@ -143,6 +145,22 @@ class ParallelLMHead(ParallelEmbedding):
         builder = get_backend().get_layer_impl_builder(OpType.Linear)
         self.impl = builder.build(hidden_size, self.vocab_size_padded, bias, dtype=dtype)
 
+        self._symm_mem_gatherer = None
+        if self.all_reduce and _envs.enable_symm_mem_lmhead:
+            try:
+                from lmdeploy.pytorch.backends.cuda.comm.symm_mem_allgather import MultimemAllGatherer
+
+                gathered_width = self.tp * self.vocab_size_padded
+                capacity = _envs.symm_mem_lmhead_max_mb * 1024 * 1024
+                max_tokens = capacity // (gathered_width * torch.bfloat16.itemsize)
+                if max_tokens > 0:
+                    self._symm_mem_gatherer = MultimemAllGatherer(group=self.tp_group,
+                                                                  rank=self.tp_rank,
+                                                                  gathered_width=gathered_width,
+                                                                  max_tokens=max_tokens)
+            except ImportError:
+                pass
+
     def tie_weights(self, embedding: ParallelEmbedding):
         """Tie the local LM-head shard to a parallel embedding shard."""
         self.weight = embedding.weight
@@ -157,6 +175,13 @@ class ParallelLMHead(ParallelEmbedding):
         """All-gather full logits on every TP rank."""
         if not self.all_reduce:
             return local_logits[..., :self.vocab_size]
+
+        if self._symm_mem_gatherer is not None:
+            local_logits_2d = local_logits.reshape(-1, local_logits.shape[-1])
+            gathered = self._symm_mem_gatherer(local_logits_2d)
+            if gathered is not None:
+                output_shape = local_logits.shape[:-1] + (self.tp * local_logits.shape[-1], )
+                return gathered.reshape(output_shape)[..., :self.vocab_size]
 
         input_size = local_logits.size()
         output_size = (input_size[0] * self.tp, ) + input_size[1:]
