@@ -78,6 +78,36 @@ def test_from_hf_config_keeps_dist_config_for_head_split():
     assert model_config.get_num_qkv_head_by_tp() == (8, 2)
 
 
+@pytest.mark.parametrize(
+    ('num_kv_heads', 'expected_effective_heads', 'expected_replica_num'),
+    [(32, 32, 1), (2, 8, 4), (1, 8, 8)],
+)
+def test_model_config_records_kv_head_replication(
+    num_kv_heads,
+    expected_effective_heads,
+    expected_replica_num,
+):
+    hf_config = SimpleNamespace(
+        architectures=['OtherForCausalLM'],
+        bos_token_id=1,
+        eos_token_id=2,
+        hidden_size=4096,
+        model_type='other',
+        num_attention_heads=32,
+        num_hidden_layers=1,
+        num_key_value_heads=num_kv_heads,
+        vocab_size=32000,
+    )
+
+    model_config = ModelConfig.from_hf_config(
+        hf_config,
+        dist_config=DistConfig(tp=8),
+    )
+
+    assert model_config.num_key_value_heads == expected_effective_heads
+    assert model_config.num_replicate_key_value_heads == expected_replica_num
+
+
 def test_get_num_qkv_head_by_tp_with_dist_config_tp():
     model_config = _make_model_config(dist_config=DistConfig(tp=2))
 

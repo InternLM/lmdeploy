@@ -191,6 +191,10 @@ class WorkerWrapperBase:
         ret = self.pack_output(ret)
         return ret
 
+    def shutdown_kv_connector(self):
+        """Drain and close the worker-local KV connector."""
+        self.model_agent.shutdown_kv_connector()
+
     def release(self):
         """Stop engine loop."""
         self.model_agent.release()

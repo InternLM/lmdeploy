@@ -2,6 +2,7 @@
 # modify from: https://github.com/vllm-project/vllm
 import json
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 
 import torch
 
@@ -30,6 +31,7 @@ from .migration import (
     validate_cache_pool_layouts,
 )
 from .plan import BlockCachePlan
+from .schema import CacheTensorSpec
 from .view import NamedCacheView
 
 logger = get_logger('lmdeploy')
@@ -147,6 +149,69 @@ class CacheEngine:
     def block_caches(self) -> Mapping[str, torch.Tensor]:
         """Return all standard and operator-requested caches by name."""
         return self._block_caches
+
+    @property
+    def connector_kv_caches(self) -> Mapping[str, torch.Tensor]:
+        """Return raw packed cache rows for an external KV connector.
+
+        Each value is one contiguous ``[kernel_pages, packed_bytes]`` view of
+        a row in the device allocation. Standard K/V (and any co-located
+        quantization payloads) occupy one row per model layer; operator-owned
+        block caches occupy one row per declared consumer row.
+
+        The mapping is ordered by tensor-spec declaration and is structurally
+        read-only; callers that register the temporary row views must not keep
+        them alive beyond the cache engine's lifetime.
+        """
+        cache_config = self.cache_config
+        block_size = cache_config.block_size
+        kernel_block_size = cache_config.kernel_block_size
+        if block_size < kernel_block_size or block_size % kernel_block_size != 0:
+            raise ValueError(
+                f'block_size {block_size} must be greater than or equal to and divisible by '
+                f'kernel_block_size {kernel_block_size}.')
+
+        kernel_blocks_per_logical = block_size // kernel_block_size
+        expected_kernel_blocks = cache_config.num_gpu_blocks * kernel_blocks_per_logical
+
+        tensor_specs = self.block_cache_plan.tensor_specs
+        tensor_views = self.gpu_allocation.tensor_views
+        if len(tensor_specs) != len(tensor_views):
+            raise ValueError(
+                f'connector cache layout expects {len(tensor_specs)} packed views, '
+                f'got {len(tensor_views)}.')
+
+        def _row_keys(spec: CacheTensorSpec, num_rows: int):
+            if spec.consumer_rows is not None:
+                for index, row_id in enumerate(spec.consumer_rows):
+                    yield f'block_cache.{spec.name}.row.{row_id}', index
+            elif spec.layer_rows is not None:
+                for index, layer_id in enumerate(spec.layer_rows.layer_ids):
+                    yield f'block_cache.{spec.name}.layer.{layer_id}', index
+            else:
+                for layer_id in range(num_rows):
+                    yield f'{spec.name}.layer.{layer_id}', layer_id
+
+        connector_caches: dict[str, torch.Tensor] = {}
+        for spec, view in zip(tensor_specs, tensor_views):
+            if not isinstance(view, torch.Tensor):
+                raise TypeError(f'{spec.name} packed view must be a torch.Tensor.')
+            if view.dim() < 2 or view.size(1) != expected_kernel_blocks:
+                raise ValueError(
+                    f'{spec.name} packed view must have shape [rows, {expected_kernel_blocks}, ...], '
+                    f'got {tuple(view.shape)}.')
+            for key, row_index in _row_keys(spec, view.size(0)):
+                if row_index >= view.size(0):
+                    raise ValueError(
+                        f'{spec.name} declares row {row_index} outside its {view.size(0)} view rows.')
+                row = view[row_index]
+                if not row.is_contiguous():
+                    raise ValueError(f'{key} packed row must be contiguous.')
+                if key in connector_caches:
+                    raise ValueError(f'duplicate connector cache key: {key}.')
+                connector_caches[key] = row
+
+        return MappingProxyType(connector_caches)
 
     def _build_swap_pairs(self):
         """Resolve compatible CPU-to-device cache entries once at build

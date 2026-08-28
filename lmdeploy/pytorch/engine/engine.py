@@ -22,6 +22,7 @@ from lmdeploy.utils import get_logger, get_model
 
 from ..adapter.adapter import AdapterManager
 from ..config import CacheConfig, ModelConfig
+from ..kv_connector import KVConnectorRole, build_kv_connector, prepare_kv_connector_config
 from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
 from ..multimodal.data_type import ensure_multimodal_content_hashes
 from ..paging import Scheduler
@@ -29,7 +30,7 @@ from ..strategies import build_strategy_factory
 from .base import EngineBase
 from .config_builder import ConfigBuilder
 from .engine_checker import EngineChecker
-from .executor import build_executor
+from .executor import build_executor, get_distributed_executor_backend
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
@@ -138,6 +139,22 @@ class Engine(EngineBase):
         cache_config = ConfigBuilder.build_cache_config(engine_config)
         backend_config = ConfigBuilder.build_backend_config(engine_config)
         dist_config = ConfigBuilder.build_dist_config(engine_config)
+        distributed_executor_backend = engine_config.distributed_executor_backend
+        transfer_config = cache_config.kv_transfer_config
+        if (distributed_executor_backend is None and transfer_config is not None
+                and transfer_config.is_kv_transfer_instance):
+            distributed_executor_backend = get_distributed_executor_backend(
+                dist_config.world_size,
+                dist_config.dp,
+                engine_config.device_type,
+                logger,
+            )
+        prepare_kv_connector_config(
+            cache_config,
+            model_path=model_path,
+            dist_config=dist_config,
+            distributed_executor_backend=distributed_executor_backend,
+        )
         memdecode_config = ConfigBuilder.build_memdecode_config(model_path,
                                                                 engine_config,
                                                                 cache_config,
@@ -166,7 +183,7 @@ class Engine(EngineBase):
             misc_config=misc_config,
             adapters=adapters,
             device_type=engine_config.device_type,
-            distributed_executor_backend=engine_config.distributed_executor_backend,
+            distributed_executor_backend=distributed_executor_backend,
             dtype=engine_config.dtype,
             specdecode_config=self.specdecode_config,
             trust_remote_code=trust_remote_code,
@@ -189,7 +206,18 @@ class Engine(EngineBase):
                                         cache_config=cache_config,
                                         seq_strategy=self.seq_strategy,
                                         sampling_strategy=self.sampling_strategy)
-        self.scheduler = Scheduler(scheduler_config, cache_config, seq_meta=self.seq_meta)
+        scheduler_connector = build_kv_connector(
+            KVConnectorRole.SCHEDULER,
+            cache_config,
+            tp_size=dist_config.attn_tp,
+            kv_head_replica_num=self.model_config.num_replicate_key_value_heads,
+        )
+        self.scheduler = Scheduler(
+            scheduler_config,
+            cache_config,
+            seq_meta=self.seq_meta,
+            kv_connector=scheduler_connector,
+        )
 
         # engine args
         self.model_path = model_path
@@ -505,6 +533,7 @@ class Engine(EngineBase):
         """Finally process for dist."""
         logger.info('Cleanup executor.')
         self.migration_event = None
+        self.scheduler.shutdown()
         self.executor.release()
 
     def update_params(self, request: Any):
@@ -576,6 +605,7 @@ class Engine(EngineBase):
         # cancel all remain sessions
         self._cancel_and_end_all_sessions()
         await self.executor.sleep(level)
+        self.scheduler.finish_deferred_kv_transfers_after_worker_drain()
         if self._engine_loop is not None:
             self._engine_loop.reset_runtime_state()
         logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))

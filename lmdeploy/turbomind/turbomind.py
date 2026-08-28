@@ -733,6 +733,8 @@ class TurboMindInstance:
                     decode_grammar = gen_config.response_format[decode_grammar_type]
                 elif decode_grammar_type == 'json_object':
                     decode_grammar = '{"type" : "object", "additionalProperties": true}'
+                elif decode_grammar_type == 'structural_tag':
+                    decode_grammar = gen_config.response_format[decode_grammar_type]
 
                 if decode_grammar_type == 'json_schema':
                     decode_grammar = json.dumps(decode_grammar)
@@ -743,12 +745,15 @@ class TurboMindInstance:
                 elif decode_grammar_type == 'json_object':
                     decode_grammar = str(decode_grammar)
                     grammar = compiler.compile_json_schema(decode_grammar)
+                elif decode_grammar_type == 'structural_tag':
+                    decode_grammar = json.dumps(decode_grammar)
+                    grammar = compiler.compile_structural_tag(decode_grammar)
                 else:
                     assert False, f'Decode grammar type {decode_grammar_type} should be in ' \
-                                   '["json_schema", "regex_schema", "json_object"]'
+                                   '["json_schema", "regex_schema", "json_object", "structural_tag"]'
 
                 self.model_inst.set_grammar(grammar)
-            except ValueError as e:
+            except (ValueError, KeyError) as e:
                 logger.warning(f'Failed to initialize guided decoding, '
                                f'disable guided decoding: {e}')
                 gen_config.response_format = None
