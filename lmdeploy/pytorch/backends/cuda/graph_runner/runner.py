@@ -188,18 +188,19 @@ class CUDAGraphRunner(GraphRunner):
         return context.global_is_decoding() and self.enable_graph(**kwargs)
 
     def _get_piecewise_graph_descriptor(self, context: StepContext, **kwargs):
-        """Return a prefill descriptor without changing runtime state.
+        """Return a descriptor without changing runtime state.
 
-        Piecewise CUDA graph is prefill-only. Under DP an idle rank runs a
-        decode-shaped dummy while another rank is prefilling, so
-        ``global_is_decoding()`` is False but this rank's local ``is_decoding``
-        is True; replaying a prefill plan for such a rank crashes the prefill
-        eager boundaries. Gate on the local phase so decode requests (real or
-        dummy) never enter piecewise replay. EP/DeepEP collectives are
-        within-DP, so DP ranks may diverge between piecewise and eager safely.
+        Pure decode steps are owned by the full graph (or eager), so the
+        global phase gate suffices. A DP hybrid step's decode rank runs a
+        decode-shaped context through the prefill plan: the eager boundaries
+        are phase-dispatching (attention, causal conv, gated delta all select
+        the decode kernel from live metadata), so decode requests keep the
+        decode kernel while the captured pieces are shared with the prefill
+        rank. EP/DeepEP collectives are within-DP, so DP ranks may diverge
+        between piecewise and eager safely.
         """
         manager = self._piecewise_graph_manager
-        if manager is None or context.is_decoding or context.global_is_decoding():
+        if manager is None or context.global_is_decoding():
             return None
         return manager.get_piecewise_graph_descriptor(context, kwargs)
 

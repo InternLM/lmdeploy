@@ -17,7 +17,7 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
         from lmdeploy.pytorch.kernels.cuda.causal_conv1d import causal_conv1d_fn, causal_conv1d_update
         self.causal_conv1d_fn = causal_conv1d_fn
         self.causal_conv1d_update = causal_conv1d_update
-        self._piecewise_prefill: Callable[..., torch.Tensor] | None = None
+        self._piecewise_forward: Callable[..., torch.Tensor] | None = None
         register_piecewise_graph_impl(self)
 
     def _prefill(
@@ -59,8 +59,15 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
         return output.transpose(-2, -1)
 
     def enable_piecewise_cuda_graph(self) -> None:
-        """Install the causal-convolution boundary owned by this CUDA op."""
-        if self._piecewise_prefill is not None:
+        """Install the phase-dispatching causal-convolution boundary.
+
+        Wraps ``forward`` (the decode/prefill dispatcher) so a replaying plan
+        runs the phase-appropriate convolution eagerly from live metadata. This
+        keeps decode requests on the decode kernel for batch-invariant outputs
+        while still letting DP hybrid decode ranks share the prefill plan.
+        Mirrors the CUDA attention boundary.
+        """
+        if self._piecewise_forward is not None:
             return
 
         from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
@@ -69,11 +76,13 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
             get_piecewise_graph_execution,
         )
 
+        original_forward = self.forward
+
         @eager_boundary(
             adapter_factory=partial(PaddedTensorOutputAdapter, token_axis=1),
             reuse_bridge_after_next_step=True,
         )
-        def run_eager_prefill(
+        def run_eager(
             x: torch.Tensor,
             weight: torch.Tensor,
             bias: torch.Tensor | None,
@@ -83,7 +92,7 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
         ) -> torch.Tensor:
             execution = get_piecewise_graph_execution()
             assert execution is not None
-            return self._prefill(
+            return original_forward(
                 x[:, :execution.raw_tokens],
                 weight,
                 bias,
@@ -92,7 +101,7 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
                 activation,
             )
 
-        def piecewise_prefill(
+        def piecewise_forward(
             x: torch.Tensor,
             weight: torch.Tensor,
             bias: torch.Tensor | None,
@@ -101,24 +110,11 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
             activation: str,
         ) -> torch.Tensor:
             if get_piecewise_graph_execution() is None:
-                return self._prefill(x, weight, bias, conv_state, gated_delta_meta, activation)
-            return run_eager_prefill(x, weight, bias, conv_state, gated_delta_meta, activation)
+                return original_forward(x, weight, bias, conv_state, gated_delta_meta, activation)
+            return run_eager(x, weight, bias, conv_state, gated_delta_meta, activation)
 
-        self._piecewise_prefill = piecewise_prefill
-
-    def prefill(
-        self,
-        x: torch.Tensor,
-        weight: torch.Tensor,
-        bias: torch.Tensor | None,
-        conv_state: torch.Tensor,
-        gated_delta_meta: GatedDeltaMeta,
-        activation: str,
-    ) -> torch.Tensor:
-        """Run causal convolution eagerly only during piecewise prefill."""
-        if self._piecewise_prefill is None:
-            return self._prefill(x, weight, bias, conv_state, gated_delta_meta, activation)
-        return self._piecewise_prefill(x, weight, bias, conv_state, gated_delta_meta, activation)
+        self._piecewise_forward = piecewise_forward
+        self.forward = piecewise_forward
 
     def decode(
         self,
@@ -165,7 +161,7 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
         """Dispatch causal convolution by inference phase."""
         if gated_delta_meta.is_decoding:
             return self.decode(x, weight, bias, conv_state, gated_delta_meta, activation)
-        return self.prefill(x, weight, bias, conv_state, gated_delta_meta, activation)
+        return self._prefill(x, weight, bias, conv_state, gated_delta_meta, activation)
 
     def supports_piecewise_cuda_graph(self) -> bool:
         """Return whether this selected CUDA implementation supports PCG."""
@@ -212,7 +208,7 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
 class CausalConv1dDaoImpl(CausalConv1dTilelangImpl):
 
     def __init__(self):
-        self._piecewise_prefill = None
+        self._piecewise_forward = None
         try:
             import causal_conv1d
             self.causal_conv1d_fn = causal_conv1d.causal_conv1d_fn
