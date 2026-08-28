@@ -1,8 +1,17 @@
 import os
+from functools import cache
 
 import pytest
 from utils.config_utils import model_enables_return_routed_experts
 from utils.constant import BACKEND_LIST, DEFAULT_MAX_COMPLETION_TOKENS, TOOL_REASONING_MODEL_LIST
+from utils.tool_call_json_schema_utils import (
+    HARD_SCHEMA_SKIP_NO_PARSER,
+    HARD_SCHEMA_SKIP_NO_SUITE,
+    kvv_load_selected_cases,
+    kvv_validator,
+    model_has_hard_schema_suite,
+    model_has_tool_call_parser,
+)
 from utils.tool_reasoning_definitions import (
     CONCURRENT_WEATHER_TOOL,
     DEFAULT_TOOL_CALL_CONCURRENCY,
@@ -42,6 +51,13 @@ _CLASS_MARKS_MM = [
     pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
 ]
 
+_CLASS_MARKS_HARD_SCHEMA = [
+    pytest.mark.order(8),
+    pytest.mark.hard_schema,
+    pytest.mark.parametrize('backend', BACKEND_LIST),
+    pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
+]
+
 def _apply_marks(cls):
     """Apply the shared set of marks to *cls* and return it."""
     for m in _CLASS_MARKS:
@@ -66,6 +82,13 @@ def _apply_experts_marks(cls):
 def _apply_marks_mm(cls):
     """Apply multimodal tool-call marks to *cls*."""
     for m in _CLASS_MARKS_MM:
+        cls = m(cls)
+    return cls
+
+
+def _apply_hard_schema_marks(cls):
+    """Apply hard-schema walle MFJS marks to *cls*."""
+    for m in _CLASS_MARKS_HARD_SCHEMA:
         cls = m(cls)
     return cls
 
@@ -245,15 +268,62 @@ def _mm_video_tool_call_skip_target(item) -> bool:
     return 'video' in test_name.lower()
 
 
+def _hard_schema_case_params():
+    try:
+        selected = kvv_load_selected_cases()
+    except FileNotFoundError as exc:
+        return [
+            pytest.param(
+                (None, None, 'missing_cases', 'non-stream'),
+                marks=pytest.mark.skip(reason=str(exc)),
+                id='missing_cases',
+            ),
+        ]
+    params = []
+    for case, schema, reason in selected:
+        for mode in kvv_validator().REQUEST_MODES:
+            params.append(
+                pytest.param(
+                    (case, schema, reason, mode),
+                    id=f'{case.suite}:{case.line}:{mode}',
+                ),
+            )
+    return params
+
+
+@cache
+def _hard_schema_skip_reason(model_case: str, backend: str) -> str | None:
+    if not model_has_hard_schema_suite(model_case, backend):
+        return HARD_SCHEMA_SKIP_NO_SUITE
+    if not model_has_tool_call_parser(model_case, backend):
+        return HARD_SCHEMA_SKIP_NO_PARSER
+    return None
+
+
+def pytest_generate_tests(metafunc):
+    if 'case_info' not in metafunc.fixturenames:
+        return
+    metafunc.parametrize('case_info', _hard_schema_case_params())
+
+
 def pytest_collection_modifyitems(config, items):
     """Skip parallel-tool tests on single-tool parsers; skip MM tool tests on
-    text-only models; skip Intern-S1 video MM tool tests."""
+    text-only models; skip Intern-S1 video MM tool tests; gate hard_schema by
+    yaml suite."""
     for item in items:
         callspec = getattr(item, 'callspec', None)
         if callspec is None:
             continue
         model_case = callspec.params.get('model_case')
         if model_case is None:
+            continue
+        if 'case_info' in getattr(item, 'fixturenames', []):
+            backend = callspec.params.get('backend')
+            if backend is None:
+                continue
+            skip_reason = _hard_schema_skip_reason(model_case, backend)
+            if skip_reason is not None:
+                item.add_marker(pytest.mark.skip(reason=skip_reason))
             continue
         if _parallel_tool_skip_target(item):
             if is_single_tool_call_only(model_case):

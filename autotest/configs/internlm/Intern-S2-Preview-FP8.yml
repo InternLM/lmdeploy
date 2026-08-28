@@ -25,6 +25,7 @@ h:
       - base
       - logprob
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
@@ -39,6 +40,7 @@ h:
       - base
       - logprob
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs

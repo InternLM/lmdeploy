@@ -65,10 +65,12 @@ h:
     pytorch:
       suites:
       - toolcall
+      - hard_schema
       extra:
         tool-call-parser: qwen2d5
     turbomind:
       suites:
       - toolcall
+      - hard_schema
       extra:
         tool-call-parser: qwen2d5

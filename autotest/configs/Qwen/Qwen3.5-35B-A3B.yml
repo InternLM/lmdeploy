@@ -23,12 +23,14 @@ a100:
       - logprob
       - experts
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
         enable-return-routed-experts: true
         tool-call-parser: qwen3coder
         reasoning-parser: default
+        enable_thinking: true
     - suites:
       - anthropic
       extra:
@@ -39,11 +41,13 @@ a100:
       - base
       - logprob
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
         tool-call-parser: qwen3coder
         reasoning-parser: default
+        enable_thinking: true
     - suites:
       - anthropic
       extra:
@@ -98,12 +102,14 @@ h:
       - logprob
       - experts
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
         enable-return-routed-experts: true
         tool-call-parser: qwen3coder
         reasoning-parser: default
+        enable_thinking: true
     - suites:
       - anthropic
       extra:
@@ -114,11 +120,13 @@ h:
       - base
       - logprob
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
         tool-call-parser: qwen3coder
         reasoning-parser: default
+        enable_thinking: true
     - suites:
       - anthropic
       extra:
