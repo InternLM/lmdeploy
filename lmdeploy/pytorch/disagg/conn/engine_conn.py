@@ -67,7 +67,8 @@ class EngineP2PConnection:
 
     def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
         # TODO (JimyMa): drop RDMA Connection
-        self.zmq_disconnect(drop_conn_request.remote_engine_id)
+        event_loop = asyncio.get_event_loop()
+        event_loop.create_task(self.zmq_disconnect(drop_conn_request.remote_engine_id))
         return {'success': True}
 
     async def zmq_send(self, remote_engine_id: str, remote_session_id: int):
