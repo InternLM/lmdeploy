@@ -3,13 +3,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import TYPE_CHECKING
 
 from .base import KVConnectorBase, KVConnectorRole
 
 if TYPE_CHECKING:
-    from lmdeploy.pytorch.config import CacheConfig, DistConfig
+    from lmdeploy.pytorch.config import CacheConfig, DistConfig, ModelConfig
 
 
 def prepare_kv_connector_config(
@@ -18,6 +19,7 @@ def prepare_kv_connector_config(
     model_path: str | None = None,
     dist_config: DistConfig | None = None,
     distributed_executor_backend: str | None = None,
+    model_revision: str | None = None,
 ) -> None:
     """Prepare runtime values before the config is copied to workers."""
     transfer_config = cache_config.kv_transfer_config
@@ -36,9 +38,18 @@ def prepare_kv_connector_config(
                 raise ValueError('Mooncake Store requires lookup_async=true')
             extra_config['lookup_async'] = True
 
-        cache_prefix = extra_config.get('cache_prefix', '')
-        if not isinstance(cache_prefix, str):
-            raise TypeError('cache_prefix must be a string')
+        cache_prefix = extra_config.get('cache_prefix')
+        if not isinstance(cache_prefix, str) or not cache_prefix.strip():
+            raise ValueError(
+                'Mooncake Store requires an explicit non-empty cache_prefix '
+                'to isolate shared-store tenants')
+
+        weights_version = extra_config.get('weights_version', model_revision)
+        if not isinstance(weights_version, str) or not weights_version.strip():
+            raise ValueError(
+                'Mooncake Store requires an explicit non-empty weights_version '
+                'or model revision')
+        extra_config['weights_version'] = weights_version
 
         if 'model_name' in extra_config:
             model_name = extra_config['model_name']
@@ -61,6 +72,38 @@ def prepare_kv_connector_config(
                 dp_rank=dp_rank,
                 dp_size=dp_size,
             )
+
+
+def prepare_kv_connector_model_identity(
+    cache_config: CacheConfig,
+    model_config: ModelConfig,
+    *,
+    weights_generation: int = 0,
+) -> None:
+    """Bind the resolved KV format and weights generation to Mooncake keys."""
+    transfer_config = cache_config.kv_transfer_config
+    if (transfer_config is None or not transfer_config.is_kv_transfer_instance
+            or transfer_config.kv_connector != 'MooncakeStoreConnector'):
+        return
+    if (isinstance(weights_generation, bool)
+            or not isinstance(weights_generation, int)
+            or weights_generation < 0):
+        raise ValueError('weights_generation must be a non-negative integer')
+
+    kv_cache_format = json.dumps(
+        {
+            'device_type': cache_config.device_type,
+            'mla_kv_cache_dtype': str(
+                getattr(model_config, 'mla_kv_cache_dtype', None)),
+            'model_dtype': str(model_config.dtype),
+            'quant_policy': int(cache_config.quant_policy),
+        },
+        sort_keys=True,
+        separators=(',', ':'),
+    )
+    extra_config = transfer_config.kv_connector_extra_config
+    extra_config['kv_cache_format'] = kv_cache_format
+    extra_config['weights_generation'] = weights_generation
 
 
 def build_kv_connector(
