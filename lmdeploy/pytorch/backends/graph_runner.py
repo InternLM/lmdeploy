@@ -39,10 +39,9 @@ _preparing_prefill: ContextVar[bool] = ContextVar('graph_runner_preparing_prefil
 def prefill_preparation_scope():
     """Mark graph-runner startup prefill warmup.
 
-    ModelAgent enters this only around its startup graph-requested prefill
-    warmup loop. The CUDA runner builds a missing piecewise plan only inside
-    this scope; a serving-time dummy (for example an empty DP rank) never
-    captures.
+    Only ModelAgent startup warmup enters this scope.
+
+    The CUDA runner may build missing piecewise plans here. Serving-time dummy ranks never capture.
     """
     token = _preparing_prefill.set(True)
     try:
@@ -52,7 +51,7 @@ def prefill_preparation_scope():
 
 
 def is_preparing_prefill() -> bool:
-    """Return whether the current call sits inside a prefill preparation scope."""
+    """Return whether startup prefill preparation is active."""
     return _preparing_prefill.get()
 
 

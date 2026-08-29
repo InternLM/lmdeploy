@@ -107,7 +107,10 @@ class BaseNSAIndexFP8(ABC):
                       sin: Tensor, indexer_k_cache: Tensor, norm_eps: float, head_gate_scale: float,
                       rope_interleaved: bool, attn_metadata=None,
                       meta: NSAIndexMeta | None = None) -> Tensor | None:
-        """Forward with fused DSA indexer preparation. May return ``None``."""
+        """Forward with fused DSA indexer preparation.
+
+        May return ``None``.
+        """
         raise NotImplementedError('Not implemented.')
 
 class BaseNSAIndexFP8Builder:
