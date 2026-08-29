@@ -843,6 +843,20 @@ class ArgumentHelper:
                                    default=False,
                                    help='Whether to trust remote code from model repositories.')
 
+    @staticmethod
+    def kv_transfer_config(parser):
+        """Add external KV-cache connector configuration."""
+        return parser.add_argument(
+            '--kv-transfer-config',
+            type=json.loads,
+            default=None,
+            help='External KV-cache connector configuration for the PyTorch engine. '
+            'Mooncake Store requires MOONCAKE_CONFIG_PATH (or '
+            'kv_connector_extra_config.mooncake_config_path) and does not support '
+            'distributed_executor_backend="mp". '
+            'Example: '
+            "'{\"kv_connector\":\"MooncakeStoreConnector\",\"kv_role\":\"kv_both\"}'.")
+
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py
 class FlexibleArgumentParser(argparse.ArgumentParser):
