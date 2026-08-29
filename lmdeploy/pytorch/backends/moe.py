@@ -299,5 +299,4 @@ class FusedMoEV4FP4BuildSpec(BuildSpec[FusedMoEV4FP4Impl]):
     scale_fmt: str | None
     ep_size: int
     ep_group: dist.ProcessGroup | None
-    layer_idx: int
     num_max_dispatch_tokens_per_rank: int

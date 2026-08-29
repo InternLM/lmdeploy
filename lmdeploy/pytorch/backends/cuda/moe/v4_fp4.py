@@ -230,7 +230,7 @@ class V4FP4FusedMoENormal:
     """Prefill EP MoE: dispatch -> scatter -> FP4 GEMM -> gather -> combine."""
 
     def __init__(self, ep_size, ep_group, num_experts, num_local_experts,
-                 hidden_dim, ffn_dim, top_k, swiglu_limit, scale_fmt, layer_idx, out_dtype,
+                 hidden_dim, ffn_dim, top_k, swiglu_limit, scale_fmt, out_dtype,
                  num_max_dispatch_tokens_per_rank=128):
         from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcher
         self.num_experts = num_experts
@@ -276,7 +276,7 @@ class V4FP4FusedMoELowLatency:
     """Decode EP MoE: low_latency_dispatch -> masked FP4 GEMM -> low_latency_combine."""
 
     def __init__(self, ep_size, ep_group, num_experts, num_local_experts,
-                 hidden_dim, ffn_dim, top_k, swiglu_limit, scale_fmt, layer_idx, out_dtype,
+                 hidden_dim, ffn_dim, top_k, swiglu_limit, scale_fmt, out_dtype,
                  num_max_dispatch_tokens_per_rank=128):
         from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherLowLatency
         self.num_experts = num_experts
@@ -324,7 +324,7 @@ class TritonFusedMoEV4FP4EPImpl(FusedMoEV4FP4Impl):
 
     def __init__(self, ep_size, ep_group, top_k, num_experts, num_local_experts,
                  hidden_dim, ffn_dim, swiglu_limit=0.0, scale_fmt='ue8m0',
-                 layer_idx=0, num_max_dispatch_tokens_per_rank=128):
+                 num_max_dispatch_tokens_per_rank=128):
         self.ep_size = ep_size
         self.ep_group = ep_group
         self.top_k = top_k
@@ -334,7 +334,6 @@ class TritonFusedMoEV4FP4EPImpl(FusedMoEV4FP4Impl):
         self.ffn_dim = ffn_dim
         self.swiglu_limit = swiglu_limit
         self.scale_fmt = scale_fmt
-        self.layer_idx = layer_idx
         self.num_max_dispatch_tokens_per_rank = num_max_dispatch_tokens_per_rank
 
         try:
@@ -370,7 +369,7 @@ class TritonFusedMoEV4FP4EPImpl(FusedMoEV4FP4Impl):
                 num_experts=self.num_experts, num_local_experts=self.num_local_experts,
                 hidden_dim=self.hidden_dim, ffn_dim=self.ffn_dim,
                 top_k=self.top_k, swiglu_limit=self.swiglu_limit,
-                scale_fmt=self.scale_fmt, layer_idx=self.layer_idx,
+                scale_fmt=self.scale_fmt,
                 out_dtype=torch.bfloat16,
                 num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank)
         return V4FP4FusedMoENormal(
@@ -378,7 +377,7 @@ class TritonFusedMoEV4FP4EPImpl(FusedMoEV4FP4Impl):
             num_experts=self.num_experts, num_local_experts=self.num_local_experts,
             hidden_dim=self.hidden_dim, ffn_dim=self.ffn_dim,
             top_k=self.top_k, swiglu_limit=self.swiglu_limit,
-            scale_fmt=self.scale_fmt, layer_idx=self.layer_idx,
+            scale_fmt=self.scale_fmt,
             out_dtype=torch.bfloat16,
             num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank)
 
@@ -417,7 +416,6 @@ def _build_fused_moe_v4_fp4(spec: FusedMoEV4FP4BuildSpec) -> FusedMoEV4FP4Impl:
             ffn_dim=spec.ffn_dim,
             swiglu_limit=spec.swiglu_limit,
             scale_fmt=spec.scale_fmt,
-            layer_idx=spec.layer_idx,
             num_max_dispatch_tokens_per_rank=spec.num_max_dispatch_tokens_per_rank,
         )
     return TritonFusedMoEV4FP4TPImpl(
