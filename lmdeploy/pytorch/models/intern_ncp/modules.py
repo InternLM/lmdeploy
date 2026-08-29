@@ -12,7 +12,7 @@ from lmdeploy.pytorch.nn import (
     Attention,
     RMSNorm,
     SiluAndMul,
-    build_rotary_embedding,
+    build_rotary_embedding_from_config,
 )
 from lmdeploy.pytorch.nn.linear import (
     build_down_linear,
@@ -30,6 +30,7 @@ from .weight import _repack_olmo_qkv_weight
 _CONFIG_VALUE = object()
 _HistoryStates = torch.Tensor
 _SourceStates = torch.Tensor | None
+
 
 def _get_configured_window(config: PretrainedConfig):
     """Return the reference OLMo window setting as an int or None."""
@@ -51,22 +52,8 @@ def _make_olmo_rotary_embedding(config: PretrainedConfig,
     if rotary_interleaved:
         raise NotImplementedError('ConceptLM rotary_interleaved=True is not supported by the LMDeploy block yet.')
 
-    head_dim = int(config.kv_channels)
-    rotary_percent = float(getattr(config, 'rotary_percent', 1.0))
-    rotary_dim = int(head_dim * rotary_percent)
-    rotary_dim -= rotary_dim % 2
-    if rotary_dim <= 0:
-        raise ValueError(f'Invalid ConceptLM rotary dimension: head_dim={head_dim}, rotary_percent={rotary_percent}')
+    return build_rotary_embedding_from_config(config, device=device)
 
-    partial_rotary_factor = rotary_dim / head_dim
-    return build_rotary_embedding(
-        dim=head_dim,
-        max_position_embeddings=getattr(config, 'max_position_embeddings', getattr(config, 'max_sequence_length',
-                                                                                   2048)),
-        base=getattr(config, 'rotary_base', 10000),
-        partial_rotary_factor=partial_rotary_factor,
-        device=device,
-    )
 
 def _qk_rmsnorm_variance(query: torch.Tensor, key: torch.Tensor) -> torch.Tensor:
     """Local Q/K squared sums before TP all-reduce."""
