@@ -46,3 +46,22 @@ def test_evict_prunes_stale_non_leaf_entry(block_trie, scheduler, num_gpu_blocks
     assert block_trie.evict(2) == 2
     assert len(block_trie.leaves) == 0
     assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks
+
+
+def test_clear_releases_all_trie_owned_blocks(block_trie, scheduler, num_gpu_blocks):
+    block_mgr = scheduler.block_manager
+    sess = scheduler.add_session(0)
+    block_size = sess.seq_meta.block_size
+    seq = sess.add_sequence([1] * block_size * 2 + [2])
+
+    block_mgr.allocate(seq)
+    block_trie.allocate(seq)
+    block_mgr.free(seq)
+    seq.set_step(0)
+
+    assert len(block_trie.leaves) == 1
+    assert block_trie.clear() == 2
+    assert len(block_trie.leaves) == 0
+    assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks
+    assert block_trie.stats.num_query_tokens == 0
+    assert block_trie.stats.num_hit_tokens == 0

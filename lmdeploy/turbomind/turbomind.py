@@ -345,7 +345,8 @@ class TurboMind:
             """
             func, args = item
             args = list(args)
-            args[6] = torch.cuda.current_device()  # device id.
+            if len(args) > 6:
+                args[6] = torch.cuda.current_device()  # device id.
             return func(*args).clone()
 
         with torch.cuda.device(self.devices[0]):

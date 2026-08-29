@@ -3,6 +3,7 @@ import asyncio
 import ctypes
 import gc
 import os
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +19,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeDropConnectionRequest,
     DistServeInitRequest,
 )
+from lmdeploy.pytorch.exceptions import WeightUpdateError
 from lmdeploy.utils import get_logger, get_model
 
 from ..adapter.adapter import AdapterManager
@@ -237,6 +239,7 @@ class Engine(EngineBase):
         # resources and has its own weight-update workflow.
         self._sleeping_tags = set()
         self._weights_update_lock: asyncio.Lock | None = None
+        self._weights_update_sync_lock: Any = None
         self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
         self._multimodal_session_end_count = 0
 
@@ -538,7 +541,47 @@ class Engine(EngineBase):
 
     def update_params(self, request: Any):
         """Update params."""
-        self.executor.update_params(request)
+        with self._get_weights_update_sync_lock():
+            self._check_weight_update_state()
+            self.executor.update_params(request)
+
+    def _get_weights_update_sync_lock(self):
+        """Get the lock shared by synchronous and asynchronous updates."""
+        if getattr(self, '_weights_update_sync_lock', None) is None:
+            self._weights_update_sync_lock = threading.Lock()
+        return self._weights_update_sync_lock
+
+    def _check_weight_update_state(self):
+        """Ensure no request or KV cache can retain the previous weights."""
+        # A normal engine must explicitly offload its KV cache before a weight
+        # update. Empty-init starts without model weights and is the exception
+        # used by the initial loading workflow.
+        sleeping_tags = getattr(self, '_sleeping_tags', set())
+        misc_config = getattr(self, 'misc_config', None)
+        empty_init = getattr(misc_config, 'empty_init', False)
+        if (('kv_cache' not in sleeping_tags or 'weights' in sleeping_tags)
+                and not empty_init):
+            raise WeightUpdateError(
+                'Weight updates require the KV cache to be offloaded. '
+                'Call /sleep first, then /wakeup?tags=weights before updating.')
+
+        scheduler = self.scheduler
+        if getattr(scheduler, 'sessions', None):
+            raise WeightUpdateError(
+                'Weight updates require no active sessions. '
+                'Call /sleep first to stop inference and discard KV cache.')
+
+        block_trie = getattr(scheduler, 'block_trie', None)
+        if block_trie is not None and getattr(block_trie, 'leaves', None):
+            raise WeightUpdateError(
+                'Weight updates require an empty prefix cache. '
+                'Call /sleep first to discard cached KV blocks.')
+
+        has_unfinished = getattr(scheduler, 'has_unfinished', None)
+        if has_unfinished is not None and has_unfinished():
+            raise WeightUpdateError(
+                'Weight updates require the engine to be idle. '
+                'Wait for pending KV transfers to finish, then retry.')
 
     def _get_weights_update_lock(self):
         """Get the disaggregated weights-update lock."""
@@ -546,10 +589,20 @@ class Engine(EngineBase):
             self._weights_update_lock = asyncio.Lock()
         return self._weights_update_lock
 
-    async def _run_weights_update(self, func, request: Any):
+    async def _run_weights_update(self, func, request: Any, check_state: bool = False):
         """Run one serialized disaggregated weights-update operation."""
         async with self._get_weights_update_lock():
-            return await asyncio.to_thread(func, request)
+            return await asyncio.to_thread(self._run_weights_update_sync, func, request, check_state)
+
+    def _run_weights_update_sync(self, func, request: Any, check_state: bool = False):
+        """Run one weight-update RPC while excluding synchronous updates."""
+        with self._get_weights_update_sync_lock():
+            if check_state:
+                try:
+                    self._check_weight_update_state()
+                except WeightUpdateError as e:
+                    return False, str(e)
+            return func(request)
 
     async def init_weights_update_group(self, request: Any):
         """Init disaggregated weights-update process group."""
@@ -557,7 +610,9 @@ class Engine(EngineBase):
 
     async def update_weights_from_distributed(self, request: Any):
         """Receive weights through the disaggregated process group."""
-        return await self._run_weights_update(self.executor.update_weights_from_distributed, request)
+        return await self._run_weights_update(self.executor.update_weights_from_distributed,
+                                              request,
+                                              check_state=True)
 
     async def destroy_weights_update_group(self, request: Any):
         """Tear down a previously initialized weights-update process group."""
@@ -604,32 +659,37 @@ class Engine(EngineBase):
             logger.info('PyTorch engine loop drained for sleep.')
         # cancel all remain sessions
         self._cancel_and_end_all_sessions()
-        await self.executor.sleep(level)
-        self.scheduler.finish_deferred_kv_transfers_after_worker_drain()
+        with self._get_weights_update_sync_lock():
+            await self.executor.sleep(level)
+            self.scheduler.finish_deferred_kv_transfers_after_worker_drain()
+            clear_prefix_cache = getattr(self.scheduler, 'clear_prefix_cache', None)
+            if clear_prefix_cache is not None:
+                clear_prefix_cache()
         if self._engine_loop is not None:
             self._engine_loop.reset_runtime_state()
         logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
-        wakeup_tags = tags
-        logger.info('PyTorch engine wakeup requested: tags=%s, sleeping_tags=%s.',
-                    wakeup_tags, sorted(self._sleeping_tags))
-        self.executor.wakeup(wakeup_tags)
-        if wakeup_tags is None:
-            self._sleeping_tags.clear()
-        else:
-            self._sleeping_tags.difference_update(wakeup_tags)
-        # The engine would resume only when all sleep tags have been cleared.
-        if not self._sleeping_tags:
-            # enable ADD_MESSAGE and ADD_SESSION
-            self._unblock_new_inputs()
-            if self._engine_loop is not None:
-                self._engine_loop.resume_from_sleep()
-            logger.info('PyTorch engine wakeup complete; inference requests are enabled.')
-        else:
-            logger.info('PyTorch engine partial wakeup; blocked tags=%s.',
-                        sorted(self._sleeping_tags))
+        with self._get_weights_update_sync_lock():
+            wakeup_tags = tags
+            logger.info('PyTorch engine wakeup requested: tags=%s, sleeping_tags=%s.',
+                        wakeup_tags, sorted(self._sleeping_tags))
+            self.executor.wakeup(wakeup_tags)
+            if wakeup_tags is None:
+                self._sleeping_tags.clear()
+            else:
+                self._sleeping_tags.difference_update(wakeup_tags)
+            # The engine would resume only when all sleep tags have been cleared.
+            if not self._sleeping_tags:
+                # enable ADD_MESSAGE and ADD_SESSION
+                self._unblock_new_inputs()
+                if self._engine_loop is not None:
+                    self._engine_loop.resume_from_sleep()
+                logger.info('PyTorch engine wakeup complete; inference requests are enabled.')
+            else:
+                logger.info('PyTorch engine partial wakeup; blocked tags=%s.',
+                            sorted(self._sleeping_tags))
 
     async def async_loop(self):
         engine_loop = None

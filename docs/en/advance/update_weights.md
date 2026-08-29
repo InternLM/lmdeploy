@@ -35,6 +35,10 @@ response = requests.post(f"{BASE_URL}/wakeup", headers=headers, params=dict(tags
 assert response.status_code == 200, response.status_code
 ```
 
+The update endpoints reject requests while the KV cache is available. This
+ordering is required because KV states computed with the previous weights
+cannot be reused after a weight update.
+
 ## Step 3: Update weights
 
 Split model weights into multi segments and update through `update_weights` endpoint.

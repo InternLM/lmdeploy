@@ -1389,7 +1389,10 @@ class BaseModelAgent:
         def _construct(item, require_clone: bool = True):
             func, args = item
             args = list(args)
-            args[6] = torch.cuda.current_device()  # device id.
+            # CPU tensor reducers do not carry a device argument. CUDA
+            # reducers use this slot to remap producer-local device ids.
+            if len(args) > 6:
+                args[6] = torch.cuda.current_device()  # device id.
             ipc_tensor = func(*args)
             return ipc_tensor.clone() if require_clone else ipc_tensor
 

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 
+from lmdeploy.pytorch.exceptions import WeightUpdateError
 from lmdeploy.serve.openai.errors import create_error_response
 from lmdeploy.serve.openai.protocol import (
     AbortRequest,
@@ -17,6 +18,22 @@ from lmdeploy.serve.openai.protocol import (
     UpdateWeightsFromDistributedRequest,
 )
 from lmdeploy.serve.utils.server_utils import validate_json_request
+
+_WEIGHT_UPDATE_STATE_MESSAGE = (
+    'Weight updates require the KV cache to be offloaded. '
+    'Call /sleep first, then /wakeup?tags=weights before updating.')
+
+
+def _check_weight_update_state(async_engine):
+    """Reject PyTorch weight updates while inference KV is still available."""
+    if getattr(async_engine, 'backend', None) != 'pytorch':
+        return None
+    sleeping_tags = getattr(async_engine, 'sleeping_tags', None)
+    empty_init = getattr(getattr(async_engine, 'backend_config', None), 'empty_init', False)
+    if (sleeping_tags is not None
+            and ('kv_cache' not in sleeping_tags or ('weights' in sleeping_tags and not empty_init))):
+        return create_error_response(HTTPStatus.CONFLICT, _WEIGHT_UPDATE_STATE_MESSAGE)
+    return None
 
 
 def register(router: APIRouter, server_context) -> None:
@@ -55,7 +72,14 @@ def register(router: APIRouter, server_context) -> None:
     def update_params(request: UpdateParamsRequest,
                       raw_request: Request = None):
         """Update weights for the model."""
-        server_context.async_engine.engine.update_params(request)
+        async_engine = server_context.async_engine
+        error = _check_weight_update_state(async_engine)
+        if error is not None:
+            return error
+        try:
+            async_engine.engine.update_params(request)
+        except WeightUpdateError as e:
+            return create_error_response(HTTPStatus.CONFLICT, str(e))
         return JSONResponse(content=None)
 
     def _check_pytorch_backend_for_disagg_weight_update():
@@ -96,6 +120,9 @@ def register(router: APIRouter, server_context) -> None:
         """Receive a bucket of weights through a previously initialized
         weights- update group and load them into the running model."""
         err = _check_pytorch_backend_for_disagg_weight_update()
+        if err is not None:
+            return err
+        err = _check_weight_update_state(server_context.async_engine)
         if err is not None:
             return err
         success, message = await server_context.async_engine.engine.update_weights_from_distributed(

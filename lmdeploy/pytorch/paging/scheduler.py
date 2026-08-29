@@ -899,6 +899,10 @@ class Scheduler:
         if connector is not None:
             connector.shutdown()
 
+    def clear_prefix_cache(self):
+        """Release scheduler-owned prefix-cache KV before a weight update."""
+        return self.block_trie.clear()
+
     def _ensure_runtime_state_available(self):
         """Make one state-cache slot available for an SSM runtime state.
 

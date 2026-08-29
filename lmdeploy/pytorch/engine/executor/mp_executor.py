@@ -376,6 +376,10 @@ class MPExecutor(ExecutorBase):
         """Build cache engine."""
         self.collective_rpc('warmup')
 
+    def update_params(self, request: Any):
+        """Update model parameters on every worker."""
+        self.collective_rpc('update_params', args=(request, ))
+
     async def sleep(self, level: int = 1):
         """Sleep."""
         await self.collective_rpc_async('sleep', args=(level, ), return_mask=0)

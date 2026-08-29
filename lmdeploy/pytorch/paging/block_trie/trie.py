@@ -646,3 +646,18 @@ class BlockTrie:
         if evicted < max_num_blocks:
             evicted += self._kv_lifecycle.evict(max_num_blocks - evicted)
         return evicted
+
+    def clear(self):
+        """Release all unpinned prefix-cache blocks owned by the trie.
+
+        Weight updates invalidate every KV entry. Repeatedly evicting leaves also walks back through the trie, so
+        allocator references and optional SSM checkpoints follow the normal lifecycle release path.
+        """
+        evicted = 0
+        while self.leaves:
+            released = self.evict(len(self.leaves))
+            evicted += released
+            if released == 0:
+                break
+        self.stats.reset()
+        return evicted

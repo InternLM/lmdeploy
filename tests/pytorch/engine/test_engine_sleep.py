@@ -9,6 +9,7 @@ from lmdeploy.pytorch.engine.engine import Engine
 from lmdeploy.pytorch.engine.engine_instance import EngineInstance
 from lmdeploy.pytorch.engine.executor.mp_executor import MPExecutor
 from lmdeploy.pytorch.engine.request import RequestManager, RequestType, Response
+from lmdeploy.pytorch.exceptions import WeightUpdateError
 
 
 class _FakeSequence:
@@ -28,6 +29,7 @@ class _FakeScheduler:
     def __init__(self, session):
         self.sessions = {1: session}
         self.ended_sessions = []
+        self.clear_prefix_cache_calls = 0
 
     def end_session(self, session_id):
         self.ended_sessions.append(session_id)
@@ -35,6 +37,9 @@ class _FakeScheduler:
 
     def finish_deferred_kv_transfers_after_worker_drain(self):
         pass
+
+    def clear_prefix_cache(self):
+        self.clear_prefix_cache_calls += 1
 
 
 class _FakeEngineLoop:
@@ -125,6 +130,7 @@ def test_engine_sleep_blocks_inputs_cancels_sessions_then_sleeps(event_loop):
     assert resp.is_done
     assert resp.event.is_set()
     assert engine.scheduler.ended_sessions == [1]
+    assert engine.scheduler.clear_prefix_cache_calls == 1
     assert engine.executor.sleep_calls == [1]
     assert engine.events == ['drain', 'sleep', 'reset_engine_loop']
 
@@ -186,6 +192,77 @@ def test_mp_executor_wakeup_waits_for_kv_cache():
         ('wakeup', (['kv_cache'], ), 0xff),
         ('wakeup', (None, ), 0xff),
     ]
+
+
+def test_mp_executor_update_params_forwards_to_workers():
+    executor = MPExecutor.__new__(MPExecutor)
+    calls = []
+
+    def _collective_rpc(method, args=None, return_mask=0xff):
+        calls.append((method, args, return_mask))
+
+    executor.collective_rpc = _collective_rpc
+    request = object()
+
+    executor.update_params(request)
+
+    assert calls == [('update_params', (request, ), 0xff)]
+
+
+def test_engine_rejects_weight_update_without_offloaded_kv(event_loop):
+    engine = Engine.__new__(Engine)
+    engine._sleeping_tags = set()
+    engine.misc_config = SimpleNamespace(empty_init=False)
+    engine.scheduler = SimpleNamespace(sessions={}, block_trie=SimpleNamespace(leaves=set()),
+                                       has_unfinished=lambda: False)
+    engine.executor = SimpleNamespace(update_params=lambda _: pytest.fail('update should be rejected'))
+
+    with pytest.raises(WeightUpdateError, match='KV cache to be offloaded'):
+        engine.update_params(object())
+
+
+def test_engine_allows_weight_update_after_cache_offload(event_loop):
+    calls = []
+    engine = Engine.__new__(Engine)
+    engine._sleeping_tags = {'kv_cache'}
+    engine.misc_config = SimpleNamespace(empty_init=False)
+    engine.scheduler = SimpleNamespace(sessions={}, block_trie=SimpleNamespace(leaves=set()),
+                                       has_unfinished=lambda: False)
+    engine.executor = SimpleNamespace(update_params=lambda request: calls.append(request))
+    request = object()
+
+    engine.update_params(request)
+
+    assert calls == [request]
+
+
+def test_engine_rejects_weight_update_with_cached_prefix(event_loop):
+    engine = Engine.__new__(Engine)
+    engine._sleeping_tags = {'kv_cache'}
+    engine.misc_config = SimpleNamespace(empty_init=False)
+    engine.scheduler = SimpleNamespace(sessions={}, block_trie=SimpleNamespace(leaves={object()}),
+                                       has_unfinished=lambda: False)
+    engine.executor = SimpleNamespace(update_params=lambda _: pytest.fail('update should be rejected'))
+
+    with pytest.raises(WeightUpdateError, match='empty prefix cache'):
+        engine.update_params(object())
+
+
+def test_engine_distributed_weight_update_rejects_unsafe_state(event_loop):
+    engine = Engine.__new__(Engine)
+    engine._sleeping_tags = set()
+    engine.misc_config = SimpleNamespace(empty_init=False)
+    engine.scheduler = SimpleNamespace(sessions={}, block_trie=SimpleNamespace(leaves=set()),
+                                       has_unfinished=lambda: False)
+    engine._weights_update_lock = None
+    engine.executor = SimpleNamespace(update_weights_from_distributed=lambda _: pytest.fail(
+        'update should be rejected'))
+    request = object()
+
+    success, message = event_loop.run_until_complete(engine.update_weights_from_distributed(request))
+
+    assert not success
+    assert 'KV cache to be offloaded' in message
 
 
 def test_engine_instance_new_request_after_sleep_returns_cancel(event_loop):

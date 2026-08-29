@@ -35,6 +35,9 @@ response = requests.post(f"{BASE_URL}/wakeup", headers=headers, params=dict(tags
 assert response.status_code == 200, response.status_code
 ```
 
+当 KV 缓存仍可用时，权重更新接口会拒绝请求。必须遵循上述顺序，因为
+使用旧权重计算的 KV 状态不能在权重更新后继续复用。
+
 ## 步骤 3: 更新权重
 
 将模型权重切分后调用`update_weights`API进行更新。
