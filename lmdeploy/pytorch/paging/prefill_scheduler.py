@@ -575,8 +575,11 @@ class _PrefillAdmissionAttempt:
     def _match_prefix_for_prefill_gate(self):
         """Tentatively match once so a request can be rechecked by a gate."""
         prefill = self.prefill_scheduler
-        if (self._load_ready or not prefill.block_trie.enabled
-                or self._has_private_local_tail()):
+        if self._load_ready:
+            return None
+        if not prefill.block_trie.enabled:
+            return None
+        if self._has_private_local_tail():
             return None
         self._prefix_match.match()
         return True
@@ -636,18 +639,22 @@ class _PrefillAdmissionAttempt:
                 <= token_budget):
             return None
 
-        if not self._prefix_match.is_matched:
-            matched = self._match_prefix_for_prefill_gate()
-            if matched is not None:
-                prefill_token_count = prefill._prefill_admission_token_count(seq)
-                if self.batch_prefill_tokens + prefill_token_count <= token_budget:
-                    self._prefix_match.retain_for_admission(
-                        self._token_budget_rejection())
-                    return None
-                self._prefix_match.rollback('still exceeds prefill token budget')
-        else:
+        rejection = self._token_budget_rejection()
+        if self._prefix_match.is_matched:
             self._prefix_match.rollback('still exceeds prefill token budget')
-        return self._token_budget_rejection()
+            return rejection
+
+        matched = self._match_prefix_for_prefill_gate()
+        if matched is None:
+            return rejection
+
+        prefill_token_count = prefill._prefill_admission_token_count(seq)
+        if self.batch_prefill_tokens + prefill_token_count > token_budget:
+            self._prefix_match.rollback('still exceeds prefill token budget')
+            return rejection
+
+        self._prefix_match.retain_for_admission(rejection)
+        return None
 
     def _prepare_and_evict(self):
         """Apply chunk allocation limits and evict for this prefill."""
