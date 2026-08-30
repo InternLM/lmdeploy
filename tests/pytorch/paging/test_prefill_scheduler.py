@@ -182,6 +182,32 @@ def test_scheduler_short_turn_uses_prefix_hit_to_admit_long_looking_sibling():
     assert cache_hit_tail.cached_tokens == block_size
 
 
+def test_scheduler_long_first_short_turn_admits_only_final_prefix_hit():
+    scheduler, block_size = _make_prefix_cache_scheduler(
+        max_batches=1,
+        max_prefill_token_num=16,
+    )
+
+    cached = scheduler.add_session(0).add_sequence([1] * block_size)
+    scheduler.schedule(is_prefill=True)
+    cached.state.stop()
+
+    short = scheduler.add_session(1).add_sequence([4])
+    cache_hit_tail = scheduler.add_session(2).add_sequence(
+        [1] * block_size + [3])
+
+    output = scheduler.schedule(
+        is_prefill=True,
+        allow_long_prefill=False,
+        prefer_long_prefill=True,
+    )
+
+    assert output.running == [cache_hit_tail]
+    assert short.status == MessageStatus.WAITING
+    assert cache_hit_tail.num_history_ids == block_size
+    assert cache_hit_tail.num_token_ids == 1
+
+
 def test_scheduler_budget_gate_uses_prefix_hit_to_admit_sibling():
     scheduler, block_size = _make_prefix_cache_scheduler(max_batches=2, max_prefill_token_num=16)
 

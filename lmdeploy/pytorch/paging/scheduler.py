@@ -19,7 +19,7 @@ from .block_trie import BlockTrie
 from .eviction_helper import build_eviction_helper
 from .kv_load_coordinator import KVLoadCoordinator
 from .kv_save_coordinator import KVSaveCoordinator
-from .prefill_scheduler import _PrefillScheduler
+from .prefill_scheduler import _PrefillScheduler, _PrefillTurnPolicy
 from .state_manager import build_state_manager
 
 if TYPE_CHECKING:
@@ -287,14 +287,17 @@ class Scheduler:
                 'schedule only selects prefill work; use schedule_running '
                 'for decode capacity admission')
 
+        turn_policy = _PrefillTurnPolicy.from_flags(
+            allow_long_prefill,
+            prefer_long_prefill,
+        )
         running = self._prefill_scheduler.schedule(
             waiting=self.waiting,
             stopped=self.hanging,
             num_ready=self.num_ready(),
             num_running=self.num_running(),
+            turn_policy=turn_policy,
             prealloc_size=prealloc_size,
-            allow_long_prefill=allow_long_prefill,
-            prefer_long_prefill=prefer_long_prefill,
         )
         return SchedulerOutput(
             running=running,

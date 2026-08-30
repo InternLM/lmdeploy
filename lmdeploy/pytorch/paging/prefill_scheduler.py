@@ -43,6 +43,27 @@ class _PrefillReorderInfo:
     estimated_long_chunks: int
 
 
+class _PrefillTurnPolicy(enum.Enum):
+    """Complete internal policy derived from the public long-prefill flags."""
+
+    STANDARD = (True, False)
+    SHORT_ONLY = (False, False)
+    LONG_FIRST = (True, True)
+    # Preserve the fourth public flag combination: try a long-looking request
+    # first, but admit it only if prefix matching makes this its final prefill.
+    LONG_FIRST_IF_FINAL = (False, True)
+
+    def __init__(self, allows_nonfinal_long_prefill: bool,
+                 prefers_long_prefill: bool):
+        self.allows_nonfinal_long_prefill = allows_nonfinal_long_prefill
+        self.prefers_long_prefill = prefers_long_prefill
+
+    @classmethod
+    def from_flags(cls, allow_long_prefill: bool, prefer_long_prefill: bool):
+        """Normalize the stable public flag pair at the scheduler boundary."""
+        return cls((allow_long_prefill, prefer_long_prefill))
+
+
 class _PrefillReorderer:
     """Order waiting prefills without applying scheduler side effects."""
 
@@ -52,8 +73,7 @@ class _PrefillReorderer:
 
     def reorder(self,
                 waiting: SeqList,
-                allow_long_prefill: bool,
-                prefer_long_prefill: bool):
+                turn_policy: _PrefillTurnPolicy):
         """Return waiting requests in the order the prefill loop should try."""
         waiting = sorted(waiting, key=lambda seq: seq.arrive_time)
         # A completed load already owns destination blocks and a soft prefill
@@ -66,7 +86,7 @@ class _PrefillReorderer:
             seq for seq in waiting
             if not self.prefill_scheduler.load_coordinator.is_remote_ready(seq)
         ]
-        if prefer_long_prefill:
+        if turn_policy.prefers_long_prefill:
             # Long-work turns choose one long waiter first. The size policy only
             # reorders this long lane; it is not global shortest-prefill-first
             # admission.
@@ -74,7 +94,7 @@ class _PrefillReorderer:
             if long_turn_order is not None:
                 return remote_ready + self._warn_if_not_permutation(waiting, long_turn_order)
 
-        if allow_long_prefill:
+        if turn_policy.allows_nonfinal_long_prefill:
             return remote_ready + self._warn_if_not_permutation(waiting, waiting)
 
         reordered = self._reorder_for_short_turn(waiting)
@@ -264,6 +284,14 @@ class _PrefixMatchStateSnapshot:
         )
 
 
+class _PrefixMatchPhase(enum.Enum):
+    """Lifecycle of one request-local tentative prefix transaction."""
+
+    IDLE = enum.auto()
+    TRACKING = enum.auto()
+    MATCHED = enum.auto()
+
+
 class _TentativePrefixMatch:
     """Request-local transaction around ``BlockTrie.match`` side effects.
 
@@ -282,8 +310,7 @@ class _TentativePrefixMatch:
         '_stats_snapshot',
         '_state_snapshot',
         '_rejection_on_rollback',
-        '_started',
-        'matched',
+        '_phase',
     )
 
     def __init__(self,
@@ -301,8 +328,11 @@ class _TentativePrefixMatch:
         self._stats_snapshot = None
         self._state_snapshot: _PrefixMatchStateSnapshot | None = None
         self._rejection_on_rollback: _PrefillAdmissionResult | None = None
-        self._started = False
-        self.matched = False
+        self._phase = _PrefixMatchPhase.IDLE
+
+    @property
+    def is_matched(self) -> bool:
+        return self._phase is _PrefixMatchPhase.MATCHED
 
     def begin(self) -> None:
         """Start the transaction before gates can mutate exact external state.
@@ -311,23 +341,24 @@ class _TentativePrefixMatch:
         starts before gates so rollback can restore existing request state even
         when a private partial block prevents another trie match.
         """
-        if self._started or not self.block_trie.enabled:
+        if self._phase is not _PrefixMatchPhase.IDLE or not self.block_trie.enabled:
             return
         self._stats_snapshot = self.block_trie.stats.snapshot()
         if self._preserve_existing_state:
             self._state_snapshot = _PrefixMatchStateSnapshot.capture(self.seq)
-        self._started = True
+        self._phase = _PrefixMatchPhase.TRACKING
 
     def match(self) -> None:
         """Apply one tentative match after capturing its rollback boundary."""
-        assert not self.matched
+        assert not self.is_matched
         self.begin()
+        assert self._phase is _PrefixMatchPhase.TRACKING
         self.block_trie.match(self.seq)
-        self.matched = True
+        self._phase = _PrefixMatchPhase.MATCHED
 
     def retain_for_admission(self, rejection_on_rollback: _PrefillAdmissionResult) -> None:
         """Keep a gate-enabling match and remember its original rejection."""
-        assert self.matched
+        assert self.is_matched
         self._rejection_on_rollback = rejection_on_rollback
 
     def pin_restore(self) -> bool:
@@ -344,7 +375,7 @@ class _TentativePrefixMatch:
     def rollback(self, reason: str):
         """Undo the transaction and return any gate-defined rejection."""
         rejection = self._rejection_on_rollback
-        if not self._started:
+        if self._phase is _PrefixMatchPhase.IDLE:
             return rejection
 
         seq = self.seq
@@ -399,8 +430,7 @@ class _TentativePrefixMatch:
         self._stats_snapshot = None
         self._state_snapshot = None
         self._rejection_on_rollback = None
-        self._started = False
-        self.matched = False
+        self._phase = _PrefixMatchPhase.IDLE
 
 
 class _PrefillAdmissionAttempt:
@@ -420,7 +450,7 @@ class _PrefillAdmissionAttempt:
                  prealloc_size: int,
                  batch_prefill_tokens: int,
                  batch_has_prefill: bool,
-                 allow_long_prefill: bool):
+                 turn_policy: _PrefillTurnPolicy):
         self.prefill_scheduler = prefill_scheduler
         self.seq = seq
         self.stopped = stopped
@@ -430,7 +460,7 @@ class _PrefillAdmissionAttempt:
         self.batch_has_prefill = batch_has_prefill
         self.load_coordinator = prefill_scheduler.load_coordinator
         self._load_ready = self.load_coordinator.is_remote_ready(seq)
-        self.allow_long_prefill = allow_long_prefill
+        self.turn_policy = turn_policy
         self._effective_prealloc_size = prealloc_size
         self._prefix_match = _TentativePrefixMatch(
             seq,
@@ -479,7 +509,7 @@ class _PrefillAdmissionAttempt:
 
     def _resolve_prefix_source(self):
         """Match local cache first, then try loading its remote extension."""
-        if not self._prefix_match.matched:
+        if not self._prefix_match.is_matched:
             # A completed external load has already published the accepted
             # prefix. Matching again would lose its cached-token accounting.
             if not self._load_ready and not self._has_private_local_tail():
@@ -598,7 +628,7 @@ class _PrefillAdmissionAttempt:
         return seq.num_blocks > int(seq.num_history_ids) // seq.block_size
 
     def _token_budget_rejection(self):
-        if self.allow_long_prefill:
+        if self.turn_policy.allows_nonfinal_long_prefill:
             return _PrefillAdmissionResult.stop()
         return _PrefillAdmissionResult.skip()
 
@@ -610,7 +640,8 @@ class _PrefillAdmissionAttempt:
         prefill_token_count = prefill._prefill_admission_token_count(seq)
         is_nonfinal_long_prefill = prefill._prefill_kv_token_limit(seq) is not None
 
-        if is_nonfinal_long_prefill and not self.allow_long_prefill:
+        if (is_nonfinal_long_prefill
+                and not self.turn_policy.allows_nonfinal_long_prefill):
             matched = self._match_prefix_for_prefill_gate()
             if matched is None:
                 return _PrefillAdmissionResult.skip()
@@ -628,7 +659,7 @@ class _PrefillAdmissionAttempt:
         if not exceeds_token_budget:
             return None
 
-        if not self._prefix_match.matched:
+        if not self._prefix_match.is_matched:
             matched = self._match_prefix_for_prefill_gate()
             if matched is not None:
                 prefill_token_count = prefill._prefill_admission_token_count(seq)
@@ -829,9 +860,8 @@ class _PrefillScheduler:
         stopped: SeqList,
         num_ready: int,
         num_running: int,
+        turn_policy: _PrefillTurnPolicy,
         prealloc_size: int = 0,
-        allow_long_prefill: bool = True,
-        prefer_long_prefill: bool = False,
     ):
         """Select and activate one prefill batch."""
         self.last_schedule_had_pending_lookup = False
@@ -844,8 +874,7 @@ class _PrefillScheduler:
 
         waiting = _PrefillReorderer(self).reorder(
             waiting,
-            allow_long_prefill=allow_long_prefill,
-            prefer_long_prefill=prefer_long_prefill,
+            turn_policy=turn_policy,
         )
         skipped_waiting: SeqList = []
         while waiting and len(running) < max_batches:
@@ -859,7 +888,7 @@ class _PrefillScheduler:
                 prealloc_size=prealloc_size,
                 batch_prefill_tokens=batch_prefill_tokens,
                 batch_has_prefill=bool(running),
-                allow_long_prefill=allow_long_prefill,
+                turn_policy=turn_policy,
             ).run()
 
             if admission.action is _PrefillAdmissionAction.LOAD_STARTED:
