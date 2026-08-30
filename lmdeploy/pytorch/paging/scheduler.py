@@ -56,6 +56,7 @@ External KV scheduling detail:
   TP rank reports terminal progress or worker queues are drained.
 """
 
+import enum
 import time
 from collections import Counter, OrderedDict
 from contextlib import contextmanager
@@ -246,43 +247,45 @@ class _PrefillReorderer:
         return self._sort_normal_prefills(normal_waiting) + long_waiting
 
 
+class _PrefillAdmissionAction(enum.Enum):
+    ADMIT = enum.auto()
+    SKIP = enum.auto()
+    STOP = enum.auto()
+    LOAD_STARTED = enum.auto()
+
+
 @dataclass(frozen=True)
 class _PrefillAdmissionResult:
     """Outcome from trying to admit one waiting prefill request.
 
     The outer loop distinguishes four outcomes:
 
-    * ``admitted``: include the request in this tick's model batch.
-    * ``should_skip``: leave it waiting but continue trying later candidates.
-    * ``should_stop``: resource pressure ends this prefill admission turn.
-    * ``load_started``: no model work was selected, but the request left the
+    * ``ADMIT``: include the request in this tick's model batch.
+    * ``SKIP``: leave it waiting but continue trying later candidates.
+    * ``STOP``: resource pressure ends this prefill admission turn.
+    * ``LOAD_STARTED``: no model work was selected, but the request left the
       waiting queue for asynchronous KV load.
     """
 
-    admitted: bool
+    action: _PrefillAdmissionAction
     prefill_token_count: int = 0
-    should_skip: bool = False
-    load_started: bool = False
 
     @classmethod
     def admit(cls, prefill_token_count: int):
-        return cls(admitted=True, prefill_token_count=prefill_token_count)
+        return cls(action=_PrefillAdmissionAction.ADMIT,
+                   prefill_token_count=prefill_token_count)
 
     @classmethod
     def skip(cls):
-        return cls(admitted=False, should_skip=True)
+        return cls(action=_PrefillAdmissionAction.SKIP)
 
     @classmethod
     def stop(cls):
-        return cls(admitted=False)
+        return cls(action=_PrefillAdmissionAction.STOP)
 
     @classmethod
     def load(cls):
-        return cls(admitted=False, load_started=True)
-
-    @property
-    def should_stop(self):
-        return not self.admitted and not self.should_skip and not self.load_started
+        return cls(action=_PrefillAdmissionAction.LOAD_STARTED)
 
 
 @dataclass(frozen=True)
@@ -365,18 +368,18 @@ class _PrefillAdmissionAttempt:
         """
         if self.scheduler._external_lookup_enabled and not self._remote_ready:
             if self._lookup_is_pending():
-                return self._check_result(_PrefillAdmissionResult.skip())
+                return _PrefillAdmissionResult.skip()
             self._capture_prefix_match_baseline()
 
         gate_result = self._check_prefill_admission_gates()
         if gate_result is not None:
-            return self._check_result(gate_result)
+            return gate_result
 
         resource_result = self._admit_resources()
         if resource_result is not None:
-            return self._check_result(resource_result)
+            return resource_result
 
-        return self._check_result(self._finish_admission())
+        return self._finish_admission()
 
     def _rollback_gate(self, stats_snapshot, reason: str):
         """Rollback a tentative prefix hit and return any gate-only rejection.
@@ -388,22 +391,6 @@ class _PrefillAdmissionAttempt:
         """
         self._rollback_prefix_match(stats_snapshot, reason)
         return self._gate_match_rollback_result
-
-    def _check_result(self, result: _PrefillAdmissionResult):
-        if result.admitted and result.should_skip:
-            self._warn_unexpected_state(
-                f'admission result both admits and skips: prefill_token_count={result.prefill_token_count}')
-        if not result.admitted and result.prefill_token_count != 0:
-            self._warn_unexpected_state(
-                f'rejected admission result carries token count: prefill_token_count={result.prefill_token_count}')
-        if result.load_started and (result.admitted or result.should_skip):
-            self._warn_unexpected_state('external load result has conflicting admission flags')
-        return result
-
-    def _warn_unexpected_state(self, message: str):
-        seq = self.seq
-        logger.warning('Unexpected prefill admission state: session_id=%s seq_id=%s %s',
-                       seq.session_id, seq.seq_id, message)
 
     def _lookup_is_pending(self) -> bool:
         """Skip without touching local prefix state while lookup is running.
@@ -1206,19 +1193,20 @@ class Scheduler:
                 allow_long_prefill=allow_long_prefill,
             ).run()
 
-            if admission.load_started:
+            if admission.action is _PrefillAdmissionAction.LOAD_STARTED:
                 # start_load already moved the sequence out of WAITING. It must
                 # not join running or skipped_waiting, both of which permit
                 # ordinary model/paging operations on the sequence. Since no
                 # model work was admitted, continue without consuming a batch
                 # slot or token budget.
                 continue
-            if admission.should_skip:
+            if admission.action is _PrefillAdmissionAction.SKIP:
                 skipped_waiting.append(seq)
                 continue
-            if admission.should_stop:
+            if admission.action is _PrefillAdmissionAction.STOP:
                 break
 
+            assert admission.action is _PrefillAdmissionAction.ADMIT
             _to_running(seq, admission.prefill_token_count)
 
             seq.record_event(EventType.SCHEDULED)
