@@ -272,7 +272,7 @@ def test_schedule_migration_matches_current_sequence():
                                          remote_block_ids=[1])
     seq = scheduler.add_session(100).add_sequence([1] * block_size, migration_request=migration_request)
 
-    output = scheduler._schedule_migration()
+    output = scheduler.schedule_migration()
 
     assert output == [seq]
     assert seq.status == MessageStatus.MIGRATION_READY

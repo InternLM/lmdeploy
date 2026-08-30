@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
     from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
     from lmdeploy.pytorch.paging import Scheduler
+    from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import StateCheckpointLifecycle
     from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
     from .engine import Engine, SeqList
@@ -117,6 +118,7 @@ class EngineLoop:
     def __init__(self,
                  req_manager: 'RequestManager',
                  scheduler: 'Scheduler',
+                 state_checkpoints: 'StateCheckpointLifecycle',
                  executor: 'ExecutorBase',
                  seq_strategy: 'SequenceStrategy',
                  inputs_maker: 'InputsMakerAsync',
@@ -124,6 +126,7 @@ class EngineLoop:
                  engine_conn: Optional['EngineP2PConnection'] = None):
         self.req_manager = req_manager
         self.scheduler = scheduler
+        self.state_checkpoints = state_checkpoints
         self.executor = executor
         self.seq_strategy = seq_strategy
         self.inputs_maker = inputs_maker
@@ -323,7 +326,7 @@ class EngineLoop:
             seq.append_routed_experts(all_routed_experts)
             seq.append_logits(logits)
             seq.append_ce_loss(ce_loss, finish=False)
-            self.scheduler.block_trie.cache_routed_experts_for_seq(seq)
+            self.scheduler.cache_routed_experts([seq])
             return dict()
 
         new_token_timestamp = batched_outputs.new_token_timestamp
@@ -337,7 +340,7 @@ class EngineLoop:
                                          batched_outputs=batched_outputs,
                                          model_inputs=model_inputs,
                                          delta=delta)
-        self.scheduler.block_trie.cache_routed_experts(running)
+        self.scheduler.cache_routed_experts(running)
 
         # generate output
         outputs: dict[int, InferOutput] = dict()
@@ -354,7 +357,7 @@ class EngineLoop:
                 continue
             session_id = msg.session_id
             if msg.resp_cache:
-                cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
+                cache_block_ids = self.scheduler.get_block_tables([msg])[0].tolist()
             else:
                 cache_block_ids = None
 
@@ -422,21 +425,21 @@ class EngineLoop:
             # warning or adding the full pressure backoff to TTFT.
             await asyncio.sleep(0.001)
             return
+        cache_usage = scheduler.schedule_metrics.cache_usage
         logger.warning(f'no next prefill running request, Maybe cache is full, '
-                       f'free gpu cache blocks: {scheduler.block_manager.get_num_free_gpu_blocks()}, '
-                       f'total gpu cache blocks: {scheduler.block_manager.num_gpu_blocks}')
+                       f'gpu cache usage: {cache_usage:.1%}')
         await asyncio.sleep(0.1)
 
     def _publish_forward_checkpoints(self, running: 'SeqList', has_state_checkpoint_save: bool):
         """Publish per-forward prefix-cache ownership before prefetching."""
-        state_checkpoints = self.scheduler.block_trie.state_checkpoints
+        state_checkpoints = self.state_checkpoints
         if has_state_checkpoint_save:
             state_checkpoints.publish_saves(running, pin_saves=True)
         state_checkpoints.unpin_restores(running)
 
     def _release_forward_save_pins(self, running: 'SeqList'):
         """Unpin producers after the forward output/event boundary."""
-        self.scheduler.block_trie.state_checkpoints.unpin_saves(running)
+        self.state_checkpoints.unpin_saves(running)
 
     def _finish_forward_output(self,
                                out: 'BatchedOutputs | None',
@@ -558,7 +561,7 @@ class EngineLoop:
             migration_execution_requests: list[tuple[int, list[tuple[int, int]]]] = []
             migration_request = msg.migration_request
             prefill_block_ids = migration_request.remote_block_ids
-            decode_block_ids = list(self.scheduler.block_manager.get_block_table(msg=msg))
+            decode_block_ids = list(self.scheduler.get_block_tables([msg])[0])
 
             assert len(prefill_block_ids) == len(decode_block_ids), (
                 f'#prefill block ids ({len(prefill_block_ids)}) must equal to '
@@ -615,7 +618,7 @@ class EngineLoop:
                 await self._sleep_resume_event.wait()
                 continue
 
-            migration_ready = self.scheduler._schedule_migration()
+            migration_ready = self.scheduler.schedule_migration()
             if not migration_ready and not self.scheduler.has_migration_waiting():
                 await self.migration_event.wait()
             elif migration_ready:
@@ -692,6 +695,7 @@ def build_engine_loop(engine: 'Engine'):
     return EngineLoop(
         req_manager=engine.req_manager,
         scheduler=engine.scheduler,
+        state_checkpoints=engine.scheduler.state_checkpoints,
         executor=engine.executor,
         seq_strategy=engine.seq_strategy,
         inputs_maker=inputs_maker,

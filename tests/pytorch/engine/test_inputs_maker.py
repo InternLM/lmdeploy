@@ -130,6 +130,9 @@ class _FakeScheduler:
         self.kv_connector = None
         self.connector_meta_calls = []
 
+    def has_kv_connector(self):
+        return self.kv_connector is not None
+
     def schedule(self,
                  is_prefill: bool,
                  prealloc_size: int,
@@ -186,6 +189,17 @@ class _FakeModelAgentStrategy:
         return None
 
 
+def _make_inputs_maker_config():
+    return InputsMakerConfig(max_batches=1,
+                             max_prefill_token_num=512,
+                             role=EngineRole.Decode,
+                             block_size=16,
+                             kernel_block_size=16,
+                             window_size=-1,
+                             enable_prefix_caching=False,
+                             prefix_cache_decode_state_interval=0)
+
+
 def _fake_model_inputs(is_chunk: bool = False):
     return SimpleNamespace(is_decoding=False,
                            is_dummy=False,
@@ -237,9 +251,9 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
             return None
 
     state_checkpoints = _StateCheckpoints()
-    block_trie = SimpleNamespace(enabled=True, state_checkpoints=state_checkpoints)
     loop = EngineLoop.__new__(EngineLoop)
-    loop.scheduler = SimpleNamespace(block_trie=block_trie, collect_migration_done=lambda: None)
+    loop.scheduler = SimpleNamespace(collect_migration_done=lambda: None)
+    loop.state_checkpoints = state_checkpoints
     loop.inputs_maker = _InputsMaker(state_checkpoints)
     loop.executor = _Executor(state_checkpoints)
     loop._sleep_requested = False
@@ -323,9 +337,9 @@ def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save()
             return None
 
     state_checkpoints = _StateCheckpoints()
-    block_trie = SimpleNamespace(enabled=True, state_checkpoints=state_checkpoints)
     loop = EngineLoop.__new__(EngineLoop)
-    loop.scheduler = SimpleNamespace(block_trie=block_trie, collect_migration_done=lambda: None)
+    loop.scheduler = SimpleNamespace(collect_migration_done=lambda: None)
+    loop.state_checkpoints = state_checkpoints
     loop.inputs_maker = _InputsMaker()
     loop.executor = _Executor()
     loop._sleep_requested = True
@@ -385,7 +399,7 @@ def test_migration_loop_schedules_and_processes_ready_batch():
 
     class _Scheduler:
 
-        def _schedule_migration(self):
+        def schedule_migration(self):
             events.append('schedule')
             return migration_ready
 
@@ -416,36 +430,32 @@ def test_migration_loop_schedules_and_processes_ready_batch():
 def test_engine_loop_uses_short_yield_only_for_pending_lookup(monkeypatch):
     sleeps = []
 
-    class _BlockManager:
-        num_gpu_blocks = 8
-
+    class _Scheduler:
         def __init__(self):
             self.reads = 0
+            self.last_schedule_had_pending_lookup = True
 
-        def get_num_free_gpu_blocks(self):
+        @property
+        def schedule_metrics(self):
             self.reads += 1
-            return 4
+            return SimpleNamespace(cache_usage=0.5)
 
     async def record_sleep(delay):
         sleeps.append(delay)
 
-    block_manager = _BlockManager()
-    scheduler = SimpleNamespace(
-        last_schedule_had_pending_lookup=True,
-        block_manager=block_manager,
-    )
+    scheduler = _Scheduler()
     loop = EngineLoop.__new__(EngineLoop)
     loop.scheduler = scheduler
     monkeypatch.setattr(engine_loop_module.asyncio, 'sleep', record_sleep)
 
     asyncio.run(loop._wait_for_schedulable_prefill())
     assert sleeps == [0.001]
-    assert block_manager.reads == 0
+    assert scheduler.reads == 0
 
     scheduler.last_schedule_had_pending_lookup = False
     asyncio.run(loop._wait_for_schedulable_prefill())
     assert sleeps == [0.001, 0.1]
-    assert block_manager.reads == 1
+    assert scheduler.reads == 1
 
 
 def test_engine_loop_reset_runtime_state_delegates_to_inputs_maker():
@@ -485,12 +495,13 @@ def _make_policy_maker(long_seq, decode_seq=None):
 
 def test_inputs_maker_reads_opt_ttft_short_turns_env(monkeypatch):
     monkeypatch.setattr(inputs_maker_module._envs, 'opt_ttft_short_turns', 5)
-    scheduler = SimpleNamespace(cache_config=SimpleNamespace(block_size=16, kernel_block_size=16))
-    config = InputsMakerConfig(max_batches=1, max_prefill_token_num=512, role=EngineRole.Decode)
+    scheduler = SimpleNamespace()
+    config = _make_inputs_maker_config()
 
     maker = InputsMakerAsync(
         executor=SimpleNamespace(device_type='cpu'),
         scheduler=scheduler,
+        state_checkpoints=SimpleNamespace(),
         adapter_manager=SimpleNamespace(),
         engine_strategy=_FakeEngineStrategy(),
         sampling_strategy=_FakeSamplingStrategy(),
@@ -503,12 +514,13 @@ def test_inputs_maker_reads_opt_ttft_short_turns_env(monkeypatch):
 
 def test_inputs_maker_clamps_opt_ttft_short_turns_to_one(monkeypatch):
     monkeypatch.setattr(inputs_maker_module._envs, 'opt_ttft_short_turns', 0)
-    scheduler = SimpleNamespace(cache_config=SimpleNamespace(block_size=16, kernel_block_size=16))
-    config = InputsMakerConfig(max_batches=1, max_prefill_token_num=512, role=EngineRole.Decode)
+    scheduler = SimpleNamespace()
+    config = _make_inputs_maker_config()
 
     maker = InputsMakerAsync(
         executor=SimpleNamespace(device_type='cpu'),
         scheduler=scheduler,
+        state_checkpoints=SimpleNamespace(),
         adapter_manager=SimpleNamespace(),
         engine_strategy=_FakeEngineStrategy(),
         sampling_strategy=_FakeSamplingStrategy(),
@@ -520,11 +532,12 @@ def test_inputs_maker_clamps_opt_ttft_short_turns_to_one(monkeypatch):
 
 
 def test_inputs_maker_reset_runtime_state_discards_request_local_state():
-    scheduler = SimpleNamespace(cache_config=SimpleNamespace(block_size=16, kernel_block_size=16))
-    config = InputsMakerConfig(max_batches=1, max_prefill_token_num=512, role=EngineRole.Decode)
+    scheduler = SimpleNamespace()
+    config = _make_inputs_maker_config()
     maker = InputsMakerAsync(
         executor=SimpleNamespace(device_type='cpu'),
         scheduler=scheduler,
+        state_checkpoints=SimpleNamespace(),
         adapter_manager=SimpleNamespace(),
         engine_strategy=_FakeEngineStrategy(),
         sampling_strategy=_FakeSamplingStrategy(),
@@ -1400,9 +1413,8 @@ def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans():
             return state_idx
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
-    maker.config = SimpleNamespace(is_ssm=True)
-    maker.cache_config = SimpleNamespace(enable_prefix_caching=True)
-    maker.scheduler = SimpleNamespace(block_trie=SimpleNamespace(state_checkpoints=_StateCheckpoints()))
+    maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
+    maker.state_checkpoints = _StateCheckpoints()
 
     cache_inputs = maker._prepare_prefill_cache_inputs(messages)
 
@@ -1430,9 +1442,8 @@ def test_prepare_prefill_cache_inputs_uses_explicit_chunk_end_step():
             return 21
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
-    maker.config = SimpleNamespace(is_ssm=True)
-    maker.cache_config = SimpleNamespace(enable_prefix_caching=True)
-    maker.scheduler = SimpleNamespace(block_trie=SimpleNamespace(state_checkpoints=_StateCheckpoints()))
+    maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
+    maker.state_checkpoints = _StateCheckpoints()
 
     cache_inputs = maker._prepare_prefill_cache_inputs([seq], save_steps=(160, ))
 
@@ -1463,11 +1474,10 @@ def test_prepare_prefill_cache_inputs_groups_partial_kv_restore_and_save_plans()
             return state_idx
 
     scheduler = _CopyPlanScheduler()
-    scheduler.block_trie = SimpleNamespace(state_checkpoints=_StateCheckpoints())
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
-    maker.config = SimpleNamespace(is_ssm=True)
-    maker.cache_config = SimpleNamespace(enable_prefix_caching=True, block_size=16)
+    maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True, block_size=16)
     maker.scheduler = scheduler
+    maker.state_checkpoints = _StateCheckpoints()
 
     cache_inputs = maker._prepare_prefill_cache_inputs(messages)
 
@@ -1481,8 +1491,7 @@ def test_prepare_prefill_cache_inputs_groups_partial_kv_restore_and_save_plans()
 
 def test_prepare_prefill_cache_inputs_rejects_mismatched_save_steps():
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
-    maker.config = SimpleNamespace(is_ssm=True)
-    maker.cache_config = SimpleNamespace(enable_prefix_caching=True)
+    maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
 
     with pytest.raises(ValueError, match='one entry per prefill sequence'):
         maker._prepare_prefill_cache_inputs([_state_seq(4, 11)], save_steps=())
@@ -1498,10 +1507,10 @@ def test_make_decode_cache_inputs_compacts_valid_state_saves():
             return {4: 31, 5: -1}[seq.logical_state]
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
-    maker.config = SimpleNamespace(is_ssm=True)
-    maker.cache_config = SimpleNamespace(enable_prefix_caching=True,
-                                         prefix_cache_decode_state_interval=16)
-    maker.scheduler = SimpleNamespace(block_trie=SimpleNamespace(state_checkpoints=_StateCheckpoints()))
+    maker.config = SimpleNamespace(is_ssm=True,
+                                   enable_prefix_caching=True,
+                                   prefix_cache_decode_state_interval=16)
+    maker.state_checkpoints = _StateCheckpoints()
     maker.spec_decoding = False
     delta = SimpleNamespace(max_q_seqlen=1)
 
@@ -1530,10 +1539,10 @@ def test_make_decode_cache_inputs_respects_feature_gates(is_ssm, enabled, interv
             raise AssertionError('disabled decode checkpoint path must not reserve state')
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
-    maker.config = SimpleNamespace(is_ssm=is_ssm)
-    maker.cache_config = SimpleNamespace(enable_prefix_caching=enabled,
-                                         prefix_cache_decode_state_interval=interval)
-    maker.scheduler = SimpleNamespace(block_trie=SimpleNamespace(state_checkpoints=_StateCheckpoints()))
+    maker.config = SimpleNamespace(is_ssm=is_ssm,
+                                   enable_prefix_caching=enabled,
+                                   prefix_cache_decode_state_interval=interval)
+    maker.state_checkpoints = _StateCheckpoints()
     maker.spec_decoding = spec_decoding
     delta = SimpleNamespace(max_q_seqlen=max_q_seqlen)
 

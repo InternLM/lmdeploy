@@ -25,6 +25,8 @@ from .state_manager import build_state_manager
 if TYPE_CHECKING:
     from lmdeploy.pytorch.kv_connector.base import KVConnectorBase
 
+    from .block_trie.checkpoint_lifecycle import StateCheckpointLifecycle
+
 MapType = dict[int, int]
 SeqList = list[SchedulerSequence]
 
@@ -246,7 +248,8 @@ class Scheduler:
         self.sessions[session_id] = session
         return session
 
-    def _schedule_migration(self):
+    def schedule_migration(self):
+        """Admit waiting migration sequences to paging resources."""
         migration_ready: SeqList = []
         migration_waiting = sorted(
             self.migration_waiting,
@@ -439,6 +442,10 @@ class Scheduler:
             self.kv_save_coordinator.acquire(metadata)
         return metadata
 
+    def has_kv_connector(self) -> bool:
+        """Whether connector work can be produced or polled."""
+        return self.kv_connector is not None
+
     def update_connector_output(self, connector_output) -> None:
         """Convert all-TP worker progress into paging state transitions.
 
@@ -470,6 +477,15 @@ class Scheduler:
     def get_block_tables(self, seqs: SeqList):
         """Get block tables for the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]
+
+    @property
+    def state_checkpoints(self) -> 'StateCheckpointLifecycle':
+        """Return the prefix-checkpoint lifecycle owner."""
+        return self.block_trie.state_checkpoints
+
+    def cache_routed_experts(self, seqs: SeqList) -> None:
+        """Publish routed-expert history to reusable prefix nodes."""
+        self.block_trie.cache_routed_experts(seqs)
 
     def resolve_gpu_block_offsets(self, logical_block_ids):
         """Resolve paging-owned logical ids for a forward cache-copy plan."""
