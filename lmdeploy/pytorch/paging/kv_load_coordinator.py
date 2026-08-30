@@ -1,11 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Paging ownership for asynchronous external KV-cache loads.
 
-The connector owns lookup keys, remote I/O, and worker progress, while the
-scheduler owns sequences and GPU blocks.  This coordinator bridges those two
-lifetimes without performing I/O itself:
+The connector owns lookup keys, remote I/O, and worker progress. This
+coordinator owns destination admission and bridges connector progress to
+sequence and GPU-block lifetimes without performing worker I/O itself:
 
-1. The scheduler allocates destination blocks and calls :meth:`start_load`.
+1. :meth:`try_load` polls lookup, admits the complete prefill, allocates exact
+   destinations, binds connector metadata, and calls :meth:`start_load`.
 2. While workers may write those blocks, the sequence stays in
    ``WAITING_FOR_REMOTE_KVS`` and cannot be evicted or removed.
 3. :meth:`update` publishes a successful load or rolls a failed/cancelled load
@@ -23,14 +24,29 @@ GPU utilization unnecessarily.
 from __future__ import annotations
 
 import enum
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from lmdeploy.pytorch.kv_connector import KVLoadResult
-from lmdeploy.pytorch.messages import SchedulerSequence
+from lmdeploy.pytorch.messages import SchedulerSequence, SchedulerSession
 
 if TYPE_CHECKING:
-    from .scheduler import Scheduler
+    from lmdeploy.pytorch.kv_connector import KVConnectorBase
+
+    from .block_manager.base_block_manager import BaseBlockManager
+    from .block_trie import BlockTrie
+    from .eviction_helper.base_eviction_helper import BaseEvictionHelper
+
+
+class KVLoadAdmission(enum.Enum):
+    """Narrow external-load result interpreted by prefill queue policy."""
+
+    NO_LOAD = enum.auto()
+    PENDING = enum.auto()
+    FULL_PREFILL_UNAVAILABLE = enum.auto()
+    SOFT_BUDGET_UNAVAILABLE = enum.auto()
+    STARTED = enum.auto()
 
 
 class _LoadPhase(enum.Enum):
@@ -84,8 +100,22 @@ class KVLoadCoordinator:
       completion/preemption of the remaining prefill.
     """
 
-    def __init__(self, scheduler: Scheduler) -> None:
-        self.scheduler = scheduler
+    def __init__(
+        self,
+        *,
+        lookup_enabled: bool,
+        connector: KVConnectorBase | None,
+        block_manager: BaseBlockManager,
+        block_trie: BlockTrie,
+        eviction_helper: BaseEvictionHelper,
+        sessions: dict[int, SchedulerSession],
+    ) -> None:
+        self.lookup_enabled = lookup_enabled
+        self.connector = connector
+        self.block_manager = block_manager
+        self.block_trie = block_trie
+        self.eviction_helper = eviction_helper
+        self.sessions = sessions
         # Active load lifecycle. Records survive the LOADING -> READY ->
         # PREFILLING transitions so stop/end and preemption can find the owner.
         self._loads: dict[int, _LoadRecord] = {}
@@ -104,7 +134,7 @@ class KVLoadCoordinator:
         remote-hit allocation may stop earlier, but load admission must know
         whether the eventual full prefill has a path to completion.
         """
-        block_size = self.scheduler.cache_config.block_size
+        block_size = seq.block_size
         target_tokens = int(seq.num_all_ids) + max(0, int(prealloc_size))
         return (target_tokens + block_size - 1) // block_size
 
@@ -122,7 +152,7 @@ class KVLoadCoordinator:
         both paths in one table prevents the new load from consuming capacity
         required by work that the scheduler has already accepted.
         """
-        if not self.scheduler._external_lookup_enabled:
+        if not self.lookup_enabled:
             return
         if target_blocks is None:
             target_blocks = self.prefill_target_blocks(seq, prealloc_size)
@@ -153,8 +183,120 @@ class KVLoadCoordinator:
         """
         missing_blocks = max(0, int(target_blocks) - int(seq.num_blocks))
         soft_reserved = self.soft_reserved_blocks(exclude_seq=seq)
-        free_blocks = self.scheduler.block_manager.get_num_free_gpu_blocks()
+        free_blocks = self.block_manager.get_num_free_gpu_blocks()
         return missing_blocks + soft_reserved <= free_blocks
+
+    def is_lookup_pending(self, seq: SchedulerSequence) -> bool:
+        """Whether this request already has an asynchronous lookup in
+        flight."""
+        connector = self.connector
+        if not self.lookup_enabled or connector is None:
+            return False
+        return connector.is_lookup_pending(seq.seq_id)
+
+    def try_load(
+        self,
+        seq: SchedulerSequence,
+        *,
+        prealloc_size: int,
+        evictable_seqs: Iterable[SchedulerSequence],
+    ) -> KVLoadAdmission:
+        """Poll and admit one external prefix without choosing queue policy.
+
+        The return value describes only the connector/paging result. Prefill admission remains responsible for mapping
+        it to skip, stop, continue, or load-started and for committing or rolling back its local match.
+        """
+        connector = self.connector
+        if not self.lookup_enabled or connector is None:
+            return KVLoadAdmission.NO_LOAD
+
+        num_external_tokens, _ = connector.get_num_new_matched_tokens(
+            seq,
+            seq.num_history_ids,
+        )
+        if num_external_tokens is None:
+            return KVLoadAdmission.PENDING
+        if num_external_tokens <= 0:
+            return KVLoadAdmission.NO_LOAD
+        return self._admit_load(
+            seq,
+            num_external_tokens=int(num_external_tokens),
+            prealloc_size=prealloc_size,
+            evictable_seqs=evictable_seqs,
+        )
+
+    def _admit_load(
+        self,
+        seq: SchedulerSequence,
+        *,
+        num_external_tokens: int,
+        prealloc_size: int,
+        evictable_seqs: Iterable[SchedulerSequence],
+    ) -> KVLoadAdmission:
+        """Admit the complete prefill, then allocate the remote interval."""
+        connector = self.connector
+        assert connector is not None
+        block_size = seq.block_size
+        local_step = int(seq.num_history_ids)
+        # Transfers are block-granular. Reuse a private partial boundary block,
+        # publish only full loaded blocks, and leave the final token to compute.
+        fallback_step = local_step // block_size * block_size
+        remote_step = local_step + num_external_tokens
+        remote_step = min(remote_step, int(seq.get_prefix_cache_max_match_step()))
+        remote_step = remote_step // block_size * block_size
+        if remote_step <= fallback_step:
+            return KVLoadAdmission.NO_LOAD
+
+        target_blocks = self.prefill_target_blocks(seq, prealloc_size)
+        old_kv_token_limit = seq.kv_token_limit
+        # Only the remote hit is allocated now, but admission guarantees the
+        # complete prefill can finish beside every existing soft reservation.
+        seq.kv_token_limit = None
+        full_prefill_fits = self.eviction_helper.evict_for_seq(
+            seq,
+            list(evictable_seqs),
+            prealloc_size,
+        )
+        if not full_prefill_fits:
+            seq.kv_token_limit = old_kv_token_limit
+            return KVLoadAdmission.FULL_PREFILL_UNAVAILABLE
+        if not self.can_admit_load(seq, target_blocks):
+            seq.kv_token_limit = old_kv_token_limit
+            return KVLoadAdmission.SOFT_BUDGET_UNAVAILABLE
+
+        original_num_blocks = seq.num_blocks
+        try:
+            # Allocate only the checked remote interval. The unallocated local
+            # tail remains represented by the soft target above.
+            seq.kv_token_limit = remote_step
+            self.block_manager.allocate(seq)
+            block_table = self.block_manager.get_block_table(seq)
+            fallback_block = fallback_step // block_size
+            remote_block = remote_step // block_size
+            load_block_ids = tuple(
+                int(block_id)
+                for block_id in block_table[fallback_block:remote_block]
+            )
+            connector.update_state_after_alloc(
+                seq,
+                load_block_ids,
+                remote_step - fallback_step,
+            )
+            # From start_load onward, cleanup must retain destinations until
+            # workers report terminal progress or their queues are drained.
+            self.start_load(
+                seq,
+                fallback_step=fallback_step,
+                remote_step=remote_step,
+                target_blocks=target_blocks,
+            )
+        except Exception:
+            if seq.num_blocks > original_num_blocks:
+                self.block_manager.truncate(seq, original_num_blocks)
+            seq.kv_token_limit = old_kv_token_limit
+            raise
+        seq.kv_token_limit = None
+        return KVLoadAdmission.STARTED
 
     def start_load(
         self,
@@ -166,10 +308,9 @@ class KVLoadCoordinator:
     ) -> None:
         """Take paging ownership after destinations have been allocated.
 
-        ``Scheduler._start_external_load`` must first allocate the exact
-        destination range and bind it to connector metadata. Only then does
-        this method move the sequence out of the normal waiting queue and make
-        the asynchronous write visible to paging cleanup paths.
+        :meth:`try_load` first allocates the exact destination range and binds
+        connector metadata. Only then does this method move the sequence out of
+        normal waiting and expose the asynchronous write to cleanup paths.
         """
         request_id = int(seq.seq_id)
         if request_id in self._loads:
@@ -217,20 +358,19 @@ class KVLoadCoordinator:
         The blocks were private destinations while loading. Publishing inserts their full prefix into the local trie,
         advances sequence history, and exposes cached-token metrics only after all ranks have valid contents.
         """
-        scheduler = self.scheduler
         seq = record.seq
         # Limit trie publication to the successfully loaded prefix. The request
         # may already own preallocated blocks after remote_step.
         seq.kv_token_limit = record.remote_step
-        if scheduler.block_trie.enabled:
-            scheduler.block_trie.allocate(seq)
+        if self.block_trie.enabled:
+            self.block_trie.allocate(seq)
         seq.set_step(record.remote_step)
         seq.kv_token_limit = None
         if seq.prefix_cache.match_start_step < 0:
             # With no preceding local trie hit, the block-aligned load start is
             # the beginning of this request's externally cached interval.
             seq.prefix_cache.match_start_step = record.fallback_step
-        scheduler._finish_prefix_cache_schedule(seq)
+        self.block_trie.finalize_match(seq)
         seq.state.finish_remote_load()
         record.phase = _LoadPhase.READY
 
@@ -242,11 +382,10 @@ class KVLoadCoordinator:
         block-aligned ``fallback_step`` and move the trie cursor to an ancestor
         that refers only to retained blocks.
         """
-        scheduler = self.scheduler
         seq = record.seq
         fallback_blocks = record.fallback_step // seq.block_size
         if seq.num_blocks > fallback_blocks:
-            scheduler.block_manager.truncate(seq, fallback_blocks)
+            self.block_manager.truncate(seq, fallback_blocks)
         seq.set_step(record.fallback_step)
         seq.kv_token_limit = None
 
@@ -256,7 +395,7 @@ class KVLoadCoordinator:
         seq.prefix_cache.trie_cursor = cursor
         if seq.prefix_cache.match_start_step > record.fallback_step:
             seq.prefix_cache.match_start_step = -1
-        scheduler._finish_prefix_cache_schedule(seq)
+        self.block_trie.finalize_match(seq)
 
     def _finish_cancelled_or_failed(self, record: _LoadRecord) -> None:
         """Release accounting and honor cleanup deferred during ``LOADING``."""
@@ -343,15 +482,20 @@ class KVLoadCoordinator:
             self._finish_cancelled_or_failed(record)
 
     def _remove_sequence(self, seq: SchedulerSequence) -> None:
-        scheduler = self.scheduler
-        connector = scheduler.kv_connector
+        connector = self.connector
         if connector is not None:
             connector.request_finished(seq)
 
         session = seq.session
         session.remove_sequence(seq)
         if not session.sequences:
-            scheduler.sessions.pop(session.session_id, None)
+            self.sessions.pop(session.session_id, None)
+
+    def disable(self) -> None:
+        """Stop new lookup admission and discard scheduler-side ownership."""
+        self.lookup_enabled = False
+        self.clear()
+        self.connector = None
 
     def clear(self) -> None:
         self._loads.clear()

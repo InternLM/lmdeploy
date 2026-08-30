@@ -75,7 +75,7 @@ from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, Seque
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
 from .eviction_helper import build_eviction_helper
-from .kv_load_coordinator import KVLoadCoordinator
+from .kv_load_coordinator import KVLoadAdmission, KVLoadCoordinator
 from .kv_save_coordinator import KVSaveCoordinator
 from .state_manager import build_state_manager
 
@@ -500,7 +500,8 @@ class _PrefillAdmissionAttempt:
         self.prealloc_size = prealloc_size
         self.token_count = token_count
         self.has_admitted = has_admitted
-        self._remote_ready = scheduler.kv_load_coordinator.is_remote_ready(seq)
+        self.load_coordinator = scheduler.kv_load_coordinator
+        self._remote_ready = self.load_coordinator.is_remote_ready(seq)
         self.allow_long_prefill = allow_long_prefill
         self._alloc_size = prealloc_size
         self._prefix_match = _TentativePrefixMatch(
@@ -509,7 +510,7 @@ class _PrefillAdmissionAttempt:
             scheduler.block_manager,
             is_ssm=scheduler.is_ssm,
             preserve_existing_state=(
-                scheduler._external_lookup_enabled and not self._remote_ready),
+                self.load_coordinator.lookup_enabled and not self._remote_ready),
         )
 
     def run(self):
@@ -523,7 +524,7 @@ class _PrefillAdmissionAttempt:
         5. Admit KV/state resources or roll the tentative match back precisely.
         6. On success, allocate blocks/states and publish the accepted hit.
         """
-        if self.scheduler._external_lookup_enabled and not self._remote_ready:
+        if self.load_coordinator.lookup_enabled and not self._remote_ready:
             if self._lookup_is_pending():
                 return _PrefillAdmissionResult.skip()
             self._prefix_match.begin()
@@ -545,9 +546,7 @@ class _PrefillAdmissionAttempt:
         poll delay instead of diagnosing an empty batch as GPU-cache pressure.
         """
         scheduler = self.scheduler
-        connector = scheduler.kv_connector
-        assert connector is not None
-        if not connector.is_lookup_pending(self.seq.seq_id):
+        if not self.load_coordinator.is_lookup_pending(self.seq):
             return False
         scheduler.last_schedule_had_pending_lookup = True
         return True
@@ -555,7 +554,7 @@ class _PrefillAdmissionAttempt:
     def _admit_resources(self):
         if self.scheduler.block_trie.enabled:
             return self._admit_prefix_cache_resources()
-        if self.scheduler._external_lookup_enabled:
+        if self.load_coordinator.lookup_enabled:
             lookup_result = self._query_external_prefix()
             if lookup_result is not None:
                 return lookup_result
@@ -586,7 +585,7 @@ class _PrefillAdmissionAttempt:
             if not self._remote_ready and not self._has_private_local_tail():
                 self._prefix_match.match()
 
-        if scheduler._external_lookup_enabled:
+        if self.load_coordinator.lookup_enabled:
             lookup_result = self._query_external_prefix()
             if lookup_result is not None:
                 return lookup_result
@@ -629,138 +628,39 @@ class _PrefillAdmissionAttempt:
         return None
 
     def _query_external_prefix(self):
-        """Poll the external prefix after prioritizing the local trie.
-
-        Return meanings from the connector are intentionally different:
-
-        * ``None``: lookup RPC is still pending. Restore the pre-match baseline
-          and skip this candidate so later waiters can still run.
-        * ``0``: lookup completed with no extension; continue normal local
-          allocation using any accepted trie hit.
-        * ``> 0``: allocate the block-aligned external interval and move the
-          request to the load coordinator instead of this model batch.
-
-        A coordinator ``READY`` request bypasses lookup because its accepted
-        remote boundary has already been published.
-        """
+        """Map connector/paging admission to prefill queue policy."""
         scheduler = self.scheduler
         if self._remote_ready:
             return None
-        connector = scheduler.kv_connector
-        assert connector is not None
-        # Local matching runs first, so this step asks the connector only for
-        # the remote extension beyond KV that is already resident on this node.
-        num_external_tokens, _ = connector.get_num_new_matched_tokens(
+        admission = self.load_coordinator.try_load(
             self.seq,
-            self.seq.num_history_ids,
+            prealloc_size=self.prealloc_size,
+            evictable_seqs=self._evictable_sequences(),
         )
-        if num_external_tokens is not None:
-            if num_external_tokens > 0:
-                return self._start_external_load(int(num_external_tokens))
+        if admission is KVLoadAdmission.NO_LOAD:
             return None
+        if admission is KVLoadAdmission.PENDING:
+            self._prefix_match.rollback('external lookup pending')
+            scheduler.last_schedule_had_pending_lookup = True
+            return _PrefillAdmissionResult.skip()
+        if admission is KVLoadAdmission.STARTED:
+            self._prefix_match.commit()
+            return _PrefillAdmissionResult.load()
+        if admission is KVLoadAdmission.FULL_PREFILL_UNAVAILABLE:
+            reason = 'full prefill capacity unavailable'
+        else:
+            assert admission is KVLoadAdmission.SOFT_BUDGET_UNAVAILABLE
+            reason = 'soft prefill budget unavailable'
+        # No worker has seen a destination on rejected admission, so the
+        # request-local prefix transaction remains exactly reversible.
+        self._prefix_match.rollback(reason)
+        return _PrefillAdmissionResult.stop()
 
-        self._prefix_match.rollback('external lookup pending')
-        scheduler.last_schedule_had_pending_lookup = True
-        return _PrefillAdmissionResult.skip()
-
-    def _start_external_load(self, num_external_tokens: int):
-        """Admit against soft prefill budgets, then allocate the remote hit.
-
-        Lookup can start inside a partially computed block, but connector
-        transfer and local trie publication are block-granular. The load range
-        is therefore expanded down to ``fallback_step`` and truncated to the
-        deepest safe full-block ``remote_step``. A failure later recomputes from
-        fallback because an asynchronous writer may have overwritten that
-        boundary block partially.
-
-        Only the remote interval is physically allocated now. Admission still
-        checks capacity for the complete prefill and every existing soft
-        reservation before handing any destination to workers; otherwise
-        several prefix loads could occupy all blocks and leave no capacity for
-        their remaining local tails.
-        """
+    def _evictable_sequences(self):
+        """Iterate queue-owned eviction candidates in historical order."""
         scheduler = self.scheduler
-        connector = scheduler.kv_connector
-        assert connector is not None
-        seq = self.seq
-        block_size = seq.block_size
-        local_step = int(seq.num_history_ids)
-        # Transfers are block-granular. Reuse the sequence's private partial
-        # block at the boundary, but only publish complete remotely loaded
-        # blocks and never match through the prompt's final token.
-        fallback_step = local_step // block_size * block_size
-        remote_step = local_step + num_external_tokens
-        remote_step = min(remote_step, int(seq.get_prefix_cache_max_match_step()))
-        remote_step = remote_step // block_size * block_size
-        if remote_step <= fallback_step:
-            return None
-
-        target_blocks = scheduler.kv_load_coordinator.prefill_target_blocks(
-            seq,
-            self.prealloc_size,
-        )
-        old_kv_token_limit = seq.kv_token_limit
-        # The load allocates only the remote hit now, but it is admitted only
-        # when the whole prefill can eventually finish. Otherwise concurrent
-        # loads could each pin a prefix and deadlock on their remaining tails.
-        seq.kv_token_limit = None
-        full_prefill_fits = self._evict_for_seq(self.prealloc_size)
-        load_admitted = (
-            full_prefill_fits
-            and scheduler.kv_load_coordinator.can_admit_load(
-                seq,
-                target_blocks,
-            )
-        )
-        if not load_admitted:
-            # No worker has seen the destination yet, so local match state can
-            # still be restored exactly and the request can retry later.
-            seq.kv_token_limit = old_kv_token_limit
-            reason = (
-                'full prefill capacity unavailable'
-                if not full_prefill_fits
-                else 'soft prefill budget unavailable'
-            )
-            self._prefix_match.rollback(reason)
-            return _PrefillAdmissionResult.stop()
-
-        original_num_blocks = seq.num_blocks
-        try:
-            # kv_token_limit prevents allocate() from reserving the unchecked
-            # local tail; can_admit_load() accounts for that tail softly.
-            seq.kv_token_limit = remote_step
-            scheduler.block_manager.allocate(seq)
-            block_table = scheduler.block_manager.get_block_table(seq)
-            fallback_block = fallback_step // block_size
-            remote_block = remote_step // block_size
-            load_block_ids = tuple(
-                int(block_id)
-                for block_id in block_table[fallback_block:remote_block]
-            )
-            connector.update_state_after_alloc(
-                seq,
-                load_block_ids,
-                remote_step - fallback_step,
-            )
-            # Register paging ownership only after connector state references
-            # concrete destinations. From start_load onward, stop/end may not
-            # free these blocks until workers report completion or are drained.
-            scheduler.kv_load_coordinator.start_load(
-                seq,
-                fallback_step=fallback_step,
-                remote_step=remote_step,
-                target_blocks=target_blocks,
-            )
-        except Exception:
-            # Allocation/binding failed synchronously, before device writes are
-            # in flight. Remove only blocks added by this attempt.
-            if seq.num_blocks > original_num_blocks:
-                scheduler.block_manager.truncate(seq, original_num_blocks)
-            seq.kv_token_limit = old_kv_token_limit
-            raise
-        seq.kv_token_limit = None
-        self._prefix_match.commit()
-        return _PrefillAdmissionResult.load()
+        yield from reversed(scheduler.hanging)
+        yield from reversed(self.evictable_waiting)
 
     def _match_prefix_for_prefill_gate(self):
         """Tentatively match once so a request can be rechecked by a gate."""
@@ -806,8 +706,7 @@ class _PrefillAdmissionAttempt:
         model forwards, preemption/resume, or a continued chat session; it is
         not specific to multi-turn conversation.
         """
-        scheduler = self.scheduler
-        if not scheduler._external_lookup_enabled:
+        if not self.load_coordinator.lookup_enabled:
             return False
         seq = self.seq
         return seq.num_blocks > int(seq.num_history_ids) // seq.block_size
@@ -866,12 +765,12 @@ class _PrefillAdmissionAttempt:
 
     def _evict_for_seq(self, alloc_size: int):
         """Evict stopped or skipped waiters until this sequence can run."""
-        from itertools import chain
         scheduler = self.scheduler
-        hanging = reversed(scheduler.hanging)
-        waiting = reversed(self.evictable_waiting)
-        evictable = list(chain(hanging, waiting))
-        return scheduler.eviction_helper.evict_for_seq(self.seq, evictable, alloc_size)
+        return scheduler.eviction_helper.evict_for_seq(
+            self.seq,
+            list(self._evictable_sequences()),
+            alloc_size,
+        )
 
     def _finish_admission(self):
         scheduler = self.scheduler
@@ -887,8 +786,8 @@ class _PrefillAdmissionAttempt:
         if scheduler.is_ssm:
             scheduler.state_manager.allocate(seq)
         if scheduler.block_trie.enabled:
-            scheduler._finish_prefix_cache_schedule(seq)
-        scheduler.kv_load_coordinator.track_prefill(
+            scheduler.block_trie.finalize_match(seq)
+        self.load_coordinator.track_prefill(
             seq,
             prealloc_size=self.prealloc_size,
         )
@@ -896,7 +795,7 @@ class _PrefillAdmissionAttempt:
             # Preserve the load record through the remaining prefill so its
             # reservation can be released only after model output advances the
             # sequence to input_end_pos.
-            scheduler.kv_load_coordinator.mark_scheduled(seq)
+            self.load_coordinator.mark_scheduled(seq)
         self._prefix_match.commit()
         return _PrefillAdmissionResult.admit(prefill_token_count)
 
@@ -937,13 +836,6 @@ class Scheduler:
             and transfer_config.is_kv_consumer
             and not self.is_ssm
         )
-        # Keep call sites uniform even when a role is disabled. Each coordinator
-        # is a no-op until scheduler/connector metadata starts its lifecycle.
-        self.kv_load_coordinator = KVLoadCoordinator(self)
-        self.kv_save_coordinator = KVSaveCoordinator(self)
-        # Per-tick signal consumed by EngineLoop to distinguish asynchronous
-        # lookup latency from actual cache-allocation pressure.
-        self.last_schedule_had_pending_lookup = False
         checkpoint_state_manager = self.state_manager if self.is_ssm else None
         self.block_trie = BlockTrie(allocator=self.block_manager.allocator,
                                    block_size=self.cache_config.block_size,
@@ -951,6 +843,21 @@ class Scheduler:
                                    checkpoint_state_manager=checkpoint_state_manager)
 
         self.eviction_helper = build_eviction_helper(self, self.scheduler_config.eviction_type)
+        # Load admission receives only paging owners plus request-local queue
+        # candidates from its caller; it does not reach back through Scheduler.
+        self.kv_load_coordinator = KVLoadCoordinator(
+            lookup_enabled=self._external_lookup_enabled,
+            connector=kv_connector,
+            block_manager=self.block_manager,
+            block_trie=self.block_trie,
+            eviction_helper=self.eviction_helper,
+            sessions=self.sessions,
+        )
+        # Keep save call sites uniform even when the producer role is disabled.
+        self.kv_save_coordinator = KVSaveCoordinator(self)
+        # Per-tick signal consumed by EngineLoop to distinguish asynchronous
+        # lookup latency from actual cache-allocation pressure.
+        self.last_schedule_had_pending_lookup = False
 
         seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
         self.seq_meta = seq_meta
@@ -972,7 +879,7 @@ class Scheduler:
         connector = self.kv_connector
         self.kv_connector = None
         self._external_lookup_enabled = False
-        self.kv_load_coordinator.clear()
+        self.kv_load_coordinator.disable()
         self.kv_save_coordinator.clear()
         if connector is not None:
             connector.shutdown()
@@ -989,29 +896,6 @@ class Scheduler:
             return True
         self.block_trie.state_checkpoints.evict(1)
         return self.state_manager.get_num_free_runtime() > 0
-
-    @staticmethod
-    def _finalize_prefix_cache_match(seq: SchedulerSequence):
-        """Publish accepted cached-token count within the current prompt."""
-        match_start = seq.prefix_cache.match_start_step
-        if match_start < 0:
-            seq.cached_tokens = 0
-            return
-        cached_start = match_start
-        cached_end = seq.num_history_ids
-        prompt_start = seq.input_start_pos
-        prompt_end = seq.input_end_pos
-        seq.cached_tokens = max(0, min(cached_end, prompt_end) - max(cached_start, prompt_start))
-
-    @staticmethod
-    def _finish_prefix_cache_schedule(seq: SchedulerSequence):
-        """Publish match side effects after the sequence is accepted to run."""
-        prefix_cache = seq.prefix_cache
-        if prefix_cache.suppress_match_stats:
-            seq.cached_tokens = 0
-            prefix_cache.suppress_match_stats = False
-            return
-        Scheduler._finalize_prefix_cache_match(seq)
 
     def _long_context_chunk_limit(self, seq: SchedulerSequence):
         """Return the token budget for one long-context chunk."""
@@ -1175,7 +1059,7 @@ class Scheduler:
 
             # allocate session memory
             self.block_manager.allocate(seq)
-            self._finish_prefix_cache_schedule(seq)
+            self.block_trie.finalize_match(seq)
             _to_running(seq)
 
         return migration_ready

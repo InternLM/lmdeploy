@@ -227,7 +227,7 @@ def test_scheduler_shutdown_releases_injected_connector_once():
     scheduler.shutdown()
 
     connector.shutdown.assert_called_once_with()
-    assert scheduler.kv_load_coordinator.clear.call_count == 2
+    assert scheduler.kv_load_coordinator.disable.call_count == 2
     assert scheduler.kv_save_coordinator.clear.call_count == 2
     assert scheduler.kv_connector is None
     assert not scheduler._external_lookup_enabled
