@@ -24,13 +24,14 @@ class _AsyncLookupConnector:
         self.results = iter(results)
         self.failed_ids = set(failed_ids)
         self.pending_ids = set()
+        self.new_requests = []
         self.lookup_calls = []
         self.cancelled = []
         self.finished = []
         self.allocations = []
 
     def on_new_request(self, request):
-        pass
+        self.new_requests.append(request.seq_id)
 
     def is_lookup_pending(self, request_id):
         return request_id in self.pending_ids
@@ -107,6 +108,21 @@ def _make_async_lookup_scheduler(
         seq_meta=SequenceMeta(block_size, strategy=ARSequenceStrategy()),
         kv_connector=connector,
     )
+
+
+def test_sequence_lifecycle_notifies_connector_on_add_and_end():
+    connector = _AsyncLookupConnector([])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+    )
+
+    seq = scheduler.add_session(71).add_sequence(torch.arange(4))
+    assert connector.new_requests == [seq.seq_id]
+
+    scheduler.end_session(71)
+    assert connector.finished == [seq.seq_id]
+    assert 71 not in scheduler.sessions
 
 
 def test_async_lookup_pending_rolls_back_a_new_request_once():

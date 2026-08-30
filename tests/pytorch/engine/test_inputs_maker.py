@@ -379,6 +379,40 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
     assert events == ['collect_migration_done', 'send_next_inputs']
 
 
+def test_migration_loop_schedules_and_processes_ready_batch():
+    events = []
+    migration_ready = [object()]
+
+    class _Scheduler:
+
+        def _schedule_migration(self):
+            events.append('schedule')
+            return migration_ready
+
+        def has_migration_waiting(self):
+            raise AssertionError('a ready migration batch must be processed')
+
+    class _MigrationEvent:
+
+        def clear(self):
+            events.append('clear')
+
+    async def _process_ready(actual):
+        events.append(('process', actual))
+        loop.stop_event.set()
+
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.stop_event = asyncio.Event()
+    loop._sleep_requested = False
+    loop.scheduler = _Scheduler()
+    loop.migration_event = _MigrationEvent()
+    loop._migration_loop_process_ready = _process_ready
+
+    asyncio.run(loop.migration_loop())
+
+    assert events == ['schedule', 'clear', ('process', migration_ready)]
+
+
 def test_engine_loop_uses_short_yield_only_for_pending_lookup(monkeypatch):
     sleeps = []
 
