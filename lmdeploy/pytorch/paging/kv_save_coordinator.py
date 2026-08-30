@@ -13,7 +13,7 @@ Lifecycle:
 1. ``Scheduler.build_connector_meta`` asks the connector for save metadata.
 2. :meth:`acquire` pins all logical blocks before metadata reaches workers.
 3. Worker output is aggregated by the connector into completed operation IDs.
-4. :meth:`update` releases the matching logical references.
+4. :meth:`release_completed_leases` releases the matching logical references.
 5. Engine shutdown drains transfer queues before :meth:`clear` releases any
    leases whose final outputs were intentionally discarded.
 """
@@ -59,7 +59,7 @@ class KVSaveCoordinator:
             block_manager.pin_logical_blocks(logical_block_ids)
             self._leases[lease.operation_id] = logical_block_ids
 
-    def update(self, completed_save_ids: frozenset[KVOperationId]) -> None:
+    def release_completed_leases(self, completed_save_ids: frozenset[KVOperationId]) -> None:
         """Release operations that reached a terminal state on every TP
         rank."""
         block_manager = self.block_manager

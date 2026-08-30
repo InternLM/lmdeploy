@@ -65,7 +65,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
                 evict_seq.prefix_cache.suppress_match_stats = True
             # Eviction also ends the tracked prefill; otherwise its soft block
             # reservation would outlive the local KV blocks freed below.
-            self.load_coordinator.release(evict_seq)
+            self.load_coordinator.release_tracking(evict_seq)
             evict_seq.state.free()
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
@@ -125,7 +125,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
                 evict_seq.prefix_cache.suppress_match_stats = True
             # Keep coordinator ownership and its soft admission budget in sync
             # with the KV blocks and SSM runtime state released by free().
-            self.load_coordinator.release(evict_seq)
+            self.load_coordinator.release_tracking(evict_seq)
             evict_seq.state.free()
             has_free_state = has_runtime_state or state_manager.get_num_free_runtime() > 0
             if not has_free_state:

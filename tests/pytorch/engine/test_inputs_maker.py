@@ -252,7 +252,7 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
 
     state_checkpoints = _StateCheckpoints()
     loop = EngineLoop.__new__(EngineLoop)
-    loop.scheduler = SimpleNamespace(collect_migration_done=lambda: None)
+    loop.scheduler = SimpleNamespace(resume_completed_migrations=lambda: None)
     loop.state_checkpoints = state_checkpoints
     loop.inputs_maker = _InputsMaker(state_checkpoints)
     loop.executor = _Executor(state_checkpoints)
@@ -338,7 +338,7 @@ def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save()
 
     state_checkpoints = _StateCheckpoints()
     loop = EngineLoop.__new__(EngineLoop)
-    loop.scheduler = SimpleNamespace(collect_migration_done=lambda: None)
+    loop.scheduler = SimpleNamespace(resume_completed_migrations=lambda: None)
     loop.state_checkpoints = state_checkpoints
     loop.inputs_maker = _InputsMaker()
     loop.executor = _Executor()
@@ -369,8 +369,8 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
         def has_unfinished(self):
             return False
 
-        def collect_migration_done(self):
-            events.append('collect_migration_done')
+        def resume_completed_migrations(self):
+            events.append('resume_completed_migrations')
 
     class _InputsMaker:
 
@@ -390,7 +390,7 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
     result = asyncio.run(asyncio.wait_for(loop._main_loop_try_send_next_inputs(), timeout=1.0))
 
     assert result == ('forward_inputs', ['long-seq'])
-    assert events == ['collect_migration_done', 'send_next_inputs']
+    assert events == ['resume_completed_migrations', 'send_next_inputs']
 
 
 def test_migration_loop_schedules_and_processes_ready_batch():

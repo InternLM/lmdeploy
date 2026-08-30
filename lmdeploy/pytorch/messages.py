@@ -238,16 +238,16 @@ class SequenceManager:
         """Num sequences."""
         return len(self.get_sequences(status))
 
-    def add_sequence(self, seq: 'SchedulerSequence'):
-        """Add sequence."""
+    def register_sequence(self, seq: 'SchedulerSequence'):
+        """Register a sequence in the global and status indexes."""
         seq_id = seq.seq_id
         status = seq.status
         status_map = self._status_seq_map[status]
         self._seq_map[seq_id] = seq
         status_map[seq_id] = seq
 
-    def remove_sequence(self, seq: 'SchedulerSequence'):
-        """Remove sequence."""
+    def unregister_sequence(self, seq: 'SchedulerSequence'):
+        """Remove a sequence from the global and status indexes."""
         seq_id = seq.seq_id
         status = seq.status
         status_map = self._status_seq_map[status]

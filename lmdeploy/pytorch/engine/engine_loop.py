@@ -406,14 +406,14 @@ class EngineLoop:
         if self._sleep_requested:
             return None, None
 
-        self.scheduler.collect_migration_done()
+        self.scheduler.resume_completed_migrations()
         return await self.inputs_maker.send_next_inputs()
 
     async def _prefetch_next_inputs(self):
-        """Collect migration completions before prefetching the next batch."""
+        """Resume completed migrations before prefetching the next batch."""
         if self._sleep_requested:
             return None, None
-        self.scheduler.collect_migration_done()
+        self.scheduler.resume_completed_migrations()
         return await self.inputs_maker.prefetch_next_inputs()
 
     async def _wait_for_schedulable_prefill(self):

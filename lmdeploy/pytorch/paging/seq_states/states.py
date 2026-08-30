@@ -37,7 +37,7 @@ class SequenceLifecycle:
     def add_sequence(self, seq: SchedulerSequence, status: MessageStatus) -> None:
         seq.session.sequences[seq.seq_id] = seq
         seq.set_state(StateBase.build(self, seq, status))
-        self._seq_manager.add_sequence(seq)
+        self._seq_manager.register_sequence(seq)
         if self._connector is not None:
             self._connector.on_new_request(seq)
 
@@ -46,10 +46,10 @@ class SequenceLifecycle:
         assert seq.seq_id in seq.session.sequences
         self.free_sequence(seq)
         seq.session.sequences.pop(seq.seq_id)
-        self._seq_manager.remove_sequence(seq)
+        self._seq_manager.unregister_sequence(seq)
 
-    def finish_sequence(self, seq: SchedulerSequence) -> None:
-        """Notify connector completion, then release local ownership."""
+    def end_sequence(self, seq: SchedulerSequence) -> None:
+        """Notify the connector that the request ended, then remove it."""
         if self._connector is not None:
             self._connector.request_finished(seq)
         self.remove_sequence(seq)

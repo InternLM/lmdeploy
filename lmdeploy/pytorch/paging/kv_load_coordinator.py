@@ -9,8 +9,8 @@ sequence and GPU-block lifetimes without performing worker I/O itself:
    destinations, binds connector metadata, and calls :meth:`start_load`.
 2. While workers may write those blocks, the sequence stays in
    ``WAITING_FOR_REMOTE_KVS`` and cannot be evicted or removed.
-3. :meth:`update` publishes a successful load or rolls a failed/cancelled load
-   back to the last block-aligned safe step.
+3. :meth:`apply_load_results` publishes a successful load or rolls a
+   failed/cancelled load back to the last block-aligned safe step.
 4. The completed request is admitted for its remaining prefill, after which
    its load record and soft reservation can be released.
 
@@ -392,13 +392,13 @@ class KVLoadCoordinator:
         record = self._loads.get(int(seq.seq_id))
         return record is not None and record.phase is _LoadPhase.READY
 
-    def mark_scheduled(self, seq: SchedulerSequence) -> None:
+    def mark_prefill_scheduled(self, seq: SchedulerSequence) -> None:
         """Record that the remote-ready request entered remaining prefill."""
         record = self._loads.get(int(seq.seq_id))
         if record is not None and record.phase is _LoadPhase.READY:
             record.phase = _LoadPhase.PREFILLING
 
-    def update(self, results: tuple[KVLoadResult, ...]) -> None:
+    def apply_load_results(self, results: tuple[KVLoadResult, ...]) -> None:
         """Apply terminal load results aggregated across all TP ranks.
 
         Missing or non-``LOADING`` records are stale/duplicate progress and are
@@ -469,11 +469,11 @@ class KVLoadCoordinator:
         self._prefill_targets.pop(request_id, None)
         seq.state.finish_remote_load()
         if record.deferred_cleanup is _DeferredLoadCleanup.END:
-            self._remove_sequence(seq)
+            self._finish_deferred_end(seq)
         elif record.deferred_cleanup is _DeferredLoadCleanup.STOP:
             seq.state.stop()
 
-    def request_stop(self, seq: SchedulerSequence) -> bool:
+    def defer_stop_if_loading(self, seq: SchedulerSequence) -> bool:
         """Return True when stop must wait for an active device write.
 
         Dropping the record or freeing sequence blocks now could let paging
@@ -482,13 +482,13 @@ class KVLoadCoordinator:
         """
         record = self._loads.get(int(seq.seq_id))
         if record is None or record.phase is not _LoadPhase.LOADING:
-            self.release(seq)
+            self.release_tracking(seq)
             return False
         if record.deferred_cleanup is _DeferredLoadCleanup.NONE:
             record.deferred_cleanup = _DeferredLoadCleanup.STOP
         return True
 
-    def request_end(self, seq: SchedulerSequence) -> bool:
+    def defer_end_if_loading(self, seq: SchedulerSequence) -> bool:
         """Return True when removal must wait for an active device write.
 
         End differs from stop only in final cleanup: after the write terminates,
@@ -496,12 +496,12 @@ class KVLoadCoordinator:
         """
         record = self._loads.get(int(seq.seq_id))
         if record is None or record.phase is not _LoadPhase.LOADING:
-            self.release(seq)
+            self.release_tracking(seq)
             return False
         record.deferred_cleanup = _DeferredLoadCleanup.END
         return True
 
-    def release(self, seq: SchedulerSequence) -> None:
+    def release_tracking(self, seq: SchedulerSequence) -> None:
         """Drop tracking after prefill completion, preemption, or removal.
 
         ``LOADING`` is intentionally a no-op because only terminal worker
@@ -515,7 +515,7 @@ class KVLoadCoordinator:
         if record is not None:
             self._loads.pop(request_id, None)
 
-    def release_completed_prefills(self, seqs: list[SchedulerSequence]) -> None:
+    def release_completed_prefill_reservations(self, seqs: list[SchedulerSequence]) -> None:
         """Release reservations after model output advances sequence history.
 
         Dispatch alone is insufficient proof: only after EngineLoop applies the
@@ -529,7 +529,7 @@ class KVLoadCoordinator:
             if self.is_remote_ready(seq):
                 continue
             if int(seq.num_history_ids) >= int(seq.input_end_pos):
-                self.release(seq)
+                self.release_tracking(seq)
 
     def finish_deferred_loads_after_worker_drain(self) -> None:
         """Remove ended requests after workers can no longer write KV blocks.
@@ -547,9 +547,9 @@ class KVLoadCoordinator:
             self._rollback(record)
             self._finish_cancelled_or_failed(record)
 
-    def _remove_sequence(self, seq: SchedulerSequence) -> None:
+    def _finish_deferred_end(self, seq: SchedulerSequence) -> None:
         session = seq.session
-        session.lifecycle.finish_sequence(seq)
+        session.lifecycle.end_sequence(seq)
         if not session.sequences:
             self.sessions.pop(session.session_id, None)
 

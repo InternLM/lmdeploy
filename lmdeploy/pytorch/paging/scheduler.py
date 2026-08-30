@@ -331,7 +331,7 @@ class Scheduler:
                 continue
 
             seq.state.deactivate()
-            self.kv_load_coordinator.release(seq)
+            self.kv_load_coordinator.release_tracking(seq)
             seq.state.evict()
             valid_mask[idx] = False
         return valid_mask
@@ -351,7 +351,7 @@ class Scheduler:
                 connector.cancel_lookup(seq.seq_id)
             # An active load may still write GPU memory. Defer the state change
             # until all ranks terminate instead of making its blocks evictable.
-            if self.kv_load_coordinator.request_stop(seq):
+            if self.kv_load_coordinator.defer_stop_if_loading(seq):
                 continue
             seq.state.stop()
 
@@ -371,11 +371,11 @@ class Scheduler:
                 connector.cancel_lookup(seq.seq_id)
             # Session removal also frees sequence blocks, so it must be deferred
             # while a worker may still address an in-flight load destination.
-            if self.kv_load_coordinator.request_end(seq):
+            if self.kv_load_coordinator.defer_end_if_loading(seq):
                 continue
             # stop session so it won't get scheduled again
             seq.state.stop()
-            self.sequence_lifecycle.finish_sequence(seq)
+            self.sequence_lifecycle.end_sequence(seq)
         if not session.sequences:
             self.sessions.pop(session_id)
 
@@ -453,12 +453,13 @@ class Scheduler:
         if connector_output is None or self.kv_connector is None:
             return
         result = self.kv_connector.update_connector_output(connector_output)
-        self.kv_load_coordinator.update(result.load_results)
-        self.kv_save_coordinator.update(result.completed_save_ids)
+        self.kv_load_coordinator.apply_load_results(result.load_results)
+        self.kv_save_coordinator.release_completed_leases(
+            result.completed_save_ids)
 
     def release_completed_prefill_reservations(self, seqs: SeqList) -> None:
         """Release soft targets only after forward output advanced history."""
-        self.kv_load_coordinator.release_completed_prefills(seqs)
+        self.kv_load_coordinator.release_completed_prefill_reservations(seqs)
 
     def finish_kv_transfers_after_worker_drain(self) -> None:
         """Release paging ownership after worker transfer queues have drained.
@@ -492,7 +493,7 @@ class Scheduler:
     def evict_seqs(self, running: SeqList):
         """Evict running sequences."""
         for seq in running:
-            self.kv_load_coordinator.release(seq)
+            self.kv_load_coordinator.release_tracking(seq)
             seq.state.evict()
 
     def activate_seqs(self, running: SeqList, filter_status: MessageStatus = MessageStatus.READY):
@@ -523,7 +524,8 @@ class Scheduler:
         finally:
             self.deactivate_migration_seqs(running)
 
-    def collect_migration_done(self):
+    def resume_completed_migrations(self):
+        """Move completed migration sequences back to the waiting queue."""
         for seq in self.migration_done:
             seq.state.activate()
 

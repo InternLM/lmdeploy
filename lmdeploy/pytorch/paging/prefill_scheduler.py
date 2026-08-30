@@ -437,7 +437,7 @@ class _PrefillAdmissionAttempt:
                 return _PrefillAdmissionResult.skip()
             self._prefix_match.begin()
 
-        gate_result = self._check_prefill_admission_gates()
+        gate_result = self._apply_prefill_admission_gates()
         if gate_result is not None:
             return gate_result
 
@@ -607,7 +607,7 @@ class _PrefillAdmissionAttempt:
             return _PrefillAdmissionResult.stop()
         return _PrefillAdmissionResult.skip()
 
-    def _check_prefill_admission_gates(self):
+    def _apply_prefill_admission_gates(self):
         """Apply long-prefill and token-budget admission gates."""
         result = self._apply_nonfinal_long_prefill_gate()
         if result is not None:
@@ -702,7 +702,7 @@ class _PrefillAdmissionAttempt:
             # Preserve the load record through the remaining prefill so its
             # reservation can be released only after model output advances the
             # sequence to input_end_pos.
-            self.load_coordinator.mark_scheduled(seq)
+            self.load_coordinator.mark_prefill_scheduled(seq)
         self._prefix_match.commit()
         return _PrefillAdmissionResult.admit(prefill_token_count)
 
