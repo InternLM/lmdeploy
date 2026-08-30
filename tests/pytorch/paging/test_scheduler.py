@@ -184,6 +184,59 @@ class TestScheduler:
         with pytest.raises(ValueError, match='schedule_running'):
             scheduler.schedule(is_prefill=False)
 
+    @pytest.mark.parametrize(
+        ('name', 'status'),
+        [
+            ('waiting', MessageStatus.WAITING),
+            ('remote_loading', MessageStatus.WAITING_FOR_REMOTE_KVS),
+            ('ready', MessageStatus.READY),
+            ('hanging', MessageStatus.STOPPED),
+            ('running', MessageStatus.RUNNING),
+            ('migration_waiting', MessageStatus.MIGRATION_WAITING),
+            ('migration_done', MessageStatus.MIGRATION_DONE),
+        ],
+    )
+    def test_status_sequence_views(self, scheduler, monkeypatch, name, status):
+        seq = object()
+        queried = []
+
+        def get_sequences(actual_status):
+            queried.append(actual_status)
+            return {0: seq}
+
+        monkeypatch.setattr(scheduler.seq_manager, 'get_sequences', get_sequences)
+
+        assert getattr(scheduler, name) == [seq]
+        assert queried == [status]
+
+    @pytest.mark.parametrize(
+        ('name', 'status', 'expected'),
+        [
+            ('num_waiting', MessageStatus.WAITING, 3),
+            ('num_remote_loading', MessageStatus.WAITING_FOR_REMOTE_KVS, 3),
+            ('num_ready', MessageStatus.READY, 3),
+            ('num_running', MessageStatus.RUNNING, 3),
+            ('num_migration_waiting', MessageStatus.MIGRATION_WAITING, 3),
+            ('num_migration_done', MessageStatus.MIGRATION_DONE, 3),
+            ('has_waiting', MessageStatus.WAITING, True),
+            ('has_remote_loading', MessageStatus.WAITING_FOR_REMOTE_KVS, True),
+            ('has_ready', MessageStatus.READY, True),
+            ('has_migration_waiting', MessageStatus.MIGRATION_WAITING, True),
+            ('has_migration_done', MessageStatus.MIGRATION_DONE, True),
+        ],
+    )
+    def test_status_queries(self, scheduler, monkeypatch, name, status, expected):
+        queried = []
+
+        def num_sequences(actual_status):
+            queried.append(actual_status)
+            return 3
+
+        monkeypatch.setattr(scheduler.seq_manager, 'num_sequences', num_sequences)
+
+        assert getattr(scheduler, name)() == expected
+        assert queried == [status]
+
 
 def test_schedule_migration_matches_current_sequence():
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy

@@ -160,60 +160,73 @@ class Scheduler:
             is_last_chunk=is_last_chunk,
         )
 
-    @staticmethod
-    def create_status_list_property(status: MessageStatus):
-        """Create status list property."""
-
-        def _get_status_list(self):
-            seq_map = self.seq_manager.get_sequences(status)
-            return list(seq_map.values())
-
-        return property(_get_status_list)
-
-    @staticmethod
-    def create_num_status_method(status: MessageStatus):
-        """Create num status method."""
-
-        def _num_status(self):
-            return self.seq_manager.num_sequences(status)
-
-        return _num_status
-
-    @staticmethod
-    def create_has_status_method(status: MessageStatus):
-        """Create has status method."""
-
-        def _has_status(self):
-            return self.seq_manager.num_sequences(status) > 0
-
-        return _has_status
-
     # Remote-loading sequences are intentionally separate from WAITING: workers
     # may address their destination blocks, so ordinary scheduling/eviction
     # must not treat them as candidates until the coordinator publishes them.
-    # status list properties
-    waiting = create_status_list_property(MessageStatus.WAITING)
-    remote_loading = create_status_list_property(MessageStatus.WAITING_FOR_REMOTE_KVS)
-    ready = create_status_list_property(MessageStatus.READY)
-    hanging = create_status_list_property(MessageStatus.STOPPED)
-    running = create_status_list_property(MessageStatus.RUNNING)
-    migration_waiting = create_status_list_property(MessageStatus.MIGRATION_WAITING)
-    migration_done = create_status_list_property(MessageStatus.MIGRATION_DONE)
 
-    # num status methods
-    num_waiting = create_num_status_method(MessageStatus.WAITING)
-    num_remote_loading = create_num_status_method(MessageStatus.WAITING_FOR_REMOTE_KVS)
-    num_ready = create_num_status_method(MessageStatus.READY)
-    num_running = create_num_status_method(MessageStatus.RUNNING)
-    num_migration_waiting = create_num_status_method(MessageStatus.MIGRATION_WAITING)
-    num_migration_done = create_num_status_method(MessageStatus.MIGRATION_DONE)
+    # Sequence views.
+    @property
+    def waiting(self) -> SeqList:
+        return list(self.seq_manager.get_sequences(MessageStatus.WAITING).values())
 
-    # has status methods
-    has_waiting = create_has_status_method(MessageStatus.WAITING)
-    has_remote_loading = create_has_status_method(MessageStatus.WAITING_FOR_REMOTE_KVS)
-    has_ready = create_has_status_method(MessageStatus.READY)
-    has_migration_waiting = create_has_status_method(MessageStatus.MIGRATION_WAITING)
-    has_migration_done = create_has_status_method(MessageStatus.MIGRATION_DONE)
+    @property
+    def remote_loading(self) -> SeqList:
+        return list(self.seq_manager.get_sequences(MessageStatus.WAITING_FOR_REMOTE_KVS).values())
+
+    @property
+    def ready(self) -> SeqList:
+        return list(self.seq_manager.get_sequences(MessageStatus.READY).values())
+
+    @property
+    def hanging(self) -> SeqList:
+        return list(self.seq_manager.get_sequences(MessageStatus.STOPPED).values())
+
+    @property
+    def running(self) -> SeqList:
+        return list(self.seq_manager.get_sequences(MessageStatus.RUNNING).values())
+
+    @property
+    def migration_waiting(self) -> SeqList:
+        return list(self.seq_manager.get_sequences(MessageStatus.MIGRATION_WAITING).values())
+
+    @property
+    def migration_done(self) -> SeqList:
+        return list(self.seq_manager.get_sequences(MessageStatus.MIGRATION_DONE).values())
+
+    # Sequence counts.
+    def num_waiting(self) -> int:
+        return self.seq_manager.num_sequences(MessageStatus.WAITING)
+
+    def num_remote_loading(self) -> int:
+        return self.seq_manager.num_sequences(MessageStatus.WAITING_FOR_REMOTE_KVS)
+
+    def num_ready(self) -> int:
+        return self.seq_manager.num_sequences(MessageStatus.READY)
+
+    def num_running(self) -> int:
+        return self.seq_manager.num_sequences(MessageStatus.RUNNING)
+
+    def num_migration_waiting(self) -> int:
+        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_WAITING)
+
+    def num_migration_done(self) -> int:
+        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_DONE)
+
+    # Non-empty status checks used by engine control flow.
+    def has_waiting(self) -> bool:
+        return self.seq_manager.num_sequences(MessageStatus.WAITING) > 0
+
+    def has_remote_loading(self) -> bool:
+        return self.seq_manager.num_sequences(MessageStatus.WAITING_FOR_REMOTE_KVS) > 0
+
+    def has_ready(self) -> bool:
+        return self.seq_manager.num_sequences(MessageStatus.READY) > 0
+
+    def has_migration_waiting(self) -> bool:
+        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_WAITING) > 0
+
+    def has_migration_done(self) -> bool:
+        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_DONE) > 0
 
     def add_session(self, session_id: int):
         """Add new session.
