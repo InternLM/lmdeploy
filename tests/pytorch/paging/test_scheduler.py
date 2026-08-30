@@ -61,6 +61,8 @@ class TestScheduler:
         session = scheduler.add_session(session_id)
         assert session_id in scheduler.sessions
         assert scheduler.sessions[session_id] == session
+        assert scheduler.get_session(session_id) is session
+        assert scheduler.get_sessions() == [session]
 
         num_blocks = 2
         token_ids = torch.tensor([0] * block_size * num_blocks)

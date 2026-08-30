@@ -20,6 +20,7 @@ from .eviction_helper import build_eviction_helper
 from .kv_load_coordinator import KVLoadCoordinator
 from .kv_save_coordinator import KVSaveCoordinator
 from .prefill_scheduler import _PrefillScheduler, _PrefillTurnPolicy
+from .seq_states import SequenceLifecycle
 from .state_manager import build_state_manager
 
 if TYPE_CHECKING:
@@ -70,6 +71,10 @@ class Scheduler:
         self.cache_config = cache_config
         self.sessions: dict[int, SchedulerSession] = OrderedDict()
         self.kv_connector = kv_connector
+        seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
+        seq_meta.enable_prefix_caching = self.cache_config.enable_prefix_caching
+        self.seq_meta = seq_meta
+        self.seq_manager = SequenceManager(seq_meta)
 
         self.state_manager = build_state_manager(self.cache_config)
         self.block_manager = build_block_manager(cache_config)
@@ -89,6 +94,15 @@ class Scheduler:
                                    block_size=self.cache_config.block_size,
                                    enabled=self.cache_config.enable_prefix_caching,
                                    checkpoint_state_manager=checkpoint_state_manager)
+        self.sequence_lifecycle = SequenceLifecycle(
+            seq_manager=self.seq_manager,
+            block_manager=self.block_manager,
+            state_manager=self.state_manager,
+            state_checkpoints=self.block_trie.state_checkpoints,
+            prefix_cache_enabled=self.block_trie.enabled,
+            is_ssm=self.is_ssm,
+            connector=kv_connector,
+        )
 
         self.eviction_helper = build_eviction_helper(self, self.scheduler_config.eviction_type)
         # Load admission receives only paging owners plus request-local queue
@@ -114,9 +128,6 @@ class Scheduler:
         # Keep save call sites uniform even when the producer role is disabled.
         self.kv_save_coordinator = KVSaveCoordinator(self)
 
-        seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
-        self.seq_meta = seq_meta
-        self.seq_manager = SequenceManager(seq_meta)
         self.scheduler_tick = 0
 
     def tick(self):
@@ -131,6 +142,7 @@ class Scheduler:
         """
         connector = self.kv_connector
         self.kv_connector = None
+        self.sequence_lifecycle.disable_connector()
         self.kv_load_coordinator.disable()
         self.kv_save_coordinator.clear()
         if connector is not None:
@@ -244,9 +256,17 @@ class Scheduler:
             session_id (int): New session id.
         """
         assert session_id not in self.sessions
-        session = SchedulerSession(session_id, seq_manager=self.seq_manager, scheduler=self)
+        session = SchedulerSession(session_id, seq_meta=self.seq_meta, lifecycle=self.sequence_lifecycle)
         self.sessions[session_id] = session
         return session
+
+    def get_session(self, session_id: int) -> SchedulerSession | None:
+        """Return one session owner, if it exists."""
+        return self.sessions.get(session_id)
+
+    def get_sessions(self) -> list[SchedulerSession]:
+        """Return a snapshot of current session owners."""
+        return list(self.sessions.values())
 
     def schedule_migration(self):
         """Admit waiting migration sequences to paging resources."""
@@ -375,9 +395,7 @@ class Scheduler:
                 continue
             # stop session so it won't get scheduled again
             seq.state.stop()
-            if connector is not None:
-                connector.request_finished(seq)
-            session.remove_sequence(seq)
+            self.sequence_lifecycle.finish_sequence(seq)
         if not session.sequences:
             self.sessions.pop(session_id)
 

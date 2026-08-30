@@ -19,7 +19,8 @@ class _FakeSequence:
 
 class _FakeSession:
 
-    def __init__(self, seq):
+    def __init__(self, session_id, seq):
+        self.session_id = session_id
         self.sequences = {0: seq}
 
 
@@ -32,6 +33,12 @@ class _FakeScheduler:
     def end_session(self, session_id):
         self.ended_sessions.append(session_id)
         self.sessions.pop(session_id)
+
+    def get_session(self, session_id):
+        return self.sessions.get(session_id)
+
+    def get_sessions(self):
+        return list(self.sessions.values())
 
     def finish_deferred_kv_transfers_after_worker_drain(self):
         pass
@@ -104,7 +111,7 @@ def _build_sleeping_test_engine(event_loop):
     engine.req_manager = RequestManager()
     resp = Response(type=ResponseType.INTERNAL_ENGINE_ERROR, sender_id=0, event=asyncio.Event())
     seq = _FakeSequence(resp)
-    session = _FakeSession(seq)
+    session = _FakeSession(1, seq)
     engine.scheduler = _FakeScheduler(session)
     engine._sleeping_tags = set()
     engine.events = []

@@ -545,12 +545,8 @@ class KVLoadCoordinator:
             self._finish_cancelled_or_failed(record)
 
     def _remove_sequence(self, seq: SchedulerSequence) -> None:
-        connector = self.connector
-        if connector is not None:
-            connector.request_finished(seq)
-
         session = seq.session
-        session.remove_sequence(seq)
+        session.lifecycle.finish_sequence(seq)
         if not session.sequences:
             self.sessions.pop(session.session_id, None)
 

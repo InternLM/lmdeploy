@@ -227,6 +227,7 @@ def test_scheduler_shutdown_releases_injected_connector_once():
     load_coordinator.disable.side_effect = disable_loads
     scheduler = Scheduler.__new__(Scheduler)
     scheduler.kv_connector = connector
+    scheduler.sequence_lifecycle = Mock()
     scheduler.kv_load_coordinator = load_coordinator
     scheduler.kv_save_coordinator = Mock()
 
@@ -235,6 +236,7 @@ def test_scheduler_shutdown_releases_injected_connector_once():
 
     connector.shutdown.assert_called_once_with()
     assert scheduler.kv_load_coordinator.disable.call_count == 2
+    assert scheduler.sequence_lifecycle.disable_connector.call_count == 2
     assert scheduler.kv_save_coordinator.clear.call_count == 2
     assert scheduler.kv_connector is None
     assert not scheduler._external_lookup_enabled

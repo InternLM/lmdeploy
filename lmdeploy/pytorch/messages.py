@@ -29,8 +29,7 @@ from lmdeploy.vl.constants import Modality
 from .block import LogicalTokenBlocks
 
 if TYPE_CHECKING:
-    from lmdeploy.pytorch.paging.scheduler import Scheduler
-    from lmdeploy.pytorch.paging.seq_states.states import StateBase
+    from lmdeploy.pytorch.paging.seq_states.states import SequenceLifecycle, StateBase
     from lmdeploy.pytorch.strategies.base.sampling import SamplingStrategy
     from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
@@ -209,6 +208,7 @@ class SequenceMeta:
     strategy: 'SequenceStrategy' = None
     sampling_strategy: 'SamplingStrategy' = None
     use_mrope: bool = False
+    enable_prefix_caching: bool = False
 
 
 class SequenceManager:
@@ -221,7 +221,7 @@ class SequenceManager:
         self.seq_meta = seq_meta
         self._seq_count = 0
 
-    def _new_seq_id(self):
+    def new_sequence_id(self):
         seq_id = self._seq_count
         self._seq_count += 1
         return seq_id
@@ -282,12 +282,11 @@ def _to_ndarray(token_ids) -> np.ndarray:
 class SchedulerSession:
     """Scheduler session."""
 
-    def __init__(self, session_id: int, seq_manager: SequenceManager, scheduler: 'Scheduler') -> None:
+    def __init__(self, session_id: int, seq_meta: SequenceMeta, lifecycle: 'SequenceLifecycle') -> None:
         self.session_id = session_id
-        self.seq_meta = seq_manager.seq_meta
+        self.seq_meta = seq_meta
         self.sequences: SeqMap = dict()
-        self.seq_manager = seq_manager
-        self.scheduler = scheduler
+        self.lifecycle = lifecycle
 
     def add_sequence(self,
                      token_ids: Tensor,
@@ -299,12 +298,10 @@ class SchedulerSession:
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
-        from lmdeploy.pytorch.paging.seq_states.states import build_seq_state
-
         if sampling_param is None:
             sampling_param = SamplingParam()
 
-        seq_id = self.seq_manager._new_seq_id()
+        seq_id = self.lifecycle.new_sequence_id()
         seq = self.seq_meta.strategy.make_sequence(seq_id=seq_id,
                                                    session=self,
                                                    sampling_param=sampling_param,
@@ -318,16 +315,8 @@ class SchedulerSession:
             embeddings=input_embeddings,
             mode=UpdateTokenMode.INPUTS,
         )
-        self.sequences[seq.seq_id] = seq
-
-        # set status
-        # update seq manager
         status = MessageStatus.WAITING if migration_request is None else MessageStatus.MIGRATION_WAITING
-        seq.set_state(build_seq_state(self.scheduler, seq, status))
-        self.seq_manager.add_sequence(seq)
-        connector = self.scheduler.kv_connector
-        if connector is not None:
-            connector.on_new_request(seq)
+        self.lifecycle.add_sequence(seq, status)
 
         # metrics
         seq.record_event(EventType.QUEUED)
@@ -336,10 +325,7 @@ class SchedulerSession:
 
     def remove_sequence(self, seq: 'SchedulerSequence'):
         """Remove sequence."""
-        assert seq.seq_id in self.sequences
-        seq.state.free()
-        self.sequences.pop(seq.seq_id)
-        self.seq_manager.remove_sequence(seq)
+        self.lifecycle.remove_sequence(seq)
 
 
 def _div_up(x, n):
@@ -966,7 +952,7 @@ class SchedulerSequence:
         if multimodals is None:
             return
         multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
-        if self.session.scheduler.cache_config.enable_prefix_caching:
+        if self._seq_meta.enable_prefix_caching:
             self._update_prefix_cache_spans(multimodals)
         self.history_multimodals.add_inputs(multimodals)
 
