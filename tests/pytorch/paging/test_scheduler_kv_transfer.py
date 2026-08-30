@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from unittest.mock import Mock
 
+import pytest
 import torch
 
 from lmdeploy.messages import KVTransferConfig
@@ -487,6 +488,27 @@ def test_async_load_capacity_failure_restores_tentative_local_prefix(monkeypatch
     assert scheduler.block_trie.stats.num_hit_tokens == 0
 
 
+def test_async_load_binding_failure_releases_allocated_destinations():
+    connector = _AsyncLookupConnector([(8, True)])
+    connector.update_state_after_alloc = Mock(
+        side_effect=RuntimeError('binding failed'))
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+        num_gpu_blocks=4,
+    )
+    seq = scheduler.add_session(77).add_sequence(torch.arange(13))
+
+    with pytest.raises(RuntimeError, match='binding failed'):
+        scheduler.schedule(is_prefill=True)
+
+    assert seq.status == MessageStatus.WAITING
+    assert seq.num_blocks == 0
+    assert seq.kv_token_limit is None
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 4
+    assert not scheduler.has_remote_loading()
+
+
 def test_async_load_does_not_consume_model_batch_slot():
     connector = _AsyncLookupConnector([(8, True), (0, False)])
     scheduler = _make_async_lookup_scheduler(
@@ -623,7 +645,7 @@ def test_async_load_soft_reservation_shrinks_across_chunks():
     assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 0
 
 
-def test_end_session_waits_for_active_async_load_before_freeing_blocks():
+def test_stop_session_waits_for_active_async_load_before_stopping():
     connector = _AsyncLookupConnector([(8, True)])
     scheduler = _make_async_lookup_scheduler(
         connector,
@@ -632,6 +654,28 @@ def test_end_session_waits_for_active_async_load_before_freeing_blocks():
     seq = scheduler.add_session(82).add_sequence(torch.arange(13))
     scheduler.schedule(is_prefill=True)
 
+    scheduler.stop_session(82)
+    assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    assert seq.num_blocks == 2
+
+    scheduler.update_connector_output(
+        KVConnectorOutput(finished_receiving={seq.seq_id}))
+    assert seq.status == MessageStatus.STOPPED
+    assert seq.num_blocks == 0
+    assert 82 in scheduler.sessions
+    assert connector.finished == []
+
+
+def test_end_session_overrides_stop_deferred_during_active_async_load():
+    connector = _AsyncLookupConnector([(8, True)])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+    )
+    seq = scheduler.add_session(82).add_sequence(torch.arange(13))
+    scheduler.schedule(is_prefill=True)
+
+    scheduler.stop_session(82)
     scheduler.end_session(82)
     assert 82 in scheduler.sessions
     assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS

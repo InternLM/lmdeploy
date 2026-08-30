@@ -66,6 +66,24 @@ class _LoadPhase(enum.Enum):
     PREFILLING = enum.auto()
 
 
+class _DeferredLoadCleanup(enum.Enum):
+    """Cleanup to apply after an active device write becomes safe."""
+
+    NONE = enum.auto()
+    STOP = enum.auto()
+    END = enum.auto()
+
+
+@dataclass(frozen=True, slots=True)
+class _LoadPlan:
+    """Block-aligned remote interval and its admission rollback boundary."""
+
+    fallback_step: int
+    remote_step: int
+    target_blocks: int
+    original_kv_token_limit: int | None
+
+
 @dataclass
 class _LoadRecord:
     """Paging state retained for one asynchronous load.
@@ -73,15 +91,15 @@ class _LoadRecord:
     ``fallback_step`` is the block-aligned prefix that remains trustworthy if
     a worker fails or is cancelled after partially writing a destination.
     ``remote_step`` is published only after every TP rank reports success.
-    Stop/end flags defer user-requested cleanup until device writes are safe.
+    ``deferred_cleanup`` records the strongest user-requested action until
+    device writes are safe; ending a request takes precedence over stopping it.
     """
 
     seq: SchedulerSequence
     fallback_step: int
     remote_step: int
     phase: _LoadPhase = _LoadPhase.LOADING
-    stop_requested: bool = False
-    end_requested: bool = False
+    deferred_cleanup: _DeferredLoadCleanup = _DeferredLoadCleanup.NONE
 
 
 class KVLoadCoordinator:
@@ -234,8 +252,29 @@ class KVLoadCoordinator:
         evictable_seqs: Iterable[SchedulerSequence],
     ) -> KVLoadAdmission:
         """Admit the complete prefill, then allocate the remote interval."""
-        connector = self.connector
-        assert connector is not None
+        plan = self._plan_load(seq, num_external_tokens, prealloc_size)
+        if plan is None:
+            return KVLoadAdmission.NO_LOAD
+
+        failure = self._admit_load_capacity(
+            seq,
+            plan,
+            prealloc_size,
+            evictable_seqs,
+        )
+        if failure is not None:
+            return failure
+
+        self._allocate_and_start_load(seq, plan)
+        return KVLoadAdmission.STARTED
+
+    def _plan_load(
+        self,
+        seq: SchedulerSequence,
+        num_external_tokens: int,
+        prealloc_size: int,
+    ) -> _LoadPlan | None:
+        """Plan the safe block-aligned interval before mutating ownership."""
         block_size = seq.block_size
         local_step = int(seq.num_history_ids)
         # Transfers are block-granular. Reuse a private partial boundary block,
@@ -245,10 +284,23 @@ class KVLoadCoordinator:
         remote_step = min(remote_step, int(seq.get_prefix_cache_max_match_step()))
         remote_step = remote_step // block_size * block_size
         if remote_step <= fallback_step:
-            return KVLoadAdmission.NO_LOAD
+            return None
 
-        target_blocks = self.prefill_target_blocks(seq, prealloc_size)
-        old_kv_token_limit = seq.kv_token_limit
+        return _LoadPlan(
+            fallback_step=fallback_step,
+            remote_step=remote_step,
+            target_blocks=self.prefill_target_blocks(seq, prealloc_size),
+            original_kv_token_limit=seq.kv_token_limit,
+        )
+
+    def _admit_load_capacity(
+        self,
+        seq: SchedulerSequence,
+        plan: _LoadPlan,
+        prealloc_size: int,
+        evictable_seqs: Iterable[SchedulerSequence],
+    ) -> KVLoadAdmission | None:
+        """Admit the full prefill against physical and soft capacity."""
         # Only the remote hit is allocated now, but admission guarantees the
         # complete prefill can finish beside every existing soft reservation.
         seq.kv_token_limit = None
@@ -258,21 +310,30 @@ class KVLoadCoordinator:
             prealloc_size,
         )
         if not full_prefill_fits:
-            seq.kv_token_limit = old_kv_token_limit
+            seq.kv_token_limit = plan.original_kv_token_limit
             return KVLoadAdmission.FULL_PREFILL_UNAVAILABLE
-        if not self.can_admit_load(seq, target_blocks):
-            seq.kv_token_limit = old_kv_token_limit
+        if not self.can_admit_load(seq, plan.target_blocks):
+            seq.kv_token_limit = plan.original_kv_token_limit
             return KVLoadAdmission.SOFT_BUDGET_UNAVAILABLE
+        return None
 
+    def _allocate_and_start_load(
+        self,
+        seq: SchedulerSequence,
+        plan: _LoadPlan,
+    ) -> None:
+        """Allocate destinations, bind them, then transfer paging ownership."""
+        connector = self.connector
+        assert connector is not None
         original_num_blocks = seq.num_blocks
         try:
             # Allocate only the checked remote interval. The unallocated local
-            # tail remains represented by the soft target above.
-            seq.kv_token_limit = remote_step
+            # tail remains represented by the plan's soft target.
+            seq.kv_token_limit = plan.remote_step
             self.block_manager.allocate(seq)
             block_table = self.block_manager.get_block_table(seq)
-            fallback_block = fallback_step // block_size
-            remote_block = remote_step // block_size
+            fallback_block = plan.fallback_step // seq.block_size
+            remote_block = plan.remote_step // seq.block_size
             load_block_ids = tuple(
                 int(block_id)
                 for block_id in block_table[fallback_block:remote_block]
@@ -280,23 +341,22 @@ class KVLoadCoordinator:
             connector.update_state_after_alloc(
                 seq,
                 load_block_ids,
-                remote_step - fallback_step,
+                plan.remote_step - plan.fallback_step,
             )
             # From start_load onward, cleanup must retain destinations until
             # workers report terminal progress or their queues are drained.
             self.start_load(
                 seq,
-                fallback_step=fallback_step,
-                remote_step=remote_step,
-                target_blocks=target_blocks,
+                fallback_step=plan.fallback_step,
+                remote_step=plan.remote_step,
+                target_blocks=plan.target_blocks,
             )
         except Exception:
             if seq.num_blocks > original_num_blocks:
                 self.block_manager.truncate(seq, original_num_blocks)
-            seq.kv_token_limit = old_kv_token_limit
+            seq.kv_token_limit = plan.original_kv_token_limit
             raise
         seq.kv_token_limit = None
-        return KVLoadAdmission.STARTED
 
     def start_load(
         self,
@@ -346,7 +406,8 @@ class KVLoadCoordinator:
             record = self._loads.get(int(result.request_id))
             if record is None or record.phase is not _LoadPhase.LOADING:
                 continue
-            if record.stop_requested or record.end_requested or not result.success:
+            if (record.deferred_cleanup is not _DeferredLoadCleanup.NONE
+                    or not result.success):
                 self._rollback(record)
                 self._finish_cancelled_or_failed(record)
             else:
@@ -404,9 +465,9 @@ class KVLoadCoordinator:
         self._loads.pop(request_id, None)
         self._prefill_targets.pop(request_id, None)
         seq.state.finish_remote_load()
-        if record.end_requested:
+        if record.deferred_cleanup is _DeferredLoadCleanup.END:
             self._remove_sequence(seq)
-        elif record.stop_requested:
+        elif record.deferred_cleanup is _DeferredLoadCleanup.STOP:
             seq.state.stop()
 
     def request_stop(self, seq: SchedulerSequence) -> bool:
@@ -420,7 +481,8 @@ class KVLoadCoordinator:
         if record is None or record.phase is not _LoadPhase.LOADING:
             self.release(seq)
             return False
-        record.stop_requested = True
+        if record.deferred_cleanup is _DeferredLoadCleanup.NONE:
+            record.deferred_cleanup = _DeferredLoadCleanup.STOP
         return True
 
     def request_end(self, seq: SchedulerSequence) -> bool:
@@ -433,7 +495,7 @@ class KVLoadCoordinator:
         if record is None or record.phase is not _LoadPhase.LOADING:
             self.release(seq)
             return False
-        record.end_requested = True
+        record.deferred_cleanup = _DeferredLoadCleanup.END
         return True
 
     def release(self, seq: SchedulerSequence) -> None:
@@ -475,7 +537,8 @@ class KVLoadCoordinator:
         records = [
             record
             for record in self._loads.values()
-            if record.phase is _LoadPhase.LOADING and record.end_requested
+            if (record.phase is _LoadPhase.LOADING
+                and record.deferred_cleanup is _DeferredLoadCleanup.END)
         ]
         for record in records:
             self._rollback(record)
