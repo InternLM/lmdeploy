@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -183,6 +185,17 @@ class TestScheduler:
     def test_decode_requires_schedule_running(self, scheduler):
         with pytest.raises(ValueError, match='schedule_running'):
             scheduler.schedule(is_prefill=False)
+
+    def test_schedule_running_validity_uses_input_indices(self, scheduler,
+                                                          monkeypatch):
+        waiting = SimpleNamespace(status=MessageStatus.WAITING)
+        running = SimpleNamespace(status=MessageStatus.RUNNING)
+        monkeypatch.setattr(scheduler.block_manager, 'num_required_blocks',
+                            lambda seq, num_tokens: 0)
+
+        valid_mask = scheduler.schedule_running([waiting, running])
+
+        assert valid_mask == [False, True]
 
     @pytest.mark.parametrize(
         ('name', 'status'),

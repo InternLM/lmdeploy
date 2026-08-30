@@ -202,16 +202,7 @@ class _PrefillAdmissionAction(enum.Enum):
 
 @dataclass(frozen=True)
 class _PrefillAdmissionResult:
-    """Outcome from trying to admit one waiting prefill request.
-
-    The outer loop distinguishes four outcomes:
-
-    * ``ADMIT``: include the request in this tick's model batch.
-    * ``SKIP``: leave it waiting but continue trying later candidates.
-    * ``STOP``: resource pressure ends this prefill admission turn.
-    * ``LOAD_STARTED``: no model work was selected, but the request left the
-      waiting queue for asynchronous KV load.
-    """
+    """Outcome from trying to admit one waiting prefill request."""
 
     action: _PrefillAdmissionAction
     prefill_token_count: int = 0
@@ -236,21 +227,9 @@ class _PrefillAdmissionResult:
 
 @dataclass(frozen=True, slots=True)
 class _PrefixMatchStateSnapshot:
-    """Exact sequence state captured before a tentative local trie match.
+    """Committed state restored when a tentative local match is rejected.
 
-    External lookup itself does not mutate sequence paging state. The scheduler
-    may, however, run ``block_trie.match`` first so the connector queries only
-    beyond the locally resident prefix. If that non-blocking lookup returns
-    pending, or a positive hit cannot be admitted before worker writes start,
-    the request will not run this tick and the tentative local match must be
-    undone.
-
-    A multi-turn request may already own valid history, blocks, and model
-    metadata before this attempt. Restoring this baseline preserves that exact
-    committed state; the legacy new-request rollback to step zero would discard
-    it. This snapshot is not used after an asynchronous load starts--load
-    failure then rolls back to its block-aligned ``fallback_step`` through
-    ``KVLoadCoordinator`` because workers may have partially written KV.
+    Load failure after worker writes uses its block-aligned fallback instead.
     """
 
     # Committed sequence progress and block ownership before tentative match.
@@ -293,13 +272,7 @@ class _PrefixMatchPhase(enum.Enum):
 
 
 class _TentativePrefixMatch:
-    """Request-local transaction around ``BlockTrie.match`` side effects.
-
-    Ordinary and SSM admission preserve the historical fallback to an unmatched request. External lookup instead needs
-    an exact pre-match snapshot because a multi-turn request may already own committed progress. Both contracts share
-    one stats snapshot, restore-pin boundary, and explicit commit/rollback lifecycle without changing their rollback
-    semantics.
-    """
+    """Manage one request's tentative ``BlockTrie.match`` side effects."""
 
     __slots__ = (
         'seq',
@@ -434,13 +407,7 @@ class _TentativePrefixMatch:
 
 
 class _PrefillAdmissionAttempt:
-    """Try to admit one waiting prefill sequence.
-
-    The attempt owns all tentative prefix-cache side effects for the sequence:
-    match, SSM restore pinning, eviction, runtime-state checks, allocation, and
-    rollback. The outer prefill loop still owns queue traversal and decides
-    whether a rejected candidate is skipped or ends the current prefill turn.
-    """
+    """Own one waiting sequence's tentative admission side effects."""
 
     def __init__(self,
                  prefill_scheduler: '_PrefillScheduler',
@@ -557,7 +524,7 @@ class _PrefillAdmissionAttempt:
         """Ensure an SSM runtime slot, retrying after match rollback."""
         prefill = self.prefill_scheduler
         seq = self.seq
-        if not prefill.is_ssm or prefill._ensure_runtime_state_available():
+        if not prefill.is_ssm or prefill._make_runtime_state_available():
             return None
 
         result = self._prefix_match.rollback(
@@ -566,7 +533,7 @@ class _PrefillAdmissionAttempt:
             return result
         if not self._prepare_and_evict():
             return _PrefillAdmissionResult.stop()
-        if not prefill._ensure_runtime_state_available():
+        if not prefill._make_runtime_state_available():
             seq.kv_token_limit = None
             return _PrefillAdmissionResult.stop()
         return None
@@ -633,30 +600,40 @@ class _PrefillAdmissionAttempt:
         return _PrefillAdmissionResult.skip()
 
     def _check_prefill_admission_gates(self):
-        """Apply prefill gates, tentatively matching only when it may help."""
+        """Apply long-prefill and token-budget admission gates."""
+        result = self._apply_nonfinal_long_prefill_gate()
+        if result is not None:
+            return result
+        return self._apply_prefill_token_budget_gate()
+
+    def _apply_nonfinal_long_prefill_gate(self):
+        """Reject non-final long prefills when this turn excludes them."""
         prefill = self.prefill_scheduler
         seq = self.seq
-        token_budget = prefill.cache_config.max_prefill_token_num
+        if (self.turn_policy.allows_nonfinal_long_prefill
+                or prefill._prefill_kv_token_limit(seq) is None):
+            return None
+
+        matched = self._match_prefix_for_prefill_gate()
+        if matched is None:
+            return _PrefillAdmissionResult.skip()
+        if prefill._prefill_kv_token_limit(seq) is not None:
+            self._prefix_match.rollback(
+                'still non-final long prefill on short turn')
+            return _PrefillAdmissionResult.skip()
+        self._prefix_match.retain_for_admission(
+            _PrefillAdmissionResult.skip())
+        return None
+
+    def _apply_prefill_token_budget_gate(self):
+        """Reject a second prefill that exceeds this turn's token budget."""
+        prefill = self.prefill_scheduler
+        seq = self.seq
         prefill_token_count = prefill._prefill_admission_token_count(seq)
-        is_nonfinal_long_prefill = prefill._prefill_kv_token_limit(seq) is not None
-
-        if (is_nonfinal_long_prefill
-                and not self.turn_policy.allows_nonfinal_long_prefill):
-            matched = self._match_prefix_for_prefill_gate()
-            if matched is None:
-                return _PrefillAdmissionResult.skip()
-            if prefill._prefill_kv_token_limit(seq) is not None:
-                self._prefix_match.rollback('still non-final long prefill on short turn')
-                return _PrefillAdmissionResult.skip()
-            self._prefix_match.retain_for_admission(
-                _PrefillAdmissionResult.skip())
-            prefill_token_count = prefill._prefill_admission_token_count(seq)
-
-        exceeds_token_budget = (
-            self.batch_has_prefill
-            and self.batch_prefill_tokens + prefill_token_count > token_budget
-        )
-        if not exceeds_token_budget:
+        token_budget = prefill.cache_config.max_prefill_token_num
+        if (not self.batch_has_prefill
+                or self.batch_prefill_tokens + prefill_token_count
+                <= token_budget):
             return None
 
         if not self._prefix_match.is_matched:
@@ -755,7 +732,7 @@ class _PrefillScheduler:
             _envs.opt_ttft_aging_sec,
         )
 
-    def _ensure_runtime_state_available(self):
+    def _make_runtime_state_available(self):
         """Make one state-cache slot available for an SSM runtime state."""
         if not self.is_ssm:
             return True

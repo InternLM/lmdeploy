@@ -323,12 +323,12 @@ def test_ssm_scheduler_rejects_prefix_match_for_prefill_gate_after_runtime_state
     node, state_idx = _add_published_ssm_checkpoint(scheduler, [1] * block_size * 2)
     ensure_results = iter([False, True])
 
-    def _ensure_runtime_state_available_once_then_succeed():
+    def _make_runtime_state_available_once_then_succeed():
         return next(ensure_results)
 
     monkeypatch.setattr(scheduler._prefill_scheduler,
-                        '_ensure_runtime_state_available',
-                        _ensure_runtime_state_available_once_then_succeed)
+                        '_make_runtime_state_available',
+                        _make_runtime_state_available_once_then_succeed)
     scheduler.block_trie.stats.reset()
 
     cache_hit_tail = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [3])
@@ -379,11 +379,11 @@ def test_schedule_prefill_reapplies_chunk_limit_after_ssm_state_rollback():
 
     ensure_results = iter([False, True])
 
-    def _ensure_runtime_state_available_once_then_succeed():
+    def _make_runtime_state_available_once_then_succeed():
         return next(ensure_results)
 
-    scheduler._prefill_scheduler._ensure_runtime_state_available = (
-        _ensure_runtime_state_available_once_then_succeed)
+    scheduler._prefill_scheduler._make_runtime_state_available = (
+        _make_runtime_state_available_once_then_succeed)
 
     output = scheduler.schedule(is_prefill=True, prealloc_size=1)
 

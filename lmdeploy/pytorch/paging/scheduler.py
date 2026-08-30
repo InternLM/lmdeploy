@@ -312,12 +312,10 @@ class Scheduler:
         assert len(running) > 0
         eviction_helper = self.eviction_helper
 
-        valid_mask = [True for _ in running]
-
-        # loop over reverse running
-        rev_running = reversed(running)
-        for idx, seq in enumerate(rev_running):
-            if not seq.status == MessageStatus.RUNNING:
+        valid_mask = [True] * len(running)
+        for idx in reversed(range(len(running))):
+            seq = running[idx]
+            if seq.status != MessageStatus.RUNNING:
                 valid_mask[idx] = False
                 continue
             num_required_blocks = self.block_manager.num_required_blocks(seq, num_required_tokens)
@@ -329,13 +327,10 @@ class Scheduler:
                 self.block_trie.allocate(seq)
                 continue
 
-            # running to ready
             seq.state.deactivate()
-            # ready to waiting
             self.kv_load_coordinator.release(seq)
             seq.state.evict()
             valid_mask[idx] = False
-        valid_mask = list(reversed(valid_mask))
         return valid_mask
 
     def stop_session(self, session_id: int):
