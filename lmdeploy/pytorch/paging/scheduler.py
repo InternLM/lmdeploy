@@ -69,9 +69,6 @@ class Scheduler:
         self.sessions: dict[int, SchedulerSession] = OrderedDict()
         self.kv_connector = kv_connector
 
-        # For Disaggregation
-        self.locked_sessions: dict[int, SchedulerSession] = OrderedDict()
-
         self.state_manager = build_state_manager(self.cache_config)
         self.block_manager = build_block_manager(cache_config)
         self.is_ssm = len(self.cache_config.states_shapes) > 0
@@ -79,7 +76,7 @@ class Scheduler:
         # A producer-only connector still needs the save path below, but must
         # not issue lookups. SSM restore owns a different state-cache protocol
         # and is deliberately excluded from external KV load admission.
-        self._external_lookup_enabled = (
+        external_lookup_enabled = (
             kv_connector is not None
             and transfer_config is not None
             and transfer_config.is_kv_consumer
@@ -95,7 +92,7 @@ class Scheduler:
         # Load admission receives only paging owners plus request-local queue
         # candidates from its caller; it does not reach back through Scheduler.
         self.kv_load_coordinator = KVLoadCoordinator(
-            lookup_enabled=self._external_lookup_enabled,
+            lookup_enabled=external_lookup_enabled,
             connector=kv_connector,
             block_manager=self.block_manager,
             block_trie=self.block_trie,
@@ -114,9 +111,6 @@ class Scheduler:
         )
         # Keep save call sites uniform even when the producer role is disabled.
         self.kv_save_coordinator = KVSaveCoordinator(self)
-        # Per-tick signal consumed by EngineLoop to distinguish asynchronous
-        # lookup latency from actual cache-allocation pressure.
-        self.last_schedule_had_pending_lookup = False
 
         seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
         self.seq_meta = seq_meta
@@ -135,11 +129,24 @@ class Scheduler:
         """
         connector = self.kv_connector
         self.kv_connector = None
-        self._external_lookup_enabled = False
         self.kv_load_coordinator.disable()
         self.kv_save_coordinator.clear()
         if connector is not None:
             connector.shutdown()
+
+    @property
+    def _external_lookup_enabled(self) -> bool:
+        """Whether external KV lookup admission is currently enabled."""
+        return self.kv_load_coordinator.lookup_enabled
+
+    @property
+    def last_schedule_had_pending_lookup(self) -> bool:
+        """Whether the latest prefill turn encountered a pending lookup."""
+        return self._prefill_scheduler.last_schedule_had_pending_lookup
+
+    @last_schedule_had_pending_lookup.setter
+    def last_schedule_had_pending_lookup(self, value: bool) -> None:
+        self._prefill_scheduler.last_schedule_had_pending_lookup = value
 
     def has_waiting_long_prefill(self):
         """Whether a waiting request would need a non-final prefill chunk."""
@@ -280,7 +287,6 @@ class Scheduler:
                 'schedule only selects prefill work; use schedule_running '
                 'for decode capacity admission')
 
-        self.last_schedule_had_pending_lookup = False
         running = self._prefill_scheduler.schedule(
             waiting=self.waiting,
             stopped=self.hanging,
@@ -290,8 +296,6 @@ class Scheduler:
             allow_long_prefill=allow_long_prefill,
             prefer_long_prefill=prefer_long_prefill,
         )
-        self.last_schedule_had_pending_lookup = (
-            self._prefill_scheduler.last_schedule_had_pending_lookup)
         return SchedulerOutput(
             running=running,
             swap_in_map={},

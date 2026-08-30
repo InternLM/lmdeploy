@@ -218,9 +218,16 @@ def test_prepare_kv_connector_config_does_not_change_disabled_config(transfer_co
 
 def test_scheduler_shutdown_releases_injected_connector_once():
     connector = Mock()
+    load_coordinator = Mock()
+    load_coordinator.lookup_enabled = True
+
+    def disable_loads():
+        load_coordinator.lookup_enabled = False
+
+    load_coordinator.disable.side_effect = disable_loads
     scheduler = Scheduler.__new__(Scheduler)
     scheduler.kv_connector = connector
-    scheduler.kv_load_coordinator = Mock()
+    scheduler.kv_load_coordinator = load_coordinator
     scheduler.kv_save_coordinator = Mock()
 
     scheduler.shutdown()
