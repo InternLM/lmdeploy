@@ -683,7 +683,7 @@ def test_scheduler_ar_spec_prefix_hit_recomputes_overlap_block():
     assert scheduler.block_trie.stats.num_hit_tokens == block_size * 2
 
 
-def test_scheduler_prefix_match_rollback_clears_recompute_overlap_window():
+def test_scheduler_prefix_match_rollback_clears_recompute_overlap_window(monkeypatch):
     from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
     block_size = 16
     seq_meta = SequenceMeta(block_size, strategy=ARSpecSequenceStrategy())
@@ -702,16 +702,15 @@ def test_scheduler_prefix_match_rollback_clears_recompute_overlap_window():
     cached = scheduler.add_session(0).add_sequence(token_ids)
     scheduler.block_manager.allocate(cached)
     scheduler.block_trie.allocate(cached)
+    cached.state.stop()
 
     seq = scheduler.add_session(1).add_sequence(token_ids)
-    stats_snapshot = scheduler.block_trie.stats.snapshot()
-    scheduler.block_trie.match(seq)
+    monkeypatch.setattr(scheduler.eviction_helper, 'evict_for_seq', Mock(return_value=False))
+    scheduler.block_trie.stats.reset()
 
-    assert seq.num_history_ids == block_size * 2
-    assert seq.prefix_cache.recompute_overlap.fresh_block_range == range(2, 3)
+    output = scheduler.schedule(is_prefill=True)
 
-    scheduler._rollback_unscheduled_prefix_match(seq, stats_snapshot)
-
+    assert output.running == []
     assert seq.num_history_ids == 0
     assert seq.num_token_ids == len(token_ids)
     assert seq.cached_tokens == 0
@@ -904,6 +903,39 @@ def test_async_lookup_precisely_restores_a_multiturn_local_prefix():
 
     fourth = scheduler.schedule(is_prefill=True)
     assert fourth.running == [seq]
+
+
+def test_async_lookup_pending_preserves_private_partial_prefix():
+    connector = _AsyncLookupConnector([(None, False)])
+    scheduler = _make_async_lookup_scheduler(connector)
+    tokens = torch.arange(13)
+    seq = scheduler.add_session(72).add_sequence(tokens)
+
+    seq.kv_token_limit = 5
+    scheduler.block_manager.allocate(seq)
+    scheduler.block_trie.allocate(seq)
+    seq.set_step(5)
+    seq.kv_token_limit = 7
+    seq.cached_tokens = 3
+    seq.model_meta = {'state': 'keep'}
+    baseline_blocks = seq.logical_blocks.get_real_blocks().copy()
+    baseline_cursor = seq.prefix_cache.trie_cursor
+    scheduler.block_trie.stats.reset()
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == []
+    assert scheduler.last_schedule_had_pending_lookup
+    assert connector.lookup_calls == [(seq.seq_id, 5)]
+    assert seq.num_history_ids == 5
+    assert torch.equal(torch.from_numpy(seq.logical_blocks.get_real_blocks()),
+                       torch.from_numpy(baseline_blocks))
+    assert seq.prefix_cache.trie_cursor is baseline_cursor
+    assert seq.prefix_cache.match_start_step == -1
+    assert seq.cached_tokens == 3
+    assert seq.kv_token_limit == 7
+    assert seq.model_meta == {'state': 'keep'}
+    assert scheduler.block_trie.stats.num_query_tokens == 0
 
 
 def test_external_cached_tokens_survive_remote_ready_admission():
