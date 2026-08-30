@@ -607,7 +607,7 @@ class Engine(EngineBase):
         # cancel all remain sessions
         self._cancel_and_end_all_sessions()
         await self.executor.sleep(level)
-        self.scheduler.finish_deferred_kv_transfers_after_worker_drain()
+        self.scheduler.finish_kv_transfers_after_worker_drain()
         if self._engine_loop is not None:
             self._engine_loop.reset_runtime_state()
         logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))

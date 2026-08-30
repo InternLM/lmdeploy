@@ -449,16 +449,14 @@ class EngineLoop:
         """Apply connector progress and publish model outputs."""
         if out is None:
             return
-        # A connector polling step intentionally has no token output. Consume
-        # its transfer completions first so newly loaded requests become
-        # schedulable even when no model forward ran in this executor step.
+        # Connector-only polls have no token output; apply completions before
+        # returning.
         self.scheduler.update_connector_output(out.kv_connector_output)
         if out.next_token_ids is None:
             return
         step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
-        # Sequence history is advanced by _make_infer_outputs. Only now can the
-        # scheduler prove that a prefill reached its reserved target and release
-        # the soft block reservation used while admitting external KV loads.
+        # _make_infer_outputs advances history; only then can soft reservations
+        # be released.
         self.scheduler.release_completed_prefill_reservations(running)
         self.resp_queue.put_nowait(step_outputs)
 

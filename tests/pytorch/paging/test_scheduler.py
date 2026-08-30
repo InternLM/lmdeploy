@@ -110,19 +110,18 @@ class TestScheduler:
 
         # stop seq
         seq1.state.stop()
-        assert len(scheduler.ready) == 1
+        assert scheduler.num_ready() == 1
         assert seq1 in scheduler.hanging
 
         # end seq
         seq1.session.remove_sequence(seq1)
         assert session_id1 in scheduler.sessions
-        assert seq1 not in scheduler.ready
         assert seq1 not in scheduler.hanging
         assert block_manager.get_num_free_gpu_blocks() == num_gpu_blocks - 2
 
         # stop session
         scheduler.stop_session(session_id2)
-        assert len(scheduler.ready) == 0
+        assert scheduler.num_ready() == 0
         assert len(scheduler.waiting) == 0
         assert len(scheduler.hanging) == 2
 
@@ -155,7 +154,7 @@ class TestScheduler:
 
         # test: waiting alloc
         seq2.state.stop()
-        assert len(scheduler.ready) == 1
+        assert scheduler.num_ready() == 1
         assert len(scheduler.waiting) == 1
         assert len(scheduler.hanging) == 1
 
@@ -172,7 +171,7 @@ class TestScheduler:
         seq2.state.activate()
         seq3.session.remove_sequence(seq3)
         seq2.update_token_ids(torch.tensor([1] * block_size))
-        assert len(scheduler.ready) == 1
+        assert scheduler.num_ready() == 1
         assert len(scheduler.waiting) == 1
         assert len(scheduler.hanging) == 0
 
@@ -203,10 +202,7 @@ class TestScheduler:
         ('name', 'status'),
         [
             ('waiting', MessageStatus.WAITING),
-            ('remote_loading', MessageStatus.WAITING_FOR_REMOTE_KVS),
-            ('ready', MessageStatus.READY),
             ('hanging', MessageStatus.STOPPED),
-            ('running', MessageStatus.RUNNING),
             ('migration_waiting', MessageStatus.MIGRATION_WAITING),
             ('migration_done', MessageStatus.MIGRATION_DONE),
         ],
@@ -231,8 +227,6 @@ class TestScheduler:
             ('num_remote_loading', MessageStatus.WAITING_FOR_REMOTE_KVS, 3),
             ('num_ready', MessageStatus.READY, 3),
             ('num_running', MessageStatus.RUNNING, 3),
-            ('num_migration_waiting', MessageStatus.MIGRATION_WAITING, 3),
-            ('num_migration_done', MessageStatus.MIGRATION_DONE, 3),
             ('has_waiting', MessageStatus.WAITING, True),
             ('has_remote_loading', MessageStatus.WAITING_FOR_REMOTE_KVS, True),
             ('has_ready', MessageStatus.READY, True),

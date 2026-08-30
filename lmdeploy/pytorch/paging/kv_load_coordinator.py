@@ -553,7 +553,7 @@ class KVLoadCoordinator:
         if not session.sequences:
             self.sessions.pop(session.session_id, None)
 
-    def disable(self) -> None:
+    def shutdown(self) -> None:
         """Stop new lookup admission and discard scheduler-side ownership."""
         self.lookup_enabled = False
         self.clear()

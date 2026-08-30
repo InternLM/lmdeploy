@@ -8,7 +8,6 @@ from lmdeploy.pytorch.config import CacheConfig, DistConfig
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
 from lmdeploy.pytorch.engine.engine import Engine
 from lmdeploy.pytorch.kv_connector import prepare_kv_connector_config
-from lmdeploy.pytorch.paging.scheduler import Scheduler
 
 
 def _make_cache_config(kv_transfer_config=None):
@@ -214,32 +213,6 @@ def test_prepare_kv_connector_config_does_not_change_disabled_config(transfer_co
         assert cache_config.kv_transfer_config is None
     else:
         assert transfer_config.kv_connector_extra_config == original_extra_config
-
-
-def test_scheduler_shutdown_releases_injected_connector_once():
-    connector = Mock()
-    load_coordinator = Mock()
-    load_coordinator.lookup_enabled = True
-
-    def disable_loads():
-        load_coordinator.lookup_enabled = False
-
-    load_coordinator.disable.side_effect = disable_loads
-    scheduler = Scheduler.__new__(Scheduler)
-    scheduler.kv_connector = connector
-    scheduler.sequence_lifecycle = Mock()
-    scheduler.kv_load_coordinator = load_coordinator
-    scheduler.kv_save_coordinator = Mock()
-
-    scheduler.shutdown()
-    scheduler.shutdown()
-
-    connector.shutdown.assert_called_once_with()
-    assert scheduler.kv_load_coordinator.disable.call_count == 2
-    assert scheduler.sequence_lifecycle.disable_connector.call_count == 2
-    assert scheduler.kv_save_coordinator.clear.call_count == 2
-    assert scheduler.kv_connector is None
-    assert not scheduler._external_lookup_enabled
 
 
 def test_engine_loop_finally_shuts_down_scheduler_before_executor():

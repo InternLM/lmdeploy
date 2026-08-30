@@ -30,6 +30,7 @@ class _AsyncLookupConnector:
         self.cancelled = []
         self.finished = []
         self.allocations = []
+        self.shutdown_calls = 0
 
     def on_new_request(self, request):
         self.new_requests.append(request.seq_id)
@@ -74,7 +75,7 @@ class _AsyncLookupConnector:
         pass
 
     def shutdown(self):
-        pass
+        self.shutdown_calls += 1
 
 
 def _make_async_lookup_scheduler(
@@ -124,6 +125,26 @@ def test_sequence_lifecycle_notifies_connector_on_add_and_end():
     scheduler.end_session(71)
     assert connector.finished == [seq.seq_id]
     assert 71 not in scheduler.sessions
+
+
+def test_scheduler_shutdown_disables_external_loads_and_connector_once():
+    connector = _AsyncLookupConnector([])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=False,
+    )
+    seq = scheduler.add_session(72).add_sequence(torch.arange(9))
+    scheduler.kv_load_coordinator.track_prefill(seq)
+    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 3
+
+    scheduler.shutdown()
+    scheduler.shutdown()
+
+    assert connector.shutdown_calls == 1
+    assert not scheduler.kv_load_coordinator.lookup_enabled
+    assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 0
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    assert connector.lookup_calls == []
 
 
 def test_async_lookup_pending_rolls_back_a_new_request_once():
@@ -715,7 +736,7 @@ def test_worker_drain_finishes_an_ended_session_with_a_dropped_load_output():
     scheduler.schedule(is_prefill=True)
     scheduler.end_session(85)
 
-    scheduler.finish_deferred_kv_transfers_after_worker_drain()
+    scheduler.finish_kv_transfers_after_worker_drain()
 
     assert 85 not in scheduler.sessions
     assert connector.finished == [seq.seq_id]
@@ -846,7 +867,7 @@ def test_worker_drain_releases_save_leases_when_outputs_are_discarded():
 
     scheduler.build_connector_meta([seq], connector_token_lens=(8, ))
     scheduler.block_manager.free(seq)
-    scheduler.finish_deferred_kv_transfers_after_worker_drain()
+    scheduler.finish_kv_transfers_after_worker_drain()
 
     assert scheduler.block_manager.get_num_free_gpu_blocks() == 2
     assert not scheduler.kv_save_coordinator.has_pending()

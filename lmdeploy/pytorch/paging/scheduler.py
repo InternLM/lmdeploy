@@ -150,24 +150,15 @@ class Scheduler:
         connector = self.kv_connector
         self.kv_connector = None
         self.sequence_lifecycle.disable_connector()
-        self.kv_load_coordinator.disable()
+        self.kv_load_coordinator.shutdown()
         self.kv_save_coordinator.clear()
         if connector is not None:
             connector.shutdown()
 
     @property
-    def _external_lookup_enabled(self) -> bool:
-        """Whether external KV lookup admission is currently enabled."""
-        return self.kv_load_coordinator.lookup_enabled
-
-    @property
     def last_schedule_had_pending_lookup(self) -> bool:
         """Whether the latest prefill turn encountered a pending lookup."""
         return self._prefill_scheduler.last_schedule_had_pending_lookup
-
-    @last_schedule_had_pending_lookup.setter
-    def last_schedule_had_pending_lookup(self, value: bool) -> None:
-        self._prefill_scheduler.last_schedule_had_pending_lookup = value
 
     def has_waiting_long_prefill(self):
         """Whether a waiting request would need a non-final prefill chunk."""
@@ -198,20 +189,8 @@ class Scheduler:
         return list(self.seq_manager.get_sequences(MessageStatus.WAITING).values())
 
     @property
-    def remote_loading(self) -> SeqList:
-        return list(self.seq_manager.get_sequences(MessageStatus.WAITING_FOR_REMOTE_KVS).values())
-
-    @property
-    def ready(self) -> SeqList:
-        return list(self.seq_manager.get_sequences(MessageStatus.READY).values())
-
-    @property
     def hanging(self) -> SeqList:
         return list(self.seq_manager.get_sequences(MessageStatus.STOPPED).values())
-
-    @property
-    def running(self) -> SeqList:
-        return list(self.seq_manager.get_sequences(MessageStatus.RUNNING).values())
 
     @property
     def migration_waiting(self) -> SeqList:
@@ -233,12 +212,6 @@ class Scheduler:
 
     def num_running(self) -> int:
         return self.seq_manager.num_sequences(MessageStatus.RUNNING)
-
-    def num_migration_waiting(self) -> int:
-        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_WAITING)
-
-    def num_migration_done(self) -> int:
-        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_DONE)
 
     # Non-empty status checks used by engine control flow.
     def has_waiting(self) -> bool:
@@ -487,7 +460,7 @@ class Scheduler:
         """Release soft targets only after forward output advanced history."""
         self.kv_load_coordinator.release_completed_prefills(seqs)
 
-    def finish_deferred_kv_transfers_after_worker_drain(self) -> None:
+    def finish_kv_transfers_after_worker_drain(self) -> None:
         """Release paging ownership after worker transfer queues have drained.
 
         Engine sleep may discard prefetched completion outputs. Worker drain is
@@ -532,15 +505,6 @@ class Scheduler:
         for seq in running:
             if seq.status == filter_status:
                 seq.state.deactivate()
-
-    @contextmanager
-    def seqs_activation(self, running: SeqList):
-        """Context manager to activate and deactivate sequences."""
-        self.activate_seqs(running, MessageStatus.READY)
-        try:
-            yield running
-        finally:
-            self.deactivate_seqs(running, MessageStatus.RUNNING)
 
     def activate_migration_seqs(self, running: SeqList):
         """Lock running sequence."""

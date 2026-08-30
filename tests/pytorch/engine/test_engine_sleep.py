@@ -40,7 +40,7 @@ class _FakeScheduler:
     def get_sessions(self):
         return list(self.sessions.values())
 
-    def finish_deferred_kv_transfers_after_worker_drain(self):
+    def finish_kv_transfers_after_worker_drain(self):
         pass
 
 
