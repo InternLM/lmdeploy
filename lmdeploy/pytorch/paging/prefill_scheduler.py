@@ -1,58 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Request scheduling and prefix-cache side-effect boundaries.
+"""Prefill ordering and prefix-cache admission.
 
-The scheduler is the first owner of prefix-cache side effects.  In prefill,
-``BlockTrie.match()`` is intentionally called before eviction and allocation so
-the scheduler can account for reused KV/state.  That match is tentative:
-rollback is required if checkpoint pinning, KV eviction, or runtime state
-allocation means the request cannot safely run now.  Long-context suffixes can
-continue chunking from the accepted prefix hit.
-
-Successful prefill scheduling keeps this order:
-
-1. ``block_trie.match(seq)`` mutates sequence state to skip a cached prefix.
-2. eviction and SSM runtime-state availability are checked.
-3. ``block_manager.allocate(seq)`` allocates missing KV blocks.
-4. ``block_trie.allocate(seq)`` publishes newly allocated full blocks.
-5. For SSM, downstream input/model/engine code restores and saves checkpoint
-   states; the scheduler only owns resource decisions and rollback.
-
-SSM scheduling detail:
-
-* ``block_trie.match(seq)`` may find a published checkpoint and record
-  ``seq.prefix_cache.restore`` before the request owns a runtime state.
-  The scheduler must treat that as tentative until KV blocks and one runtime
-  state slot are guaranteed.
-* A matched restore checkpoint can be pinned before eviction so checkpoint LRU
-  cannot free the source slot.  If that pin prevents eviction from finding
-  enough resources, the scheduler rolls the match back, releases the pin, and
-  retries eviction once without the tentative hit.
-* Runtime state availability is checked after KV eviction because old unpinned
-  checkpoints may be dropped to free state-cache slots.  If no runtime slot can
-  be recovered, the tentative prefix hit is rolled back and the request waits.
-* ``state_manager.allocate(seq)`` assigns the request runtime state only after
-  ``block_manager.allocate(seq)`` and ``block_trie.allocate(seq)`` succeed.
-  Later, ``InputsMaker`` may reserve checkpoint saves for the exact produced
-  step; scheduler code does not perform state-cache tensor copies or publish
-  checkpoint readiness.
-
-External KV scheduling detail:
-
-* External lookup is enabled only for a KV consumer with a connector, and is
-  kept separate from the SSM checkpoint path. Local ``BlockTrie.match()`` runs
-  first so the connector searches only beyond KV already resident on this node.
-* Lookup is asynchronous. A pending result must leave the request schedulable
-  for a later tick without retaining a tentative local match, so multi-turn
-  sequence state is snapshotted and restored exactly.
-* A positive hit is block-aligned, allocated, and handed to
-  ``KVLoadCoordinator``. While workers may write those blocks, the sequence is
-  in ``WAITING_FOR_REMOTE_KVS`` and paging cleanup is deferred.
-* A successful load is published into the local trie and prioritized for its
-  remaining prefill. A failed or cancelled load returns to the last safe
-  block-aligned prefix because partially written destinations are untrusted.
-* Prefill saves take a physical block snapshot for workers and a logical block
-  lease for paging. ``KVSaveCoordinator`` keeps those blocks alive until every
-  TP rank reports terminal progress or worker queues are drained.
+Each candidate is checked against long-context and token-budget policy before acquiring KV or runtime-state resources.
+Local trie matches remain tentative until those resources are available; rejected attempts restore the sequence's exact
+pre-match state. External loads use a later rollback boundary once a worker may have written block-aligned destinations.
 """
 
 import enum
@@ -259,7 +210,7 @@ class _PrefillAdmissionResult:
         return cls(action=_PrefillAdmissionAction.STOP)
 
     @classmethod
-    def load(cls):
+    def load_started(cls):
         return cls(action=_PrefillAdmissionAction.LOAD_STARTED)
 
 
@@ -464,45 +415,37 @@ class _PrefillAdmissionAttempt:
     def __init__(self,
                  prefill_scheduler: '_PrefillScheduler',
                  seq: SchedulerSequence,
-                 hanging: SeqList,
+                 stopped: SeqList,
                  evictable_waiting: SeqList,
                  prealloc_size: int,
-                 token_count: int,
-                 has_admitted: bool,
+                 batch_prefill_tokens: int,
+                 batch_has_prefill: bool,
                  allow_long_prefill: bool):
         self.prefill_scheduler = prefill_scheduler
         self.seq = seq
-        self.hanging = hanging
+        self.stopped = stopped
         self.evictable_waiting = evictable_waiting
         self.prealloc_size = prealloc_size
-        self.token_count = token_count
-        self.has_admitted = has_admitted
+        self.batch_prefill_tokens = batch_prefill_tokens
+        self.batch_has_prefill = batch_has_prefill
         self.load_coordinator = prefill_scheduler.load_coordinator
-        self._remote_ready = self.load_coordinator.is_remote_ready(seq)
+        self._load_ready = self.load_coordinator.is_remote_ready(seq)
         self.allow_long_prefill = allow_long_prefill
-        self._alloc_size = prealloc_size
+        self._effective_prealloc_size = prealloc_size
         self._prefix_match = _TentativePrefixMatch(
             seq,
             prefill_scheduler.block_trie,
             prefill_scheduler.block_manager,
             is_ssm=prefill_scheduler.is_ssm,
             preserve_existing_state=(
-                self.load_coordinator.lookup_enabled and not self._remote_ready),
+                self.load_coordinator.lookup_enabled and not self._load_ready),
         )
 
     def run(self):
-        """Run the admission route for one waiting prefill.
-
-        1. If a previous external lookup is pending, skip without applying new
-           local prefix-cache side effects.
-        2. Snapshot multi-turn state before a local match may become tentative.
-        3. Apply long-prefill and token-budget gates.
-        4. Prefer a local trie hit, then query/load only its remote extension.
-        5. Admit KV/state resources or roll the tentative match back precisely.
-        6. On success, allocate blocks/states and publish the accepted hit.
-        """
-        if self.load_coordinator.lookup_enabled and not self._remote_ready:
-            if self._lookup_is_pending():
+        """Apply policy, acquire resources, and commit one admission."""
+        if self.load_coordinator.lookup_enabled and not self._load_ready:
+            if self.load_coordinator.is_lookup_pending(self.seq):
+                self.prefill_scheduler.last_schedule_had_pending_lookup = True
                 return _PrefillAdmissionResult.skip()
             self._prefix_match.begin()
 
@@ -514,59 +457,42 @@ class _PrefillAdmissionAttempt:
         if resource_result is not None:
             return resource_result
 
-        return self._finish_admission()
-
-    def _lookup_is_pending(self) -> bool:
-        """Skip without touching local prefix state while lookup is running.
-
-        The connector owns the Future and deduplicates polls. Marking this turn lets EngineLoop use a short I/O poll
-        delay instead of diagnosing an empty batch as GPU-cache pressure.
-        """
-        prefill = self.prefill_scheduler
-        if not self.load_coordinator.is_lookup_pending(self.seq):
-            return False
-        prefill.last_schedule_had_pending_lookup = True
-        return True
+        return self._allocate_and_commit()
 
     def _admit_resources(self):
         if self.prefill_scheduler.block_trie.enabled:
             return self._admit_prefix_cache_resources()
         if self.load_coordinator.lookup_enabled:
-            lookup_result = self._query_external_prefix()
-            if lookup_result is not None:
-                return lookup_result
+            load_result = self._try_external_load()
+            if load_result is not None:
+                return load_result
         if not self._prepare_and_evict():
             return _PrefillAdmissionResult.stop()
         return None
 
     def _admit_prefix_cache_resources(self):
-        """Admit resources for prefix-cache scheduling.
+        """Resolve the prefix source, then admit its paging resources."""
+        load_result = self._resolve_prefix_source()
+        if load_result is not None:
+            return load_result
+        return self._admit_matched_resources()
 
-        Route map:
-        1. Use or create the tentative prefix-cache match.
-        2. For external consumers, query only beyond that local match.
-        3. Pin any SSM restore state required by the match.
-        4. Prepare allocation limits and evict KV/state resources.
-        5. For SSM, verify a runtime state slot is still available.
-
-        Any failure rolls the tentative match back. A match created only to pass
-        a prefill gate returns that gate's skip/stop result after rollback;
-        normal resource failures keep their local retry/stop behavior here.
-        """
-        prefill = self.prefill_scheduler
-        seq = self.seq
+    def _resolve_prefix_source(self):
+        """Match local cache first, then try loading its remote extension."""
         if not self._prefix_match.matched:
             # A completed external load has already published the accepted
-            # prefix interval. Matching again would restart accounting at the
-            # remote step and drop the restored tokens from request metrics.
-            if not self._remote_ready and not self._has_private_local_tail():
+            # prefix. Matching again would lose its cached-token accounting.
+            if not self._load_ready and not self._has_private_local_tail():
                 self._prefix_match.match()
 
         if self.load_coordinator.lookup_enabled:
-            lookup_result = self._query_external_prefix()
-            if lookup_result is not None:
-                return lookup_result
+            return self._try_external_load()
+        return None
 
+    def _admit_matched_resources(self):
+        """Pin matched state, evict for KV, and reserve runtime state."""
+        prefill = self.prefill_scheduler
+        seq = self.seq
         had_ssm_restore = prefill.is_ssm and seq.prefix_cache.restore.is_selected
         if not self._prefix_match.pin_restore():
             result = self._prefix_match.rollback(
@@ -574,40 +500,51 @@ class _PrefillAdmissionAttempt:
             if result is not None:
                 return result
 
+        kv_result = self._admit_kv_resources(had_ssm_restore)
+        if kv_result is not None:
+            return kv_result
+        return self._admit_runtime_state()
+
+    def _admit_kv_resources(self, had_ssm_restore: bool):
+        """Evict for KV, retrying once without a pinned SSM restore."""
+        if self._prepare_and_evict():
+            return None
+
+        reason = 'eviction failed'
+        if had_ssm_restore:
+            reason = 'eviction failed with pinned SSM restore'
+        result = self._prefix_match.rollback(reason)
+        if result is not None:
+            return result
+
+        # The matched restore may pin the only checkpoint state that eviction
+        # can free. Retrying after rollback preserves the unmatched fallback.
+        if had_ssm_restore and self._prepare_and_evict():
+            return None
+        return _PrefillAdmissionResult.stop()
+
+    def _admit_runtime_state(self):
+        """Ensure an SSM runtime slot, retrying after match rollback."""
+        prefill = self.prefill_scheduler
+        seq = self.seq
+        if not prefill.is_ssm or prefill._ensure_runtime_state_available():
+            return None
+
+        result = self._prefix_match.rollback(
+            'no runtime SSM state available')
+        if result is not None:
+            return result
         if not self._prepare_and_evict():
-            if not had_ssm_restore:
-                result = self._prefix_match.rollback('eviction failed')
-                if result is not None:
-                    return result
-                return _PrefillAdmissionResult.stop()
-
-            # A matched SSM restore may be pinning the only checkpoint state
-            # that eviction would otherwise free. Roll it back once and retry
-            # eviction before declaring the sequence unschedulable.
-            result = self._prefix_match.rollback(
-                'eviction failed with pinned SSM restore')
-            if result is not None:
-                return result
-            if not self._prepare_and_evict():
-                return _PrefillAdmissionResult.stop()
-
-        if prefill.is_ssm and not prefill._ensure_runtime_state_available():
-            result = self._prefix_match.rollback(
-                'no runtime SSM state available')
-            if result is not None:
-                return result
-            if not self._prepare_and_evict():
-                return _PrefillAdmissionResult.stop()
-            if not prefill._ensure_runtime_state_available():
-                seq.kv_token_limit = None
-                return _PrefillAdmissionResult.stop()
-
+            return _PrefillAdmissionResult.stop()
+        if not prefill._ensure_runtime_state_available():
+            seq.kv_token_limit = None
+            return _PrefillAdmissionResult.stop()
         return None
 
-    def _query_external_prefix(self):
+    def _try_external_load(self):
         """Map connector/paging admission to prefill queue policy."""
         prefill = self.prefill_scheduler
-        if self._remote_ready:
+        if self._load_ready:
             return None
         admission = self.load_coordinator.try_load(
             self.seq,
@@ -622,7 +559,7 @@ class _PrefillAdmissionAttempt:
             return _PrefillAdmissionResult.skip()
         if admission is KVLoadAdmission.STARTED:
             self._prefix_match.commit()
-            return _PrefillAdmissionResult.load()
+            return _PrefillAdmissionResult.load_started()
         if admission is KVLoadAdmission.FULL_PREFILL_UNAVAILABLE:
             reason = 'full prefill capacity unavailable'
         else:
@@ -635,52 +572,25 @@ class _PrefillAdmissionAttempt:
 
     def _evictable_sequences(self):
         """Iterate queue-owned eviction candidates in historical order."""
-        yield from reversed(self.hanging)
+        yield from reversed(self.stopped)
         yield from reversed(self.evictable_waiting)
 
     def _match_prefix_for_prefill_gate(self):
         """Tentatively match once so a request can be rechecked by a gate."""
         prefill = self.prefill_scheduler
-        if (self._remote_ready or not prefill.block_trie.enabled
+        if (self._load_ready or not prefill.block_trie.enabled
                 or self._has_private_local_tail()):
             return None
         self._prefix_match.match()
         return True
 
     def _has_private_local_tail(self) -> bool:
-        """Whether blocks exist beyond the full-block part of local history.
+        """Whether a private partial block prevents another trie match.
 
-        ``num_history_ids // block_size`` counts the completely computed
-        blocks before the current step.  A larger ``num_blocks`` means that the
-        sequence also owns the block containing a non-aligned current step, or
-        blocks preallocated after it.  Those blocks are private to this
-        sequence because their KV is partial or not computed yet, so they
-        cannot be published as complete reusable trie blocks.
-
-        For example, with block size 4, a chunked prefill may stop at step 5
-        with block table ``[P0, P1]``::
-
-            P0 -> tokens [0, 4), complete
-            P1 -> tokens [4, 8), only the KV at token 4 is valid
-
-        The trie cursor is at step 4 while ``P1`` already occupies logical
-        block index 1.  If another ``block_trie.match`` finds a shared block
-        ``S1`` for tokens [4, 8), matching appends it after ``P1`` instead of
-        filling ``P1``.  The resulting table ``[P0, P1, S1]`` is misaligned:
-        ``S1`` describes logical block 1 but resides at block-table index 2.
-
-        External lookup starts at the exact local step 5, but a block-granular
-        transfer rounds its start down to step 4.  It must therefore reuse
-        ``P1`` at index 1 as the first destination and overwrite the incomplete
-        KV there.  Skipping trie rematch keeps that destination stable until
-        the load is bound.  Without this guard, lookup may start from an
-        incorrectly advanced step or the load/model may address a block table
-        whose logical token ranges no longer match its indices.
-
-        This state means that a sequence retains local progress across
-        scheduling attempts.  It can result from chunked prefill, repeated
-        model forwards, preemption/resume, or a continued chat session; it is
-        not specific to multi-turn conversation.
+        A block beyond ``history // block_size`` occupies the logical range
+        that another shared match would append, misaligning table positions.
+        Block-granular external load must instead reuse that private boundary
+        block as its first destination.
         """
         if not self.load_coordinator.lookup_enabled:
             return False
@@ -711,7 +621,10 @@ class _PrefillAdmissionAttempt:
                 _PrefillAdmissionResult.skip())
             prefill_token_count = prefill._prefill_admission_token_count(seq)
 
-        exceeds_token_budget = self.has_admitted and self.token_count + prefill_token_count > token_budget
+        exceeds_token_budget = (
+            self.batch_has_prefill
+            and self.batch_prefill_tokens + prefill_token_count > token_budget
+        )
         if not exceeds_token_budget:
             return None
 
@@ -719,7 +632,7 @@ class _PrefillAdmissionAttempt:
             matched = self._match_prefix_for_prefill_gate()
             if matched is not None:
                 prefill_token_count = prefill._prefill_admission_token_count(seq)
-                if self.token_count + prefill_token_count <= token_budget:
+                if self.batch_prefill_tokens + prefill_token_count <= token_budget:
                     self._prefix_match.retain_for_admission(
                         self._token_budget_rejection())
                     return None
@@ -733,7 +646,7 @@ class _PrefillAdmissionAttempt:
         prefill = self.prefill_scheduler
         seq = self.seq
         alloc_size = prefill._prepare_prefill_allocation(seq, self.prealloc_size)
-        self._alloc_size = alloc_size
+        self._effective_prealloc_size = alloc_size
         if self._evict_for_seq(alloc_size):
             return True
         seq.kv_token_limit = None
@@ -748,7 +661,7 @@ class _PrefillAdmissionAttempt:
             alloc_size,
         )
 
-    def _finish_admission(self):
+    def _allocate_and_commit(self):
         prefill = self.prefill_scheduler
         seq = self.seq
         # Prefix-cache matching can advance the sequence step and shrink the
@@ -756,7 +669,7 @@ class _PrefillAdmissionAttempt:
         # post-match/post-rollback cost, not the conservative pre-match
         # estimate used to decide whether this sequence is worth trying.
         prefill_token_count = prefill._prefill_admission_token_count(seq)
-        prefill.block_manager.allocate(seq, self._alloc_size)
+        prefill.block_manager.allocate(seq, self._effective_prealloc_size)
         if prefill.block_trie.enabled:
             prefill.block_trie.allocate(seq)
         if prefill.is_ssm:
@@ -767,7 +680,7 @@ class _PrefillAdmissionAttempt:
             seq,
             prealloc_size=self.prealloc_size,
         )
-        if self._remote_ready:
+        if self._load_ready:
             # Preserve the load record through the remaining prefill so its
             # reservation can be released only after model output advances the
             # sequence to input_end_pos.
@@ -881,7 +794,7 @@ class _PrefillScheduler:
         self,
         seq: SchedulerSequence,
         *,
-        hanging: SeqList,
+        stopped: SeqList,
         waiting: SeqList,
         chunk_size: int,
         prealloc_size: int = 0,
@@ -895,7 +808,7 @@ class _PrefillScheduler:
             seq.kv_token_limit = seq.num_history_ids + chunk_size
             prealloc_size = 0
 
-        evictable = hanging + waiting
+        evictable = stopped + waiting
         if not self.eviction_helper.evict_for_seq(
             seq,
             evictable,
@@ -913,7 +826,7 @@ class _PrefillScheduler:
         self,
         *,
         waiting: SeqList,
-        hanging: SeqList,
+        stopped: SeqList,
         num_ready: int,
         num_running: int,
         prealloc_size: int = 0,
@@ -924,19 +837,9 @@ class _PrefillScheduler:
         self.last_schedule_had_pending_lookup = False
         max_batches = self.scheduler_config.max_batches - num_ready - num_running
         running: SeqList = []
-        token_count = 0
+        batch_prefill_tokens = 0
 
-        def _to_running(
-            seq: SchedulerSequence,
-            prefill_token_count: int,
-        ):
-            """Activate an admitted sequence and count its prefill tokens."""
-            seq.state.activate()
-            running.append(seq)
-            nonlocal token_count
-            token_count += prefill_token_count
-
-        if len(running) >= max_batches or len(waiting) == 0:
+        if max_batches <= 0 or not waiting:
             return running
 
         waiting = _PrefillReorderer(self).reorder(
@@ -945,17 +848,17 @@ class _PrefillScheduler:
             prefer_long_prefill=prefer_long_prefill,
         )
         skipped_waiting: SeqList = []
-        while len(waiting) > 0 and len(running) < max_batches:
+        while waiting and len(running) < max_batches:
             seq = waiting.pop(0)
             evictable_waiting = skipped_waiting + waiting
             admission = _PrefillAdmissionAttempt(
                 self,
                 seq,
-                hanging=hanging,
+                stopped=stopped,
                 evictable_waiting=evictable_waiting,
                 prealloc_size=prealloc_size,
-                token_count=token_count,
-                has_admitted=len(running) > 0,
+                batch_prefill_tokens=batch_prefill_tokens,
+                batch_has_prefill=bool(running),
                 allow_long_prefill=allow_long_prefill,
             ).run()
 
@@ -970,7 +873,9 @@ class _PrefillScheduler:
                 break
 
             assert admission.action is _PrefillAdmissionAction.ADMIT
-            _to_running(seq, admission.prefill_token_count)
+            seq.state.activate()
+            running.append(seq)
+            batch_prefill_tokens += admission.prefill_token_count
             seq.record_event(EventType.SCHEDULED)
 
             if seq.kv_token_limit is not None:

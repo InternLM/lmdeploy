@@ -1,10 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-"""Public sequence lifecycle and prefill/decode scheduling facade."""
+"""Public paging scheduler and sequence-lifecycle facade."""
 
 from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import chain
 from typing import TYPE_CHECKING
 
 from torch.profiler import record_function
@@ -30,7 +31,7 @@ SeqList = list[SchedulerSequence]
 
 @dataclass
 class SchedulerOutput:
-    """Output of schedule."""
+    """Paging selection and connector snapshots for one model step."""
 
     running: SeqList
     swap_in_map: MapType
@@ -49,11 +50,11 @@ class SchedulerOutput:
 
 
 class Scheduler:
-    """Tools to schedule next step.
+    """Coordinate sequence lifecycle and paging-resource admission.
 
     Args:
-        scheduler_config (SchedulerConfig): The config of scheduler.
-        cache_config (CacheConfig): The config of cache info.
+        scheduler_config: Batch and eviction policy.
+        cache_config: KV and state-cache configuration.
     """
 
     def __init__(
@@ -152,7 +153,7 @@ class Scheduler:
         """Reserve KV blocks for the next chunk of a running long prefill."""
         return self._prefill_scheduler.reserve_long_context_chunk(
             seq,
-            hanging=self.hanging,
+            stopped=self.hanging,
             waiting=self.waiting,
             chunk_size=chunk_size,
             prealloc_size=prealloc_size,
@@ -227,137 +228,67 @@ class Scheduler:
 
     def _schedule_migration(self):
         migration_ready: SeqList = []
-        migrating_token_count = 0
-
-        def _to_running(seq: SchedulerSequence):
-            """Activate a migrated sequence and count its tokens."""
-            seq.state.activate()
-            migration_ready.append(seq)
-            nonlocal migrating_token_count
-            migrating_token_count += seq.num_token_ids
-
-        def __evict_for_seq(seq: SchedulerSequence, waiting):
-            """Evict until can append."""
-            from itertools import chain
-
-            hanging = reversed(self.hanging)
-            waiting = reversed(waiting)
-            evictable = list(chain(hanging, waiting))
-            return self.eviction_helper.evict_for_seq(seq, evictable, 0)
-
-        def _reorder_migrating():
-            """Reorder waiting."""
-            return sorted(self.migration_waiting, key=lambda seq: seq.arrive_time)
-
-        migration_waiting = _reorder_migrating()
+        migration_waiting = sorted(
+            self.migration_waiting,
+            key=lambda seq: seq.arrive_time,
+        )
 
         max_batches = self.scheduler_config.max_batches - self.num_ready() - self.num_running()
-        while len(migration_waiting) > 0 and len(migration_ready) < max_batches:
+        while migration_waiting and len(migration_ready) < max_batches:
             seq = migration_waiting.pop(0)
             self.block_trie.match(seq)
-            if not __evict_for_seq(seq, migration_waiting):
+            evictable = list(
+                chain(
+                    reversed(self.hanging),
+                    reversed(migration_waiting),
+                ))
+            if not self.eviction_helper.evict_for_seq(seq, evictable, 0):
                 break
 
             # allocate session memory
             self.block_manager.allocate(seq)
             self.block_trie.finalize_match(seq)
-            _to_running(seq)
+            seq.state.activate()
+            migration_ready.append(seq)
 
         return migration_ready
-
-    @record_function('schedule_decoding')
-    def _schedule_decoding(self, prealloc_size: int = 0):
-        """Schedule decoding."""
-
-        def _reorder_running():
-            """Reorder running."""
-            return sorted(self.ready, key=lambda seq: seq.arrive_time)
-
-        running = _reorder_running()
-        assert len(running) != 0
-
-        eviction_helper = self.eviction_helper
-        swap_out_map: MapType = dict()
-        swap_in_map: MapType = dict()
-        copy_map: MapType = dict()
-
-        def __evict_for_seq(seq: SchedulerSequence, num_required_blocks: int):
-            """Evict until can append."""
-            if num_required_blocks == 0:
-                # No need to evict, just return True.
-                return True
-            elif num_required_blocks <= self.block_manager.get_num_free_gpu_blocks():
-                # Enough free blocks, just return True.
-                return True
-
-            from itertools import chain
-            hanging = reversed(self.hanging)
-            waiting = reversed(self.waiting)
-            evictable = list(chain(hanging, waiting))
-            return eviction_helper.evict_for_seq(seq, evictable, prealloc_size)
-
-        # 1. running
-        while len(running) > 0:
-            # token + n
-            seq = running.pop(0)
-            num_required_blocks = self.block_manager.num_required_blocks(seq, prealloc_size)
-            assert seq.num_blocks + num_required_blocks <= self.block_manager.num_gpu_blocks, (
-                'Sequence requires more blocks than total gpu blocks.')
-
-            while not __evict_for_seq(seq, num_required_blocks):
-                if len(running) == 0:
-                    break
-                seq_preempted = running.pop(-1)
-                # Preemption abandons the tracked full-prefill target. Keeping
-                # it would reserve blocks for work no longer admitted.
-                self.kv_load_coordinator.release(seq_preempted)
-                seq_preempted.state.evict()
-
-            if self.block_manager.get_num_free_gpu_blocks() < num_required_blocks:
-                self.kv_load_coordinator.release(seq)
-                seq.state.evict()
-                continue
-
-            self.block_manager.allocate(seq, prealloc_size)
-            self.block_trie.allocate(seq)
-
-        return self.ready[:self.scheduler_config.max_batches], swap_in_map, swap_out_map, copy_map
 
     def schedule(self,
                  is_prefill: bool,
                  prealloc_size: int = 0,
                  allow_long_prefill: bool = True,
                  prefer_long_prefill: bool = False):
-        """Schedule inputs for next steps."""
-        self.last_schedule_had_pending_lookup = False
-        if is_prefill:
-            running = self._prefill_scheduler.schedule(
-                waiting=self.waiting,
-                hanging=self.hanging,
-                num_ready=self.num_ready(),
-                num_running=self.num_running(),
-                prealloc_size=prealloc_size,
-                allow_long_prefill=allow_long_prefill,
-                prefer_long_prefill=prefer_long_prefill,
-            )
-            self.last_schedule_had_pending_lookup = (
-                self._prefill_scheduler.last_schedule_had_pending_lookup)
-            swap_in_map: MapType = {}
-            swap_out_map: MapType = {}
-            copy_map: MapType = {}
-        else:
-            running, swap_in_map, swap_out_map, copy_map = self._schedule_decoding(
-                prealloc_size)
+        """Select the next prefill batch.
 
-        return SchedulerOutput(running=running, swap_in_map=swap_in_map, swap_out_map=swap_out_map, copy_map=copy_map)
+        Decode capacity is admitted by :meth:`schedule_running`.
+        """
+        if not is_prefill:
+            raise ValueError(
+                'schedule only selects prefill work; use schedule_running '
+                'for decode capacity admission')
+
+        self.last_schedule_had_pending_lookup = False
+        running = self._prefill_scheduler.schedule(
+            waiting=self.waiting,
+            stopped=self.hanging,
+            num_ready=self.num_ready(),
+            num_running=self.num_running(),
+            prealloc_size=prealloc_size,
+            allow_long_prefill=allow_long_prefill,
+            prefer_long_prefill=prefer_long_prefill,
+        )
+        self.last_schedule_had_pending_lookup = (
+            self._prefill_scheduler.last_schedule_had_pending_lookup)
+        return SchedulerOutput(
+            running=running,
+            swap_in_map={},
+            swap_out_map={},
+            copy_map={},
+        )
 
     @record_function('schedule_running')
     def schedule_running(self, running: SeqList, num_required_tokens: int = 1, prealloc_size: int = 1):
-        """Schedule running sequences.
-
-        This function is used to add blocks for running sequences request would be marked as invalid if not enough
-        blocks can be allocated.
-        """
+        """Admit KV growth for running sequences and return their validity."""
         assert len(running) > 0
         eviction_helper = self.eviction_helper
 

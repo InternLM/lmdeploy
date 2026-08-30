@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.config import CacheConfig
-from lmdeploy.pytorch.paging.state_manager import build_state_manager
+from lmdeploy.pytorch.paging.state_manager import StateManager, build_state_manager
 
 
 def test_reserved_state_cache_is_not_allocatable():
@@ -82,3 +82,40 @@ def test_non_ssm_state_manager_without_state_caches():
     assert state_manager.get_num_free() == 0
     with pytest.raises(RuntimeError, match='No free states.'):
         state_manager.allocate(SimpleNamespace(logical_state=-1))
+
+
+def test_state_manager_reserves_system_state_slot():
+    manager = StateManager(num_states=3, num_reserved=1)
+
+    assert manager.allocate_state() == 1
+    assert manager.allocate_state() == 2
+    with pytest.raises(RuntimeError, match='No free states'):
+        manager.allocate_state()
+
+
+def test_state_manager_checkpoint_can_borrow_idle_runtime_slots():
+    manager = StateManager(num_states=5, num_reserved=1, num_runtime_states=2)
+
+    checkpoints = [manager.allocate_checkpoint_state() for _ in range(4)]
+    assert checkpoints == [1, 2, 3, 4]
+    with pytest.raises(RuntimeError, match='No free states'):
+        manager.allocate_checkpoint_state()
+
+    manager.free_checkpoint_state(checkpoints[0])
+    manager.free_checkpoint_state(checkpoints[1])
+    assert manager.allocate_state() == checkpoints[1]
+    assert manager.allocate_state() == checkpoints[0]
+    with pytest.raises(RuntimeError, match='No free states'):
+        manager.allocate_state()
+
+
+def test_state_manager_caps_runtime_count_even_with_extra_free_slots():
+    manager = StateManager(num_states=6, num_reserved=1, num_runtime_states=2)
+
+    assert manager.num_runtime_states == 2
+    assert manager.allocate_state() == 1
+    assert manager.allocate_state() == 2
+    assert manager.get_num_free() == 3
+    assert manager.get_num_free_runtime() == 0
+    with pytest.raises(RuntimeError, match='No free states'):
+        manager.allocate_state()
