@@ -101,7 +101,7 @@ def test_scheduler_prefix_match_rollback_clears_recompute_overlap_window(monkeyp
     cached.state.stop()
 
     seq = scheduler.add_session(1).add_sequence(token_ids)
-    monkeypatch.setattr(scheduler.eviction_helper, 'evict_for_seq', Mock(return_value=False))
+    monkeypatch.setattr(scheduler.eviction_helper, 'try_make_capacity_for', Mock(return_value=False))
     scheduler.block_trie.stats.reset()
 
     output = scheduler.schedule(is_prefill=True)
@@ -255,8 +255,8 @@ def test_scheduler_resource_rejection_rolls_back_tentative_prefix_match(monkeypa
     scheduler.block_trie.stats.reset()
 
     seq = scheduler.add_session(1).add_sequence([1] * block_size + [3])
-    evict_for_seq = Mock(return_value=False)
-    monkeypatch.setattr(scheduler.eviction_helper, 'evict_for_seq', evict_for_seq)
+    try_make_capacity = Mock(return_value=False)
+    monkeypatch.setattr(scheduler.eviction_helper, 'try_make_capacity_for', try_make_capacity)
 
     output = scheduler.schedule(is_prefill=True)
 
@@ -268,7 +268,7 @@ def test_scheduler_resource_rejection_rolls_back_tentative_prefix_match(monkeypa
     assert seq.cached_tokens == 0
     assert seq.prefix_cache.trie_cursor is None
     assert seq.prefix_cache.match_start_step == -1
-    assert evict_for_seq.call_count == 1
+    assert try_make_capacity.call_count == 1
     assert scheduler.block_manager.allocator.get_ref_count(cached_block).tolist() == ref_count.tolist()
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0
@@ -363,7 +363,7 @@ def test_scheduler_cached_tokens_only_count_current_prompt_after_session_evictio
     scheduler.schedule(is_prefill=True)
     seq.update_token_ids(torch.tensor([9]), mode=UpdateTokenMode.PREFILL)
     seq.state.stop()
-    seq.state.free()
+    seq.state.release_paging_resources()
 
     seq.update_token_ids(torch.tensor([4] * 4))
     assert seq.input_start_pos == block_size * 2 + 2
@@ -400,7 +400,7 @@ def test_scheduler_excludes_recompute_eviction_prefix_hits_from_stats():
     pressure = scheduler.add_session(1).add_sequence([9] * block_size * 3)
     scheduler.block_trie.stats.reset()
 
-    assert scheduler.eviction_helper.evict_for_seq(pressure, [seq], 0)
+    assert scheduler.eviction_helper.try_make_capacity_for(pressure, [seq], 0)
     assert seq.prefix_cache.suppress_match_stats
     pressure.session.remove_sequence(pressure)
 

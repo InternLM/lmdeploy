@@ -281,6 +281,16 @@ class StateCheckpointLifecycle:
             self._state_manager.free_checkpoint_state(checkpoint.slot)
         node.state_checkpoint = None
 
+    def make_runtime_state_available(self) -> bool:
+        """Release one checkpoint when runtime-state capacity is exhausted."""
+        state_manager = self._state_manager
+        if state_manager is None:
+            return False
+        if state_manager.get_num_free_runtime() > 0:
+            return True
+        self.evict(1)
+        return state_manager.get_num_free_runtime() > 0
+
     def evict(self, max_num_checkpoints: int):
         """Evict published checkpoints without removing trie nodes."""
         return self._evict_checkpoints(self._index.unique_nodes(), max_num_checkpoints)

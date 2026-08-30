@@ -505,8 +505,8 @@ def test_async_load_capacity_failure_restores_tentative_local_prefix(monkeypatch
     scheduler.block_trie.stats.reset()
 
     seq = scheduler.add_session(77).add_sequence(tokens)
-    evict_for_seq = Mock(return_value=False)
-    monkeypatch.setattr(scheduler.eviction_helper, 'evict_for_seq', evict_for_seq)
+    try_make_capacity = Mock(return_value=False)
+    monkeypatch.setattr(scheduler.eviction_helper, 'try_make_capacity_for', try_make_capacity)
 
     output = scheduler.schedule(is_prefill=True)
 
@@ -520,7 +520,7 @@ def test_async_load_capacity_failure_restores_tentative_local_prefix(monkeypatch
     assert seq.prefix_cache.match_start_step == -1
     assert connector.lookup_calls == [(seq.seq_id, 4)]
     assert connector.allocations == []
-    assert evict_for_seq.call_count == 1
+    assert try_make_capacity.call_count == 1
     assert scheduler.block_manager.allocator.get_ref_count(cached_block).tolist() == ref_count.tolist()
     assert scheduler.block_trie.stats.num_query_tokens == 0
     assert scheduler.block_trie.stats.num_hit_tokens == 0

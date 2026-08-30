@@ -326,9 +326,16 @@ def test_ssm_scheduler_rejects_prefix_match_for_prefill_gate_after_runtime_state
     def _make_runtime_state_available_once_then_succeed():
         return next(ensure_results)
 
-    monkeypatch.setattr(scheduler._prefill_scheduler,
-                        '_make_runtime_state_available',
-                        _make_runtime_state_available_once_then_succeed)
+    monkeypatch.setattr(
+        scheduler.eviction_helper,
+        'try_make_capacity_for',
+        lambda *args: True,
+    )
+    monkeypatch.setattr(
+        scheduler.block_trie.state_checkpoints,
+        'make_runtime_state_available',
+        _make_runtime_state_available_once_then_succeed,
+    )
     scheduler.block_trie.stats.reset()
 
     cache_hit_tail = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [3])
@@ -373,7 +380,9 @@ def _make_ssm_scheduler_for_long_context_chunks(num_gpu_blocks: int = 2):
     return scheduler, block_size
 
 
-def test_schedule_prefill_reapplies_chunk_limit_after_ssm_state_rollback():
+def test_schedule_prefill_reapplies_chunk_limit_after_ssm_state_rollback(
+    monkeypatch,
+):
     scheduler, block_size = _make_ssm_scheduler_for_long_context_chunks(num_gpu_blocks=2)
     long_seq = scheduler.add_session(100).add_sequence([1] * (block_size * 4))
 
@@ -382,8 +391,16 @@ def test_schedule_prefill_reapplies_chunk_limit_after_ssm_state_rollback():
     def _make_runtime_state_available_once_then_succeed():
         return next(ensure_results)
 
-    scheduler._prefill_scheduler._make_runtime_state_available = (
-        _make_runtime_state_available_once_then_succeed)
+    monkeypatch.setattr(
+        scheduler.eviction_helper,
+        'try_make_capacity_for',
+        lambda *args: True,
+    )
+    monkeypatch.setattr(
+        scheduler.block_trie.state_checkpoints,
+        'make_runtime_state_available',
+        _make_runtime_state_available_once_then_succeed,
+    )
 
     output = scheduler.schedule(is_prefill=True, prealloc_size=1)
 

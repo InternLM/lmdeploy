@@ -44,7 +44,7 @@ class SequenceLifecycle:
     def remove_sequence(self, seq: SchedulerSequence) -> None:
         """Release local ownership without a terminal connector event."""
         assert seq.seq_id in seq.session.sequences
-        self.free_sequence(seq)
+        self.release_paging_resources(seq)
         seq.session.sequences.pop(seq.seq_id)
         self._seq_manager.unregister_sequence(seq)
 
@@ -64,7 +64,8 @@ class SequenceLifecycle:
         if self._is_ssm:
             assert seq.logical_state >= 0
 
-    def free_sequence(self, seq: SchedulerSequence) -> None:
+    def release_paging_resources(self, seq: SchedulerSequence) -> None:
+        """Release blocks and state without changing sequence status."""
         if self._prefix_cache_enabled:
             self._state_checkpoints.discard_save(seq)
             self._state_checkpoints.unpin_restore(seq)
@@ -128,9 +129,9 @@ class StateBase:
         """Stop the state."""
         self.to_state(StoppedState)
 
-    def free(self):
-        """Free the state."""
-        self.lifecycle.free_sequence(self.seq)
+    def release_paging_resources(self):
+        """Release blocks and state without changing sequence status."""
+        self.lifecycle.release_paging_resources(self.seq)
 
     def begin_remote_load(self):
         raise NotImplementedError(f'begin_remote_load not implemented for state {self.status}')

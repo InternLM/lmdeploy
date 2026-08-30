@@ -27,7 +27,7 @@ from .state_manager import StateManager
 
 if TYPE_CHECKING:
     from .block_manager.base_block_manager import BaseBlockManager
-    from .eviction_helper.base_eviction_helper import BaseEvictionHelper
+    from .eviction_helper.recompute_eviction_helper import RecomputeEvictionHelper
 
 logger = get_logger('lmdeploy')
 
@@ -379,7 +379,7 @@ class _TentativePrefixMatch:
         if self.is_ssm:
             self.block_trie.state_checkpoints.unpin_restore(seq)
         if seq.num_blocks > 0 or seq.logical_state >= 0:
-            seq.state.free()
+            seq.state.release_paging_resources()
         elif seq.num_history_ids > 0:
             seq.set_step(0)
         seq.kv_token_limit = None
@@ -454,7 +454,7 @@ class _PrefillAdmissionAttempt:
             load_result = self._try_external_load()
             if load_result is not None:
                 return load_result
-        if not self._prepare_and_evict():
+        if not self._prepare_and_make_capacity():
             return _PrefillAdmissionResult.stop()
         return None
 
@@ -495,7 +495,7 @@ class _PrefillAdmissionAttempt:
 
     def _admit_kv_resources(self, had_ssm_restore: bool):
         """Evict for KV, retrying once without a pinned SSM restore."""
-        if self._prepare_and_evict():
+        if self._prepare_and_make_capacity():
             return None
 
         reason = 'eviction failed'
@@ -507,24 +507,25 @@ class _PrefillAdmissionAttempt:
 
         # The matched restore may pin the only checkpoint state that eviction
         # can free. Retrying after rollback preserves the unmatched fallback.
-        if had_ssm_restore and self._prepare_and_evict():
+        if had_ssm_restore and self._prepare_and_make_capacity():
             return None
         return _PrefillAdmissionResult.stop()
 
     def _admit_runtime_state(self):
-        """Ensure an SSM runtime slot, retrying after match rollback."""
+        """Admit an SSM runtime slot, retrying after match rollback."""
         prefill = self.prefill_scheduler
         seq = self.seq
-        if not prefill.is_ssm or prefill._make_runtime_state_available():
+        state_checkpoints = prefill.block_trie.state_checkpoints
+        if not prefill.is_ssm or state_checkpoints.make_runtime_state_available():
             return None
 
         gate_rejection = self._rollback_match_after_resource_failure(
             'no runtime SSM state available')
         if gate_rejection is not None:
             return gate_rejection
-        if not self._prepare_and_evict():
+        if not self._prepare_and_make_capacity():
             return _PrefillAdmissionResult.stop()
-        if not prefill._make_runtime_state_available():
+        if not state_checkpoints.make_runtime_state_available():
             seq.kv_token_limit = None
             return _PrefillAdmissionResult.stop()
         return None
@@ -659,21 +660,21 @@ class _PrefillAdmissionAttempt:
         self._accept_gate_enabling_match(rejection)
         return None
 
-    def _prepare_and_evict(self):
-        """Apply chunk allocation limits and evict for this prefill."""
+    def _prepare_and_make_capacity(self):
+        """Apply chunk allocation limits and reclaim prefill capacity."""
         prefill = self.prefill_scheduler
         seq = self.seq
         alloc_size = prefill._prepare_prefill_allocation(seq, self.prealloc_size)
         self._effective_prealloc_size = alloc_size
-        if self._evict_for_seq(alloc_size):
+        if self._try_make_capacity(alloc_size):
             return True
         seq.kv_token_limit = None
         return False
 
-    def _evict_for_seq(self, alloc_size: int):
-        """Evict stopped or skipped waiters until this sequence can run."""
+    def _try_make_capacity(self, alloc_size: int):
+        """Reclaim stopped or skipped waiters until this sequence can run."""
         prefill = self.prefill_scheduler
-        return prefill.eviction_helper.evict_for_seq(
+        return prefill.eviction_helper.try_make_capacity_for(
             self.seq,
             list(self._evictable_sequences()),
             alloc_size,
@@ -724,7 +725,7 @@ class _PrefillScheduler:
         block_manager: 'BaseBlockManager',
         block_trie: BlockTrie,
         state_manager: StateManager,
-        eviction_helper: 'BaseEvictionHelper',
+        eviction_helper: 'RecomputeEvictionHelper',
         load_coordinator: KVLoadCoordinator,
     ) -> None:
         self.scheduler_config = scheduler_config
@@ -741,15 +742,6 @@ class _PrefillScheduler:
             0.001,
             _envs.opt_ttft_aging_sec,
         )
-
-    def _make_runtime_state_available(self):
-        """Make one state-cache slot available for an SSM runtime state."""
-        if not self.is_ssm:
-            return True
-        if self.state_manager.get_num_free_runtime() > 0:
-            return True
-        self.block_trie.state_checkpoints.evict(1)
-        return self.state_manager.get_num_free_runtime() > 0
 
     def _long_context_chunk_limit(self, seq: SchedulerSequence):
         """Return the token budget for one long-context chunk."""
@@ -827,7 +819,7 @@ class _PrefillScheduler:
             prealloc_size = 0
 
         evictable = stopped + waiting
-        if not self.eviction_helper.evict_for_seq(
+        if not self.eviction_helper.try_make_capacity_for(
             seq,
             evictable,
             prealloc_size,

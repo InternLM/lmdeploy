@@ -72,7 +72,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert checkpoint_node.state_checkpoint.pin_count == 0
         assert seq.prefix_cache.restore.node is None
 
-    def test_free_clears_unpinned_ssm_restore(self, ssm_scheduler):
+    def test_release_paging_resources_clears_unpinned_ssm_restore(self, ssm_scheduler):
         block_trie = ssm_scheduler.block_trie
         block_size = ssm_scheduler.seq_meta.block_size
         checkpoint_tokens = [1] * block_size * 2
@@ -85,7 +85,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert seq.prefix_cache.restore.node is checkpoint_node
         assert not seq.prefix_cache.restore.pinned
 
-        seq.state.free()
+        seq.state.release_paging_resources()
 
         assert not seq.prefix_cache.restore.is_selected
         assert seq.prefix_cache.restore.node is None

@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
     from .block_manager.base_block_manager import BaseBlockManager
     from .block_trie import BlockTrie
-    from .eviction_helper.base_eviction_helper import BaseEvictionHelper
+    from .eviction_helper.recompute_eviction_helper import RecomputeEvictionHelper
 
 
 class KVLoadAdmission(enum.Enum):
@@ -216,7 +216,7 @@ class KVLoadCoordinator:
         *,
         prealloc_size: int,
         evictable_seqs: Iterable[SchedulerSequence],
-        eviction_helper: BaseEvictionHelper,
+        eviction_helper: RecomputeEvictionHelper,
     ) -> KVLoadAdmission:
         """Poll and admit one external prefix without choosing queue policy.
 
@@ -250,7 +250,7 @@ class KVLoadCoordinator:
         num_external_tokens: int,
         prealloc_size: int,
         evictable_seqs: Iterable[SchedulerSequence],
-        eviction_helper: BaseEvictionHelper,
+        eviction_helper: RecomputeEvictionHelper,
     ) -> KVLoadAdmission:
         """Admit the complete prefill, then allocate the remote interval."""
         plan = self._plan_load(seq, num_external_tokens, prealloc_size)
@@ -301,13 +301,13 @@ class KVLoadCoordinator:
         plan: _LoadPlan,
         prealloc_size: int,
         evictable_seqs: Iterable[SchedulerSequence],
-        eviction_helper: BaseEvictionHelper,
+        eviction_helper: RecomputeEvictionHelper,
     ) -> KVLoadAdmission | None:
         """Admit the full prefill against physical and soft capacity."""
         # Only the remote hit is allocated now, but admission guarantees the
         # complete prefill can finish beside every existing soft reservation.
         seq.kv_token_limit = None
-        full_prefill_fits = eviction_helper.evict_for_seq(
+        full_prefill_fits = eviction_helper.try_make_capacity_for(
             seq,
             list(evictable_seqs),
             prealloc_size,

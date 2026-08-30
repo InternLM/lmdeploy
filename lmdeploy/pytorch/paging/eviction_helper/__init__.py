@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from ..block_trie import BlockTrie
     from ..kv_load_coordinator import KVLoadCoordinator
     from ..state_manager import StateManager
+    from .recompute_eviction_helper import RecomputeEvictionHelper
 
 logger = get_logger('lmdeploy')
 
@@ -22,7 +23,7 @@ def build_eviction_helper(
     state_manager: StateManager,
     load_coordinator: KVLoadCoordinator,
     is_ssm: bool,
-):
+) -> RecomputeEvictionHelper:
     """Build eviction helper."""
     if eviction_type == 'copy':
         logger.warning('`copy` eviction has been deprecated, '

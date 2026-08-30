@@ -265,7 +265,11 @@ class Scheduler:
                     reversed(self.hanging),
                     reversed(migration_waiting),
                 ))
-            if not self.eviction_helper.evict_for_seq(seq, evictable, 0):
+            if not self.eviction_helper.try_make_capacity_for(
+                seq,
+                evictable,
+                0,
+            ):
                 break
 
             # allocate session memory
@@ -325,7 +329,11 @@ class Scheduler:
             if num_required_blocks == 0:
                 continue
 
-            if eviction_helper.evict_for_seq(seq, self.hanging + self.waiting, prealloc_size):
+            if eviction_helper.try_make_capacity_for(
+                seq,
+                self.hanging + self.waiting,
+                prealloc_size,
+            ):
                 self.block_manager.allocate(seq, prealloc_size)
                 self.block_trie.allocate(seq)
                 continue
