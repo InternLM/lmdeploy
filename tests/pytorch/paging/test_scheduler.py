@@ -4,7 +4,7 @@ from unittest.mock import Mock
 import pytest
 import torch
 
-import lmdeploy.pytorch.paging.scheduler as scheduler_module
+import lmdeploy.pytorch.paging.prefill_scheduler as prefill_scheduler_module
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
@@ -1924,8 +1924,10 @@ def test_schedule_prefill_prefer_long_admits_oldest_long_waiter_first():
 
 
 def test_scheduler_reads_opt_ttft_env(monkeypatch):
-    monkeypatch.setattr(scheduler_module._envs, 'opt_ttft_policy', 'fifo')
-    monkeypatch.setattr(scheduler_module._envs, 'opt_ttft_aging_sec', 0.25)
+    monkeypatch.setattr(prefill_scheduler_module._envs, 'opt_ttft_policy',
+                        'fifo')
+    monkeypatch.setattr(prefill_scheduler_module._envs, 'opt_ttft_aging_sec',
+                        0.25)
 
     scheduler, _ = _make_scheduler_for_long_context_chunks(num_gpu_blocks=8)
 
