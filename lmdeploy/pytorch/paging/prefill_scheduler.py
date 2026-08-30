@@ -282,7 +282,6 @@ class _TentativePrefixMatch:
         '_preserve_existing_state',
         '_stats_snapshot',
         '_state_snapshot',
-        '_rejection_on_rollback',
         '_phase',
     )
 
@@ -300,7 +299,6 @@ class _TentativePrefixMatch:
         self._preserve_existing_state = preserve_existing_state
         self._stats_snapshot = None
         self._state_snapshot: _PrefixMatchStateSnapshot | None = None
-        self._rejection_on_rollback: _PrefillAdmissionResult | None = None
         self._phase = _PrefixMatchPhase.IDLE
 
     @property
@@ -329,11 +327,6 @@ class _TentativePrefixMatch:
         self.block_trie.match(self.seq)
         self._phase = _PrefixMatchPhase.MATCHED
 
-    def retain_for_admission(self, rejection_on_rollback: _PrefillAdmissionResult) -> None:
-        """Keep a gate-enabling match and remember its original rejection."""
-        assert self.is_matched
-        self._rejection_on_rollback = rejection_on_rollback
-
     def pin_restore(self) -> bool:
         """Pin an SSM restore selected by this tentative match."""
         restore = self.seq.prefix_cache.restore
@@ -345,11 +338,10 @@ class _TentativePrefixMatch:
         """Accept the match and discard request-local rollback state."""
         self._clear()
 
-    def rollback(self, reason: str):
-        """Undo the transaction and return any gate-defined rejection."""
-        rejection = self._rejection_on_rollback
+    def rollback(self, reason: str) -> None:
+        """Undo the tentative prefix-cache transaction."""
         if self._phase is _PrefixMatchPhase.IDLE:
-            return rejection
+            return
 
         seq = self.seq
         logger.debug('Rollback tentative prefix-cache match: session_id=%s seq_id=%s reason=%s '
@@ -362,7 +354,6 @@ class _TentativePrefixMatch:
         else:
             self._restore_snapshot(snapshot)
         self._clear()
-        return rejection
 
     def _restore_snapshot(self, snapshot: _PrefixMatchStateSnapshot) -> None:
         seq = self.seq
@@ -402,7 +393,6 @@ class _TentativePrefixMatch:
     def _clear(self) -> None:
         self._stats_snapshot = None
         self._state_snapshot = None
-        self._rejection_on_rollback = None
         self._phase = _PrefixMatchPhase.IDLE
 
 
@@ -437,6 +427,7 @@ class _PrefillAdmissionAttempt:
             preserve_existing_state=(
                 self.load_coordinator.lookup_enabled and not self._load_ready),
         )
+        self._resource_rollback_rejection: _PrefillAdmissionResult | None = None
 
     def run(self):
         """Apply policy, acquire resources, and commit one admission."""
@@ -492,10 +483,10 @@ class _PrefillAdmissionAttempt:
         seq = self.seq
         had_ssm_restore = prefill.is_ssm and seq.prefix_cache.restore.is_selected
         if not self._prefix_match.pin_restore():
-            result = self._prefix_match.rollback(
+            gate_rejection = self._rollback_match_after_resource_failure(
                 'failed to pin SSM restore checkpoint')
-            if result is not None:
-                return result
+            if gate_rejection is not None:
+                return gate_rejection
 
         kv_result = self._admit_kv_resources(had_ssm_restore)
         if kv_result is not None:
@@ -510,9 +501,9 @@ class _PrefillAdmissionAttempt:
         reason = 'eviction failed'
         if had_ssm_restore:
             reason = 'eviction failed with pinned SSM restore'
-        result = self._prefix_match.rollback(reason)
-        if result is not None:
-            return result
+        gate_rejection = self._rollback_match_after_resource_failure(reason)
+        if gate_rejection is not None:
+            return gate_rejection
 
         # The matched restore may pin the only checkpoint state that eviction
         # can free. Retrying after rollback preserves the unmatched fallback.
@@ -527,10 +518,10 @@ class _PrefillAdmissionAttempt:
         if not prefill.is_ssm or prefill._make_runtime_state_available():
             return None
 
-        result = self._prefix_match.rollback(
+        gate_rejection = self._rollback_match_after_resource_failure(
             'no runtime SSM state available')
-        if result is not None:
-            return result
+        if gate_rejection is not None:
+            return gate_rejection
         if not self._prepare_and_evict():
             return _PrefillAdmissionResult.stop()
         if not prefill._make_runtime_state_available():
@@ -573,17 +564,30 @@ class _PrefillAdmissionAttempt:
         yield from reversed(self.stopped)
         yield from reversed(self.evictable_waiting)
 
-    def _match_prefix_for_prefill_gate(self):
+    def _try_match_prefix_for_prefill_gate(self) -> bool:
         """Tentatively match once so a request can be rechecked by a gate."""
         prefill = self.prefill_scheduler
         if self._load_ready:
-            return None
+            return False
         if not prefill.block_trie.enabled:
-            return None
+            return False
         if self._has_private_local_tail():
-            return None
+            return False
         self._prefix_match.match()
         return True
+
+    def _accept_gate_enabling_match(self, rejection: _PrefillAdmissionResult) -> None:
+        """Preserve a gate's outcome if resource admission loses its match."""
+        assert self._prefix_match.is_matched
+        self._resource_rollback_rejection = rejection
+
+    def _rollback_match_after_resource_failure(
+        self,
+        reason: str,
+    ) -> _PrefillAdmissionResult | None:
+        """Undo the match and recover the rejection it allowed us to defer."""
+        self._prefix_match.rollback(reason)
+        return self._resource_rollback_rejection
 
     def _has_private_local_tail(self) -> bool:
         """Whether a private partial block prevents another trie match.
@@ -618,14 +622,13 @@ class _PrefillAdmissionAttempt:
                 or prefill._prefill_kv_token_limit(seq) is None):
             return None
 
-        matched = self._match_prefix_for_prefill_gate()
-        if matched is None:
+        if not self._try_match_prefix_for_prefill_gate():
             return _PrefillAdmissionResult.skip()
         if prefill._prefill_kv_token_limit(seq) is not None:
             self._prefix_match.rollback(
                 'still non-final long prefill on short turn')
             return _PrefillAdmissionResult.skip()
-        self._prefix_match.retain_for_admission(
+        self._accept_gate_enabling_match(
             _PrefillAdmissionResult.skip())
         return None
 
@@ -645,8 +648,7 @@ class _PrefillAdmissionAttempt:
             self._prefix_match.rollback('still exceeds prefill token budget')
             return rejection
 
-        matched = self._match_prefix_for_prefill_gate()
-        if matched is None:
+        if not self._try_match_prefix_for_prefill_gate():
             return rejection
 
         prefill_token_count = prefill._prefill_admission_token_count(seq)
@@ -654,7 +656,7 @@ class _PrefillAdmissionAttempt:
             self._prefix_match.rollback('still exceeds prefill token budget')
             return rejection
 
-        self._prefix_match.retain_for_admission(rejection)
+        self._accept_gate_enabling_match(rejection)
         return None
 
     def _prepare_and_evict(self):
