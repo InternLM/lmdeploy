@@ -253,8 +253,18 @@ def get_hf_gen_cfg(path: str, trust_remote_code: bool = False):
 
 
 def get_model(pretrained_model_name_or_path: str, download_dir: str = None, revision: str = None, token: str = None):
-    """Get model from huggingface, modelscope or openmind_hub."""
+    """Get model from huggingface, modelscope, openmind_hub or an OCI
+    registry."""
     import os
+
+    from lmdeploy.oci import get_oci_model, is_oci_ref
+
+    # A CNCF ModelPack artifact is pulled as a whole from a container registry;
+    # download_dir/revision/token are hub concepts with no counterpart there, so
+    # they are not forwarded. Every other path is unchanged.
+    if is_oci_ref(pretrained_model_name_or_path):
+        return get_oci_model(pretrained_model_name_or_path)
+
     if os.getenv('LMDEPLOY_USE_MODELSCOPE', 'False').lower() == 'true':
         from modelscope import snapshot_download
     elif os.getenv('LMDEPLOY_USE_OPENMIND_HUB', 'False').lower() == 'true':
