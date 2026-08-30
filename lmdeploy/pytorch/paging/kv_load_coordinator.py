@@ -549,7 +549,7 @@ class KVLoadCoordinator:
 
     def _finish_deferred_end(self, seq: SchedulerSequence) -> None:
         session = seq.session
-        session.lifecycle.end_sequence(seq)
+        session.end_sequence(seq)
         if not session.sequences:
             self.sessions.pop(session.session_id, None)
 

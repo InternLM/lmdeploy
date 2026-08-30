@@ -247,4 +247,4 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
                                  routed_experts=routed_experts,
                                  stop_pos=stop_pos[idx])
             if stop:
-                msg.state.finish()
+                msg.finish()

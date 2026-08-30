@@ -3,7 +3,6 @@
 import torch
 
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
-from lmdeploy.pytorch.engine.inputs_maker import _make_state_prefix_cache_save_plan
 from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 
@@ -123,17 +122,13 @@ def test_ssm_same_batch_duplicate_checkpoint_save_has_unique_dst_offsets():
     assert seq_a.logical_state != seq_b.logical_state
     assert seq_a.prefix_cache.trie_cursor is seq_b.prefix_cache.trie_cursor
 
-    save_state_offsets = [
-        scheduler.block_trie.state_checkpoints.reserve_save(seq) for seq in output.running
-    ]
-    save_plan = _make_state_prefix_cache_save_plan(output.running, save_state_offsets)
-    assert save_plan is not None
-    save_src_offsets, save_dst_offsets = save_plan
+    copy_plan = scheduler.block_trie.state_checkpoints.reserve_prefill_save_batch(output.running)
+    save_src_offsets, save_dst_offsets = zip(*copy_plan.state_pairs)
 
     assert save_src_offsets == (seq_a.logical_state, )
-    assert save_dst_offsets == (save_state_offsets[0], )
-    assert save_state_offsets[0] >= 0
-    assert save_state_offsets[1] == -1
+    assert save_dst_offsets == (seq_a.prefix_cache.pending_save.slot, )
+    assert save_dst_offsets[0] >= 0
+    assert not seq_b.prefix_cache.pending_save.is_pending
     assert len(save_dst_offsets) == len(set(save_dst_offsets))
 
 

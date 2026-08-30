@@ -286,7 +286,7 @@ class SchedulerSession:
         self.session_id = session_id
         self.seq_meta = seq_meta
         self.sequences: SeqMap = dict()
-        self.lifecycle = lifecycle
+        self._lifecycle = lifecycle
 
     def add_sequence(self,
                      token_ids: Tensor,
@@ -301,7 +301,7 @@ class SchedulerSession:
         if sampling_param is None:
             sampling_param = SamplingParam()
 
-        seq_id = self.lifecycle.new_sequence_id()
+        seq_id = self._lifecycle.new_sequence_id()
         seq = self.seq_meta.strategy.make_sequence(seq_id=seq_id,
                                                    session=self,
                                                    sampling_param=sampling_param,
@@ -316,7 +316,7 @@ class SchedulerSession:
             mode=UpdateTokenMode.INPUTS,
         )
         status = MessageStatus.WAITING if migration_request is None else MessageStatus.MIGRATION_WAITING
-        self.lifecycle.add_sequence(seq, status)
+        self._lifecycle.add_sequence(seq, status)
 
         # metrics
         seq.record_event(EventType.QUEUED)
@@ -325,7 +325,11 @@ class SchedulerSession:
 
     def remove_sequence(self, seq: 'SchedulerSequence'):
         """Remove sequence."""
-        self.lifecycle.remove_sequence(seq)
+        self._lifecycle.remove_sequence(seq)
+
+    def end_sequence(self, seq: 'SchedulerSequence') -> None:
+        """Notify terminal completion and release the sequence."""
+        self._lifecycle.end_sequence(seq)
 
 
 def _div_up(x, n):
@@ -803,6 +807,14 @@ class SchedulerSequence:
     @property
     def status(self):
         return self.state.status
+
+    def activate(self) -> None:
+        """Advance the sequence from its current resumable state."""
+        self.state.activate()
+
+    def finish(self) -> None:
+        """Finish the sequence's current running lifecycle."""
+        self.state.finish()
 
     @property
     def return_logits(self):

@@ -16,12 +16,12 @@ from lmdeploy.pytorch.engine.inputs_maker import (
     InputsMakerAsync,
     InputsMakerConfig,
     LongContextChunker,
-    _make_state_prefix_cache_restore_plan,
-    _make_state_prefix_cache_save_plan,
+    _make_state_checkpoint_copy_plan,
 )
 from lmdeploy.pytorch.engine.model_agent.agent import BatchedOutputs
 from lmdeploy.pytorch.kv_connector import KVConnectorOutput
 from lmdeploy.pytorch.messages import MessageStatus, StateCheckpointRestore, StateCheckpointSaveReservation
+from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import CheckpointCopyPlan
 
 
 @dataclass
@@ -133,6 +133,9 @@ class _FakeScheduler:
     def has_kv_connector(self):
         return self.kv_connector is not None
 
+    def resume_completed_migrations(self):
+        pass
+
     def schedule(self,
                  is_prefill: bool,
                  prealloc_size: int,
@@ -217,13 +220,10 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
     class _StateCheckpoints:
         pinned = False
 
-        def publish_saves(self, seqs, pin_saves=False):
-            events.append(('publish_saves', pin_saves))
-            assert pin_saves
+        def finish_forward_dispatch(self, seqs, *, has_save_plan):
+            events.append(('finish_dispatch', has_save_plan))
+            assert has_save_plan
             self.pinned = True
-
-        def unpin_restores(self, seqs):
-            events.append(('unpin_restores', self.pinned))
 
         def unpin_saves(self, seqs):
             events.append(('unpin_saves', self.pinned))
@@ -267,8 +267,7 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
     assert next_running is None
     assert events == [
         'update_running',
-        ('publish_saves', True),
-        ('unpin_restores', True),
+        ('finish_dispatch', True),
         ('prefetch', True),
         ('get_output', True),
         ('unpin_saves', True),
@@ -311,12 +310,9 @@ def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save()
     class _StateCheckpoints:
         pinned = False
 
-        def publish_saves(self, seqs, pin_saves=False):
-            events.append(('publish_saves', pin_saves))
+        def finish_forward_dispatch(self, seqs, *, has_save_plan):
+            events.append(('finish_dispatch', has_save_plan))
             self.pinned = True
-
-        def unpin_restores(self, seqs):
-            events.append(('unpin_restores', self.pinned))
 
         def unpin_saves(self, seqs):
             events.append(('unpin_saves', self.pinned))
@@ -353,8 +349,7 @@ def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save()
     assert next_running is None
     assert events == [
         'update_running',
-        ('publish_saves', True),
-        ('unpin_restores', True),
+        ('finish_dispatch', True),
         'get_output',
         ('unpin_saves', True),
     ]
@@ -368,9 +363,6 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
 
         def has_unfinished(self):
             return False
-
-        def resume_completed_migrations(self):
-            events.append('resume_completed_migrations')
 
     class _InputsMaker:
 
@@ -390,7 +382,56 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
     result = asyncio.run(asyncio.wait_for(loop._main_loop_try_send_next_inputs(), timeout=1.0))
 
     assert result == ('forward_inputs', ['long-seq'])
-    assert events == ['resume_completed_migrations', 'send_next_inputs']
+    assert events == ['send_next_inputs']
+
+
+@pytest.mark.parametrize(
+    ('method_name', 'enable_empty'),
+    [
+        ('send_next_inputs', False),
+        ('prefetch_next_inputs', True),
+    ],
+)
+def test_inputs_maker_resumes_completed_migrations_before_selecting_work(method_name, enable_empty):
+    events = []
+
+    class _Scheduler:
+
+        def resume_completed_migrations(self):
+            events.append('resume_migrations')
+
+        def tick(self):
+            events.append('tick')
+
+    class _Executor:
+
+        async def forward_async(self, forward_inputs):
+            events.append('forward_async')
+
+    def do_prefill():
+        events.append('select_work')
+        return True
+
+    def make_forward_inputs(prefill, enable_empty=False):
+        events.append(('make_forward_inputs', prefill, enable_empty))
+        return dict(running=['seq'], inputs=None, delta=None)
+
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.scheduler = _Scheduler()
+    maker.executor = _Executor()
+    maker.do_prefill = do_prefill
+    maker._make_forward_inputs = make_forward_inputs
+
+    result = asyncio.run(getattr(maker, method_name)())
+
+    assert result == ({'inputs': None, 'delta': None}, ['seq'])
+    assert events == [
+        'resume_migrations',
+        'select_work',
+        ('make_forward_inputs', True, enable_empty),
+        'forward_async',
+        'tick',
+    ]
 
 
 def test_migration_loop_schedules_and_processes_ready_batch():
@@ -1373,22 +1414,11 @@ def test_do_prefill_default_forces_pending_last_chunk_prefill():
     assert maker.do_prefill_default()
 
 
-def test_state_prefix_cache_restore_plan_is_compact():
-    messages = [_state_seq(4, 11), _state_seq(5, -1), _state_seq(6, 13)]
-
-    plan = _make_state_prefix_cache_restore_plan(messages)
+def test_state_checkpoint_copy_plan_is_compact():
+    plan = _make_state_checkpoint_copy_plan(((11, 4), (13, 6)))
 
     assert plan == ((11, 13), (4, 6))
-    assert _make_state_prefix_cache_restore_plan([_state_seq(4)]) is None
-
-
-def test_state_prefix_cache_save_plan_is_compact():
-    messages = [_state_seq(4), _state_seq(5), _state_seq(6)]
-
-    plan = _make_state_prefix_cache_save_plan(messages, [-1, 21, 22])
-
-    assert plan == ((5, 6), (21, 22))
-    assert _make_state_prefix_cache_save_plan(messages, [-1, -1, -1]) is None
+    assert _make_state_checkpoint_copy_plan(()) is None
 
 
 def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans():
@@ -1397,20 +1427,16 @@ def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans():
 
     class _StateCheckpoints:
 
-        def pin_restores(self, seqs):
+        def prepare_restore_batch(self, seqs):
             events.append('pin_restores')
             for seq in seqs:
                 if seq.prefix_cache.restore.is_selected:
                     seq.prefix_cache.restore.pinned = True
+            return CheckpointCopyPlan(state_pairs=((11, 4), ))
 
-        def reserve_save(self, seq, step=None):
-            assert step is None
-            state_idx = {4: 21, 5: -1}[seq.logical_state]
-            if state_idx >= 0:
-                checkpoint = SimpleNamespace(step=0, frozen_block_id=-1)
-                node = SimpleNamespace(state_checkpoint=checkpoint)
-                seq.prefix_cache.pending_save.reserve(state_idx, 0, node, False)
-            return state_idx
+        def reserve_prefill_save_batch(self, seqs, steps=None):
+            assert steps is None
+            return CheckpointCopyPlan(state_pairs=((4, 21), ))
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
@@ -1430,16 +1456,12 @@ def test_prepare_prefill_cache_inputs_uses_explicit_chunk_end_step():
 
     class _StateCheckpoints:
 
-        def pin_restores(self, seqs):
-            for seq in seqs:
-                seq.prefix_cache.restore.pinned = True
+        def prepare_restore_batch(self, seqs):
+            return CheckpointCopyPlan(state_pairs=((11, 4), ))
 
-        def reserve_save(self, seq, step=None):
-            reserve_steps.append(step)
-            checkpoint = SimpleNamespace(step=step, frozen_block_id=-1)
-            node = SimpleNamespace(state_checkpoint=checkpoint)
-            seq.prefix_cache.pending_save.reserve(21, step, node, False)
-            return 21
+        def reserve_prefill_save_batch(self, seqs, steps=None):
+            reserve_steps.extend(steps)
+            return CheckpointCopyPlan(state_pairs=((4, 21), ))
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
@@ -1454,24 +1476,20 @@ def test_prepare_prefill_cache_inputs_uses_explicit_chunk_end_step():
 
 def test_prepare_prefill_cache_inputs_groups_partial_kv_restore_and_save_plans():
     messages = [_state_seq(4, 11), _state_seq(5, 12)]
-    for msg, dst_block in zip(messages, (20, 21)):
-        checkpoint = SimpleNamespace(step=17, frozen_block_id=70)
-        msg.prefix_cache.restore.node = SimpleNamespace(state_checkpoint=checkpoint)
-        msg.logical_blocks = np.array([10, dst_block], dtype=np.int64)
 
     class _StateCheckpoints:
 
-        def pin_restores(self, seqs):
-            for seq in seqs:
-                seq.prefix_cache.restore.pinned = True
+        def prepare_restore_batch(self, seqs):
+            return CheckpointCopyPlan(
+                state_pairs=((11, 4), (12, 5)),
+                kv_block_pairs=((70, 20), (70, 21)),
+            )
 
-        def reserve_save(self, seq, step=None):
-            state_idx = {4: 21, 5: 22}[seq.logical_state]
-            frozen_block = {4: 80, 5: 81}[seq.logical_state]
-            checkpoint = SimpleNamespace(step=17, frozen_block_id=frozen_block)
-            node = SimpleNamespace(state_checkpoint=checkpoint)
-            seq.prefix_cache.pending_save.reserve(state_idx, 17, node, False)
-            return state_idx
+        def reserve_prefill_save_batch(self, seqs, steps=None):
+            return CheckpointCopyPlan(
+                state_pairs=((4, 21), (5, 22)),
+                kv_block_pairs=((20, 80), (21, 81)),
+            )
 
     scheduler = _CopyPlanScheduler()
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
@@ -1502,9 +1520,9 @@ def test_make_decode_cache_inputs_compacts_valid_state_saves():
 
     class _StateCheckpoints:
 
-        def reserve_decode_save(self, seq, interval):
+        def reserve_decode_save_batch(self, seqs, interval):
             assert interval == 16
-            return {4: 31, 5: -1}[seq.logical_state]
+            return CheckpointCopyPlan(state_pairs=((4, 31), ))
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
     maker.config = SimpleNamespace(is_ssm=True,
@@ -1535,7 +1553,7 @@ def test_make_decode_cache_inputs_respects_feature_gates(is_ssm, enabled, interv
 
     class _StateCheckpoints:
 
-        def reserve_decode_save(self, seq, interval):
+        def reserve_decode_save_batch(self, seqs, interval):
             raise AssertionError('disabled decode checkpoint path must not reserve state')
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)

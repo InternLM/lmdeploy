@@ -406,14 +406,12 @@ class EngineLoop:
         if self._sleep_requested:
             return None, None
 
-        self.scheduler.resume_completed_migrations()
         return await self.inputs_maker.send_next_inputs()
 
     async def _prefetch_next_inputs(self):
-        """Resume completed migrations before prefetching the next batch."""
+        """Prefetch the next batch unless sleep has started."""
         if self._sleep_requested:
             return None, None
-        self.scheduler.resume_completed_migrations()
         return await self.inputs_maker.prefetch_next_inputs()
 
     async def _wait_for_schedulable_prefill(self):
@@ -429,17 +427,6 @@ class EngineLoop:
         logger.warning(f'no next prefill running request, Maybe cache is full, '
                        f'gpu cache usage: {cache_usage:.1%}')
         await asyncio.sleep(0.1)
-
-    def _publish_forward_checkpoints(self, running: 'SeqList', has_state_checkpoint_save: bool):
-        """Publish per-forward prefix-cache ownership before prefetching."""
-        state_checkpoints = self.state_checkpoints
-        if has_state_checkpoint_save:
-            state_checkpoints.publish_saves(running, pin_saves=True)
-        state_checkpoints.unpin_restores(running)
-
-    def _release_forward_save_pins(self, running: 'SeqList'):
-        """Unpin producers after the forward output/event boundary."""
-        self.state_checkpoints.unpin_saves(running)
 
     def _finish_forward_output(self,
                                out: 'BatchedOutputs | None',
@@ -482,11 +469,14 @@ class EngineLoop:
         # for GPU output; save checkpoints keep a producer pin until the output
         # event boundary so prefetch cannot evict/reuse their destination slots.
         if has_model_work:
-            self._publish_forward_checkpoints(running, has_state_checkpoint_save)
+            self.state_checkpoints.finish_forward_dispatch(
+                running,
+                has_save_plan=has_state_checkpoint_save,
+            )
         forward_inputs, next_running = await self._prefetch_next_inputs()
         out = await self.executor.get_output_async()
         if has_model_work:
-            self._release_forward_save_pins(running)
+            self.state_checkpoints.unpin_saves(running)
         self._finish_forward_output(out, running, model_inputs, delta)
         # out might come from shared memory, need to explicitly delete to release memory in time
         del out
@@ -529,7 +519,7 @@ class EngineLoop:
                 running=next_running,
                 forward_inputs=forward_inputs,
             )
-            self.inputs_maker.deactivate_evict_seqs()
+            self.inputs_maker.preempt_invalid_decode_seqs()
             has_runable_event.set()
 
     def update_running_migration(self, running: 'SeqList', next_token_ids: np.ndarray, stopped: torch.Tensor,
@@ -547,7 +537,7 @@ class EngineLoop:
             if stop:
                 update_token = _EMPTY_TOKEN
                 msg.update_token_ids(update_token, model_meta=model_meta, mode=UpdateTokenMode.PREFILL)
-                msg.state.finish()
+                msg.finish()
 
     async def _migration_loop_migrate(self, migration_ready: 'SeqList'):
         """Migration loop migrate."""

@@ -14,6 +14,7 @@ from __future__ import annotations
 import heapq
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -30,6 +31,14 @@ if TYPE_CHECKING:
     from .checkpoint import StateCheckpointKey, StateCheckpointMatchData
 
 logger = get_logger('lmdeploy')
+
+
+@dataclass(frozen=True)
+class CheckpointCopyPlan:
+    """Logical state and KV copies owned by one checkpoint batch."""
+
+    state_pairs: tuple[tuple[int, int], ...] = ()
+    kv_block_pairs: tuple[tuple[int, int], ...] = ()
 
 
 class StateCheckpointLifecycle:
@@ -60,6 +69,93 @@ class StateCheckpointLifecycle:
         self._state_manager = state_manager
         self._index = index
         self._snapshot_match_data = snapshot_match_data
+
+    def prepare_restore_batch(self, seqs: list[SchedulerSequence]) -> CheckpointCopyPlan:
+        """Pin selected restores and expose their logical copy pairs."""
+        self.pin_restores(seqs)
+        state_pairs = []
+        kv_block_pairs = []
+        for seq in seqs:
+            restore = seq.prefix_cache.restore
+            if not restore.is_selected:
+                continue
+            if not restore.pinned:
+                raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
+
+            state_pairs.append((int(restore.slot), int(seq.logical_state)))
+            checkpoint = restore.node.state_checkpoint
+            if checkpoint.frozen_block_id < 0:
+                continue
+            dst_block_idx = checkpoint.step // self._block_size
+            if dst_block_idx >= len(seq.logical_blocks):
+                raise RuntimeError('SSM prefix-cache restore destination block is missing.')
+            kv_block_pairs.append((
+                int(checkpoint.frozen_block_id),
+                int(seq.logical_blocks[dst_block_idx]),
+            ))
+        return CheckpointCopyPlan(
+            state_pairs=tuple(state_pairs),
+            kv_block_pairs=tuple(kv_block_pairs),
+        )
+
+    def reserve_prefill_save_batch(
+        self,
+        seqs: list[SchedulerSequence],
+        steps: tuple[int, ...] | None = None,
+    ) -> CheckpointCopyPlan:
+        """Reserve prefill checkpoints and expose their logical copy pairs."""
+        if steps is not None and len(steps) != len(seqs):
+            raise ValueError('steps must have one entry per prefill sequence.')
+        if steps is None:
+            state_offsets = [self.reserve_save(seq) for seq in seqs]
+        else:
+            state_offsets = [self.reserve_save(seq, step=step) for seq, step in zip(seqs, steps)]
+
+        state_pairs = []
+        kv_block_pairs = []
+        for seq, state_idx in zip(seqs, state_offsets):
+            if state_idx < 0:
+                continue
+            state_pairs.append((int(seq.logical_state), int(state_idx)))
+            pending_save = seq.prefix_cache.pending_save
+            checkpoint = pending_save.node.state_checkpoint
+            if checkpoint.frozen_block_id < 0:
+                continue
+            src_block_idx = pending_save.step // self._block_size
+            if src_block_idx >= len(seq.logical_blocks):
+                raise RuntimeError('SSM prefix-cache save source block is missing.')
+            kv_block_pairs.append((
+                int(seq.logical_blocks[src_block_idx]),
+                int(checkpoint.frozen_block_id),
+            ))
+        return CheckpointCopyPlan(
+            state_pairs=tuple(state_pairs),
+            kv_block_pairs=tuple(kv_block_pairs),
+        )
+
+    def reserve_decode_save_batch(
+        self,
+        seqs: list[SchedulerSequence],
+        interval: int,
+    ) -> CheckpointCopyPlan:
+        """Reserve replaceable decode checkpoints for one forward batch."""
+        state_pairs = []
+        for seq in seqs:
+            state_idx = self.reserve_decode_save(seq, interval)
+            if state_idx >= 0:
+                state_pairs.append((int(seq.logical_state), int(state_idx)))
+        return CheckpointCopyPlan(state_pairs=tuple(state_pairs))
+
+    def finish_forward_dispatch(
+        self,
+        seqs: list[SchedulerSequence],
+        *,
+        has_save_plan: bool,
+    ) -> None:
+        """Publish queued saves and release restore pins before prefetch."""
+        if has_save_plan:
+            self.publish_saves(seqs, pin_saves=True)
+        self.unpin_restores(seqs)
 
     def reserve_save(self, seq: SchedulerSequence, step: int = None, is_decode: bool = False):
         """Reserve a checkpoint at an exact safe prefill boundary."""

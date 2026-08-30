@@ -3,6 +3,7 @@
 """Public paging scheduler and sequence-lifecycle facade."""
 
 from collections import OrderedDict
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import chain
@@ -338,9 +339,7 @@ class Scheduler:
                 self.block_trie.allocate(seq)
                 continue
 
-            seq.state.deactivate()
-            self.kv_load_coordinator.release_tracking(seq)
-            seq.state.evict()
+            self.preempt_seqs((seq, ))
             valid_mask[idx] = False
         return valid_mask
 
@@ -383,7 +382,7 @@ class Scheduler:
                 continue
             # stop session so it won't get scheduled again
             seq.state.stop()
-            self.sequence_lifecycle.end_sequence(seq)
+            session.end_sequence(seq)
         if not session.sequences:
             self.sessions.pop(session_id)
 
@@ -498,39 +497,32 @@ class Scheduler:
         """Resolve paging-owned logical ids for a forward cache-copy plan."""
         return self.block_manager.resolve_gpu_block_offsets(logical_block_ids)
 
-    def evict_seqs(self, running: SeqList):
-        """Evict running sequences."""
+    def activate_seqs(self, running: SeqList):
+        """Mark a ready batch as running at the engine dispatch boundary."""
         for seq in running:
+            if seq.status == MessageStatus.READY:
+                seq.state.activate()
+
+    def preempt_seqs(self, seqs: Iterable[SchedulerSequence]) -> None:
+        """Return invalid decode sequences to their evictable queue states."""
+        for seq in seqs:
+            if seq.status == MessageStatus.RUNNING:
+                seq.state.deactivate()
             self.kv_load_coordinator.release_tracking(seq)
             seq.state.evict()
 
-    def activate_seqs(self, running: SeqList, filter_status: MessageStatus = MessageStatus.READY):
-        """Lock running sequence."""
-        for seq in running:
-            if seq.status == filter_status:
-                seq.state.activate()
-
-    def deactivate_seqs(self, running: SeqList, filter_status: MessageStatus = MessageStatus.RUNNING):
-        for seq in running:
-            if seq.status == filter_status:
-                seq.state.deactivate()
-
-    def activate_migration_seqs(self, running: SeqList):
-        """Lock running sequence."""
-        return self.activate_seqs(running, filter_status=MessageStatus.MIGRATION_READY)
-
-    def deactivate_migration_seqs(self, running: SeqList):
-        """Unlock running migration."""
-        return self.deactivate_seqs(running, filter_status=MessageStatus.MIGRATION_RUNNING)
-
     @contextmanager
     def seqs_migration_activation(self, running: SeqList):
-        """Context manager to activate and deactivate sequences."""
-        self.activate_migration_seqs(running)
+        """Keep a migration batch running only while applying its output."""
+        for seq in running:
+            if seq.status == MessageStatus.MIGRATION_READY:
+                seq.state.activate()
         try:
             yield running
         finally:
-            self.deactivate_migration_seqs(running)
+            for seq in running:
+                if seq.status == MessageStatus.MIGRATION_RUNNING:
+                    seq.state.deactivate()
 
     def resume_completed_migrations(self):
         """Move completed migration sequences back to the waiting queue."""

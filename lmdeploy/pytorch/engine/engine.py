@@ -416,7 +416,7 @@ class Engine(EngineBase):
             if session is not None:
                 msgs = list(session.sequences.values())
                 if len(msgs) > 0 and msgs[0].preserve_cache:
-                    msgs[0].state.finish()
+                    msgs[0].finish()
                 else:
                     self.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
@@ -511,7 +511,7 @@ class Engine(EngineBase):
                     mode=UpdateTokenMode.INPUTS,
                 )
                 msg.sampling_param = sampling_param
-                msg.state.activate()
+                msg.activate()
 
             __update_max_new_tokens(msg)
             msg.resp = req.resp
