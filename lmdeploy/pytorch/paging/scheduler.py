@@ -13,6 +13,7 @@ from torch.profiler import record_function
 from lmdeploy.messages import ScheduleMetrics
 
 from ..config import CacheConfig, SchedulerConfig
+from ..kv_connector import KVConnectorStepInput
 from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, SequenceManager, SequenceMeta
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
@@ -104,7 +105,6 @@ class Scheduler:
             connector=kv_connector,
         )
 
-        self.eviction_helper = build_eviction_helper(self, self.scheduler_config.eviction_type)
         # Load admission receives only paging owners plus request-local queue
         # candidates from its caller; it does not reach back through Scheduler.
         self.kv_load_coordinator = KVLoadCoordinator(
@@ -112,8 +112,15 @@ class Scheduler:
             connector=kv_connector,
             block_manager=self.block_manager,
             block_trie=self.block_trie,
-            eviction_helper=self.eviction_helper,
             sessions=self.sessions,
+        )
+        self.eviction_helper = build_eviction_helper(
+            self.scheduler_config.eviction_type,
+            block_manager=self.block_manager,
+            block_trie=self.block_trie,
+            state_manager=self.state_manager,
+            load_coordinator=self.kv_load_coordinator,
+            is_ssm=self.is_ssm,
         )
         self._prefill_scheduler = _PrefillScheduler(
             scheduler_config=self.scheduler_config,
@@ -126,7 +133,7 @@ class Scheduler:
             load_coordinator=self.kv_load_coordinator,
         )
         # Keep save call sites uniform even when the producer role is disabled.
-        self.kv_save_coordinator = KVSaveCoordinator(self)
+        self.kv_save_coordinator = KVSaveCoordinator(self.block_manager)
 
         self.scheduler_tick = 0
 
@@ -444,7 +451,7 @@ class Scheduler:
         else:
             logical_block_ids = ()
             block_ids = ()
-        scheduler_output = SchedulerOutput(
+        step_input = KVConnectorStepInput(
             running=running,
             swap_in_map=swap_in_map or {},
             swap_out_map=swap_out_map or {},
@@ -453,7 +460,7 @@ class Scheduler:
             connector_block_ids=block_ids,
             connector_logical_block_ids=logical_block_ids,
         )
-        metadata = connector.build_connector_meta(scheduler_output)
+        metadata = connector.build_connector_meta(step_input)
         if metadata is not None:
             # Acquire before the caller queues metadata. Sequence cleanup may
             # otherwise release the last block reference before save starts.

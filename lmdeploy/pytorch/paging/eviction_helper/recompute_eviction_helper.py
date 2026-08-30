@@ -1,20 +1,41 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from ...messages import SchedulerSequence
-from ..scheduler import Scheduler
 from .base_eviction_helper import BaseEvictionHelper
+
+if TYPE_CHECKING:
+    from ..block_manager import BaseBlockManager
+    from ..block_trie import BlockTrie
+    from ..kv_load_coordinator import KVLoadCoordinator
+    from ..state_manager import StateManager
 
 
 class RecomputeEvictionHelper(BaseEvictionHelper):
     """Recompute eviction."""
 
-    def __init__(self, scheduler: Scheduler):
-        super().__init__(scheduler)
+    def __init__(
+        self,
+        *,
+        block_manager: BaseBlockManager,
+        block_trie: BlockTrie,
+        state_manager: StateManager,
+        load_coordinator: KVLoadCoordinator,
+        is_ssm: bool,
+    ) -> None:
+        super().__init__(
+            block_manager=block_manager,
+            block_trie=block_trie,
+            state_manager=state_manager,
+            load_coordinator=load_coordinator,
+        )
 
-        if len(self.cache_config.states_shapes) == 0:
-            self.evict_for_seq = self._evict_for_seq_default
-        else:
+        if is_ssm:
             self.evict_for_seq = self._evict_for_ssm
+        else:
+            self.evict_for_seq = self._evict_for_seq_default
 
     def _evict_for_seq_default(self, seq: SchedulerSequence, evictable_seqs: list[SchedulerSequence],
                                prealloc_size: int):
@@ -33,7 +54,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             # A completed remote load has published fresh KV into these blocks.
             # Preserve it until prefill consumes the result instead of paying
             # for the transfer again on a later scheduling turn.
-            if self.scheduler.kv_load_coordinator.is_remote_ready(evict_seq):
+            if self.load_coordinator.is_remote_ready(evict_seq):
                 continue
 
             # skip sequence with no blocks
@@ -44,7 +65,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
                 evict_seq.prefix_cache.suppress_match_stats = True
             # Eviction also ends the tracked prefill; otherwise its soft block
             # reservation would outlive the local KV blocks freed below.
-            self.scheduler.kv_load_coordinator.release(evict_seq)
+            self.load_coordinator.release(evict_seq)
             evict_seq.state.free()
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
@@ -92,7 +113,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
 
             # READY remote KV is already transferred and awaiting consumption;
             # do not discard that result merely to admit another prefill.
-            if self.scheduler.kv_load_coordinator.is_remote_ready(evict_seq):
+            if self.load_coordinator.is_remote_ready(evict_seq):
                 continue
 
             # skip sequence with no blocks
@@ -104,7 +125,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
                 evict_seq.prefix_cache.suppress_match_stats = True
             # Keep coordinator ownership and its soft admission budget in sync
             # with the KV blocks and SSM runtime state released by free().
-            self.scheduler.kv_load_coordinator.release(evict_seq)
+            self.load_coordinator.release(evict_seq)
             evict_seq.state.free()
             has_free_state = has_runtime_state or state_manager.get_num_free_runtime() > 0
             if not has_free_state:

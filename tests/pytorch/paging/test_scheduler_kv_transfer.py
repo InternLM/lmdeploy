@@ -10,6 +10,7 @@ from lmdeploy.pytorch.kv_connector import (
     KVConnectorMetadata,
     KVConnectorOutput,
     KVConnectorResult,
+    KVConnectorStepInput,
     KVLoadResult,
     KVSaveBlockLease,
 )
@@ -52,7 +53,7 @@ class _AsyncLookupConnector:
     def update_state_after_alloc(self, request, block_ids, num_external_tokens):
         self.allocations.append((request.seq_id, tuple(block_ids), num_external_tokens))
 
-    def build_connector_meta(self, scheduler_output):
+    def build_connector_meta(self, step_input):
         return None
 
     def update_connector_output(self, connector_output):
@@ -772,8 +773,10 @@ def test_async_save_lease_keeps_exact_blocks_alive_until_all_tp_complete():
         def __init__(self):
             super().__init__([])
             self.metadata = None
+            self.step_input = None
 
-        def build_connector_meta(self, scheduler_output):
+        def build_connector_meta(self, step_input):
+            self.step_input = step_input
             metadata, self.metadata = self.metadata, None
             return metadata
 
@@ -801,6 +804,8 @@ def test_async_save_lease_keeps_exact_blocks_alive_until_all_tp_complete():
     )
 
     assert metadata is not None
+    assert isinstance(connector.step_input, KVConnectorStepInput)
+    assert connector.step_input.running == [seq]
     assert allocator.get_ref_count(logical_blocks).tolist() == [2, 2]
     assert scheduler.has_unfinished()
 
@@ -837,7 +842,7 @@ def test_worker_drain_releases_save_leases_when_outputs_are_discarded():
     scheduler.block_manager.allocate(seq)
     logical_blocks = seq.logical_blocks.get_real_blocks().copy()
     metadata = _SaveMetadata(logical_blocks)
-    connector.build_connector_meta = lambda scheduler_output: metadata
+    connector.build_connector_meta = lambda step_input: metadata
 
     scheduler.build_connector_meta([seq], connector_token_lens=(8, ))
     scheduler.block_manager.free(seq)

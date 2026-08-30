@@ -125,14 +125,12 @@ class KVLoadCoordinator:
         connector: KVConnectorBase | None,
         block_manager: BaseBlockManager,
         block_trie: BlockTrie,
-        eviction_helper: BaseEvictionHelper,
         sessions: dict[int, SchedulerSession],
     ) -> None:
         self.lookup_enabled = lookup_enabled
         self.connector = connector
         self.block_manager = block_manager
         self.block_trie = block_trie
-        self.eviction_helper = eviction_helper
         self.sessions = sessions
         # Active load lifecycle. Records survive the LOADING -> READY ->
         # PREFILLING transitions so stop/end and preemption can find the owner.
@@ -218,6 +216,7 @@ class KVLoadCoordinator:
         *,
         prealloc_size: int,
         evictable_seqs: Iterable[SchedulerSequence],
+        eviction_helper: BaseEvictionHelper,
     ) -> KVLoadAdmission:
         """Poll and admit one external prefix without choosing queue policy.
 
@@ -241,6 +240,7 @@ class KVLoadCoordinator:
             num_external_tokens=int(num_external_tokens),
             prealloc_size=prealloc_size,
             evictable_seqs=evictable_seqs,
+            eviction_helper=eviction_helper,
         )
 
     def _admit_load(
@@ -250,6 +250,7 @@ class KVLoadCoordinator:
         num_external_tokens: int,
         prealloc_size: int,
         evictable_seqs: Iterable[SchedulerSequence],
+        eviction_helper: BaseEvictionHelper,
     ) -> KVLoadAdmission:
         """Admit the complete prefill, then allocate the remote interval."""
         plan = self._plan_load(seq, num_external_tokens, prealloc_size)
@@ -261,6 +262,7 @@ class KVLoadCoordinator:
             plan,
             prealloc_size,
             evictable_seqs,
+            eviction_helper,
         )
         if failure is not None:
             return failure
@@ -299,12 +301,13 @@ class KVLoadCoordinator:
         plan: _LoadPlan,
         prealloc_size: int,
         evictable_seqs: Iterable[SchedulerSequence],
+        eviction_helper: BaseEvictionHelper,
     ) -> KVLoadAdmission | None:
         """Admit the full prefill against physical and soft capacity."""
         # Only the remote hit is allocated now, but admission guarantees the
         # complete prefill can finish beside every existing soft reservation.
         seq.kv_token_limit = None
-        full_prefill_fits = self.eviction_helper.evict_for_seq(
+        full_prefill_fits = eviction_helper.evict_for_seq(
             seq,
             list(evictable_seqs),
             prealloc_size,

@@ -547,6 +547,7 @@ class _PrefillAdmissionAttempt:
             self.seq,
             prealloc_size=self.prealloc_size,
             evictable_seqs=self._evictable_sequences(),
+            eviction_helper=prefill.eviction_helper,
         )
         if admission is KVLoadAdmission.NO_LOAD:
             return None
