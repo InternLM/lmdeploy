@@ -1029,6 +1029,43 @@ def test_async_load_requires_capacity_for_the_complete_prefill():
     assert connector.allocations == []
 
 
+def test_async_load_capacity_failure_restores_tentative_local_prefix(monkeypatch):
+    connector = _AsyncLookupConnector([(4, True)])
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        num_gpu_blocks=3,
+    )
+    tokens = torch.arange(13)
+    cached = scheduler.add_session(76).add_sequence(tokens[:5])
+    scheduler.block_manager.allocate(cached)
+    scheduler.block_trie.allocate(cached)
+    cached.state.stop()
+    cached_block = cached.logical_blocks.get_real_blocks()[:1]
+    ref_count = scheduler.block_manager.allocator.get_ref_count(cached_block).copy()
+    scheduler.block_trie.stats.reset()
+
+    seq = scheduler.add_session(77).add_sequence(tokens)
+    evict_for_seq = Mock(return_value=False)
+    monkeypatch.setattr(scheduler.eviction_helper, 'evict_for_seq', evict_for_seq)
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == []
+    assert seq.status == MessageStatus.WAITING
+    assert seq.num_history_ids == 0
+    assert seq.num_blocks == 0
+    assert seq.kv_token_limit is None
+    assert seq.cached_tokens == 0
+    assert seq.prefix_cache.trie_cursor is None
+    assert seq.prefix_cache.match_start_step == -1
+    assert connector.lookup_calls == [(seq.seq_id, 4)]
+    assert connector.allocations == []
+    assert evict_for_seq.call_count == 1
+    assert scheduler.block_manager.allocator.get_ref_count(cached_block).tolist() == ref_count.tolist()
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+
+
 def test_async_load_does_not_consume_model_batch_slot():
     connector = _AsyncLookupConnector([(8, True), (0, False)])
     scheduler = _make_async_lookup_scheduler(
@@ -1430,6 +1467,36 @@ def test_scheduler_reorder_cache_stays_order_only_after_prefix_hit():
     assert cache_hit_tail.num_token_ids == 1
     assert cache_hit_tail.cached_tokens == block_size
     assert normal.status == MessageStatus.READY
+
+
+def test_scheduler_resource_rejection_rolls_back_tentative_prefix_match(monkeypatch):
+    scheduler, block_size = _make_prefix_cache_scheduler(max_batches=1)
+
+    cached = scheduler.add_session(0).add_sequence([1] * block_size + [2])
+    scheduler.schedule(is_prefill=True)
+    cached.state.stop()
+    cached_block = cached.logical_blocks.get_real_blocks()[:1]
+    ref_count = scheduler.block_manager.allocator.get_ref_count(cached_block).copy()
+    scheduler.block_trie.stats.reset()
+
+    seq = scheduler.add_session(1).add_sequence([1] * block_size + [3])
+    evict_for_seq = Mock(return_value=False)
+    monkeypatch.setattr(scheduler.eviction_helper, 'evict_for_seq', evict_for_seq)
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == []
+    assert seq.status == MessageStatus.WAITING
+    assert seq.num_history_ids == 0
+    assert seq.num_blocks == 0
+    assert seq.kv_token_limit is None
+    assert seq.cached_tokens == 0
+    assert seq.prefix_cache.trie_cursor is None
+    assert seq.prefix_cache.match_start_step == -1
+    assert evict_for_seq.call_count == 1
+    assert scheduler.block_manager.allocator.get_ref_count(cached_block).tolist() == ref_count.tolist()
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
 
 
 def test_scheduler_rolls_back_prefix_match_for_prefill_gate_when_tail_still_exceeds_budget():
