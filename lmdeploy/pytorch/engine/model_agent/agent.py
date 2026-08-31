@@ -1371,11 +1371,6 @@ class BaseModelAgent:
                 'device_uuid': device_uuid,
                 'weight_devices': sorted(devices),
                 'rank': self.rank,
-                'world_size': self.dist_config.world_size,
-                'tp': self.dist_config.tp,
-                'dp': self.dist_config.dp,
-                'dp_rank': self.dist_config.dp_rank,
-                'ep': self.dist_config.ep,
             }
 
     @torch.inference_mode()

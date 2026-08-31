@@ -106,18 +106,13 @@ A ready response contains the worker CUDA UUIDs in local rank order:
   "is_sleeping": true,
   "sleeping_tags": ["kv_cache", "weights"],
   "device_uuids": ["GPU-..."],
-  "worker_ranks": [0],
-  "world_size": 4,
-  "tp": 1,
-  "dp": 4,
-  "dp_rank": 0,
-  "ep": 4
+  "worker_ranks": [0]
 }
 ```
 
-For multiple endpoints, order URLs by `dp_rank`. The driver must validate
-`worker_ranks`, `world_size`, `tp`, `dp`, `dp_rank`, and `ep`; the UUID count alone
-does not describe the distributed topology.
+For multiple endpoints, the driver must derive the target group from its LMDeploy
+distributed configuration. The readiness response reports runtime worker identity;
+it does not describe the distributed topology.
 
 ## ParameterServer callback
 

@@ -101,18 +101,12 @@ curl -H 'Authorization: Bearer YOUR_API_KEY' \
   "is_sleeping": true,
   "sleeping_tags": ["kv_cache", "weights"],
   "device_uuids": ["GPU-..."],
-  "worker_ranks": [0],
-  "world_size": 4,
-  "tp": 1,
-  "dp": 4,
-  "dp_rank": 0,
-  "ep": 4
+  "worker_ranks": [0]
 }
 ```
 
-多 endpoint 场景必须按 `dp_rank` 排列 URL。驱动需要同时校验
-`worker_ranks`、`world_size`、`tp`、`dp`、`dp_rank` 和 `ep`，不能只按 UUID 数量
-推断并行拓扑。
+多 endpoint 场景由驱动根据 LMDeploy 的分布式配置确定目标 group。就绪响应只报告
+worker 的运行时身份，不描述分布式拓扑。
 
 ## ParameterServer 回调
 

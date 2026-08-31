@@ -559,11 +559,6 @@ class UpdateWeightsFromIPCStatus(BaseModel):
     sleeping_tags: list[str] = Field(default_factory=list)
     device_uuids: list[str] = Field(default_factory=list)
     worker_ranks: list[int] = Field(default_factory=list)
-    world_size: int | None = None
-    tp: int | None = None
-    dp: int | None = None
-    dp_rank: int | None = None
-    ep: int | None = None
 
 
 class InitWeightsUpdateGroupRequest(BaseModel):

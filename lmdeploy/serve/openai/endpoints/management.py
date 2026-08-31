@@ -90,17 +90,11 @@ def register(router: APIRouter, server_context) -> None:
 
         worker_statuses = await async_engine.engine.get_checkpoint_engine_status()
         worker_ready = bool(worker_statuses) and all(item['ready'] for item in worker_statuses)
-        topology_keys = ('world_size', 'tp', 'dp', 'dp_rank', 'ep')
-        topologies = {tuple(item[key] for key in topology_keys) for item in worker_statuses}
-        topology_ready = len(topologies) == 1
-        topology = dict(zip(topology_keys, next(iter(topologies)))) if topology_ready else {}
         lifecycle_ready = async_engine.is_sleeping and 'kv_cache' in async_engine.sleeping_tags
-        ready = worker_ready and topology_ready and lifecycle_ready
+        ready = worker_ready and lifecycle_ready
         if not worker_ready:
             message = next((item['message'] for item in worker_statuses if not item['ready']),
                            'No checkpoint-engine workers are available.')
-        elif not topology_ready:
-            message = 'LMDeploy workers reported inconsistent distributed topology.'
         elif not lifecycle_ready:
             message = ('Engine must be sleeping with kv_cache unavailable. For online updates call '
                        'POST /sleep, then POST /wakeup?tags=weights.')
@@ -119,7 +113,6 @@ def register(router: APIRouter, server_context) -> None:
             sleeping_tags=sorted(async_engine.sleeping_tags),
             device_uuids=[item['device_uuid'] for item in worker_statuses],
             worker_ranks=[item['rank'] for item in worker_statuses],
-            **topology,
         )
 
     @router.post('/update_weights_from_ipc',
