@@ -94,7 +94,7 @@ lmdeploy serve api_server internlm/internlm2_5-7b-chat --cache-max-entry-count 0
 ### Api Server Fetch Timeout
 
 The API server remote media fetch timeout can be configured via `LMDEPLOY_IMAGE_FETCH_TIMEOUT` for images and `LMDEPLOY_VIDEO_FETCH_TIMEOUT` for videos.
-By default, image requests may take up to 10 seconds before timing out, and video requests may take up to 30 seconds. See [lmdeploy/multimodal/media/connection.py](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/multimodal/media/connection.py) for usage.
+By default, image requests may take up to 10 seconds before timing out, and video requests may take up to 30 seconds. See [lmdeploy/multimodal/media/connection.py](https://github.com/InternLM/lmdeploy/blob/b221c7fd2b02c471bd9a5ca4f27fef0b5723fa4e/lmdeploy/multimodal/media/connection.py#L63-L65) for usage.
 
 ## Quantization
 
