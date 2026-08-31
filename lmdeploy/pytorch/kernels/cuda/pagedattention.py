@@ -592,14 +592,19 @@ def _reduce_split_kernel(
     cur_batch = tl.program_id(1)
     cur_head = tl.program_id(0)
 
+    # Apply the scalar batch/head offsets before constructing the K x DV
+    # tensor offsets. Broadcasting the scalar base into that tensor can make
+    # Triton miscompile 128 x 128 reductions when launched with two warps.
+    acc_ptr += cur_batch * stride_abs + cur_head * stride_ah
+    out_ptr += cur_batch * stride_obs + cur_head * stride_oh
+
     # initialize offsets
     offs_dv = tl.arange(0, BLOCK_DV)
     offs_k = tl.arange(0, SPLIT_K)
     mask_dv = offs_dv < head_size_v
 
-    offs_acc = (cur_batch * stride_abs + cur_head * stride_ah + offs_k[:, None] * stride_ak +
-                offs_dv[None, :] * stride_ad)
-    offs_mi = (cur_batch * stride_abs + cur_head * stride_ah + stride_ak * offs_k + head_size_v)
+    offs_acc = offs_k[:, None] * stride_ak + offs_dv[None, :] * stride_ad
+    offs_mi = stride_ak * offs_k + head_size_v
 
     if USE_PDL:
         tl.extra.cuda.gdc_wait()
@@ -622,7 +627,7 @@ def _reduce_split_kernel(
         l_sum = l_sum + tl.exp2(sink * tl_log2(math.e) - m_max)
     acc = acc / (l_sum + 1e-10)
 
-    out_offs = (cur_batch * stride_obs + cur_head * stride_oh + offs_dv * stride_od)
+    out_offs = offs_dv * stride_od
     tl.store(out_ptr + out_offs, acc, mask=mask_dv)
 
 
