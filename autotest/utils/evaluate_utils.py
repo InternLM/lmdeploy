@@ -83,12 +83,42 @@ def _is_fp8_case(case_name: str) -> bool:
     return case_name.endswith('_fp8')
 
 
+def _is_base_eval_config(eval_config_name: str) -> bool:
+    return eval_config_name == 'base' or eval_config_name.startswith('base-')
+
+
 def _should_skip_num_workers_override(eval_config_name: str, case_name: str) -> bool:
     if eval_config_name in ('longtext-256k', 'longtext-512k'):
         return True
     if _is_fp8_case(case_name):
         return True
     return False
+
+
+_TURBOMIND_API_MODEL_KEYS = frozenset({
+    'max_seq_len',
+    'max_out_len',
+    'batch_size',
+    'temperature',
+    'top_p',
+    'top_k',
+    'gen_config',
+    'end_str',
+    'api_key',
+})
+
+
+def _apply_turbomind_api_model_cfg(model_cfg: dict, case_name: str, api_addr: str, kwargs: dict) -> None:
+    """Fill TurboMindAPIModel fields for lmdeploy api_server / proxy."""
+    model_cfg['abbr'] = case_name
+    model_cfg['model_name'] = case_name
+    model_cfg['api_addr'] = api_addr
+    for key, value in kwargs.items():
+        if key in _TURBOMIND_API_MODEL_KEYS:
+            model_cfg[key] = value
+    gen_config = model_cfg.setdefault('gen_config', {})
+    if 'max_out_len' in model_cfg and 'max_new_tokens' not in gen_config:
+        gen_config['max_new_tokens'] = model_cfg['max_out_len']
 
 
 def _dataset_size_cache_path(eval_path: str, eval_config_name: str) -> str:
@@ -259,10 +289,13 @@ def eval_test(model_path,
         current_dir = os.path.dirname(os.path.abspath(__file__))
         parent_dir = os.path.dirname(current_dir)
 
+        is_base_eval = _is_base_eval_config(eval_config_name)
         if eval_config_name == 'longtext-512k':
             config_file = os.path.join(parent_dir, 'evaluate/eval_config_chat_512_longtext.py')
         elif eval_config_name == 'longtext-256k':
             config_file = os.path.join(parent_dir, 'evaluate/eval_config_chat_longtext.py')
+        elif is_base_eval:
+            config_file = os.path.join(parent_dir, 'evaluate/eval_config_base.py')
         else:
             config_file = os.path.join(parent_dir, 'evaluate/eval_config_chat.py')
 
@@ -274,7 +307,9 @@ def eval_test(model_path,
         original_cwd = os.getcwd()
         os.makedirs(work_dir, exist_ok=True)
 
-        test_url = f'http://{DEFAULT_SERVER}:{port}/v1'
+        # TurboMindAPIModel builds /v1/encode and /get_ppl from api_addr root.
+        api_addr = f'http://{DEFAULT_SERVER}:{port}'
+        test_url = f'{api_addr}/v1'
 
         try:
             if test_type == 'infer':
@@ -286,29 +321,32 @@ def eval_test(model_path,
 
                 cfg.MODEL_NAME = case_name
                 cfg.MODEL_PATH = model_path
-                cfg.API_BASE = test_url  # noqa: E231
+                cfg.API_BASE = api_addr if is_base_eval else test_url  # noqa: E231
 
                 if cfg.models and len(cfg.models) > 0:
                     model_cfg = cfg.models[0]
-                    model_cfg['abbr'] = case_name
-                    model_cfg['path'] = case_name
-                    model_cfg['openai_api_base'] = test_url
-                    model_cfg['tokenizer_path'] = model_path
+                    if is_base_eval:
+                        _apply_turbomind_api_model_cfg(model_cfg, case_name, api_addr, kwargs)
+                    else:
+                        model_cfg['abbr'] = case_name
+                        model_cfg['path'] = case_name
+                        model_cfg['openai_api_base'] = test_url
+                        model_cfg['tokenizer_path'] = model_path
 
-                    for key, value in kwargs.items():
-                        model_cfg[key] = value
+                        for key, value in kwargs.items():
+                            model_cfg[key] = value
 
                 _sync_ruler_tokenizer_model(cfg, model_path)
-
-                if not _should_skip_num_workers_override(eval_config_name, case_name):
-                    cfg.NUM_WORKERS = extra_config.get('max-num-workers', 8)
-                    cfg.infer['partitioner']['num_worker'] = extra_config.get(
-                        'max-num-workers', 8)
 
                 # Persist dataset-size cache under eval_path (opencompass NumWorkerPartitioner).
                 cfg.infer['partitioner']['dataset_size_path'] = _dataset_size_cache_path(
                     eval_path, eval_config_name)
                 print(f'dataset_size_path={cfg.infer["partitioner"]["dataset_size_path"]}')
+
+                if not _should_skip_num_workers_override(eval_config_name, case_name):
+                    num_workers = extra_config.get('max-num-workers', 8)
+                    cfg.NUM_WORKERS = num_workers
+                    cfg.infer['partitioner']['num_worker'] = num_workers
 
                 _sanitize_cfg_for_dump(cfg)
                 cfg.dump(temp_config_path)
@@ -322,34 +360,37 @@ def eval_test(model_path,
                 with _mmengine_lazy_allow_lazyattr_call():
                     cfg = Config.fromfile(temp_config_path)
                 print(f'Using existing temp config file: {temp_config_path}')
-                eval_run_config = EVAL_RUN_CONFIG
-                eval_case_name = get_case_str_by_config(eval_run_config)
-                cfg.JUDGE_API_BASE = test_url
-                cfg.JUDGE_MODEL_PATH = model_path
-                cfg.JUDGE_MODEL_NAME = eval_case_name
 
-                if hasattr(cfg, 'judge_cfg'):
-                    cfg.judge_cfg['path'] = eval_case_name
-                    cfg.judge_cfg['abbr'] = eval_case_name
-                    cfg.judge_cfg['openai_api_base'] = test_url
-                    cfg.judge_cfg['tokenizer_path'] = model_path
+                # Base PPL/LL suites use rule metrics; skip judge model wiring.
+                if not is_base_eval:
+                    eval_run_config = EVAL_RUN_CONFIG
+                    eval_case_name = get_case_str_by_config(eval_run_config)
+                    cfg.JUDGE_API_BASE = test_url
+                    cfg.JUDGE_MODEL_PATH = model_path
+                    cfg.JUDGE_MODEL_NAME = eval_case_name
 
-                if hasattr(cfg, 'datasets') and cfg.datasets:
-                    for dataset in cfg.datasets:
-                        if 'eval_cfg' in dataset and 'evaluator' in dataset['eval_cfg']:
-                            evaluator = dataset['eval_cfg']['evaluator']
+                    if hasattr(cfg, 'judge_cfg'):
+                        cfg.judge_cfg['path'] = eval_case_name
+                        cfg.judge_cfg['abbr'] = eval_case_name
+                        cfg.judge_cfg['openai_api_base'] = test_url
+                        cfg.judge_cfg['tokenizer_path'] = model_path
 
-                            if 'judge_cfg' in evaluator:
-                                evaluator['judge_cfg']['abbr'] = cfg.JUDGE_MODEL_NAME
-                                evaluator['judge_cfg']['path'] = cfg.JUDGE_MODEL_NAME
-                                evaluator['judge_cfg']['openai_api_base'] = cfg.JUDGE_API_BASE
-                                evaluator['judge_cfg']['tokenizer_path'] = cfg.JUDGE_MODEL_PATH
+                    if hasattr(cfg, 'datasets') and cfg.datasets:
+                        for dataset in cfg.datasets:
+                            if 'eval_cfg' in dataset and 'evaluator' in dataset['eval_cfg']:
+                                evaluator = dataset['eval_cfg']['evaluator']
 
-                            if 'llm_evaluator' in evaluator and 'judge_cfg' in evaluator['llm_evaluator']:
-                                evaluator['llm_evaluator']['judge_cfg']['abbr'] = cfg.JUDGE_MODEL_NAME
-                                evaluator['llm_evaluator']['judge_cfg']['path'] = cfg.JUDGE_MODEL_NAME
-                                evaluator['llm_evaluator']['judge_cfg']['openai_api_base'] = cfg.JUDGE_API_BASE
-                                evaluator['llm_evaluator']['judge_cfg']['tokenizer_path'] = cfg.JUDGE_MODEL_PATH
+                                if 'judge_cfg' in evaluator:
+                                    evaluator['judge_cfg']['abbr'] = cfg.JUDGE_MODEL_NAME
+                                    evaluator['judge_cfg']['path'] = cfg.JUDGE_MODEL_NAME
+                                    evaluator['judge_cfg']['openai_api_base'] = cfg.JUDGE_API_BASE
+                                    evaluator['judge_cfg']['tokenizer_path'] = cfg.JUDGE_MODEL_PATH
+
+                                if 'llm_evaluator' in evaluator and 'judge_cfg' in evaluator['llm_evaluator']:
+                                    evaluator['llm_evaluator']['judge_cfg']['abbr'] = cfg.JUDGE_MODEL_NAME
+                                    evaluator['llm_evaluator']['judge_cfg']['path'] = cfg.JUDGE_MODEL_NAME
+                                    evaluator['llm_evaluator']['judge_cfg']['openai_api_base'] = cfg.JUDGE_API_BASE
+                                    evaluator['llm_evaluator']['judge_cfg']['tokenizer_path'] = cfg.JUDGE_MODEL_PATH
 
                 _sync_ruler_tokenizer_model(cfg, model_path)
 

@@ -116,7 +116,7 @@ def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
 
 
 def test_build_spec_agent_allows_guided_spec_followers_without_proposer():
-    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.config import BackendConfig, DistConfig, SpecDecodeConfig
     from lmdeploy.pytorch.distributed import DistContext
     from lmdeploy.pytorch.spec_decode import build_spec_agent
 
@@ -129,7 +129,7 @@ def test_build_spec_agent_allows_guided_spec_followers_without_proposer():
     )
     spec_agent = build_spec_agent(
         specdecode_config,
-        backend_config=None,
+        backend_config=BackendConfig(),
         dist_ctx=DistContext(rank=1, dist_config=DistConfig(tp=2)),
         inputs_strategy=None,
         agent_strategy=None,
@@ -139,18 +139,21 @@ def test_build_spec_agent_allows_guided_spec_followers_without_proposer():
     )
     assert spec_agent.is_enabled()
     assert spec_agent.proposer is None
+    assert not hasattr(spec_agent, 'rejection_sampler')
     assert not hasattr(spec_agent, 'guided_helper')
 
 
 def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
     import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
-    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.config import BackendConfig, DistConfig, SpecDecodeConfig
     from lmdeploy.pytorch.distributed import DistContext
     from lmdeploy.pytorch.spec_decode import build_spec_agent
 
     guided_manager = object()
     proposer = SimpleNamespace(guided_helper=None)
+    rejection_sampler = object()
     monkeypatch.setattr(spec_agent_mod, 'build_specdecode_proposer', lambda *args, **kwargs: proposer)
+    monkeypatch.setattr(spec_agent_mod, 'RejectionSampler', lambda *args: rejection_sampler)
     inputs_strategy = SimpleNamespace(create_make_dummy_meta=lambda model_config: None)
     specdecode_config = SpecDecodeConfig(
         model='draft-model',
@@ -161,7 +164,7 @@ def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
 
     spec_agent = build_spec_agent(
         specdecode_config,
-        backend_config=None,
+        backend_config=BackendConfig(),
         dist_ctx=DistContext(rank=0, dist_config=DistConfig(tp=2)),
         inputs_strategy=inputs_strategy,
         agent_strategy=None,
@@ -171,6 +174,7 @@ def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
     )
 
     assert spec_agent.proposer is proposer
+    assert spec_agent.rejection_sampler is rejection_sampler
     assert spec_agent.guided_helper.manager is guided_manager
     assert proposer.guided_helper is spec_agent.guided_helper
 
@@ -797,6 +801,34 @@ class TestDPForwardInputsMaker:
 
         asyncio.run(_run())
 
+    def test_get_attaches_dummy_inputs_to_connector_only_step(self):
+        async def _run():
+            metadata = object()
+            connector_inputs = {
+                'inputs': None,
+                'delta': None,
+                'extra_inputs': None,
+                'return_logits': False,
+                'kv_connector_metadata': metadata,
+            }
+            dummy_inputs = {
+                'inputs': 'connector_dummy',
+                'extra_inputs': 'dummy_extra',
+                'return_logits': True,
+            }
+            maker = self._make_maker(dummy_forward_inputs=dummy_inputs)
+            maker._in_que.put_nowait(connector_inputs)
+
+            result = await asyncio.wait_for(maker.get(), timeout=1.0)
+
+            assert result is connector_inputs
+            assert result['inputs'] == 'connector_dummy'
+            assert result['extra_inputs'] == 'dummy_extra'
+            assert result['return_logits'] is True
+            assert result['kv_connector_metadata'] is metadata
+
+        asyncio.run(_run())
+
 
 class TestDPForwardMeta:
 
@@ -1021,6 +1053,7 @@ class TestModelAgentWakeup:
         model_agent.state = SleepWakeupState()
         model_agent.dist_config = SimpleNamespace(dp=1)
         model_agent.memdecode_agent = None
+        model_agent.kv_connector = None
         model_agent.cache_engine = object()
         model_agent.state_cache_engine = object()
         model_agent.patched_model = _PatchedModel()
@@ -1120,6 +1153,7 @@ class TestMemDecodeModelAgentLifecycle:
         agent.state = SleepWakeupState()
         agent.dist_config = SimpleNamespace(dp=1)
         agent.patched_model = object()
+        agent.kv_connector = None
         agent.cache_engine = object()
         agent.state_cache_engine = object()
 
@@ -1266,6 +1300,7 @@ class TestMemDecodeModelAgentLifecycle:
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
         agent.rank = 0
+        agent.kv_connector = None
         agent.cache_engine = 'base_cache'
         agent.memdecode_agent = _MemDecodeAgent()
         agent._async_model_forward = _async_model_forward

@@ -413,6 +413,20 @@ class EngineLoop:
         self.scheduler.collect_migration_done()
         return await self.inputs_maker.prefetch_next_inputs()
 
+    async def _wait_for_schedulable_prefill(self):
+        """Yield briefly for lookup I/O or back off for cache pressure."""
+        scheduler = self.scheduler
+        if scheduler.last_schedule_had_pending_lookup:
+            # A pending remote lookup is normal transient I/O, not cache
+            # exhaustion. Poll promptly without emitting the misleading cache
+            # warning or adding the full pressure backoff to TTFT.
+            await asyncio.sleep(0.001)
+            return
+        logger.warning(f'no next prefill running request, Maybe cache is full, '
+                       f'free gpu cache blocks: {scheduler.block_manager.get_num_free_gpu_blocks()}, '
+                       f'total gpu cache blocks: {scheduler.block_manager.num_gpu_blocks}')
+        await asyncio.sleep(0.1)
+
     def _publish_forward_checkpoints(self, running: 'SeqList', has_state_checkpoint_save: bool):
         """Publish per-forward prefix-cache ownership before prefetching."""
         state_checkpoints = self.scheduler.block_trie.state_checkpoints
@@ -429,10 +443,20 @@ class EngineLoop:
                                running: 'SeqList',
                                model_inputs: 'ModelInputs | None',
                                delta: 'ModelInputsDelta | None'):
-        """Publish outputs."""
+        """Apply connector progress and publish model outputs."""
         if out is None:
             return
+        # A connector polling step intentionally has no token output. Consume
+        # its transfer completions first so newly loaded requests become
+        # schedulable even when no model forward ran in this executor step.
+        self.scheduler.update_connector_output(out.kv_connector_output)
+        if out.next_token_ids is None:
+            return
         step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
+        # Sequence history is advanced by _make_infer_outputs. Only now can the
+        # scheduler prove that a prefill reached its reserved target and release
+        # the soft block reservation used while admitting external KV loads.
+        self.scheduler.release_completed_prefill_reservations(running)
         self.resp_queue.put_nowait(step_outputs)
 
     async def _main_loop_get_outputs(
@@ -444,7 +468,11 @@ class EngineLoop:
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
         cache_inputs = forward_inputs['cache_inputs']
-        self.inputs_maker.update_running_seqs(running, model_inputs)
+        # Connector-only work shares the executor queue to preserve ordering,
+        # but owns neither model sequence state nor checkpoint pin transitions.
+        has_model_work = model_inputs is not None or delta is not None
+        if has_model_work:
+            self.inputs_maker.update_running_seqs(running, model_inputs)
         has_state_checkpoint_save = (cache_inputs is not None
                                      and cache_inputs.state_save_plan is not None)
 
@@ -452,10 +480,12 @@ class EngineLoop:
         # input is queued, matched checkpoints can be published before waiting
         # for GPU output; save checkpoints keep a producer pin until the output
         # event boundary so prefetch cannot evict/reuse their destination slots.
-        self._publish_forward_checkpoints(running, has_state_checkpoint_save)
+        if has_model_work:
+            self._publish_forward_checkpoints(running, has_state_checkpoint_save)
         forward_inputs, next_running = await self._prefetch_next_inputs()
         out = await self.executor.get_output_async()
-        self._release_forward_save_pins(running)
+        if has_model_work:
+            self._release_forward_save_pins(running)
         self._finish_forward_output(out, running, model_inputs, delta)
         # out might come from shared memory, need to explicitly delete to release memory in time
         del out
@@ -471,14 +501,6 @@ class EngineLoop:
         scheduler = self.scheduler
         forward_inputs = None
         next_running = None
-
-        async def __no_running_warning():
-            # TODO (JimyMa): add watermark check event instead of async sleep.
-            # self.perfill_watermark_event.wait()
-            logger.warning(f'no next prefill running request, Maybe cache is full, '
-                           f'free gpu cache blocks: {scheduler.block_manager.get_num_free_gpu_blocks()}, '
-                           f'total gpu cache blocks: {scheduler.block_manager.num_gpu_blocks}')
-            await asyncio.sleep(0.1)
 
         while not self.stop_event.is_set():
             if self._sleep_requested:
@@ -498,7 +520,7 @@ class EngineLoop:
                 if next_running is None:
                     if self._sleep_requested:
                         continue
-                    await __no_running_warning()
+                    await self._wait_for_schedulable_prefill()
                     continue
 
             scheduler.activate_seqs(next_running)

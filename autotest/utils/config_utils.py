@@ -686,7 +686,7 @@ def _suite_launch_extra_defaults(suites: list[str] | set[str]) -> dict[str, Any]
     defaults: dict[str, Any] = {}
     if suite_set & {'logprob', 'experts'}:
         defaults['logprobs-mode'] = 'raw_logprobs'
-    if suite_set & {'experts', 'toolcall'}:
+    if suite_set & {'experts'}:
         defaults['enable-return-routed-experts'] = True
     return defaults
 
@@ -719,6 +719,46 @@ def build_interface_launch_extra(
     merged.update(_parallel_launch_extra(_entry_engine_config(entry)))
     merged.update(copy.deepcopy(extra_src or {}))
     return merged
+
+
+ROUTED_EXPERTS_UNSUPPORTED_SKIP = (
+    'return_routed_experts not enabled in model interface config '
+    '(add experts suite or enable-return-routed-experts: true in yaml)')
+
+
+def iter_model_yaml_entries(model_id: str) -> list[dict[str, Any]]:
+    """All matrix rows for *model_id* under the active ``TEST_ENV``."""
+    env_key = _resolve_paths_env_key(os.environ.get('TEST_ENV'))
+    return [entry for mid, entry in _iter_per_model_entries(env_key) if mid == model_id]
+
+
+def model_enables_return_routed_experts(
+    model_id: str,
+    backend: str,
+    *,
+    required_suites: set[str] | frozenset[str] | None = None,
+) -> bool:
+    """True when yaml interface launch extra enables ``return_routed_experts``.
+
+    When *required_suites* is set (e.g. ``{'toolcall'}`` or ``{'experts'}``),
+    only matching interface profiles are considered.
+    """
+    if backend == 'turbomind':
+        return False
+    for entry in iter_model_yaml_entries(model_id):
+        for prof in get_interface_profiles(entry, backend):
+            suites = set(prof.get('suites') or [])
+            if required_suites and not (required_suites & suites):
+                continue
+            extra = build_interface_launch_extra(
+                entry,
+                backend,
+                suites=prof['suites'],
+                interface_extra=prof.get('extra'),
+            )
+            if extra.get('enable-return-routed-experts'):
+                return True
+    return False
 
 
 def derive_interface_server_extra(
@@ -1364,32 +1404,42 @@ def get_config() -> dict[str, Any]:
     return config_copy
 
 
+def get_gpus_per_instance(parallel_config: dict[str, int] | None) -> int:
+    """GPU count for one api_server instance (align with launch_server dp
+    layout)."""
+    parallel_config = parallel_config or {}
+    dp = parallel_config.get('dp', 1)
+    tp = parallel_config.get('tp', 1)
+    ep = parallel_config.get('ep', 1)
+    return max(dp, tp, ep)
+
+
 def get_cuda_prefix_by_workerid(worker_id: str | None, parallel_config: dict[str, int] | None = None) -> str | None:
     """Get cuda/ascend visible devices env prefix by worker id & parallel
     config."""
     para_conf = parallel_config or {}
     device_type = os.environ.get('DEVICE', 'cuda')
 
-    tp_num = para_conf.get('tp')
-    if not tp_num:
+    gpus_per_instance = get_gpus_per_instance(para_conf)
+    if gpus_per_instance <= 0:
         return ''
 
-    cuda_id = get_cuda_id_by_workerid(worker_id, tp_num)
+    cuda_id = get_cuda_id_by_workerid(worker_id, gpus_per_instance)
     if not cuda_id:
         return ''
 
     return f'ASCEND_RT_VISIBLE_DEVICES={cuda_id}' if device_type == 'ascend' else f'CUDA_VISIBLE_DEVICES={cuda_id}'
 
 
-def get_cuda_id_by_workerid(worker_id: str | None, tp_num: int = 1) -> str | None:
-    """Get cuda id str by worker id and tp num, return None if invalid worker
-    id."""
+def get_cuda_id_by_workerid(worker_id: str | None, gpus_per_instance: int = 1) -> str | None:
+    """Get cuda id str by worker id and GPUs per instance, return None if
+    invalid worker id."""
     if worker_id is None or 'gw' not in worker_id:
         return None
 
     base_id = int(worker_id.replace('gw', ''))
-    cuda_num = base_id * tp_num
-    return ','.join([str(cuda_num + i) for i in range(tp_num)])
+    cuda_num = base_id * gpus_per_instance
+    return ','.join([str(cuda_num + i) for i in range(gpus_per_instance)])
 
 
 def get_workerid(worker_id: str | None) -> int:
@@ -1439,19 +1489,19 @@ def set_device_env_variable(worker_id: str | None, parallel_config: dict[str, in
     """Set device environment variable based on the device type."""
     device = os.environ.get('DEVICE', 'cuda')
 
-    tp_num = 1
+    gpus_per_instance = 1
     if parallel_config is not None:
         if isinstance(parallel_config, int):
-            tp_num = parallel_config
+            gpus_per_instance = parallel_config
         elif isinstance(parallel_config, dict):
-            tp_num = parallel_config.get('tp', 1)
+            gpus_per_instance = get_gpus_per_instance(parallel_config)
 
     if device == 'ascend':
-        device_id = get_cuda_id_by_workerid(worker_id, tp_num)
+        device_id = get_cuda_id_by_workerid(worker_id, gpus_per_instance)
         if device_id is not None:
             os.environ['ASCEND_RT_VISIBLE_DEVICES'] = device_id
     else:
-        cuda_id = get_cuda_id_by_workerid(worker_id, tp_num)
+        cuda_id = get_cuda_id_by_workerid(worker_id, gpus_per_instance)
         if cuda_id is not None:
             os.environ['CUDA_VISIBLE_DEVICES'] = cuda_id
 
@@ -1520,6 +1570,8 @@ _EVAL_OC_SCALAR_KEYS = frozenset({
     'max_seq_len',
     'batch_size',
     'temperature',
+    'top_p',
+    'top_k',
 })
 
 
@@ -1597,6 +1649,10 @@ def get_eval_preset_config(
         if run_config.get('gen_config'):
             merged.update(_gen_config_to_vlmevalkit_kwargs(run_config['gen_config']))
         return merged
+
+    # Base TurboMindAPIModel: keep scalar sampling fields, skip OpenAISDK mapping.
+    if name == 'base' or name.startswith('base-'):
+        return _eval_table_scalar_params(preset) or copy.deepcopy(preset)
 
     if run_config.get('gen_config'):
         result = _eval_table_scalar_params(preset)

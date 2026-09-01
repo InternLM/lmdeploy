@@ -24,6 +24,7 @@ from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVConnectorRole, build_kv_connector
 from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
@@ -43,6 +44,7 @@ from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_l
 
 from .dp_utils import DistGatherScalar, DPForwardMeta, GatheredDPForwardMeta
 from .inputs_maker import build_inputs_maker
+from .kv_connector import finish_kv_connector_step, start_kv_connector_save, start_kv_connector_step
 from .profiler import AgentProfiler
 from .scoring import compute_input_ce_loss
 
@@ -93,8 +95,15 @@ class BatchedLogProbs:
 
 @dataclass
 class BatchedOutputs:
-    next_token_ids: torch.Tensor
-    stopped: torch.Tensor
+    """One worker step's model result and optional KV-transfer progress.
+
+    ``next_token_ids`` and ``stopped`` are ``None`` only for a connector-only
+    step, where workers must report asynchronous KV progress although no model
+    forward ran.
+    """
+
+    next_token_ids: torch.Tensor | None
+    stopped: torch.Tensor | None
     stop_pos: torch.Tensor | None = None
     logits: torch.Tensor | None = None
     model_metas: list[dict[str, Any]] = None
@@ -103,6 +112,16 @@ class BatchedOutputs:
     extra_outputs: ExtraOutputs | None = None
     all_routed_experts: torch.Tensor | None = None
     ce_loss: torch.Tensor | None = None
+    kv_connector_output: KVConnectorOutput | None = None
+
+    @classmethod
+    def connector_only(cls, output: KVConnectorOutput) -> 'BatchedOutputs':
+        """Build a lightweight envelope for a no-model-forward step."""
+        return cls(
+            next_token_ids=None,
+            stopped=None,
+            kv_connector_output=output,
+        )
 
     def to_cpu(self):
         """To cpu."""
@@ -348,6 +367,7 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         self.state_cache_engine = None
+        self.kv_connector = None
         self.profiler: AgentProfiler = None
         try:
             self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
@@ -762,7 +782,7 @@ class BaseModelAgent:
         extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
 
         if inputs.is_dummy:
-            return inputs, extra_inputs, stopping_criteria, None, next_token_ids
+            return inputs, extra_inputs, stopping_criteria, None, next_token_ids, None
 
         # post broadcast for spec agent
         with self.spec_agent.post_broadcast(extra_inputs, self.dist_ctx, need_broadcast_next):
@@ -783,18 +803,19 @@ class BaseModelAgent:
         logger.debug(f'<ForwardTask> rank[{rank}]: Output')
         extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
 
-        self._push_output(
-            BatchedOutputs(next_token_ids=output_token_ids,
-                           logits=logits if return_logits else None,
-                           stopped=stopped,
-                           stop_pos=stop_pos,
-                           model_metas=model_metas,
-                           logprobs=logprobs,
-                           all_routed_experts=all_routed_experts,
-                           extra_outputs=extra_outputs,
-                           ce_loss=ce_loss))
+        # Delay enqueueing until _async_step has attached this rank's connector
+        # progress. Distributed executors aggregate that field across TP ranks.
+        batched_output = BatchedOutputs(next_token_ids=output_token_ids,
+                                        logits=logits if return_logits else None,
+                                        stopped=stopped,
+                                        stop_pos=stop_pos,
+                                        model_metas=model_metas,
+                                        logprobs=logprobs,
+                                        all_routed_experts=all_routed_experts,
+                                        extra_outputs=extra_outputs,
+                                        ce_loss=ce_loss)
 
-        return inputs, extra_inputs, stopping_criteria, extra_outputs, next_token_ids
+        return inputs, extra_inputs, stopping_criteria, extra_outputs, next_token_ids, batched_output
 
     async def _step_postprocess_without_output(
         self,
@@ -842,6 +863,7 @@ class BaseModelAgent:
         return_ce_loss: bool = False,
         extra_inputs: ExtraInputs = None,
         cache_inputs: CacheCheckpointInputs | None = None,
+        kv_connector_metadata=None,
     ):
         """Asyc forward task."""
 
@@ -852,6 +874,21 @@ class BaseModelAgent:
         need_broadcast_next = (tp > 1)
         dp = dist_config.dp
         need_update_inputs = False
+        # Connector metadata can describe either work for this forward or a
+        # polling-only step. Its presence also tells distributed executors to
+        # collect connector progress from every TP worker.
+        connector_step = start_kv_connector_step(
+            self.kv_connector,
+            kv_connector_metadata,
+        )
+        if inputs is None and delta is None:
+            assert dp == 1, 'DP connector-only steps must carry dummy model inputs.'
+            # Loads and saves finish asynchronously, so progress must still be
+            # returned when the scheduler has no model work to dispatch.
+            connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+            assert connector_output is not None
+            self._push_output(BatchedOutputs.connector_only(connector_output))
+            return
 
         if inputs is None:
             # decoding step, update prev_inputs with delta
@@ -878,6 +915,9 @@ class BaseModelAgent:
             inputs, is_all_sleeping = await self._prepare_dp_v1(inputs)
             # skip dummy forward.
             if inputs is None:
+                connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+                if connector_output is not None:
+                    self._push_output(BatchedOutputs.connector_only(connector_output))
                 if is_all_sleeping:
                     self.state.to_sleep.set()
                     await self.state.to_wakeup.wait()
@@ -908,9 +948,15 @@ class BaseModelAgent:
             return_logits=return_logits or return_ce_loss,
             cache_inputs=cache_inputs,
         )
+        # The forward has now queued its KV writes on the current CUDA stream.
+        # The connector records a readiness event before its sender reads them.
+        start_kv_connector_save(self.kv_connector, connector_step)
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output
+            connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+            if connector_output is not None:
+                self._push_output(BatchedOutputs.connector_only(connector_output))
             return
 
         logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
@@ -933,6 +979,7 @@ class BaseModelAgent:
                 stopping_criteria,
                 extra_outputs,
                 next_token_ids,
+                batched_output,
             ) = await asyncio.shield(
                 self._step_postprocess_with_output(
                     last_logits,
@@ -949,6 +996,7 @@ class BaseModelAgent:
                     extra_inputs=extra_inputs,
                 ))
         else:
+            batched_output = None
             (
                 inputs,
                 next_token_ids,
@@ -965,7 +1013,20 @@ class BaseModelAgent:
 
         if inputs.is_dummy:
             # skip dummy forward output
+            connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+            if connector_output is not None:
+                self._push_output(BatchedOutputs.connector_only(connector_output))
             return
+
+        # This is a non-blocking progress poll. The TP leader carries model and
+        # connector output together; other TP ranks emit a connector-only
+        # envelope so the executor can wait for all-rank completion.
+        connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+        if batched_output is not None:
+            batched_output.kv_connector_output = connector_output
+            self._push_output(batched_output)
+        elif connector_output is not None:
+            self._push_output(BatchedOutputs.connector_only(connector_output))
 
         sampling_delta = sampling_inputs.get_delta()
         if need_update_inputs:
@@ -1245,20 +1306,47 @@ class BaseModelAgent:
             if self.memdecode_agent is not None:
                 self.memdecode_agent.build_graph_runner()
 
+    def shutdown_kv_connector(self):
+        """Drain and close the local connector without releasing the model."""
+        self._drain_queues()
+        torch.cuda.synchronize()
+        self._release_completed_h2d_transfers()
+        self._shutdown_kv_connector()
+
+    def _shutdown_kv_connector(self):
+        """Shutdown the connector before releasing its registered caches."""
+        if self.kv_connector is None:
+            return
+        self.kv_connector.shutdown()
+        self.kv_connector = None
+
     def build_cache_engine(self):
         """Build cache engine."""
         with self.all_context():
+            self._shutdown_kv_connector()
             dist_ctx = get_dist_manager().current_context()
             dist_cfg = self.dist_config
             tp = dist_cfg.attn_tp
+            tp_rank = dist_ctx.attn_tp_group.rank
 
             self.cache_engine = CacheEngine(self.cache_config,
                                             self.model_config,
                                             rank=self.rank,
-                                            tp_rank=dist_ctx.attn_tp_group.rank,
+                                            tp_rank=tp_rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
             self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
+
+            self.kv_connector = build_kv_connector(
+                KVConnectorRole.WORKER,
+                self.cache_config,
+                global_rank=self.rank,
+                tp_rank=tp_rank,
+                tp_size=tp,
+                kv_head_replica_num=self.model_config.num_replicate_key_value_heads,
+            )
+            if self.kv_connector is not None:
+                self.kv_connector.register_kv_caches(self.cache_engine.connector_kv_caches)
 
             self.spec_agent.build_cache_engine(self.cache_stream)
             if self.memdecode_agent is not None:
@@ -1527,6 +1615,9 @@ class BaseModelAgent:
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
         device = 'cpu' if level == 1 else 'meta'
+        # Stop producers of GPU work and wait for queued work before closing the
+        # connector threads that still reference registered cache addresses.
+        self.shutdown_kv_connector()
         self.cache_engine = None
         self.state_cache_engine = None
         self.reset_graph_runner()
@@ -1537,9 +1628,7 @@ class BaseModelAgent:
             self.spec_agent.cache_engine = None
             spec_model.to(device=device, non_blocking=True)
 
-        self._drain_queues()
         torch.cuda.synchronize()
-        self._release_completed_h2d_transfers()
         self.reset_runtime_state()
         # force clean _update_params_ipc tensor and event after all gpu jobs done
         self._update_params_ipc_tensor = None
@@ -1582,6 +1671,7 @@ class BaseModelAgent:
 
     def release(self):
         """release."""
+        self._shutdown_kv_connector()
         self.reset_graph_runner()
         if self.memdecode_agent is not None:
             self.memdecode_agent.release()

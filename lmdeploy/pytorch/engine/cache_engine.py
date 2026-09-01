@@ -5,6 +5,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from operator import index as as_index
+from types import MappingProxyType
 
 import torch
 
@@ -642,6 +643,78 @@ class CacheEngine:
         if not layer_maps:
             return caches
         return NamedCacheView(caches, layer_maps)
+
+    @property
+    def connector_kv_caches(self) -> Mapping[str, torch.Tensor]:
+        """Return raw packed cache rows for an external KV connector.
+
+        Each value is one contiguous ``[kernel_pages, packed_bytes]`` view of
+        an owning pool in :attr:`full_gpu_cache`. Standard K/V (and any
+        co-located quantization payloads) occupy one row per model layer.
+        Named block caches occupy the compact rows declared by their
+        :class:`BlockCacheSpec` objects.
+
+        The mapping is ordered by standard layers first, then by named cache
+        declaration and its declared global layer ids. It is structurally
+        read-only; callers that register the temporary row views must not keep
+        them alive beyond the cache engine's lifetime.
+        """
+        model_config = self.model_config
+        cache_config = self.cache_config
+        use_standard_cache = model_config.use_standard_kv_cache
+        named_resources = self._get_block_cache_resources(model_config)
+
+        pools = self._as_mem_pools(self.full_gpu_cache)
+        expected_pool_count = int(use_standard_cache) + len(named_resources)
+        if len(pools) != expected_pool_count:
+            raise ValueError(
+                f'connector cache layout expects {expected_pool_count} packed pools, got {len(pools)}.')
+
+        block_size = cache_config.block_size
+        kernel_block_size = cache_config.kernel_block_size
+        if block_size < kernel_block_size or block_size % kernel_block_size != 0:
+            raise ValueError(
+                f'block_size {block_size} must be greater than or equal to and divisible by '
+                f'kernel_block_size {kernel_block_size}.')
+        kernel_blocks_per_logical = block_size // kernel_block_size
+        expected_kernel_blocks = self.num_gpu_blocks * kernel_blocks_per_logical
+
+        layouts: list[tuple[str, tuple[int, ...]]] = []
+        if use_standard_cache:
+            layouts.append(('standard_kv_cache', tuple(range(model_config.num_layers))))
+        for resource in named_resources:
+            assert resource.layout is not None
+            layouts.append((f'block_cache.{resource.name}', resource.layout.layer_ids))
+
+        connector_caches: dict[str, torch.Tensor] = {}
+        for pool, (cache_name, layer_ids) in zip(pools, layouts):
+            if not isinstance(pool, torch.Tensor):
+                raise TypeError(f'{cache_name} packed pool must be a torch.Tensor.')
+            if pool.dtype != torch.uint8:
+                raise TypeError(f'{cache_name} packed pool must use torch.uint8, got {pool.dtype}.')
+            if pool.dim() != 3:
+                raise ValueError(
+                    f'{cache_name} packed pool must have shape [rows, kernel_blocks, bytes], '
+                    f'got {tuple(pool.shape)}.')
+            if not pool.is_contiguous():
+                raise ValueError(f'{cache_name} packed pool must be contiguous.')
+            if pool.size(0) != len(layer_ids):
+                raise ValueError(
+                    f'{cache_name} packed pool has {pool.size(0)} rows, expected {len(layer_ids)}.')
+            if pool.size(1) != expected_kernel_blocks:
+                raise ValueError(
+                    f'{cache_name} packed pool has {pool.size(1)} kernel blocks, '
+                    f'expected {expected_kernel_blocks}.')
+
+            for cache_row, layer_id in enumerate(layer_ids):
+                key = f'{cache_name}.layer.{layer_id}'
+                if key in connector_caches:
+                    raise ValueError(f'duplicate connector cache key: {key}.')
+                row = pool[cache_row]
+                assert row.is_contiguous()
+                connector_caches[key] = row
+
+        return MappingProxyType(connector_caches)
 
     @staticmethod
     def get_custom_cache_shape_impl(num_layers: int, num_blocks: int, block_size: int, shape: list[int]):
