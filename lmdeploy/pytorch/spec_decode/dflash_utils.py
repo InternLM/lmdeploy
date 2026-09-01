@@ -139,14 +139,20 @@ def parse_dflash_config(draft_hf_config: Any, num_speculative_tokens: int,
                          f'draft declares num_target_layers={num_target_layers}, '
                          f'but target ModelConfig has num_layers={target_num_layers}.')
 
-    max_query_length = dflash_config['block_size']
+    # Original z-lab DFlash checkpoints (e.g. Qwen3-4B/8B-DFlash-b16) store
+    # block_size at the top level of config.json; newer checkpoints nest it
+    # in dflash_config. Mirror the reference implementation's fallback order
+    # (dflash_config first, then the top-level config attribute).
+    max_query_length = dflash_config.get('block_size', getattr(draft_hf_config, 'block_size', None))
+    if max_query_length is None:
+        raise ValueError('DFlash checkpoint requires block_size in dflash_config or at the top level of its config.')
     query_length = num_speculative_tokens + 1
     if query_length > max_query_length:
         raise ValueError('DFlash query length (1 + speculative_num_draft_tokens) must not exceed checkpoint '
                          'dflash_config.block_size. '
                          f'Got block_size={max_query_length}, query_length={query_length}.')
 
-    mask_token_id = dflash_config.get('mask_token_id')
+    mask_token_id = dflash_config.get('mask_token_id', getattr(draft_hf_config, 'mask_token_id', None))
     if mask_token_id is None:
         raise ValueError('DFlash checkpoint requires dflash_config.mask_token_id.')
 

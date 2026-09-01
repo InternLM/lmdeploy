@@ -71,6 +71,21 @@ def test_parse_dflash_config_valid():
     assert mask_token_id == 32001
 
 
+def test_parse_dflash_config_top_level_checkpoint_layout():
+    """Original z-lab DFlash checkpoints (e.g. Qwen3-4B-DFlash-b16) keep
+    block_size at the top level of config.json and nest only mask_token_id and
+    target_layer_ids inside dflash_config."""
+    config = _draft_config(block_size=4,
+                           dflash_config=dict(
+                               mask_token_id=32001,
+                               target_layer_ids=[1, 5, 9, 13],
+                           ))
+    target_layer_ids, mask_token_id = _parse_dflash(config, num_speculative_tokens=3)
+
+    assert target_layer_ids == (1, 5, 9, 13)
+    assert mask_token_id == 32001
+
+
 def test_specdecode_config_stores_resolved_dflash_fields_directly():
     target_layer_ids, mask_token_id = _parse_dflash(_draft_config(), num_speculative_tokens=3)
     cfg = SpecDecodeConfig(model='draft-model',
