@@ -7,47 +7,15 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContextManager
-from lmdeploy.pytorch.nn import RMSNorm, build_rotary_embedding_from_config
+from lmdeploy.pytorch.nn import build_rotary_embedding_from_config
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .deepseek_mtp import DeepseekMTPModel
-from .glm4_moe import Glm4MoE, Glm4MoeAttention, Glm4MoeDecoderLayer, Glm4MoeMLP
-
-
-class Glm4MoeMTPDecoderLayer(Glm4MoeDecoderLayer):
-    """Decoder layer."""
-
-    def __init__(self,
-                 config: PretrainedConfig,
-                 layer_idx: int,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
-        nn.Module.__init__(self)
-        self.layer_idx = layer_idx
-        quantization_config = getattr(config, 'quantization_config', None)
-
-        # build attention layer
-        self.self_attn = Glm4MoeAttention(config, dtype=dtype, device=device, is_tp=False)
-
-        if layer_idx >= config.first_k_dense_replace:
-            self.mlp = Glm4MoE(config, layer_idx=layer_idx, dtype=dtype, device=device, is_tp=False)
-            self.mlp._all_reduce = False
-        else:
-            self.mlp = Glm4MoeMLP(config, dtype=dtype, device=device, is_tp=False, all_reduce=False)
-
-        # build input layer norm
-        self.input_layernorm = RMSNorm(config.hidden_size,
-                                       config.rms_norm_eps,
-                                       quant_config=quantization_config,
-                                       dtype=dtype,
-                                       device=device)
-
-        # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+from .glm4_moe import Glm4MoeDecoderLayer
 
 
 class Glm4MoeMTPModel(DeepseekMTPModel):
-    """ModelForCausalLM."""
+    """GLM-4 MoE MTP model."""
 
     packed_modules_mapping = {
         'qkv_proj': [
@@ -71,7 +39,7 @@ class Glm4MoeMTPModel(DeepseekMTPModel):
             ctx_mgr,
             dtype=dtype,
             device=device,
-            decoder_layer_cls=Glm4MoeMTPDecoderLayer,
+            decoder_layer_cls=Glm4MoeDecoderLayer,
             build_rotary_embedding_func=build_rotary_embedding_from_config,
         )
 
