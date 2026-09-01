@@ -277,7 +277,6 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
-                dp_disable_tp=True,
             )
         else:
             self.fused_qkv_a_proj = build_merged_colwise_linear(
@@ -303,7 +302,6 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
-                dp_disable_tp=True,
             )
 
         if self.q_lora_rank is None:
@@ -420,9 +418,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        dist_ctx = get_dist_manager().current_context()
-        tp_world_size = dist_ctx.dist_config.attn_tp
-        num_heads = self.num_heads // tp_world_size
+        num_heads = self.attn_fwd.num_heads
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
 

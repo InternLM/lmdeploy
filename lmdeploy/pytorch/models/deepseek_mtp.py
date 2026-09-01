@@ -9,352 +9,25 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (
-    ApplyRotaryEmb,
-    Attention,
     ParallelLMHead,
     RMSNorm,
     RopeType,
-    SiluAndMul,
     build_rotary_embedding,
     build_rotary_params,
 )
-from lmdeploy.pytorch.nn.linear import (
-    build_colwise_linear,
-    build_down_linear,
-    build_gateup_linear,
-    build_o_proj,
-)
-from lmdeploy.pytorch.nn.moe import build_fused_moe
-from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
+from lmdeploy.pytorch.nn.linear import build_colwise_linear
+from lmdeploy.pytorch.nn.rotary_embedding import get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.utils import get_logger
 
-from .deepseek_v2 import DeepseekV2Attention, DeepseekV2DecoderLayer, MoEGate, yarn_get_mscale
+from .deepseek_v2 import DeepseekV2DecoderLayer
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 
 logger = get_logger('lmdeploy')
 
 
-class DeepseekV2BMM(nn.Module):
-    """Wrapped bmm."""
-
-    def __init__(self, batch: int, in_features: int, out_features: int, dtype: torch.dtype, device: torch.device):
-        super().__init__()
-
-        weight = self.create_weight(batch, in_features, out_features, dtype=dtype, device=device)
-        weight = torch.nn.Parameter(weight, requires_grad=False)
-        self.register_parameter('weight', weight)
-        weight.weight_loader = self.weight_loader
-
-        self.batch = batch
-        self.in_features = in_features
-        self.out_features = out_features
-        self.dtype = dtype
-        self.device = device
-
-    def create_weight(self, batch: int, in_features: int, out_features: int, dtype: torch.dtype, device: torch.device):
-        """Create weight."""
-        return torch.empty((batch, in_features, out_features), dtype=dtype, device=device)
-
-    def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
-        """Weight loader."""
-        param.data.copy_(weight)
-
-    def forward(self, x: torch.Tensor, output: torch.Tensor):
-        """forward."""
-        torch.bmm(x.transpose(0, 1), self.weight, out=output.transpose(0, 1))
-
-
-class DeepseekV2Attention(DeepseekV2Attention):
-    """Deepseekv2 attention."""
-
-    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
-        nn.Module.__init__(self)
-        quantization_config = getattr(config, 'quantization_config', None)
-        self.q_lora_rank = config.q_lora_rank
-        self.hidden_size = config.hidden_size
-        self.num_heads = config.num_attention_heads
-        self.qk_rope_head_dim = config.qk_rope_head_dim
-        self.kv_lora_rank = config.kv_lora_rank
-        self.v_head_dim = config.v_head_dim
-        self.qk_nope_head_dim = config.qk_nope_head_dim
-        self.q_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
-        num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
-        num_key_value_heads = getattr(config, 'num_key_value_heads', 1)
-        use_flash_mla = getattr(config, 'use_flash_mla', False)
-
-        if self.q_lora_rank is None:
-            self.q_proj = build_colwise_linear(
-                self.hidden_size,
-                self.num_heads * self.q_head_dim,
-                bias=False,
-                dtype=dtype,
-                device=device,
-                is_tp=False,
-                quant_config=quantization_config,
-                dp_disable_tp=True,
-            )
-        else:
-            self.q_a_proj = build_colwise_linear(
-                self.hidden_size,
-                config.q_lora_rank,
-                bias=config.attention_bias,
-                dtype=dtype,
-                device=device,
-                is_tp=False,
-                quant_config=quantization_config,
-            )
-            self.q_a_layernorm = RMSNorm(config.q_lora_rank,
-                                         1e-6,
-                                         quant_config=quantization_config,
-                                         dtype=dtype,
-                                         device=device)
-            self.q_b_proj = build_colwise_linear(
-                config.q_lora_rank,
-                self.num_heads * self.q_head_dim,
-                bias=False,
-                dtype=dtype,
-                device=device,
-                is_tp=False,
-                quant_config=quantization_config,
-                dp_disable_tp=True,
-            )
-
-        self.kv_a_proj_with_mqa = build_colwise_linear(
-            self.hidden_size,
-            config.kv_lora_rank + config.qk_rope_head_dim,
-            bias=config.attention_bias,
-            dtype=dtype,
-            device=device,
-            is_tp=False,
-            quant_config=quantization_config,
-        )
-        self.kv_a_layernorm = RMSNorm(config.kv_lora_rank,
-                                      1e-6,
-                                      quant_config=quantization_config,
-                                      dtype=dtype,
-                                      device=device)
-        self.kc = DeepseekV2BMM(self.num_heads,
-                                config.qk_nope_head_dim,
-                                config.kv_lora_rank,
-                                dtype=dtype,
-                                device=device)
-
-        self.apply_rotary_pos_emb = ApplyRotaryEmb()
-
-        self.softmax_scale = self.q_head_dim**(-0.5)
-
-        rope_scaling = get_rope_parameters(config)
-        if rope_scaling is not None:
-            mscale_all_dim = rope_scaling.get('mscale_all_dim', 0)
-            scaling_factor = rope_scaling.get('factor', 1.0)
-            if mscale_all_dim:
-                mscale = yarn_get_mscale(scaling_factor, mscale_all_dim)
-                self.softmax_scale = self.softmax_scale * mscale * mscale
-
-        self.attn_fwd = Attention(self.num_heads,
-                                  config.kv_lora_rank + self.qk_rope_head_dim,
-                                  scale=self.softmax_scale,
-                                  num_kv_heads=num_key_value_heads,
-                                  v_head_size=config.kv_lora_rank,
-                                  num_replicate_kv_heads=num_replicate_kv_heads,
-                                  use_flash_mla=use_flash_mla)
-
-        self.vc = DeepseekV2BMM(self.num_heads, config.kv_lora_rank, self.v_head_dim, dtype=dtype, device=device)
-        self.o_proj = build_o_proj(
-            self.num_heads * self.v_head_dim,
-            self.hidden_size,
-            bias=config.attention_bias,
-            dtype=dtype,
-            device=device,
-            is_tp=False,
-            quant_config=quantization_config,
-        )
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: tuple[torch.Tensor] | None = None,
-        attn_metadata: Any = None,
-    ):
-        """Rewrite of LlamaAttention.forward."""
-        num_heads = self.num_heads
-        nope_size = self.kv_lora_rank
-        q_len = hidden_states.size(1)
-
-        # qkv_proj
-        query_states, key_states, value_states, q_pe, k_pe = self._qkv_proj(hidden_states, num_heads=num_heads)
-
-        cos, sin = rotary_pos_emb
-        q_pe, k_pe = self.apply_rotary_pos_emb(
-            q_pe,
-            k_pe,
-            cos,
-            sin,
-            inplace=False,
-        )
-        query_states[..., nope_size:] = q_pe
-        key_states[..., nope_size:] = k_pe
-
-        attn_output = self.attn_fwd(
-            query_states,
-            key_states,
-            value_states,
-            past_key_value[0],
-            past_key_value[0][..., :nope_size],
-            attn_metadata,
-            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
-            inplace=True,
-        )
-        attn_bmm_out = attn_output.new_empty(q_len, num_heads, self.v_head_dim)
-
-        self.vc(attn_output, attn_bmm_out)
-        attn_output = attn_bmm_out.flatten(-2, -1)[None]
-        attn_output = self.o_proj(attn_output)
-
-        return attn_output
-
-
-class DeepseekV2MoE(nn.Module):
-    """Deepseek v2 MoE."""
-
-    def __init__(self, config: Any, layer_idx, dtype: torch.dtype = None, device: torch.device = None):
-        super().__init__()
-        quantization_config = getattr(config, 'quantization_config', None)
-        self.hidden_dim = config.hidden_size
-        self.ffn_dim = config.moe_intermediate_size
-        self.num_experts = config.n_routed_experts
-        self.top_k = config.num_experts_per_tok
-        self.norm_topk_prob = config.norm_topk_prob
-        self.routed_scaling_factor = config.routed_scaling_factor
-        self.renormalize = self.top_k > 1 and self.norm_topk_prob
-        self.topk_method = config.topk_method
-        self.n_group = config.n_group
-        self.topk_group = config.topk_group
-
-        self.gate = MoEGate(config, dtype=dtype, device=device, info=None)
-        self.experts = build_fused_moe(
-            self.hidden_dim,
-            self.ffn_dim,
-            self.num_experts,
-            top_k=self.top_k,
-            renormalize=False,
-            dtype=dtype,
-            device=device,
-            all_reduce=False,
-            quant_config=quantization_config,
-            layer_idx=layer_idx,
-        )
-        self.shared_experts = None
-        if config.n_shared_experts is not None:
-            intermediate_size = (config.moe_intermediate_size * config.n_shared_experts)
-            self.shared_experts = DeepseekV2MLP(
-                config=config,
-                intermediate_size=intermediate_size,
-                dtype=dtype,
-                device=device,
-            )
-
-    def forward(self, hidden_states: torch.Tensor):
-        """forward."""
-        batch_size, sequence_length, hidden_dim = hidden_states.shape
-        hidden_states = hidden_states.view(-1, hidden_dim)
-        topk_weights, topk_ids = self.gate(hidden_states)
-
-        out_states = self.experts(
-            hidden_states,
-            topk_weights,
-            topk_ids,
-        )
-
-        if self.shared_experts is not None:
-            shared_states = self.shared_experts(hidden_states)
-            out_states += shared_states
-        out_states = out_states.reshape(batch_size, sequence_length, -1)
-
-        return out_states
-
-
-class DeepseekV2MLP(nn.Module):
-    """Deepseek v2 mlp."""
-
-    def __init__(self,
-                 config: Any,
-                 intermediate_size: int = None,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
-        super().__init__()
-
-        quantization_config = getattr(config, 'quantization_config', None)
-        # gate up
-        if intermediate_size is None:
-            intermediate_size = config.intermediate_size
-        self.gate_up_proj = build_gateup_linear(
-            config.hidden_size,
-            [intermediate_size, intermediate_size],
-            bias=False,
-            dtype=dtype,
-            device=device,
-            quant_config=quantization_config,
-            is_tp=False,
-        )
-
-        # silu and mul
-        self.act_fn = SiluAndMul(inplace=True)
-
-        # down
-        self.down_proj = build_down_linear(
-            intermediate_size,
-            config.hidden_size,
-            bias=False,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-            is_tp=False,
-            all_reduce=False,
-        )
-
-    def forward(self, x):
-        """forward."""
-        gate_up = self.gate_up_proj(x)
-        act = self.act_fn(gate_up)
-        return self.down_proj(act)
-
-
-class DeepseekV2DecoderLayer(DeepseekV2DecoderLayer):
-    """Deepseekv2 decoder layer."""
-
-    def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
-        nn.Module.__init__(self)
-        self.layer_idx = layer_idx
-        quantization_config = None
-
-        # build attention layer
-        self.self_attn = DeepseekV2Attention(config, dtype=dtype, device=device)
-
-        # mlp
-        self.mlp = (DeepseekV2MoE(config, layer_idx, dtype=dtype, device=device) if
-                    (config.n_routed_experts is not None and layer_idx >= config.first_k_dense_replace
-                     and layer_idx % config.moe_layer_freq == 0) else DeepseekV2MLP(config, dtype=dtype, device=device))
-
-        # build input layer norm
-        self.input_layernorm = RMSNorm(config.hidden_size,
-                                       config.rms_norm_eps,
-                                       quant_config=quantization_config,
-                                       dtype=dtype,
-                                       device=device)
-
-        # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
-
-
-# modify from vllm
-
-
 class SharedHead(nn.Module):
-    """Deepseekv2 shared head."""
+    """DeepSeek MTP normalization and vocab-parallel head."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -384,6 +57,7 @@ def build_deepseek_rotary_embedding(config: PretrainedConfig):
 
 
 class DeepSeekMultiTokenPredictorLayer(nn.Module):
+    """DeepSeek MTP layer."""
 
     def __init__(
         self,
@@ -407,6 +81,7 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
 
         self.enorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, device=device)
         self.hnorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, device=device)
+        # Keep the recurrent MTP projection replicated across TP ranks.
         self.eh_proj = build_colwise_linear(
             config.hidden_size * 2,
             config.hidden_size,
@@ -415,7 +90,6 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
             device=device,
             is_tp=False,
             quant_config=quantization_config,
-            dp_disable_tp=True,
         )
 
         self.shared_head = SharedHead(config=config, dtype=dtype, device=device)
@@ -458,6 +132,7 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
 
 
 class DeepSeekMultiTokenPredictor(nn.Module):
+    """DeepSeek multi-token predictor."""
 
     def __init__(
         self,
@@ -522,6 +197,7 @@ class DeepSeekMultiTokenPredictor(nn.Module):
 
 
 class DeepseekMTPModel(nn.Module, CudaGraphMixin):
+    """DeepSeek MTP model."""
 
     def __init__(
         self,

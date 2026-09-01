@@ -352,6 +352,51 @@ class TestPagedAttention(TestPagedAttentionBase):
         torch.testing.assert_close(out, window_gt, atol=1e-3, rtol=1e-5)
 
 
+class TestPagedAttentionLongContext(TestPagedAttentionBase):
+    """Regression tests for split-K reduction with a long KV cache."""
+
+    @pytest.fixture
+    def dtype(self):
+        yield torch.bfloat16
+
+    @pytest.fixture
+    def batched_q(self, seq_len, kv_seqlens, num_heads_q, feat_dim, dtype):
+        torch.manual_seed(123)
+        batch_size = len(kv_seqlens)
+        yield torch.randn(batch_size, seq_len, num_heads_q, feat_dim, dtype=dtype, device='cuda')
+
+    @pytest.fixture
+    def batched_kv(self, kv_seqlens, num_heads_k, feat_dim, feat_dim_v, dtype):
+        torch.manual_seed(456)
+        batch_size = len(kv_seqlens)
+        max_seq_len = kv_seqlens.max().item()
+        k = torch.randn(batch_size, max_seq_len, num_heads_k, feat_dim, dtype=dtype, device='cuda')
+        v = torch.randn(batch_size, max_seq_len, num_heads_k, feat_dim_v, dtype=dtype, device='cuda')
+        yield k, v
+
+    @pytest.mark.parametrize('feat_dim', [128], indirect=True)
+    @pytest.mark.parametrize('feat_dim_v', [128], indirect=True)
+    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(16, 1)], indirect=True)
+    @pytest.mark.parametrize('history_lens', [(20547, )], indirect=True)
+    @pytest.mark.parametrize('block_size', [16], indirect=True)
+    @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
+    def test_split_k_reduction(self, conti_q, blocked_kv, block_offsets, kv_seqlens, layout, conti_gt, monkeypatch):
+        from lmdeploy.pytorch.kernels.cuda import pagedattention
+
+        # H200 selects SPLIT_K=128 for this shape. Force the same reduction
+        # tile so that GPUs with fewer SMs do not miss the regression.
+        monkeypatch.setattr(pagedattention, '_get_split_k', lambda *args, **kwargs: 128)
+
+        blocked_k, blocked_v = blocked_kv
+        out = pagedattention.flash_attn_with_kvcache(conti_q,
+                                                     blocked_k,
+                                                     blocked_v,
+                                                     page_table=block_offsets,
+                                                     cache_seqlens=kv_seqlens,
+                                                     kv_layout=layout)
+        torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
+
+
 class TestPagedAttentionSink(TestPagedAttentionBase):
 
     @pytest.fixture

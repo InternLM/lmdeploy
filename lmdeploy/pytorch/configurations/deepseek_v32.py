@@ -35,10 +35,13 @@ class DeepseekV32ModelConfigBuilder(DeepseekV2ModelConfigBuilder):
     @classmethod
     def build(cls, hf_config, model_path: str | None = None, **kwargs):
         """build."""
+        is_draft_model = kwargs.get('is_draft_model', False)
         config = DeepseekV2ModelConfigBuilder.build(hf_config, model_path=model_path, **kwargs)
 
         assert hf_config.use_flash_mla, 'DeepSeek-V3.2 requires flash_mla to be available.'
         config.mla_kv_cache_dtype = 'bfloat16'
         config.mla_index_topk = hf_config.index_topk
         config.check_env_func = _check_env_v32
+        if is_draft_model:
+            hf_config.architectures[0] = 'DeepseekV32MTPModel'
         return config

@@ -6,7 +6,6 @@ import torch
 from torch import nn
 
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.model_inputs import StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
@@ -217,8 +216,7 @@ class GlmMoeDsaAttention(DeepseekV32Attention):
         topk_indices_buffer: DSATopKIndicesBuffer | None = None,
         skip_topk: bool = False,
     ):
-        dist_config = get_dist_manager().current_config()
-        num_heads = self.num_heads if dist_config.dp > 1 else self.num_heads // dist_config.attn_tp
+        num_heads = self.attn_fwd.num_heads
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
 
