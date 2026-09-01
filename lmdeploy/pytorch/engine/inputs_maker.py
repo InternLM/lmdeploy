@@ -86,7 +86,7 @@ def _make_state_prefix_cache_save_plan(messages: list['SchedulerSequence'],
     return tuple(src_offsets), tuple(dst_offsets)
 
 
-def _build_logits_indices(messages: list['SchedulerSequence'], query_lengths: list[int]):
+def fill_logits_indices(model_inputs: ModelInputs, messages: list['SchedulerSequence'], query_lengths: list[int]):
     """Build ordered source-hidden indices and per-sequence output rows.
 
     Non-final long-prefill chunks still project their final source row, but
@@ -94,7 +94,9 @@ def _build_logits_indices(messages: list['SchedulerSequence'], query_lengths: li
     ``_prev_chunk_last_logit`` carry.
     """
     if not any(msg.logprob_start_pos >= 0 for msg in messages):
-        return None, None
+        model_inputs.logits_indices = None
+        model_inputs.seq_logit_length = None
+        return model_inputs
 
     indices = []
     row_counts = []
@@ -124,7 +126,9 @@ def _build_logits_indices(messages: list['SchedulerSequence'], query_lengths: li
         row_counts.append(row_count)
         base += query_len
 
-    return torch.tensor(indices, dtype=torch.long), torch.tensor(row_counts, dtype=torch.long)
+    model_inputs.logits_indices = torch.tensor(indices, dtype=torch.long)
+    model_inputs.seq_logit_length = torch.tensor(row_counts, dtype=torch.long)
+    return model_inputs
 
 
 @dataclass
@@ -1092,9 +1096,7 @@ class InputsMakerAsync:
             model_metas=model_metas,
         )
         if is_prefill:
-            logits_indices, seq_logit_length = _build_logits_indices(messages, [len(ids) for ids in token_ids])
-            model_inputs.logits_indices = logits_indices
-            model_inputs.seq_logit_length = seq_logit_length
+            model_inputs = fill_logits_indices(model_inputs, messages, [len(ids) for ids in token_ids])
 
         # adapters
         self._set_adapter_ids(model_inputs, messages)
@@ -1155,9 +1157,7 @@ class InputsMakerAsync:
             model_metas=model_metas,
             is_chunk=True,
         )
-        logits_indices, seq_logit_length = _build_logits_indices([seq], [chunk_size])
-        model_inputs.logits_indices = logits_indices
-        model_inputs.seq_logit_length = seq_logit_length
+        model_inputs = fill_logits_indices(model_inputs, [seq], [chunk_size])
 
         # adapters
         self._set_adapter_ids(model_inputs, [seq])

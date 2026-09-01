@@ -16,9 +16,9 @@ from lmdeploy.pytorch.engine.inputs_maker import (
     InputsMakerAsync,
     InputsMakerConfig,
     LongContextChunker,
-    _build_logits_indices,
     _make_state_prefix_cache_restore_plan,
     _make_state_prefix_cache_save_plan,
+    fill_logits_indices,
 )
 from lmdeploy.pytorch.engine.model_agent.agent import BatchedOutputs
 from lmdeploy.pytorch.kv_connector import KVConnectorOutput
@@ -38,29 +38,28 @@ def test_logits_indices_keep_batch_alignment_and_exact_targets():
     enabled = _logprob_seq(10, 8, 15, 11, list(range(20)))
     empty = _logprob_seq(20, 17, 20, 20, list(range(24)))
 
-    indices, row_counts = _build_logits_indices([disabled, enabled, empty],
-                                                [3, 5, 0])
-    assert indices.tolist() == [4, 5, 6]
-    assert row_counts.tolist() == [0, 3, 0]
+    model_inputs = fill_logits_indices(SimpleNamespace(), [disabled, enabled, empty], [3, 5, 0])
+    assert model_inputs.logits_indices.tolist() == [4, 5, 6]
+    assert model_inputs.seq_logit_length.tolist() == [0, 3, 0]
 
 
 def test_logits_indices_shift_cross_chunk_target_to_next_chunk():
     first = _logprob_seq(0, 0, 10, 2, list(range(12)))
-    indices, row_counts = _build_logits_indices([first], [4])
-    assert indices.tolist() == [2, 3]
-    assert row_counts.tolist() == [1]
+    model_inputs = fill_logits_indices(SimpleNamespace(), [first], [4])
+    assert model_inputs.logits_indices.tolist() == [2, 3]
+    assert model_inputs.seq_logit_length.tolist() == [1]
 
     middle = _logprob_seq(4, 0, 10, 2, list(range(12)))
-    indices, row_counts = _build_logits_indices([middle], [4])
-    assert indices.tolist() == [0, 1, 2, 3]
-    assert row_counts.tolist() == [4]
+    model_inputs = fill_logits_indices(SimpleNamespace(), [middle], [4])
+    assert model_inputs.logits_indices.tolist() == [0, 1, 2, 3]
+    assert model_inputs.seq_logit_length.tolist() == [4]
 
     # Final chunks exclude the last input hidden, which is reserved for
     # generated/control-token sampling, but include the carried previous row.
     final = _logprob_seq(8, 0, 10, 2, list(range(12)))
-    indices, row_counts = _build_logits_indices([final], [2])
-    assert indices.tolist() == [0]
-    assert row_counts.tolist() == [2]
+    model_inputs = fill_logits_indices(SimpleNamespace(), [final], [2])
+    assert model_inputs.logits_indices.tolist() == [0]
+    assert model_inputs.seq_logit_length.tolist() == [2]
 
 
 @dataclass
