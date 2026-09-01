@@ -182,6 +182,17 @@ class LinearBase(nn.Module):
         """Update weights."""
         raise NotImplementedError('This method should be implemented in subclasses.')
 
+    def get_unquantized_weight(self, out_dtype: torch.dtype) -> torch.Tensor:
+        """Return the local weight in ``[out_features, in_features]``
+        layout."""
+        param = next(self.parameters())
+        inputs = torch.eye(self.in_features, dtype=out_dtype, device=param.device)
+        outputs = self._forward_default(inputs, all_reduce=False, tp_sizes=None)
+        bias = getattr(self, 'bias', None)
+        if bias is not None:
+            outputs = outputs - bias
+        return outputs.T.to(out_dtype)
+
     def _forward_default(self, x, all_reduce: bool, tp_sizes: list[int]):
         """Default forward implement."""
         raise NotImplementedError('This method should be implemented in subclasses.')

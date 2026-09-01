@@ -323,6 +323,15 @@ class DeepseekV32Attention(DeepseekV2Attention):
                                       quant_config=quantization_config,
                                       dtype=torch.float32,
                                       device=device)
+        self.kv_b_proj = build_colwise_linear(
+            config.kv_lora_rank,
+            self.num_heads * (config.qk_nope_head_dim + self.v_head_dim),
+            bias=False,
+            dtype=dtype,
+            device=device,
+            is_tp=True,
+            quant_config=quantization_config,
+        )
         self.kc = DeepseekV2BMM(self.num_heads,
                                 config.qk_nope_head_dim,
                                 config.kv_lora_rank,
