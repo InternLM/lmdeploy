@@ -210,7 +210,6 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
     ):
         super().__init__()
         self.config = config
-        self.quantization_config = getattr(config, 'quantization_config', None)
         self.dtype = dtype
         self.ctx_mgr = ctx_mgr
         self.model = DeepSeekMultiTokenPredictor(config,
@@ -218,8 +217,6 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
                                                  device=device,
                                                  decoder_layer_cls=decoder_layer_cls,
                                                  build_rotary_embedding_func=build_rotary_embedding_func)
-
-        self._load_buffers = dict()
 
     def get_logits(self, hidden_states: torch.Tensor, spec_step_idx: int = 0):
         """Compute logits of the model output."""
@@ -321,53 +318,6 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
             weight = weight.flatten(0, 1)
             return weight
 
-        def __load_kcvc(name: str, weight: torch.Tensor):
-            """Load kc and vc from weight."""
-            config = self.config
-            v_head_dim = config.v_head_dim
-            qk_nope_head_dim = config.qk_nope_head_dim
-            w_kc, w_vc = weight.unflatten(0, (-1, qk_nope_head_dim + v_head_dim)).split([qk_nope_head_dim, v_head_dim],
-                                                                                        dim=1)
-            w_vc = w_vc.transpose(1, 2).contiguous()
-            kc_param_name = name.replace('.kv_b_proj', '.kc')
-            param_kc = params_dict[kc_param_name]
-            load_weight(param_kc, w_kc)
-            vc_param_name = name.replace('.kv_b_proj', '.vc')
-            param_vc = params_dict[vc_param_name]
-            load_weight(param_vc, w_vc)
-
-        def __dequant_weight(weight: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype):
-            """Dequant weight."""
-            dim_w0, dim_w1 = weight.shape
-            dim_s0, dim_s1 = scale.shape
-            assert dim_w0 % dim_s0 == 0
-            assert dim_w1 % dim_s1 == 0
-            group0 = dim_w0 // dim_s0
-            group1 = dim_w1 // dim_s1
-            weight = weight.reshape(dim_s0, group0, dim_s1, group1)
-            scale = scale.reshape(dim_s0, 1, dim_s1, 1)
-            weight = weight.to(scale.dtype) * scale
-            weight = weight.to(dtype)
-            weight = weight.reshape(dim_w0, dim_w1)
-            return weight
-
-        def __load_kcvc_blocked_fp8(name: str, loaded_weight: torch.Tensor):
-            """Dequant weight."""
-            if name.endswith('.weight'):
-                weight_name = name
-                scale_name = name.replace('.weight', '.scale')
-            elif name.endswith('.weight_scale_inv'):
-                weight_name = name.replace('.weight_scale_inv', '.weight')
-                scale_name = name
-            self._load_buffers[name] = loaded_weight
-            if (weight_name in self._load_buffers and scale_name in self._load_buffers):
-                weight = self._load_buffers.pop(weight_name)
-                scale = self._load_buffers.pop(scale_name)
-                kc_param_name = weight_name.replace('.kv_b_proj', '.kc')
-                dtype = params_dict[kc_param_name].dtype
-                weight = __dequant_weight(weight, scale, dtype)
-                __load_kcvc(weight_name, weight)
-
         for (mod_name, head_dim, pe_dim_offset) in update_pe_mapping:
             if mod_name not in name:
                 continue
@@ -380,21 +330,8 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
             load_weight(param, weight)
             break
         else:
-            if '.kv_b_proj' in name:
-                quantization_config = self.quantization_config
-                quant_method = None
-                if quantization_config is not None:
-                    quant_method = quantization_config.get('quant_method')
-
-                loaded_weight = loaded_weight.to(device)
-                if quant_method == 'fp8':
-                    # update blocked fp8 weight
-                    __load_kcvc_blocked_fp8(name, loaded_weight)
-                else:
-                    __load_kcvc(name, loaded_weight)
-            else:
-                param = params_dict[name]
-                load_weight(param, loaded_weight)
+            param = params_dict[name]
+            load_weight(param, loaded_weight)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
