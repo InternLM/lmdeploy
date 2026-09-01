@@ -9,6 +9,15 @@ BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
 BASE_URL = f'{BASE_HTTP_URL}:{os.getenv("LMDEPLOY_PORT", str(DEFAULT_PORT))}'
 
 EVAL_CONFIGS = {
+    # Base-model PPL/LL API eval (TurboMindAPIModel / get_ppl).
+    'base': {
+        'max_out_len': 1024,
+        'max_seq_len': 7168,
+        'batch_size': 32,
+        'temperature': 1e-6,
+        'top_p': 0.9,
+        'top_k': 1,
+    },
     'default': {
         'query_per_second': 4,
         'max_out_len': 64000,
@@ -236,9 +245,9 @@ TOOL_REASONING_MODEL_LIST_LATEST = [
     'Qwen/Qwen3.5-122B-A10B',
     'Qwen/Qwen3.5-397B-A17B',
     'Qwen/Qwen3.5-397B-A17B-FP8',
-    'meta-llama/Meta-Llama-3.1-70B-Instruct',
+    'meta-llama/Llama-3.1-70B-Instruct',
     'deepseek-ai/DeepSeek-V3',
-    'unsloth/gpt-oss-20b-BF16',
+    'openai/gpt-oss-20b',
     'Qwen/Qwen2.5-7B-Instruct',
     'internlm/Intern-S1',
     'internlm/Intern-S1-Pro',

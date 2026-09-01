@@ -62,14 +62,17 @@ class DeepseekV32ModelConfigBuilder(DeepseekV2ModelConfigBuilder):
     @classmethod
     def build(cls, hf_config, model_path: str | None = None, **kwargs):
         """build."""
+        is_draft_model = kwargs.get('is_draft_model', False)
         config = DeepseekV2ModelConfigBuilder.build(hf_config, model_path=model_path, **kwargs)
 
         assert hf_config.use_flash_mla, 'DeepSeek-V3.2 requires flash_mla to be available.'
         index_k_shape = ([hf_config.index_head_dim], torch.float8_e4m3fn)
         index_k_scale_shape = ([1], torch.float32)
         config.cache_shapes = [index_k_shape, index_k_scale_shape]
-        config.mla_kv_cache_dtype = 'fp8_ds_mla'
+        config.mla_kv_cache_dtype = 'bfloat16'
         config.mla_index_topk = hf_config.index_topk
         config.check_env_func = _check_env_v32
         config.post_build_func = _finalize_v32_cache_specs
+        if is_draft_model:
+            hf_config.architectures[0] = 'DeepseekV32MTPModel'
         return config

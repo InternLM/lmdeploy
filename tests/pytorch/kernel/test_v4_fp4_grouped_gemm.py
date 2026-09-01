@@ -55,7 +55,7 @@ class TestV4SwiGLUQuant:
     @torch.inference_mode()
     def test_matches_reference_quant_path(self, shape, swiglu_limit):
         from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
-        from lmdeploy.pytorch.kernels.cuda.v4_swiglu_quant import v4_swiglu_and_quant_fp8
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_swiglu_quant import v4_swiglu_and_quant_fp8
 
         gate_up = torch.randn(*shape, dtype=torch.bfloat16, device='cuda') * 3
         act_quant, act_scale = v4_swiglu_and_quant_fp8(gate_up, swiglu_limit=swiglu_limit, group_size=128)
@@ -158,8 +158,8 @@ class TestGroupedGemmContiguous:
 
     @torch.inference_mode()
     def test_contiguous_vs_launcher(self, A_quant, A_scale, B_packed, B_scale, grouped_layout, M, N, device):
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_fused_moe import fused_moe_v4_fp4_kernel_launcher
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import m_grouped_fp8_fp4_gemm_nt_contiguous
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_fp4 import fused_moe_v4_fp4_kernel_launcher
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_fp4_grouped_gemm import m_grouped_fp8_fp4_gemm_nt_contiguous
 
         # Run through the new wrapper.
         out_wrapper = torch.empty(M, N, dtype=torch.bfloat16, device=device)
@@ -194,7 +194,7 @@ class TestGroupedGemmContiguous:
     @torch.inference_mode()
     def test_contiguous_vs_bf16_reference(self, A_bf16, A_quant, A_scale, B_dense, B_packed, B_scale,
                                           grouped_layout, M, N, device):
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import m_grouped_fp8_fp4_gemm_nt_contiguous
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_fp4_grouped_gemm import m_grouped_fp8_fp4_gemm_nt_contiguous
 
         out = torch.empty(M, N, dtype=torch.bfloat16, device=device)
         m_grouped_fp8_fp4_gemm_nt_contiguous(
@@ -300,8 +300,8 @@ class TestGroupedGemmMasked:
 
     @torch.inference_mode()
     def test_masked_vs_launcher(self, A_quant, A_scale, B_packed, B_scale, masked_m, max_m, device):
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_fused_moe import fused_moe_v4_fp4_kernel_launcher
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import m_grouped_fp8_fp4_gemm_nt_masked
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_fp4 import fused_moe_v4_fp4_kernel_launcher
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_fp4_grouped_gemm import m_grouped_fp8_fp4_gemm_nt_masked
 
         num_experts = B_packed.size(0)
         N = B_packed.size(1)
@@ -341,7 +341,7 @@ class TestGroupedGemmMasked:
     @torch.inference_mode()
     def test_masked_vs_bf16_reference(self, A_dense, A_quant, A_scale, B_dense, B_packed, B_scale,
                                       masked_m, max_m, device):
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import m_grouped_fp8_fp4_gemm_nt_masked
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_fp4_grouped_gemm import m_grouped_fp8_fp4_gemm_nt_masked
 
         num_experts = B_packed.size(0)
         N = B_packed.size(1)
@@ -471,7 +471,7 @@ class TestEPNormal:
                                                w1_packed, w1_scale,
                                                w2_packed, w2_scale,
                                                num_experts, hidden_dim, ffn_dim, top_k, device):
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import fused_moe_v4_fp4_ep_normal
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_fp4_grouped_gemm import fused_moe_v4_fp4_ep_normal
 
         recv_x, recv_tokens_per_expert = permuted_data
 
@@ -491,7 +491,7 @@ class TestEPNormal:
                                            w2_packed, w2_scale,
                                            num_experts, top_k, device):
         from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import (
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_fp4_grouped_gemm import (
             fused_moe_v4_fp4_ep_normal,
             m_grouped_fp8_fp4_gemm_nt_contiguous,
         )
@@ -534,7 +534,7 @@ class TestEPNormal:
             (input_quant, input_scale), (local_w1_packed, local_w1_scale),
             gateup_output, m_indices)
 
-        from lmdeploy.pytorch.kernels.cuda.v4_swiglu_quant import v4_swiglu_and_quant_fp8
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_swiglu_quant import v4_swiglu_and_quant_fp8
         act_quant, act_scale = v4_swiglu_and_quant_fp8(gateup_output, group_size=128)
 
         ref = recv_x.new_empty((recv_x.size(0), local_w2_packed.size(1)), dtype=torch.bfloat16)
@@ -626,11 +626,11 @@ class TestEPLowLatency:
                                               w2_packed, w2_scale,
                                               masked_m, max_m, num_experts,
                                               hidden_dim, ffn_dim, device):
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import (
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_fp4_grouped_gemm import (
             fused_moe_v4_fp4_ep_low_latency,
             m_grouped_fp8_fp4_gemm_nt_masked,
         )
-        from lmdeploy.pytorch.kernels.cuda.v4_swiglu_quant import v4_swiglu_and_quant_fp8
+        from lmdeploy.pytorch.kernels.cuda.moe.v4_swiglu_quant import v4_swiglu_and_quant_fp8
 
         out = fused_moe_v4_fp4_ep_low_latency(
             (A_quant, A_scale),

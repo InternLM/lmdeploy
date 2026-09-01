@@ -1,9 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Unit tests for MTP (speculative decoding) + Guided Decoding integration.
 
-1. _expand/_slice_sampling_inputs non-tensor field handling
-   - response_formats, session_ctx must be repeated/sliced alongside tensor
-     fields when spec decode expands or slices the batch dimension.
+1. Expanded SamplingInputs non-tensor field handling
+   - response_formats and session_ctx must follow tensor fields when spec
+     decode expands the batch dimension.
    - Boundary cases: num_tokens=1, empty response_formats, None session_ctx.
 
 2. Grammar state management (fork / rollback / accept_string)
@@ -31,10 +31,7 @@ import torch
 import xgrammar as xgr
 
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
-from lmdeploy.pytorch.spec_decode.spec_agent import (
-    _expand_sampling_inputs,
-    _slice_sampling_inputs,
-)
+from lmdeploy.pytorch.spec_decode.spec_agent import _expand_sampling_inputs
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -167,67 +164,7 @@ class TestExpandSamplingInputsNonTensor:
 
 
 # ===========================================================================
-# 2. _slice_sampling_inputs — non-tensor field slicing
-# ===========================================================================
-
-
-class TestSliceSamplingInputsNonTensor:
-    """After expansion, _slice_sampling_inputs must also slice non-tensor
-    fields back to the expected size."""
-
-    def _make_expanded(self, num_tokens=3, batch_size=2):
-        """Create an already-expanded SamplingInputs (as if expansion handled
-        non-tensor fields correctly)."""
-        total = batch_size * num_tokens
-        fmt = {'type': 'json_schema', 'json_schema': {'name': 't', 'schema': {'type': 'object'}}}
-        return SamplingInputs(
-            max_top_k=1,
-            batch_size=total,
-            temperature=torch.ones(total),
-            response_formats=tuple([fmt] * num_tokens + [None] * num_tokens),
-            session_ctx=[{'session_id': 1, 'seq_id': 10}] * num_tokens
-                        + [{'session_id': 2, 'seq_id': 20}] * num_tokens,
-        )
-
-    def test_slice_is_last_true(self):
-        """is_last=True → one element per original batch (the last token)."""
-        si = self._make_expanded(num_tokens=3, batch_size=2)
-        sliced = _slice_sampling_inputs(si, num_tokens=3, is_last=True)
-        assert sliced.batch_size == 2
-        assert len(sliced.response_formats) == 2
-        assert len(sliced.session_ctx) == 2
-        # Last token per batch: indices 2 and 5
-        assert sliced.response_formats[0] == si.response_formats[2]
-        assert sliced.response_formats[1] is None
-        assert sliced.session_ctx[0] == {'session_id': 1, 'seq_id': 10}
-        assert sliced.session_ctx[1] == {'session_id': 2, 'seq_id': 20}
-
-    def test_slice_is_last_false(self):
-        """is_last=False → num_tokens-1 elements per original batch."""
-        si = self._make_expanded(num_tokens=3, batch_size=2)
-        sliced = _slice_sampling_inputs(si, num_tokens=3, is_last=False)
-        assert sliced.batch_size == 4  # 2 * (3-1)
-        assert len(sliced.response_formats) == 4
-        assert len(sliced.session_ctx) == 4
-        # First 2 tokens per batch: [fmt, fmt, None, None]
-        assert sliced.response_formats[0] == si.response_formats[0]
-        assert sliced.response_formats[1] == si.response_formats[1]
-        assert sliced.response_formats[2] is None
-        assert sliced.response_formats[3] is None
-
-    def test_slice_num_tokens_1_identity(self):
-        si = SamplingInputs(
-            max_top_k=1,
-            batch_size=2,
-            temperature=torch.ones(2),
-            response_formats=({'type': 'json_schema'}, None),
-        )
-        result = _slice_sampling_inputs(si, num_tokens=1)
-        assert result is si
-
-
-# ===========================================================================
-# 3. Grammar state management — fork
+# 2. Grammar state management — fork
 # ===========================================================================
 
 
@@ -309,7 +246,7 @@ class TestGrammarFork:
 
 
 # ===========================================================================
-# 4. Grammar state management — rollback
+# 3. Grammar state management — rollback
 # ===========================================================================
 
 
@@ -395,7 +332,7 @@ class TestGrammarRollback:
 
 
 # ===========================================================================
-# 5. Grammar state management — fork-based strategy for spec decode
+# 4. Grammar state management — fork-based strategy for spec decode
 # ===========================================================================
 
 
@@ -449,7 +386,7 @@ class TestGrammarForkStrategy:
 
 
 # ===========================================================================
-# 6. Positional-serial grammar mask
+# 5. Positional-serial grammar mask
 # ===========================================================================
 
 
@@ -555,7 +492,7 @@ class TestPositionalSerialGrammarMask:
 
 
 # ===========================================================================
-# 7. Draft model grammar masking (logic validation)
+# 6. Draft model grammar masking (logic validation)
 # ===========================================================================
 
 
@@ -627,7 +564,7 @@ class TestDraftModelGrammarMasking:
 
 
 # ===========================================================================
-# 8. Grammar state after rejection sampling
+# 7. Grammar state after rejection sampling
 # ===========================================================================
 
 

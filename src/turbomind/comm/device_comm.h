@@ -111,6 +111,7 @@ public:
                                                 int          group0,
                                                 int          group1,
                                                 const int*   local_token_nums,
+                                                int          local_token_nums_count,
                                                 cudaStream_t stream)
     {
         throw std::runtime_error("not implemented");

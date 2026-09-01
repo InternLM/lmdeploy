@@ -168,9 +168,13 @@ class DPForwardInputsMaker:
         # try get inputs
         forward_inputs = await self._get_inputs()
 
-        # make dummy inputs
+        # Make dummy inputs. Connector-only steps must still join the global
+        # DP forward rendezvous while preserving their connector metadata.
         if forward_inputs is None:
             forward_inputs = self._make_dummy_forward_inputs()
+        elif forward_inputs['inputs'] is None and forward_inputs['delta'] is None:
+            assert forward_inputs['kv_connector_metadata'] is not None
+            forward_inputs.update(self._make_dummy_forward_inputs())
 
         return forward_inputs
 

@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 from typing import Any, NamedTuple
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
@@ -221,6 +222,12 @@ class ExecutorBase:
             for rank in range(num_ranks)
         ]
 
+    def _get_dsa_score_workspace_size(self) -> int:
+        """Return the bounded sparse-indexer score workspace in bytes."""
+        if getattr(self.model_config, 'mla_index_topk', None) is None:
+            return 0
+        return _envs.dsa_indexer_max_logits_mb * (1 << 20)
+
     def _get_runtime_size(self, free_mems: list[int], cache_block_size: _CacheBlockSize,
                           vocab_size: int) -> tuple[int, int]:
         """Find best prefill num."""
@@ -228,12 +235,14 @@ class ExecutorBase:
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         max_batches = self.cache_config.max_batches
         rank_cache_block_sizes = self._get_rank_cache_block_sizes(len(free_mems), cache_block_size)
+        dsa_score_workspace = self._get_dsa_score_workspace_size()
         runtime_cache_size = 0
         while max_prefill_token_num > 0:
             # Runtime buffers scale mostly with the prefill token budget and
             # logits/vocab size. They are not pageable KV cache, so reserve
             # them before applying the KV cache memory ratio.
             runtime_cache_size = int((max_prefill_token_num + max_batches * 2) * vocab_size * 2)
+            runtime_cache_size += dsa_score_workspace
             available_mems = [int((free_mem - runtime_cache_size) * cache_max_entry_count) for free_mem in free_mems]
             # Keep at least a small number of KV blocks after runtime reserve.
             # If not possible, reduce the prefill token budget and try again.
@@ -393,6 +402,10 @@ class ExecutorBase:
     def _reserve_runtime_mem(self, free_mems: list[int], cache_block_size: _CacheBlockSize,
                              spec_cache_config: CacheConfig | None) -> list[int]:
         """Reserve runtime memory and update prefill token limit if needed."""
+        dsa_score_workspace = self._get_dsa_score_workspace_size()
+        if dsa_score_workspace > 0:
+            logger.info('Reserve %d MiB for DSA prefill score workspace.',
+                        dsa_score_workspace >> 20)
         runtime_mem, max_prefill_token_num = self._get_runtime_size(free_mems, cache_block_size,
                                                                     self.model_config.vocab_size)
         if self.cache_config.max_prefill_token_num != max_prefill_token_num:
