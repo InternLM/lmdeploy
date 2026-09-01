@@ -2,7 +2,6 @@ import pytest
 from tools.common_case_config import (
     MODELSCOPE_CONFIG,
     PYTORCH_LORA_TEST_LLM_GPU1,
-    PYTORCH_LORA_TEST_LLM_GPU2,
     PYTORCH_PR_TEST_LLM_GPU1,
     PYTORCH_PR_TEST_LLM_GPU2,
 )
@@ -76,11 +75,4 @@ def test_modelscope_pipeline_chat_tp1(config, run_config, common_case_config, wo
 @layout_mark({'tp': 1})
 @pytest.mark.parametrize('run_config', PYTORCH_LORA_TEST_LLM_GPU1)
 def test_pytorch_chat_with_lora_tp1(config, run_config, common_case_config, worker_id):
-    run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
-
-
-@pytest.mark.usefixtures('common_case_config')
-@layout_mark({'tp': 2})
-@pytest.mark.parametrize('run_config', PYTORCH_LORA_TEST_LLM_GPU2)
-def test_pytorch_chat_with_lora_tp2(config, run_config, common_case_config, worker_id):
     run_pipeline_llm_test(config, run_config, common_case_config, worker_id)

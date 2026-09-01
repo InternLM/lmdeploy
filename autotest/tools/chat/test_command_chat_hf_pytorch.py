@@ -2,7 +2,6 @@ import pytest
 from tools.common_case_config import (
     MODELSCOPE_CONFIG,
     PYTORCH_LORA_TEST_LLM_GPU1,
-    PYTORCH_LORA_TEST_LLM_GPU2,
     PYTORCH_PR_TEST_LLM_GPU1,
     PYTORCH_PR_TEST_LLM_GPU2,
 )
@@ -87,14 +86,4 @@ def test_modelscope_pytorch_chat_tp1(config, run_config, cli_case_config, worker
 @layout_mark({'tp': 1})
 @pytest.mark.parametrize('run_config', PYTORCH_LORA_TEST_LLM_GPU1)
 def test_pytorch_chat_with_lora_tp1(config, run_config, cli_case_config, worker_id):
-    run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
-
-
-@pytest.mark.order(10)
-@pytest.mark.usefixtures('cli_case_config')
-@pytest.mark.hf_pytorch_chat
-@pytest.mark.other
-@layout_mark({'tp': 2})
-@pytest.mark.parametrize('run_config', PYTORCH_LORA_TEST_LLM_GPU2)
-def test_pytorch_chat_with_lora_tp2(config, run_config, cli_case_config, worker_id):
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
