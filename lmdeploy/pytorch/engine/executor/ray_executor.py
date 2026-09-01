@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import os
+from collections import deque
 from typing import Any
 
 import ray
@@ -16,6 +17,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, Misc
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.kv_connector import KVConnectorOutputAggregator
 from lmdeploy.pytorch.ray import RayContext, get_device_str
 from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.utils import get_logger, try_import_deeplink
@@ -25,6 +27,9 @@ from .base_worker import WorkerWrapperBase
 from .dist_utils import find_available_port
 
 logger = get_logger('lmdeploy')
+
+_DEFAULT_WORKER_RELEASE_TIMEOUT = 5.0
+_KV_CONNECTOR_WORKER_RELEASE_TIMEOUT = 45.0
 
 
 def _get_master_addr():
@@ -208,6 +213,16 @@ class RayWorkerWrapper(WorkerWrapperBase):
 class RayExecutor(ExecutorBase):
     """Ray executor."""
 
+    @staticmethod
+    def _get_worker_release_timeout(cache_config: CacheConfig | None) -> float:
+        """Allow external buffer registrations to be released before killing
+        workers."""
+        if cache_config is not None:
+            transfer_config = cache_config.kv_transfer_config
+            if transfer_config is not None and transfer_config.is_kv_transfer_instance:
+                return _KV_CONNECTOR_WORKER_RELEASE_TIMEOUT
+        return _DEFAULT_WORKER_RELEASE_TIMEOUT
+
     def __init__(
         self,
         model_path: str,
@@ -278,6 +293,12 @@ class RayExecutor(ExecutorBase):
             self.dag = None
             self._prefetch_task: asyncio.Task = None
             self.remote_outs: asyncio.Queue = None
+            # Forwards and outputs are consumed in FIFO order. Remember which
+            # queued steps need all TP outputs instead of only the TP leader's.
+            self._connector_steps: deque[bool] = deque()
+            # Rank-local connector completions may arrive on different steps.
+            # Keep partial reports here until every worker has reported an ID.
+            self._kv_output_aggregator = KVConnectorOutputAggregator(len(self.workers))
 
             logger.info('Init distributed environment by device.')
             self.rank_offset = dist_config.dp_rank * attn_tp
@@ -375,6 +396,10 @@ class RayExecutor(ExecutorBase):
     async def sleep(self, level: int = 1):
         """Sleep."""
         await self.collective_rpc_async('sleep', (level, ))
+        # Workers drain their queues while sleeping, so their driver-side step
+        # markers and partially aggregated completions are stale as well.
+        self._connector_steps.clear()
+        self._kv_output_aggregator.clear()
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
@@ -467,16 +492,30 @@ class RayExecutor(ExecutorBase):
             ray.timeline(_envs.ray_timeline_output_path)
 
         if self.dp == 1:
+            release_timeout = self._get_worker_release_timeout(self.cache_config)
             try:
-                self.collective_rpc('release', timeout=5.0)
+                self.collective_rpc('release', timeout=release_timeout)
                 logger.debug('RayExecutor workers released.')
             except ray.exceptions.ActorDiedError:
                 logger.info('RayExecutor worker has been killed before finish release.')
                 [ray.kill(worker) for worker in self.workers]
             except ray.exceptions.GetTimeoutError:
-                logger.info('Ray release timeout, killing workers')
+                logger.info('Ray release timeout after %.1f seconds, killing workers.', release_timeout)
                 [ray.kill(worker) for worker in self.workers]
         else:
+            transfer_config = self.cache_config.kv_transfer_config
+            if transfer_config is not None and transfer_config.is_kv_transfer_instance:
+                release_timeout = self._get_worker_release_timeout(self.cache_config)
+                try:
+                    self.collective_rpc('shutdown_kv_connector', timeout=release_timeout)
+                    logger.debug('RayExecutor DP worker connectors shut down.')
+                except ray.exceptions.ActorDiedError:
+                    logger.info('RayExecutor worker died before connector shutdown finished.')
+                except ray.exceptions.GetTimeoutError:
+                    logger.info(
+                        'Ray connector shutdown timeout after %.1f seconds, killing workers.',
+                        release_timeout,
+                    )
             [ray.kill(worker) for worker in self.workers]
 
         self.ray_ctx.shutdown()
@@ -520,12 +559,29 @@ class RayExecutor(ExecutorBase):
         self._prev_out = [
             worker.forward_async.remote(self._prev_inputs) for worker in self.workers
         ]
+        self._connector_steps.append(inputs.get('kv_connector_metadata') is not None)
 
     async def get_output_async(self):
         """Get output async."""
-        ret = await self.workers[0].get_outputs.remote()
-        ret = ret.to_tensor()
-        return ret
+        connector_step = self._connector_steps.popleft()
+        if not connector_step:
+            ret = await self.workers[0].get_outputs.remote()
+            return ret.to_tensor()
+
+        outputs = await asyncio.gather(*[
+            worker.get_outputs.remote()
+            for worker in self.workers
+        ])
+        outputs = [output.to_tensor() for output in outputs]
+        connector_output = self._kv_output_aggregator.aggregate([
+            output.kv_connector_output
+            for output in outputs
+        ])
+        # Model output is produced by the TP leader; only connector progress
+        # needs to be replaced with the all-worker aggregate.
+        output = outputs[0]
+        output.kv_connector_output = connector_output
+        return output
 
     @contextlib.contextmanager
     def remote_log(self, msg: str):

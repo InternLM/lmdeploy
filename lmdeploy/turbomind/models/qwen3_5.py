@@ -74,9 +74,12 @@ if TYPE_CHECKING:
 
 
 def map_packed_qwen35_experts(name: str) -> str:
-    """Map packed expert names to weight names so parameter.py can classify."""
-    return re.sub(r'(mlp\.experts\.(?:gate_up|down)_proj)$', r'\1.weight', name)
-
+    """Map packed expert weights and scales to resolver suffixes."""
+    name = re.sub(
+        r'(mlp\.experts\.(?:gate_up|down)_proj)_scale_inv$',
+        r'\1.weight_scale_inv', name)
+    return re.sub(
+        r'(mlp\.experts\.(?:gate_up|down)_proj)$', r'\1.weight', name)
 
 class Qwen3_5TextModel(TextModel):
     """Weight model for Qwen3.5 (dense + linear-attn + optional MoE)."""
