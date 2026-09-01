@@ -12,7 +12,13 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config, validate_request
+from lmdeploy.serve.openai.errors import (
+    create_error_response,
+    create_request_error_response,
+    request_error_payload,
+)
 from lmdeploy.serve.openai.protocol import (
     CompletionRequest,
     CompletionResponse,
@@ -22,7 +28,6 @@ from lmdeploy.serve.openai.protocol import (
     LogProbs,
     UsageInfo,
 )
-from lmdeploy.serve.openai.utils import create_error_response
 from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
 
@@ -154,16 +159,30 @@ def register(router: APIRouter, server_context) -> None:
             with_cache=with_cache,
             preserve_cache=preserve_cache,
         )
-        generators = []
-        for prompt, session in zip(request.prompt, sessions):
-            result_generator = server_context.async_engine.generate(
-                prompt,
-                session,
-                gen_config=gen_config,
-                stream_response=True,  # always use stream to enable batching
-                do_preprocess=False,
-                adapter_name=adapter_name)
-            generators.append(result_generator)
+        prepared_requests = await asyncio.gather(*[
+            server_context.async_engine.preprocess(prompt,
+                                                   session,
+                                                   gen_config=gen_config,
+                                                   do_preprocess=False,
+                                                   adapter_name=adapter_name)
+            for prompt, session in zip(request.prompt, sessions)
+        ], return_exceptions=True)
+        preprocess_error = next((result for result in prepared_requests if isinstance(result, BaseException)), None)
+        if preprocess_error is not None:
+            for result in prepared_requests:
+                if not isinstance(result, BaseException):
+                    result.inputs.clear()
+            for session in sessions:
+                server_context.session_manager.remove(session)
+            if isinstance(preprocess_error, asyncio.CancelledError):
+                raise preprocess_error
+            if not isinstance(preprocess_error, RequestError):
+                preprocess_error = RequestError(ErrorCode.INTERNAL_ERROR)
+            return create_request_error_response(preprocess_error)
+        generators = [
+            server_context.async_engine.generate(prepared_request, stream_response=True)
+            for prepared_request in prepared_requests
+        ]
 
         include_usage = bool(request.stream_options
                              and request.stream_options.include_usage)
@@ -203,29 +222,34 @@ def register(router: APIRouter, server_context) -> None:
         async def completion_stream_generator() -> AsyncGenerator[str, None]:
             # First chunk with role
             final_usage = UsageInfo() if include_usage else None
-            for generator in generators:
-                async for res in generator:
-                    logprobs = None
-                    if request.logprobs and res.logprobs:
-                        raise ValueError('logprobs is removed')
-                    if res.finish_reason and final_usage is not None:
-                        final_res = res
-                        total_tokens = sum([
-                            final_res.input_token_len,
-                            final_res.generate_token_len
-                        ])
-                        final_usage.prompt_tokens += final_res.input_token_len
-                        final_usage.completion_tokens += final_res.generate_token_len
-                        final_usage.total_tokens += total_tokens
-                    response_json = create_stream_response_json(
-                        index=0,
-                        text=res.response,
-                        finish_reason=res.finish_reason,
-                        logprobs=logprobs)
-                    if res.cache_block_ids is not None:
-                        response_json['cache_block_ids'] = res.cache_block_ids
-                        response_json['remote_token_ids'] = res.token_ids
-                    yield f'data: {json.dumps(response_json)}\n\n'
+            try:
+                for generator in generators:
+                    async for res in generator:
+                        logprobs = None
+                        if request.logprobs and res.logprobs:
+                            raise ValueError('logprobs is removed')
+                        if res.finish_reason and final_usage is not None:
+                            final_res = res
+                            total_tokens = sum([
+                                final_res.input_token_len,
+                                final_res.generate_token_len
+                            ])
+                            final_usage.prompt_tokens += final_res.input_token_len
+                            final_usage.completion_tokens += final_res.generate_token_len
+                            final_usage.total_tokens += total_tokens
+                        response_json = create_stream_response_json(
+                            index=0,
+                            text=res.response,
+                            finish_reason=res.finish_reason,
+                            logprobs=logprobs)
+                        if res.cache_block_ids is not None:
+                            response_json['cache_block_ids'] = res.cache_block_ids
+                            response_json['remote_token_ids'] = res.token_ids
+                        yield f'data: {json.dumps(response_json)}\n\n'
+            except RequestError as e:
+                yield f'data: {json.dumps({"error": request_error_payload(e)})}\n\n'
+                yield 'data: [DONE]\n\n'
+                return
             if final_usage is not None:
                 yield f'data: {json.dumps(create_stream_usage_response_json(final_usage))}\n\n'
             yield 'data: [DONE]\n\n'
@@ -250,24 +274,27 @@ def register(router: APIRouter, server_context) -> None:
             final_token_ids = []
             final_res = None
             text = ''
-            async with aclosing(
-                    with_request_cleanup(generator, [generator], [session],
-                                         server_context.session_manager)
-            ) as cleanup_generator:
-                async for res in cleanup_generator:
-                    if await raw_request.is_disconnected():
-                        # Abort the request if the client disconnects.
-                        await session.async_abort()
-                        return create_error_response(HTTPStatus.BAD_REQUEST,
-                                                     'Client disconnected')
-                    final_res = res
-                    text += res.response
-                    cache_block_ids.append(res.cache_block_ids)
-                    remote_token_ids.append(res.token_ids)
-                    if res.token_ids:
-                        final_token_ids.extend(res.token_ids)
-                    if res.logprobs:
-                        final_logprobs.extend(res.logprobs)
+            try:
+                async with aclosing(
+                        with_request_cleanup(generator, [generator], [session],
+                                             server_context.session_manager)
+                ) as cleanup_generator:
+                    async for res in cleanup_generator:
+                        if await raw_request.is_disconnected():
+                            # Abort the request if the client disconnects.
+                            await session.async_abort()
+                            return create_error_response(HTTPStatus.BAD_REQUEST,
+                                                         'Client disconnected')
+                        final_res = res
+                        text += res.response
+                        cache_block_ids.append(res.cache_block_ids)
+                        remote_token_ids.append(res.token_ids)
+                        if res.token_ids:
+                            final_token_ids.extend(res.token_ids)
+                        if res.logprobs:
+                            final_logprobs.extend(res.logprobs)
+            except RequestError as e:
+                return create_request_error_response(e)
 
             logprobs = None
             assert final_res is not None

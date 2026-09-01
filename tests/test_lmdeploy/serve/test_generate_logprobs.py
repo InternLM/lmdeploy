@@ -180,7 +180,7 @@ class _NonemptyEngine:
         self.logprob_token_ids = logprob_token_ids or [2, 3]
         self.logprobs = logprobs or [{2: -0.25, 8: -2.0}, {3: -0.5, 9: -3.0}]
 
-    async def generate(self, **kwargs):
+    async def preprocess(self, **kwargs):
         if self.expect_image:
             assert kwargs['input_ids'] is None
             content = kwargs['messages'][0]['content']
@@ -196,6 +196,11 @@ class _NonemptyEngine:
         assert kwargs['gen_config'].max_new_tokens == 0
         assert kwargs['gen_config'].logprob_start_len == 0
         assert kwargs['gen_config'].logprobs == self.expected_logprobs
+        return SimpleNamespace(input_token_len=len(self.logprob_token_ids) + 1)
+
+    async def generate(self, prepared_request, stream_response=True):
+        assert prepared_request.input_token_len == len(self.logprob_token_ids) + 1
+        assert stream_response is True
         yield SimpleNamespace(
             response='',
             token_ids=[],
@@ -244,12 +249,17 @@ class _DecodeEngine:
         self.epoch = 1
         self.expected_logprobs = expected_logprobs
 
-    async def generate(self, **kwargs):
+    async def preprocess(self, **kwargs):
         assert kwargs['input_ids'] == [1, 2]
         assert kwargs['gen_config'].max_new_tokens == 2
         assert kwargs['gen_config'].logprob_start_len == -1
         assert kwargs['gen_config'].logprobs == self.expected_logprobs
         assert kwargs['gen_config'].return_routed_experts is True
+        return SimpleNamespace(input_token_len=2)
+
+    async def generate(self, prepared_request, stream_response=True):
+        assert prepared_request.input_token_len == 2
+        assert stream_response is True
         yield SimpleNamespace(
             response='x',
             token_ids=[7],

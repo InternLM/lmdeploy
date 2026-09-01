@@ -49,6 +49,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.MultinomialSampling:
             from .multinomial_sampling import TritonMultinomialSamplingBuilder
             return TritonMultinomialSamplingBuilder
+        elif layer_type == OpType.RejectionSampling:
+            from .rejection_sampling import CudaRejectionSamplingBuilder
+            return CudaRejectionSamplingBuilder
         elif layer_type == OpType.SiluAndMul:
             from .activation import TritonSiluAndMulBuilder
             return TritonSiluAndMulBuilder
@@ -61,15 +64,26 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.FusedMoEW8A8:
             from .moe import TritonFusedMoEW8A8Builder
             return TritonFusedMoEW8A8Builder
+        elif layer_type == OpType.FusedMoEW4A16:
+            from .moe import TritonFusedMoEW4A16Builder
+            return TritonFusedMoEW4A16Builder
+        elif layer_type == OpType.FusedMoEStaticF8:
+            from .moe import TritonFusedMoEStaticF8Builder
+            return TritonFusedMoEStaticF8Builder
         elif layer_type == OpType.FusedMoEBlockedF8:
             from .moe import TritonFusedMoEBlockedF8Builder
             return TritonFusedMoEBlockedF8Builder
         elif layer_type == OpType.FusedMoEV4FP4:
             from .moe import TritonFusedMoEV4FP4Builder
             return TritonFusedMoEV4FP4Builder
+        elif layer_type == OpType.LinearStaticF8:
+            from .static_fp8_modules import (
+                TritonLinearStaticF8Builder,
+            )
+            return TritonLinearStaticF8Builder
         elif layer_type == OpType.LinearBlockedF8:
-            from .blockedf8_modules import TritonLinearBlockedF8Builder
-            return TritonLinearBlockedF8Builder
+            from .blockedf8_modules import CudaLinearBlockedF8Builder
+            return CudaLinearBlockedF8Builder
         elif layer_type == OpType.NSAIndexFP8:
             from .nsa import TritonNSAIndexFP8Builder
             return TritonNSAIndexFP8Builder
@@ -85,6 +99,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.HcPrePost:
             from .hc_prepost import TritonHcPrePostBuilder
             return TritonHcPrePostBuilder
+        elif layer_type == OpType.RouterGemm:
+            from .moe_router import CudaRouterGemmBuilder
+            return CudaRouterGemmBuilder
         elif layer_type == OpType.RouterNoauxTC:
             from .moe_router import TritonRouterNoauxTCBuilder
             return TritonRouterNoauxTCBuilder
@@ -94,6 +111,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.GatedDeltaRule:
             from .gated_delta_rule import CudaGatedDeltaRuleBuilder
             return CudaGatedDeltaRuleBuilder
+        elif layer_type == OpType.CacheBlockCopy:
+            from .cache_block_copy import CudaCacheBlockCopyBuilder
+            return CudaCacheBlockCopyBuilder
         else:
             logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
@@ -109,6 +129,23 @@ class CudaOpsBackend(DefaultOpsBackend):
         """Get V4 attention metadata class."""
         from .attention.v4 import CudaV4AttentionMetadata
         return CudaV4AttentionMetadata
+
+    @classmethod
+    def build_communicator(cls, cpu_group, device_group, dist_config):
+        """Build a CUDA communicator."""
+        from .comm.communicator import build_cuda_communicator
+        communicator = build_cuda_communicator(
+            cpu_group=cpu_group,
+            device_group=device_group,
+            dist_config=dist_config,
+        )
+        if communicator is not None:
+            return communicator
+        return super().build_communicator(
+            cpu_group=cpu_group,
+            device_group=device_group,
+            dist_config=dist_config,
+        )
 
     @staticmethod
     def get_k_block_shape(

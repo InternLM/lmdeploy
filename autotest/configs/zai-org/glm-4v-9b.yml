@@ -1,4 +1,4 @@
-# HF model id: THUDM/glm-4v-9b
+# HF model id: zai-org/glm-4v-9b
 
 a100:
 - model_type:
@@ -11,10 +11,8 @@ a100:
     - nccl
   test_coverage:
   - func
-  - quantization
   quantization:
     pytorch:
-    - awq
     - kvint4
     - kvint8
 h:

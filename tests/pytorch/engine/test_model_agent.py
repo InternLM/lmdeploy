@@ -79,7 +79,7 @@ def test_async_forward_returns_only_input_logits_without_sampling_policy(
     agent = BaseModelAgent.__new__(BaseModelAgent)
     agent.model_config = SimpleNamespace(vocab_size=vocab_size)
 
-    async def async_forward(_inputs):
+    async def async_forward(_inputs, **kwargs):
         return {'hidden_states': [hidden]}
 
     def get_logits(values):
@@ -107,7 +107,7 @@ def test_async_forward_requires_complete_prefill_input_logprob_metadata():
     calls = []
     agent = BaseModelAgent.__new__(BaseModelAgent)
 
-    async def async_forward(_inputs):
+    async def async_forward(_inputs, **kwargs):
         return {'hidden_states': [hidden]}
 
     def get_logits(values):
@@ -136,7 +136,7 @@ def test_async_forward_disabled_path_keeps_one_sampling_projection():
     calls = []
     agent = BaseModelAgent.__new__(BaseModelAgent)
 
-    async def async_forward(_inputs):
+    async def async_forward(_inputs, **kwargs):
         return {'hidden_states': [hidden]}
 
     def get_logits(values):
@@ -252,7 +252,7 @@ def test_dp_dummy_skips_input_compaction_without_sampling_inputs():
                                             model_metas=None,
                                             need_broadcast_next=False))
 
-    assert result[-1] is generated.next_token_ids
+    assert result[-2] is generated.next_token_ids
 
 
 def test_mtp_sampling_still_delegates_generated_rows():
@@ -422,7 +422,7 @@ def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
 
 
 def test_build_spec_agent_allows_guided_spec_followers_without_proposer():
-    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.config import BackendConfig, DistConfig, SpecDecodeConfig
     from lmdeploy.pytorch.distributed import DistContext
     from lmdeploy.pytorch.spec_decode import build_spec_agent
 
@@ -435,7 +435,7 @@ def test_build_spec_agent_allows_guided_spec_followers_without_proposer():
     )
     spec_agent = build_spec_agent(
         specdecode_config,
-        backend_config=None,
+        backend_config=BackendConfig(),
         dist_ctx=DistContext(rank=1, dist_config=DistConfig(tp=2)),
         inputs_strategy=None,
         agent_strategy=None,
@@ -445,18 +445,21 @@ def test_build_spec_agent_allows_guided_spec_followers_without_proposer():
     )
     assert spec_agent.is_enabled()
     assert spec_agent.proposer is None
+    assert not hasattr(spec_agent, 'rejection_sampler')
     assert not hasattr(spec_agent, 'guided_helper')
 
 
 def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
     import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
-    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.config import BackendConfig, DistConfig, SpecDecodeConfig
     from lmdeploy.pytorch.distributed import DistContext
     from lmdeploy.pytorch.spec_decode import build_spec_agent
 
     guided_manager = object()
     proposer = SimpleNamespace(guided_helper=None)
+    rejection_sampler = object()
     monkeypatch.setattr(spec_agent_mod, 'build_specdecode_proposer', lambda *args, **kwargs: proposer)
+    monkeypatch.setattr(spec_agent_mod, 'RejectionSampler', lambda *args: rejection_sampler)
     inputs_strategy = SimpleNamespace(create_make_dummy_meta=lambda model_config: None)
     specdecode_config = SpecDecodeConfig(
         model='draft-model',
@@ -467,7 +470,7 @@ def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
 
     spec_agent = build_spec_agent(
         specdecode_config,
-        backend_config=None,
+        backend_config=BackendConfig(),
         dist_ctx=DistContext(rank=0, dist_config=DistConfig(tp=2)),
         inputs_strategy=inputs_strategy,
         agent_strategy=None,
@@ -477,6 +480,7 @@ def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
     )
 
     assert spec_agent.proposer is proposer
+    assert spec_agent.rejection_sampler is rejection_sampler
     assert spec_agent.guided_helper.manager is guided_manager
     assert proposer.guided_helper is spec_agent.guided_helper
 
@@ -490,6 +494,149 @@ def test_spec_agent_reset_runtime_state_discards_chunk_carry():
     agent.reset_runtime_state()
 
     assert agent._prev_chunk_last == {}
+
+
+@pytest.mark.parametrize(
+    ('is_dummy', 'expected_events'),
+    [
+        pytest.param(False, [
+            'build_context',
+            'kv_restore',
+            'state_restore',
+            'update_model_metas',
+            'prepare_inputs',
+            'model_forward',
+            'kv_save',
+            'state_save',
+        ], id='real-forward'),
+        pytest.param(True, [
+            'build_context',
+            'update_model_metas',
+            'prepare_inputs',
+            'model_forward',
+        ], id='dummy-forward'),
+    ],
+)
+def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dummy, expected_events):
+    from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    events = []
+    copy_calls = []
+    restore_plan = torch.tensor([[1], [2]])
+    save_plan = torch.tensor([[3], [4]])
+
+    class _ContextManager:
+
+        def build_context(self, **kwargs):
+            events.append('build_context')
+            return SimpleNamespace(q_seqlens=torch.tensor([1]),
+                                   position_ids=torch.tensor([0]),
+                                   is_model_meta_updated=False)
+
+        def context(self, context):
+            return nullcontext()
+
+    class _Model:
+        ctx_mgr = _ContextManager()
+
+        def update_model_metas(self, **kwargs):
+            events.append('update_model_metas')
+            return []
+
+        def prepare_inputs_for_generation(self, **kwargs):
+            events.append('prepare_inputs')
+            return {}
+
+        def __call__(self, **kwargs):
+            events.append('model_forward')
+            return {'hidden_states': torch.tensor([0])}
+
+    class _CacheEngine:
+        model_config = object()
+        cache_config = SimpleNamespace(quant_policy=0)
+        gpu_cache = object()
+        block_caches = {}
+
+        def copy_logical_blocks(self, plan):
+            copy_calls.append(('kv', plan))
+            events.append('kv_restore' if plan is restore_plan else 'kv_save')
+
+    class _StateCacheEngine:
+        state_caches = object()
+        named_state_caches = {}
+
+        def copy_caches(self, src, dst):
+            copy_calls.append(('state', src, dst))
+            events.append('state_restore' if src == (5, ) else 'state_save')
+
+    inputs = SimpleNamespace(
+        is_dummy=is_dummy,
+        state_offsets=None,
+        seq_length=torch.tensor([1]),
+    )
+    cache_inputs = CacheCheckpointInputs(
+        kv_restore_plan=restore_plan,
+        kv_save_plan=save_plan,
+        state_restore_plan=((5, ), (6, )),
+        state_save_plan=((7, ), (8, )),
+    )
+
+    monkeypatch.setattr(agent_module, 'step_ctx_manager', lambda ctx_mgr: nullcontext())
+    monkeypatch.setattr(agent_module.torch.cuda, 'stream', lambda stream: nullcontext())
+
+    agent_module.model_forward(_Model(),
+                               inputs,
+                               _CacheEngine(),
+                               _StateCacheEngine(),
+                               stream=object(),
+                               cache_inputs=cache_inputs)
+
+    assert events == expected_events
+    if is_dummy:
+        assert copy_calls == []
+    else:
+        assert copy_calls[0][0] == 'kv'
+        assert copy_calls[0][1] is restore_plan
+        assert copy_calls[1] == ('state', (5, ), (6, ))
+        assert copy_calls[2][0] == 'kv'
+        assert copy_calls[2][1] is save_plan
+        assert copy_calls[3] == ('state', (7, ), (8, ))
+
+
+def test_inputs_preprocess_transfers_cache_inputs_and_keeps_host_ref(monkeypatch, event_loop):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    calls = []
+    device_cache_inputs = object()
+
+    class _HostCacheInputs:
+
+        def to_device(self, device, non_blocking=False):
+            calls.append((device, non_blocking))
+            return device_cache_inputs
+
+    class _Event:
+
+        def record(self):
+            calls.append('record')
+
+    model_agent = _make_agent_with_queues()
+    model_agent.out_stream = object()
+    host_cache_inputs = _HostCacheInputs()
+    monkeypatch.setattr(agent_module.torch.cuda, 'stream', lambda stream: nullcontext())
+    monkeypatch.setattr(agent_module.torch.cuda, 'Event', _Event)
+
+    task = event_loop.create_task(model_agent._async_loop_inputs_preprocess())
+    model_agent._pre_in_que.put_nowait({'cache_inputs': host_cache_inputs})
+    forward_inputs = event_loop.run_until_complete(asyncio.wait_for(model_agent._in_que.get(), timeout=1))
+    task.cancel()
+    event_loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
+
+    transfer = forward_inputs.pop(agent_module._H2D_TRANSFER_KEY)
+    assert calls == [('cuda', True), 'record']
+    assert forward_inputs['cache_inputs'] is device_cache_inputs
+    assert transfer.refs['cache_inputs'] is host_cache_inputs
 
 
 def test_record_forward_input_stream_uses_payload_protocol():
@@ -523,6 +670,7 @@ def test_record_forward_input_stream_uses_payload_protocol():
         'inputs': payload,
         'delta': tensor,
         'unowned_container': {'tensor': nested_tensor},
+        'cache_inputs': torch.empty(1),
     }
 
     _record_forward_input_stream(forward_inputs, stream)
@@ -662,6 +810,36 @@ def test_record_forward_input_stream_defers_origin_stream_reuse():
     forward_stream.synchronize()
     h2d_stream.synchronize()
     assert torch.all(observed == 7)
+
+
+def test_async_model_forward_preserves_cache_inputs_through_forward_impl():
+    from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    model_inputs = SimpleNamespace()
+    cache_inputs = CacheCheckpointInputs(kv_restore_plan=torch.tensor([[1], [2]]))
+    hidden_states = torch.ones(1, 1, 2)
+    seen = []
+
+    class _SpecAgent:
+
+        def update_main_model_outputs(self, output, inputs):
+            assert inputs is model_inputs
+            return output['hidden_states'], output
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.memdecode_agent = None
+    agent.spec_agent = _SpecAgent()
+    agent._forward_impl = lambda inputs, cache_inputs=None: (
+        seen.append((inputs, cache_inputs)) or {
+            'hidden_states': hidden_states
+        })
+    agent.get_logits = lambda hidden: hidden
+
+    output = asyncio.run(agent._async_model_forward(model_inputs, return_logits=True, cache_inputs=cache_inputs))
+
+    assert seen == [(model_inputs, cache_inputs)]
+    assert output['logits'] is hidden_states
 
 
 class TestDrainQueues:
@@ -856,6 +1034,34 @@ class TestDPForwardInputsMaker:
             assert await asyncio.wait_for(maker.get(), timeout=1.0) is dummy_inputs
             assert maker._pre_in_que.qsize() == 0
             assert maker._in_que.qsize() == 1
+
+        asyncio.run(_run())
+
+    def test_get_attaches_dummy_inputs_to_connector_only_step(self):
+        async def _run():
+            metadata = object()
+            connector_inputs = {
+                'inputs': None,
+                'delta': None,
+                'extra_inputs': None,
+                'return_logits': False,
+                'kv_connector_metadata': metadata,
+            }
+            dummy_inputs = {
+                'inputs': 'connector_dummy',
+                'extra_inputs': 'dummy_extra',
+                'return_logits': True,
+            }
+            maker = self._make_maker(dummy_forward_inputs=dummy_inputs)
+            maker._in_que.put_nowait(connector_inputs)
+
+            result = await asyncio.wait_for(maker.get(), timeout=1.0)
+
+            assert result is connector_inputs
+            assert result['inputs'] == 'connector_dummy'
+            assert result['extra_inputs'] == 'dummy_extra'
+            assert result['return_logits'] is True
+            assert result['kv_connector_metadata'] is metadata
 
         asyncio.run(_run())
 
@@ -1083,6 +1289,7 @@ class TestModelAgentWakeup:
         model_agent.state = SleepWakeupState()
         model_agent.dist_config = SimpleNamespace(dp=1)
         model_agent.memdecode_agent = None
+        model_agent.kv_connector = None
         model_agent.cache_engine = object()
         model_agent.state_cache_engine = object()
         model_agent.patched_model = _PatchedModel()
@@ -1182,6 +1389,7 @@ class TestMemDecodeModelAgentLifecycle:
         agent.state = SleepWakeupState()
         agent.dist_config = SimpleNamespace(dp=1)
         agent.patched_model = object()
+        agent.kv_connector = None
         agent.cache_engine = object()
         agent.state_cache_engine = object()
 
@@ -1251,7 +1459,8 @@ class TestMemDecodeModelAgentLifecycle:
                 indices = seq_length.cumsum(0) - 1
                 return hidden_states[indices]
 
-        async def _base_forward(forward_inputs):
+        async def _base_forward(forward_inputs, cache_inputs=None):
+            assert cache_inputs is None
             calls.append(('base_forward', forward_inputs))
             return {'hidden_states': base_hidden.clone(), 'seq_length': forward_inputs.seq_length}
 
@@ -1318,7 +1527,8 @@ class TestMemDecodeModelAgentLifecycle:
         def _cache_swapping(cache_engine, swap_in_map=None, swap_out_map=None):
             calls.append((cache_engine, swap_in_map, swap_out_map))
 
-        async def _async_model_forward(_inputs, return_logits):
+        async def _async_model_forward(_inputs, return_logits, cache_inputs=None):
+            assert cache_inputs is None
             raise _StopAfterSwap
 
         monkeypatch.setattr(agent_module, 'get_dist_manager', lambda: _DistManager())
@@ -1326,6 +1536,7 @@ class TestMemDecodeModelAgentLifecycle:
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
         agent.rank = 0
+        agent.kv_connector = None
         agent.cache_engine = 'base_cache'
         agent.memdecode_agent = _MemDecodeAgent()
         agent._async_model_forward = _async_model_forward

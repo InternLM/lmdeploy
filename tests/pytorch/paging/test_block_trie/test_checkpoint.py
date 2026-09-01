@@ -1,11 +1,204 @@
 import numpy as np
+import pytest
 
 from lmdeploy.pytorch.messages import SamplingParam
+from lmdeploy.pytorch.paging.block_trie.checkpoint import (
+    checkpoint_anchor_step,
+    checkpoint_tail_start,
+)
 
 from ._utils import BlockTrieTestMixin
 
 
+@pytest.mark.parametrize(('step', 'anchor_step', 'tail_start'), [
+    (1, 0, 0),
+    (15, 0, 0),
+    (16, 16, 0),
+    (17, 16, 16),
+    (32, 32, 16),
+])
+def test_checkpoint_step_geometry(step, anchor_step, tail_start):
+    block_size = 16
+
+    assert checkpoint_anchor_step(step, block_size) == anchor_step
+    assert checkpoint_tail_start(step, block_size) == tail_start
+
+
 class TestStateCheckpointMatching(BlockTrieTestMixin):
+
+    @pytest.mark.parametrize(('num_full_blocks', 'remainder'), [(0, 1), (1, 1), (1, -1)])
+    def test_match_ssm_partial_checkpoint_uses_private_destination(self, ssm_scheduler, num_full_blocks,
+                                                                   remainder):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        if remainder < 0:
+            remainder = block_size - 1
+        step = num_full_blocks * block_size + remainder
+        token_ids = np.arange(step, dtype=np.int64).tolist()
+
+        producer = ssm_scheduler.add_session(0).add_sequence(token_ids)
+        block_mgr.allocate(producer)
+        block_trie.allocate(producer)
+        state_idx = block_trie.state_checkpoints.reserve_save(producer)
+        node = producer.prefix_cache.pending_save.node
+        frozen_block = node.state_checkpoint.frozen_block_id
+        assert block_trie.state_checkpoints.publish_save(producer)
+
+        matched = ssm_scheduler.add_session(1).add_sequence(token_ids + [999])
+        block_trie.match(matched)
+
+        assert matched.num_history_ids == step
+        assert matched.prefix_cache.restore.slot == state_idx
+        assert matched.prefix_cache.restore.node is node
+        assert len(matched.logical_blocks) == num_full_blocks
+        assert matched.prefix_cache.recompute_overlap.fresh_block_range == range(num_full_blocks,
+                                                                                 num_full_blocks + 1)
+
+        block_mgr.allocate(matched)
+        private_block = matched.logical_blocks[num_full_blocks]
+        assert private_block != frozen_block
+        block_trie.allocate(matched)
+
+        assert matched.logical_blocks[num_full_blocks] == private_block
+        assert matched.prefix_cache.trie_cursor is node
+
+    def test_match_ssm_partial_checkpoint_verifies_full_prefix_and_tail(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [1] * block_size + [2, 3, 4]
+
+        producer = ssm_scheduler.add_session(0).add_sequence(token_ids)
+        block_mgr.allocate(producer)
+        block_trie.allocate(producer)
+        state_idx = block_trie.state_checkpoints.reserve_save(producer)
+        node = producer.prefix_cache.pending_save.node
+        assert block_trie.state_checkpoints.publish_save(producer)
+
+        full_prefix_mismatch = ssm_scheduler.add_session(1).add_sequence([9] * block_size + [2, 3, 4, 5])
+        block_trie.match(full_prefix_mismatch)
+        tail_mismatch = ssm_scheduler.add_session(2).add_sequence([1] * block_size + [2, 3, 8, 5])
+        block_trie.match(tail_mismatch)
+
+        assert full_prefix_mismatch.num_history_ids == 0
+        assert not full_prefix_mismatch.prefix_cache.restore.is_selected
+        assert tail_mismatch.num_history_ids == 0
+        assert not tail_mismatch.prefix_cache.restore.is_selected
+        assert node.state_checkpoint.slot == state_idx
+        assert node.state_checkpoint.published
+
+    def test_match_ssm_partial_checkpoint_does_not_skip_requested_routed_experts(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [1] * block_size + [2]
+
+        producer = ssm_scheduler.add_session(0).add_sequence(token_ids)
+        block_mgr.allocate(producer)
+        block_trie.allocate(producer)
+        assert block_trie.state_checkpoints.reserve_save(producer) >= 0
+        assert block_trie.state_checkpoints.publish_save(producer)
+
+        sampling_param = SamplingParam(return_routed_experts=True)
+        matched = ssm_scheduler.add_session(1).add_sequence(token_ids + [3], sampling_param=sampling_param)
+        block_trie.match(matched)
+
+        assert matched.num_history_ids == 0
+        assert not matched.prefix_cache.restore.is_selected
+
+    def test_match_ssm_partial_checkpoint_verifies_multimodal_boundary_and_content(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        image_start = block_size
+        image_end = block_size + 4
+        token_ids = [1] * block_size + [99] * 4
+
+        producer = ssm_scheduler.add_session(0).add_sequence(
+            token_ids,
+            multimodals=self._image_multimodals(image_start, image_end, 1.0, content_hash='image-a'),
+        )
+        block_mgr.allocate(producer)
+        block_trie.allocate(producer)
+        state_idx = block_trie.state_checkpoints.reserve_save(producer)
+        assert state_idx >= 0
+        assert block_trie.state_checkpoints.publish_save(producer)
+        assert block_trie.state_checkpoints.reserve_save(producer, step=image_start + 2) == -1
+
+        matched = ssm_scheduler.add_session(1).add_sequence(
+            token_ids + [3],
+            multimodals=self._image_multimodals(image_start, image_end, 2.0, content_hash='image-a'),
+        )
+        block_trie.match(matched)
+        mismatched = ssm_scheduler.add_session(2).add_sequence(
+            token_ids + [3],
+            multimodals=self._image_multimodals(image_start, image_end, 1.0, content_hash='image-b'),
+        )
+        block_trie.match(mismatched)
+
+        assert matched.num_history_ids == image_end
+        assert matched.prefix_cache.restore.slot == state_idx
+        assert mismatched.num_history_ids == 0
+        assert not mismatched.prefix_cache.restore.is_selected
+
+    def test_match_ssm_partial_checkpoint_preserves_mtp_recompute_overlap(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [token for token in range(1, 5) for _ in range(block_size)] + [9]
+
+        producer = ssm_scheduler.add_session(0).add_sequence(token_ids)
+        block_mgr.allocate(producer)
+        block_trie.allocate(producer)
+        producer_blocks = producer.logical_blocks.get_real_blocks().copy()
+        step = block_size * 2 + 1
+        state_idx = block_trie.state_checkpoints.reserve_save(producer, step=step)
+        assert state_idx >= 0
+        assert block_trie.state_checkpoints.publish_save(producer)
+
+        matched = ssm_scheduler.add_session(1).add_sequence(token_ids)
+        matched.prefix_cache.recompute_overlap.recompute_blocks = 1
+        block_trie.match(matched)
+
+        assert matched.num_history_ids == step
+        assert matched.prefix_cache.restore.slot == state_idx
+        assert matched.prefix_cache.recompute_overlap.fresh_block_range == range(2, 4)
+
+        block_mgr.allocate(matched)
+        private_blocks = matched.logical_blocks.get_real_blocks()[2:4].copy()
+        block_trie.allocate(matched)
+
+        assert np.all(private_blocks != producer_blocks[2:4])
+        assert np.array_equal(matched.logical_blocks.get_real_blocks()[2:4], private_blocks)
+        assert matched.prefix_cache.trie_cursor.prefix_len == block_size * 4
+
+    def test_match_ssm_partial_checkpoint_keeps_cached_continuation_writable(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [token for token in range(1, 5) for _ in range(block_size)] + [9]
+
+        producer = ssm_scheduler.add_session(0).add_sequence(token_ids)
+        block_mgr.allocate(producer)
+        block_trie.allocate(producer)
+        producer_blocks = producer.logical_blocks.get_real_blocks().copy()
+        step = block_size * 2 + 1
+        assert block_trie.state_checkpoints.reserve_save(producer, step=step) >= 0
+        assert block_trie.state_checkpoints.publish_save(producer)
+
+        matched = ssm_scheduler.add_session(1).add_sequence(token_ids)
+        block_trie.match(matched)
+
+        assert matched.num_history_ids == step
+        assert matched.prefix_cache.recompute_overlap.fresh_block_range == range(2, 4)
+
+        block_mgr.allocate(matched)
+        private_blocks = matched.logical_blocks.get_real_blocks()[2:4].copy()
+        block_trie.allocate(matched)
+
+        assert np.all(private_blocks != producer_blocks[2:4])
+        assert np.array_equal(matched.logical_blocks.get_real_blocks()[2:4], private_blocks)
 
     def test_match_ssm_requires_published_state_checkpoint(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
@@ -25,7 +218,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert seq.num_history_ids == 0
         assert seq.prefix_cache.restore.slot == -1
 
-        state_idx = block_trie.state_checkpoints._reserve_slot(node)
+        state_idx = block_trie.state_checkpoints._reserve_checkpoint(node, node.prefix_len)
         block_trie.state_checkpoints._publish_checkpoint(node, producer)
 
         seq = sess.add_sequence(token_ids)
@@ -46,7 +239,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_trie.allocate(seq)
         leaf = seq.prefix_cache.trie_cursor
         checkpoint_node = leaf.parent
-        state_idx = block_trie.state_checkpoints._reserve_slot(checkpoint_node)
+        state_idx = block_trie.state_checkpoints._reserve_checkpoint(checkpoint_node, checkpoint_node.prefix_len)
         block_trie.state_checkpoints._publish_checkpoint(checkpoint_node, seq)
 
         seq = sess.add_sequence(token_ids)
@@ -118,7 +311,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         node = seq.prefix_cache.trie_cursor
-        block_trie.state_checkpoints._reserve_slot(node)
+        block_trie.state_checkpoints._reserve_checkpoint(node, node.prefix_len)
         block_trie.state_checkpoints._publish_checkpoint(node, seq)
 
         miss_token_ids = token_ids.copy()
@@ -150,7 +343,7 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         node = seq.prefix_cache.trie_cursor
-        block_trie.state_checkpoints._reserve_slot(node)
+        block_trie.state_checkpoints._reserve_checkpoint(node, node.prefix_len)
         block_trie.state_checkpoints._publish_checkpoint(node, seq)
 
         miss_token_ids = [1] * block_size + [4] * block_size + [3]
@@ -295,16 +488,22 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert node.state_checkpoint.published
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
 
-    def test_match_ssm_releases_detached_stale_checkpoint_candidate(self, ssm_scheduler):
+    def test_match_ssm_releases_detached_partial_checkpoint(self, ssm_scheduler, monkeypatch):
         block_size = ssm_scheduler.seq_meta.block_size
-        token_ids = [1] * block_size + [2] * block_size
-        _, node, _ = self._add_published_ssm_checkpoint(ssm_scheduler, token_ids)
+        token_ids = [1] * block_size + [2] * block_size + [3]
+        _, node, state_idx = self._add_published_ssm_checkpoint(ssm_scheduler, token_ids)
         block_trie = ssm_scheduler.block_trie
         key = block_trie._checkpoint_index.make_node_key(node)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
+        logs = []
+
+        def capture_log(message, *args):
+            logs.append(message % args)
+
+        monkeypatch.setattr('lmdeploy.pytorch.paging.block_trie.trie.logger.debug', capture_log)
 
         node.detach_leaf()
-        seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [3])
+        seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [4])
         block_trie.match(seq)
 
         assert len(seq.logical_blocks) == 0
@@ -313,6 +512,9 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         assert node.adapter_name not in block_trie._checkpoint_index._steps_by_adapter
         assert node.state_checkpoint is None
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1
+        rejection = next(message for message in logs
+                         if message.startswith('Reject SSM prefix-cache checkpoint candidate'))
+        assert f'step={len(token_ids)} state_idx={state_idx}' in rejection
 
     def test_match_ssm_keeps_pinned_stale_checkpoint_candidate(self, ssm_scheduler):
         block_size = ssm_scheduler.seq_meta.block_size
@@ -346,10 +548,10 @@ class TestStateCheckpointMatching(BlockTrieTestMixin):
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         node = seq.prefix_cache.trie_cursor
-        state_idx = block_trie.state_checkpoints._reserve_slot(node)
+        state_idx = block_trie.state_checkpoints._reserve_checkpoint(node, node.prefix_len)
         assert state_idx >= 0
         assert not node.state_checkpoint.published
-        key = block_trie._checkpoint_index.make_node_key(node)
+        key = (node.adapter_name, node.prefix_len, node.block_hash)
         block_trie._checkpoint_index._buckets.setdefault(key, []).append(node)
         block_trie._checkpoint_index._steps_by_adapter.setdefault(node.adapter_name, set()).add(node.prefix_len)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()

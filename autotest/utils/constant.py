@@ -9,6 +9,15 @@ BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
 BASE_URL = f'{BASE_HTTP_URL}:{os.getenv("LMDEPLOY_PORT", str(DEFAULT_PORT))}'
 
 EVAL_CONFIGS = {
+    # Base-model PPL/LL API eval (TurboMindAPIModel / get_ppl).
+    'base': {
+        'max_out_len': 1024,
+        'max_seq_len': 7168,
+        'batch_size': 32,
+        'temperature': 1e-6,
+        'top_p': 0.9,
+        'top_k': 1,
+    },
     'default': {
         'query_per_second': 4,
         'max_out_len': 64000,
@@ -210,9 +219,10 @@ BACKEND_LIST = ['turbomind', 'pytorch']
 RESTFUL_MODEL_LIST_LATEST = [
     'Qwen/Qwen3.5-27B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B-FP8', 'Qwen/Qwen3.5-122B-A10B',
     'Qwen/Qwen3-32B', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-0.6B', 'OpenGVLab/InternVL3_5-30B-A3B',
-    'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'internlm/Intern-S1', 'meta-llama/Llama-3.2-3B-Instruct',
+    'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'internlm/Intern-S1',
+    'internlm/Intern-S1-Pro', 'meta-llama/Llama-3.2-3B-Instruct',
     'Qwen/Qwen3-VL-30B-A3B-Instruct', 'internlm/internlm3-8b-instruct', 'internlm/Intern-S2-Preview',
-    'internlm/Intern-S2-Preview-FP8'
+    'internlm/Intern-S2-Preview-FP8', 'internlm/Intern-S2-Preview-397B', 'internlm/Intern-S2-Preview-397B-FP8'
 ]
 
 RESTFUL_MODEL_LIST_LEGACY = ['internlm/internlm2_5-20b']
@@ -235,14 +245,16 @@ TOOL_REASONING_MODEL_LIST_LATEST = [
     'Qwen/Qwen3.5-122B-A10B',
     'Qwen/Qwen3.5-397B-A17B',
     'Qwen/Qwen3.5-397B-A17B-FP8',
-    'meta-llama/Meta-Llama-3.1-70B-Instruct',
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+    'meta-llama/Llama-3.1-70B-Instruct',
     'deepseek-ai/DeepSeek-V3',
-    'unsloth/gpt-oss-20b-BF16',
+    'openai/gpt-oss-20b',
     'Qwen/Qwen2.5-7B-Instruct',
-    'internlm/Intern-S1-Pro-FP8',
+    'internlm/Intern-S1',
+    'internlm/Intern-S1-Pro',
     'internlm/Intern-S2-Preview',
     'internlm/Intern-S2-Preview-FP8',
+    'internlm/Intern-S2-Preview-397B',
+    'internlm/Intern-S2-Preview-397B-FP8',
     'zai-org/GLM-4.7-Flash',
 ]
 

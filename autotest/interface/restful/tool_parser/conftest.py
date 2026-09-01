@@ -1,12 +1,12 @@
 import os
 
 import pytest
+from utils.config_utils import model_enables_return_routed_experts
 from utils.constant import BACKEND_LIST, DEFAULT_MAX_COMPLETION_TOKENS, TOOL_REASONING_MODEL_LIST
 from utils.tool_reasoning_definitions import (
     CONCURRENT_WEATHER_TOOL,
     DEFAULT_TOOL_CALL_CONCURRENCY,
     HttpToolCallError,
-    RoutedExpertsNotSupported,
     append_concurrent_turn_to_messages,
     build_input_ids_and_prompt_tokens,
     collect_stream_tool_call,
@@ -49,6 +49,20 @@ def _apply_marks(cls):
     return cls
 
 
+_EXPERTS_CLASS_MARKS = [
+    pytest.mark.experts,
+]
+
+
+def _apply_experts_marks(cls):
+    """Experts toolcall cases; turbomind omits routed_experts
+    request/validation."""
+    cls = _apply_marks(cls)
+    for m in _EXPERTS_CLASS_MARKS:
+        cls = m(cls)
+    return cls
+
+
 def _apply_marks_mm(cls):
     """Apply multimodal tool-call marks to *cls*."""
     for m in _CLASS_MARKS_MM:
@@ -73,7 +87,10 @@ SINGLE_TOOL_CALL_SKIP_REASON = (
     '(get_tool_close_tag() is None; chat template is single-tool-per-turn)')
 
 MM_TOOL_CALL_SKIP_REASON = (
-    'Multimodal tool-call tests require native VL models (Qwen3.5 / Intern-S2)')
+    'Multimodal tool-call tests require native VL models (Qwen3.5 / Intern-S1 / Intern-S2 / Qwen3-VL)')
+
+MM_VIDEO_TOOL_CALL_SKIP_REASON = (
+    'Native video not supported on Intern-S1 family (image-only)')
 
 # Test media filenames under config['resource_path'].
 MM_TEST_IMAGE_TIGER = 'tiger.jpeg'
@@ -99,6 +116,7 @@ MM_VIDEO_EXTRA_BODY = {'media_io_kwargs': {'video': {'num_frames': 3}}}
 # Substrings matched against model_case for multimodal tool-call capability.
 _MM_TOOL_CALL_MODEL_MARKERS = (
     'Qwen3.5',
+    'Intern-S1',
     'Intern-S2',
     'Qwen3-VL',
 )
@@ -108,6 +126,15 @@ def is_mm_tool_call_capable(model_case: str) -> bool:
     """True for model families that support image input and tool calling."""
     name = model_case.lower()
     return any(marker.lower() in name for marker in _MM_TOOL_CALL_MODEL_MARKERS)
+
+
+def is_mm_video_unsupported(model_case: str) -> bool:
+    """Intern-S1 family (incl.
+
+    Pro) rejects type=video; image MM still runs.
+    """
+    return 'intern-s1' in model_case.lower()
+
 
 def resolve_mm_resource_path(config, filename: str) -> str | None:
     """Return a local filesystem path for a test media file, or None if
@@ -207,9 +234,20 @@ def _mm_tool_call_skip_target(item) -> bool:
     return cls_name.startswith('TestToolCallMultimodal')
 
 
+def _mm_video_tool_call_skip_target(item) -> bool:
+    """True for MM tool tests that send video or mixed image+video."""
+    callspec = getattr(item, 'callspec', None)
+    if callspec is not None:
+        media_type = callspec.params.get('media_type')
+        if media_type in MM_VIDEO_MEDIA_TYPES:
+            return True
+    test_name = getattr(item, 'originalname', None) or item.name.split('[')[0]
+    return 'video' in test_name.lower()
+
+
 def pytest_collection_modifyitems(config, items):
     """Skip parallel-tool tests on single-tool parsers; skip MM tool tests on
-    text-only models."""
+    text-only models; skip Intern-S1 video MM tool tests."""
     for item in items:
         callspec = getattr(item, 'callspec', None)
         if callspec is None:
@@ -224,6 +262,10 @@ def pytest_collection_modifyitems(config, items):
         if _mm_tool_call_skip_target(item):
             if not is_mm_tool_call_capable(model_case):
                 item.add_marker(pytest.mark.skip(reason=MM_TOOL_CALL_SKIP_REASON))
+            elif (_mm_video_tool_call_skip_target(item)
+                  and is_mm_video_unsupported(model_case)):
+                item.add_marker(
+                    pytest.mark.skip(reason=MM_VIDEO_TOOL_CALL_SKIP_REASON))
 
 # ---------------------------------------------------------------------------
 # Per-test API request/response logging fixtures.
@@ -244,6 +286,7 @@ class _ToolCallTestBase:
         """Create the log directory and compute the log-file path."""
         self._log_file = setup_log_file(config, request.node.name, 'tool_calls')
         self._config = config
+        self._backend = backend
         self._model_case = model_case
         self._client, self._api_model_name = make_logged_client(self._log_file)
         self._model_name = self._api_model_name
@@ -288,6 +331,16 @@ class _ToolCallTestBase:
             kwargs['tools'] = tools
         return kwargs
 
+    def _validate_experts(self) -> bool:
+        return model_enables_return_routed_experts(
+            self._model_case,
+            self._backend,
+            required_suites=frozenset({'toolcall'}),
+        )
+
+    def _experts_validation_kwargs(self) -> dict:
+        return {'validate_experts': self._validate_experts()}
+
     def _stream_tool_call(self, messages, tools=None, **create_kwargs):
         """Run a streaming tool-call request and return aggregated result."""
         client, model_name = self._get_client()
@@ -310,7 +363,8 @@ class _ToolCallTestBase:
         reference_payload=False,
         **payload_extra,
     ):
-        """Stream via HTTP with return_token_ids + return_routed_experts."""
+        """Stream via HTTP with return_token_ids; routed_experts when
+        supported."""
         if use_input_ids:
             try:
                 build_input_ids_and_prompt_tokens(messages, self._tokenizer_path, tools)
@@ -330,10 +384,9 @@ class _ToolCallTestBase:
                 use_input_ids=use_input_ids,
                 tokenizer_path=self._tokenizer_path,
                 reference_payload=reference_payload,
+                return_routed_experts=self._validate_experts(),
                 **payload_extra,
             )
-        except RoutedExpertsNotSupported as exc:
-            pytest.skip(str(exc))
         except HttpToolCallError as exc:
             pytest.fail(exc.message)
 
@@ -360,6 +413,8 @@ class _ToolCallTestBase:
             use_input_ids=use_input_ids,
             log_file=self._log_file,
             reference_payload=reference_payload,
+            return_routed_experts=self._validate_experts(),
+            validate_experts=self._validate_experts(),
         )
 
     def _run_concurrent_http_error_workers(self, num_workers=None, invalid_model_name=None):

@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
@@ -165,9 +165,6 @@ class ModelInputsDelta:
     is_decoding: bool = True
     # sliding window
     num_ignored_history: torch.Tensor | None = None
-    # Compact SSM prefix-cache checkpoint save pairs for decode forwards.
-    state_prefix_cache_save_src_offsets: Sequence[int] | None = None
-    state_prefix_cache_save_offsets: Sequence[int] | None = None
 
     @property
     def seq_length(self):
@@ -229,14 +226,6 @@ class ModelInputs:
     is_dummy: bool = False
     # Runtime SSM state slot ids for each sequence in the batch.
     state_offsets: torch.Tensor | None = None
-    # Frozen checkpoint slot ids to restore from before forward. Compact, no sentinels.
-    state_prefix_cache_offsets: Sequence[int] | None = None
-    # Runtime state slot ids to restore into before forward. Compact, no sentinels.
-    state_prefix_cache_dst_offsets: Sequence[int] | None = None
-    # Runtime state slot ids to save from after forward. Compact, no sentinels.
-    state_prefix_cache_save_src_offsets: Sequence[int] | None = None
-    # Reserved checkpoint slot ids to save into after forward. Compact, no sentinels.
-    state_prefix_cache_save_offsets: Sequence[int] | None = None
     target_hidden_states: torch.Tensor | None = None
     target_position_ids: torch.Tensor | None = None
     target_inputs_embeds: torch.Tensor | None = None
@@ -270,10 +259,6 @@ class ModelInputs:
             history_lengths=self.history_lengths + step_seqlens,
             max_kv_seqlen=self.max_kv_seqlen + self.max_q_seqlen,
             sum_kv_seqlen=self.sum_kv_seqlen + self.max_q_seqlen * self.seq_length.numel(),
-            state_prefix_cache_offsets=None,
-            state_prefix_cache_dst_offsets=None,
-            state_prefix_cache_save_src_offsets=None,
-            state_prefix_cache_save_offsets=None,
             logits_indices=None,
             seq_logit_length=None,
             mrope_pos_ids=mrope_pos_ids,
@@ -412,11 +397,12 @@ class StepContext:
 
         # position ids
         attention_mask, position_ids = cls.get_mask_and_position_ids(inputs)
-        q_start_loc = q_seqlens.cumsum(0) - q_seqlens
+        q_start_loc = cls._get_q_start_loc(inputs)
 
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
-        kv_seqlens -= inputs.num_ignored_history
+        if cache_config.window_size > 0:
+            kv_seqlens -= inputs.num_ignored_history
 
         ret = StepContext(
             input_ids=inputs.input_ids,
@@ -462,6 +448,23 @@ class StepContext:
         if self.dp_meta is None:
             return self.is_decoding
         return self.dp_meta.dp_is_decoding
+
+    @staticmethod
+    def _get_q_start_loc(inputs: ModelInputs):
+        """Build query offsets, avoiding a scan for uniform layouts."""
+        q_seqlens = inputs.seq_length
+        num_tokens = inputs.input_ids.numel()
+        max_q_seqlen = inputs.max_q_seqlen
+        if max_q_seqlen * q_seqlens.numel() == num_tokens:
+            return torch.arange(
+                0,
+                num_tokens,
+                max_q_seqlen,
+                dtype=torch.long,
+                device=q_seqlens.device,
+            )
+
+        return q_seqlens.cumsum(0) - q_seqlens
 
     @classmethod
     def get_mask_and_position_ids(cls, inputs: ModelInputs):

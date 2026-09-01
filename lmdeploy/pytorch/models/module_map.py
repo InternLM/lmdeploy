@@ -114,6 +114,14 @@ MODULE_MAP.update({'DeepseekV2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deep
 # deepseek-v3
 MODULE_MAP.update({'DeepseekV3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'})
 
+# kimi-k2.5/k2.6
+MODULE_MAP.update({
+    'KimiK25ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.kimi_k25.KimiK25ForConditionalGeneration',
+    'Kimi_K25ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.kimi_k25.KimiK25ForConditionalGeneration',
+})
+
 # deepseek-v32
 MODULE_MAP.update({'DeepseekV32ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32.DeepseekV32ForCausalLM'})
 
@@ -122,6 +130,14 @@ MODULE_MAP.update({'DeepseekV4ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deep
 
 # deepseek-vl2
 MODULE_MAP.update({'DeepseekVLV2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_vl2.DeepseekVLV2ForCausalLM'})
+
+# hy3
+MODULE_MAP.update({
+    'HYV3ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.hy3.HYV3ForCausalLM',
+    'HYV3MTP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.hy3_mtp.HYV3MTP',
+})
 
 # llava
 MODULE_MAP.update({
@@ -306,6 +322,12 @@ MODULE_MAP.update({'EagleLlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llam
 
 # eagle3 llama
 MODULE_MAP.update({'Eagle3LlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama_eagle3.Eagle3LlamaForCausalLM'})
+
+# eagle3 kimi-k2/deepseek MLA
+MODULE_MAP.update({
+    'Eagle3DeepseekV2ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.kimi_k25_eagle3.Eagle3DeepseekV2ForCausalLM'
+})
 
 # deepseek mtp
 MODULE_MAP.update({'DeepseekMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_mtp.DeepseekMTPModel'})

@@ -8,25 +8,6 @@ from .deepseek_v32 import DeepseekV32ModelConfigBuilder
 logger = get_logger('lmdeploy')
 
 
-def _check_env_glm_moe_dsa(device: str = 'cuda'):
-    if device != 'cuda':
-        return
-
-    if _envs.disable_dsa_indexer_fusion:
-        try:
-            import fast_hadamard_transform  # noqa: F401
-        except ImportError:
-            raise ImportError('GLM-5.2 requires <fast_hadamard_transform> when indexer fusion is disabled.')
-
-    try:
-        import flash_mla  # noqa: F401
-    except ImportError:
-        raise ImportError('GLM-5.2 requires <flash_mla>.')
-
-    if not hasattr(flash_mla, 'flash_mla_sparse_fwd'):
-        raise RuntimeError('Latest flash_mla is required: https://github.com/deepseek-ai/FlashMLA.')
-
-
 class GlmMoeDsaModelConfigBuilder(DeepseekV32ModelConfigBuilder):
 
     @classmethod
@@ -52,8 +33,6 @@ class GlmMoeDsaModelConfigBuilder(DeepseekV32ModelConfigBuilder):
         hf_config.head_dim = hf_config.qk_rope_head_dim
 
         config = super().build(hf_config, model_path=model_path, **kwargs)
-        config.mla_kv_cache_dtype = 'bfloat16'
-        config.check_env_func = _check_env_glm_moe_dsa
         if is_draft_model:
             hf_config.architectures[0] = 'GlmMoeDsaMTPModel'
         return config

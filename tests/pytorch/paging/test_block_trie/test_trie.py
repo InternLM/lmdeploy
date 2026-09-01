@@ -199,7 +199,7 @@ class TestBlockTrie(BlockTrieTestMixin):
         new_node = seq.prefix_cache.trie_cursor
         assert new_node.prefix_len == block_size * 4
         assert new_node.parent is not cached_overlap_leaf
-        assert block_trie._cursor_is_attached(new_node)
+        assert block_trie._cursor_belongs_to_trie(new_node)
 
     @pytest.mark.parametrize('raw_match_blocks', [1, 2, 5])
     def test_match_recompute_overlap_boundary_cases(self, block_trie, block_mgr, scheduler, raw_match_blocks):

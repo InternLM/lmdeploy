@@ -7,11 +7,14 @@ from types import SimpleNamespace
 import pytest
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
 
-from lmdeploy.serve.anthropic.protocol import MessagesRequest
+from lmdeploy.serve.anthropic.protocol import CountTokensRequest, MessagesRequest
 from lmdeploy.serve.anthropic.router import create_anthropic_router
 from lmdeploy.serve.anthropic.streaming import stream_messages_response
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
+from lmdeploy.serve.utils.server_utils import protocol_error_response
 
 ANTHROPIC_HEADERS = {'anthropic-version': '2023-06-01'}
 DEFAULT_MESSAGES = [{'role': 'user', 'content': 'Hi there'}]
@@ -71,6 +74,16 @@ class _FakeChatTemplate:
         return '\n'.join(parts)
 
 
+class _SystemFirstChatTemplate(_FakeChatTemplate):
+
+    def messages2prompt(self, messages, **kwargs):
+        for index, message in enumerate(messages):
+            if message['role'] == 'system' and index != 0:
+                raise ValueError('System message must be at the beginning.')
+        parts = [f"{item['role']}:{item['content']}" for item in messages]
+        return '\n'.join(parts)
+
+
 class _FakeEngine:
 
     def __init__(
@@ -78,17 +91,23 @@ class _FakeEngine:
             *,
             logprobs_mode='raw_logprobs',
             enable_return_routed_experts: bool = True,
+            chat_template=None,
     ):
         self.model_name = 'fake-model'
         self.backend_config = SimpleNamespace(adapters=['adapter-model'],
                                              logprobs_mode=logprobs_mode,
                                              enable_return_routed_experts=enable_return_routed_experts)
         self.tokenizer = _FakeTokenizer()
-        self.chat_template = _FakeChatTemplate()
+        self.chat_template = chat_template or _FakeChatTemplate()
+        self.preprocess_calls = []
         self.generate_calls = []
 
-    def generate(self, *args, **kwargs):
-        self.generate_calls.append((args, kwargs))
+    async def preprocess(self, *args, **kwargs):
+        self.preprocess_calls.append((args, kwargs))
+        return SimpleNamespace(args=args, kwargs=kwargs)
+
+    def generate(self, request, **kwargs):
+        self.generate_calls.append((request, kwargs))
 
         async def _gen():
             yield SimpleNamespace(
@@ -136,11 +155,13 @@ class _FakeServerContext:
             response_parser_cls=_BasicParser,
             logprobs_mode='raw_logprobs',
             enable_return_routed_experts: bool = True,
+            chat_template=None,
     ):
         self.session_mgr = _FakeSessionManager()
         self.async_engine = _FakeEngine(
             logprobs_mode=logprobs_mode,
             enable_return_routed_experts=enable_return_routed_experts,
+            chat_template=chat_template,
         )
         self.async_engine.session_mgr = self.session_mgr
         self.default_gen_config = {}
@@ -209,8 +230,15 @@ class _AnthropicTestClient:
         return asyncio.run(self._get(path))
 
     async def _post(self, path: str, *, headers, json):
-        endpoint = self._routes[path.split('?', 1)[0]]
-        result = await endpoint(MessagesRequest(**json), _FakeRawRequest(headers))
+        path = path.split('?', 1)[0]
+        endpoint = self._routes[path]
+        request_cls = CountTokensRequest if path == '/v1/messages/count_tokens' else MessagesRequest
+        try:
+            request = request_cls(**json)
+        except ValidationError as exc:
+            result = _validation_error_response(path, exc)
+            return await self._response_from_result(result)
+        result = await endpoint(request, _FakeRawRequest(headers))
         return await self._response_from_result(result)
 
     async def _get(self, path: str):
@@ -312,6 +340,14 @@ def _messages_payload(**overrides):
     return payload
 
 
+def _validation_error_response(path: str, exc: ValidationError):
+    first_error = next(iter(exc.errors()), {})
+    location = '.'.join(str(part) for part in first_error.get('loc', ()))
+    detail = first_error.get('msg', 'Invalid request body.')
+    message = f'{location}: {detail}' if location else detail
+    return protocol_error_response(path, RequestError(ErrorCode.INVALID_REQUEST, message))
+
+
 def test_messages_non_stream():
     client, context = _make_client(return_context=True)
     response = _post_messages(client)
@@ -327,8 +363,34 @@ def test_messages_non_stream():
     assert len(context.session_mgr.removed) == 1
 
 
+def test_messages_count_tokens_rejects_empty_messages():
+    response = _post_count_tokens(_make_client(), messages=[])
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'type': 'error',
+        'error': {
+            'type': 'invalid_request_error',
+            'message': 'messages: at least one message is required',
+        },
+    }
+
+
 def _post_messages(client: _AnthropicTestClient, **overrides):
     return client.post('/v1/messages', headers=ANTHROPIC_HEADERS, json=_messages_payload(**overrides))
+
+
+def _count_tokens_payload(**overrides):
+    payload = {
+        'model': 'fake-model',
+        'messages': DEFAULT_MESSAGES,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _post_count_tokens(client: _AnthropicTestClient, **overrides):
+    return client.post('/v1/messages/count_tokens', headers=ANTHROPIC_HEADERS, json=_count_tokens_payload(**overrides))
 
 
 def _stream_messages_body(client: _AnthropicTestClient, **overrides):
@@ -359,6 +421,27 @@ def _collect_stream_response_payloads(result_generator, response_parser, **kwarg
         ]
 
     return _sse_payloads('\n'.join(asyncio.run(_collect_events())))
+
+
+def test_stream_messages_runtime_exception_emits_error_event():
+
+    async def _result_generator():
+        if False:
+            yield None
+        raise RequestError(ErrorCode.INTERNAL_ERROR)
+
+    payloads = _collect_stream_response_payloads(
+        _result_generator(),
+        _BasicParser(SimpleNamespace()),
+    )
+
+    assert payloads == [{
+        'type': 'error',
+        'error': {
+            'type': 'api_error',
+            'message': 'An internal server error occurred.',
+        },
+    }]
 
 
 def test_messages_return_routed_experts_requires_engine_flag():
@@ -400,7 +483,7 @@ def test_messages_beta_accepts_system_role_message():
     )
 
     assert response.status_code == 200
-    args, _kwargs = context.async_engine.generate_calls[-1]
+    args, _kwargs = context.async_engine.preprocess_calls[-1]
     assert args[0] == [
         {
             'role': 'user',
@@ -417,6 +500,68 @@ def test_messages_beta_accepts_system_role_message():
     ]
 
 
+def test_messages_merges_inline_system_for_system_first_template():
+    context = _FakeServerContext(chat_template=_SystemFirstChatTemplate())
+    response = _post_messages(
+        _make_client(server_context=context),
+        system='Top-level.',
+        messages=[
+            {
+                'role': 'user',
+                'content': 'first',
+            },
+            {
+                'role': 'system',
+                'content': 'Inline.',
+            },
+            {
+                'role': 'user',
+                'content': 'second',
+            },
+        ],
+    )
+
+    assert response.status_code == 200
+    args, _kwargs = context.async_engine.preprocess_calls[-1]
+    assert args[0] == [
+        {
+            'role': 'system',
+            'content': 'Top-level.Inline.',
+        },
+        {
+            'role': 'user',
+            'content': 'first',
+        },
+        {
+            'role': 'user',
+            'content': 'second',
+        },
+    ]
+
+
+def test_messages_count_tokens_merges_inline_system_for_system_first_template():
+    context = _FakeServerContext(chat_template=_SystemFirstChatTemplate())
+    response = _post_count_tokens(
+        _make_client(server_context=context),
+        messages=[
+            {
+                'role': 'user',
+                'content': 'first',
+            },
+            {
+                'role': 'system',
+                'content': 'Inline.',
+            },
+            {
+                'role': 'user',
+                'content': 'second',
+            },
+        ],
+    )
+
+    assert response.status_code == 200
+
+
 def test_messages_non_stream_with_reasoning_and_tool_use_blocks():
     client = _make_client(response_parser_cls=_ToolAndReasoningParser)
     response = _post_messages(
@@ -430,7 +575,11 @@ def test_messages_non_stream_with_reasoning_and_tool_use_blocks():
     assert response.status_code == 200
     data = response.json()
     assert data['stop_reason'] == 'tool_use'
-    assert data['content'][0] == {'type': 'thinking', 'thinking': 'internal reasoning'}
+    assert data['content'][0] == {
+        'type': 'thinking',
+        'thinking': 'internal reasoning',
+        'signature': 'lmdeploy-local',
+    }
     assert data['content'][1] == {'type': 'text', 'text': 'visible text'}
     assert data['content'][2]['type'] == 'tool_use'
     assert data['content'][2]['name'] == 'search'
@@ -468,9 +617,40 @@ def test_messages_streaming_usage_matches_anthropic_event_spec():
 def test_messages_streaming_with_reasoning_and_tool_use_events():
     client = _make_client(response_parser_cls=_ToolAndReasoningParser)
     status_code, body = _stream_messages_body(client, tools=[SEARCH_TOOL], return_token_ids=True)
+    payloads = _sse_payloads(body)
+    thinking_events = [payload for payload in payloads if payload.get('index') == 0]
 
     assert status_code == 200
-    assert '"type": "thinking_delta"' in body
+    assert thinking_events == [
+        {
+            'type': 'content_block_start',
+            'index': 0,
+            'content_block': {
+                'type': 'thinking',
+                'thinking': '',
+            },
+        },
+        {
+            'type': 'content_block_delta',
+            'index': 0,
+            'delta': {
+                'type': 'thinking_delta',
+                'thinking': 'internal reasoning',
+            },
+        },
+        {
+            'type': 'content_block_delta',
+            'index': 0,
+            'delta': {
+                'type': 'signature_delta',
+                'signature': 'lmdeploy-local',
+            },
+        },
+        {
+            'type': 'content_block_stop',
+            'index': 0,
+        },
+    ]
     assert '"type": "input_json_delta"' in body
     assert '"type": "tool_use"' in body
     assert '"output_ids": [102]' in body
@@ -719,7 +899,7 @@ def test_messages_image_data_preserves_input_ids_in_multimodal_content():
         image_data='https://example.com/img.png',
     )
     assert response.status_code == 200
-    args, kwargs = context.async_engine.generate_calls[-1]
+    args, kwargs = context.async_engine.preprocess_calls[-1]
     messages_arg = args[0]
     assert messages_arg[0]['content'][0] == {'type': 'text', 'text': [1, 2, 3]}
     assert kwargs['input_ids'] is None

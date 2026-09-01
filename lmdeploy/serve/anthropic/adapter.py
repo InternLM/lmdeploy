@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, TypeVar
 
 import shortuuid
 
@@ -24,6 +24,8 @@ from .protocol import (
     ToolParam,
 )
 
+_MessageT = TypeVar('_MessageT', bound=dict[str, Any])
+
 
 def get_model_list(server_context) -> list[str]:
     """Return available model names from the server context."""
@@ -32,6 +34,25 @@ def get_model_list(server_context) -> list[str]:
     cfg = server_context.engine_config
     model_names += getattr(cfg, 'adapters', None) or []
     return model_names
+
+
+def detect_inline_system_support(chat_template) -> bool:
+    """Return whether a chat template renders system messages in-place."""
+
+    if chat_template is None:
+        return False
+
+    sentinel = '__lmdeploy_inline_system_sentinel__'
+    try:
+        prompt = chat_template.messages2prompt([
+            dict(role='system', content='system'),
+            dict(role='user', content='user'),
+            dict(role='system', content=sentinel),
+            dict(role='user', content='user'),
+        ])
+    except Exception:
+        return False
+    return isinstance(prompt, str) and sentinel in prompt
 
 
 def ensure_tools_not_requested(request: MessagesRequest | CountTokensRequest) -> None:
@@ -196,16 +217,48 @@ def _convert_image_source_to_url(source: Any) -> str:
     return ''
 
 
-def _convert_system_blocks_to_text(system: list[ContentBlockParam]) -> str:
-    system_prompt = ''
-    for block in system:
-        if _block_get(block, 'type') != 'text':
-            continue
-        text = _block_get(block, 'text')
-        if not text or text.startswith('x-anthropic-billing-header'):
-            continue
-        system_prompt += text
-    return system_prompt
+def _convert_system_message(content: str | list[ContentBlockParam]) -> list[dict[str, str]]:
+    """Convert Anthropic system content into zero or one chat message.
+
+    Only text blocks are retained when ``content`` is a block list.
+    """
+
+    if isinstance(content, str):
+        system_text = content
+    else:
+        system_parts: list[str] = []
+        for block in content:
+            if _block_get(block, 'type') != 'text':
+                continue
+            text = _block_get(block, 'text')
+            if not text or text.startswith('x-anthropic-billing-header'):
+                continue
+            system_parts.append(text)
+        system_text = ''.join(system_parts)
+
+    if not system_text:
+        return []
+    return [dict(role='system', content=system_text)]
+
+
+def _merge_system_messages(messages: list[_MessageT]) -> list[_MessageT]:
+    """Move system messages to the front while preserving the message type."""
+
+    system_parts: list[str] = []
+    system_message: _MessageT | None = None
+    non_system_messages: list[_MessageT] = []
+    for message in messages:
+        if message['role'] == 'system':
+            if system_message is None:
+                system_message = message
+            system_parts.append(message['content'])
+        else:
+            non_system_messages.append(message)
+
+    if system_message is None:
+        return non_system_messages
+    system_message['content'] = ''.join(system_parts)
+    return [system_message, *non_system_messages]
 
 
 def _convert_user_tool_result(block: ContentBlockParam | dict[str, Any]) -> list[dict[str, Any]]:
@@ -242,18 +295,23 @@ def _convert_user_tool_result(block: ContentBlockParam | dict[str, Any]) -> list
     return messages
 
 
-def to_openai_messages(request: MessagesRequest | CountTokensRequest) -> list[dict[str, Any]]:
+def to_openai_messages(
+    request: MessagesRequest | CountTokensRequest,
+    *,
+    merge_inline_system: bool = False,
+) -> list[dict[str, Any]]:
     """Convert Anthropic request messages into OpenAI-compatible message
     dicts."""
 
     openai_messages: list[dict[str, Any]] = []
     if request.system is not None:
-        if isinstance(request.system, str):
-            openai_messages.append(dict(role='system', content=request.system))
-        else:
-            openai_messages.append(dict(role='system', content=_convert_system_blocks_to_text(request.system)))
+        openai_messages.extend(_convert_system_message(request.system))
 
     for idx, message in enumerate(request.messages):
+        if message.role == 'system':
+            openai_messages.extend(_convert_system_message(message.content))
+            continue
+
         if isinstance(message.content, str):
             openai_messages.append(dict(role=message.role, content=message.content))
             continue
@@ -326,25 +384,36 @@ def to_openai_messages(request: MessagesRequest | CountTokensRequest) -> list[di
         if ('content' in openai_message or 'tool_calls' in openai_message
                 or 'reasoning_content' in openai_message):
             openai_messages.append(openai_message)
+    if merge_inline_system:
+        return _merge_system_messages(openai_messages)
     return openai_messages
 
 
-def to_lmdeploy_messages(request: MessagesRequest | CountTokensRequest) -> list[dict[str, str]]:
+def to_lmdeploy_messages(
+    request: MessagesRequest | CountTokensRequest,
+    *,
+    merge_inline_system: bool = False,
+) -> list[dict[str, str]]:
     """Convert Anthropic request messages into LMDeploy chat messages."""
 
     lm_messages: list[dict[str, str]] = []
     if request.system is not None:
-        lm_messages.append(
-            dict(role='system', content=text_from_content(request.system, field_name='system')))
+        lm_messages.extend(_convert_system_message(request.system))
     for idx, message in enumerate(request.messages):
+        if message.role == 'system':
+            lm_messages.extend(_convert_system_message(message.content))
+            continue
         content = text_from_content(message.content, field_name=f'messages[{idx}].content')
         lm_messages.append(dict(role=message.role, content=content))
+    if merge_inline_system:
+        return _merge_system_messages(lm_messages)
     return lm_messages
 
 
 def to_generation_config(
     request: MessagesRequest,
     default_gen_config: dict | None = None,
+    **kwargs: Any,
 ) -> GenerationConfig:
     """Map Anthropic messages request to LMDeploy generation config."""
     return build_generation_config(
@@ -353,10 +422,9 @@ def to_generation_config(
         max_new_tokens=request.max_tokens,
         stop_words=request.stop_sequences,
         include_stop_str_in_output=request.include_stop_str_in_output or False,
-        skip_special_tokens=True,
-        spaces_between_special_tokens=True,
         return_routed_experts=request.return_routed_experts or False,
         logprobs=1 if request.return_logprob else None,
+        **kwargs,
     )
 
 

@@ -1,6 +1,7 @@
 import pytest
 from openai import BadRequestError
 from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS
+from utils.restful_return_check import assert_usage
 from utils.tool_reasoning_definitions import (
     CALCULATOR_TOOL,
     SEARCH_TOOL,
@@ -10,6 +11,7 @@ from utils.tool_reasoning_definitions import (
     _stream_choice_extension,
     _stream_delta_field,
     assert_arguments_parseable,
+    assert_completion_reasoning_tokens,
     assert_tool_call_dict_fields,
     assert_tool_call_fields,
     assert_tool_name_single_delta,
@@ -450,8 +452,7 @@ class TestReasoningWebSearchTool(_ReasoningTestBase):
 
 @_apply_marks
 class TestReasoningTokenAccounting(_ReasoningTestBase):
-    """Verify ``usage`` (prompt / completion / total tokens) on reasoning
-    requests."""
+    """Verify ``usage`` / ``completion_tokens_details.reasoning_tokens``."""
 
     def test_usage_present(self, backend, model_case):
         client, model_name = self._get_client()
@@ -461,11 +462,16 @@ class TestReasoningTokenAccounting(_ReasoningTestBase):
                                                   max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
                                                   logprobs=False,
                                                   extra_body={'chat_template_kwargs': {'enable_thinking': True}})
-        assert response.usage is not None
-        assert response.usage.prompt_tokens > 0
-        assert response.usage.completion_tokens > 0
-        assert response.usage.total_tokens == (response.usage.prompt_tokens + response.usage.completion_tokens)
+        assert_usage(response.usage.model_dump())
         assert response.usage.completion_tokens > 10
+        reasoning = _require_str(response.choices[0].message.reasoning_content, 'reasoning_content')
+        assert_completion_reasoning_tokens(
+            response.usage,
+            expect_reasoning=True,
+            reasoning=reasoning,
+            tokenizer_path=self._tokenizer_path,
+            model_case=model_case,
+        )
 
     def test_usage_present_streaming(self, backend, model_case):
         client, model_name = self._get_client()
@@ -478,14 +484,35 @@ class TestReasoningTokenAccounting(_ReasoningTestBase):
                                                 stream=True,
                                                 stream_options={'include_usage': True})
         usage = None
+        reasoning = ''
         for chunk in stream:
-            chunk_usage = getattr(chunk, 'usage', None)
-            if chunk_usage is not None:
-                usage = chunk_usage
-        if usage is not None:
-            assert usage.prompt_tokens > 0
-            assert usage.completion_tokens > 0
-            assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
+            if getattr(chunk, 'usage', None) is not None:
+                usage = chunk.usage
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            piece = _stream_delta_field(delta, 'reasoning_content')
+            if piece:
+                reasoning += piece
+        assert_usage(usage.model_dump())
+        assert_completion_reasoning_tokens(
+            usage,
+            expect_reasoning=True,
+            reasoning=reasoning,
+            tokenizer_path=self._tokenizer_path,
+            model_case=model_case,
+        )
+
+    def test_reasoning_tokens_thinking_off(self, backend, model_case):
+        client, model_name = self._get_client()
+        response = client.chat.completions.create(model=model_name,
+                                                  messages=MESSAGES_REASONING_BASIC,
+                                                  temperature=0,
+                                                  max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+                                                  logprobs=False,
+                                                  extra_body=_EXTRA_BODY_THINKING_OFF)
+        assert_usage(response.usage.model_dump())
+        assert_completion_reasoning_tokens(response.usage, expect_reasoning=False)
 
 
 # ===========================================================================

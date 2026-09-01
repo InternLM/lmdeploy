@@ -225,14 +225,14 @@ class TestDSIndex:
                                            atol=0)
 
         deep_gemm = pytest.importorskip('deep_gemm')
-        from lmdeploy.pytorch.backends.cuda.v4_compressor import _get_v4_packed_index_cache_views
-        from lmdeploy.pytorch.consts import v4_packed_index_cache_shape
+        from lmdeploy.pytorch.backends.cuda.nsa import _get_dsa_indexer_k_cache_views
+        from lmdeploy.pytorch.consts import dsa_packed_indexer_k_cache_shape
 
         packed_cache = torch.zeros(batch_size * max_num_blocks,
-                                   *v4_packed_index_cache_shape(block_size, head_dim),
+                                   *dsa_packed_indexer_k_cache_shape(block_size, head_dim),
                                    dtype=torch.uint8,
                                    device=device)
-        packed_values, packed_scales = _get_v4_packed_index_cache_views(packed_cache, head_dim)
+        packed_values, packed_scales = _get_dsa_indexer_k_cache_views(packed_cache, head_dim)
         packed_values.copy_(k_cache)
         packed_scales.squeeze(-1).copy_(k_s_cache)
 
@@ -242,15 +242,17 @@ class TestDSIndex:
         context_lens = expected_lens.unsqueeze(-1)
         schedule = deep_gemm.get_paged_mqa_logits_metadata(
             context_lens, block_size, deep_gemm.get_num_sms())
-        deepgemm_scores = deep_gemm.fp8_paged_mqa_logits(
-            q.view(total_q, 1, num_heads, head_dim),
-            packed_cache,
-            q_s,
-            context_lens,
-            page_table,
-            schedule,
-            max_k_seqlen,
-            False)
+        deepgemm_scores = deep_gemm.fp8_fp4_paged_mqa_logits(
+            q=(q.view(total_q, 1, num_heads, head_dim), None),
+            kv_cache=packed_cache,
+            weights=q_s,
+            context_lens=context_lens,
+            block_table=page_table,
+            schedule_meta=schedule,
+            max_context_len=max_k_seqlen,
+            clean_logits=False,
+            logits_dtype=torch.float32,
+        )
         for row, row_len in enumerate(expected_lens.tolist()):
             if row_len > 0:
                 torch.testing.assert_close(deepgemm_scores[row, :row_len],

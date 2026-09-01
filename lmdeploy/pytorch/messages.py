@@ -184,6 +184,7 @@ class MessageStatus(enum.Enum):
     """Status of a sequence."""
 
     WAITING = enum.auto()
+    WAITING_FOR_REMOTE_KVS = enum.auto()
     READY = enum.auto()
     STOPPED = enum.auto()
     RUNNING = enum.auto()
@@ -326,6 +327,9 @@ class SchedulerSession:
         status = MessageStatus.WAITING if migration_request is None else MessageStatus.MIGRATION_WAITING
         seq.set_state(build_seq_state(self.scheduler, seq, status))
         self.seq_manager.add_sequence(seq)
+        connector = self.scheduler.kv_connector
+        if connector is not None:
+            connector.on_new_request(seq)
 
         # metrics
         seq.record_event(EventType.QUEUED)
@@ -942,6 +946,12 @@ class SchedulerSequence:
         if logprob_start >= 0:
             max_step = min(max_step, logprob_start)
         return max(0, max_step)
+
+    def is_prefix_cache_boundary_safe(self, step: int):
+        """Check that an exact cache boundary is outside multimodal spans."""
+        if any(span.start < step < span.end for span in self.prefix_cache.multimodal_spans):
+            return False
+        return not any(emb.start < step < emb.end for emb in self.history_embeddings.embeddings)
 
     def get_prefix_cache_max_match_step(self):
         """Get the deepest effective prefix step allowed for a cache hit."""

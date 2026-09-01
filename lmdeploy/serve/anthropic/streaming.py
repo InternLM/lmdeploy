@@ -8,14 +8,18 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any
 
+from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.protocol import DeltaMessage
 
 from .adapter import map_finish_reason
+from .errors import anthropic_error_from_request
 from .protocol import (
+    LOCAL_THINKING_SIGNATURE,
     AnthropicStreamEvent,
     ContentBlockDeltaEvent,
     ContentBlockStartEvent,
     ContentBlockStopEvent,
+    ErrorEvent,
     InputJsonDelta,
     MessageDelta,
     MessageDeltaEvent,
@@ -24,6 +28,7 @@ from .protocol import (
     MessageStartMessage,
     MessageStopEvent,
     MessageUsage,
+    SignatureDelta,
     StreamTextBlock,
     StreamThinkingBlock,
     StreamToolUseBlock,
@@ -42,6 +47,14 @@ def _format_sse(data: AnthropicStreamEvent) -> str:
     return f'event: {data.type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n'
 
 
+async def _results_or_error(result_generator):
+    try:
+        async for result in result_generator:
+            yield result
+    except RequestError as error:
+        yield error
+
+
 @dataclass
 class _StreamBlockState:
     next_block_index: int = 0
@@ -49,21 +62,30 @@ class _StreamBlockState:
     tool_blocks: dict[int, dict[str, Any]] = field(default_factory=dict)
 
 
-def _close_current_block(state: _StreamBlockState) -> str | None:
-    if state.current_block is None:
-        return None
-    payload = _format_sse(ContentBlockStopEvent(index=state.current_block['block_index']))
+def _close_current_block(state: _StreamBlockState) -> list[str]:
+    block = state.current_block
+    if block is None:
+        return []
+
+    block_index = block['block_index']
+    events: list[str] = []
+    if block['kind'] == 'thinking':
+        events.append(
+            _format_sse(
+                ContentBlockDeltaEvent(
+                    index=block_index,
+                    delta=SignatureDelta(signature=LOCAL_THINKING_SIGNATURE),
+                )))
+    events.append(_format_sse(ContentBlockStopEvent(index=block_index)))
     state.current_block = None
-    return payload
+    return events
 
 
 def _start_text_or_thinking(state: _StreamBlockState, kind: str) -> list[str]:
     events: list[str] = []
     if state.current_block is not None and state.current_block['kind'] == kind:
         return events
-    closing = _close_current_block(state)
-    if closing:
-        events.append(closing)
+    events.extend(_close_current_block(state))
     block_index = state.next_block_index
     state.next_block_index += 1
     if kind == 'text':
@@ -90,9 +112,7 @@ def _start_tool_block(state: _StreamBlockState, tool_delta) -> list[str]:
         and block is not None
         and current_block['block_index'] == block['block_index'])
     if not same_block:
-        closing = _close_current_block(state)
-        if closing:
-            events.append(closing)
+        events.extend(_close_current_block(state))
     if block is None:
         function_delta = tool_delta.function
         tool_name = '' if function_delta is None else function_delta.name or ''
@@ -175,11 +195,16 @@ async def stream_messages_response(result_generator,
     # Anthropic's message_start event carries usage while its content is
     # still empty. Buffer one backend result to populate usage, then stream
     # that same result through the normal content-block path below.
-    result_iter = result_generator.__aiter__()
+    result_iter = _results_or_error(result_generator).__aiter__()
     try:
         first_res = await anext(result_iter)
     except StopAsyncIteration:
         first_res = None
+
+    if isinstance(first_res, RequestError):
+        yield _format_sse(
+            ErrorEvent(error=anthropic_error_from_request(first_res)))
+        return
 
     start_usage = MessageUsage(
         input_tokens=0 if first_res is None else first_res.input_token_len,
@@ -205,6 +230,12 @@ async def stream_messages_response(result_generator,
             yield res
 
     async for res in _results():
+        if isinstance(res, RequestError):
+            for event in _close_current_block(block_state):
+                yield event
+            yield _format_sse(
+                ErrorEvent(error=anthropic_error_from_request(res)))
+            return
         final_res = res
         text = res.response or ''
         delta_token_ids = res.token_ids if res.token_ids is not None else []
@@ -308,9 +339,8 @@ async def stream_messages_response(result_generator,
         if res.finish_reason == 'stop' and streaming_tools:
             res.finish_reason = 'tool_calls'
 
-    closing = _close_current_block(block_state)
-    if closing:
-        yield closing
+    for event in _close_current_block(block_state):
+        yield event
 
     output_tokens = 0 if final_res is None else final_res.generate_token_len
     stop_reason = map_finish_reason(None if final_res is None else final_res.finish_reason)

@@ -15,6 +15,7 @@ from openai.types.responses import (
     ResponseOutputMessage,
 )
 
+from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.responses.protocol import (
     ResponsesRequest,
     ResponsesResponse,
@@ -25,6 +26,14 @@ from lmdeploy.serve.openai.utils import filter_parallel_tool_call_deltas
 
 def _sse(event: str, data: dict[str, Any]) -> str:
     return f'event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
+
+
+async def _results_or_error(result_generator):
+    try:
+        async for result in result_generator:
+            yield result
+    except RequestError as error:
+        yield error
 
 
 async def stream_response(result_generator,
@@ -57,6 +66,7 @@ async def stream_response(result_generator,
     tool_states: dict[int, dict[str, Any]] = {}
     streaming_tools = False
     final_res = None
+    runtime_error = None
 
     def _start_text_item() -> list[str]:
         nonlocal next_output_index, sequence_number, text_output_index, text_started
@@ -144,11 +154,18 @@ async def stream_response(result_generator,
         sequence_number += 1
         return [event]
 
-    async for res in result_generator:
+    async for res in _results_or_error(result_generator):
+        if isinstance(res, RequestError):
+            runtime_error = res
+            break
         final_res = res
         delta = res.response or ''
         delta_token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
-        stream_deltas = response_parser.stream_chunk(delta, delta_token_ids)
+        stream_deltas = response_parser.stream_chunk(
+            delta,
+            delta_token_ids,
+            final=res.finish_reason is not None,
+        )
 
         for delta_message, tool_emitted in stream_deltas:
             content_delta = getattr(delta_message, 'content', None) or ''
@@ -205,7 +222,8 @@ async def stream_response(result_generator,
 
     input_tokens = 0 if final_res is None else final_res.input_token_len
     output_tokens = 0 if final_res is None else final_res.generate_token_len
-    finish_reason = None if final_res is None else final_res.finish_reason
+    finish_reason = ('error' if runtime_error is not None else
+                     None if final_res is None else final_res.finish_reason)
     if not text and not tool_states:
         for event in _start_text_item():
             yield event
@@ -227,8 +245,11 @@ async def stream_response(result_generator,
         tool_calls=tool_calls,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        reasoning_tokens=response_parser.reasoning_tokens or 0,
         finish_reason=finish_reason,
         message_id=message_id,
+        error_code=None if runtime_error is None else runtime_error.code.value,
+        error_message=None if runtime_error is None else runtime_error.message,
     )
     output_by_index: dict[int, ResponseOutputMessage | ResponseOutputFunctionCall] = {}
     text_item = next((item for item in final_response.output if isinstance(item, ResponseOutputMessage)), None)

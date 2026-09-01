@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
+import json
 from contextlib import aclosing
 from http import HTTPStatus
 
@@ -9,13 +10,18 @@ from fastapi.responses import StreamingResponse
 
 from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config, validate_request
+from lmdeploy.serve.openai.errors import (
+    create_error_response,
+    create_request_error_response,
+    request_error_payload,
+)
 from lmdeploy.serve.openai.protocol import (
     GenerateReqInput,
     GenerateReqMetaOutput,
     GenerateReqOutput,
 )
-from lmdeploy.serve.openai.utils import create_error_response
 from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
 
@@ -62,9 +68,12 @@ def check_request(request: GenerateReqInput, server_context) -> str:
     if hasattr(engine_config, 'logprobs_mode') and logprobs_mode is None and return_logprob:
         return f'return_logprob({return_logprob}) requested but not enabled logprobs_mode in engine configuration.'
 
-    if request.return_routed_experts and not engine_config.enable_return_routed_experts:
-        return ('routed experts requested but not configured in engine configuration. '
-                'May start api_server with --enable-return-routed-experts flag.')
+    if request.return_routed_experts:
+        if not hasattr(engine_config, 'enable_return_routed_experts'):
+            return f'return_routed_experts is not supported in {type(engine_config).__name__}.'
+        if not engine_config.enable_return_routed_experts:
+            return ('routed experts requested but not configured in engine configuration. '
+                    'May start api_server with --enable-return-routed-experts flag.')
 
     if (request.prompt is not None) ^ (request.input_ids is None):
         return 'You must specify exactly one of prompt or input_ids'
@@ -116,8 +125,6 @@ def register(router: APIRouter, server_context) -> None:
         if error_check_ret is not None:
             return error_check_ret
 
-        session = server_context.create_session(request.session_id)
-
         prompt = request.prompt
         input_ids = request.input_ids
         input_logprobs_requested = request.logprob_start_len >= 0
@@ -147,15 +154,19 @@ def register(router: APIRouter, server_context) -> None:
             stop_words=request.stop,
         )
 
-        result_generator = server_context.async_engine.generate(
-            messages=prompt,
-            session_id=session,
-            input_ids=input_ids,
-            gen_config=gen_config,
-            stream_response=True,  # always use stream to enable batching
-            do_preprocess=False,
-            media_io_kwargs=request.media_io_kwargs,
-            mm_processor_kwargs=request.mm_processor_kwargs)
+        session = server_context.create_session(request.session_id)
+        try:
+            prepared_request = await server_context.async_engine.preprocess(
+                messages=prompt,
+                session_id=session,
+                input_ids=input_ids,
+                gen_config=gen_config,
+                do_preprocess=False,
+                media_io_kwargs=request.media_io_kwargs,
+                mm_processor_kwargs=request.mm_processor_kwargs)
+        except RequestError as e:
+            return create_request_error_response(e)
+        result_generator = server_context.async_engine.generate(prepared_request, stream_response=True)
 
         def create_generate_response_json(res,
                                           text,
@@ -185,35 +196,38 @@ def register(router: APIRouter, server_context) -> None:
             return response.model_dump_json()
 
         async def generate_stream_generator():
-            async for res in result_generator:
-                text = res.response or ''
-                output_ids = res.token_ids
-                routed_experts = res.routed_experts
-                if input_logprobs_requested:
-                    input_logprob_token_ids = res.logprob_token_ids
-                    logprobs = None
-                    input_logprobs = _create_token_logprobs(input_logprob_token_ids, res.logprobs)
-                    top_logprobs = None
-                    input_top_logprobs = (_create_top_logprobs(input_logprob_token_ids, res.logprobs,
-                                                               request.top_logprobs_num)
-                                          if request.top_logprobs_num else None)
-                else:
-                    logprobs = _create_token_logprobs(res.token_ids, res.logprobs)
-                    top_logprobs = (_create_top_logprobs(res.token_ids, res.logprobs, request.top_logprobs_num)
-                                    if request.top_logprobs_num else None)
-                    input_logprobs = None
-                    input_top_logprobs = None
-                response_json = create_generate_response_json(
-                    res,
-                    text,
-                    output_ids,
-                    logprobs,
-                    input_logprobs,
-                    top_logprobs,
-                    input_top_logprobs,
-                    res.finish_reason,
-                    routed_experts=routed_experts)
-                yield f'data: {response_json}\n\n'
+            try:
+                async for res in result_generator:
+                    text = res.response or ''
+                    output_ids = res.token_ids
+                    routed_experts = res.routed_experts
+                    if input_logprobs_requested:
+                        input_logprob_token_ids = res.logprob_token_ids
+                        logprobs = None
+                        input_logprobs = _create_token_logprobs(input_logprob_token_ids, res.logprobs)
+                        top_logprobs = None
+                        input_top_logprobs = (_create_top_logprobs(input_logprob_token_ids, res.logprobs,
+                                                                   request.top_logprobs_num)
+                                              if request.top_logprobs_num else None)
+                    else:
+                        logprobs = _create_token_logprobs(res.token_ids, res.logprobs)
+                        top_logprobs = (_create_top_logprobs(res.token_ids, res.logprobs, request.top_logprobs_num)
+                                        if request.top_logprobs_num else None)
+                        input_logprobs = None
+                        input_top_logprobs = None
+                    response_json = create_generate_response_json(
+                        res,
+                        text,
+                        output_ids,
+                        logprobs,
+                        input_logprobs,
+                        top_logprobs,
+                        input_top_logprobs,
+                        res.finish_reason,
+                        routed_experts=routed_experts)
+                    yield f'data: {response_json}\n\n'
+            except RequestError as e:
+                yield f'data: {json.dumps({"error": request_error_payload(e)})}\n\n'
             yield 'data: [DONE]\n\n'
 
         if request.stream:
@@ -231,24 +245,27 @@ def register(router: APIRouter, server_context) -> None:
             input_token_logprobs = None
             input_top_logprobs = None
             input_logprob_token_ids = None
-            async with aclosing(
-                    with_request_cleanup(
-                        result_generator, [result_generator], [session],
-                        server_context.session_manager)) as generator:
-                async for res in generator:
-                    if await raw_request.is_disconnected():
-                        # Abort the request if the client disconnects.
-                        await session.async_abort()
-                        return create_error_response(HTTPStatus.BAD_REQUEST,
-                                                     'Client disconnected')
-                    text += res.response or ''
-                    output_ids.extend(res.token_ids or [])
-                    if input_logprobs_requested:
-                        input_logprob_token_ids = res.logprob_token_ids
-                        if res.logprobs:
-                            input_logprobs = res.logprobs
-                    elif res.logprobs:
-                        logprobs.extend(res.logprobs)
+            try:
+                async with aclosing(
+                        with_request_cleanup(
+                            result_generator, [result_generator], [session],
+                            server_context.session_manager)) as generator:
+                    async for res in generator:
+                        if await raw_request.is_disconnected():
+                            # Abort the request if the client disconnects.
+                            await session.async_abort()
+                            return create_error_response(HTTPStatus.BAD_REQUEST,
+                                                         'Client disconnected')
+                        text += res.response or ''
+                        output_ids.extend(res.token_ids or [])
+                        if input_logprobs_requested:
+                            input_logprob_token_ids = res.logprob_token_ids
+                            if res.logprobs:
+                                input_logprobs = res.logprobs
+                        elif res.logprobs:
+                            logprobs.extend(res.logprobs)
+            except RequestError as e:
+                return create_request_error_response(e)
 
             output_token_logprobs = _create_token_logprobs(output_ids, logprobs) if logprobs else None
             output_top_logprobs = (_create_top_logprobs(output_ids, logprobs, request.top_logprobs_num)

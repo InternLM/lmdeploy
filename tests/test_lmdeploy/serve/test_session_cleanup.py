@@ -11,7 +11,7 @@ from lmdeploy.messages import (
     ResponseType,
 )
 from lmdeploy.pytorch.disagg.config import EngineRole
-from lmdeploy.serve.core.exceptions import SafeRunException
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError, SafeRunException
 from lmdeploy.serve.managers import SessionManager
 
 
@@ -171,9 +171,8 @@ async def _run_prompt_cancel_updates_metrics():
         engine.prompt_processor = _FakePromptProcessor()
         engine.request_logger = _FakeRequestLogger()
 
-        generator = engine.generate('hello', 260606)
         with suppress(asyncio.CancelledError):
-            await generator.__anext__()
+            await engine.preprocess('hello', 260606)
 
         stats = metrics_processor.scheduler_stats
         assert stats.num_total_reqs == 1
@@ -199,25 +198,29 @@ async def _run_max_new_tokens_zero_cleans_up_session():
         engine = AsyncEngine.__new__(AsyncEngine)
         engine.session_mgr = SessionManager()
         engine.session_mgr.build_request_handle_pool(_FakeEngine(), 1)
-        engine._determine_gen_config = lambda session, input_ids, gen_config=None: gen_config
+        engine.session_len = 4096
+        engine._determine_gen_config = lambda input_ids, gen_config=None: gen_config
+        engine.backend_config = type('_BackendConfig', (), {'enable_prefix_caching': False})()
+        engine.request_logger = type('_RequestLogger', (), {'log_inputs': lambda *args, **kwargs: None})()
 
         session = engine.session_mgr.get(260606)
-        generator = engine.generate(None,
+        try:
+            await engine.preprocess(None,
                                     session,
                                     input_ids=[1, 2],
                                     gen_config=GenerationConfig(max_new_tokens=0))
-
-        out = await generator.__anext__()
-
-        assert out.input_token_len == 2
-        assert out.finish_reason == 'length'
+        except RequestError as error:
+            assert error.code is ErrorCode.INVALID_REQUEST
+            assert error.message == 'max_new_tokens must be at least 1, got 0.'
+        else:
+            raise AssertionError('Expected zero max_new_tokens to fail preprocessing.')
         assert not hasattr(session, 'step')
         assert engine.session_mgr.sessions == {}
     finally:
         metrics_processor.scheduler_stats = old_stats
 
 
-def test_max_new_tokens_zero_cleans_up_session():
+def test_invalid_max_new_tokens_cleans_up_session():
     asyncio.run(_run_max_new_tokens_zero_cleans_up_session())
 
 
@@ -250,8 +253,8 @@ async def _run_input_logprob_outputs(engine_outputs,
     engine.session_mgr = SessionManager()
     engine.session_mgr.build_request_handle_pool(
         SimpleNamespace(create_instance=lambda: handle), 1)
-    engine._determine_gen_config = (
-        lambda session, input_ids, gen_config=None: gen_config)
+    engine.session_len = 4096
+    engine._determine_gen_config = lambda input_ids, gen_config=None: gen_config
     engine._if_session_stale = lambda session, input_len: None
     engine.backend = 'pytorch'
     engine.backend_config = SimpleNamespace(
@@ -261,8 +264,8 @@ async def _run_input_logprob_outputs(engine_outputs,
     )
     engine.hf_cfg = SimpleNamespace(vocab_size=10)
     engine.num_spec_token = 0
-    engine.request_logger = SimpleNamespace(
-        log_response=lambda *args, **kwargs: None)
+    engine.request_logger = SimpleNamespace(log_inputs=lambda *args, **kwargs: None,
+                                            log_response=lambda *args, **kwargs: None)
 
     old_queue_update = metrics_processor.queue_update
     metrics_processor.queue_update = queued_metrics.append
@@ -271,15 +274,11 @@ async def _run_input_logprob_outputs(engine_outputs,
         config = GenerationConfig(max_new_tokens=0,
                                   logprobs=0,
                                   logprob_start_len=logprob_start_len)
-        results = [
-            out async for out in engine.generate(
-                None,
-                session,
-                input_ids=[1, 2, 3],
-                gen_config=config,
-                sequence_end=True,
-            )
-        ]
+        prepared = await engine.preprocess(None,
+                                           session,
+                                           input_ids=[1, 2, 3],
+                                           gen_config=config)
+        results = [out async for out in engine.generate(prepared)]
         return results, queued_metrics, engine.session_mgr
     finally:
         metrics_processor.queue_update = old_queue_update
@@ -309,14 +308,8 @@ def test_async_engine_reinterprets_terminal_logprobs_as_input_rows(carrier):
 
 
 def test_async_engine_validates_input_logprob_start_after_preprocess():
-    results, queued_metrics, manager = asyncio.run(
-        _run_input_logprob_outputs([], logprob_start_len=3))
+    with pytest.raises(RequestError) as exc_info:
+        asyncio.run(_run_input_logprob_outputs([], logprob_start_len=3))
 
-    assert queued_metrics == []
-    assert manager.sessions == {}
-    assert len(results) == 1
-    assert results[0].token_ids == []
-    assert results[0].input_token_len == 3
-    assert results[0].generate_token_len == 0
-    assert results[0].finish_reason == 'error'
-    assert 'processed input_ids length(3)' in results[0].response
+    assert exc_info.value.code is ErrorCode.INVALID_REQUEST
+    assert 'processed input_ids length(3)' in exc_info.value.message

@@ -30,7 +30,7 @@ from utils.anthropic_messages import (
     get_async_anthropic_client_and_model,
 )
 from utils.config_utils import get_config
-from utils.constant import BASE_URL
+from utils.constant import BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS
 
 from lmdeploy.serve.openai.api_client import APIClient
 
@@ -43,8 +43,9 @@ _TINY_PNG_BASE64 = (
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 )
 
-# Reasoning+vision models may emit long thinking before tool_use.
-_VLM_TOOL_MAX_TOKENS = 8192
+# Leave room for reasoning thinking before tool_use.
+_TOOL_MAX_TOKENS = DEFAULT_MAX_COMPLETION_TOKENS
+_VLM_TOOL_MAX_TOKENS = DEFAULT_MAX_COMPLETION_TOKENS
 
 _SOLID_COLOR_VLM_PROMPT = (
     'The image is a single solid color (one pixel). '
@@ -298,6 +299,7 @@ def _trace_anthropic_http(
 
 
 @_apply_marks
+@pytest.mark.anthropic
 class TestAnthropicHttpToolMessages(_ToolCallTestBase):
     """``POST /v1/messages`` over HTTP when api_server is launched *with*
     ``--tool-call-parser``.
@@ -314,7 +316,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
-            'max_tokens': 512,
+            'max_tokens': _TOOL_MAX_TOKENS,
             'temperature': 0,
             'stream': True,
             'tool_choice': {
@@ -353,7 +355,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
-            'max_tokens': 512,
+            'max_tokens': _TOOL_MAX_TOKENS,
             'temperature': 0,
             'stream': True,
             'messages': [{'role': 'user', 'content': USER_ASK_WEATHER_DALLAS}],
@@ -389,7 +391,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
-            'max_tokens': 1024,
+            'max_tokens': _TOOL_MAX_TOKENS,
             'temperature': 0,
             'stream': True,
             'system': ANTHROPIC_SYSTEM_PARALLEL_WEATHER,
@@ -427,7 +429,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         url = f'{BASE_URL}/v1/messages'
         turn1 = {
             'model': model_name,
-            'max_tokens': 1024,
+            'max_tokens': _TOOL_MAX_TOKENS,
             'temperature': 0,
             'system': ANTHROPIC_SYSTEM_WEATHER,
             'messages': ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
@@ -458,7 +460,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         )
         turn2 = {
             'model': model_name,
-            'max_tokens': 1024,
+            'max_tokens': _TOOL_MAX_TOKENS,
             'temperature': 0,
             'system': ANTHROPIC_SYSTEM_WEATHER,
             'messages': turn2_messages,
@@ -485,7 +487,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
-            'max_tokens': 8192,
+            'max_tokens': _TOOL_MAX_TOKENS,
             'temperature': 0.01,
             'messages': build_anthropic_messages_history_tool_result(),
         }
@@ -517,7 +519,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
-            'max_tokens': 8192,
+            'max_tokens': _TOOL_MAX_TOKENS,
             'temperature': 0.01,
             'messages': ANTHROPIC_MESSAGES_HISTORY_THINKING_REPLAY,
         }
@@ -685,7 +687,7 @@ async def _async_weather_tool_single_location_non_stream(log_file: str):
     client, model_name = get_async_anthropic_client_and_model()
     msg = await client.messages.create(
         model=model_name,
-        max_tokens=1024,
+        max_tokens=_TOOL_MAX_TOKENS,
         temperature=0,
         messages=[{'role': 'user', 'content': USER_ASK_WEATHER_DALLAS}],
         tools=[WEATHER_TOOL_SINGLE_LOCATION_ANTHROPIC],
@@ -705,7 +707,7 @@ async def _async_tool_choice_force_named_tool(log_file: str):
     client, model_name = get_async_anthropic_client_and_model()
     msg = await client.messages.create(
         model=model_name,
-        max_tokens=1024,
+        max_tokens=_TOOL_MAX_TOKENS,
         temperature=0,
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
@@ -727,7 +729,7 @@ async def _async_tool_choice_any(log_file: str):
     client, model_name = get_async_anthropic_client_and_model()
     msg = await client.messages.create(
         model=model_name,
-        max_tokens=1024,
+        max_tokens=_TOOL_MAX_TOKENS,
         temperature=0,
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
@@ -813,7 +815,7 @@ async def _async_messages_tool_non_stream(log_file: str):
     client, model_name = get_async_anthropic_client_and_model()
     msg = await client.messages.create(
         model=model_name,
-        max_tokens=1024,
+        max_tokens=_TOOL_MAX_TOKENS,
         temperature=0,
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
@@ -834,7 +836,7 @@ async def _async_messages_tool_stream(log_file: str):
     client, model_name = get_async_anthropic_client_and_model()
     stream = await client.messages.create(
         model=model_name,
-        max_tokens=1024,
+        max_tokens=_TOOL_MAX_TOKENS,
         temperature=0,
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
@@ -874,7 +876,7 @@ async def _async_parallel_same_tool_non_stream(log_file: str):
     client, model_name = get_async_anthropic_client_and_model()
     msg = await client.messages.create(
         model=model_name,
-        max_tokens=1024,
+        max_tokens=_TOOL_MAX_TOKENS,
         temperature=0,
         system=ANTHROPIC_SYSTEM_PARALLEL_WEATHER,
         messages=ANTHROPIC_MESSAGES_PARALLEL_WEATHER,
@@ -888,7 +890,7 @@ async def _async_parallel_same_tool_stream(log_file: str):
     client, model_name = get_async_anthropic_client_and_model()
     stream = await client.messages.create(
         model=model_name,
-        max_tokens=1024,
+        max_tokens=_TOOL_MAX_TOKENS,
         temperature=0,
         system=ANTHROPIC_SYSTEM_PARALLEL_WEATHER,
         messages=ANTHROPIC_MESSAGES_PARALLEL_WEATHER,
@@ -912,7 +914,7 @@ async def _async_parallel_mixed_tools_non_stream(log_file: str):
     client, model_name = get_async_anthropic_client_and_model()
     msg = await client.messages.create(
         model=model_name,
-        max_tokens=1024,
+        max_tokens=_TOOL_MAX_TOKENS,
         temperature=0,
         system=ANTHROPIC_SYSTEM_PARALLEL_MIXED,
         messages=ANTHROPIC_MESSAGES_PARALLEL_MIXED,
@@ -927,7 +929,7 @@ async def _async_full_roundtrip_single_tool_result(log_file: str):
     tools = [WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC]
     msg1 = await client.messages.create(
         model=model_name,
-        max_tokens=1024,
+        max_tokens=_TOOL_MAX_TOKENS,
         temperature=0,
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
@@ -948,7 +950,7 @@ async def _async_full_roundtrip_single_tool_result(log_file: str):
     )
     msg2 = await client.messages.create(
         model=model_name,
-        max_tokens=1024,
+        max_tokens=_TOOL_MAX_TOKENS,
         temperature=0,
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=turn2_messages,
@@ -962,7 +964,7 @@ async def _async_full_roundtrip_parallel_tool_results(log_file: str):
     client, model_name = get_async_anthropic_client_and_model()
     msg1 = await client.messages.create(
         model=model_name,
-        max_tokens=1024,
+        max_tokens=_TOOL_MAX_TOKENS,
         temperature=0,
         system=ANTHROPIC_SYSTEM_PARALLEL_WEATHER,
         messages=ANTHROPIC_MESSAGES_PARALLEL_WEATHER,
@@ -995,7 +997,7 @@ async def _async_full_roundtrip_parallel_tool_results(log_file: str):
     )
     msg2 = await client.messages.create(
         model=model_name,
-        max_tokens=1024,
+        max_tokens=_TOOL_MAX_TOKENS,
         temperature=0,
         system=ANTHROPIC_SYSTEM_PARALLEL_WEATHER,
         messages=turn2_messages,
@@ -1078,6 +1080,7 @@ async def _async_vlm_base64_solid_color_stream(log_file: str) -> tuple[str, str]
 
 
 @_apply_marks
+@pytest.mark.anthropic
 class TestAnthropicSdkToolCall(_ToolCallTestBase):
     """Anthropic Messages + tools via official async SDK (end-to-end
     integration)."""

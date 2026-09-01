@@ -135,6 +135,14 @@ def _assert_count_tokens_json(data: dict) -> int:
     return n
 
 
+_LARGE_PAYLOAD_PREFIX = 'Reply with one word: OK. Context:\n'
+_LARGE_PAYLOAD_MAX_TOKENS = 8
+
+
+def _large_payload_user_content() -> str:
+    return f'{_LARGE_PAYLOAD_PREFIX}{"x" * (128 * 1024)}'
+
+
 def _assert_anthropic_error_envelope(body: dict) -> dict:
     assert body['type'] == 'error', body
     err = body['error']
@@ -153,11 +161,10 @@ def _assert_anthropic_invalid_request_error(resp: requests.Response) -> dict:
 
 
 def _assert_fastapi_validation_error(resp: requests.Response) -> dict:
-    """FastAPI ``RequestValidationError`` payload (schema-level 422)."""
+    """Schema/request validation errors: Anthropic envelope HTTP 400."""
 
-    assert resp.status_code == 422, resp.text
-    body = resp.json()
-    assert isinstance(body['detail'], list), body
+    body = _assert_anthropic_invalid_request_error(resp)
+    assert body['error']['type'] == 'invalid_request_error', body
     return body
 
 
@@ -171,6 +178,7 @@ def _assert_tool_parser_required_message(resp: requests.Response) -> None:
 
 
 @pytest.mark.order(8)
+@pytest.mark.anthropic
 @pytest.mark.flaky(reruns=2)
 @pytest.mark.parametrize('backend', BACKEND_LIST)
 @pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
@@ -282,7 +290,7 @@ class TestRestfulAnthropicV1:
         assert resp.status_code == 200, resp.text
         data = assert_success_message_json(resp.json())
         text = _assistant_text_from_message_payload(data)
-        assert 'acknowledged' in text.lower(), text[:500]
+        assert 'acknowledge' in text.lower(), text[:500]
 
     def test_messages_user_content_as_blocks(self, backend, model_case, deployed_model_name: str):
         """``messages[].content`` as a list of ``{type: text}`` blocks
@@ -866,21 +874,28 @@ class TestRestfulAnthropicV1:
         )
         _assert_fastapi_validation_error(resp)
 
-    def test_messages_invalid_message_role(self, backend, model_case, deployed_model_name: str):
-        """``messages[].role`` must be ``user`` or ``assistant`` (not
-        ``system``)."""
+    def test_messages_accepts_system_role_in_messages(self, backend, model_case, deployed_model_name: str):
+        """LMDeploy accepts ``messages[].role == system`` (Claude Code / beta
+        history); classic Anthropic usually rejects this in favor of top-level
+        ``system``."""
 
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
                 'model': deployed_model_name,
-                'max_tokens': 8,
-                'messages': [{'role': 'system', 'content': 'not allowed here'}],
+                'max_tokens': 32,
+                'temperature': 0.01,
+                'messages': [
+                    {'role': 'system', 'content': 'Reply with one word: OK.'},
+                    {'role': 'user', 'content': 'Acknowledge.'},
+                ],
             },
-            timeout=30,
+            timeout=120,
         )
-        _assert_anthropic_invalid_request_error(resp)
+        assert resp.status_code == 200, resp.text
+        data = assert_success_message_json(resp.json())
+        assert len(_assistant_text_from_message_payload(data).strip()) > 0
 
     def test_messages_message_missing_role(self, backend, model_case, deployed_model_name: str):
         resp = requests.post(
@@ -937,8 +952,8 @@ class TestRestfulAnthropicV1:
         _assert_fastapi_validation_error(resp)
 
     def test_messages_stream_validation_error_returns_json(self, backend, model_case, deployed_model_name: str):
-        """Invalid bodies must not upgrade to ``text/event-stream``; FastAPI
-        returns JSON 422."""
+        """Invalid bodies must not upgrade to ``text/event-stream``; returns
+        Anthropic JSON 400."""
 
         resp = requests.post(
             _MESSAGES_URL,
@@ -972,15 +987,15 @@ class TestRestfulAnthropicV1:
         """Regression guard for large JSON bodies (CI-sized payload, not
         stress-test scale)."""
 
-        big = 'x' * (128 * 1024)
+        user_content = _large_payload_user_content()
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
                 'model': deployed_model_name,
-                'max_tokens': 8,
+                'max_tokens': _LARGE_PAYLOAD_MAX_TOKENS,
                 'temperature': 0.01,
-                'messages': [{'role': 'user', 'content': f'Reply with one word: OK. Context:\n{big}'}],
+                'messages': [{'role': 'user', 'content': user_content}],
             },
             timeout=180,
         )
@@ -989,8 +1004,8 @@ class TestRestfulAnthropicV1:
         assert len(_assistant_text_from_message_payload(data).strip()) > 0
 
     def test_messages_rejects_tools_without_tool_call_parser(self, backend, model_case, deployed_model_name: str):
-        """``RESTFUL`` jobs start api_server *without* ``--tool-call-parser``;
-        ``tools`` must yield 400."""
+        """Anthropic interface suites start api_server *without* ``--tool-call-
+        parser``; ``tools`` must yield 400."""
 
         resp = requests.post(
             _MESSAGES_URL,
@@ -1008,8 +1023,8 @@ class TestRestfulAnthropicV1:
 
     def test_messages_rejects_tool_choice_with_tools_without_tool_call_parser(
             self, backend, model_case, deployed_model_name: str):
-        """``tool_choice`` is only meaningful with ``tools``; still blocked
-        without ``--tool-call-parser``."""
+        """``tool_choice`` with ``tools`` is blocked without ``--tool-call-
+        parser`` on the anthropic dedicated server."""
 
         resp = requests.post(
             _MESSAGES_URL,

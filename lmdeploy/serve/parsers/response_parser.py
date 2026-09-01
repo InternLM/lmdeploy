@@ -155,6 +155,8 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
 
 
 class ResponseParser:
+    reasoning_tokens: int | None
+
     @classmethod
     def set_parsers(
         cls,
@@ -166,6 +168,7 @@ class ResponseParser:
 
     def __init__(self, request: ChatCompletionRequest):
         self.request = request
+        self.reasoning_tokens = None
 
     @abstractmethod
     def stream_chunk(self,
@@ -232,6 +235,7 @@ class BaseResponseParser(ResponseParser):
 
     reasoning_parser_cls: ClassVar[type[ReasoningParser] | None] = None
     tool_parser_cls: ClassVar[type[ToolParser] | None] = None
+    tokenizer: ClassVar[PreTrainedTokenizerBase | None] = None
     MODE_PLAIN: ClassVar[str] = 'plain'
     MODE_REASONING: ClassVar[str] = 'reasoning'
     MODE_TOOL: ClassVar[str] = 'tool'
@@ -248,6 +252,7 @@ class BaseResponseParser(ResponseParser):
         from .tool_parser import ToolParserManager
 
         reasoning_parser_name, tool_parser_name = validate_parser_names(reasoning_parser_name, tool_parser_name)
+        cls.tokenizer = tokenizer
 
         if reasoning_parser_name is not None:
             cls.reasoning_parser_cls = ReasoningParserManager.get(reasoning_parser_name)
@@ -282,7 +287,8 @@ class BaseResponseParser(ResponseParser):
         rcls = type(self).reasoning_parser_cls
         tcls = type(self).tool_parser_cls
         self._kwargs = type(self).chat_template_kwargs_from_request(request)
-        self.enable_thinking: bool | None = self._kwargs.get('enable_thinking', None)
+        self.enable_thinking: bool | None = self._kwargs.get(
+            'enable_thinking', self._kwargs.get('thinking', None))
         if self._kwargs.get('thinking') is True:
             self.enable_thinking = True
         self.reasoning_parser: ReasoningParser | None = rcls(**self._kwargs) if rcls else None
@@ -305,6 +311,8 @@ class BaseResponseParser(ResponseParser):
             self._mode = self.MODE_PLAIN
         self._pending = ''
 
+        self._initialize_reasoning_token_counter()
+
     def stream_chunk(
         self,
         delta_text: str,
@@ -324,6 +332,8 @@ class BaseResponseParser(ResponseParser):
             Return ``[]`` when this engine step produces no visible delta (for
             example while buffering a partial protocol tag).
         """
+        self._update_reasoning_tokens(delta_token_ids)
+
         # Special-case: some backends emit a leading empty delta (no text, no
         # tokens) before any actual content. Tests treat this as a visible empty
         # content delta.
@@ -579,9 +589,11 @@ class BaseResponseParser(ResponseParser):
             if (self.profile.tool_payload_format == 'json'
                 and self._is_complete_json_object(self.tool_parser._tool_payload)):
                 out.extend(self.tool_parser.decode_tool_incremental(added_text='', final=True))
+                out = self.tool_parser.filter_tool_call_deltas(out)
                 self.tool_parser.finish_tool_call()
                 self._mode = self.MODE_PLAIN
-            return out, True
+                return out, True
+            return self.tool_parser.filter_tool_call_deltas(out), True
 
         idx = self._pending.find(close_tag)
 
@@ -590,12 +602,14 @@ class BaseResponseParser(ResponseParser):
                 return [], False
             emit = self._pending
             self._pending = ''
-            return self.tool_parser.decode_tool_incremental(added_text=emit, final=False), True
+            calls = self.tool_parser.decode_tool_incremental(added_text=emit, final=False)
+            return self.tool_parser.filter_tool_call_deltas(calls), True
 
         # Final chunk inside tool block.
         inner = self._pending[:idx]
         self._pending = self._pending[idx + len(close_tag):]
         calls = self.tool_parser.decode_tool_incremental(added_text=inner, final=True)
+        calls = self.tool_parser.filter_tool_call_deltas(calls)
         self.tool_parser.finish_tool_call()
         self._mode = self.MODE_PLAIN
         return calls, True
@@ -620,6 +634,36 @@ class BaseResponseParser(ResponseParser):
                 raise RuntimeError(f'Tool parser {tparser.__class__.__name__} must provide a tool start tag')
         return profile
 
+    def _initialize_reasoning_token_counter(self) -> None:
+        """Initialize token-based reasoning usage accounting."""
+        self.reasoning_tokens = None
+        self._counting_reasoning_tokens = self._mode == self.MODE_REASONING
+        self._reasoning_start_token_id: int | None = None
+        self._reasoning_end_token_id: int | None = None
+
+        tokenizer = type(self).tokenizer
+        if self.reasoning_parser is None or tokenizer is None:
+            return
+
+        self.reasoning_tokens = 0
+        vocab = tokenizer.get_vocab()
+        if self.profile.reasoning_open_tag:
+            self._reasoning_start_token_id = vocab[self.profile.reasoning_open_tag]
+        self._reasoning_end_token_id = vocab[self.profile.reasoning_close_tag]
+
+    def _update_reasoning_tokens(self, token_ids: list[int]) -> None:
+        """Count tokens inside the logical reasoning-tag interval."""
+        if self.reasoning_tokens is None or self.enable_thinking is False:
+            return
+
+        for token_id in token_ids:
+            if token_id == self._reasoning_start_token_id:
+                self._counting_reasoning_tokens = True
+            elif token_id == self._reasoning_end_token_id:
+                self._counting_reasoning_tokens = False
+            elif self._counting_reasoning_tokens:
+                self.reasoning_tokens += 1
+
     def parse_complete(
         self,
         text: str,
@@ -637,6 +681,13 @@ class BaseResponseParser(ResponseParser):
             - ``tool_calls``: parsed tool calls, or ``None``
             - ``reasoning_content``: separated reasoning text, or ``None``
         """
+        if self.reasoning_tokens is not None:
+            self.reasoning_tokens = 0
+            self._counting_reasoning_tokens = (self.profile.starts_in_reasoning_mode
+                                                and self.reasoning_parser is not None
+                                                and self.enable_thinking is not False)
+            self._update_reasoning_tokens(token_ids or [])
+
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_calls: list[ToolCall] = []
@@ -705,11 +756,9 @@ class BaseResponseParser(ResponseParser):
                 close_idx = n
                 tool_payload = text[open_idx + len(open_tag):].strip()
             parsed_call = self.tool_parser.parse_tool_call_complete(tool_payload) if self.tool_parser else None
-            if parsed_call:
-                if isinstance(parsed_call, list):
-                    tool_calls.extend(parsed_call)
-                else:
-                    tool_calls.append(parsed_call)
+            if parsed_call and self.tool_parser is not None:
+                parsed_calls = parsed_call if isinstance(parsed_call, list) else [parsed_call]
+                tool_calls.extend(self.tool_parser.filter_tool_calls(parsed_calls))
                 pos = close_idx + len(close_tag) if close_tag else n
             else:
                 # Tool call parsing failed — fall back to plain text.
