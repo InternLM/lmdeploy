@@ -816,7 +816,8 @@ def test_async_model_forward_preserves_cache_inputs_through_forward_impl():
     from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
     from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
-    model_inputs = SimpleNamespace()
+    model_inputs = SimpleNamespace(
+        is_dummy=False, is_decoding=False, logits_indices=None, seq_logit_length=None)
     cache_inputs = CacheCheckpointInputs(kv_restore_plan=torch.tensor([[1], [2]]))
     hidden_states = torch.ones(1, 1, 2)
     seen = []
@@ -1435,7 +1436,14 @@ class TestMemDecodeModelAgentLifecycle:
         calls = []
         base_hidden = torch.arange(20, dtype=torch.float32).reshape(1, 5, 4)
         memory_hidden = torch.arange(30, dtype=torch.float32).reshape(1, 5, 6)
-        inputs = SimpleNamespace(seq_length=torch.tensor([2, 3]), is_chunk=False)
+        inputs = SimpleNamespace(
+            seq_length=torch.tensor([2, 3]),
+            is_chunk=False,
+            is_dummy=False,
+            is_decoding=False,
+            logits_indices=None,
+            seq_logit_length=None,
+        )
 
         class _MemDecodeAgent:
 

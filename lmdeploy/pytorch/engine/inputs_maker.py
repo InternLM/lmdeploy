@@ -100,27 +100,31 @@ def _build_logits_indices(messages: list['SchedulerSequence'], query_lengths: li
     row_counts = []
     base = 0
     for msg, query_len in zip(messages, query_lengths, strict=True):
-        chunk_start = int(msg.num_history_ids)
-        chunk_end = chunk_start + int(query_len)
-        logprob_start = int(msg.logprob_start_pos)
-        input_end = int(msg.input_end_pos)
+        chunk_start = msg.num_history_ids
+        chunk_end = chunk_start + query_len
+        logprob_start = msg.logprob_start_pos
+        input_end = msg.input_end_pos
 
         range_start = max(chunk_start, logprob_start) if logprob_start >= 0 else chunk_end
         range_end = min(chunk_end, input_end - 1)
         num_projected_rows = max(0, range_end - range_start)
         indices.extend(range(base + range_start - chunk_start, base + range_end - chunk_start))
 
-        has_prev_chunk_logit = (logprob_start >= 0 and int(msg.input_start_pos) < chunk_start
+        has_prev_chunk_logit = (logprob_start >= 0 and msg.input_start_pos < chunk_start
                                 and logprob_start < chunk_start and chunk_start < input_end)
         stash_current_last_logit = (range_end == chunk_end and num_projected_rows > 0
                                     and chunk_end < input_end)
         if stash_current_last_logit:
             assert len(messages) == 1, 'long-prefill cross-chunk logit carry requires a single request'
-        row_counts.append(num_projected_rows + int(has_prev_chunk_logit) - int(stash_current_last_logit))
-        base += int(query_len)
+        row_count = num_projected_rows
+        if has_prev_chunk_logit:
+            row_count += 1
+        if stash_current_last_logit:
+            row_count -= 1
+        row_counts.append(row_count)
+        base += query_len
 
-    return (torch.tensor(indices, dtype=torch.long),
-            torch.tensor(row_counts, dtype=torch.long))
+    return torch.tensor(indices, dtype=torch.long), torch.tensor(row_counts, dtype=torch.long)
 
 
 @dataclass

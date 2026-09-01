@@ -553,10 +553,8 @@ class BaseModelAgent:
     def _is_prefill_input_logprobs(inputs: ModelInputs | None) -> bool:
         """Whether this prefill step uses the V2 scoring-only input-logprob
         path."""
-        return (inputs is not None and not getattr(inputs, 'is_dummy', False)
-                and not getattr(inputs, 'is_decoding', False)
-                and getattr(inputs, 'logits_indices', None) is not None
-                and getattr(inputs, 'seq_logit_length', None) is not None)
+        return (inputs is not None and not inputs.is_dummy and not inputs.is_decoding
+                and inputs.logits_indices is not None and inputs.seq_logit_length is not None)
 
     async def _async_model_forward(
         self,
@@ -610,8 +608,7 @@ class BaseModelAgent:
             input_ids = inputs.input_ids.flatten()
             if inputs.is_chunk:
                 prev_chunk_last_logit = None if inputs.is_first_chunk else self._prev_chunk_last_logit
-                if (source_indices.numel() > 0 and not inputs.is_last_chunk
-                        and source_indices[-1].item() == input_ids.numel() - 1):
+                if source_indices.numel() > 0 and not inputs.is_last_chunk:
                     self._prev_chunk_last_logit = input_logits[-1:].clone()
                     input_logits = input_logits[:-1]
                     source_indices = source_indices[:-1]
