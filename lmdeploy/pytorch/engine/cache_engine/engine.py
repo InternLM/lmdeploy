@@ -241,21 +241,31 @@ class CacheEngine:
 
         Args:
             cache_pairs: Source cache, destination cache, and entry axis.
-            src_to_dst (dict[int, int]): Map between src and dst.
+            src_to_dst: Map between source and destination scheduler-block
+                offsets.
         """
         if not cache_pairs or not src_to_dst:
             return
 
-        BLOCKS_PER_COPY = 2
-        num_copy = len(src_to_dst)
-        src_idx, dst_idx = list(zip(*src_to_dst.items()))
-        src_idx = torch.tensor(src_idx, device=cache_pairs[0][0].device)
-        dst_idx = torch.tensor(dst_idx, device=cache_pairs[0][1].device)
+        LOGICAL_BLOCKS_PER_COPY = 2
+        pages_per_block = self.block_cache_plan.kernel_blocks_per_logical_block
+        src_blocks, dst_blocks = list(zip(*src_to_dst.items()))
+        src_entries = [
+            block * pages_per_block + page for block in src_blocks for page in range(pages_per_block)
+        ]
+        dst_entries = [
+            block * pages_per_block + page for block in dst_blocks for page in range(pages_per_block)
+        ]
+        src_idx = torch.tensor(src_entries, device=cache_pairs[0][0].device)
+        dst_idx = torch.tensor(dst_entries, device=cache_pairs[0][1].device)
+
+        entries_per_copy = LOGICAL_BLOCKS_PER_COPY * pages_per_block
+        num_entries = src_idx.numel()
         with torch.cuda.stream(self.cache_stream):
             for scache, dcache, entry_axis in cache_pairs:
-                for idx in range(0, num_copy, BLOCKS_PER_COPY):
-                    sidx = src_idx[idx:idx + BLOCKS_PER_COPY]
-                    didx = dst_idx[idx:idx + BLOCKS_PER_COPY]
+                for idx in range(0, num_entries, entries_per_copy):
+                    sidx = src_idx[idx:idx + entries_per_copy]
+                    didx = dst_idx[idx:idx + entries_per_copy]
                     sdata = scache.index_select(entry_axis, sidx)
                     dcache.index_copy_(entry_axis, didx, sdata.to(dcache.device))
             self.swap_event.record(stream=self.cache_stream)

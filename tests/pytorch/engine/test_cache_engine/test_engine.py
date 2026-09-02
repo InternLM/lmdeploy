@@ -432,13 +432,14 @@ def test_cache_engine_reuses_retained_plan_for_device_and_cpu_allocations():
     assert torch.equal(gpu_cache[0][0], cache_engine.gpu_allocation.tensor_views[0][0])
     assert torch.equal(cpu_cache[0][0], cache_engine.cpu_allocation.tensor_views[0][0])
 
-def test_cache_engine_swap_uses_each_pool_entry_axis(monkeypatch):
-    cpu_first = torch.arange(6).view(3, 2)
-    cpu_second = torch.arange(12).view(2, 3, 2)
-    gpu_first = torch.zeros((4, 2), dtype=cpu_first.dtype)
-    gpu_second = torch.zeros((2, 4, 2), dtype=cpu_second.dtype)
+def test_cache_engine_swap_expands_logical_blocks_for_each_pool_entry_axis(monkeypatch):
+    cpu_first = torch.arange(12).view(6, 2)
+    cpu_second = torch.arange(24).view(2, 6, 2)
+    gpu_first = torch.zeros((8, 2), dtype=cpu_first.dtype)
+    gpu_second = torch.zeros((2, 8, 2), dtype=cpu_second.dtype)
 
     cache_engine = object.__new__(CacheEngine)
+    cache_engine.block_cache_plan = SimpleNamespace(kernel_blocks_per_logical_block=2)
     cache_engine.cpu_allocation = CacheAllocation(
         pools=(CachePool(cpu_first, entry_axis=0), CachePool(cpu_second, entry_axis=1)),
         tensor_views=(),
@@ -455,17 +456,17 @@ def test_cache_engine_swap_uses_each_pool_entry_axis(monkeypatch):
 
     cache_engine.swap_in({0: 2, 2: 1})
 
-    assert torch.equal(gpu_first[2], cpu_first[0])
-    assert torch.equal(gpu_first[1], cpu_first[2])
-    assert torch.equal(gpu_second[:, 2], cpu_second[:, 0])
-    assert torch.equal(gpu_second[:, 1], cpu_second[:, 2])
+    assert torch.equal(gpu_first[4:6], cpu_first[0:2])
+    assert torch.equal(gpu_first[2:4], cpu_first[4:6])
+    assert torch.equal(gpu_second[:, 4:6], cpu_second[:, 0:2])
+    assert torch.equal(gpu_second[:, 2:4], cpu_second[:, 4:6])
 
-    gpu_first[3].fill_(21)
-    gpu_second[:, 3].fill_(22)
+    gpu_first[6:8].fill_(21)
+    gpu_second[:, 6:8].fill_(22)
     cache_engine.swap_out({3: 1})
 
-    assert torch.equal(cpu_first[1], gpu_first[3])
-    assert torch.equal(cpu_second[:, 1], gpu_second[:, 3])
+    assert torch.equal(cpu_first[2:4], gpu_first[6:8])
+    assert torch.equal(cpu_second[:, 2:4], gpu_second[:, 6:8])
     assert recorded_streams == [cache_engine.cache_stream, cache_engine.cache_stream]
 
 
