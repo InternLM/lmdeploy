@@ -22,8 +22,10 @@ FAST_HADAMARD_TRANSFORM_VERSION=v1.1.0.post2
 if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
     export CPLUS_INCLUDE_PATH="/usr/local/cuda/include/cccl":${CPLUS_INCLUDE_PATH}
     pip install nvidia-nvshmem-cu13==3.4.5
+    pip install mooncake-transfer-engine-cuda13==0.3.12.post1
 else
     pip install nvidia-nvshmem-cu12==3.4.5
+    pip install mooncake-transfer-engine==0.3.12.post1
 fi
 pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/DeepEP.git@${DEEP_EP_VERSION}"
 
@@ -48,6 +50,9 @@ fi
 pip download --no-deps --only-binary=:all: -d /wheels \
     "flash-attn-3==3.0.0" \
     --index-url "https://download.pytorch.org/whl/${FA3_CUDA_VERSION}"
+
+wget -q -O /wheels/lmdeploy_router-0.0.2-py3-none-linux_x86_64.whl \
+    "https://github.com/caikun-pjlab/router/releases/download/v0.0.2/lmdeploy_router-0.0.2-py3-none-linux_x86_64.whl"
 
 # GDRCopy debs
 apt-get update -y \
