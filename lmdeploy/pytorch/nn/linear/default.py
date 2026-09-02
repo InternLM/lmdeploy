@@ -117,7 +117,7 @@ class BaseLinear(LinearBase):
 
     def get_unquantized_weight(self, out_dtype: torch.dtype) -> torch.Tensor:
         """Return the local unquantized weight."""
-        return self.weight.to(out_dtype)
+        return self.impl.get_unquantized_weight(self.weight).to(out_dtype)
 
     def _forward_default(self, x, all_reduce, tp_sizes):
         """Default forward implement."""
