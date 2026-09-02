@@ -292,6 +292,18 @@ def test_required_complete_parsing_accepts_multiple_calls(configured_parser):
     assert parser.validate_complete(text) is True
 
 
+def test_required_complete_validation_preserves_reasoning_tokens(configured_parser):
+    parser = configured_parser(reasoning=True)
+    text = (
+        'Need weather</think>'
+        '<tool_call>{"name":"get_weather","arguments":{"city":"Paris"}}</tool_call>'
+    )
+    parser.reasoning_tokens = 3
+
+    assert parser.validate_complete(text) is True
+    assert parser.reasoning_tokens == 3
+
+
 def test_required_streaming_preserves_reasoning_and_split_tags(configured_parser):
     parser = configured_parser(reasoning=True)
     chunks = [

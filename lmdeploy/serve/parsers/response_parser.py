@@ -756,6 +756,10 @@ class BaseResponseParser(ResponseParser):
                                                 and self.enable_thinking is not False)
             self._update_reasoning_tokens(token_ids or [])
 
+        return self._parse_complete(text)
+
+    def _parse_complete(self, text: str) -> tuple[str, list | None, str | None]:
+        """Parse complete text without updating token accounting."""
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_calls: list[ToolCall] = []
@@ -868,7 +872,7 @@ class BaseResponseParser(ResponseParser):
         if self.request.tool_choice != 'required':
             return True
 
-        content, tool_calls, _ = self.parse_complete(text)
+        content, tool_calls, _ = self._parse_complete(text)
         if content is not None and content.strip():
             return False
         return _validate_required_tool_calls(tool_calls, self._required_tool_validators)
