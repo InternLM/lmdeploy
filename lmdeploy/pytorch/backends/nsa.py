@@ -27,6 +27,7 @@ class NSAIndexMeta:
     block_size: int = None
     is_decoding: bool = False
     score_meta: object = None
+    kv_start_indices: Tensor = None
 
 
 def _build_indexer_kv_seqlens(num_tokens: int, q_seqlens: Tensor,
@@ -89,6 +90,9 @@ def should_skip_nsa_indexer(model_metas) -> bool:
 
 
 class BaseNSAIndexFP8(ABC):
+
+    supports_fused_preprocess = False
+    requires_unfused_hadamard = False
 
     @abstractmethod
     def get_block_cache_requests(self, geometry: BlockCacheGeometry,

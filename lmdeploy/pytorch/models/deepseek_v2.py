@@ -687,7 +687,8 @@ class DeepseekV2MoE(nn.Module):
                  layer_idx,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 all_reduce: bool = True):
+                 all_reduce: bool = True,
+                 prefix: str = ''):
         super().__init__()
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
@@ -727,6 +728,7 @@ class DeepseekV2MoE(nn.Module):
             all_reduce=moe_all_reduce,
             quant_config=quantization_config,
             layer_idx=layer_idx,
+            prefix=f'{prefix}.experts' if prefix else '',
         )
         self.shared_experts = None
         if config.n_shared_experts is not None:
@@ -737,12 +739,15 @@ class DeepseekV2MoE(nn.Module):
                 dtype=dtype,
                 device=device,
                 is_shared_expert=True,
+                prefix=f'{prefix}.shared_experts' if prefix else '',
             )
 
-        if all_reduce and dp == 1 and world_size > 1:
-            self._all_reduce = True
-        else:
-            self._all_reduce = False
+        ep = dist_config.ep
+        self._all_reduce = all_reduce and dp == 1 and world_size > 1 and ep == 1
+        self._all_reduce_shared_experts = all_reduce and dp == 1 and ep > 1 and dist_config.mlp_tp > 1
+        self._shared_expert_tp_group = None
+        if self._all_reduce_shared_experts:
+            self._shared_expert_tp_group = dist_ctx.mlp_tp_group.gpu_group
 
     def forward(self, hidden_states: torch.Tensor, all_routed_experts: torch.Tensor = None):
         """forward."""
@@ -761,6 +766,10 @@ class DeepseekV2MoE(nn.Module):
 
         if self.shared_experts is not None:
             shared_states = self.shared_experts(hidden_states)
+            # EP already combines routed expert outputs. Only the shared expert
+            # output remains sharded over the MLP TP group.
+            if self._all_reduce_shared_experts:
+                dist.all_reduce(shared_states, group=self._shared_expert_tp_group)
             out_states += shared_states
         out_states = out_states.reshape(batch_size, sequence_length, -1)
 
@@ -779,7 +788,8 @@ class DeepseekV2MLP(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None,
                  is_shared_expert: bool = False,
-                 all_reduce: bool = True):
+                 all_reduce: bool = True,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         if is_shared_expert:
@@ -808,6 +818,7 @@ class DeepseekV2MLP(nn.Module):
             device=device,
             quant_config=quantization_config,
             is_tp=is_tp,
+            prefix=f'{prefix}.gate_up_proj' if prefix else '',
         )
 
         # silu and mul
@@ -823,6 +834,7 @@ class DeepseekV2MLP(nn.Module):
             device=device,
             is_tp=is_tp,
             all_reduce=all_reduce,
+            prefix=f'{prefix}.down_proj' if prefix else '',
         )
 
     def forward(self, x):
@@ -1183,6 +1195,18 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
 
+    def _map_modelslim_param_name(self, name: str, params_dict: dict[str, nn.Parameter]) -> str | None:
+        """Map ModelSlim checkpoint auxiliary tensors to lmdeploy parameters."""
+        quantization_config = self.quantization_config or {}
+        if quantization_config.get('quant_method') != 'modelslim':
+            return name
+        if name.endswith('.weight_offset'):
+            return None
+        if name.endswith('.weight_scale'):
+            mapped_name = name.removesuffix('.weight_scale') + '.scale'
+            return mapped_name if mapped_name in params_dict else None
+        return name
+
     def prepare_inputs_for_generation(
         self,
         past_key_values: list[list[torch.Tensor]],
@@ -1209,16 +1233,25 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if weight_name not in name:
                 continue
             name = name.replace(weight_name, param_name)
+            name = self._map_modelslim_param_name(name, params_dict)
+            if name is None:
+                return
             param = params_dict[name]
             load_weight(param, loaded_weight, expert_id=expert_id, shard_id=shard_id)
             break
         else:
+            name = self._map_modelslim_param_name(name, params_dict)
+            if name is None:
+                return
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
                                update_pe_mapping: list):
         """Load weight attention."""
+        name = self._map_modelslim_param_name(name, params_dict)
+        if name is None:
+            return
         device = next(iter(params_dict.values())).device
 
         def __update_pe(weight, head_dim: int, pe_dim_offset: int):
@@ -1286,9 +1319,14 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 continue
             if name.endswith('.weight_scale_inv'):
                 weight = loaded_weight
-            else:
+            elif name.endswith(('.weight', '.deq_scale', '.quant_bias')):
                 loaded_weight = loaded_weight.to(device)
                 weight = __update_pe(loaded_weight, head_dim, pe_dim_offset)
+            else:
+                weight = loaded_weight
+            name = self._map_modelslim_param_name(name, params_dict)
+            if name is None:
+                return
             param = params_dict[name]
             load_weight(param, weight)
             break
@@ -1395,9 +1433,15 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                     if weight_name not in name:
                         continue
                     name = name.replace(weight_name, param_name)
+                    name = self._map_modelslim_param_name(name, params_dict)
+                    if name is None:
+                        break
                     param = params_dict[name]
                     load_weight(param, loaded_weight, shard_id=shard_id)
                     break
                 else:
+                    name = self._map_modelslim_param_name(name, params_dict)
+                    if name is None:
+                        continue
                     param = params_dict[name]
                     load_weight(param, loaded_weight)

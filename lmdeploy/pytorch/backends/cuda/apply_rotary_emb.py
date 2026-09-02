@@ -18,6 +18,10 @@ class TritonApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
                 inplace: bool = True,
                 complex_mode: bool = False):
         """forward."""
+        if complex_mode and cos.size(-1) == query.size(-1):
+            half_size = cos.size(-1) // 2
+            cos = cos[..., :half_size]
+            sin = sin[..., :half_size]
         if inplace:
             q_embed = query
             k_embed = key

@@ -39,7 +39,10 @@ class DlinferOpsBackend(DefaultOpsBackend):
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
         """Get dlinfer layer builder."""
-        if layer_type == OpType.PagedAttention:
+        if layer_type == OpType.NSAIndexFP8:
+            from .nsa import DlinferNSAIndexBF16Builder
+            return DlinferNSAIndexBF16Builder
+        elif layer_type == OpType.PagedAttention:
             from .attention import DlinferAttentionBuilder
             return DlinferAttentionBuilder
         elif layer_type == OpType.FlashAttention:
@@ -66,6 +69,9 @@ class DlinferOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.FusedMoE:
             from .moe import DlinferFusedMoEBuilder
             return DlinferFusedMoEBuilder
+        elif layer_type == OpType.FusedMoEW8A8:
+            from .moe import DlinferFusedMoEW8A8Builder
+            return DlinferFusedMoEW8A8Builder
         elif layer_type == OpType.Linear:
             from .linear import DlinferLinearBuilder
             return DlinferLinearBuilder

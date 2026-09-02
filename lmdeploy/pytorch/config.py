@@ -818,6 +818,9 @@ class QuantizationConfig:
         elif quant_method == 'smooth_quant':
             if quant_dtype is None:
                 quant_dtype = 'int8'
+        elif quant_method == 'modelslim':
+            if quant_dtype is None:
+                quant_dtype = 'int8'
         elif quant_method == 'fp8':
             fmt = quant_config.get('fmt', 'e4m3')
             if fmt == 'e4m3':
@@ -867,6 +870,8 @@ class QuantizationConfig:
                 raise ValueError('compressed-tensors dispatch requires a non-empty canonical module prefix')
             is_ignored = any(_matches_compressed_tensors_ignore(rule, prefix) for rule in self.ignored_layers)
             return None if is_ignored else self.quant_method
+        if self.quant_method == 'modelslim':
+            return self._get_modelslim_quant_method(prefix, module_kind)
         if self.quant_method == 'fp8' and self.fp8_quant_scope == 'moe_only' and module_kind != 'moe':
             quant_method = None
             return quant_method
@@ -877,6 +882,43 @@ class QuantizationConfig:
         is_ignore = any([prefix in layer_name for layer_name in self.ignored_layers])
         quant_method = None if is_ignore else self.quant_method
         return quant_method
+
+    def _get_modelslim_quant_method(self, prefix: str, module_kind: str):
+        """Resolve one lmdeploy module against ModelSlim's flat description."""
+        if not prefix or module_kind == 'norm':
+            return None
+
+        description = self.hf_quant_config.get('quant_description', {})
+        if not description:
+            raise ValueError('ModelSlim quantization requires quant_description metadata.')
+
+        proj_name = prefix.rsplit('.', 1)[-1]
+        if module_kind == 'moe':
+            suffixes = ('0.gate_proj.weight', '0.up_proj.weight', '0.down_proj.weight')
+            keys = [f'{prefix}.{suffix}' for suffix in suffixes]
+        elif proj_name == 'gate_up_proj':
+            parent = prefix.rsplit('.', 1)[0]
+            keys = [f'{parent}.gate_proj.weight', f'{parent}.up_proj.weight']
+        else:
+            keys = [f'{prefix}.weight']
+
+        missing = [key for key in keys if key not in description]
+        if missing:
+            return None
+        quant_types = {description[key] for key in keys}
+        if len(quant_types) != 1:
+            raise ValueError(f'ModelSlim fused module {prefix} mixes quant types: {sorted(quant_types)}')
+
+        quant_type = quant_types.pop()
+        if quant_type == 'FLOAT':
+            return None
+        if quant_type == 'W8A8_DYNAMIC':
+            return 'smooth_quant'
+        if quant_type == 'W8A8':
+            if module_kind == 'moe':
+                raise ValueError(f'Static W8A8 MoE is not supported for {prefix}.')
+            return 'modelslim_w8a8_static'
+        raise ValueError(f'Unsupported ModelSlim quant type {quant_type!r} for {prefix}.')
 
     def get(self, key, default=None):
         """Get extra key from hf quant config."""

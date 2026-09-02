@@ -10,6 +10,7 @@ from lmdeploy.pytorch.model_inputs import StepContextManager, get_step_ctx_manag
 from lmdeploy.pytorch.nn import ApplyRotaryEmb
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
 from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8
+from lmdeploy.utils import get_logger
 
 from .deepseek_v2 import DeepseekV2MoE
 from .deepseek_v32 import (
@@ -21,6 +22,8 @@ from .deepseek_v32 import (
     rotate_activation,
 )
 from .patch import get_build_model_context
+
+logger = get_logger('lmdeploy')
 
 
 def _get_layer_indexer_type(config: Any, layer_idx: int | None) -> str:
@@ -41,9 +44,75 @@ def _get_layer_idx_from_weight_name(name: str) -> int | None:
     return None
 
 
+def _resolve_dsa_indexer_fusion(indexer_topk: IndexerTopKFP8) -> bool:
+    """Resolve the requested fusion mode against backend capabilities."""
+    fusion_requested = not _envs.disable_dsa_indexer_fusion
+    fusion_supported = indexer_topk.supports_fused_preprocess
+    if fusion_requested and not fusion_supported:
+        backend_impl = type(indexer_topk.index_impl).__name__
+        logger.warning(
+            'DSA indexer fused preprocessing was requested but is not '
+            f'supported by {backend_impl}; falling back to the unfused path.')
+    return fusion_requested and fusion_supported
+
+
+def _dequantize_blocked_fp8(weight: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """Dequantize a 2D block-FP8 checkpoint tensor."""
+    dim_w0, dim_w1 = weight.shape
+    dim_s0, dim_s1 = scale.shape
+    assert dim_w0 % dim_s0 == 0 and dim_w1 % dim_s1 == 0
+    weight = weight.reshape(dim_s0, dim_w0 // dim_s0, dim_s1, dim_w1 // dim_s1)
+    weight = weight.float() * scale.reshape(dim_s0, 1, dim_s1, 1)
+    return weight.to(dtype).reshape(dim_w0, dim_w1)
+
+
+def _load_fused_indexer_weight(name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                               load_buffers: dict) -> bool:
+    """Load separate checkpoint projections into one fused BF16 weight."""
+    is_wk = '.self_attn.indexer.wk.' in name
+    is_gate = '.self_attn.indexer.weights_proj.' in name
+    if not (is_wk or is_gate):
+        return False
+
+    indexer_prefix = name.rsplit('.indexer.', 1)[0] + '.indexer'
+    fused_param = params_dict.get(f'{indexer_prefix}.wk_weights_proj.weight')
+    if fused_param is None:
+        return False
+
+    if is_gate:
+        if not name.endswith('.weight'):
+            return False
+        gate = loaded_weight.to(device=fused_param.device, dtype=fused_param.dtype)
+        fused_param.data[-gate.size(0):].copy_(gate)
+        return True
+
+    if name.endswith('.weight') and loaded_weight.dtype != torch.float8_e4m3fn:
+        wk = loaded_weight.to(device=fused_param.device, dtype=fused_param.dtype)
+        fused_param.data[:wk.size(0)].copy_(wk)
+        return True
+
+    is_weight = name.endswith('.weight')
+    is_scale = name.endswith('.weight_scale_inv')
+    if not (is_weight or is_scale):
+        return False
+
+    buffer = load_buffers.setdefault(f'{indexer_prefix}.wk', {})
+    buffer['weight' if is_weight else 'scale'] = loaded_weight.to(fused_param.device)
+    if 'weight' in buffer and 'scale' in buffer:
+        wk = _dequantize_blocked_fp8(buffer['weight'], buffer['scale'], fused_param.dtype)
+        fused_param.data[:wk.size(0)].copy_(wk)
+        load_buffers.pop(f'{indexer_prefix}.wk')
+    return True
+
+
 class GlmMoeDsaIndexer(nn.Module):
 
-    def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: Any,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         quant_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
@@ -59,8 +128,17 @@ class GlmMoeDsaIndexer(nn.Module):
                                          dtype=dtype,
                                          device=device,
                                          is_tp=False,
-                                         quant_config=quant_config)
-        self.use_fusion = not _envs.disable_dsa_indexer_fusion
+                                         quant_config=quant_config,
+                                         prefix=f'{prefix}.wq_b' if prefix else '')
+        self.softmax_scale = self.head_dim**-0.5
+        self.indexer_topk = IndexerTopKFP8(self.index_topk,
+                                           self.softmax_scale,
+                                           block_size=128,
+                                           fill=-1,
+                                           # MTP may reuse its first iteration's indices in later drafts.
+                                           allow_short_prefill_scoring_skip=layer_idx < config.num_hidden_layers)
+        self.use_fusion = _resolve_dsa_indexer_fusion(self.indexer_topk)
+        self.use_unfused_hadamard = self.indexer_topk.requires_unfused_hadamard
         if self.use_fusion:
             self.wk_weights_proj = build_colwise_linear(self.dim,
                                                         self.head_dim + self.n_heads,
@@ -83,24 +161,12 @@ class GlmMoeDsaIndexer(nn.Module):
                                                      device=device,
                                                      is_tp=False)
         self.k_norm = LayerNorm(self.head_dim, device=device)
-        self.softmax_scale = self.head_dim**-0.5
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
-        self.indexer_topk = IndexerTopKFP8(self.index_topk,
-                                           self.softmax_scale,
-                                           self.head_dim,
-                                           block_size=128,
-                                           fill=-1,
-                                           # MTP may reuse its first iteration's indices in later drafts.
-                                           allow_short_prefill_scoring_skip=layer_idx
-                                           < config.num_hidden_layers)
+
 
     def _apply_rotary_pos_emb(self, q_pe: torch.Tensor, k_pe: torch.Tensor,
                               freqs_cis: tuple[torch.Tensor, torch.Tensor]):
         cos, sin = freqs_cis
-        if self.rope_interleave:
-            half_size = cos.size(-1) // 2
-            cos = cos[..., :half_size]
-            sin = sin[..., :half_size]
         return self.apply_rotary_pos_emb(q_pe,
                                          k_pe[..., None, :],
                                          cos,
@@ -136,8 +202,11 @@ class GlmMoeDsaIndexer(nn.Module):
         k = self.k_norm(self.wk(x))
         k_pe, k_nope = torch.split(k, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
         q_pe, k_pe = self._apply_rotary_pos_emb(q_pe, k_pe, freqs_cis)
-        q = rotate_activation(torch.cat([q_pe, q_nope], dim=-1))
-        k = rotate_activation(torch.cat([k_pe[0], k_nope[0, :, None]], dim=-1))
+        q = torch.cat([q_pe, q_nope], dim=-1)
+        k = torch.cat([k_pe[0], k_nope[0, :, None]], dim=-1)
+        if self.use_unfused_hadamard:
+            q = rotate_activation(q)
+            k = rotate_activation(k)
         weights = self.weights_proj(x) * self.n_heads**-0.5
         return self.indexer_topk(q[0],
                                  k[:, 0],
@@ -201,11 +270,20 @@ class DSATopKIndicesBuffer(nn.Module):
 
 class GlmMoeDsaAttention(DeepseekV32Attention):
 
-    def _build_indexer(self, config: Any, layer_idx: int, dtype: torch.dtype, device: torch.device):
+    def _build_indexer(self,
+                       config: Any,
+                       layer_idx: int,
+                       dtype: torch.dtype,
+                       device: torch.device,
+                       prefix: str = ''):
         self.indexer_type = _get_layer_indexer_type(config, layer_idx)
         if self.indexer_type == 'shared':
             return None
-        return GlmMoeDsaIndexer(config, layer_idx, dtype=dtype, device=device)
+        return GlmMoeDsaIndexer(config,
+                                layer_idx,
+                                dtype=dtype,
+                                device=device,
+                                prefix=f'{prefix}.indexer' if prefix else '')
 
     def forward(
         self,
@@ -257,6 +335,17 @@ class GlmMoeDsaAttention(DeepseekV32Attention):
 class GlmMoeDsaDecoderLayer(DeepseekV32DecoderLayer):
     attention_cls = GlmMoeDsaAttention
 
+    def __init__(self,
+                 config: Any,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
+        super().__init__(config, layer_idx, dtype=dtype, device=device, prefix=prefix)
+        if dtype is not None:
+            self.input_layernorm.to(dtype=dtype)
+            self.post_attention_layernorm.to(dtype=dtype)
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -293,6 +382,8 @@ class GlmMoeDsaModel(DeepseekV32Model):
 
     def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__(config, dtype=dtype, device=device)
+        if dtype is not None:
+            self.norm.to(dtype=dtype)
         self.topk_indices_buffer = DSATopKIndicesBuffer(config.index_topk)
 
     def forward(
@@ -352,6 +443,12 @@ class GlmMoeDsaForCausalLM(DeepseekV32ForCausalLM):
                  device: torch.device = None):
         super().__init__(config, ctx_mgr, dtype=dtype, device=device)
         self.enable_return_routed_experts = get_build_model_context().enable_return_routed_experts
+
+    def load_weights(self, weights):
+        # ModelSlim QuaRot checkpoints carry this auxiliary MTP weight in the
+        # main checkpoint index.  The target model does not consume it.
+        weights = ((name, weight) for name, weight in weights if name != 'rot.weight')
+        return super().load_weights(weights)
 
     def forward(
         self,

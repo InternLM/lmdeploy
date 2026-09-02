@@ -335,6 +335,9 @@ class DSAIndexerMetaBuilder(
 
 class TritonNSAIndexFP8(BaseNSAIndexFP8):
 
+    supports_fused_preprocess = True
+    requires_unfused_hadamard = True
+
     def __init__(self, topk: int, softmax_scale: float, block_size: int,
                  fill: int,
                  allow_short_prefill_scoring_skip: bool = False) -> None:
