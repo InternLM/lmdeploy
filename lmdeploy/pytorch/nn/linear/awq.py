@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from contextlib import nullcontext
 from typing import Any
 
 import torch
@@ -39,17 +40,20 @@ class AwqLinear(LinearBase):
             in_features, out_features = self._get_io_features(in_features, out_features, w_bit, group_size, colwise)
         qweight, scales, qzeros, bias = self.create_weights(in_features, out_features, w_bit, group_size, bias,
                                                             self.dtype, self.device)
-        self.impl = get_backend().build_op(
-            LinearW4A16BuildSpec(
-                in_features=in_features,
-                out_features=out_features,
-                w_bit=w_bit,
-                group_size=group_size,
-                bias=bias is not None,
-                output_dtype=scales.dtype,
-            ),
-            enable_deterministic=get_build_model_context().enable_deterministic,
-        )
+        # Provider checks must inspect the device that owns these weights.
+        device_guard = torch.cuda.device(scales.device) if scales.is_cuda else nullcontext()
+        with device_guard:
+            self.impl = get_backend().build_op(
+                LinearW4A16BuildSpec(
+                    in_features=in_features,
+                    out_features=out_features,
+                    w_bit=w_bit,
+                    group_size=group_size,
+                    bias=bias is not None,
+                    output_dtype=scales.dtype,
+                ),
+                enable_deterministic=get_build_model_context().enable_deterministic,
+            )
         self.register_all_parameters(qweight, scales, qzeros, bias)
 
         self.in_features = in_features

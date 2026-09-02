@@ -135,16 +135,8 @@ class CudaOpsBackend(DefaultOpsBackend):
             from .cache_block_copy import CudaCacheBlockCopyImpl
             return cast(ImplT, CudaCacheBlockCopyImpl(spec.packed_caches, spec.pages_per_block))
         if isinstance(spec, LinearW4A16BuildSpec):
-            from .awq_modules import AwqLinearW4A16Impl
-            return cast(
-                ImplT,
-                AwqLinearW4A16Impl(
-                    spec.in_features,
-                    spec.out_features,
-                    spec.w_bit,
-                    spec.group_size,
-                ),
-            )
+            from .awq_modules import _build_linear_w4a16
+            return cast(ImplT, _build_linear_w4a16(spec))
         if isinstance(spec, LinearW8A8BuildSpec):
             from .qmodules import TritonLinearW8A8Impl
             return cast(
