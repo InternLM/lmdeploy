@@ -10,6 +10,19 @@ from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParser, ToolParserManager
 
 
+@pytest.fixture(scope='module')
+def xgrammar_compiler():
+    import xgrammar as xgr
+
+    tokenizer_info = xgr.TokenizerInfo(
+        [bytes([token_id]) for token_id in range(256)],
+        vocab_type=xgr.VocabType.RAW,
+        vocab_size=256,
+        stop_token_ids=[0],
+    )
+    return xgr, xgr.GrammarCompiler(tokenizer_info)
+
+
 def _tools():
     return [{
         'type': 'function',
@@ -101,7 +114,7 @@ def _walk_formats(value):
     ],
 )
 @pytest.mark.parametrize('reasoning', [False, True])
-def test_xgrammar_structural_formats_require_schema_constrained_calls(model_format, reasoning):
+def test_xgrammar_structural_formats_require_schema_constrained_calls(model_format, reasoning, xgrammar_compiler):
     tools = _tools()
     original = deepcopy(tools)
 
@@ -127,6 +140,10 @@ def test_xgrammar_structural_formats_require_schema_constrained_calls(model_form
     for tool in tools:
         assert tool['function']['name'] in serialized
         assert str(tool['function']['parameters']) in serialized
+
+    xgr, compiler = xgrammar_compiler
+    compiled = compiler.compile_structural_tag(response_format)
+    assert isinstance(compiled, xgr.CompiledGrammar)
 
 
 def test_structural_format_rejects_empty_tools():

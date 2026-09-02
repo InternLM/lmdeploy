@@ -23,7 +23,10 @@ def _json_schema_from_response_format(response_format: dict[str, Any]) -> str:
 
 
 def compile_response_format(compiler, response_format: dict[str, Any]):
-    """Compile one public or internal response format with XGrammar."""
+    """Compile one public or internal response format with XGrammar.
+
+    Structural-tag formats use XGrammar's native top-level shape.
+    """
     schema_type = response_format.get('type', 'text')
     if schema_type == 'json_schema':
         return compiler.compile_json_schema(
