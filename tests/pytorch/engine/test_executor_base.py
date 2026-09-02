@@ -171,14 +171,15 @@ def test_sync_spec_cache_block_size_updates_kernel_block_size():
     assert spec_cache_config.kernel_block_size == 16
 
 
-def test_adjust_block_size_uses_deepseek_v4_cache_hook_before_large_head_dim_rule():
+def test_adjust_block_size_uses_deepseek_v4_hook_and_syncs_model_config():
     executor = object.__new__(ExecutorBase)
     executor.cache_config = CacheConfig(max_batches=1,
                                         block_size=192,
                                         kernel_block_size=64,
                                         num_cpu_blocks=0,
                                         num_gpu_blocks=0)
-    executor.model_config = SimpleNamespace(k_head_dim=512,
+    executor.model_config = SimpleNamespace(block_size=192,
+                                            k_head_dim=512,
                                             use_flash_mla=False,
                                             update_cache_config_func=update_deepseek_v4_cache_config)
 
@@ -187,6 +188,7 @@ def test_adjust_block_size_uses_deepseek_v4_cache_hook_before_large_head_dim_rul
     assert executor.cache_config.block_size == 256
     assert executor.cache_config.kernel_block_size == 256
     assert executor.cache_config.window_size == -1
+    assert executor.model_config.block_size == 256
 
 
 def test_executor_disables_prefix_cache_with_generic_sliding_window():

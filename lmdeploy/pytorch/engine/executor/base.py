@@ -235,6 +235,9 @@ class ExecutorBase:
         """Adjust block_size."""
         if self.model_config.update_cache_config_func is not None:
             self.model_config.update_cache_config_func(self.cache_config)
+            # TODO: Remove this mirror after graph and warmup metadata consume
+            # CacheConfig.block_size directly.
+            self.model_config.block_size = self.cache_config.block_size
             return
         if self.model_config.use_flash_mla is True:
             if self.cache_config.block_size != 64:
