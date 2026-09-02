@@ -164,8 +164,7 @@ def _validate_tool_choice_request(request: MessagesRequest, parser_cls):
             'Please launch the api_server with --tool-call-parser if you want to use tool calling.')
 
     if _is_tool_choice_any(request.tool_choice):
-        supports_required_tool_choice = getattr(parser_cls, 'supports_required_tool_choice', None)
-        if supports_required_tool_choice is None or not supports_required_tool_choice():
+        if not parser_cls.supports_required_tool_choice():
             return create_error_response(
                 HTTPStatus.BAD_REQUEST,
                 'The configured tool-call parser does not support `tool_choice={"type":"any"}`.')

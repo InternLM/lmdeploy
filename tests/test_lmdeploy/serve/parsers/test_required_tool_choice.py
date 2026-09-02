@@ -108,6 +108,7 @@ def _walk_formats(value):
         'qwen_3_5',
         'qwen_3_coder',
         'llama',
+        'kimi',
         'glm_4_7',
         'deepseek_v3_2',
         'deepseek_v4',
@@ -118,10 +119,15 @@ def test_xgrammar_structural_formats_require_schema_constrained_calls(model_form
     tools = _tools()
     original = deepcopy(tools)
 
-    class XGrammarToolParser(ToolParser):
-        structural_tag_model = model_format
+    if model_format == 'kimi':
+        parser_cls = ToolParserManager.get('kimi-k2')
+    else:
+        class XGrammarToolParser(ToolParser):
+            structural_tag_model = model_format
 
-    response_format = XGrammarToolParser.build_required_tool_response_format(
+        parser_cls = XGrammarToolParser
+
+    response_format = parser_cls.build_required_tool_response_format(
         _request(),
         tools,
         reasoning=reasoning,

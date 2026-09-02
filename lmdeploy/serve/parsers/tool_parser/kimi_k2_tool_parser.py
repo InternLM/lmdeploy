@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 class KimiK2ToolParser(ToolParser):
     """Tool parser for the Kimi K2 tool-call section protocol."""
 
+    structural_tag_model = 'kimi'
+
     section_begin = '<|tool_calls_section_begin|>'
     section_end = '<|tool_calls_section_end|>'
     call_begin = '<|tool_call_begin|>'
