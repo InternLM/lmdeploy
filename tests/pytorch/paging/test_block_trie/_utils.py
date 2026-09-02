@@ -1,8 +1,8 @@
 import numpy as np
 import torch
 
+from lmdeploy.multimodal.constants import Modality
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
-from lmdeploy.vl.constants import Modality
 
 
 class BlockTrieTestMixin:

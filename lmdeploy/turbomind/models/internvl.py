@@ -11,7 +11,7 @@ import _turbomind as _tm
 import torch
 from transformers import PretrainedConfig
 
-from lmdeploy.vl.constants import Modality
+from lmdeploy.multimodal.constants import Modality
 
 from ..builders import (
     AttentionBuilder,

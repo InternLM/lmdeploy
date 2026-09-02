@@ -1,10 +1,10 @@
 import numpy as np
 import pytest
 
+from lmdeploy.multimodal.constants import Modality
 from lmdeploy.pytorch import messages as messages_module
 from lmdeploy.pytorch.messages import SamplingParam, UpdateTokenMode
 from lmdeploy.pytorch.paging import Scheduler
-from lmdeploy.vl.constants import Modality
 
 from ._utils import BlockTrieTestMixin
 

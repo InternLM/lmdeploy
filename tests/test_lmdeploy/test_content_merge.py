@@ -4,8 +4,8 @@ import sys
 import pytest
 from PIL import Image
 
+from lmdeploy.multimodal.constants import Modality
 from lmdeploy.serve.processors import MultimodalProcessor
-from lmdeploy.vl.constants import Modality
 
 multimodal_module = sys.modules[MultimodalProcessor.__module__]
 

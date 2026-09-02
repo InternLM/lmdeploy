@@ -30,7 +30,7 @@ To construct valid DeepSeek-VL2 prompts with image inputs, users should insert `
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 
 if __name__ == "__main__":

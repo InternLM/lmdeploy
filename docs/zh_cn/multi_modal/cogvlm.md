@@ -25,7 +25,7 @@ huggingface-cli download lmsys/vicuna-7b-v1.5 special_tokens_map.json tokenizer.
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 
 if __name__ == "__main__":

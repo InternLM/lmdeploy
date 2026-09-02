@@ -42,7 +42,7 @@ The following sample code shows the basic usage of VLM pipeline. For detailed in
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('OpenGVLab/InternVL2-8B')
 
@@ -60,7 +60,7 @@ More examples are listed below:
 
 ```python
 from lmdeploy import pipeline, GenerationConfig
-from lmdeploy.vl.constants import IMAGE_TOKEN
+from lmdeploy.multimodal.constants import IMAGE_TOKEN
 
 pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
 messages = [
@@ -86,7 +86,7 @@ out = pipe(messages, gen_config=GenerationConfig(top_k=1))
 
 ```python
 from lmdeploy import pipeline, GenerationConfig
-from lmdeploy.vl.constants import IMAGE_TOKEN
+from lmdeploy.multimodal.constants import IMAGE_TOKEN
 
 pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
 messages = [
@@ -114,8 +114,8 @@ out = pipe(messages, gen_config=GenerationConfig(top_k=1))
 import numpy as np
 from lmdeploy import pipeline, GenerationConfig
 from decord import VideoReader, cpu
-from lmdeploy.vl.constants import IMAGE_TOKEN
-from lmdeploy.vl import encode_image_base64
+from lmdeploy.multimodal.constants import IMAGE_TOKEN
+from lmdeploy.multimodal import encode_image_base64
 from PIL import Image
 pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
 

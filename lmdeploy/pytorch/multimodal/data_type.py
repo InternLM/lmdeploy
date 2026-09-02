@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from lmdeploy.vl.constants import Modality
+from lmdeploy.multimodal.constants import Modality
 
 NestedTensor = Tensor | list[Tensor]
 

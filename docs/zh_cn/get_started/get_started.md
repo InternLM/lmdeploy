@@ -81,7 +81,7 @@ VLM 推理 pipeline 与 LLM 类似，但增加了使用 pipeline 处理图像数
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('OpenGVLab/InternVL2-8B')
 
@@ -94,7 +94,7 @@ print(response)
 
 ```python
 from lmdeploy import pipeline, VisionConfig
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('OpenGVLab/InternVL2-8B',
                 vision_config=VisionConfig(

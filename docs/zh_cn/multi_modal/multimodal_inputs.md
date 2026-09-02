@@ -403,7 +403,7 @@ lmdeploy serve api_server <model_path> --allowed-media-domains example.com
 - **本地文件路径**，使用 `file://` 协议：`file:///absolute/path/to/file.jpg`
 - **Base64 编码数据**，使用 data URL：`data:<mime>;base64,<encoded_data>`
 
-可使用 `lmdeploy.vl.utils` 中的工具函数对本地文件进行编码：
+可使用 `lmdeploy.multimodal.utils` 中的工具函数对本地文件进行编码：
 
 <details>
 <summary>本地文件路径示例</summary>
@@ -439,7 +439,7 @@ print(response.choices[0].message.content)
 
 ```python
 from openai import OpenAI
-from lmdeploy.vl.utils import encode_image_base64
+from lmdeploy.multimodal.utils import encode_image_base64
 
 client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
 model_name = client.models.list().data[0].id
@@ -470,7 +470,7 @@ print(response.choices[0].message.content)
 
 ```python
 from openai import OpenAI
-from lmdeploy.vl.utils import encode_video_base64
+from lmdeploy.multimodal.utils import encode_video_base64
 
 client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
 model_name = client.models.list().data[0].id
@@ -502,7 +502,7 @@ print(response.choices[0].message.content)
 
 ```python
 from openai import OpenAI
-from lmdeploy.vl.utils import encode_audio_base64
+from lmdeploy.multimodal.utils import encode_audio_base64
 
 client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
 model_name = client.models.list().data[0].id
@@ -533,7 +533,7 @@ print(response.choices[0].message.content)
 
 ```python
 from openai import OpenAI
-from lmdeploy.vl.utils import encode_time_series_base64
+from lmdeploy.multimodal.utils import encode_time_series_base64
 
 client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
 model_name = client.models.list().data[0].id

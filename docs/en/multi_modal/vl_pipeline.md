@@ -16,7 +16,7 @@ Using the pipeline interface to infer other VLM models is similar, with the main
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('OpenGVLab/InternVL2_5-8B')
 
@@ -53,7 +53,7 @@ Tensor paramllelism can be activated by setting the engine parameter `tp`
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(tp=2))
@@ -69,7 +69,7 @@ When creating the pipeline, you can customize the size of the context window by 
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(session_len=8192))
@@ -85,7 +85,7 @@ You can change the default sampling parameters of pipeline by passing `Generatio
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(tp=2, session_len=8192))
@@ -101,8 +101,8 @@ By default, LMDeploy inserts the special image token into the user prompt follow
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
-from lmdeploy.vl.constants import IMAGE_TOKEN
+from lmdeploy.multimodal import load_image
+from lmdeploy.multimodal.constants import IMAGE_TOKEN
 
 pipe = pipeline('deepseek-ai/deepseek-vl-1.3b-chat')
 
@@ -117,7 +117,7 @@ While performing inference, LMDeploy identifies an appropriate chat template fro
 
 ```python
 from lmdeploy import pipeline, ChatTemplateConfig
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 pipe = pipeline('local_model_folder',
                 chat_template_config=ChatTemplateConfig(model_name='llava-v1'))
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
@@ -133,7 +133,7 @@ The default parameters of the visual model can be modified by setting `VisionCon
 
 ```python
 from lmdeploy import pipeline, VisionConfig
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 vision_config=VisionConfig(max_batch_size=16)
 pipe = pipeline('liuhaotian/llava-v1.5-7b', vision_config=vision_config)
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
@@ -145,7 +145,7 @@ print(response)
 
 ```python
 from lmdeploy import pipeline, GenerationConfig
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 pipe = pipeline('OpenGVLab/InternVL2_5-8B')
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
@@ -162,7 +162,7 @@ When dealing with multiple images, you can put them all in one list. Keep in min
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(session_len=8192))
@@ -183,7 +183,7 @@ Conducting inference with batch prompts is quite straightforward; just place the
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(session_len=8192))
@@ -203,7 +203,7 @@ There are two ways to do the multi-turn conversations with the pipeline. One is 
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig, GenerationConfig
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(session_len=8192))
@@ -224,7 +224,7 @@ You can release the pipeline explicitly by calling its `close()` method, or alte
 from lmdeploy import pipeline
 
 from lmdeploy import pipeline
-from lmdeploy.vl import load_image
+from lmdeploy.multimodal import load_image
 
 with pipeline('OpenGVLab/InternVL2_5-8B') as pipe:
     image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
