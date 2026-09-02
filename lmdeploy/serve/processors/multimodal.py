@@ -220,8 +220,8 @@ class MultimodalProcessor:
                                **kwargs):
         """Process prompt and return prompt string and input_ids.
 
-        Handles both text-only and multimodal prompts. If multimodal input is detected
-        and vl_encoder is available, processes images accordingly.
+        Handles both text-only and multimodal prompts. Multimodal input is
+        rejected when no vision encoder is available.
 
         Args:
             prompt: Input prompt as string or list of message dicts.
@@ -237,6 +237,9 @@ class MultimodalProcessor:
         Returns:
             dict with 'prompt' (str) and 'input_ids' (list[int]) keys for text-only,
             or dict with multimodal data for multimodal prompts.
+
+        Raises:
+            ValueError: If multimodal input is provided to a text-only model.
         """
         # Handle string input
         if isinstance(prompt, str):
@@ -253,8 +256,11 @@ class MultimodalProcessor:
             # Check if multimodal input exists
             has_multimodal_input = self._has_multimodal_input(prompt)
 
-            # If no multimodal input or no vl_encoder, use text-only processing
-            if not has_multimodal_input or self.vl_encoder is None:
+            if has_multimodal_input and self.vl_encoder is None:
+                raise ValueError('Multimodal input is not supported by this model.')
+
+            # If no multimodal input, use text-only processing
+            if not has_multimodal_input:
                 return await self._get_text_prompt_input(prompt=prompt,
                                                          do_preprocess=do_preprocess,
                                                          adapter_name=adapter_name,
