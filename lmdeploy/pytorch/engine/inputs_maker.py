@@ -68,6 +68,51 @@ def _make_state_checkpoint_copy_plan(
     return tuple(src_offsets), tuple(dst_offsets)
 
 
+def fill_logits_indices(model_inputs: ModelInputs, messages: list['SchedulerSequence'], query_lengths: list[int]):
+    """Build ordered source-hidden indices and per-sequence output rows.
+
+    Non-final long-prefill chunks still project their final source row, but
+    that row is emitted by the next chunk through ModelAgent's
+    ``_prev_chunk_last_logit`` carry.
+    """
+    if not any(msg.logprob_start_pos >= 0 for msg in messages):
+        model_inputs.logits_indices = None
+        model_inputs.seq_logit_length = None
+        return model_inputs
+
+    indices = []
+    row_counts = []
+    base = 0
+    for msg, query_len in zip(messages, query_lengths, strict=True):
+        chunk_start = msg.num_history_ids
+        chunk_end = chunk_start + query_len
+        logprob_start = msg.logprob_start_pos
+        input_end = msg.input_end_pos
+
+        range_start = max(chunk_start, logprob_start) if logprob_start >= 0 else chunk_end
+        range_end = min(chunk_end, input_end - 1)
+        num_projected_rows = max(0, range_end - range_start)
+        indices.extend(range(base + range_start - chunk_start, base + range_end - chunk_start))
+
+        has_prev_chunk_logit = (logprob_start >= 0 and msg.input_start_pos < chunk_start
+                                and logprob_start < chunk_start and chunk_start < input_end)
+        stash_current_last_logit = (range_end == chunk_end and num_projected_rows > 0
+                                    and chunk_end < input_end)
+        if stash_current_last_logit:
+            assert len(messages) == 1, 'long-prefill cross-chunk logit carry requires a single request'
+        row_count = num_projected_rows
+        if has_prev_chunk_logit:
+            row_count += 1
+        if stash_current_last_logit:
+            row_count -= 1
+        row_counts.append(row_count)
+        base += query_len
+
+    model_inputs.logits_indices = torch.tensor(indices, dtype=torch.long)
+    model_inputs.seq_logit_length = torch.tensor(row_counts, dtype=torch.long)
+    return model_inputs
+
+
 @dataclass
 class InputsMakerConfig:
     """Input maker config.
@@ -1003,6 +1048,8 @@ class InputsMakerAsync:
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
         )
+        if is_prefill:
+            model_inputs = fill_logits_indices(model_inputs, messages, [len(ids) for ids in token_ids])
 
         # adapters
         self._set_adapter_ids(model_inputs, messages)
@@ -1063,6 +1110,7 @@ class InputsMakerAsync:
             model_metas=model_metas,
             is_chunk=True,
         )
+        model_inputs = fill_logits_indices(model_inputs, [seq], [chunk_size])
 
         # adapters
         self._set_adapter_ids(model_inputs, [seq])
@@ -1196,7 +1244,9 @@ class InputsMakerAsync:
         if is_decoding:
             self.running_seqs = running
         else:
-            self.running_seqs += running
+            for seq in running:
+                if seq.sampling_param.max_new_tokens > 0:
+                    self.running_seqs.append(seq)
 
     def preempt_invalid_decode_seqs(self):
         """Return decode sequences rejected during prefetch to waiting."""

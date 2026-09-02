@@ -258,7 +258,10 @@ def _run_logprobs_test(port: int = DEFAULT_PORT):
     model_name = api_client.available_models[0]
     output = None
     for output in api_client.chat_completions_v1(model=model_name,
-                                                 messages='Hi, pls intro yourself',
+                                                 messages=[{
+                                                     'role': 'user',
+                                                     'content': 'Hi, pls intro yourself'
+                                                 }],
                                                  max_tokens=5,
                                                  temperature=0.01,
                                                  logprobs=True,

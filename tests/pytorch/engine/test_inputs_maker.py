@@ -17,11 +17,49 @@ from lmdeploy.pytorch.engine.inputs_maker import (
     InputsMakerConfig,
     LongContextChunker,
     _make_state_checkpoint_copy_plan,
+    fill_logits_indices,
 )
 from lmdeploy.pytorch.engine.model_agent.agent import BatchedOutputs
 from lmdeploy.pytorch.kv_connector import KVConnectorOutput
 from lmdeploy.pytorch.messages import MessageStatus, StateCheckpointRestore, StateCheckpointSaveReservation
 from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import CheckpointCopyPlan
+
+
+def _logprob_seq(history, input_start, input_end, logprob_start, all_ids):
+    return SimpleNamespace(num_history_ids=history,
+                           input_start_pos=input_start,
+                           input_end_pos=input_end,
+                           logprob_start_pos=logprob_start,
+                           all_ids=all_ids)
+
+
+def test_logits_indices_keep_batch_alignment_and_exact_targets():
+    disabled = _logprob_seq(2, 0, 5, -1, list(range(5)))
+    enabled = _logprob_seq(10, 8, 15, 11, list(range(20)))
+    empty = _logprob_seq(20, 17, 20, 20, list(range(24)))
+
+    model_inputs = fill_logits_indices(SimpleNamespace(), [disabled, enabled, empty], [3, 5, 0])
+    assert model_inputs.logits_indices.tolist() == [4, 5, 6]
+    assert model_inputs.seq_logit_length.tolist() == [0, 3, 0]
+
+
+def test_logits_indices_shift_cross_chunk_target_to_next_chunk():
+    first = _logprob_seq(0, 0, 10, 2, list(range(12)))
+    model_inputs = fill_logits_indices(SimpleNamespace(), [first], [4])
+    assert model_inputs.logits_indices.tolist() == [2, 3]
+    assert model_inputs.seq_logit_length.tolist() == [1]
+
+    middle = _logprob_seq(4, 0, 10, 2, list(range(12)))
+    model_inputs = fill_logits_indices(SimpleNamespace(), [middle], [4])
+    assert model_inputs.logits_indices.tolist() == [0, 1, 2, 3]
+    assert model_inputs.seq_logit_length.tolist() == [4]
+
+    # Final chunks exclude the last input hidden, which is reserved for
+    # generated/control-token sampling, but include the carried previous row.
+    final = _logprob_seq(8, 0, 10, 2, list(range(12)))
+    model_inputs = fill_logits_indices(SimpleNamespace(), [final], [2])
+    assert model_inputs.logits_indices.tolist() == [0]
+    assert model_inputs.seq_logit_length.tolist() == [2]
 
 
 @dataclass
@@ -47,6 +85,7 @@ class _DummySeq:
         self.return_routed_experts = False
         self.return_ce_loss = False
         self.status = MessageStatus.RUNNING
+        self.sampling_param = SimpleNamespace(max_new_tokens=512)
 
     def set_step(self, step: int):
         self.num_history_ids = step
@@ -1362,6 +1401,36 @@ def test_normal_prefill_can_update_running_while_long_chunker_is_active():
     assert maker.running_seqs == [short_seq]
     assert maker.long_context_chunker.enabled()
     assert maker.long_context_chunker.next_step == 0
+
+
+def test_scoring_prefill_never_enters_decode_running_set():
+    seq = _DummySeq(history_ids=0,
+                    token_ids=16,
+                    all_multimodals={},
+                    input_multimodals={})
+    seq.sampling_param.max_new_tokens = 0
+    model_inputs = _fake_model_inputs()
+    model_inputs.logits_indices = torch.tensor([0])
+    maker = _make_policy_maker(seq)
+
+    maker.update_running_seqs([seq], model_inputs)
+
+    assert maker.running_seqs == []
+
+
+def test_prefill_running_update_filters_by_decode_need_not_logits_metadata():
+    long_seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
+    scoring_seq = _DummySeq(history_ids=0, token_ids=16, all_multimodals={}, input_multimodals={})
+    decode_seq = _DummySeq(history_ids=0, token_ids=16, all_multimodals={}, input_multimodals={})
+    scoring_seq.sampling_param.max_new_tokens = 0
+    decode_seq.sampling_param.max_new_tokens = 3
+    model_inputs = _fake_model_inputs()
+    model_inputs.logits_indices = torch.tensor([0])
+    maker = _make_policy_maker(long_seq)
+
+    maker.update_running_seqs([scoring_seq, decode_seq], model_inputs)
+
+    assert maker.running_seqs == [decode_seq]
 
 
 def test_last_long_context_chunk_runs_as_prefill_on_prefill_turn():

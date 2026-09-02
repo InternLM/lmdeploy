@@ -23,7 +23,7 @@ from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
-from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
 from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVConnectorRole, build_kv_connector
 from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
@@ -425,7 +425,7 @@ class BaseModelAgent:
         """Initialize request-local decode and chunk state."""
         self.step_inputs = self.strategy_factory.build_step_inputs()
         self._prev_chunk_output: dict = None
-        # chunked-prefill ppl: last logit row of the previous chunk, used to score the cross-chunk boundary token
+        # Last logit row of the previous chunk, used to score cross-chunk prompt tokens.
         self._prev_chunk_last_logit: torch.Tensor | None = None
 
     def reset_runtime_state(self):
@@ -540,6 +540,22 @@ class BaseModelAgent:
         output['hidden_states'] = hidden_states
         return output
 
+    def _get_input_logits(self, hidden_states: torch.Tensor, inputs: ModelInputs):
+        """Project the selected scoring rows with at most one lm-head call."""
+        if not self._is_prefill_input_logprobs(inputs):
+            return None
+        logits_indices = inputs.logits_indices
+        flat_hidden = hidden_states.reshape(-1, hidden_states.shape[-1])
+        selected_hidden = flat_hidden.index_select(0, logits_indices)
+        return self.get_logits(selected_hidden[None])[0]
+
+    @staticmethod
+    def _is_prefill_input_logprobs(inputs: ModelInputs | None) -> bool:
+        """Whether this prefill step uses the V2 scoring-only input-logprob
+        path."""
+        return (inputs is not None and not inputs.is_dummy and not inputs.is_decoding
+                and inputs.logits_indices is not None and inputs.seq_logit_length is not None)
+
     async def _async_model_forward(
         self,
         inputs: ModelInputs,
@@ -547,19 +563,25 @@ class BaseModelAgent:
         cache_inputs: CacheCheckpointInputs | None = None,
     ):
         """Model forward."""
-        if self.memdecode_agent is not None and return_logits:
+        memdecode_agent = getattr(self, 'memdecode_agent', None)
+        if memdecode_agent is not None and return_logits:
             raise RuntimeError('MemDecode does not support returned prompt logits yet.')
 
         ret = await self.async_forward(inputs, cache_inputs=cache_inputs)
+        if self._is_prefill_input_logprobs(inputs):
+            # This is the only lm-head projection for scoring: return before
+            # the ordinary all/sampling-logits projection below.
+            ret['logits'] = self._get_input_logits(ret['hidden_states'][0], inputs)
+            return ret
 
         if not return_logits:
             ret = self._postprocess_forward_output(ret, inputs)
 
-        if self.memdecode_agent is not None:
+        if memdecode_agent is not None:
             base_hidden_states = ret['hidden_states']
             base_logits = self.get_logits(base_hidden_states)
 
-            return await self.memdecode_agent.fuse_with_base(
+            return await memdecode_agent.fuse_with_base(
                 inputs=inputs,
                 base_output=ret,
                 base_logits=base_logits,
@@ -571,6 +593,58 @@ class BaseModelAgent:
         logits = self.get_logits(hidden_states)
         ret['logits'] = logits
         return ret
+
+    def _get_outputs_with_logprobs(
+        self,
+        input_logits: torch.Tensor | None,
+        inputs: ModelInputs,
+        num_logprobs: int,
+        model_metas: list[dict[str, Any]] | None,
+    ):
+        """Build the scoring-only output without generation modifiers."""
+        input_logprobs = None
+        if input_logits is not None:
+            source_indices = inputs.logits_indices
+            input_ids = inputs.input_ids.flatten()
+            if inputs.is_chunk:
+                prev_chunk_last_logit = None if inputs.is_first_chunk else self._prev_chunk_last_logit
+                if source_indices.numel() > 0 and not inputs.is_last_chunk:
+                    self._prev_chunk_last_logit = input_logits[-1:].clone()
+                    input_logits = input_logits[:-1]
+                    source_indices = source_indices[:-1]
+                else:
+                    self._prev_chunk_last_logit = None
+            else:
+                prev_chunk_last_logit = None
+
+            targets = input_ids.index_select(0, source_indices + 1)
+            if prev_chunk_last_logit is not None:
+                input_logits = torch.cat([prev_chunk_last_logit, input_logits], dim=0)
+                targets = torch.cat([input_ids[:1], targets])
+            if self.misc_config.logprobs_mode == 'raw_logprobs':
+                input_logits = input_logits.log_softmax(dim=-1)
+            target_indices = targets[:, None]
+            vals = input_logits.gather(-1, target_indices)
+            if num_logprobs > 0:
+                topk_vals, topk_indices = _torch_topk(input_logits, num_logprobs, dim=-1)
+                vals = torch.cat([vals, topk_vals], dim=-1)
+                target_indices = torch.cat([target_indices, topk_indices], dim=-1)
+            input_logprobs = BatchedLogProbs(vals=vals, indices=target_indices.to(torch.int32))
+
+        batch_size = inputs.seq_length.numel()
+        device = inputs.input_ids.device
+        return BatchedOutputs(
+            next_token_ids=torch.zeros(batch_size,
+                                       dtype=inputs.input_ids.dtype,
+                                       device=device),
+            stopped=torch.ones(batch_size, dtype=torch.bool, device=device),
+            stop_pos=torch.full((batch_size,),
+                                -1,
+                                dtype=torch.long,
+                                device=device),
+            model_metas=model_metas,
+            logprobs=input_logprobs,
+        )
 
     async def async_sampling_logits(self, logits: torch.Tensor, inputs: ModelInputs,
                                     extra_inputs: ExtraInputs, sampling_inputs: SamplingInputs):
@@ -943,6 +1017,7 @@ class BaseModelAgent:
                      f'is_last_chunk={inputs.is_last_chunk} '
                      f'dp_meta={inputs.dp_meta} '
                      f'is_decoding={inputs.is_decoding}')
+        prefill_input_logprobs = self._is_prefill_input_logprobs(inputs)
         output = await self._async_model_forward(
             inputs,
             return_logits=return_logits or return_ce_loss,
@@ -957,6 +1032,24 @@ class BaseModelAgent:
             connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
             if connector_output is not None:
                 self._push_output(BatchedOutputs.connector_only(connector_output))
+            return
+
+        # input-logprob mode is scoring-only: this branch emits compact
+        # logprob rows, and falling through would wrongly run sampling /
+        # sequence-update on a max_tokens=0 request.
+        if prefill_input_logprobs:
+            model_metas = output.get('model_metas')
+            connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+            if self.need_output:
+                output = self._get_outputs_with_logprobs(output.get('logits'), inputs,
+                                                         sampling_inputs.max_num_logprobs, model_metas)
+                output.kv_connector_output = connector_output
+                self._push_output(output)
+            elif connector_output is not None:
+                self._push_output(BatchedOutputs.connector_only(connector_output))
+            if inputs.is_chunk and not inputs.is_last_chunk:
+                self._prev_chunk_output = {'model_metas': model_metas}
+
             return
 
         logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
