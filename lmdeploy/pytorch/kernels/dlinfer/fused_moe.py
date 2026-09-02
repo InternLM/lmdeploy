@@ -14,7 +14,8 @@ def fused_moe(
     topk: int,
     renormalize: bool,
     moe_metadata: DlinferMoeMetadata,
+    chunked_moe_layout=None,
 ):
     """Dlinfer fused moe."""
     return ext_ops.fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, topk, renormalize,
-                             moe_metadata)
+                             moe_metadata, chunked_moe_layout)

@@ -97,7 +97,14 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.mlp_dp_size = parallel.mlp_dp_size
         cfg.mlp_tp_size = parallel.mlp_tp_size
     if cfg.ep > 1:
-        assert cfg.nnodes == 1, 'ep > 1 is only supported in single-node mode'
+        if cfg.moe_a2a_backend == 'auto':
+            cfg.moe_a2a_backend = 'deepep' if cfg.nnodes > 1 else 'default'
+        if cfg.moe_a2a_backend == 'deepep':
+            assert cfg.communicator == 'nccl', 'deepep backend only supports nccl communicator'
+            # Reduce the number of QPs used in multithreaded scenarios.
+            os.environ.setdefault('NCCL_CROSS_NIC', '0')
+        if cfg.communicator in ['cuda-ipc', 'native']:
+            assert cfg.nnodes == 1, f'{cfg.communicator} communicator only supports single-node'
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
     # update devices
     cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
@@ -163,6 +170,7 @@ class TurboMind:
         self.source_model = model_loader.model
         self.is_dummy = self.model_comm.is_dummy_node()
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
+        self._grammar_compiler = None
         if not _engine_config.empty_init:
             with torch.cuda.device(self.devices[0]):
                 model_loader.export()
@@ -171,6 +179,15 @@ class TurboMind:
 
         self.session_len = _engine_config.session_len
         self.health_executor = ThreadPoolExecutor(max_workers=1)
+
+    @property
+    def grammar_compiler(self):
+        """Lazy-initialized GrammarCompiler shared across all requests."""
+        if self._grammar_compiler is None:
+            tokenizer_info = TokenizerInfo.from_huggingface(
+                self.tokenizer.model.model, vocab_size=self._vocab_size)
+            self._grammar_compiler = _xgr.GrammarCompiler(tokenizer_info)
+        return self._grammar_compiler
 
     def _process_weights(self):
         """Process weight."""
@@ -257,6 +274,7 @@ class TurboMind:
         ec.nnodes = engine_config.nnodes
         ec.node_rank = engine_config.node_rank
         ec.communicator = engine_config.communicator
+        ec.moe_a2a_backend = engine_config.moe_a2a_backend
 
         logger.info(f'turbomind engine config:\n\n'
                     f'dtype={engine_config.dtype}, state_dtype={state_dtype}, '
@@ -265,7 +283,9 @@ class TurboMind:
                     f'devices={engine_config.devices}, '
                     f'tp={engine_config.attn_tp_size}, '
                     f'dp={engine_config.attn_dp_size}, '
-                    f'cp={engine_config.attn_cp_size}')
+                    f'cp={engine_config.attn_cp_size}, '
+                    f'ep={engine_config.ep}, '
+                    f'moe_a2a_backend={engine_config.moe_a2a_backend}')
 
         model_comm = _tm.TurboMind.create(model_dir='', engine_config=ec)
         self._create_weight(model_comm)
@@ -397,16 +417,10 @@ class TurboMind:
     def get_schedule_metrics(self):
         # TODO: support dp
         tm_metrics = self.model_comm.get_schedule_metrics(0)
-        if tm_metrics is None:
-            # ScheduleMetrics is not yet wired onto the new scheduler (metrics revival is
-            # deferred). Report no metrics so consumers (health probe / metrics logger)
-            # degrade gracefully instead of dereferencing a missing metrics object.
-            return None
         return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
                                waiting_seqs=tm_metrics.waiting_seqs,
-                               total_blocks=tm_metrics.total_blocks,
-                               active_blocks=tm_metrics.active_blocks,
-                               free_blocks=tm_metrics.free_blocks,
+                               cache_usage=tm_metrics.cache_usage,
+                               prefix_cache_hit_rate=tm_metrics.prefix_cache_hit_rate,
                                scheduler_tick=tm_metrics.scheduler_tick)
 
     def _get_health_status(self) -> dict:
@@ -523,14 +537,16 @@ def _get_metrics(metrics):
 
     def _func(out: EngineOutput, step: int, **kwargs):
         nonlocal is_first
+        cached_tokens = metrics.cached_tokens
         if not is_first:
-            out.req_metrics = RequestMetrics(token_timestamp=time.time())
+            out.req_metrics = RequestMetrics(token_timestamp=time.time(), cached_tokens=cached_tokens)
         else:
-            events = [
-                EngineEvent(EventType.QUEUED, metrics.enqueue_time / 1000000),
-                EngineEvent(EventType.SCHEDULED, metrics.scheduled_time / 1000000),
-            ]
-            out.req_metrics = RequestMetrics(token_timestamp=time.time(), engine_events=events)
+            events = [EngineEvent(EventType.QUEUED, metrics.enqueue_time / 1000000)]
+            if metrics.scheduled_time:
+                events.append(EngineEvent(EventType.SCHEDULED, metrics.scheduled_time / 1000000))
+            out.req_metrics = RequestMetrics(token_timestamp=time.time(),
+                                             engine_events=events,
+                                             cached_tokens=cached_tokens)
             is_first = False
 
     return _func
@@ -647,19 +663,11 @@ class TurboMindInstance:
 
         return values, ranges
 
-    def prepare_mrope(self, input_meta: dict[str, Any], input_len: int):
-        mrope_position_ids = input_meta['mrope_position_ids']
-        mrope_position_delta = input_meta['mrope_position_delta']
-        assert mrope_position_ids.size(-1) == input_len
-        mrope_position_ids = mrope_position_ids.t().contiguous()
-        return mrope_position_ids, mrope_position_delta
-
     def prepare_inputs(self,
                        input_ids,
                        gen_config: GenerationConfig,
                        input_embeddings=None,
-                       input_embedding_ranges=None,
-                       input_meta: dict[str, Any] = None):
+                       input_embedding_ranges=None):
         """Convert inputs format."""
         assert isinstance(input_ids, Sequence)
 
@@ -672,12 +680,6 @@ class TurboMindInstance:
         if input_embeddings is not None:
             inputs['input_embeddings'] = input_embeddings.cpu()
             inputs['input_embedding_ranges'] = input_embedding_ranges
-
-        if input_meta and 'mrope_position_ids' in input_meta:
-            mrope_position_ids, mrope_position_delta = self.prepare_mrope(input_meta, input_len)
-            inputs['mrope_position_ids'] = mrope_position_ids.type(torch.int32)
-            inputs['mrope_position_delta'] = mrope_position_delta.type(torch.int32)
-            inputs['mrope_length'] = torch.IntTensor([mrope_position_ids.shape[0]])
 
         return inputs, input_len
 
@@ -697,7 +699,6 @@ class TurboMindInstance:
                                  input_ids,
                                  input_embeddings=None,
                                  input_embedding_ranges=None,
-                                 input_meta: dict[str, Any] = None,
                                  multimodal: list[dict[str, Any]] = None,
                                  gen_config: GenerationConfig = None,
                                  stream_output=False,
@@ -720,15 +721,11 @@ class TurboMindInstance:
         inputs, input_len = self.prepare_inputs(input_ids=input_ids,
                                                 input_embeddings=input_embeddings,
                                                 input_embedding_ranges=input_embedding_ranges,
-                                                input_meta=input_meta,
                                                 gen_config=gen_config)
 
         if gen_config.response_format is not None:
-            tokenizer = self.tm_model.tokenizer
-            vocab_size = self.tm_model._vocab_size
-
             try:
-                tokenizer_info = TokenizerInfo.from_huggingface(tokenizer.model.model, vocab_size=vocab_size)
+                compiler = self.tm_model.grammar_compiler
                 decode_grammar_type = gen_config.response_format['type']
                 if decode_grammar_type == 'json_schema':
                     decode_grammar = gen_config.response_format[decode_grammar_type]['schema']
@@ -736,8 +733,8 @@ class TurboMindInstance:
                     decode_grammar = gen_config.response_format[decode_grammar_type]
                 elif decode_grammar_type == 'json_object':
                     decode_grammar = '{"type" : "object", "additionalProperties": true}'
-
-                compiler = _xgr.GrammarCompiler(tokenizer_info)
+                elif decode_grammar_type == 'structural_tag':
+                    decode_grammar = gen_config.response_format[decode_grammar_type]
 
                 if decode_grammar_type == 'json_schema':
                     decode_grammar = json.dumps(decode_grammar)
@@ -748,13 +745,16 @@ class TurboMindInstance:
                 elif decode_grammar_type == 'json_object':
                     decode_grammar = str(decode_grammar)
                     grammar = compiler.compile_json_schema(decode_grammar)
+                elif decode_grammar_type == 'structural_tag':
+                    decode_grammar = json.dumps(decode_grammar)
+                    grammar = compiler.compile_structural_tag(decode_grammar)
                 else:
                     assert False, f'Decode grammar type {decode_grammar_type} should be in ' \
-                                   '["json_schema", "regex_schema", "json_object"]'
+                                   '["json_schema", "regex_schema", "json_object", "structural_tag"]'
 
                 self.model_inst.set_grammar(grammar)
-            except ValueError as e:
-                logger.warning(f'Failed to initialize guided decoding for tokenizer {tokenizer}, '
+            except (ValueError, KeyError) as e:
+                logger.warning(f'Failed to initialize guided decoding, '
                                f'disable guided decoding: {e}')
                 gen_config.response_format = None
 

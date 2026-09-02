@@ -72,7 +72,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
     """Triton attention builder.
 
     This builder selects the appropriate attention implementation based on:
-    1. use_flash_mla: Use FlashMLAImpl for MLA models
+    1. use_flash_mla: Use dense or sparse FlashMLA for MLA models
     2. enable_fa3: Use FA3Impl if FA3 is available and supported
     3. Default: Use TritonAttentionImpl as fallback
     """
@@ -89,6 +89,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         logit_softcapping: float = 0.0,
         causal: bool = True,
         use_flash_mla: bool = False,
+        mla_index_topk: int | None = None,
         learnable_sink: bool = False,
         block_sparse_size: int = 1,
         **kwargs,
@@ -106,6 +107,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
             logit_softcapping: Logit softcapping value (for Gemma 2).
             causal: Whether to use causal attention.
             use_flash_mla: Whether to use Flash MLA implementation.
+            mla_index_topk: Sparse MLA top-k width, or ``None`` for dense MLA.
             learnable_sink: Whether to use learnable sink tokens.
             block_sparse_size: Block sparse attention size.
             **kwargs: Additional arguments.
@@ -132,6 +134,12 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         enable_fa3 = _enable_fa3(alibi, learnable_sink, block_sparse_size, head_size)
 
         if use_flash_mla is True:
+            if mla_index_topk is not None:
+                logger.debug('Build FlashMLASparseImpl Attention')
+                from .sparse_mla import FlashMLASparseImpl
+                return FlashMLASparseImpl(mla_index_topk=mla_index_topk,
+                                          use_fa3=use_fa3,
+                                          **common_args)
             logger.debug('Build FlashMLAImpl Attention')
             from .mla import FlashMLAImpl
             return FlashMLAImpl(use_fa3=use_fa3, **common_args)

@@ -67,6 +67,7 @@ class GptOssResponseParser(ResponseParser):
         self._active_tool_index: int | None = None
         self._active_tool_name: str | None = None
         self.tool_parser = object()  # API server checks `is not None` for tool support.
+        self.reasoning_tokens = 0
 
     def _convert_response_format_to_harmony(self):
         """Convert response_format to Harmony-native mode for GPT-OSS.
@@ -85,11 +86,6 @@ class GptOssResponseParser(ResponseParser):
             format_json = json.dumps(fmt.model_dump())
             format_body = f'# Response Formats\n{format_json}'
             messages = self.request.messages
-
-            if isinstance(messages, str):
-                messages = messages + '\n\n' + format_body
-                self._clear_response_format(messages=messages)
-                return
 
             if not isinstance(messages, list):
                 logger.warning('Cannot inject response_format schema into '
@@ -216,6 +212,7 @@ class GptOssResponseParser(ResponseParser):
             # when token ids are unavailable, return raw text as assistant content.
             return text or None, None, None
 
+        self.reasoning_tokens = 0
         content = ''
         reasoning = ''
 
@@ -289,6 +286,7 @@ class GptOssResponseParser(ResponseParser):
             if cur_channel == 'final' and token_delta:
                 yield 'content', token_delta
             elif cur_channel == 'analysis' and token_delta:
+                self.reasoning_tokens += 1
                 yield 'reasoning', token_delta
 
     @staticmethod

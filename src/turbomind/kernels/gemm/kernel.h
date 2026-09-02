@@ -41,6 +41,8 @@ public:
                        const MatrixLayout& Cdesc,
                        void*               D,
                        const MatrixLayout& Ddesc,
+                       void*               W,
+                       const MatrixLayout& Wdesc,
                        int                 swizzle,
                        int                 splits,
                        Workspace&          workspace,

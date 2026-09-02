@@ -65,9 +65,20 @@ def _response_status_from_finish_reason(
     return 'completed'
 
 
-def _response_error_from_finish_reason(finish_reason: str | None) -> ResponseError | None:
+def _response_error_from_finish_reason(finish_reason: str | None,
+                                       error_code: str | None = None,
+                                       error_message: str | None = None) -> ResponseError | None:
     if finish_reason == 'error':
-        return ResponseError(code='server_error', message='Response generation failed.')
+        response_code = (
+            'invalid_prompt' if error_code in {
+                'invalid_request',
+                'context_length_exceeded',
+                'unsupported_feature',
+                'preprocess_failed',
+            } else 'server_error')
+        return ResponseError(
+            code=response_code,
+            message=error_message or 'Response generation failed.')
     if finish_reason == 'abort':
         return ResponseError(code='server_error', message='Response generation was cancelled.')
     return None
@@ -81,8 +92,11 @@ def make_response(*,
                   tool_calls: list[Any] | None = None,
                   input_tokens: int,
                   output_tokens: int,
+                  reasoning_tokens: int,
                   finish_reason: str | None,
-                  message_id: str | None = None) -> ResponsesResponse:
+                  message_id: str | None = None,
+                  error_code: str | None = None,
+                  error_message: str | None = None) -> ResponsesResponse:
     text = text or ''
     tool_calls = filter_parallel_tool_calls(tool_calls, request.parallel_tool_calls)
     status = _response_status_from_finish_reason(finish_reason)
@@ -127,19 +141,21 @@ def make_response(*,
             input_tokens=input_tokens,
             input_tokens_details=ResponseInputTokensDetails(
                 cached_tokens=0,
+                cache_write_tokens=0,
                 input_tokens_per_turn=[],
                 cached_tokens_per_turn=[],
             ),
             output_tokens=output_tokens,
             output_tokens_details=ResponseOutputTokensDetails(
-                reasoning_tokens=0,
+                reasoning_tokens=reasoning_tokens,
                 tool_output_tokens=0,
                 output_tokens_per_turn=[],
                 tool_output_tokens_per_turn=[],
             ),
             total_tokens=input_tokens + output_tokens,
         ),
-        error=_response_error_from_finish_reason(finish_reason),
+        error=_response_error_from_finish_reason(
+            finish_reason, error_code, error_message),
         incomplete_details=incomplete_details,
         **response_metadata_kwargs(request),
     )

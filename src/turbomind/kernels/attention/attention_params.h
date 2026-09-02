@@ -48,6 +48,10 @@ struct AttentionParams {
     const bool*  finished;
     const float* rope_theta;
 
+    // per-token validity mask [token_num], owned by the language model (global over
+    // attention DP ranks); consumed by the reduce (invalid rows are skipped and zeroed)
+    const bool* token_mask{nullptr};
+
     const T* sinks;
     float    scale_sinks;
 

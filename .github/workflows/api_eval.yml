@@ -27,6 +27,15 @@ on:
           - infer
           - eval
         default: 'both'
+      eval_suite:
+        required: false
+        description: 'Run chat-model eval, base-model eval, or both. Default is "both"'
+        type: choice
+        options:
+          - both
+          - chat
+          - base
+        default: 'both'
       run_id:
         required: false
         description: 'Set custom run ID. If not provided, github.run_id will be used'
@@ -154,10 +163,8 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        eval_suite: ${{ fromJSON(github.event.inputs.eval_suite == 'base' && '["base"]' || github.event.inputs.eval_suite == 'chat' && '["chat"]' || '["chat","base"]') }}
         gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
-        transformers: ["", "legacy"]
-    env:
-      TEST_ENV: ${{ matrix.transformers }}
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -190,10 +197,6 @@ jobs:
           cd opencompass
           python3 -m pip install .
           python3 -m pip install langdetect
-      - name: Downgrade transformers
-        if: ${{matrix.transformers == 'legacy'}}
-        run: |
-          pip install transformers==4.57.6
       - name: Check env
         run: |
           python3 -m pip list
@@ -207,12 +210,33 @@ jobs:
           ln -s /mnt/104/opencompass-data/data ./data
           ln -s /nvme/qa_test_models/resource/nltk_data /usr/share/nltk_data
           execution_mode="${{ github.event.inputs.execution_mode || 'both' }}"
+          eval_suite="${{ matrix.eval_suite }}"
           ulimit -n 65535
+
+          if [ "$eval_suite" = "chat" ]; then
+            test_files="autotest/evaluate/test_api_evaluate.py"
+          else
+            test_files="autotest/evaluate/test_api_base_evaluate.py"
+          fi
+
+          mark="${{ matrix.gpu_num }} and ${{ matrix.backend }}"
+          case "${{ matrix.gpu_num }}" in
+            gpu_num_1) xdist_n=8 ;;
+            gpu_num_2) xdist_n=4 ;;
+            gpu_num_4) xdist_n=2 ;;
+            gpu_num_8) xdist_n=1 ;;
+            *) xdist_n=1 ;;
+          esac
+
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "infer" ]; then
-            pytest autotest/evaluate/test_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and infer" --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            if [ "$eval_suite" = "base" ]; then
+              pytest ${test_files} -m "${mark} and infer" -n "${xdist_n}" --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            else
+              pytest ${test_files} -m "${mark} and infer" --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            fi
           fi
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "eval" ]; then
-            pytest autotest/evaluate/test_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and eval" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest ${test_files} -m "${mark} and eval" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi
           exit $overall_exit
       - name: Clear workspace

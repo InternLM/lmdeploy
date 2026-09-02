@@ -52,30 +52,31 @@ struct ObjectSpec {
     std::vector<MemberSpec> members;
     int                     total_parts{0};
     std::vector<int>        part_slab;  // positional part -> SlabAllocator index
+    size_t                  bytes{};    // total aligned bytes across all parts
 };
 
 // ---- MemoryState: capacity layer (the only thing a trial copies) ----
 
 struct MemoryState {
     static constexpr size_t kPageSize      = 32 << 20UL;
-    static constexpr size_t kMinSlabSize   = 32 << 20UL;
     static constexpr size_t kMaxSlabSize   = 1 << 30UL;
     static constexpr size_t kMaxEmptySlabs = 0;
     static constexpr float  kUtilThresh    = .95f;
 
     Buffer                     mem_;
+    size_t                     page_size_;
     PageAllocator              pages_;
     std::vector<SlabAllocator> slabs_;
 
-    explicit MemoryState(Buffer memory):
-        mem_{std::move(memory)}, pages_{mem_.raw_data(), (size_t)mem_.byte_size(), kPageSize}
+    explicit MemoryState(Buffer memory, size_t page_size):
+        mem_{std::move(memory)}, page_size_{page_size}, pages_{mem_.raw_data(), (size_t)mem_.byte_size(), page_size_}
     {
     }
 
     int add_slab_class(size_t aligned)
     {
         const int slab = static_cast<int>(slabs_.size());
-        slabs_.emplace_back(aligned, kMinSlabSize, kMaxSlabSize, kUtilThresh, kMaxEmptySlabs);
+        slabs_.emplace_back(aligned, page_size_, kMaxSlabSize, kUtilThresh, kMaxEmptySlabs);
         return slab;
     }
 
@@ -129,8 +130,9 @@ struct ObjectAllocator::Impl {
     std::vector<ObjectSpec>         objects_;
     std::unordered_map<size_t, int> slab_of_size_;
     std::unordered_map<size_t, int> simple_id_;
+    size_t                          live_bytes_{};
 
-    explicit Impl(Buffer memory): space_{std::move(memory)} {}
+    explicit Impl(Buffer memory, size_t page_size): space_{std::move(memory), page_size} {}
 
     static size_t align_up(size_t size, size_t align)
     {
@@ -159,6 +161,7 @@ struct ObjectAllocator::Impl {
         spec.members     = {{slab, 1}};
         spec.total_parts = 1;
         spec.part_slab   = {slab};
+        spec.bytes       = aligned;
         objects_.push_back(std::move(spec));
         simple_id_[aligned] = id;
         return id;
@@ -181,6 +184,7 @@ struct ObjectAllocator::Impl {
                 spec.part_slab.push_back(slab);
             }
             spec.total_parts += static_cast<int>(count);
+            spec.bytes += aligned * count;
         }
         const int id = static_cast<int>(objects_.size());
         objects_.push_back(std::move(spec));
@@ -203,6 +207,7 @@ struct ObjectAllocator::Impl {
             a->n     = 1;
             a->base0 = space_.slabs_[slab].AddressOf(a->slot0);
             space_.slabs_[slab].set_owner(a->slot0, object_alloc_t{a});
+            live_bytes_ += spec.bytes;
             return {a};
         }
 
@@ -217,6 +222,7 @@ struct ObjectAllocator::Impl {
             a->bases[p] = space_.address_of(spec.part_slab[p], a->slots[p]);
             space_.set_owner(spec.part_slab[p], a->slots[p], object_alloc_t{a});
         }
+        live_bytes_ += spec.bytes;
         return {a};
     }
 
@@ -230,6 +236,8 @@ struct ObjectAllocator::Impl {
         else {
             space_.free(spec, a->slots.data());
         }
+        TM_CHECK_GE(live_bytes_, spec.bytes);
+        live_bytes_ -= spec.bytes;
         table_.Release(a);
     }
 
@@ -262,15 +270,23 @@ struct ObjectAllocator::Impl {
         return space_.slabs_[objects_[index].part_slab[part]].object_size();
     }
 
+    MemoryUsage usage() const
+    {
+        return {table_.pool_.size() - table_.free_.size(), live_bytes_, static_cast<size_t>(space_.mem_.byte_size())};
+    }
+
     MemoryStats stats() const
     {
         MemoryStats s;
         s.page             = space_.pages_.stats();
         s.region_bytes     = static_cast<size_t>(space_.mem_.byte_size());
         s.live_allocations = table_.pool_.size() - table_.free_.size();
+        s.live_bytes       = 0;
         s.slabs.reserve(space_.slabs_.size());
         for (const SlabAllocator& slab : space_.slabs_) {
-            s.slabs.push_back(slab.stats());
+            auto stats = slab.stats();
+            s.live_bytes += stats.used_objects * stats.object_size;
+            s.slabs.push_back(std::move(stats));
         }
         return s;
     }
@@ -291,7 +307,12 @@ struct ScratchAllocator::Impl {
 ObjectAllocator::~ObjectAllocator() = default;
 ObjectAllocator::ObjectAllocator()  = default;
 
-ObjectAllocator::ObjectAllocator(Buffer region): impl_{std::make_unique<Impl>(std::move(region))} {}
+ObjectAllocator::ObjectAllocator(Buffer region): ObjectAllocator{std::move(region), MemoryState::kPageSize} {}
+
+ObjectAllocator::ObjectAllocator(Buffer region, size_t page_size):
+    impl_{std::make_unique<Impl>(std::move(region), page_size)}
+{
+}
 
 ObjectAllocator::ObjectAllocator(ObjectAllocator&&) noexcept = default;
 ObjectAllocator& ObjectAllocator::operator=(ObjectAllocator&&) noexcept = default;
@@ -331,6 +352,11 @@ size_t ObjectAllocator::PartBytes(int index, int part) const
 bool ObjectAllocator::IsValid(object_alloc_t handle, uint64_t saved_key) const
 {
     return handle.a != nullptr && handle->key == saved_key;
+}
+
+MemoryUsage ObjectAllocator::Usage() const
+{
+    return impl_->usage();
 }
 
 MemoryStats ObjectAllocator::Stats() const

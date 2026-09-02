@@ -1,26 +1,31 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 import functools
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import torch
+from packaging import version
 from torch.profiler import record_function
 
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
-from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import (
     BackendConfig,
     CacheConfig,
     ModelConfig,
     normalize_cudagraph_capture_batch_sizes,
 )
-from lmdeploy.pytorch.envs import fake_capture
+from lmdeploy.pytorch.envs import enable_decode_torch_compile, fake_capture
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
 from lmdeploy.utils import get_logger
 
 from ..graph_runner import GraphRunner
-from .attention import TritonAttentionMetadata
+
+if TYPE_CHECKING:
+    from .attention import TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
 
@@ -62,6 +67,64 @@ def _false(*args, **kwargs):
     return False
 
 
+@functools.lru_cache
+def _configure_decode_torch_compile():
+    """Configure the Dynamo policy used by decode compilation."""
+    from torch._dynamo import config, trace_rules
+
+    # Decode capture intentionally specializes fixed batch buckets. Keep those
+    # specializations compiled instead of falling back to eager at the default
+    # recompile limit.
+    config.recompile_limit = 1024
+    config.accumulated_recompile_limit = 1024
+
+    # Dynamo otherwise enters user Triton launchers and may fail on mutable
+    # autotune state or infer incorrect fake shapes. The outer CUDA graph still
+    # captures these eager kernel launches with the compiled regions around them.
+    trace_rules.add('lmdeploy.pytorch.kernels')
+    trace_rules.add('lmdeploy.pytorch.third_party.flash_attn_interface')
+    trace_rules.add('flash_attn_interface')
+    trace_rules.add('triton')
+
+
+def _get_decode_torch_compile_options(config) -> dict[str, bool]:
+    """Build options supported by the installed Inductor version."""
+    options = {
+        'emulate_precision_casts': True,
+        'triton.cudagraphs': False,
+    }
+
+    # Division-rounding emulation was added in PyTorch 2.10 and renamed in
+    # PyTorch 2.11. Inductor rejects unknown options instead of ignoring them.
+    if hasattr(config, 'emulate_divison_rounding'):
+        options['emulate_divison_rounding'] = True
+    elif hasattr(config, 'eager_numerics') and hasattr(config.eager_numerics, 'division_rounding'):
+        options['eager_numerics.division_rounding'] = True
+
+    return options
+
+
+def _build_decode_model_forward(model: torch.nn.Module) -> Callable[..., Any]:
+    """Build the model callable used only while capturing decode graphs."""
+    if not enable_decode_torch_compile:
+        return model
+
+    if version.parse(torch.__version__) < version.parse('2.8'):
+        logger.warning(f'Decode torch.compile requires PyTorch >= 2.8, but found {torch.__version__}; '
+                       'using the raw model.')
+        return model
+
+    logger.info('Enabling torch.compile for decode CUDA graph capture.')
+    _configure_decode_torch_compile()
+    from torch._inductor import config
+    return torch.compile(
+        model,
+        fullgraph=False,
+        dynamic=False,
+        options=_get_decode_torch_compile_options(config),
+    )
+
+
 class CUDASingleGraphRunner:
     """Cuda single graph runner."""
 
@@ -76,10 +139,15 @@ class CUDASingleGraphRunner:
         pool: tuple[int, int],
         model_config: ModelConfig,
         device: torch.device,
+        model_forward: Callable[..., Any] | None = None,
     ):
         self.model = model
+        self.model_forward = model if model_forward is None else model_forward
         self.ctx_mgr = model.ctx_mgr
         self.model_config = model_config
+        step_meta_plan = getattr(self.ctx_mgr, 'backend_step_meta_plan', None)
+        if not getattr(step_meta_plan, 'is_supported', False):
+            step_meta_plan = None
 
         self.meta = CudaGraphMeta(
             max_batchs=max_batches,
@@ -99,6 +167,7 @@ class CUDASingleGraphRunner:
             use_mrope=model_config.use_mrope,
             block_size=model_config.block_size,
             decode_query_len=decode_query_len,
+            step_meta_plan=step_meta_plan,
         )
         self.device = device
         self.max_batches = max_batches
@@ -122,10 +191,22 @@ class CUDASingleGraphRunner:
         current_stream = torch.cuda.current_stream()
 
         # warmup
-        warmup_output = self.model(**padded_kwargs)
+        warmup_output = self.model_forward(**padded_kwargs)
         warmup_buffers = self.model.make_output_buffers(warmup_output)
 
         if self.USE_GRAPH:
+            step_meta_plan = self.meta.step_meta_plan
+            if step_meta_plan is not None:
+                step_ctx = self.ctx_mgr.current_context()
+                assert self.meta.step_meta_buffers is not None
+                step_meta_plan.prepare_cudagraph_capture(
+                    self.meta,
+                    self.meta.input_buffers,
+                    step_ctx,
+                    self.meta.step_meta_buffers,
+                    padded_kwargs['attn_metadata'],
+                )
+
             self._graph = torch.cuda.CUDAGraph()
             # unsafe kernel call in other thread might invalid the capture
             # so we set thread_safe capture mode here.
@@ -133,7 +214,7 @@ class CUDASingleGraphRunner:
                                   pool=self.pool,
                                   stream=current_stream,
                                   capture_error_mode='thread_local'):
-                output = self.model(**padded_kwargs)
+                output = self.model_forward(**padded_kwargs)
         else:
             output = warmup_output
 
@@ -153,7 +234,7 @@ class CUDASingleGraphRunner:
             self._graph.replay()
             output_buffers = self.meta.output_buffers
         else:
-            output = self.model(**padded_kwargs)
+            output = self.model_forward(**padded_kwargs)
             output_buffers = self.model.make_output_buffers(output)
         output = self.model.get_outputs_cudagraph(output_buffers, **kwargs)
         return output
@@ -191,10 +272,10 @@ class CUDAGraphRunner(GraphRunner):
                     f'is installed, or disable speculative decoding.')
 
         self.enable_graph = self.check_enable_graph()
+        self.decode_model_forward: Callable[..., Any] | None = None
 
         self.graph_pool_handle = torch.cuda.graph_pool_handle()
         self._runner_map: dict[Any, CUDASingleGraphRunner] = dict()
-        self.has_try_compile_model: bool = False
 
         # strategy factory
         build_ctx = model.ctx_mgr.build_ctx
@@ -208,16 +289,16 @@ class CUDAGraphRunner(GraphRunner):
 
         return getattr(self.model, 'support_cuda_graph', _false)
 
-    def _try_compile_model_once(self):
-        if self.has_try_compile_model:
-            return
-
-        # TODO: recovery it when torch.compile is stable (should be add a flag to enable it?)
-        # if hasattr(self.model, 'compile_model'):
-        #     method = getattr(self.model, 'compile_model')
-        #     method()
-
-        self.has_try_compile_model = True
+    def _get_decode_model_forward(self) -> Callable[..., Any]:
+        """Lazily build the callable used to capture decode graphs."""
+        if self.decode_model_forward is None:
+            if self.backend_config.device_type == 'cuda':
+                self.decode_model_forward = _build_decode_model_forward(self.model)
+            else:
+                # CAMB and MACA reuse this graph runner, but the compiler policy
+                # and Inductor options above are CUDA-specific.
+                self.decode_model_forward = self.model
+        return self.decode_model_forward
 
     def _get_capture_tokens(self, batch_size: int):
         """Get capture tokens."""
@@ -240,7 +321,9 @@ class CUDAGraphRunner(GraphRunner):
             batch_size = self._get_capture_tokens(batch_size)
         else:
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
-        return (batch_size, is_decoding, enable_microbatch, query_len)
+        graph_key = (batch_size, is_decoding, enable_microbatch, query_len)
+        graph_key += self.model.get_cudagraph_extra_key(**kwargs)
+        return graph_key
 
     def _prepare_inputs(self, **kwargs):
         """Prepare inputs."""
@@ -260,9 +343,6 @@ class CUDAGraphRunner(GraphRunner):
 
     def __call__(self, **kwargs):
         """call."""
-        if not self.backend_config.eager_mode and get_backend().get_name() == 'cuda':
-            self._try_compile_model_once()
-
         kwargs = self._prepare_inputs(**kwargs)
         context = self.ctx_mgr.current_context()
         if get_deepep_state().enabled():
@@ -285,6 +365,7 @@ class CUDAGraphRunner(GraphRunner):
             max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
             runner = CUDASingleGraphRunner(
                 self.model,
+                model_forward=self._get_decode_model_forward(),
                 max_batches=max_batches,
                 max_tokens=max_tokens,
                 num_blocks=self.num_blocks,

@@ -1,48 +1,13 @@
 import pytest
-from utils.config_utils import get_model_path_from_config
-from utils.constant import BACKEND_LIST, RESTFUL_BASE_MODEL_LIST
+from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_BASE_MODEL_LIST
 from utils.restful_return_check import assert_completions_batch_return, assert_completions_stream_return
 
 from lmdeploy.serve.openai.api_client import APIClient
-
-BASE_HTTP_URL = 'http://localhost'
-DEFAULT_PORT = 23333
-MODEL = 'internlm/internlm2_5-20b'
-BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
 @pytest.mark.parametrize('backend', BACKEND_LIST)
 @pytest.mark.parametrize('model_case', RESTFUL_BASE_MODEL_LIST)
 class TestRestfulInterfaceBase:
-
-    @pytest.mark.internlm2_5
-    def test_get_model(self, config, backend, model_case):
-        print(f'[test_get_model] backend={backend!r} model_case={model_case!r}')
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
-        print(f'[test_get_model] available_models={api_client.available_models!r} resolved={model_name!r}')
-        assert model_name == get_model_path_from_config(config, MODEL), api_client.available_models
-
-    @pytest.mark.internlm2_5
-    def test_encode(self, backend, model_case):
-        print(f'[test_encode] backend={backend!r} model_case={model_case!r}')
-        api_client = APIClient(BASE_URL)
-        input_ids1, length1 = api_client.encode('Hi, pls intro yourself')
-        input_ids2, length2 = api_client.encode('Hi, pls intro yourself', add_bos=False)
-        input_ids3, length3 = api_client.encode('Hi, pls intro yourself', do_preprocess=True)
-        input_ids4, length4 = api_client.encode('Hi, pls intro yourself', do_preprocess=True, add_bos=False)
-        input_ids5, length5 = api_client.encode('Hi, pls intro yourself' * 100, add_bos=False)
-        assert len(input_ids1) == length1 and length1 > 0
-        assert len(input_ids2) == length2 and length2 > 0
-        assert len(input_ids3) == length3 and length3 > 0
-        assert len(input_ids4) == length4 and length4 > 0
-        assert len(input_ids5) == length5 and length5 > 0
-        assert length1 == length2 + 1
-        assert input_ids2 == input_ids1[1:]
-        assert input_ids1[0] == 1 and input_ids3[0] == 1
-        assert length5 == length2 * 100
-        assert input_ids5 == input_ids2 * 100
-        print(f'[test_encode] lengths length1={length1} length2={length2} length5={length5}')
 
     def test_return(self, backend, model_case):
         print(f'[test_return] backend={backend!r} model_case={model_case!r}')

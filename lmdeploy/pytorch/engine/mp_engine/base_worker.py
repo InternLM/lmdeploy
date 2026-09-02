@@ -1,9 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from lmdeploy.messages import EngineOutput
+from lmdeploy.messages import EngineOutput, ResponseType
 from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeConnectionRequest,
     DistServeDropConnectionRequest,
@@ -15,6 +16,94 @@ logger = get_logger('lmdeploy')
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.engine.engine import Engine
+
+
+@dataclass(frozen=True)
+class StreamError:
+    """Serializable error raised by a remote streaming producer."""
+
+    type_name: str
+    message: str
+
+    @classmethod
+    def from_exception(cls, error: BaseException):
+        """Build a transport-safe error description."""
+        error_type = type(error)
+        type_name = f'{error_type.__module__}.{error_type.__qualname__}'
+        return cls(type_name=type_name, message=str(error))
+
+
+class MPStreamError(RuntimeError):
+    """Error propagated by an MP streaming transport."""
+
+    def __init__(self, error: StreamError):
+        self.remote_error = error
+        super().__init__(f'{error.type_name}: {error.message}')
+
+
+@dataclass
+class StreamPollResult:
+    """Atomic snapshot returned by an MP stream poll."""
+
+    output: Any = None
+    has_output: bool = False
+    done: bool = False
+    error: StreamError | None = None
+
+
+@dataclass
+class StreamMailbox:
+    """Single-slot coalescing mailbox shared by MP stream backends."""
+
+    event: asyncio.Event = field(default_factory=asyncio.Event)
+    output: Any = None
+    pending: bool = False
+    done: bool = False
+    error: StreamError | None = None
+
+    def publish(self, output: Any):
+        """Publish or replace the pending coalesced output."""
+        if self.done:
+            raise RuntimeError('Cannot publish output after stream completion.')
+        self.output = output
+        self.pending = True
+        self.event.set()
+
+    def finish(self):
+        """Mark the producer complete without touching pending output."""
+        self.done = True
+        self.event.set()
+
+    def fail(self, error: BaseException):
+        """Record a producer failure without overwriting pending output."""
+        self.error = StreamError.from_exception(error)
+        self.done = True
+        self.event.set()
+
+    def drain(self):
+        """Atomically transfer pending output and terminal state."""
+        poll_result = StreamPollResult(
+            output=self.output if self.pending else None,
+            has_output=self.pending,
+            done=self.done,
+            error=self.error,
+        )
+        self.output = None
+        self.pending = False
+        self.error = None
+        self.event.clear()
+        return poll_result
+
+
+def iter_stream_poll_outputs(poll_result: StreamPollResult, method: str):
+    """Apply common Ray/ZMQ output and error delivery semantics."""
+    if poll_result.has_output:
+        yield poll_result.output
+    if poll_result.error is not None:
+        if method == 'instance_async_stream_infer':
+            yield EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
+        else:
+            raise MPStreamError(poll_result.error)
 
 
 class EngineInstancePool:
@@ -154,7 +243,7 @@ class EngineOutputGather:
 
     def get(self, stream_id):
         if stream_id not in self._output:
-            self._output[stream_id] = EngineOutput(status=None, token_ids=[], logprobs=[])
+            self._output[stream_id] = EngineOutput(status=None, token_ids=[], logprobs=None)
         return self._output[stream_id]
 
     def add(self, stream_id, result):
@@ -162,7 +251,10 @@ class EngineOutputGather:
             return
         output = self.get(stream_id)
         output.token_ids.extend(result.token_ids or [])
-        output.logprobs.extend(result.logprobs or [])
+        if result.logprobs is not None:
+            if output.logprobs is None:
+                output.logprobs = []
+            output.logprobs.extend(result.logprobs)
 
     def pop(self, stream_id, result):
         if not isinstance(result, EngineOutput):
@@ -171,7 +263,7 @@ class EngineOutputGather:
         if output is None:
             return result
         result.token_ids = output.token_ids or []
-        result.logprobs = output.logprobs or None
+        result.logprobs = output.logprobs
         return result
 
     def discard(self, stream_id):

@@ -1,4 +1,17 @@
 # flake8: noqa
+"""Release-gate chat eval (no long-context).
+
+Aligned with opencompass ``examples/eval_release_gate.py``:
+  MMLU-Pro (computer science + physics)
+  AIME2025 x4, GPQA-diamond x2, IFEval
+  LiveCodeBench v6 x4, MATH-500 (cascade, n=1)
+  sanitized MBPP (code exec)
+"""
+
+# Underscore aliases: plain ``import copy/os`` become real modules after lazy
+# build and break ``Config.dump()`` (invalid ``copy=<module ...>`` syntax).
+import copy as _copy
+import os as _os
 
 from mmengine.config import read_base
 from opencompass.models import OpenAISDK
@@ -8,18 +21,69 @@ from opencompass.tasks import OpenICLEvalTask, OpenICLInferConcurrentTask
 from opencompass.utils.text_postprocessors import extract_non_reasoning_content
 
 #######################################################################
-#                          PART 0  Essential Configs                  #
+#                     Gate parameters                                 #
 #######################################################################
+
+# Original (pre-gate) repeats: AIME=32, GPQA=4, LCB=6
+AIME_N = 4
+GPQA_N = 2
+LCB_N = 4
+
+MMLU_PRO_KEEP = {
+    'mmlu_pro_computer_science',
+    'mmlu_pro_physics',
+}
+
+#######################################################################
+#                          Import base configs                        #
+#######################################################################
+
 with read_base():
-    # Datasets
-    from opencompass.configs.datasets.aime2025.aime2025_llmjudge_academic import aime2025_datasets
-    from opencompass.configs.datasets.gpqa.gpqa_cascade_eval_academic import gpqa_datasets
-    from opencompass.configs.datasets.HLE.hle_llmverify_academic import hle_datasets
-    from opencompass.configs.datasets.IFEval.IFEval_gen_353ae7 import ifeval_datasets
-    from opencompass.configs.datasets.livecodebench.livecodebench_v6_academic import LCBCodeGeneration_dataset
-    from opencompass.configs.datasets.mmlu_pro.mmlu_pro_0shot_cot_gen_08c1de import mmlu_pro_datasets
-    # Summary Groups
-    from opencompass.configs.summarizers.groups.mmlu_pro import mmlu_pro_summary_groups
+    from opencompass.configs.datasets.aime2025.aime2025_llmjudge_academic import \
+        aime2025_datasets
+    from opencompass.configs.datasets.gpqa.gpqa_cascade_eval_academic import \
+        gpqa_datasets
+    from opencompass.configs.datasets.IFEval.IFEval_gen_353ae7 import \
+        ifeval_datasets
+    from opencompass.configs.datasets.livecodebench.livecodebench_v6_academic import \
+        LCBCodeGeneration_dataset
+    from opencompass.configs.datasets.math.math_500_cascade_eval_gen_6ff468 import \
+        math_datasets
+    from opencompass.configs.datasets.mmlu_pro.mmlu_pro_0shot_cot_gen_08c1de import \
+        mmlu_pro_datasets
+    from opencompass.configs.datasets.mbpp.sanitized_mbpp_mdblock_gen_a447ff import \
+        sanitized_mbpp_datasets
+
+#######################################################################
+#                     Apply gate overrides                            #
+#######################################################################
+
+mmlu_pro_datasets = [
+    ds for ds in mmlu_pro_datasets if ds['abbr'] in MMLU_PRO_KEEP
+]
+
+aime2025_datasets = [_copy.deepcopy(ds) for ds in aime2025_datasets]
+for i in range(len(aime2025_datasets)):
+    aime2025_datasets[i]['n'] = AIME_N
+    aime2025_datasets[i]['abbr'] = f'aime2025_repeat_{AIME_N}'
+
+gpqa_datasets = [_copy.deepcopy(ds) for ds in gpqa_datasets]
+for i in range(len(gpqa_datasets)):
+    _split = gpqa_datasets[i]['abbr'].split('_repeat_')[0]
+    gpqa_datasets[i]['n'] = GPQA_N
+    gpqa_datasets[i]['abbr'] = f'{_split}_repeat_{GPQA_N}'
+
+LCBCodeGeneration_dataset = _copy.deepcopy(LCBCodeGeneration_dataset)
+LCBCodeGeneration_dataset['n'] = LCB_N
+LCBCodeGeneration_dataset['abbr'] = f'lcb_code_generation_repeat_{LCB_N}'
+
+math_datasets = [_copy.deepcopy(ds) for ds in math_datasets]
+for i in range(len(math_datasets)):
+    math_datasets[i]['n'] = 1
+
+sanitized_mbpp_datasets = [
+    _copy.deepcopy(ds) for ds in sanitized_mbpp_datasets
+]
 
 #######################################################################
 #                         Model Configuration                         #
@@ -37,7 +101,6 @@ api_meta_template = dict(round=[
     dict(role='BOT', api_role='BOT', generate=True),
 ])
 
-# Use OpenAISDK to configure LMDeploy OpenAI interface
 models = [
     dict(type=OpenAISDK,
          abbr=f'{MODEL_NAME}',
@@ -53,15 +116,14 @@ models = [
 ]
 
 #######################################################################
-#                          PART 1  Datasets List                      #
+#                          Datasets + judge                           #
 #######################################################################
-# datasets list for evaluation
-mmlu_pro_datasets = [x for x in mmlu_pro_datasets if 'math' in x['abbr'] or 'other' in x['abbr']]
 
-# Modify datasets list to exclude hle_datasets and LCBCodeGeneration_dataset
-datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')), []) + [LCBCodeGeneration_dataset]
+datasets = (
+    mmlu_pro_datasets + aime2025_datasets + gpqa_datasets + ifeval_datasets +
+    math_datasets + sanitized_mbpp_datasets + [LCBCodeGeneration_dataset]
+)
 
-# LLM judge config: using LLM to evaluate predictions
 judge_cfg = dict(
     type=OpenAISDK,
     abbr=f'{JUDGE_MODEL_NAME}',
@@ -83,54 +145,88 @@ judge_cfg = dict(
 )
 
 for item in datasets:
-    if 'judge_cfg' in item['eval_cfg']['evaluator']:
-        item['eval_cfg']['evaluator']['judge_cfg'] = judge_cfg
-    if 'llm_evaluator' in item['eval_cfg']['evaluator'].keys(
-    ) and 'judge_cfg' in item['eval_cfg']['evaluator']['llm_evaluator']:
-        item['eval_cfg']['evaluator']['llm_evaluator']['judge_cfg'] = judge_cfg
+    evaluator = item.get('eval_cfg', {}).get('evaluator', {})
+    if isinstance(evaluator, dict):
+        if 'judge_cfg' in evaluator:
+            evaluator['judge_cfg'] = judge_cfg
+        if ('llm_evaluator' in evaluator and isinstance(
+                evaluator['llm_evaluator'], dict) and
+                'judge_cfg' in evaluator['llm_evaluator']):
+            evaluator['llm_evaluator']['judge_cfg'] = judge_cfg
 
 #######################################################################
-#                       PART 2  Dataset Summarizer                    #
+#                            Summarizer                               #
 #######################################################################
 
-core_summary_groups = [
+mmlu_pro_summary_groups = [
     {
-        'name':
-        'core_average',
+        'name': 'mmlu_pro_gate',
+        'subsets': sorted(MMLU_PRO_KEEP),
+    },
+]
+
+gate_summary_groups = [
+    {
+        'name': 'release_gate_average',
         'subsets': [
             ['IFEval', 'Prompt-level-strict-accuracy'],
-            ['hle_llmjudge', 'accuracy'],
-            ['aime2025_repeat_32', 'accuracy (32 runs average)'],
-            ['GPQA_diamond_repeat_4', 'accuracy (4 runs average)'],
-            ['mmlu_pro', 'naive_average'],
-            'mmlu_pro_math',
-            'mmlu_pro_other',
-            ['lcb_code_generation_repeat_6', 'pass@1 (6 runs average)'],
+            [f'aime2025_repeat_{AIME_N}', f'accuracy ({AIME_N} runs average)'],
+            [f'GPQA_diamond_repeat_{GPQA_N}',
+             f'accuracy ({GPQA_N} runs average)'],
+            ['mmlu_pro_gate', 'naive_average'],
+            [f'lcb_code_generation_repeat_{LCB_N}',
+             f'pass@1 ({LCB_N} runs average)'],
+            ['math_prm800k_500', 'accuracy'],
+            ['sanitized_mbpp', 'score'],
         ],
     },
 ]
 
 summarizer = dict(
     dataset_abbrs=[
-        ['core_average', 'naive_average'],
+        ['release_gate_average', 'naive_average'],
+        '',
+        'Instruction Following',
         ['IFEval', 'Prompt-level-strict-accuracy'],
-        ['hle_llmjudge', 'accuracy'],
-        ['GPQA_diamond_repeat_4', 'accuracy (4 runs average)'],
-        ['aime2025_repeat_32', 'accuracy (32 runs average)'],
-        ['mmlu_pro', 'naive_average'],
-        'mmlu_pro_math',
-        'mmlu_pro_other',
-        ['lcb_code_generation_repeat_6', 'pass@1 (6 runs average)'],
+        '',
+        'General Reasoning',
+        [f'GPQA_diamond_repeat_{GPQA_N}',
+         f'accuracy ({GPQA_N} runs average)'],
+        '',
+        'Math',
+        [f'aime2025_repeat_{AIME_N}', f'accuracy ({AIME_N} runs average)'],
+        ['math_prm800k_500', 'accuracy'],
+        '',
+        'Knowledge (MMLU-Pro subset)',
+        ['mmlu_pro_gate', 'naive_average'],
+        'mmlu_pro_computer_science',
+        'mmlu_pro_physics',
+        '',
+        'Code',
+        [f'lcb_code_generation_repeat_{LCB_N}',
+         f'pass@1 ({LCB_N} runs average)'],
+        'sanitized_mbpp',
     ],
-    summary_groups=sum([v for k, v in locals().items() if k.endswith('_summary_groups')], []) + core_summary_groups,
+    summary_groups=gate_summary_groups + mmlu_pro_summary_groups,
 )
 
 for item in datasets:
     if 'max_out_len' in item['infer_cfg']['inferencer']:
         del item['infer_cfg']['inferencer']['max_out_len']
 
+# Cache under REPORT_DIR's parent so chat / longtext / local_run share one file.
+# dirname('.') is ''; fall back to '.' so the path stays under cwd.
+_dataset_size_root = _os.path.dirname(
+    _os.environ.get('REPORT_DIR', '.').rstrip('/') or '.') or '.'
+_dataset_type = _os.environ.get('CHAT_TYPE', 'default').rstrip('/')
+dataset_size_path = f'{_dataset_size_root}/dataset_size_{_dataset_type}.json'
+
 infer = dict(
-    partitioner=dict(type=NumWorkerPartitioner, num_worker=1),
+    partitioner=dict(
+        type=NumWorkerPartitioner,
+        num_worker=1,
+        dataset_size_path=dataset_size_path,
+    ),
     runner=dict(
         type=LocalRunner,
         max_num_workers=64,
@@ -139,7 +235,6 @@ infer = dict(
     ),
 )
 
-# eval with local runner
 eval = dict(
     partitioner=dict(type=NaivePartitioner, n=10),
     runner=dict(type=LocalRunner, max_num_workers=64, task=dict(type=OpenICLEvalTask)),

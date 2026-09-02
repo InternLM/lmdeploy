@@ -56,21 +56,50 @@ class PromptTokensDetails(BaseModel):
     cached_tokens: int = 0
 
 
+class CompletionTokensDetails(BaseModel):
+    """Completion token usage details.
+
+    Mirrors the OpenAI ``completion_tokens_details`` object. ``reasoning_tokens``
+    counts tokens generated as part of the model's reasoning process. The
+    remaining fields are reserved OpenAI slots for future use and default to
+    ``None`` (not populated by lmdeploy today).
+    """
+
+    reasoning_tokens: int = 0
+    accepted_prediction_tokens: int | None = None
+    rejected_prediction_tokens: int | None = None
+    audio_tokens: int | None = None
+
+
 class UsageInfo(BaseModel):
     """Usage information."""
     prompt_tokens: int = 0
     total_tokens: int = 0
     completion_tokens: int | None = 0
     prompt_tokens_details: PromptTokensDetails | None = None
+    completion_tokens_details: CompletionTokensDetails | None = None
 
     @classmethod
-    def build(cls, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> 'UsageInfo':
-        """Build OpenAI-compatible usage with prefix-cache details."""
+    def build(cls,
+              prompt_tokens: int,
+              completion_tokens: int,
+              cached_tokens: int = 0,
+              reasoning_tokens: int | None = None) -> 'UsageInfo':
+        """Build OpenAI-compatible usage with prefix-cache details.
+
+        ``reasoning_tokens`` is only populated when the engine exposes a
+        reasoning token count; otherwise ``completion_tokens_details`` is left
+        ``None``. Individual endpoints determine whether ``None`` fields are
+        serialized as ``null`` or omitted.
+        """
+        completion_tokens_details = (CompletionTokensDetails(
+            reasoning_tokens=reasoning_tokens) if reasoning_tokens is not None else None)
         return cls(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=PromptTokensDetails(cached_tokens=cached_tokens),
+            completion_tokens_details=completion_tokens_details,
         )
 
 
@@ -143,7 +172,7 @@ class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
 
-    messages: str | list[dict[str, Any]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])
+    messages: list[dict[str, Any]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])
     temperature: float | None = None
     top_p: float | None = None
     tools: list[Tool] | None = Field(default=None, examples=[None])
@@ -175,7 +204,6 @@ class ChatCompletionRequest(BaseModel):
     reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None
     response_format: ResponseFormat | None = Field(default=None, examples=[None])
     # additional argument of lmdeploy
-    do_preprocess: bool | None = True
     repetition_penalty: float | None = None
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
@@ -209,7 +237,7 @@ class ChatCompletionRequest(BaseModel):
     )
     # Extended input fields from /generate endpoint.
     # input_ids and image_data are fallback inputs — they are only used when
-    # messages is empty/None/''. When messages is non-empty, it takes priority.
+    # messages is empty. When messages is non-empty, it takes priority.
     input_ids: list[int] | None = Field(
         default=None,
         description=('Token IDs as input. Only used when messages is empty. '
@@ -303,6 +331,9 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: list[ChatCompletionResponseChoice]
     usage: UsageInfo
+    # OpenAI shape placeholder. Request-side tier scheduling is not implemented;
+    # the response reports ``None`` until scheduling is added.
+    service_tier: str | None = None
 
 
 class DeltaFunctionCall(BaseModel):
@@ -545,6 +576,8 @@ class GenerateReqInput(BaseModel):
     input_ids: list[int] | None = None
     image_data: ImageDataFormat | None = None
     return_logprob: bool | None = None
+    top_logprobs_num: int | None = None
+    logprob_start_len: int = Field(default=-1, ge=-1)
     max_tokens: int = 128
     stop: str | list[str] | None = None
     stop_token_ids: list[int] | None = None
@@ -578,6 +611,9 @@ class GenerateReqMetaOutput(BaseModel):
     completion_tokens: int | None = None
     finish_reason: dict[str, Any] | None = None
     output_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
+    input_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
+    output_top_logprobs: list[list[tuple[float, int]]] | None = None  # per-output-token top (logprob, token_id)
+    input_top_logprobs: list[list[tuple[float, int]]] | None = None  # per-input-token top (logprob, token_id)
     routed_experts: list[list[list[int]]] | str | None = None  # (num_token, num_layer, topk_expert)
 
 

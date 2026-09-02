@@ -4,12 +4,15 @@ from typing import Any
 import numpy as np
 import torch
 
-from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, MultimodalSpecialTokens
 from lmdeploy.vl.model.qwen3 import Qwen3VLModel
-from lmdeploy.vl.model.utils import disable_logging
 
-logger = get_logger('lmdeploy')
+_INTERN_S2_ARCHS = [
+    'InternS2MobiusForConditionalGeneration',
+    'InternS2MobiusForCausalLM',
+    'InternS2PreviewForConditionalGeneration',
+    'InternS2PreviewForCausalLM',
+]
 
 
 def check_transformers():
@@ -29,8 +32,7 @@ class Qwen3_5Model(Qwen3VLModel):
     _arch = [
         'Qwen3_5ForConditionalGeneration',
         'Qwen3_5MoeForConditionalGeneration',
-        'InternS2PreviewForConditionalGeneration',
-        'InternS2PreviewForCausalLM',
+        *_INTERN_S2_ARCHS,
     ]
     _turbomind_native_vision = True
 
@@ -118,50 +120,14 @@ class Qwen3_5Model(Qwen3VLModel):
             from transformers import Qwen3_5ForConditionalGeneration as AutoModelCls
         elif arch == 'Qwen3_5MoeForConditionalGeneration':
             from transformers import Qwen3_5MoeForConditionalGeneration as AutoModelCls
-        elif arch in ['InternS2PreviewForConditionalGeneration', 'InternS2PreviewForCausalLM']:
+        elif arch in _INTERN_S2_ARCHS:
             from transformers import AutoModelForImageTextToText as AutoModelCls
         else:
             raise ValueError(f'Unsupported arch={arch}')
 
-        if self.with_llm:
-            if arch in ['Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration']:
-                self.vl_model = AutoModelCls.from_pretrained(self.model_path, device_map='cpu')
-            else:
-                self.vl_model = AutoModelCls.from_pretrained(self.model_path,
-                                                             device_map='cpu',
-                                                             trust_remote_code=trust_remote_code)
+        if arch in ['Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration']:
+            self.vl_model = AutoModelCls.from_pretrained(self.model_path, device_map='cpu')
         else:
-            from accelerate import init_empty_weights
-            with init_empty_weights():
-                config = self.hf_config
-                config.tie_word_embeddings = False
-                if hasattr(config, 'text_config'):
-                    config.text_config.tie_word_embeddings = False
-
-                if arch in ['Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration']:
-                    model = AutoModelCls._from_config(config)
-                    model.visual = model.model.visual
-                    del model.model
-                    del model.lm_head
-                elif arch in ['InternS2PreviewForConditionalGeneration', 'InternS2PreviewForCausalLM']:
-                    model = AutoModelCls.from_config(config, trust_remote_code=trust_remote_code)
-                    model.visual = model.model.visual
-                    model.time_series = model.model.time_series
-                    del model.model
-                    del model.lm_head
-                model.half()
-
-            from accelerate import load_checkpoint_and_dispatch
-            with disable_logging():
-                load_checkpoint_and_dispatch(model=model,
-                                             checkpoint=self.model_path,
-                                             device_map='auto' if not self.with_llm else {'': 'cpu'},
-                                             max_memory=self.max_memory,
-                                             no_split_module_classes=[
-                                                'Qwen3_5VisionBlock',
-                                                'Qwen3_5MoeVisionBlock',
-                                                'InternS2PreviewDecoderLayer',
-                                                'InternS2PreviewVisionBlock'
-                                            ],
-                                             dtype=torch.half)
-            self.model = model.eval()
+            self.vl_model = AutoModelCls.from_pretrained(self.model_path,
+                                                         device_map='cpu',
+                                                         trust_remote_code=trust_remote_code)

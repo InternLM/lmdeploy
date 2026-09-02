@@ -41,6 +41,8 @@ public:
     ObjectAllocator();
 
     explicit ObjectAllocator(Buffer region);
+    // `page_size` is in bytes and may be any positive value, not only a power of two.
+    explicit ObjectAllocator(Buffer region, size_t page_size);
 
     // No longer copyable: trials use ScratchAllocator (copies only capacity).
     ObjectAllocator(const ObjectAllocator&) = delete;
@@ -66,6 +68,8 @@ public:
     // ABA-safe stale check: handle.a && handle->key == saved_key.
     [[nodiscard]] bool IsValid(object_alloc_t handle, uint64_t saved_key) const;
 
+    // O(1) counters for scheduler metrics. Stats() additionally scans page/slab state for diagnostics.
+    MemoryUsage Usage() const;
     MemoryStats Stats() const;
 
 private:

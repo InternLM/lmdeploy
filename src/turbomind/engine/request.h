@@ -232,9 +232,10 @@ struct Sequence {
     int readonly_block_num = 0;  // leading block_ids reused read-only (no KV re-write)
 
     // Prefix-cache logging only; never read by scheduling/admission logic.
-    int          matched_blocks = 0;                    // set at AdmitPrompt: leading prompt blocks found in trie
-    bool         resuming       = false;                // transient: planned by PlanResume() this pass
-    ResumeSource resume_source  = ResumeSource::kNone;  // transient: mechanism that set resume_len
+    int          matched_blocks          = 0;      // set at AdmitPrompt: leading prompt blocks found in trie
+    bool         resuming                = false;  // transient: planned by PlanResume() this pass
+    ResumeSource resume_source           = ResumeSource::kNone;  // transient: mechanism that set resume_len
+    bool         first_schedule_recorded = false;  // observability: first admission was counted exactly once
 
     CacheBlockPtr frontier;                  // checkpoint working state for the next forward
     int           frontier_pos   = 0;        // sequence position the frontier corresponds to

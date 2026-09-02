@@ -2,6 +2,7 @@
 import asyncio
 import time
 from collections import deque
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from multiprocessing.reduction import ForkingPickler
@@ -20,8 +21,11 @@ from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
-from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
+from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVConnectorRole, build_kv_connector
+from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
 from lmdeploy.pytorch.spec_decode import build_spec_agent
@@ -40,12 +44,14 @@ from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_l
 
 from .dp_utils import DistGatherScalar, DPForwardMeta, GatheredDPForwardMeta
 from .inputs_maker import build_inputs_maker
+from .kv_connector import finish_kv_connector_step, start_kv_connector_save, start_kv_connector_step
 from .profiler import AgentProfiler
 from .scoring import compute_input_ce_loss
 
 logger = get_logger('lmdeploy')
 
 _H2D_TRANSFER_KEY = '_h2d_transfer'
+_H2D_INPUT_KEYS = ('inputs', 'delta', 'cache_inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs')
 
 
 @dataclass
@@ -89,8 +95,15 @@ class BatchedLogProbs:
 
 @dataclass
 class BatchedOutputs:
-    next_token_ids: torch.Tensor
-    stopped: torch.Tensor
+    """One worker step's model result and optional KV-transfer progress.
+
+    ``next_token_ids`` and ``stopped`` are ``None`` only for a connector-only
+    step, where workers must report asynchronous KV progress although no model
+    forward ran.
+    """
+
+    next_token_ids: torch.Tensor | None
+    stopped: torch.Tensor | None
     stop_pos: torch.Tensor | None = None
     logits: torch.Tensor | None = None
     model_metas: list[dict[str, Any]] = None
@@ -99,6 +112,16 @@ class BatchedOutputs:
     extra_outputs: ExtraOutputs | None = None
     all_routed_experts: torch.Tensor | None = None
     ce_loss: torch.Tensor | None = None
+    kv_connector_output: KVConnectorOutput | None = None
+
+    @classmethod
+    def connector_only(cls, output: KVConnectorOutput) -> 'BatchedOutputs':
+        """Build a lightweight envelope for a no-model-forward step."""
+        return cls(
+            next_token_ids=None,
+            stopped=None,
+            kv_connector_output=output,
+        )
 
     def to_cpu(self):
         """To cpu."""
@@ -161,6 +184,30 @@ def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: d
         cache_engine.events.wait()
 
 
+def _restore_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None,
+                              cache_engine: CacheEngine, state_cache_engine: StateCacheEngine) -> None:
+    """Restore one-forward KV and state checkpoints before model execution."""
+    if cache_inputs is None or inputs.is_dummy:
+        return
+
+    if cache_inputs.kv_restore_plan is not None:
+        cache_engine.copy_logical_blocks(cache_inputs.kv_restore_plan)
+    if cache_inputs.state_restore_plan is not None:
+        state_cache_engine.copy_caches(*cache_inputs.state_restore_plan)
+
+
+def _save_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None,
+                           cache_engine: CacheEngine, state_cache_engine: StateCacheEngine) -> None:
+    """Save one-forward KV and state checkpoints after model execution."""
+    if cache_inputs is None or inputs.is_dummy:
+        return
+
+    if cache_inputs.kv_save_plan is not None:
+        cache_engine.copy_logical_blocks(cache_inputs.kv_save_plan)
+    if cache_inputs.state_save_plan is not None:
+        state_cache_engine.copy_caches(*cache_inputs.state_save_plan)
+
+
 @torch.inference_mode()
 def model_forward(
     model: torch.nn.Module,
@@ -168,6 +215,7 @@ def model_forward(
     cache_engine: CacheEngine,
     state_cache_engine: StateCacheEngine,
     stream: torch.cuda.Stream = None,
+    cache_inputs: CacheCheckpointInputs | None = None,
 ):
     """Perform model forward."""
     stream = stream or torch.cuda.current_stream()
@@ -188,15 +236,11 @@ def model_forward(
         context.named_state_caches = state_cache_engine.named_state_caches
 
         with ctx_mgr.context(context):
-            if (not inputs.is_dummy and inputs.state_offsets is not None
-                    and inputs.state_prefix_cache_offsets is not None):
-                # Restore frozen SSM prefix state into this request's runtime
-                # slot on the forward stream.  The input maker already
-                # compacted valid src/dst pairs on CPU, so no CUDA boolean
-                # indexing/nonzero synchronization is needed here.
-                state_cache_engine.copy_caches(inputs.state_prefix_cache_offsets,
-                                               inputs.state_prefix_cache_dst_offsets)
-
+            # Some backends synchronize while building context. Queue restore
+            # afterward so that synchronization does not absorb copy latency;
+            # forward-stream ordering still keeps every model consumer behind
+            # the restore.
+            _restore_cache_checkpoint(inputs, cache_inputs, cache_engine, state_cache_engine)
             model_metas = model.update_model_metas(
                 past_key_values=cache_engine.gpu_cache,
                 context=context,
@@ -211,13 +255,7 @@ def model_forward(
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
             if getattr(context, 'is_model_meta_updated', False):
                 model_metas = context.model_metas
-            if (not inputs.is_dummy and inputs.state_offsets is not None
-                    and inputs.state_prefix_cache_save_offsets is not None):
-                # Save the post-forward runtime state into reserved checkpoint
-                # slots.  The scheduler publishes these slots only after the
-                # executor output boundary confirms the copy was enqueued.
-                state_cache_engine.copy_caches(inputs.state_prefix_cache_save_src_offsets,
-                                               inputs.state_prefix_cache_save_offsets)
+            _save_cache_checkpoint(inputs, cache_inputs, cache_engine, state_cache_engine)
             output['model_metas'] = model_metas
             output['seq_length'] = context.q_seqlens[:len(inputs.seq_length)]
             # for draft model reuse
@@ -234,6 +272,23 @@ def _try_to_cuda(val, non_blocking: bool = False):
         return val.to_device('cuda', non_blocking=non_blocking)
     else:
         raise RuntimeError(f'Can not cast {type(val)} to cuda.')
+
+
+def _record_forward_input_stream(forward_inputs: Mapping[str, Any], stream: torch.cuda.Stream) -> None:
+    """Register the forward stream with each H2D payload owner."""
+    for key in _H2D_INPUT_KEYS:
+        value = forward_inputs.get(key)
+        if value is None:
+            continue
+        if isinstance(value, torch.Tensor):
+            if value.is_cuda:
+                value.record_stream(stream)
+            continue
+
+        record_stream = getattr(value, 'record_stream', None)
+        if not callable(record_stream):
+            raise TypeError(f'H2D input {key!r} must be a tensor or implement record_stream().')
+        record_stream(stream)
 
 
 SwapMap = dict[int, int]
@@ -267,6 +322,9 @@ class BaseModelAgent:
 
         self.model_config = model_config
         self.cache_config = cache_config
+        memdecode_config = misc_config.memdecode_config
+        if memdecode_config is not None and specdecode_config is not None:
+            raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
         # use raw tokenizer
         if dist_ctx.dist_config.world_size > 1:
             monkey_patch_hf_modules_cache()
@@ -309,6 +367,7 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         self.state_cache_engine = None
+        self.kv_connector = None
         self.profiler: AgentProfiler = None
         try:
             self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
@@ -347,6 +406,13 @@ class BaseModelAgent:
                                            misc_config=misc_config,
                                            device=device,
                                            guided_decoding_manager=self.guided_decoding_manager)
+        self.memdecode_agent = build_memdecode_agent(
+            memdecode_config,
+            backend_config,
+            dist_ctx,
+            device=device,
+            base_model_config=model_config,
+        )
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState()
 
@@ -359,7 +425,7 @@ class BaseModelAgent:
         """Initialize request-local decode and chunk state."""
         self.step_inputs = self.strategy_factory.build_step_inputs()
         self._prev_chunk_output: dict = None
-        # chunked-prefill ppl: last logit row of the previous chunk, used to score the cross-chunk boundary token
+        # Last logit row of the previous chunk, used to score cross-chunk prompt tokens.
         self._prev_chunk_last_logit: torch.Tensor | None = None
 
     def reset_runtime_state(self):
@@ -381,6 +447,8 @@ class BaseModelAgent:
         """Set all cache config."""
         self.cache_config = cache_config
         self.spec_agent.set_cache_config(spec_cache_config)
+        if self.memdecode_agent is not None:
+            self.memdecode_agent.set_cache_config(cache_config)
 
     def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig | None = None):
         """Set model config."""
@@ -472,22 +540,111 @@ class BaseModelAgent:
         output['hidden_states'] = hidden_states
         return output
 
+    def _get_input_logits(self, hidden_states: torch.Tensor, inputs: ModelInputs):
+        """Project the selected scoring rows with at most one lm-head call."""
+        if not self._is_prefill_input_logprobs(inputs):
+            return None
+        logits_indices = inputs.logits_indices
+        flat_hidden = hidden_states.reshape(-1, hidden_states.shape[-1])
+        selected_hidden = flat_hidden.index_select(0, logits_indices)
+        return self.get_logits(selected_hidden[None])[0]
+
+    @staticmethod
+    def _is_prefill_input_logprobs(inputs: ModelInputs | None) -> bool:
+        """Whether this prefill step uses the V2 scoring-only input-logprob
+        path."""
+        return (inputs is not None and not inputs.is_dummy and not inputs.is_decoding
+                and inputs.logits_indices is not None and inputs.seq_logit_length is not None)
+
     async def _async_model_forward(
         self,
         inputs: ModelInputs,
         return_logits: bool,
+        cache_inputs: CacheCheckpointInputs | None = None,
     ):
         """Model forward."""
-        ret = await self.async_forward(inputs)
+        memdecode_agent = getattr(self, 'memdecode_agent', None)
+        if memdecode_agent is not None and return_logits:
+            raise RuntimeError('MemDecode does not support returned prompt logits yet.')
+
+        ret = await self.async_forward(inputs, cache_inputs=cache_inputs)
+        if self._is_prefill_input_logprobs(inputs):
+            # This is the only lm-head projection for scoring: return before
+            # the ordinary all/sampling-logits projection below.
+            ret['logits'] = self._get_input_logits(ret['hidden_states'][0], inputs)
+            return ret
 
         if not return_logits:
             ret = self._postprocess_forward_output(ret, inputs)
+
+        if memdecode_agent is not None:
+            base_hidden_states = ret['hidden_states']
+            base_logits = self.get_logits(base_hidden_states)
+
+            return await memdecode_agent.fuse_with_base(
+                inputs=inputs,
+                base_output=ret,
+                base_logits=base_logits,
+                postprocess_output=self._postprocess_forward_output,
+            )
 
         hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, inputs)
 
         logits = self.get_logits(hidden_states)
         ret['logits'] = logits
         return ret
+
+    def _get_outputs_with_logprobs(
+        self,
+        input_logits: torch.Tensor | None,
+        inputs: ModelInputs,
+        num_logprobs: int,
+        model_metas: list[dict[str, Any]] | None,
+    ):
+        """Build the scoring-only output without generation modifiers."""
+        input_logprobs = None
+        if input_logits is not None:
+            source_indices = inputs.logits_indices
+            input_ids = inputs.input_ids.flatten()
+            if inputs.is_chunk:
+                prev_chunk_last_logit = None if inputs.is_first_chunk else self._prev_chunk_last_logit
+                if source_indices.numel() > 0 and not inputs.is_last_chunk:
+                    self._prev_chunk_last_logit = input_logits[-1:].clone()
+                    input_logits = input_logits[:-1]
+                    source_indices = source_indices[:-1]
+                else:
+                    self._prev_chunk_last_logit = None
+            else:
+                prev_chunk_last_logit = None
+
+            targets = input_ids.index_select(0, source_indices + 1)
+            if prev_chunk_last_logit is not None:
+                input_logits = torch.cat([prev_chunk_last_logit, input_logits], dim=0)
+                targets = torch.cat([input_ids[:1], targets])
+            if self.misc_config.logprobs_mode == 'raw_logprobs':
+                input_logits = input_logits.log_softmax(dim=-1)
+            target_indices = targets[:, None]
+            vals = input_logits.gather(-1, target_indices)
+            if num_logprobs > 0:
+                topk_vals, topk_indices = _torch_topk(input_logits, num_logprobs, dim=-1)
+                vals = torch.cat([vals, topk_vals], dim=-1)
+                target_indices = torch.cat([target_indices, topk_indices], dim=-1)
+            input_logprobs = BatchedLogProbs(vals=vals, indices=target_indices.to(torch.int32))
+
+        batch_size = inputs.seq_length.numel()
+        device = inputs.input_ids.device
+        return BatchedOutputs(
+            next_token_ids=torch.zeros(batch_size,
+                                       dtype=inputs.input_ids.dtype,
+                                       device=device),
+            stopped=torch.ones(batch_size, dtype=torch.bool, device=device),
+            stop_pos=torch.full((batch_size,),
+                                -1,
+                                dtype=torch.long,
+                                device=device),
+            model_metas=model_metas,
+            logprobs=input_logprobs,
+        )
 
     async def async_sampling_logits(self, logits: torch.Tensor, inputs: ModelInputs,
                                     extra_inputs: ExtraInputs, sampling_inputs: SamplingInputs):
@@ -699,7 +856,7 @@ class BaseModelAgent:
         extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
 
         if inputs.is_dummy:
-            return inputs, extra_inputs, stopping_criteria, None, next_token_ids
+            return inputs, extra_inputs, stopping_criteria, None, next_token_ids, None
 
         # post broadcast for spec agent
         with self.spec_agent.post_broadcast(extra_inputs, self.dist_ctx, need_broadcast_next):
@@ -720,18 +877,19 @@ class BaseModelAgent:
         logger.debug(f'<ForwardTask> rank[{rank}]: Output')
         extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
 
-        self._push_output(
-            BatchedOutputs(next_token_ids=output_token_ids,
-                           logits=logits if return_logits else None,
-                           stopped=stopped,
-                           stop_pos=stop_pos,
-                           model_metas=model_metas,
-                           logprobs=logprobs,
-                           all_routed_experts=all_routed_experts,
-                           extra_outputs=extra_outputs,
-                           ce_loss=ce_loss))
+        # Delay enqueueing until _async_step has attached this rank's connector
+        # progress. Distributed executors aggregate that field across TP ranks.
+        batched_output = BatchedOutputs(next_token_ids=output_token_ids,
+                                        logits=logits if return_logits else None,
+                                        stopped=stopped,
+                                        stop_pos=stop_pos,
+                                        model_metas=model_metas,
+                                        logprobs=logprobs,
+                                        all_routed_experts=all_routed_experts,
+                                        extra_outputs=extra_outputs,
+                                        ce_loss=ce_loss)
 
-        return inputs, extra_inputs, stopping_criteria, extra_outputs, next_token_ids
+        return inputs, extra_inputs, stopping_criteria, extra_outputs, next_token_ids, batched_output
 
     async def _step_postprocess_without_output(
         self,
@@ -778,6 +936,8 @@ class BaseModelAgent:
         return_routed_experts: bool = False,
         return_ce_loss: bool = False,
         extra_inputs: ExtraInputs = None,
+        cache_inputs: CacheCheckpointInputs | None = None,
+        kv_connector_metadata=None,
     ):
         """Asyc forward task."""
 
@@ -788,6 +948,21 @@ class BaseModelAgent:
         need_broadcast_next = (tp > 1)
         dp = dist_config.dp
         need_update_inputs = False
+        # Connector metadata can describe either work for this forward or a
+        # polling-only step. Its presence also tells distributed executors to
+        # collect connector progress from every TP worker.
+        connector_step = start_kv_connector_step(
+            self.kv_connector,
+            kv_connector_metadata,
+        )
+        if inputs is None and delta is None:
+            assert dp == 1, 'DP connector-only steps must carry dummy model inputs.'
+            # Loads and saves finish asynchronously, so progress must still be
+            # returned when the scheduler has no model work to dispatch.
+            connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+            assert connector_output is not None
+            self._push_output(BatchedOutputs.connector_only(connector_output))
+            return
 
         if inputs is None:
             # decoding step, update prev_inputs with delta
@@ -814,6 +989,9 @@ class BaseModelAgent:
             inputs, is_all_sleeping = await self._prepare_dp_v1(inputs)
             # skip dummy forward.
             if inputs is None:
+                connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+                if connector_output is not None:
+                    self._push_output(BatchedOutputs.connector_only(connector_output))
                 if is_all_sleeping:
                     self.state.to_sleep.set()
                     await self.state.to_wakeup.wait()
@@ -826,6 +1004,8 @@ class BaseModelAgent:
 
         # swap caches
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+        if self.memdecode_agent is not None:
+            cache_swapping(self.memdecode_agent.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         # inference
         logger.debug(f'<ForwardTask> rank[{rank}]: model forward. '
@@ -837,13 +1017,39 @@ class BaseModelAgent:
                      f'is_last_chunk={inputs.is_last_chunk} '
                      f'dp_meta={inputs.dp_meta} '
                      f'is_decoding={inputs.is_decoding}')
+        prefill_input_logprobs = self._is_prefill_input_logprobs(inputs)
         output = await self._async_model_forward(
             inputs,
             return_logits=return_logits or return_ce_loss,
-            )
+            cache_inputs=cache_inputs,
+        )
+        # The forward has now queued its KV writes on the current CUDA stream.
+        # The connector records a readiness event before its sender reads them.
+        start_kv_connector_save(self.kv_connector, connector_step)
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output
+            connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+            if connector_output is not None:
+                self._push_output(BatchedOutputs.connector_only(connector_output))
+            return
+
+        # input-logprob mode is scoring-only: this branch emits compact
+        # logprob rows, and falling through would wrongly run sampling /
+        # sequence-update on a max_tokens=0 request.
+        if prefill_input_logprobs:
+            model_metas = output.get('model_metas')
+            connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+            if self.need_output:
+                output = self._get_outputs_with_logprobs(output.get('logits'), inputs,
+                                                         sampling_inputs.max_num_logprobs, model_metas)
+                output.kv_connector_output = connector_output
+                self._push_output(output)
+            elif connector_output is not None:
+                self._push_output(BatchedOutputs.connector_only(connector_output))
+            if inputs.is_chunk and not inputs.is_last_chunk:
+                self._prev_chunk_output = {'model_metas': model_metas}
+
             return
 
         logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
@@ -866,6 +1072,7 @@ class BaseModelAgent:
                 stopping_criteria,
                 extra_outputs,
                 next_token_ids,
+                batched_output,
             ) = await asyncio.shield(
                 self._step_postprocess_with_output(
                     last_logits,
@@ -882,6 +1089,7 @@ class BaseModelAgent:
                     extra_inputs=extra_inputs,
                 ))
         else:
+            batched_output = None
             (
                 inputs,
                 next_token_ids,
@@ -898,7 +1106,20 @@ class BaseModelAgent:
 
         if inputs.is_dummy:
             # skip dummy forward output
+            connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+            if connector_output is not None:
+                self._push_output(BatchedOutputs.connector_only(connector_output))
             return
+
+        # This is a non-blocking progress poll. The TP leader carries model and
+        # connector output together; other TP ranks emit a connector-only
+        # envelope so the executor can wait for all-rank completion.
+        connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+        if batched_output is not None:
+            batched_output.kv_connector_output = connector_output
+            self._push_output(batched_output)
+        elif connector_output is not None:
+            self._push_output(BatchedOutputs.connector_only(connector_output))
 
         sampling_delta = sampling_inputs.get_delta()
         if need_update_inputs:
@@ -938,6 +1159,7 @@ class BaseModelAgent:
                 if h2d_transfer is not None:
                     self._keep_h2d_transfer(h2d_transfer)
                     self.stream.wait_event(h2d_transfer.event)
+                    _record_forward_input_stream(forward_inputs, self.stream)
 
                 await self._async_step(**forward_inputs, )
                 if forward_event is not None:
@@ -970,18 +1192,20 @@ class BaseModelAgent:
         falling back to dummy inputs.
         """
         non_blocking = True
-        keys = ['inputs', 'delta', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
         while True:
             forward_inputs = await self._pre_in_que.get()
             forward_inputs_cuda = {}
             forward_inputs_cuda.update(forward_inputs)
-            h2d_refs = {k: forward_inputs_cuda[k] for k in keys if forward_inputs_cuda.get(k) is not None}
+            h2d_refs = {
+                key: forward_inputs_cuda[key]
+                for key in _H2D_INPUT_KEYS if forward_inputs_cuda.get(key) is not None
+            }
             logger.debug('preprocessing forward inputs.')
             with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('inputs_H2D'):
-                for k in keys:
-                    if k not in forward_inputs_cuda:
+                for key in _H2D_INPUT_KEYS:
+                    if key not in forward_inputs_cuda:
                         continue
-                    forward_inputs_cuda[k] = _try_to_cuda(forward_inputs_cuda[k], non_blocking=non_blocking)
+                    forward_inputs_cuda[key] = _try_to_cuda(forward_inputs_cuda[key], non_blocking=non_blocking)
                 h2d_event = torch.cuda.Event()
                 h2d_event.record()
                 forward_inputs_cuda[_H2D_TRANSFER_KEY] = _H2DTransfer(h2d_event, h2d_refs)
@@ -1143,6 +1367,8 @@ class BaseModelAgent:
             self.spec_agent.build_model(self.misc_config.empty_init,
                                         self.patched_model,
                                         build_model_ctx=self.build_model_ctx)
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.build_model(self.misc_config.empty_init, build_model_ctx=self.build_model_ctx)
 
     def build_graph_runner(self):
         """Build graph runner."""
@@ -1154,43 +1380,76 @@ class BaseModelAgent:
                                                             backend_config=self.backend_config,
                                                             device=self.device)
             self.spec_agent.build_graph_runner()
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.build_graph_runner()
+
+    def shutdown_kv_connector(self):
+        """Drain and close the local connector without releasing the model."""
+        self._drain_queues()
+        torch.cuda.synchronize()
+        self._release_completed_h2d_transfers()
+        self._shutdown_kv_connector()
+
+    def _shutdown_kv_connector(self):
+        """Shutdown the connector before releasing its registered caches."""
+        if self.kv_connector is None:
+            return
+        self.kv_connector.shutdown()
+        self.kv_connector = None
 
     def build_cache_engine(self):
         """Build cache engine."""
         with self.all_context():
+            self._shutdown_kv_connector()
             dist_ctx = get_dist_manager().current_context()
             dist_cfg = self.dist_config
             tp = dist_cfg.attn_tp
+            tp_rank = dist_ctx.attn_tp_group.rank
 
             self.cache_engine = CacheEngine(self.cache_config,
                                             self.model_config,
                                             rank=self.rank,
-                                            tp_rank=dist_ctx.attn_tp_group.rank,
+                                            tp_rank=tp_rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
             self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
 
-            self.spec_agent.build_cache_engine(self.cache_stream)
+            self.kv_connector = build_kv_connector(
+                KVConnectorRole.WORKER,
+                self.cache_config,
+                global_rank=self.rank,
+                tp_rank=tp_rank,
+                tp_size=tp,
+                kv_head_replica_num=self.model_config.num_replicate_key_value_heads,
+            )
+            if self.kv_connector is not None:
+                self.kv_connector.register_kv_caches(self.cache_engine.connector_kv_caches)
 
-    def _forward_impl(self, inputs: ModelInputs):
+            self.spec_agent.build_cache_engine(self.cache_stream)
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.set_cache_config(self.cache_config)
+                self.memdecode_agent.build_cache_engine(self.cache_stream)
+
+    def _forward_impl(self, inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None = None):
         output = model_forward(
             self.patched_model,
             inputs,
             self.cache_engine,
             state_cache_engine=self.state_cache_engine,
             stream=self.stream,
+            cache_inputs=cache_inputs,
         )
         return output
 
-    async def async_forward(self, inputs: ModelInputs):
+    async def async_forward(self, inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None = None):
         """Model forward.
 
         Args:
-            inputs (dict): The input data comes from _make_inputs.
-            swap_in_map (SwapMap): Cache maps to swap in.
-            swap_out_map (SwapMap): Cache maps to swap out.
+            inputs (ModelInputs): Persistent model execution inputs.
+            cache_inputs (CacheCheckpointInputs | None): One-forward cache
+                checkpoint operations.
         """
-        output = self._forward_impl(inputs)
+        output = self._forward_impl(inputs, cache_inputs=cache_inputs)
         await asyncio.sleep(0)
         return output
 
@@ -1212,6 +1471,8 @@ class BaseModelAgent:
                 self.patched_model.reset()
 
             self.spec_agent.reset_graph_runner()
+            if self.memdecode_agent is not None:
+                self.memdecode_agent.reset_graph_runner()
 
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
@@ -1425,10 +1686,15 @@ class BaseModelAgent:
     @torch.inference_mode()
     async def sleep(self, level: int = 1):
         """Sleep."""
+        if self.memdecode_agent is not None:
+            raise NotImplementedError('MemDecode sleep/wakeup is not supported yet.')
         self.state.is_sleeping = True
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
         device = 'cpu' if level == 1 else 'meta'
+        # Stop producers of GPU work and wait for queued work before closing the
+        # connector threads that still reference registered cache addresses.
+        self.shutdown_kv_connector()
         self.cache_engine = None
         self.state_cache_engine = None
         self.reset_graph_runner()
@@ -1439,9 +1705,7 @@ class BaseModelAgent:
             self.spec_agent.cache_engine = None
             spec_model.to(device=device, non_blocking=True)
 
-        self._drain_queues()
         torch.cuda.synchronize()
-        self._release_completed_h2d_transfers()
         self.reset_runtime_state()
         # force clean _update_params_ipc tensor and event after all gpu jobs done
         self._update_params_ipc_tensor = None
@@ -1452,6 +1716,8 @@ class BaseModelAgent:
     @torch.inference_mode()
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
+        if self.memdecode_agent is not None:
+            raise NotImplementedError('MemDecode sleep/wakeup is not supported yet.')
         if tags is None:
             tags = ['weights', 'kv_cache']
 
@@ -1482,7 +1748,10 @@ class BaseModelAgent:
 
     def release(self):
         """release."""
+        self._shutdown_kv_connector()
         self.reset_graph_runner()
+        if self.memdecode_agent is not None:
+            self.memdecode_agent.release()
         self.patched_model = None
         self.cache_engine = None
         self.state_cache_engine = None

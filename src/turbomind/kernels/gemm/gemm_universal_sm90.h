@@ -131,7 +131,7 @@ struct GemmUniversalSm90 {
     static constexpr int CTA_N = MMA_ATOM_N * kWorkGroupN;
     static constexpr int CTA_K = 128;
 
-    static constexpr int WARPGORUPS = kWorkGroupM * kWorkGroupN;
+    static constexpr int WARPGROUPS = kWorkGroupM * kWorkGroupN;
 
     static constexpr int MMA_M = MMA_ATOM_M * kWorkGroupM;
     static constexpr int MMA_N = MMA_ATOM_N * kWorkGroupN;
@@ -153,7 +153,7 @@ struct GemmUniversalSm90 {
 
     static constexpr int WARPGROUP_SIZE = 128;
 
-    static constexpr int CTA_SIZE = WARPGROUP_SIZE * (WARPGORUPS + 1);
+    static constexpr int CTA_SIZE = WARPGROUP_SIZE * (WARPGROUPS + 1);
 
     using Ta = __nv_fp8_e4m3;
     using Tb = __nv_fp8_e4m3;
@@ -185,7 +185,7 @@ struct GemmUniversalSm90 {
         };
         Source source;
         __align__(128) Array<Tc, CTA_M * CTA_N> C;
-        __align__(128) float UV[WARPGORUPS][round_up(CTA_M_U * CTA_N_V, 32)];
+        __align__(128) float UV[WARPGROUPS][round_up(CTA_M_U * CTA_N_V, 32)];
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
     };
@@ -213,7 +213,7 @@ struct GemmUniversalSm90 {
             PRAGMA_UNROLL
             for (int s = 0; s < Stages; ++s) {
                 ProducerBar::init(&producer_bar[s], 1);
-                ConsumerBar::init(&consumer_bar[s], kClusterSize * WARPGORUPS);
+                ConsumerBar::init(&consumer_bar[s], kClusterSize * WARPGROUPS);
             }
             cutlass::arch::fence_view_async_shared();
             if constexpr (kClusterSize > 1) {
@@ -225,7 +225,7 @@ struct GemmUniversalSm90 {
 
         const int warpgroup_id = cutlass::canonical_warp_group_idx();
 
-        if (warpgroup_id == WARPGORUPS) {
+        if (warpgroup_id == WARPGROUPS) {
             cutlass::arch::warpgroup_reg_dealloc<32>();
 
             static_assert(CTA_M % kMulticastA == 0);
@@ -241,7 +241,7 @@ struct GemmUniversalSm90 {
             auto& smem_U = storage.source.U;
             auto& smem_V = storage.source.V;
 
-            if (threadIdx.x == WARPGORUPS * WARPGROUP_SIZE) {
+            if (threadIdx.x == WARPGROUPS * WARPGROUP_SIZE) {
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
                 while (sched.next()) {
                     auto [valid_cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
@@ -458,7 +458,7 @@ struct GemmUniversalSm90 {
                     cute::tma_store_wait<0>();
                 }
 
-                cutlass::arch::NamedBarrier(WARPGORUPS * WARPGROUP_SIZE).sync();
+                cutlass::arch::NamedBarrier(WARPGROUPS * WARPGROUP_SIZE).sync();
 
                 // epilogue
                 const int warp_id = threadIdx.x / WARP_SIZE;
@@ -489,7 +489,7 @@ struct GemmUniversalSm90 {
                     }
                 }
                 cute::tma_store_fence();  // visibility: smem -> async proxy
-                cutlass::arch::NamedBarrier(WARPGORUPS * WARPGROUP_SIZE).sync();
+                cutlass::arch::NamedBarrier(WARPGROUPS * WARPGROUP_SIZE).sync();
 
                 if (threadIdx.x == 0) {
                     cute::SM90_TMA_STORE_2D::copy(&tm_c, &smem_C, offset_m, offset_n);

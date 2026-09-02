@@ -37,7 +37,7 @@ class SchedulerStats:
         # Engine core
         num_running_reqs: Engine core, currently executing requests.
         num_waiting_reqs: Engine core, requests queued waiting for execution.
-        gpu_cache_usage: Fraction of GPU KV blocks utilized (0.0 to 1.0).
+        gpu_cache_usage: Fraction of GPU KV cache utilized (0.0 to 1.0).
         prefix_cache_hit_rate: Prefix caching hit rate.
     """
 
@@ -90,7 +90,7 @@ class SchedulerStats:
     def update_from_schedule_metrics(self, scheduled_metrics: ScheduleMetrics):
         self.num_running_reqs = scheduled_metrics.active_seqs
         self.num_waiting_reqs = scheduled_metrics.waiting_seqs
-        self.gpu_cache_usage = 1.0 - (scheduled_metrics.free_blocks / scheduled_metrics.total_blocks)
+        self.gpu_cache_usage = scheduled_metrics.cache_usage
         self.prefix_cache_hit_rate = scheduled_metrics.prefix_cache_hit_rate
 
 
@@ -239,7 +239,17 @@ class IterationStats:
             return
 
         new_generation_tokens = len(outputs.token_ids)
+        if outputs.status != ResponseType.SUCCESS:
+            req_stats.finish_reason = outputs.status
+            req_stats.finish_time = self.iteration_timestamp
         if new_generation_tokens == 0:
+            if outputs.status != ResponseType.SUCCESS and req_stats.first_token_time == 0:
+                # A scoring-only request has no first generated token. Use the
+                # terminal timestamp as the internal prefill/decode boundary:
+                # full inference time is prefill and decode time is zero.
+                req_stats.first_token_time = req_stats.finish_time
+                req_stats.lastest_token_time = req_stats.finish_time
+                self.prompt_tokens = req_stats.prompt_tokens
             return
 
         self.new_generation_tokens = new_generation_tokens
@@ -255,11 +265,6 @@ class IterationStats:
 
         req_stats.lastest_token_time = outputs.req_metrics.token_timestamp
         req_stats.generation_tokens += new_generation_tokens
-
-        if outputs.status != ResponseType.SUCCESS:
-            req_stats.finish_reason = outputs.status
-            req_stats.finish_time = self.iteration_timestamp
-
 
 # modify from vllm
 @dataclass

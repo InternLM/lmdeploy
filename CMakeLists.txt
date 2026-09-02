@@ -101,7 +101,7 @@ FetchContent_MakeAvailable(yaml-cpp)
 FetchContent_Declare(
   xgrammar
   GIT_REPOSITORY          https://github.com/mlc-ai/xgrammar.git
-  GIT_TAG                 v0.1.27
+  GIT_TAG                 v0.2.1
   GIT_SUBMODULES          "3rdparty/dlpack"
   GIT_PROGRESS            TRUE
   USES_TERMINAL_DOWNLOAD  TRUE
@@ -363,17 +363,19 @@ link_directories(
 
 add_subdirectory(src)
 
-# if(BUILD_TEST)
-#     add_subdirectory(tests/csrc)
-# endif()
-
 # install python api
 if (BUILD_PY_FFI)
   if (CALL_FROM_SETUP_PY)
     install(TARGETS _turbomind DESTINATION ${CMAKE_INSTALL_PREFIX})
     install(TARGETS _xgrammar DESTINATION ${CMAKE_INSTALL_PREFIX})
+    if (TARGET turbomind_nccl_stub)
+      install(TARGETS turbomind_nccl_stub DESTINATION ${CMAKE_INSTALL_PREFIX})
+    endif()
   else()
     install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
     install(TARGETS _xgrammar DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+    if (TARGET turbomind_nccl_stub)
+      install(TARGETS turbomind_nccl_stub DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+    endif()
   endif()
 endif ()

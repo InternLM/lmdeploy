@@ -7,9 +7,47 @@ from types import SimpleNamespace
 
 import pytest
 
+from lmdeploy.serve.core.chat_runner import ChatStreamChunk
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall
 from lmdeploy.serve.openai.responses import ResponsesRequest
 from lmdeploy.serve.openai.responses.streaming import stream_response
+
+
+async def _parsed_stream(result_generator, response_parser):
+    streaming_tools = False
+    async for res in result_generator:
+        token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
+        stream_deltas = response_parser.stream_chunk(
+            res.response or '',
+            token_ids,
+            final=res.finish_reason is not None,
+        )
+        if not stream_deltas:
+            if res.finish_reason is None and not token_ids:
+                continue
+            stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
+
+        for delta_index, (delta_message, tool_emitted) in enumerate(stream_deltas):
+            if tool_emitted:
+                streaming_tools = True
+            is_last_delta = delta_index == len(stream_deltas) - 1
+            finish_reason = res.finish_reason if is_last_delta else None
+            if finish_reason == 'stop' and streaming_tools:
+                finish_reason = 'tool_calls'
+            yield ChatStreamChunk(
+                delta_message=delta_message,
+                tool_emitted=tool_emitted,
+                finish_reason=finish_reason,
+                token_ids=token_ids,
+                logprobs=getattr(res, 'logprobs', None),
+                input_token_len=res.input_token_len,
+                generate_token_len=res.generate_token_len,
+                cached_tokens=getattr(res, 'cached_tokens', 0),
+                routed_experts=getattr(res, 'routed_experts', None) if finish_reason is not None else None,
+                reasoning_tokens=getattr(response_parser, 'reasoning_tokens', None),
+                is_last_delta=is_last_delta,
+            )
 
 
 def test_responses_streaming_sse_shape(sse_payloads,
@@ -33,13 +71,14 @@ def test_responses_streaming_sse_shape(sse_payloads,
         )
 
     async def _collect_events():
+        parser = passthrough_response_parser_cls(request)
+        parser.reasoning_tokens = 2
         return [
             event async for event in stream_response(
-                _result_generator(),
+                _parsed_stream(_result_generator(), parser),
                 request=request,
                 model_name='fake-model',
                 created_time=123,
-                response_parser=passthrough_response_parser_cls(request),
             )
         ]
 
@@ -62,6 +101,7 @@ def test_responses_streaming_sse_shape(sse_payloads,
     assert done_item['id'] == added_item['id']
     assert payloads[-1]['type'] == 'response.completed'
     assert completed_response['output_text'] == 'Hello world!'
+    assert completed_response['usage']['output_tokens_details']['reasoning_tokens'] == 2
 
 
 def test_responses_streaming_length_finish_reason_emits_incomplete_event(
@@ -79,13 +119,13 @@ def test_responses_streaming_length_finish_reason_emits_incomplete_event(
         )
 
     async def _collect_events():
+        parser = passthrough_response_parser_cls(request)
         return [
             event async for event in stream_response(
-                _result_generator(),
+                _parsed_stream(_result_generator(), parser),
                 request=request,
                 model_name='fake-model',
                 created_time=123,
-                response_parser=passthrough_response_parser_cls(request),
             )
         ]
 
@@ -113,13 +153,13 @@ def test_responses_streaming_error_finish_reason_emits_failed_event(
         )
 
     async def _collect_events():
+        parser = passthrough_response_parser_cls(request)
         return [
             event async for event in stream_response(
-                _result_generator(),
+                _parsed_stream(_result_generator(), parser),
                 request=request,
                 model_name='fake-model',
                 created_time=123,
-                response_parser=passthrough_response_parser_cls(request),
             )
         ]
 
@@ -128,6 +168,34 @@ def test_responses_streaming_error_finish_reason_emits_failed_event(
     assert payloads[-1]['type'] == 'response.failed'
     assert payloads[-1]['response']['status'] == 'failed'
     assert payloads[-1]['response']['error']['code'] == 'server_error'
+
+
+def test_responses_streaming_exception_emits_failed_event(
+        sse_payloads, passthrough_response_parser_cls):
+    request = ResponsesRequest(model='fake-model', input='Hi', stream=True)
+
+    async def _result_generator():
+        if False:
+            yield None
+        raise RequestError(ErrorCode.INTERNAL_ERROR)
+
+    async def _collect_events():
+        parser = passthrough_response_parser_cls(request)
+        return [
+            event async for event in stream_response(
+                _parsed_stream(_result_generator(), parser),
+                request=request,
+                model_name='fake-model',
+                created_time=123,
+            )
+        ]
+
+    payloads = sse_payloads(asyncio.run(_collect_events()))
+    assert payloads[-1]['type'] == 'response.failed'
+    assert payloads[-1]['response']['error'] == {
+        'code': 'server_error',
+        'message': 'An internal server error occurred.',
+    }
 
 
 def test_responses_streaming_empty_output_announces_message_item(
@@ -145,13 +213,13 @@ def test_responses_streaming_empty_output_announces_message_item(
         )
 
     async def _collect_events():
+        parser = passthrough_response_parser_cls(request)
         return [
             event async for event in stream_response(
-                _result_generator(),
+                _parsed_stream(_result_generator(), parser),
                 request=request,
                 model_name='fake-model',
                 created_time=123,
-                response_parser=passthrough_response_parser_cls(request),
             )
         ]
 
@@ -174,6 +242,7 @@ def test_responses_streaming_tool_call_events(sse_payloads):
                                stream=True)
 
     class _ToolParser:
+        reasoning_tokens = 0
 
         def stream_chunk(self, delta_text: str, delta_token_ids: list[int],
                          **kwargs):
@@ -224,13 +293,13 @@ def test_responses_streaming_tool_call_events(sse_payloads):
         )
 
     async def _collect_events():
+        parser = _ToolParser()
         return [
             event async for event in stream_response(
-                _result_generator(),
+                _parsed_stream(_result_generator(), parser),
                 request=request,
                 model_name='fake-model',
                 created_time=123,
-                response_parser=_ToolParser(),
             )
         ]
 
@@ -270,6 +339,7 @@ def test_responses_streaming_parallel_tool_calls_filtering(
     )
 
     class _ParallelToolParser:
+        reasoning_tokens = 0
 
         def stream_chunk(self, delta_text: str, delta_token_ids: list[int],
                          **kwargs):
@@ -304,13 +374,13 @@ def test_responses_streaming_parallel_tool_calls_filtering(
         )
 
     async def _collect_events():
+        parser = _ParallelToolParser()
         return [
             event async for event in stream_response(
-                _result_generator(),
+                _parsed_stream(_result_generator(), parser),
                 request=request,
                 model_name='fake-model',
                 created_time=123,
-                response_parser=_ParallelToolParser(),
             )
         ]
 
@@ -331,6 +401,7 @@ def test_responses_streaming_text_indices_follow_text_item_order(sse_payloads):
                                stream=True)
 
     class _ToolThenTextParser:
+        reasoning_tokens = 0
 
         def stream_chunk(self, delta_text: str, delta_token_ids: list[int],
                          **kwargs):
@@ -369,13 +440,13 @@ def test_responses_streaming_text_indices_follow_text_item_order(sse_payloads):
         )
 
     async def _collect_events():
+        parser = _ToolThenTextParser()
         return [
             event async for event in stream_response(
-                _result_generator(),
+                _parsed_stream(_result_generator(), parser),
                 request=request,
                 model_name='fake-model',
                 created_time=123,
-                response_parser=_ToolThenTextParser(),
             )
         ]
 
@@ -405,6 +476,7 @@ def test_responses_streaming_accepts_parser_delta_list(sse_payloads):
                                stream=True)
 
     class _MultiDeltaParser:
+        reasoning_tokens = 0
 
         def stream_chunk(self, delta_text: str, delta_token_ids: list[int],
                          **kwargs):
@@ -437,13 +509,13 @@ def test_responses_streaming_accepts_parser_delta_list(sse_payloads):
         )
 
     async def _collect_events():
+        parser = _MultiDeltaParser()
         return [
             event async for event in stream_response(
-                _result_generator(),
+                _parsed_stream(_result_generator(), parser),
                 request=request,
                 model_name='fake-model',
                 created_time=123,
-                response_parser=_MultiDeltaParser(),
             )
         ]
 

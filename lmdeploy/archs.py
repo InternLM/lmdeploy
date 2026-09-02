@@ -106,7 +106,9 @@ def check_vl_llm(backend: str, config: dict) -> bool:
         'Gemma3ForConditionalGeneration', 'Llama4ForConditionalGeneration', 'InternVLForConditionalGeneration',
         'InternS1ForConditionalGeneration', 'InternS1ProForConditionalGeneration',
         'InternS1_1_ForConditionalGeneration', 'Glm4vForConditionalGeneration',
+        'InternS2MobiusForConditionalGeneration', 'InternS2MobiusForCausalLM',
         'InternS2PreviewForConditionalGeneration', 'InternS2PreviewForCausalLM',
+        'KimiK25ForConditionalGeneration', 'Kimi_K25ForConditionalGeneration',
     ])
     turbomind_unsupported_archs = []
     if arch == 'MultiModalityCausalLM' and 'language_config' in config:

@@ -9,7 +9,7 @@ from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.backends.moe import FusedMoEBuilder, FusedMoEImpl
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda import fused_moe
-from lmdeploy.pytorch.kernels.cuda.fused_moe import _renormalize
+from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _renormalize
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
@@ -108,7 +108,7 @@ class FusedMoENormal:
         expert_list: list[int] = None,
     ):
         """forward."""
-        from lmdeploy.pytorch.kernels.cuda.fused_moe_ep import fused_moe_v3
+        from lmdeploy.pytorch.kernels.cuda.moe.ep import fused_moe_v3
         x, recv_topk_ids, recv_topk_weights, recv_tokens_per_expert = self.token_dispatcher.dispatch(
             hidden_states,
             topk_ids,
@@ -144,7 +144,7 @@ class FusedMoENormal:
         return self.token_dispatcher.release()
 
     def fusedmoe_forward(self, state, up_weight, down_weight):
-        from lmdeploy.pytorch.kernels.cuda.fused_moe_ep import fused_moe_v3
+        from lmdeploy.pytorch.kernels.cuda.moe.ep import fused_moe_v3
         return fused_moe_v3(state['recv_hidden_states'], state['recv_topk_idx'], state['recv_topk_weights'], up_weight,
                             down_weight, state['recv_tokens_per_expert'])
 

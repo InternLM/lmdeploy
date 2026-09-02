@@ -14,7 +14,9 @@ endif()
 
 pybind11_add_module(${PROJECT_NAME}
     bind.cpp
-    ../kernels/linear_attn/python_bind.cpp)
+    linear_bind.cpp
+    ../kernels/linear_attn/python_bind.cpp
+    ../kernels/gemm/moe_gate_python_bind.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE turbomind xgrammar)
 
 pybind11_add_module(_xgrammar xgrammar_bind.cpp)
@@ -43,5 +45,10 @@ if (CALL_FROM_SETUP_PY)
   set_target_properties(${PROJECT_NAME} PROPERTIES
       BUILD_RPATH "\$ORIGIN"
       INSTALL_RPATH "${_INSTALL_CUDA_RPATH}"
+  )
+else()
+  set_target_properties(${PROJECT_NAME} PROPERTIES
+      BUILD_RPATH "\$ORIGIN"
+      INSTALL_RPATH "\$ORIGIN"
   )
 endif ()

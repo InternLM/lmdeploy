@@ -168,12 +168,12 @@ def test_restful_chat_pytorch_prefix_cache_tp1(config, run_config, common_case_c
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api_pytorch
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.gpu_num_distributed_dp4ep8
+@pytest.mark.gpu_num_distributed_tp2dp4ep8
 @pytest.mark.parametrize(
     'run_config',
-    get_func_config_list(BACKEND, {'dp': 4, 'ep': 8}, extra=_PREFIX_CACHE_EXTRA),
+    get_func_config_list(BACKEND, {'tp': 2, 'dp': 4, 'ep': 8}, extra=_PREFIX_CACHE_EXTRA),
 )
-def test_restful_chat_pytorch_prefix_cache_dp4ep8(
+def test_restful_chat_pytorch_prefix_cache_tp2dp4ep8(
         shared_proxy_manager, config, run_config, common_case_config, worker_id):
     _run_proxy_distributed_test(config=config,
                                 run_config=run_config,

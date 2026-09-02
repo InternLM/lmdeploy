@@ -31,6 +31,7 @@ public:
 private:
     const size_t layer_num_;
     const size_t hidden_units_;
+    const bool   output_norm_zero_centered_;
 
     const int attn_tp_size_;
     const int attn_dp_size_;
@@ -38,6 +39,7 @@ private:
     const int mlp_tp_size_;
 
     const int attn_tp_group_;
+    const int mlp_group_;
 
     comm::DeviceCommImpl* const d_comm_;
 
@@ -55,10 +57,12 @@ private:
                                   const Tensor& bias,
                                   const Tensor& weight,
                                   float         eps,
+                                  bool          zero_centered,
                                   int           token_num,
                                   int           t0,
                                   int           t1,
-                                  const int*    local_token_nums);
+                                  const int*    local_token_nums,
+                                  int           local_token_nums_count);
 };
 
 }  // namespace turbomind

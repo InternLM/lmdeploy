@@ -90,6 +90,7 @@ public:
                                               const void*  bias,
                                               const void*  weights,
                                               float        eps,
+                                              bool         zero_centered,
                                               int          dim,
                                               int          token_num,
                                               DataType     dtype,
@@ -104,11 +105,13 @@ public:
                                                 const void*  bias,
                                                 const void*  weights,
                                                 float        eps,
+                                                bool         zero_centered,
                                                 int          dim,
                                                 DataType     type,
                                                 int          group0,
                                                 int          group1,
                                                 const int*   local_token_nums,
+                                                int          local_token_nums_count,
                                                 cudaStream_t stream)
     {
         throw std::runtime_error("not implemented");

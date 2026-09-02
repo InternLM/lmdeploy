@@ -114,30 +114,12 @@ TURBOMIND_FALLBACK_TEST_LLM_GPU2 = [{
     'communicator': 'nccl',
     'quant_policy': 8,
     'parallel_config': {
-        'tp': 1
+        'tp': 2
     },
     'extra_params': {}
 }]
 
-TURBOMIND_FALLBACK_TEST_MLLM_GPU1 = [{
-    'model': 'THUDM/cogvlm-chat-hf',
-    'backend': 'turbomind',
-    'communicator': 'cuda-ipc',
-    'quant_policy': 4,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}, {
-    'model': 'THUDM/cogvlm-chat-hf',
-    'backend': 'turbomind',
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}]
+TURBOMIND_FALLBACK_TEST_MLLM_GPU1 = []
 
 TURBOMIND_LOGPROBS_TEST_LLM_GPU2 = [{
     'model': 'Qwen/Qwen3-30B-A3B',
@@ -205,7 +187,7 @@ PYTORCH_LORA_TEST_LLM_GPU1 = [{
 }]
 
 PYTORCH_LORA_TEST_LLM_GPU2 = [{
-    'model': 'baichuan-inc/Baichuan2-13B-Chat',
+    'model': 'meta-llama/Llama-2-7b-chat-hf',
     'backend': 'pytorch',
     'communicator': 'nccl',
     'quant_policy': 0,
@@ -311,7 +293,7 @@ BASE_REASONING_TEST_LLM = [{
     'communicator': 'nccl',
     'quant_policy': 0,
     'parallel_config': {
-        'tp': 1
+        'tp': 2
     },
     'extra_params': {
         'reasoning-parser': 'qwen-qwq'

@@ -294,6 +294,7 @@ def parse_args():
 def main():
     args = parse_args()
     random.seed(args.seed)
+    np.random.seed(args.seed)
     os.environ['TM_LOG_LEVEL'] = args.log_level
     if args.backend == 'turbomind':
         engine_config = TurbomindEngineConfig(max_batch_size=args.concurrency,

@@ -15,6 +15,7 @@ from openai.types.responses import (
     ResponseOutputMessage,
 )
 
+from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.responses.protocol import (
     ResponsesRequest,
     ResponsesResponse,
@@ -27,12 +28,19 @@ def _sse(event: str, data: dict[str, Any]) -> str:
     return f'event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
 
 
-async def stream_response(result_generator,
+async def _results_or_error(result_generator):
+    try:
+        async for result in result_generator:
+            yield result
+    except RequestError as error:
+        yield error
+
+
+async def stream_response(parsed_stream,
                           *,
                           request: ResponsesRequest,
                           model_name: str,
-                          created_time: int,
-                          response_parser) -> AsyncGenerator[str, None]:
+                          created_time: int) -> AsyncGenerator[str, None]:
     initial_response = ResponsesResponse(
         id=request.request_id,
         created_at=created_time,
@@ -55,8 +63,8 @@ async def stream_response(result_generator,
     text_output_index = None
     text = ''
     tool_states: dict[int, dict[str, Any]] = {}
-    streaming_tools = False
-    final_res = None
+    final_chunk = None
+    runtime_error = None
 
     def _start_text_item() -> list[str]:
         nonlocal next_output_index, sequence_number, text_output_index, text_started
@@ -108,7 +116,7 @@ async def stream_response(result_generator,
         nonlocal next_output_index, sequence_number
         tool_index = tool_delta.index
         state = tool_states.get(tool_index)
-        function_delta = getattr(tool_delta, 'function', None)
+        function_delta = tool_delta.function
         if state is not None:
             if function_delta is not None and function_delta.name:
                 state['name'] = function_delta.name
@@ -144,68 +152,62 @@ async def stream_response(result_generator,
         sequence_number += 1
         return [event]
 
-    async for res in result_generator:
-        final_res = res
-        delta = res.response or ''
-        delta_token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
-        stream_deltas = response_parser.stream_chunk(delta, delta_token_ids)
+    async for chunk in _results_or_error(parsed_stream):
+        if isinstance(chunk, RequestError):
+            runtime_error = chunk
+            break
+        final_chunk = chunk
+        delta_message = chunk.delta_message
+        content_delta = delta_message.content or ''
+        tool_deltas = delta_message.tool_calls
 
-        for delta_message, tool_emitted in stream_deltas:
-            content_delta = getattr(delta_message, 'content', None) or ''
-            tool_deltas = getattr(delta_message, 'tool_calls', None)
-
-            if content_delta:
-                for event in _start_text_item():
+        if content_delta:
+            for event in _start_text_item():
+                yield event
+            text += content_delta
+            yield _sse(
+                'response.output_text.delta',
+                {
+                    'type': 'response.output_text.delta',
+                    'sequence_number': sequence_number,
+                    'response_id': request.request_id,
+                    'item_id': message_id,
+                    'output_index': text_output_index,
+                    'content_index': content_index,
+                    'delta': content_delta,
+                },
+            )
+            sequence_number += 1
+        if tool_deltas:
+            for tool_delta in filter_parallel_tool_call_deltas(tool_deltas, request.parallel_tool_calls):
+                for event in _start_tool_item(tool_delta):
                     yield event
-                text += content_delta
-                yield _sse(
-                    'response.output_text.delta',
-                    {
-                        'type': 'response.output_text.delta',
-                        'sequence_number': sequence_number,
-                        'response_id': request.request_id,
-                        'item_id': message_id,
-                        'output_index': text_output_index,
-                        'content_index': content_index,
-                        'delta': content_delta,
-                    },
-                )
-                sequence_number += 1
-            if tool_deltas:
-                for tool_delta in filter_parallel_tool_call_deltas(tool_deltas, request.parallel_tool_calls):
-                    if tool_emitted:
-                        streaming_tools = True
-                    for event in _start_tool_item(tool_delta):
-                        yield event
-                    function_delta = getattr(tool_delta, 'function', None)
-                    if function_delta is None:
-                        continue
-                    state = tool_states[tool_delta.index]
-                    if function_delta.name:
-                        state['name'] = function_delta.name
-                    arguments_delta = function_delta.arguments or ''
-                    if arguments_delta:
-                        state['arguments'] += arguments_delta
-                        yield _sse(
-                            'response.function_call_arguments.delta',
-                            {
-                                'type': 'response.function_call_arguments.delta',
-                                'sequence_number': sequence_number,
-                                'response_id': request.request_id,
-                                'item_id': state['item_id'],
-                                'output_index': state['output_index'],
-                                'delta': arguments_delta,
-                            },
-                        )
-                        sequence_number += 1
-            elif tool_emitted:
-                streaming_tools = True
-        if res.finish_reason == 'stop' and streaming_tools:
-            res.finish_reason = 'tool_calls'
+                function_delta = tool_delta.function
+                if function_delta is None:
+                    continue
+                state = tool_states[tool_delta.index]
+                if function_delta.name:
+                    state['name'] = function_delta.name
+                arguments_delta = function_delta.arguments or ''
+                if arguments_delta:
+                    state['arguments'] += arguments_delta
+                    yield _sse(
+                        'response.function_call_arguments.delta',
+                        {
+                            'type': 'response.function_call_arguments.delta',
+                            'sequence_number': sequence_number,
+                            'response_id': request.request_id,
+                            'item_id': state['item_id'],
+                            'output_index': state['output_index'],
+                            'delta': arguments_delta,
+                        },
+                    )
+                    sequence_number += 1
 
-    input_tokens = 0 if final_res is None else final_res.input_token_len
-    output_tokens = 0 if final_res is None else final_res.generate_token_len
-    finish_reason = None if final_res is None else final_res.finish_reason
+    input_tokens = 0 if final_chunk is None else final_chunk.input_token_len
+    output_tokens = 0 if final_chunk is None else final_chunk.generate_token_len
+    finish_reason = ('error' if runtime_error is not None else
+                     None if final_chunk is None else final_chunk.finish_reason)
     if not text and not tool_states:
         for event in _start_text_item():
             yield event
@@ -227,8 +229,11 @@ async def stream_response(result_generator,
         tool_calls=tool_calls,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        reasoning_tokens=0 if final_chunk is None else final_chunk.reasoning_tokens or 0,
         finish_reason=finish_reason,
         message_id=message_id,
+        error_code=None if runtime_error is None else runtime_error.code.value,
+        error_message=None if runtime_error is None else runtime_error.message,
     )
     output_by_index: dict[int, ResponseOutputMessage | ResponseOutputFunctionCall] = {}
     text_item = next((item for item in final_response.output if isinstance(item, ResponseOutputMessage)), None)

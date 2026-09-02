@@ -152,6 +152,8 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>DeepSeek-V2.5 (236B)</li>
   <li>DeepSeek-V3 (685B)</li>
   <li>DeepSeek-V3.2 (685B)</li>
+  <li>DeepSeek-V4 (284B, 1.6T)</li>
+  <li>Hy3 (295B-A21B)</li>
   <li>Mixtral (8x7B, 8x22B)</li>
   <li>Gemma (2B - 7B)</li>
   <li>Phi-3-mini (3.8B)</li>
@@ -163,6 +165,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>gpt-oss (20B, 120B)</li>
   <li>GLM-4.7-Flash (30B)</li>
   <li>GLM-5 (754B)</li>
+  <li>GLM-5.2 (754B)</li>
 </ul>
 </td>
 <td>
@@ -173,6 +176,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Qwen3-VL (2B - 235B)</li>
   <li>Qwen3.5 (0.8B - 397B)</li>
   <li>Qwen3-Omni (30B-A3B)</li>
+  <li>Kimi-K2.6 (1T-A32B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
@@ -183,7 +187,8 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Intern-S1 (241B)</li>
   <li>Intern-S1-mini (8.3B)</li>
   <li>Intern-S1-Pro (1TB)</li>
-  <li>Intern-S2-Preview (35B-A3B)</li>
+  <li>Intern-S2-Preview (35B-A3B, 397B)</li>
+  <li>Intern-S2-Mobius (35B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>

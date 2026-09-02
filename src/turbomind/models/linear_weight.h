@@ -58,6 +58,14 @@ public:
         is_grouped_ = grouped;
     }
 
+    /// SM90 FP8 fused-SiLU: output is e4m3 with dynamic group-128 scales.
+    void set_fp8_fused_silu_output()
+    {
+        output_format.dtype        = kFloat8_e4m3;
+        output_format.block_sizes  = {128, 1};
+        output_format.scales.dtype = kFloat;
+    }
+
     explicit operator bool() const noexcept
     {
         return static_cast<bool>(weight);
@@ -100,6 +108,7 @@ public:
 private:
     bool has_bias_   = false;
     bool is_grouped_ = false;
+    bool prepared_   = false;
 };
 
 }  // namespace turbomind

@@ -63,7 +63,36 @@ def build_fused_moe(
             all_reduce=all_reduce,
         )
     elif quant_method == 'fp8':
+        is_static_per_tensor = (
+            quant_config.activation_scheme == 'static'
+            and quant_config.weight_block_size is None
+        )
+
+        if is_static_per_tensor:
+            assert not bias, (
+                'Static FP8 MoE does not support bias.'
+            )
+            assert act_func is None, (
+                'Static FP8 MoE currently uses '
+                'the built-in SiLU activation.'
+            )
+
+            from .static_fp8 import FusedMoEStaticF8
+
+            return FusedMoEStaticF8(
+                hidden_dim=hidden_dim,
+                ffn_dim=ffn_dim,
+                num_experts=num_experts,
+                top_k=top_k,
+                renormalize=renormalize,
+                dtype=dtype,
+                quant_dtype=quant_config.quant_dtype,
+                device=device,
+                all_reduce=all_reduce,
+            )
+
         from .blocked_fp8 import FusedMoEBlockedF8
+
         return FusedMoEBlockedF8(
             hidden_dim=hidden_dim,
             ffn_dim=ffn_dim,
@@ -78,6 +107,25 @@ def build_fused_moe(
             all_reduce=all_reduce,
             layer_idx=layer_idx,
             act_func=act_func,
+        )
+    elif quant_method == 'compressed-tensors':
+        if bias:
+            raise RuntimeError('Compressed-tensors W4A16 routed experts do not support bias.')
+        if act_func is not None:
+            raise RuntimeError('Compressed-tensors W4A16 only supports the built-in SiLU activation.')
+        from .compressed_tensors import FusedMoEW4A16
+        return FusedMoEW4A16(
+            hidden_dim=hidden_dim,
+            ffn_dim=ffn_dim,
+            num_experts=num_experts,
+            top_k=top_k,
+            renormalize=renormalize,
+            dtype=dtype,
+            device=device,
+            all_reduce=all_reduce,
+            num_bits=quant_config.bits,
+            group_size=quant_config.group_size,
+            layer_idx=layer_idx,
         )
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')

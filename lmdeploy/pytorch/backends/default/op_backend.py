@@ -38,6 +38,9 @@ class DefaultOpsBackend(OpsBackend):
         elif layer_type == OpType.MultinomialSampling:
             from .multinomial_sampling import DefaultMultinomialSamplingBuilder
             return DefaultMultinomialSamplingBuilder
+        elif layer_type == OpType.RejectionSampling:
+            from .rejection_sampling import DefaultRejectionSamplingBuilder
+            return DefaultRejectionSamplingBuilder
         elif layer_type == OpType.LinearW4A16:
             from .awq_modules import DefaultLinearW4A16Builder
             return DefaultLinearW4A16Builder
@@ -47,6 +50,12 @@ class DefaultOpsBackend(OpsBackend):
         elif layer_type == OpType.Embedding:
             from .embedding import DefaultEmbeddingBuilder
             return DefaultEmbeddingBuilder
+        elif layer_type == OpType.CacheBlockCopy:
+            from .cache_block_copy import DefaultCacheBlockCopyBuilder
+            return DefaultCacheBlockCopyBuilder
+        elif layer_type == OpType.RouterGemm:
+            from .moe_router import DefaultRouterGemmBuilder
+            return DefaultRouterGemmBuilder
         elif layer_type == OpType.RouterNoauxTC:
             from .moe_router import DefaultRouterNoauxTCBuilder
             return DefaultRouterNoauxTCBuilder

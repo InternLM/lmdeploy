@@ -1,15 +1,178 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import functools
+from collections.abc import Hashable
+from dataclasses import dataclass
+from typing import Any
 
 import torch
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.utils import get_logger
 
+from ..step_metadata import CudaAttentionMetaBuilder
 from .default import TritonAttentionImpl, TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
+
+
+@dataclass
+class FlashMLAAttentionMetadata:
+    """Scheduler metadata owned by one FlashMLA configuration."""
+
+    # FlashMLA <= 0.x returns tensors here. FlashMLA 1.x returns a
+    # FlashMLASchedMeta object that lazily owns those tensors.
+    tile_scheduler_metadata: Any = None
+    num_splits: torch.Tensor | None = None
+    scheduler_depends_on_step: bool = False
+
+
+def needs_flash_mla_scheduler(is_fp8_kvcache: bool, index_topk: int | None) -> bool:
+    """Whether the selected FlashMLA path consumes paged scheduler metadata."""
+    # BF16 sparse decode uses sparse_fwd rather than the paged decode kernel.
+    return is_fp8_kvcache or index_topk is None
+
+
+def _build_flash_mla_metadata(kv_seqlens,
+                              num_attention_heads: int,
+                              decoding_query_len: int,
+                              is_fp8_kvcache: bool,
+                              index_topk: int | None) -> FlashMLAAttentionMetadata:
+    """Build scheduler metadata from one selected FlashMLA implementation."""
+    if not needs_flash_mla_scheduler(is_fp8_kvcache, index_topk):
+        return FlashMLAAttentionMetadata()
+
+    import flash_mla
+
+    num_attention_heads *= decoding_query_len
+    num_heads_q = None if index_topk is None else num_attention_heads
+    tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
+        kv_seqlens.to(torch.int32),
+        num_attention_heads,
+        num_heads_k=1,
+        num_heads_q=num_heads_q,
+        is_fp8_kvcache=is_fp8_kvcache,
+        topk=index_topk,
+    )
+    return FlashMLAAttentionMetadata(
+        tile_scheduler_metadata=tile_scheduler_metadata,
+        num_splits=num_splits,
+        # The dense scheduler reads kv_seqlens. The current sparse decode call
+        # uses a fixed top-k width and does not pass topk_length.
+        scheduler_depends_on_step=index_topk is None,
+    )
+
+
+def build_flash_mla_metadata(sequence_metadata, **kwargs) -> FlashMLAAttentionMetadata:
+    """Build scheduler metadata from one selected FlashMLA implementation."""
+    return _build_flash_mla_metadata(sequence_metadata.kv_seqlens, **kwargs)
+
+
+def update_flash_mla_metadata(attn_metadata,
+                              num_attention_heads: int,
+                              decoding_query_len: int,
+                              is_fp8_kvcache: bool,
+                              index_topk: int | None) -> None:
+    """Populate the legacy single-group FlashMLA metadata fields."""
+    metadata = build_flash_mla_metadata(
+        attn_metadata,
+        num_attention_heads=num_attention_heads,
+        decoding_query_len=decoding_query_len,
+        is_fp8_kvcache=is_fp8_kvcache,
+        index_topk=index_topk,
+    )
+    attn_metadata.tile_scheduler_metadata = metadata.tile_scheduler_metadata
+    attn_metadata.num_splits = metadata.num_splits
+
+
+def build_flash_mla_graph_metadata(step_context, kv_seqlens,
+                                   decoding_query_len: int) -> FlashMLAAttentionMetadata:
+    """Build legacy graph metadata from the model-level FlashMLA
+    configuration."""
+    num_attention_heads, _ = step_context.model_config.get_num_qkv_head_by_tp()
+    model_config = step_context.model_config
+    return _build_flash_mla_metadata(
+        kv_seqlens,
+        num_attention_heads=num_attention_heads,
+        decoding_query_len=decoding_query_len,
+        is_fp8_kvcache=model_config.use_mla_fp8_cache,
+        index_topk=model_config.mla_index_topk,
+    )
+
+
+@dataclass(frozen=True)
+class FlashMLAAttentionMetaBuilder(
+        CudaAttentionMetaBuilder[FlashMLAAttentionMetadata, FlashMLAAttentionMetadata]):
+    """Build metadata requested by one selected FlashMLA configuration."""
+
+    num_attention_heads: int
+    index_topk: int | None = None
+
+    @property
+    def key(self) -> Hashable:
+        return (type(self), self.num_attention_heads, self.index_topk)
+
+    def build(self, step_context, sequence_metadata) -> FlashMLAAttentionMetadata:
+        if not step_context.is_decoding:
+            return FlashMLAAttentionMetadata()
+        batch_size = sequence_metadata.q_seqlens.size(0)
+        return build_flash_mla_metadata(
+            sequence_metadata,
+            num_attention_heads=self.num_attention_heads,
+            decoding_query_len=step_context.input_ids.size(1) // batch_size,
+            is_fp8_kvcache=step_context.model_config.use_mla_fp8_cache,
+            index_topk=self.index_topk,
+        )
+
+    def apply_legacy_metadata(self, attn_metadata, metadata: FlashMLAAttentionMetadata) -> None:
+        attn_metadata.tile_scheduler_metadata = metadata.tile_scheduler_metadata
+        attn_metadata.num_splits = metadata.num_splits
+
+    def make_cudagraph_buffer(self, graph_meta, input_buffers,
+                              step_context) -> FlashMLAAttentionMetadata:
+        return _build_flash_mla_metadata(
+            torch.ones(graph_meta.max_batchs, dtype=torch.int32, device=graph_meta.device),
+            num_attention_heads=self.num_attention_heads,
+            decoding_query_len=graph_meta.decode_query_len,
+            is_fp8_kvcache=step_context.model_config.use_mla_fp8_cache,
+            index_topk=self.index_topk,
+        )
+
+    def fill_cudagraph_buffer(self, graph_meta, input_buffers, step_context,
+                              buffer: FlashMLAAttentionMetadata) -> FlashMLAAttentionMetadata:
+        tile_scheduler_metadata = buffer.tile_scheduler_metadata
+        if not isinstance(tile_scheduler_metadata, torch.Tensor):
+            # FlashMLA 1.x initializes this object during the first kernel
+            # call. The pre-capture lifecycle decides whether the warmup
+            # scheduler is reusable or must be replaced.
+            assert buffer.num_splits is None
+            return buffer
+
+        metadata = _build_flash_mla_metadata(
+            input_buffers['kv_seqlens'],
+            num_attention_heads=self.num_attention_heads,
+            decoding_query_len=graph_meta.decode_query_len,
+            is_fp8_kvcache=step_context.model_config.use_mla_fp8_cache,
+            index_topk=self.index_topk,
+        )
+        tile_scheduler_metadata.copy_(metadata.tile_scheduler_metadata)
+        assert buffer.num_splits is not None and metadata.num_splits is not None
+        buffer.num_splits.copy_(metadata.num_splits)
+        return buffer
+
+    def prepare_cudagraph_capture(self, graph_meta, input_buffers, step_context,
+                                  buffer: FlashMLAAttentionMetadata) -> None:
+        scheduler = buffer.tile_scheduler_metadata
+        if isinstance(scheduler, torch.Tensor) or not buffer.scheduler_depends_on_step:
+            return
+
+        # FlashMLA 1.x only launches its scheduler kernel when these fields are
+        # empty. Warmup initialized the old object, so capture must use a fresh
+        # one to record metadata generation from the graph's input buffers.
+        import flash_mla
+        scheduler, num_splits = flash_mla.get_mla_metadata()
+        assert num_splits is None
+        buffer.tile_scheduler_metadata = scheduler
+        buffer.num_splits = num_splits
 
 
 def _cdiv(a, b):
@@ -17,81 +180,17 @@ def _cdiv(a, b):
     return (a + b - 1) // b
 
 
-def _try_dynamic_compile(func, *args, **kwargs):
-    """Try compile."""
-    try:
-        compiled_func = torch.compile(func, dynamic=True)
-        compiled_func(*args, **kwargs)
-        return compiled_func
-    except Exception:
-        return func
-
-
-class NSAIndicesUpdater:
-    """NSA indices updater.
-
-    Flash MLA sparse attention requires different indice format for prefill and decoding. This module is used to update
-    the indices to meet the requirements.
-    """
-
-    def __init__(self):
-        self._update_decode_func = None
-        self._update_prefill_func = None
-
-    def _update_decode_impl(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor,
-                            block_size: int) -> torch.Tensor:
-        """Update for decode impl."""
-        block_ids = nsa_indices // block_size
-        block_ids = block_ids.clamp_min(0)
-        block_ids = block_offsets.gather(1, block_ids)
-        block_remain = nsa_indices % block_size
-        ret = block_ids * block_size + block_remain
-        ret[nsa_indices < 0] = -1
-        return ret[:, None]
-
-    def update_decode(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor, block_size: int) -> torch.Tensor:
-        """Update for decode."""
-        if self._update_decode_func is None:
-            self._update_decode_func = _try_dynamic_compile(self._update_decode_impl, nsa_indices, block_offsets,
-                                                            block_size)
-
-        return self._update_decode_func(nsa_indices, block_offsets, block_size)
-
-    def _update_prefill_impl(self, nsa_indices: torch.Tensor, q_seqlens: torch.Tensor, cu_seqlens_k: torch.Tensor):
-        """Update for prefill impl."""
-        num_tokens = nsa_indices.size(0)
-        repeat_cu_seqlens_k = torch.repeat_interleave(cu_seqlens_k[:-1], q_seqlens, output_size=num_tokens)
-        neg_mask = nsa_indices < 0
-        nsa_indices = nsa_indices + repeat_cu_seqlens_k[:, None]
-        nsa_indices[neg_mask] = -1
-        return nsa_indices[:, None]
-
-    def update_prefill(self, nsa_indices: torch.Tensor, q_seqlens: torch.Tensor, cu_seqlens_k: torch.Tensor):
-        """Update for prefill."""
-        if self._update_prefill_func is None:
-            self._update_prefill_func = _try_dynamic_compile(self._update_prefill_impl, nsa_indices, q_seqlens,
-                                                             cu_seqlens_k)
-
-        return self._update_prefill_func(nsa_indices, q_seqlens, cu_seqlens_k)
-
-    @staticmethod
-    @functools.cache
-    def build():
-        return NSAIndicesUpdater()
-
-
 class FlashMLAImpl(TritonAttentionImpl):
-    """Flash MLA (Multi-head Latent Attention) implementation.
+    """Dense MLA attention.
 
-    This implementation supports multiple execution paths:
-    - Decoding: Uses flash_mla_with_kvcache with paged KV cache
-    - Prefill with NSA: Uses flash_mla_sparse_fwd for sparse attention
-    - Prefill with FA3: Uses flash_attn_varlen_func with split q_rope/q_nope
-    - Prefill fallback: Uses custom Triton kernel
+    Prefill: FA3 when available; otherwise the Triton MLA kernel.
+    Decode: paged FlashMLA.
+
+    DSA-specific index mapping and sparse execution live in
+    :class:`FlashMLASparseImpl`.
     """
 
     # MLA-specific constants
-    _MLA_HEAD_ALIGNMENT = 64  # Query heads must be multiple of 64 for flash_mla
     _MLA_NOPE_SIZE = 512  # Size of non-positional embeddings
     _MLA_SCALE_SIZE = 16  # Size of FP8 quantization scales
 
@@ -133,34 +232,33 @@ class FlashMLAImpl(TritonAttentionImpl):
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
         from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache_mla_fp8
         self.flash_mla_with_kvcache = flash_mla.flash_mla_with_kvcache
-        self.flash_mla_sparse_fwd = None
         self.fill_kv_cache_blocked_fp8 = fill_kv_cache_blocked_fp8
         self.flatten_kv_cache_mla_fp8 = flatten_kv_cache_mla_fp8
         assert num_kv_heads == 1, 'MLA requires num kv heads equal to 1'
         self.use_fa3 = use_fa3
 
-        self.nsa_updater = NSAIndicesUpdater.build()
+    def get_step_metadata_provider(self):
+        """Describe metadata required by this selected implementation."""
+        return FlashMLAAttentionMetaBuilder(num_attention_heads=self.num_heads)
 
-    def _get_flash_mla_sparse_fwd(self):
-        if self.flash_mla_sparse_fwd is not None:
-            return self.flash_mla_sparse_fwd
+    def _get_scheduler_metadata(self, attn_metadata: TritonAttentionMetadata):
+        kernel_metadata = self.get_step_kernel_metadata(attn_metadata)
+        if kernel_metadata is None:
+            return attn_metadata.tile_scheduler_metadata, attn_metadata.num_splits
+        assert isinstance(kernel_metadata, FlashMLAAttentionMetadata)
+        return kernel_metadata.tile_scheduler_metadata, kernel_metadata.num_splits
 
-        try:
-            import flash_mla
-            self.flash_mla_sparse_fwd = flash_mla.flash_mla_sparse_fwd
-            return self.flash_mla_sparse_fwd
-        except Exception:
-            logger.exception('Can not import flash_mla_sparse_fwd from flash_mla.')
-
-    def flash_mla_decoding(
+    def _decoding_paged(
         self,
         query: torch.Tensor,
         k_cache: torch.Tensor,
-        nsa_indices: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
+        indices: torch.Tensor = None,
+        causal: bool = None,
     ):
-        """Flash mla decoding."""
-        causal = self.causal
+        """Run paged FlashMLA decode with optional provider-ready indices."""
+        if causal is None:
+            causal = self.causal
         kv_seqlens = attn_metadata.kv_seqlens
         block_offsets = attn_metadata.block_offsets
         is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
@@ -170,14 +268,11 @@ class FlashMLAImpl(TritonAttentionImpl):
         max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
         max_q_seqlen = max_q_seqlen // batch_size
         query = query.unflatten(0, (batch_size, max_q_seqlen))
+        num_q_heads = query.size(2)
         if kv_seqlens.dtype == torch.int64:
             kv_seqlens = kv_seqlens.to(torch.int32)
 
-        # update nsa indice according to flash-mla requirement
-        if nsa_indices is not None:
-            block_size = k_cache.size(1)
-            nsa_indices = self.nsa_updater.update_decode(nsa_indices, block_offsets, block_size)
-            causal = False
+        tile_scheduler_metadata, num_splits = self._get_scheduler_metadata(attn_metadata)
 
         attn_output, _ = self.flash_mla_with_kvcache(query,
                                                      k_cache=k_cache,
@@ -185,49 +280,14 @@ class FlashMLAImpl(TritonAttentionImpl):
                                                      cache_seqlens=kv_seqlens,
                                                      head_dim_v=self.v_head_size,
                                                      softmax_scale=self.scale,
-                                                     tile_scheduler_metadata=attn_metadata.tile_scheduler_metadata,
-                                                     num_splits=attn_metadata.num_splits,
+                                                     tile_scheduler_metadata=tile_scheduler_metadata,
+                                                     num_splits=num_splits,
                                                      causal=causal,
                                                      is_fp8_kvcache=is_fp8_kvcache,
-                                                     indices=nsa_indices)
+                                                     indices=indices)
 
+        attn_output = attn_output[:, :, :num_q_heads]
         attn_output = attn_output.flatten(0, 1)
-        return attn_output
-
-    def _prefill_sparse(self, query: torch.Tensor, flatten_k: torch.Tensor, nsa_indices: torch.Tensor,
-                        attn_metadata: TritonAttentionMetadata) -> torch.Tensor:
-        """Sparse prefill using flash_mla_sparse_fwd.
-
-        This path is used when NSA (Non-contiguous Sparse Attention) indices are provided.
-        Requires FP8 KV cache and flash_mla library.
-
-        Args:
-            query: Query tensor.
-            flatten_k: Flattened key cache.
-            nsa_indices: Sparse attention indices.
-            attn_metadata: Attention metadata.
-
-        Returns:
-            Attention output tensor.
-        """
-        q_seqlens = attn_metadata.q_seqlens
-        flash_mla_sparse_fwd = self._get_flash_mla_sparse_fwd()
-
-        num_q_heads = query.size(1)
-        # flash_mla_sparse_fwd requires query heads to be multiple of alignment
-        if num_q_heads % self._MLA_HEAD_ALIGNMENT != 0:
-            padding = self._MLA_HEAD_ALIGNMENT - num_q_heads % self._MLA_HEAD_ALIGNMENT
-            query = torch.nn.functional.pad(query, (0, 0, 0, padding))
-
-        nsa_indices = self.nsa_updater.update_prefill(nsa_indices, q_seqlens, attn_metadata.cu_seqlens_k)
-        output = flash_mla_sparse_fwd(
-            query,
-            flatten_k,
-            nsa_indices,
-            sm_scale=self.scale,
-        )
-        attn_output = output[0]
-        attn_output = attn_output[:, :num_q_heads]
         return attn_output
 
     def _prefill_triton(
@@ -313,15 +373,15 @@ class FlashMLAImpl(TritonAttentionImpl):
         )
         return attn_output
 
-    def run_flatten_kv_cache(self,
-                             k_cache: torch.Tensor,
-                             v_cache: torch.Tensor,
-                             attn_metadata: TritonAttentionMetadata,
-                             out_dtype: torch.dtype,
-                             is_nsa: bool,
-                             k_scales_zeros: torch.Tensor = None,
-                             v_scales_zeros: torch.Tensor = None):
-        """Flatten kv cache for prefill."""
+    def _flatten_prefill_kv_cache(self,
+                                  k_cache: torch.Tensor,
+                                  v_cache: torch.Tensor,
+                                  attn_metadata: TritonAttentionMetadata,
+                                  out_dtype: torch.dtype,
+                                  kv_layout: str,
+                                  k_scales_zeros: torch.Tensor = None,
+                                  v_scales_zeros: torch.Tensor = None):
+        """Flatten paged KV into the layout required by prefill."""
 
         kv_start_loc = attn_metadata.kv_start_loc
         kv_seqlens = attn_metadata.kv_seqlens
@@ -329,15 +389,13 @@ class FlashMLAImpl(TritonAttentionImpl):
         kv_flatten_size = attn_metadata.kv_flatten_size
         quant_policy = attn_metadata.quant_policy
         is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
-        BLOCK_BS = k_cache.size(1)
+        block_size = k_cache.size(1)
 
         # pad one more block to avoid invalid kv visit
-        if self.use_fa3 or is_nsa:
+        if kv_layout == 'shd':
             out_size = kv_flatten_size
-            flatten_kv_layout = 'shd'
         else:
-            out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS + BLOCK_BS)
-            flatten_kv_layout = 'hsd'
+            out_size = _cdiv(kv_flatten_size, block_size) * block_size + block_size
 
         if is_fp8_kvcache:
             flatten_k = self.flatten_kv_cache_mla_fp8(
@@ -347,7 +405,7 @@ class FlashMLAImpl(TritonAttentionImpl):
                 start_loc=kv_start_loc,
                 out_size=out_size,
                 out_dtype=out_dtype,
-                flatten_kv_layout=flatten_kv_layout,
+                flatten_kv_layout=kv_layout,
             )
             flatten_v = flatten_k[..., :self._MLA_NOPE_SIZE]
         else:
@@ -362,8 +420,12 @@ class FlashMLAImpl(TritonAttentionImpl):
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
                 quant_policy=quant_policy,
-                flatten_kv_layout=flatten_kv_layout,
+                flatten_kv_layout=kv_layout,
             )
+            if flatten_v.size(-1) == 0:
+                # BF16 MLA stores the latent value in the leading K payload;
+                # its standalone V cache is intentionally empty.
+                flatten_v = flatten_k[..., :self.v_head_size]
 
         return flatten_k, flatten_v
 
@@ -392,6 +454,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         """Fill kv cache."""
         is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
         if not is_fp8_kvcache:
+            # The BF16 MLA V cache aliases K, and the base writer skips its duplicate store.
             return super()._fill_kv_cache_impl(
                 key,
                 value,
@@ -454,21 +517,20 @@ class FlashMLAImpl(TritonAttentionImpl):
         attn_metadata: TritonAttentionMetadata,
         nsa_indices: torch.Tensor = None,
     ) -> torch.Tensor:
-        """Forward pass for decoding stage.
-
-        Uses flash_mla_with_kvcache for efficient decoding with paged KV cache.
-        Supports both regular and sparse (NSA) attention patterns.
+        """Forward pass for dense MLA decoding.
 
         Args:
             query: Query tensor.
             k_cache: Key cache tensor.
             attn_metadata: Attention metadata.
-            nsa_indices: Optional sparse attention indices.
+            nsa_indices: Must be ``None`` for dense MLA.
 
         Returns:
             Attention output tensor.
         """
-        return self.flash_mla_decoding(query, k_cache, nsa_indices, attn_metadata)
+        if nsa_indices is not None:
+            raise RuntimeError('Sparse MLA indices require FlashMLASparseImpl.')
+        return self._decoding_paged(query, k_cache, attn_metadata)
 
     def _forward_prefill(
         self,
@@ -480,43 +542,37 @@ class FlashMLAImpl(TritonAttentionImpl):
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
     ) -> torch.Tensor:
-        """Forward pass for prefill stage.
-
-        Supports three execution paths:
-        1. Sparse (NSA + FP8): flash_mla_sparse_fwd for sparse attention
-        2. FA3 optimized: flash_attn_varlen_func with split q_rope/q_nope
-        3. Triton fallback: Custom Triton kernel implementation
+        """Forward pass for dense MLA prefill.
 
         Args:
             query: Query tensor.
             k_cache: Key cache tensor.
             v_cache: Value cache tensor.
             attn_metadata: Attention metadata.
-            nsa_indices: Optional sparse attention indices.
+            nsa_indices: Must be ``None`` for dense MLA.
             k_scales_zeros: Key quantization scales/zeros.
             v_scales_zeros: Value quantization scales/zeros.
 
         Returns:
             Attention output tensor.
         """
-        # Flatten KV cache once for all prefill paths
-        flatten_k, flatten_v = self.run_flatten_kv_cache(
+        if nsa_indices is not None:
+            raise RuntimeError('Sparse MLA indices require FlashMLASparseImpl.')
+
+        kv_layout = 'shd' if self.use_fa3 else 'hsd'
+        flatten_k, flatten_v = self._flatten_prefill_kv_cache(
             k_cache,
             v_cache,
             attn_metadata,
             out_dtype=query.dtype,
-            is_nsa=nsa_indices is not None,
+            kv_layout=kv_layout,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
         )
 
-        # Dispatch to appropriate prefill implementation
-        if nsa_indices is not None:
-            return self._prefill_sparse(query, flatten_k, nsa_indices, attn_metadata)
-        elif self.use_fa3:
+        if self.use_fa3:
             return self._prefill_fa3(query, flatten_k, attn_metadata)
-        else:
-            return self._prefill_triton(query, flatten_k, flatten_v, attn_metadata)
+        return self._prefill_triton(query, flatten_k, flatten_v, attn_metadata)
 
     def forward(
         self,
@@ -531,20 +587,15 @@ class FlashMLAImpl(TritonAttentionImpl):
         nsa_indices: torch.Tensor = None,
         **kwargs,
     ) -> torch.Tensor:
-        """Forward pass for MLA attention computation.
+        """Forward pass for dense MLA attention.
 
         This method handles both prefill and decoding stages by:
-        1. Validating NSA requirements (FP8 KV cache)
-        2. Computing max query sequence length
-        3. Filling KV cache if new key/value are provided
-        4. Dispatching to appropriate stage-specific method
+        1. Computing max query sequence length
+        2. Filling KV cache if new key/value are provided
+        3. Dispatching to the cache-specific stage implementation
 
-        Architecture:
-        - Decoding: Uses flash_mla_with_kvcache with paged KV cache
-        - Prefill: Three paths based on availability and requirements
-          * Sparse (NSA + FP8): flash_mla_sparse_fwd
-          * FA3 optimized: flash_attn_varlen_func with split q_rope/q_nope
-          * Triton fallback: Custom triton kernel
+        Prefill: FA3 when available; otherwise the Triton MLA kernel.
+        Decode: paged FlashMLA.
 
         Args:
             query: Query tensor.
@@ -555,17 +606,11 @@ class FlashMLAImpl(TritonAttentionImpl):
             attn_metadata: Attention metadata containing stage info and indices.
             k_scales_zeros: Key quantization scales/zeros.
             v_scales_zeros: Value quantization scales/zeros.
-            nsa_indices: Optional sparse attention indices.
+            nsa_indices: Must be ``None`` for dense MLA.
 
         Returns:
             Attention output tensor.
         """
-        # Validate NSA requirements
-        is_nsa = nsa_indices is not None
-        if is_nsa:
-            is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
-            assert is_fp8_kvcache, 'NSA sparse attention requires FP8 KV cache'
-
         # Shared preparation
         max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
 

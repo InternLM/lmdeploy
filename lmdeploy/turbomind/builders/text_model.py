@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from ..linear import round_up_output_groups
-from ._base import Builder, BuiltModule, ParallelGroup, SplitSide
+from ._base import _CPP_TO_TORCH, Builder, BuiltModule, ParallelGroup, SplitSide
 
 
 class TextModelBuilder(Builder):
@@ -47,8 +47,9 @@ class TextModelBuilder(Builder):
                             split_side=SplitSide.OUTPUT)
 
     def add_lm_head(self, linear):
-        """Pad output dim to ``round_up(vocab_size, tp)`` and commit to the
-        ``output`` LinearWeight root child."""
-        linear = round_up_output_groups(linear, self._vocab_size,
-                                        self.tp.size)
+        """Pad lm-head vocab so each TP-local logits row is uint4-aligned."""
+        _VECTOR_BYTES = 16
+        itemsize = _CPP_TO_TORCH[self.config.data_type].itemsize
+        div = (_VECTOR_BYTES // itemsize) * self.tp.size if self.tp.size > 1 else 1
+        linear = round_up_output_groups(linear, self._vocab_size, div)
         self._add_linear('output', linear, split_side=SplitSide.OUTPUT)

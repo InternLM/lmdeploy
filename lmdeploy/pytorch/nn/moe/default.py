@@ -23,7 +23,8 @@ class LinearWeights(nn.Module):
                  dtype: torch.dtype,
                  device: torch.device,
                  bias: bool = False,
-                 expert_list: list[int] | None = None):
+                 expert_list: list[int] | None = None,
+                 expert_id_mapper: Callable[[int], int] | None = None):
         super().__init__()
         weight = torch.empty((num_experts, out_features, in_features), dtype=dtype, device=device)
         weight = torch.nn.Parameter(weight, requires_grad=False)
@@ -38,6 +39,7 @@ class LinearWeights(nn.Module):
 
         self.ep = expert_list is not None
         self.expert_list = expert_list
+        self.expert_id_mapper = expert_id_mapper
         self.weight_type = weight_type
         self.half_out = out_features // 2
 
@@ -64,17 +66,24 @@ class LinearWeights(nn.Module):
         weight.weight_loader = weight_loader
         self.register_parameter('weight', weight)
 
+    def storage_expert_id(self, expert_id: int):
+        """Map logical expert id to physical storage id."""
+        if self.expert_id_mapper is None:
+            return expert_id
+        return self.expert_id_mapper(expert_id)
+
     def weight_loader_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int, shard_id: str):
         """Weight loader."""
         world_size, rank = get_tp_world_rank('moe')
+        storage_expert_id = self.storage_expert_id(expert_id)
         if shard_id == 'gate':
-            param_data = param.data[expert_id, :self.half_out]
+            param_data = param.data[storage_expert_id, :self.half_out]
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
         elif shard_id == 'up':
-            param_data = param.data[expert_id, self.half_out:]
+            param_data = param.data[storage_expert_id, self.half_out:]
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
         elif shard_id == 'down':
-            param_data = param.data[expert_id]
+            param_data = param.data[storage_expert_id]
             # weight is not contiguous, chunk and copy in cpu is slow
             weight = loaded_weight.to(param_data.device)
             if weight.dim() > 1:
@@ -153,20 +162,27 @@ class FusedMoE(FusedMoEBase):
         if self.ep_size > 1:
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)
             num_experts = len(expert_list)
+            storage_num_experts = num_experts
+            expert_id_mapper = None
         else:
             hidden_dim, ffn_dim = update_dims(hidden_dim, ffn_dim)
             expert_list = None
+            storage_num_experts = num_experts
+            expert_id_mapper = None
+            if hasattr(self.impl, 'build_expert_storage'):
+                storage_num_experts, expert_id_mapper = self.impl.build_expert_storage(num_experts)
         self.expert_list = expert_list
-        self.gate_up = LinearWeights(num_experts,
+        self.gate_up = LinearWeights(storage_num_experts,
                                      hidden_dim,
                                      ffn_dim * 2,
                                      weight_type='gate_up',
                                      dtype=dtype,
                                      device=device,
                                      bias=bias,
-                                     expert_list=expert_list)
+                                     expert_list=expert_list,
+                                     expert_id_mapper=expert_id_mapper)
         self.down = LinearWeights(
-            num_experts,
+            storage_num_experts,
             ffn_dim,
             hidden_dim,
             weight_type='down',
@@ -174,6 +190,7 @@ class FusedMoE(FusedMoEBase):
             device=device,
             bias=bias,
             expert_list=expert_list,
+            expert_id_mapper=expert_id_mapper,
         )
 
         self.hidden_dim = hidden_dim

@@ -4,6 +4,28 @@ from abc import ABC, abstractmethod
 import torch
 
 
+class RouterGemmImpl(ABC):
+    """Router GEMM implementation api."""
+
+    def __init__(self, out_dtype: torch.dtype | None = None):
+        self.out_dtype = out_dtype
+
+    @abstractmethod
+    def forward(self, hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        """forward."""
+        raise NotImplementedError
+
+
+class RouterGemmBuilder(ABC):
+    """Router GEMM implementation builder."""
+
+    @staticmethod
+    @abstractmethod
+    def build(out_dtype: torch.dtype | None = None):
+        """build."""
+        raise NotImplementedError
+
+
 class RouterNoauxTCImpl(ABC):
     """Noaux tc implementation api."""
 

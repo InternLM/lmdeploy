@@ -111,7 +111,7 @@ private:
 
 class SlabAllocator {
 public:
-    SlabAllocator(size_t object_size, size_t min_size, size_t max_size, float threshold, size_t max_empty_slabs):
+    SlabAllocator(size_t object_size, size_t page_size, size_t max_size, float threshold, size_t max_empty_slabs):
         object_size_{object_size}, max_empty_slabs_{max_empty_slabs}
     {
         auto get_ratio = [&](size_t size) -> float {
@@ -119,12 +119,13 @@ public:
             return quantized / static_cast<float>(size);
         };
 
-        // smallest power-of-2 size that satisfies both min_size and object_size
-        size_t size = ceil_pow2(std::max(min_size, object_size));
+        // the smallest page_count needed to hold an object
+        int    page_count = static_cast<int>((object_size + page_size - 1) / page_size);
+        size_t size       = static_cast<size_t>(ceil_pow2(page_count)) * page_size;
 
         // double slab size until utilization >= threshold
         float ratio = get_ratio(size);
-        while (ratio < threshold && size < max_size) {
+        while (ratio < threshold && size * 2 <= max_size) {
             size <<= 1;
             ratio = get_ratio(size);
         }

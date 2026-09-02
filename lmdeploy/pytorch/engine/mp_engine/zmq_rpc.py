@@ -11,7 +11,7 @@ from zmq.asyncio import Context
 
 from lmdeploy.utils import get_logger
 
-from .base_worker import EngineOutputGather
+from .base_worker import EngineOutputGather, StreamMailbox, StreamPollResult, iter_stream_poll_outputs
 
 logger = get_logger('lmdeploy')
 
@@ -196,12 +196,7 @@ class AsyncRPCServer:
             response = dict(success=True, request_id=request_id, result=stream_id)
             self.send_multipart(client_id, response)
 
-        stream_out = dict(
-            event=asyncio.Event(),
-            result=None,
-            stopped=False,
-            pending=False,
-        )
+        stream_out = StreamMailbox()
         self.stream_output[stream_id] = stream_out
         kwargs = dict(kwargs)
         if startup_notify_kwarg is not None:
@@ -221,40 +216,35 @@ class AsyncRPCServer:
             generator = method(*args, **kwargs)
             async for result in generator:
                 self._engine_output_gather.add(stream_id, result)
-                stream_out['result'] = result
-                stream_out['pending'] = True
-                stream_out['event'].set()
-        except Exception as e:
+                stream_out.publish(result)
+        except asyncio.CancelledError:
+            stream_out.finish()
+            raise
+        except Exception as error:
             logger.exception(f'ZMQ MP stream task failed: stream_id={stream_id}, request_id={request_id}, '
                              f'method={method.__name__}.')
-            stream_out['error'] = e
-            stream_out['event'].set()
+            stream_out.fail(error)
+        else:
+            stream_out.finish()
         finally:
             if not response_sent:
                 __send_resp()
-            stream_out['stopped'] = True
-            if not stream_out['pending']:
-                stream_out['result'] = None
-            stream_out['event'].set()
 
     async def get_stream_output(self, stream_id: int):
         """Get streaming output."""
         stream_out = self.stream_output.get(stream_id)
         if stream_out is None:
-            return None, True
-        event = stream_out['event']
-        await event.wait()
-        event.clear()
-        result = stream_out['result']
-        stopped = stream_out['stopped']
-        stream_out['pending'] = False
-        result = self._engine_output_gather.pop(stream_id, result)
-        if stopped:
+            return StreamPollResult(done=True)
+        await stream_out.event.wait()
+        poll_result = stream_out.drain()
+        if poll_result.has_output:
+            poll_result.output = self._engine_output_gather.pop(stream_id, poll_result.output)
+        elif poll_result.done:
+            self._engine_output_gather.discard(stream_id)
+        if poll_result.done:
             self.stream_output.pop(stream_id, None)
             self.stream_tasks.pop(stream_id, None)
-        if 'error' in stream_out:
-            raise stream_out['error']
-        return result, stopped
+        return poll_result
 
     def drop_stream_output(self, stream_id: int):
         """Drop an abandoned streaming call."""
@@ -275,10 +265,7 @@ class AsyncRPCServer:
         elif task is not None:
             task.cancel()
         if stream_out is not None:
-            stream_out['stopped'] = True
-            if not stream_out['pending']:
-                stream_out['result'] = None
-            stream_out['event'].set()
+            stream_out.finish()
         self.stream_output.pop(stream_id, None)
         self._engine_output_gather.discard(stream_id)
 
@@ -563,8 +550,9 @@ class AsyncRPCClient:
         try:
             stream_id = await asyncio.shield(stream_task)
             while not stopped:
-                output, stopped = await self.async_call('_asyncrpcserver_get_stream_output', stream_id)
-                if output is not None:
+                poll_result = await self.async_call('_asyncrpcserver_get_stream_output', stream_id)
+                stopped = poll_result.done
+                for output in iter_stream_poll_outputs(poll_result, method):
                     yield output
         except asyncio.CancelledError:
             raise

@@ -274,7 +274,8 @@ class ArgumentHelper:
                                    type=_parse,
                                    default=default,
                                    help='KV cache quant policy: none/int4/int8/fp8/fp8_e5m2/'
-                                   'turbo_quant (or 0/4/8/16/17/42). fp8 defaults to fp8_e4m3.')
+                                   'turbo_quant (or 0/4/8/16/17/42). For DSA models, fp8 uses the '
+                                   'fp8_ds_mla layout.')
 
     @staticmethod
     def rope_scaling_factor(parser):
@@ -690,6 +691,15 @@ class ArgumentHelper:
                                    'deprecated and serves as an alias for "cuda-ipc"')
 
     @staticmethod
+    def moe_a2a_backend(parser):
+        return parser.add_argument('--moe-a2a-backend',
+                                   type=str,
+                                   default='auto',
+                                   choices=['auto', 'default', 'deepep'],
+                                   help='Communication backend for MoE all-to-all. The "auto" option selects '
+                                   '"default" for single-node inference and "deepep" for multi-node inference')
+
+    @staticmethod
     def enable_microbatch(parser):
         """Add argument enable_microbatch to parser."""
 
@@ -792,7 +802,7 @@ class ArgumentHelper:
         spec_group.add_argument('--speculative-algorithm',
                                 type=str,
                                 default=None,
-                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'qwen3_5_mtp'],
+                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'hy3_mtp', 'qwen3_5_mtp'],
                                 help='The speculative algorithm to use. `None` means speculative decoding is disabled')
 
         spec_group.add_argument('--speculative-draft-model',
@@ -823,6 +833,20 @@ class ArgumentHelper:
                                    action='store_true',
                                    default=False,
                                    help='Whether to trust remote code from model repositories.')
+
+    @staticmethod
+    def kv_transfer_config(parser):
+        """Add external KV-cache connector configuration."""
+        return parser.add_argument(
+            '--kv-transfer-config',
+            type=json.loads,
+            default=None,
+            help='External KV-cache connector configuration for the PyTorch engine. '
+            'Mooncake Store requires MOONCAKE_CONFIG_PATH (or '
+            'kv_connector_extra_config.mooncake_config_path) and does not support '
+            'distributed_executor_backend="mp". '
+            'Example: '
+            "'{\"kv_connector\":\"MooncakeStoreConnector\",\"kv_role\":\"kv_both\"}'.")
 
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py

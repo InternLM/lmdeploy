@@ -22,9 +22,52 @@ class QuantPolicy(enum.IntEnum):
     NONE = 0
     INT4 = 4  # 4-bit KV cache
     INT8 = 8  # 8-bit KV cache
-    FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale)
+    FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale. DSA uses the fp8_ds_mla layout)
     FP8_E5M2 = 17  # FP8 KV cache (float8_e5m2, per-tensor scale)
     TURBO_QUANT = 42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
+
+
+KVTransferRole = Literal['kv_producer', 'kv_consumer', 'kv_both']
+
+
+@dataclass
+class KVTransferConfig:
+    """Configuration for an external KV-cache connector."""
+
+    kv_connector: str | None = None
+    kv_role: KVTransferRole | None = None
+    kv_connector_extra_config: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Validate connector configuration."""
+        supported_roles = ('kv_producer', 'kv_consumer', 'kv_both')
+        if self.kv_connector is None and self.kv_role is not None:
+            raise ValueError('kv_connector must be specified when kv_role is set')
+        if self.kv_connector is not None:
+            if not isinstance(self.kv_connector, str) or not self.kv_connector.strip():
+                raise ValueError('kv_connector must be a non-empty string')
+            if self.kv_role is None:
+                raise ValueError('kv_role must be specified when kv_connector is set')
+        if self.kv_role is not None and self.kv_role not in supported_roles:
+            raise ValueError(f'unsupported kv_role: {self.kv_role}; supported roles are {supported_roles}')
+        if not isinstance(self.kv_connector_extra_config, dict):
+            raise TypeError('kv_connector_extra_config must be a dict')
+
+    @property
+    def is_kv_transfer_instance(self) -> bool:
+        """Return whether a connector is enabled for this engine."""
+        return self.kv_connector is not None and self.kv_role is not None
+
+    @property
+    def is_kv_producer(self) -> bool:
+        """Return whether this engine saves KV cache through the connector."""
+        return self.kv_connector is not None and self.kv_role in ('kv_producer', 'kv_both')
+
+    @property
+    def is_kv_consumer(self) -> bool:
+        """Return whether this engine loads KV cache through the connector."""
+        return self.kv_connector is not None and self.kv_role in ('kv_consumer', 'kv_both')
+
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
@@ -74,6 +117,10 @@ class GenerationConfig:
             around special tokens. The behavior of Fast tokenizers is to have
             this to False. This is setup to True in slow tokenizers.
         logprobs: Number of log probabilities to return per output token.
+        logprob_start_len: Source-token boundary in the current
+            model-processed input after multimodal expansion. Rows are returned
+            for tokens after this boundary. ``-1`` disables input logprobs
+            while preserving generated-token logprobs.
         response_format: Generate responses according to given formatting.
             Examples:
 
@@ -130,6 +177,7 @@ class GenerationConfig:
     skip_special_tokens: bool = True
     spaces_between_special_tokens: bool = True
     logprobs: int = None
+    logprob_start_len: int = -1
     response_format: dict | None = None
     logits_processors: list[LogitsProcessor] | None = None
     output_logits: Literal['all', 'generation'] = None
@@ -200,6 +248,10 @@ class GenerationConfig:
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
+        if self.logprob_start_len < -1:
+            raise ValueError('logprob_start_len must be greater than or equal to -1')
+        if self.logprob_start_len >= 0 and (self.logprobs is None or self.logprobs < 0):
+            raise ValueError('logprobs must be non-negative when logprob_start_len is non-negative')
         if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:
             self.repetition_ngram_size = 0
             self.repetition_ngram_threshold = 0
@@ -294,6 +346,11 @@ class TurbomindEngineConfig:
             it to True if you want to update weights after create the pipeline
         language_model_only: Whether to run as text-only LLM without loading
             vision/multimodal encoder modules.
+        communicator: collective communicator, It can be one of the following values,
+            ['nccl', 'cuda-ipc']. The `cuda-ipc` option only supports single-node
+            multi-gpu communication.
+        moe_a2a_backend: the backend of moe a2a communication, It can be one of the
+            following values, ['auto', 'default', 'deepep'].
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model
         enable_metrics: enable metrics system
@@ -339,6 +396,7 @@ class TurbomindEngineConfig:
     empty_init: bool = False
     language_model_only: bool = False
     communicator: str = 'nccl'
+    moe_a2a_backend: str = 'auto'
     hf_overrides: dict[str, Any] | None = None
     enable_metrics: bool = True
 
@@ -365,6 +423,8 @@ class TurbomindEngineConfig:
         assert self.cache_checkpoint_interval > 0, 'invalid cache_checkpoint_interval'
         assert self.cache_prompt_boundary_skip >= 1, 'invalid cache_prompt_boundary_skip'
         assert self.async_ in (0, 1), 'async_ must be 0 (disabled) or 1 (enabled)'
+        assert self.moe_a2a_backend in ('auto', 'default', 'deepep'), \
+            'invalid moe_a2a_backend'
 
 
 @dataclass
@@ -427,7 +487,7 @@ class PytorchEngineConfig:
             If unspecified, will use the default version.
         quant_policy: default to 0. When k/v is quantized into int4,
             int8, fp8, or fp8_e5m2, set it to 4, 8, 16, or 17,
-            respectively
+            respectively. For DSA models, fp8 selects the fp8_ds_mla layout.
         distributed_executor_backend: backend of distributed backend,
             options: ['uni', 'mp', 'ray']
         empty_init: Whether to load the model weights, you should set
@@ -454,6 +514,9 @@ class PytorchEngineConfig:
         dllm_denoising_steps: Dllm denoising steps.
         dllm_confidence_threshold: dllm unmasking threshold for
             dynamic unmasking.
+        kv_transfer_config: External KV-cache connector configuration. This is
+            supported only by the PyTorch engine. ``None`` disables external
+            KV-cache transfer.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -507,6 +570,7 @@ class PytorchEngineConfig:
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
+    kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
 
     def __post_init__(self):
         """Check input validation."""
@@ -548,6 +612,10 @@ class PytorchEngineConfig:
             self.kernel_block_size = 16
             logger.warning('Currently, camb device requires block_size and kernel_block_size to be 16, '
                            'setting both to 16.')
+        if isinstance(self.kv_transfer_config, dict):
+            self.kv_transfer_config = KVTransferConfig(**self.kv_transfer_config)
+        elif self.kv_transfer_config is not None and not isinstance(self.kv_transfer_config, KVTransferConfig):
+            raise TypeError('kv_transfer_config must be a KVTransferConfig, dict, or None')
 
 
 class ResponseType(enum.Enum):
@@ -584,13 +652,15 @@ class Response:
             stop point or a provided stop sequence, 'length' if the maximum
             number of tokens specified in the request was reached.
         token_ids: the output token ids.
-        logprobs: the top logprobs for each output position.
+        logprobs: the top logprobs for each output position. For a scoring-only
+            input-logprob request, this field carries the complete ordered
+            input-token rows on the terminal response.
         index: it refers to the position index of the input request batch.
     """
     text: str
     generate_token_len: int
     input_token_len: int
-    finish_reason: Literal['stop', 'length'] | None = None
+    finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
     token_ids: list[int] = field(default_factory=list)
     logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
@@ -598,6 +668,8 @@ class Response:
     index: int = 0
     routed_experts: Any = None
     cached_tokens: int = 0
+    error_code: str | None = None
+    error_message: str | None = None
 
     def __str__(self):
         return f'text={self.text}\n{self._format_none_text_fields()}'
@@ -649,10 +721,12 @@ class Response:
         self.index = other.index
         if other.token_ids:
             self.token_ids += other.token_ids
-        if other.logprobs:
+        if other.logprobs is not None:
             self.logprobs = self.logprobs or []
             self.logprobs += other.logprobs
         self.routed_experts = other.routed_experts
+        self.error_code = other.error_code
+        self.error_message = other.error_message
         return self
 
 
@@ -694,10 +768,7 @@ class EngineEvent:
 class ScheduleMetrics:
     active_seqs: int = 0
     waiting_seqs: int = 0
-    total_blocks: int = 0
-    active_blocks: int = 0
-    cached_blocks: int = 0
-    free_blocks: int = 0
+    cache_usage: float = 0.0
     prefix_cache_hit_rate: float = 0
     scheduler_tick: int = 0
 
@@ -723,8 +794,9 @@ class EngineOutput:
     Args:
         status: the response type.
         token_ids: the newly generated token ids in each iteration.
-        logprobs: the top logprobs for each output
-            position.
+        logprobs: the top logprobs for each output position. For a scoring-only
+            input-logprob request, this internal field carries the complete
+            ordered input-token rows on its terminal output.
         cache_block_ids: send cache blocks back for migration in
             Disaggregated LLM Serving when Prefill Engine is Done.
         req_metrics: request metrics information

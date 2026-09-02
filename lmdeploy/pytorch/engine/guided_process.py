@@ -52,6 +52,10 @@ class GuidedDecodingManager:
                     schema = _format.get('regex_schema', '')
                 elif schema_type == 'json_object':
                     schema = '{"type" : "object", "additionalProperties": true}'
+                elif schema_type == 'structural_tag':
+                    schema = _format.get('structural_tag', {})
+                    if isinstance(schema, dict):
+                        schema = json.dumps(schema, ensure_ascii=False)
                 else:
                     raise ValueError(f'unsupported format type: {schema_type}')
 
@@ -79,6 +83,8 @@ class GuidedDecodingManager:
             compiled = self.compiler.compile_regex(schema)
         elif type == 'json_object':
             compiled = self.compiler.compile_json_schema(schema)
+        elif type == 'structural_tag':
+            compiled = self.compiler.compile_structural_tag(schema)
         else:
             assert False, f'Do not support schema type {type}'
 
@@ -101,7 +107,7 @@ class GuidedDecodingManager:
         processor.fill_next_token_bitmask(guided_bitmask, index)
 
     def accept_token(self, processor: xgr.GrammarMatcher, token: int) -> None:
-        processor.accept_token(token)
+        processor.accept_token(token, debug_print=False)
 
     def is_terminated(self, processor: xgr.GrammarMatcher) -> bool:
         return processor.is_terminated()

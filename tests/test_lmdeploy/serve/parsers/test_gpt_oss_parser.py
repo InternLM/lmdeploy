@@ -103,6 +103,7 @@ class TestGptOssResponseParser:
         assert delta is not None
         assert delta.content == 'Result: sunny'
         assert delta.reasoning_content == 'Need tool. '
+        assert parser.reasoning_tokens == 1
         assert tool_emitted is True
         assert delta.tool_calls is not None
         assert len(delta.tool_calls) == 5
@@ -196,6 +197,7 @@ class TestGptOssResponseParser:
         content, tool_calls, reasoning = parser.parse_complete(text='', token_ids=[1, 2, 3, 4, 5, 6, 7, 8])
         assert content == 'Result: sunny'
         assert reasoning == 'Need tool. '
+        assert parser.reasoning_tokens == 1
         assert tool_calls is not None
         assert [call.function.name for call in tool_calls] == ['get_weather', 'get_time']
         assert [call.function.arguments for call in tool_calls] == ['{"location":"Beijing"}', '{"tz":"UTC"}']
@@ -273,6 +275,7 @@ class TestGptOssResponseParser:
         assert delta is not None
         assert delta.content is None
         assert delta.reasoning_content == 'think more'
+        assert parser.reasoning_tokens == 2
         assert delta.tool_calls is None
         assert tool_emitted is False
 
@@ -444,29 +447,6 @@ class TestGptOssResponseFormatHarmonyConversion:
         parser = gpt_oss_mod.GptOssResponseParser(request=request)
         assert parser.request.response_format is None
         assert len(parser.request.messages) == 1
-
-    def test_str_messages_gets_schema_appended(self):
-        """When messages is a string, the schema section is appended to it."""
-        import json as _json
-
-        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
-
-        schema_dict = {'type': 'object', 'properties': {'x': {'type': 'integer'}}}
-        request = ChatCompletionRequest(
-            model='openai/gpt-oss-20b',
-            messages='Tell me a joke',
-            response_format=ResponseFormat(
-                type='json_schema',
-                json_schema=JsonSchema(name='test', schema=schema_dict),
-            ),
-        )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request)
-
-        assert parser.request.response_format is None
-        assert isinstance(parser.request.messages, str)
-        assert parser.request.messages.startswith('Tell me a joke')
-        assert '# Response Formats' in parser.request.messages
-        assert _json.dumps(schema_dict) in parser.request.messages
 
     def test_non_pydantic_request_messages_updated(self):
         """Non-Pydantic sentinel requests also get messages updated."""

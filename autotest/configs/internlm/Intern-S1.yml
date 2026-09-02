@@ -24,10 +24,8 @@ a100:
   - quantization
   quantization:
     turbomind:
-    - kvint4
     - kvint8
     pytorch:
-    - kvint4
     - kvint8
 h:
 - model_type:
@@ -48,6 +46,36 @@ h:
   - func
   - mllm_evaluate
   - prefix_cache
+  interface:
+    pytorch:
+    - suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: true
+        tool-call-parser: intern-s1
+        reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+    turbomind:
+    - suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: intern-s1
+        reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - kvint8

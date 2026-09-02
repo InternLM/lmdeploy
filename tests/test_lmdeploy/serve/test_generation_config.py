@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import warnings
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from pydantic import BaseModel, ConfigDict
@@ -11,9 +12,9 @@ from lmdeploy.serve.core.generation_config import (
     merge_gen_config,
     resolve_default_gen_config,
 )
+from lmdeploy.serve.openai.endpoints.generate import check_request as check_generate_request
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, GenerateReqInput
 from lmdeploy.serve.openai.responses import ResponsesRequest
-from lmdeploy.serve.openai.serving_generate import check_request as check_generate_request
 
 _DEFAULTS = GenerationConfig()
 
@@ -30,11 +31,19 @@ class _FakeSessionManager:
 
 class _FakeServerContext:
 
-    def get_engine_config(self):
-        return _FakeEngineConfig()
+    def __init__(self):
+        self.async_engine = SimpleNamespace(
+            backend_config=_FakeEngineConfig(),
+            session_mgr=_FakeSessionManager(),
+        )
 
-    def get_session_manager(self):
-        return _FakeSessionManager()
+    @property
+    def engine_config(self):
+        return self.async_engine.backend_config
+
+    @property
+    def session_manager(self):
+        return self.async_engine.session_mgr
 
 
 def test_merge_gen_config_priority():
@@ -51,7 +60,7 @@ def test_merge_gen_config_uses_server_defaults():
 
 
 def test_extract_request_gen_config_only_explicit_fields():
-    request = ChatCompletionRequest(model='test', messages='hi', temperature=0.3)
+    request = ChatCompletionRequest(model='test', messages=[{'role': 'user', 'content': 'hi'}], temperature=0.3)
     values = extract_request_gen_config(request)
     assert values == {'temperature': 0.3}
 
@@ -75,7 +84,7 @@ def test_responses_request_ignores_unknown_generation_fields():
 
 
 def test_build_generation_config_from_merged_values():
-    request = ChatCompletionRequest(model='test', messages='hi', temperature=0.2)
+    request = ChatCompletionRequest(model='test', messages=[{'role': 'user', 'content': 'hi'}], temperature=0.2)
     gen_config = build_generation_config(
         request,
         {'top_k': 5},
@@ -122,7 +131,7 @@ def test_completion_request_max_tokens_is_optional():
 
 
 def test_generate_request_sampling_defaults_match_chat_request():
-    chat_request = ChatCompletionRequest(model='test', messages='hello')
+    chat_request = ChatCompletionRequest(model='test', messages=[{'role': 'user', 'content': 'hello'}])
     generate_request = GenerateReqInput(prompt='hello')
     for name in ('temperature', 'top_p', 'top_k', 'min_p'):
         assert getattr(generate_request, name) == getattr(chat_request, name)
