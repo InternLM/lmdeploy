@@ -22,7 +22,6 @@ from ..model_inputs import DPMeta, ModelInputs
 from ..strategies.ar_spec.model_agent import ARSpecExtraInputs
 from ..strategies.base.model_agent import ExtraInputs
 from .base import BaseSpecModelAgent
-from .dflash_debug import debug_tensor, write_dflash_debug
 from .guided_spec_helper import GuidedSpecHelper
 from .proposers.base import (
     ProposalContext,
@@ -121,13 +120,11 @@ class SpecModelAgent(BaseSpecModelAgent):
     def _init_runtime_state(self):
         """Initialize request-local draft carry state."""
         self._prev_chunk_last = {}
-        self._dflash_debug_step = 0
 
     def reset_runtime_state(self):
         """Discard request-local draft carry state after sleep cancels
         sessions."""
         self._prev_chunk_last.clear()
-        self._dflash_debug_step = 0
 
     @staticmethod
     def _shift_packed_prefill_inputs(input_tensor: torch.Tensor,
@@ -459,21 +456,6 @@ class SpecModelAgent(BaseSpecModelAgent):
                     extra_inputs.output_draft_token_ids,
                     expanded_sampling_inputs,
                 ))
-            if getattr(self, 'method', None) == 'dflash':
-                target_draft_logits = processed_logits[:, :-1]
-                write_dflash_debug(self.rank, 'rejection', lambda: {
-                    'step': self._dflash_debug_step,
-                    'is_decoding': bool(model_inputs.is_decoding),
-                    'seq_length': debug_tensor(model_inputs.seq_length),
-                    'history_lengths': debug_tensor(model_inputs.history_lengths),
-                    'input_ids': debug_tensor(model_inputs.input_ids),
-                    'draft_token_ids': debug_tensor(extra_inputs.output_draft_token_ids),
-                    'target_argmax': debug_tensor(target_draft_logits.argmax(dim=-1)),
-                    'bonus_token_ids': debug_tensor(next_token_ids),
-                    'output_token_ids': debug_tensor(output_token_ids),
-                    'num_rejected_tokens': debug_tensor(num_rejected_tokens),
-                })
-                self._dflash_debug_step += 1
             last_token_indices = last_token_indices - num_rejected_tokens
 
             # Guided: accept final tokens on original matchers.
@@ -681,8 +663,6 @@ class SpecModelAgent(BaseSpecModelAgent):
         if proposal_method == ProposalMethod.DIFFUSION:
             proposal_ctx = ProposalContext(
                 cache_engine=self.cache_engine,
-                rank=self.rank,
-                debug_step=self._dflash_debug_step,
             )
             with self.draft_context():
                 return await self.proposer.propose(model_inputs,

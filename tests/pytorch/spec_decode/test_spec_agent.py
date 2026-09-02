@@ -870,7 +870,6 @@ def test_dflash_proposer_hook_rejects_guided_before_fork():
     agent.proposer.guided_helper = agent.guided_helper
     agent.cache_engine = None
     agent.rank = 0
-    agent._dflash_debug_step = 0
     agent.draft_context = lambda: nullcontext()
 
     model_inputs = ModelInputs(
@@ -892,14 +891,12 @@ def test_dflash_proposer_hook_rejects_guided_before_fork():
 
 
 def test_dflash_proposer_hook_materializes_non_last_chunk_without_drafting(monkeypatch):
-    import lmdeploy.pytorch.spec_decode.proposers.dflash as dflash_mod
-
     inputs, extra_inputs = _make_non_last_chunk_inputs()
+    extra_inputs.target_inputs_embeds = torch.randn(1, 2, 4)
 
     agent = object.__new__(SpecModelAgent)
     agent.num_spec_tokens = 3
     agent.rank = 0
-    agent._dflash_debug_step = 0
     agent.guided_helper = GuidedSpecHelper()
     agent.proposer = _make_dflash_proposer()
     agent.proposer.guided_helper = agent.guided_helper
@@ -920,12 +917,6 @@ def test_dflash_proposer_hook_materializes_non_last_chunk_without_drafting(monke
 
     monkeypatch.setattr(agent.proposer, 'materialize_context', materialize_context)
     monkeypatch.setattr(agent.proposer, 'propose_block', propose_block)
-    monkeypatch.delenv('LMDEPLOY_DFLASH_DEBUG_DIR', raising=False)
-
-    def fail_debug_tensor(*args, **kwargs):
-        raise AssertionError('Disabled DFlash tracing must not serialize tensors.')
-
-    monkeypatch.setattr(dflash_mod, 'debug_tensor', fail_debug_tensor)
 
     output = asyncio.run(agent.async_model_forward(inputs, extra_inputs, sampling_inputs=None))
 
@@ -933,16 +924,16 @@ def test_dflash_proposer_hook_materializes_non_last_chunk_without_drafting(monke
     assert captured['materialize_context_calls'] == 1
     assert captured['propose_block_calls'] == 0
     assert output.next_token_ids is extra_inputs.next_token_ids
+    assert output.target_inputs_embeds is None
 
 
 def test_dflash_proposer_api_uses_explicit_context_not_spec_agent():
     proposer = _make_dflash_proposer()
 
     assert proposer.proposal_method == ProposalMethod.DIFFUSION
-    assert proposer.requires_target_inputs_embeds is False
     assert not hasattr(proposer, 'input_mode')
     assert not hasattr(proposer, 'proposal_mode')
-    assert tuple(ProposalContext.__dataclass_fields__) == ('cache_engine', 'rank', 'debug_step')
+    assert tuple(ProposalContext.__dataclass_fields__) == ('cache_engine', )
 
 
 def test_dflash_proposer_requires_explicit_proposal_context():
@@ -952,15 +943,13 @@ def test_dflash_proposer_requires_explicit_proposal_context():
         asyncio.run(proposer.propose(None, None, None))
 
 
-def test_dflash_spec_agent_reset_runtime_state_discards_chunk_carry_and_debug_step():
+def test_dflash_spec_agent_reset_runtime_state_discards_chunk_carry():
     agent = SpecModelAgent.__new__(SpecModelAgent)
     agent._prev_chunk_last = {'hidden_states': object()}
-    agent._dflash_debug_step = 7
 
     agent.reset_runtime_state()
 
     assert agent._prev_chunk_last == {}
-    assert agent._dflash_debug_step == 0
 def _model_inputs(input_ids,
                   *,
                   is_decoding=False,

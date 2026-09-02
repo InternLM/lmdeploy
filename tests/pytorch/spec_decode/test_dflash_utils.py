@@ -10,7 +10,7 @@ from lmdeploy.messages import PytorchEngineConfig, SpeculativeConfig
 from lmdeploy.pytorch.backends.cuda.step_metadata import CudaAttentionMetaBuilder, CudaStepMetaPlan
 from lmdeploy.pytorch.config import CacheConfig, DistConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
-from lmdeploy.pytorch.model_inputs import BuildModelContext, ModelInputs
+from lmdeploy.pytorch.model_inputs import BuildModelContext, ModelInputs, SpecModelBuildContext
 from lmdeploy.pytorch.models.module_map import MODULE_MAP
 from lmdeploy.pytorch.models.patch import build_model_context
 from lmdeploy.pytorch.models.qwen3 import Qwen3ForCausalLM
@@ -465,21 +465,6 @@ def test_dflash_production_forward_requires_attention_metadata():
         'attn_metadata'].default is inspect.Parameter.empty
 
 
-def test_qwen35_dflash_target_embed_policy_covers_image_and_chunked_multimodal():
-    model = object.__new__(Qwen3_5ForConditionalGeneration)
-    model.is_spec_decoding = True
-    model.requires_target_inputs_embeds = False
-
-    image_context = SimpleNamespace(is_chunk_multimodal=False)
-    chunk_context = SimpleNamespace(is_chunk_multimodal=True)
-    assert model._should_return_target_inputs_embeds(torch.empty(1), image_context) is False
-    assert model._should_return_target_inputs_embeds(None, chunk_context) is False
-
-    model.requires_target_inputs_embeds = True
-    assert model._should_return_target_inputs_embeds(torch.empty(1), image_context) is True
-    assert model._should_return_target_inputs_embeds(None, chunk_context) is True
-
-
 def test_qwen35_visual_processing_and_aux_output_do_not_require_returned_input_embeds():
 
     class FakeEmbeddings(torch.nn.Module):
@@ -612,8 +597,18 @@ def test_qwen3_dflash_uses_only_resolved_build_context_metadata(monkeypatch):
         rms_norm_eps=1e-6,
         dflash_config=dict(mask_token_id=32001, target_layer_ids=[0]),
     )
-    resolved_ctx = BuildModelContext(target_aux_hidden_state_layers=(1, 6, 11),
-                                     speculative_mask_token_id=99)
+    resolved_ctx = BuildModelContext(
+        spec_model_ctx=SpecModelBuildContext(target_aux_hidden_state_layers=(1, 6, 11),
+                                             speculative_mask_token_id=99))
+
+    with build_model_context(BuildModelContext()):
+        with pytest.raises(ValueError, match='target_aux_hidden_state_layers'):
+            DFlashDraftModel(hf_config, ctx_mgr=SimpleNamespace(), device=torch.device('cpu'))
+    missing_mask_ctx = BuildModelContext(
+        spec_model_ctx=SpecModelBuildContext(target_aux_hidden_state_layers=(1, 6, 11)))
+    with build_model_context(missing_mask_ctx):
+        with pytest.raises(ValueError, match='speculative_mask_token_id'):
+            DFlashDraftModel(hf_config, ctx_mgr=SimpleNamespace(), device=torch.device('cpu'))
     with build_model_context(resolved_ctx):
         model = DFlashDraftModel(hf_config, ctx_mgr=SimpleNamespace(), device=torch.device('cpu'))
 

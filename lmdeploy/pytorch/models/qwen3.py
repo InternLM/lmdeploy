@@ -265,7 +265,8 @@ class Qwen3model(nn.Module):
                               prefix=add_prefix(f'layers.{layer_idx}', prefix))
             for layer_idx in range(config.num_hidden_layers)
         ])
-        self.aux_hidden_state_layers: tuple[int, ...] = get_build_model_context().target_aux_hidden_state_layers
+        self.aux_hidden_state_layers: tuple[int, ...] = \
+            get_build_model_context().spec_model_ctx.target_aux_hidden_state_layers
         self._aux_hidden_state_layers_set: frozenset[int] = frozenset(self.aux_hidden_state_layers)
 
         # build norm

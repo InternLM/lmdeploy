@@ -7,7 +7,7 @@ import torch
 from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from ..distributed import DistContext
 from ..engine.logits_process import SamplingInputs
-from ..model_inputs import ModelInputs
+from ..model_inputs import ModelInputs, SpecModelBuildContext
 from ..strategies.base.model_agent import ExtraInputs, ModelAgentStrategy
 from ..strategies.base.model_inputs import ModelInputsStrategy
 
@@ -63,14 +63,17 @@ class BaseSpecModelAgent:
     def is_enabled(self):
         return self._enabled
 
-    def requires_target_inputs_embeds(self) -> bool:
-        """Whether the proposer reuses target multimodal input embeddings."""
-        proposer = self.proposer
-        if proposer is not None:
-            return bool(getattr(proposer, 'requires_target_inputs_embeds', True))
-        # Follower ranks do not own a proposer. Keep their target-build
-        # capability consistent with the proposer-owning rank.
-        return self.method != 'dflash'
+    def build_model_context(self) -> SpecModelBuildContext:
+        """Build speculative metadata consumed during model construction."""
+        config = self.specdecode_config
+        if config is None:
+            return SpecModelBuildContext()
+        target_layer_ids = config.target_layer_ids or ()
+        mask_token_id = config.mask_token_id
+        return SpecModelBuildContext(
+            target_aux_hidden_state_layers=tuple(target_layer_ids),
+            speculative_mask_token_id=mask_token_id,
+        )
 
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""

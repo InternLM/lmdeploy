@@ -1248,18 +1248,7 @@ class BaseModelAgent:
         # for router replay
         enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
 
-        target_aux_hidden_state_layers = ()
-        speculative_mask_token_id = None
-        if self.spec_agent.is_enabled() and self.spec_agent.method == 'dflash':
-            target_layer_ids = self.spec_agent.specdecode_config.target_layer_ids
-            if target_layer_ids is None:
-                raise ValueError('DFlash target model construction requires parsed target_layer_ids metadata.')
-            target_aux_hidden_state_layers = tuple(int(layer_id) for layer_id in target_layer_ids)
-            mask_token_id = self.spec_agent.specdecode_config.mask_token_id
-            if mask_token_id is None:
-                raise ValueError('DFlash model construction requires parsed mask_token_id metadata.')
-            speculative_mask_token_id = int(mask_token_id)
-        requires_target_inputs_embeds = self.spec_agent.requires_target_inputs_embeds()
+        spec_model_ctx = self.spec_agent.build_model_context()
 
         build_model_ctx = BuildModelContext(language_model_only=self.misc_config.language_model_only,
                                             dllm_config=self.misc_config.dllm_config,
@@ -1270,9 +1259,7 @@ class BaseModelAgent:
                                             tie_word_embeddings=self.model_config.tie_word_embeddings,
                                             num_spec_tokens=self.spec_agent.num_spec_tokens,
                                             max_batch_size=self.cache_config.max_batches,
-                                            target_aux_hidden_state_layers=target_aux_hidden_state_layers,
-                                            speculative_mask_token_id=speculative_mask_token_id,
-                                            requires_target_inputs_embeds=requires_target_inputs_embeds)
+                                            spec_model_ctx=spec_model_ctx)
         patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:

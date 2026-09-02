@@ -280,10 +280,10 @@ class DFlashDraftModel(nn.Module, CudaGraphMixin):
         self.ctx_mgr = ctx_mgr
         self.dtype = dtype
         build_ctx = get_build_model_context()
-        self.target_layer_ids = build_ctx.target_aux_hidden_state_layers
+        self.target_layer_ids = build_ctx.spec_model_ctx.target_aux_hidden_state_layers
         if not self.target_layer_ids:
             raise ValueError('DFlash draft construction requires resolved target_aux_hidden_state_layers metadata.')
-        self.mask_token_id = build_ctx.speculative_mask_token_id
+        self.mask_token_id = build_ctx.spec_model_ctx.speculative_mask_token_id
         if self.mask_token_id is None:
             raise ValueError('DFlash draft construction requires resolved speculative_mask_token_id metadata.')
         self.num_context_features = len(self.target_layer_ids)

@@ -836,7 +836,8 @@ class Qwen3_5TextModel(nn.Module):
                                 prefix=add_prefix(f'layers.{layer_idx}', prefix))
             for layer_idx in range(self.config.num_hidden_layers)
         ])
-        self.aux_hidden_state_layers: tuple[int, ...] = get_build_model_context().target_aux_hidden_state_layers
+        self.aux_hidden_state_layers: tuple[int, ...] = \
+            get_build_model_context().spec_model_ctx.target_aux_hidden_state_layers
         self._aux_hidden_state_layers_set: frozenset[int] = frozenset(self.aux_hidden_state_layers)
 
         # build norm
@@ -1042,7 +1043,6 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         self.enable_return_routed_experts = False
         bm_ctx = get_build_model_context()
         self.is_spec_decoding = bm_ctx.num_spec_tokens > 0
-        self.requires_target_inputs_embeds = bm_ctx.requires_target_inputs_embeds
 
     def forward(
         self,
@@ -1114,12 +1114,6 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             outputs['aux_hidden_states'] = aux_hidden_states[:, :input_ids.size(-1)]
         return outputs
 
-    def _should_return_target_inputs_embeds(self, pixel_values: torch.Tensor | None,
-                                            context: StepContext) -> bool:
-        """Whether a shifted-input proposer needs multimodal embeddings."""
-        return (self.is_spec_decoding and self.requires_target_inputs_embeds
-                and (pixel_values is not None or context.is_chunk_multimodal))
-
     def prepare_inputs_for_generation(
         self,
         past_key_values: list[list[torch.Tensor]],
@@ -1189,7 +1183,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # return input embeds for spec decoding
-        return_input_embeds = self._should_return_target_inputs_embeds(pixel_values, context)
+        return_input_embeds = self.is_spec_decoding and (pixel_values is not None or context.is_chunk_multimodal)
 
         # inputs of forward
         return dict(

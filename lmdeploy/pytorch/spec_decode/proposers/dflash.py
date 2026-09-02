@@ -8,7 +8,6 @@ from ...config import CacheConfig, ModelConfig
 from ...engine.cache_engine import CacheEngine
 from ...model_inputs import ModelInputs, step_ctx_manager
 from ...strategies.ar_spec.model_agent import ARSpecExtraInputs
-from ..dflash_debug import debug_tensor, write_dflash_debug
 from .base import (
     SPEC_PROPOSERS,
     BaseSpecProposer,
@@ -26,7 +25,6 @@ class DFlash(BaseSpecProposer):
     """DFlash proposer with one-shot block drafting."""
 
     proposal_method = ProposalMethod.DIFFUSION
-    requires_target_inputs_embeds = False
 
     def build_model(self, empty_init: bool, target_model: torch.nn.Module = None, build_model_ctx=None):
         if target_model is None:
@@ -313,17 +311,6 @@ class DFlash(BaseSpecProposer):
                                                                 self.num_speculative_tokens)
         else:
             output_draft_ids = await self.propose_block(model_inputs, extra_inputs, proposal_ctx.cache_engine)
-
-        write_dflash_debug(proposal_ctx.rank, 'proposal', lambda: {
-            'step': proposal_ctx.debug_step,
-            'is_decoding': bool(model_inputs.is_decoding),
-            'seq_length': debug_tensor(model_inputs.seq_length),
-            'history_lengths': debug_tensor(model_inputs.history_lengths),
-            'input_ids': debug_tensor(model_inputs.input_ids),
-            'next_token_ids': debug_tensor(extra_inputs.next_token_ids),
-            'prev_num_rejected_tokens': debug_tensor(extra_inputs.num_rejected_tokens),
-            'draft_token_ids': debug_tensor(output_draft_ids),
-        })
 
         return ARSpecExtraInputs(
             output_draft_token_ids=output_draft_ids,

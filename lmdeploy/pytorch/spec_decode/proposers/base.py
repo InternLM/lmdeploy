@@ -36,8 +36,6 @@ class ProposalContext:
     """Explicit runtime dependencies for a non-autoregressive proposer."""
 
     cache_engine: CacheEngine | None
-    rank: int
-    debug_step: int
 
 
 @dataclass(frozen=True)
@@ -98,7 +96,6 @@ def draft_model_forward(
 class BaseSpecProposer:
 
     proposal_method = ProposalMethod.AUTOREGRESSIVE
-    requires_target_inputs_embeds = True
 
     def __init__(self, specdecode_config: SpecDecodeConfig, device: torch.device = None):
         self.specdecode_config = specdecode_config
