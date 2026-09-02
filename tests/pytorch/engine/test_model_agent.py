@@ -7,6 +7,312 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from lmdeploy.pytorch.engine.logits_process import SamplingInputs
+from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+from lmdeploy.pytorch.model_inputs import ModelInputs
+
+
+def _input_logprob_model_inputs(input_ids, indices):
+    size = len(input_ids)
+    return ModelInputs(input_ids=torch.tensor([input_ids]),
+                       seq_length=torch.tensor([size]),
+                       history_lengths=torch.tensor([0]),
+                       block_offsets=torch.zeros((1, 1), dtype=torch.long),
+                       is_decoding=False,
+                       num_ignored_history=torch.tensor([0]),
+                       max_q_seqlen=size,
+                       max_kv_seqlen=size,
+                       sum_kv_seqlen=size,
+                       logits_indices=None if indices is None else torch.tensor(indices, dtype=torch.long),
+                       seq_logit_length=None if indices is None else torch.tensor([len(indices)]))
+
+
+def test_get_input_logits_projects_only_selected_rows():
+    vocab_size = 8
+    hidden = torch.arange(18, dtype=torch.float32).reshape(1, 6, 3)
+    inputs = _input_logprob_model_inputs([0, 1, 2, 3, 4, 5], [0, 1, 3, 4])
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.model_config = SimpleNamespace(vocab_size=vocab_size)
+    calls = []
+
+    def get_logits(values):
+        calls.append(values.shape[1])
+        torch.testing.assert_close(values[0], hidden[0, [0, 1, 3, 4]])
+        return torch.arange(values.shape[1] * vocab_size, dtype=torch.float32).reshape(
+            1, values.shape[1], vocab_size)
+
+    agent.get_logits = get_logits
+    output = agent._get_input_logits(hidden, inputs)
+
+    assert calls == [4]
+    assert output.shape == (4, vocab_size)
+
+
+def test_prefill_input_logprobs_helper_is_semantic():
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    inputs = _input_logprob_model_inputs([0, 1, 2], [0, 1])
+    assert agent._is_prefill_input_logprobs(inputs)
+
+    missing_lengths = _input_logprob_model_inputs([0, 1, 2], [0, 1])
+    missing_lengths.seq_logit_length = None
+    assert not agent._is_prefill_input_logprobs(missing_lengths)
+
+    decode = _input_logprob_model_inputs([0, 1, 2], [0, 1])
+    decode.is_decoding = True
+    assert not agent._is_prefill_input_logprobs(decode)
+
+    dummy = _input_logprob_model_inputs([0, 1, 2], [0, 1])
+    dummy.is_dummy = True
+    assert not agent._is_prefill_input_logprobs(dummy)
+
+    ordinary = _input_logprob_model_inputs([0, 1, 2], None)
+    assert not agent._is_prefill_input_logprobs(ordinary)
+
+
+@pytest.mark.parametrize('return_logits', [False, True])
+def test_async_forward_returns_only_input_logits_without_sampling_policy(
+        return_logits):
+    vocab_size = 8
+    hidden = torch.arange(9, dtype=torch.float32).reshape(1, 3, 3)
+    inputs = _input_logprob_model_inputs([0, 1, 2], [1, 2])
+    calls = []
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.model_config = SimpleNamespace(vocab_size=vocab_size)
+
+    async def async_forward(_inputs, **kwargs):
+        return {'hidden_states': [hidden]}
+
+    def get_logits(values):
+        calls.append(values.shape[1])
+        return torch.zeros((1, values.shape[1], vocab_size))
+
+    agent.async_forward = async_forward
+    agent.get_logits = get_logits
+    agent._postprocess_forward_output = lambda output, _inputs: output
+    agent.spec_agent = SimpleNamespace(
+        update_main_model_outputs=lambda *_: pytest.fail('scoring path must not enter speculative processing'))
+
+    output = asyncio.run(agent._async_model_forward(inputs, return_logits=return_logits))
+
+    assert calls == [2]
+    assert 'input_logits' not in output
+    assert output['logits'].shape == (2, vocab_size)
+
+
+def test_async_forward_requires_complete_prefill_input_logprob_metadata():
+    vocab_size = 8
+    hidden = torch.arange(15, dtype=torch.float32).reshape(1, 5, 3)
+    inputs = _input_logprob_model_inputs([0, 1, 2, 3, 4], [0, 1])
+    inputs.seq_logit_length = None
+    calls = []
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+
+    async def async_forward(_inputs, **kwargs):
+        return {'hidden_states': [hidden]}
+
+    def get_logits(values):
+        calls.append(values.shape[1])
+        return torch.zeros((1, values.shape[1], vocab_size))
+
+    agent.async_forward = async_forward
+    agent.get_logits = get_logits
+    agent._postprocess_forward_output = lambda output, _inputs: output
+    agent.spec_agent = SimpleNamespace(
+        is_enabled=lambda: False,
+        update_main_model_outputs=lambda output, _inputs:
+        (output.pop('hidden_states')[0], output))
+
+    output = asyncio.run(agent._async_model_forward(inputs, return_logits=False))
+
+    assert calls == [5]
+    assert 'input_logits' not in output
+    assert output['logits'].shape == (1, 5, vocab_size)
+
+
+def test_async_forward_disabled_path_keeps_one_sampling_projection():
+    vocab_size = 8
+    hidden = torch.arange(15, dtype=torch.float32).reshape(1, 5, 3)
+    inputs = _input_logprob_model_inputs([0, 1, 2, 3, 4], None)
+    calls = []
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+
+    async def async_forward(_inputs, **kwargs):
+        return {'hidden_states': [hidden]}
+
+    def get_logits(values):
+        calls.append(values.shape[1])
+        return torch.zeros((1, values.shape[1], vocab_size))
+
+    agent.async_forward = async_forward
+    agent.get_logits = get_logits
+    agent._postprocess_forward_output = lambda output, _inputs: output
+    agent.spec_agent = SimpleNamespace(
+        is_enabled=lambda: False,
+        update_main_model_outputs=lambda output, _inputs: (output.pop('hidden_states')[0], output))
+
+    output = asyncio.run(agent._async_model_forward(inputs, return_logits=False))
+
+    assert calls == [5]
+    assert 'input_logits' not in output
+
+
+@pytest.mark.parametrize('mode', ['raw_logits', 'raw_logprobs'])
+@pytest.mark.parametrize('num_logprobs', [0, 1, 2])
+def test_input_compaction_matches_shared_reference(mode, num_logprobs):
+    inputs = _input_logprob_model_inputs([0, 1, 2], [0, 1])
+    input_logits = torch.tensor([[0.1, 0.2, 0.3, 0.4], [1.0, 0.5, -0.5, -1.0]])
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.misc_config = SimpleNamespace(logprobs_mode=mode)
+
+    outputs = agent._get_outputs_with_logprobs(input_logits, inputs, num_logprobs, model_metas=[{'meta': 1}])
+    compact = outputs.logprobs
+
+    reference = input_logits.log_softmax(-1) if mode == 'raw_logprobs' else input_logits
+    targets = torch.tensor([1, 2])
+    torch.testing.assert_close(compact.vals[:, 0], reference.gather(-1, targets[:, None])[:, 0])
+    assert compact.indices[:, 0].tolist() == targets.tolist()
+    assert compact.vals.shape == (2, num_logprobs + 1)
+    assert outputs.next_token_ids.tolist() == [0]
+    assert outputs.stopped.tolist() == [True]
+    assert outputs.stop_pos.tolist() == [-1]
+    assert outputs.model_metas == [{'meta': 1}]
+
+
+def test_input_compaction_reuses_previous_chunk_last_logit_for_cross_chunk_target():
+    first_inputs = _input_logprob_model_inputs([0, 1, 2], [0, 1, 2])
+    first_inputs.is_chunk = True
+    first_inputs.is_first_chunk = True
+    first_inputs.is_last_chunk = False
+    first_logits = torch.arange(24, dtype=torch.float32).reshape(3, 8)
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.misc_config = SimpleNamespace(logprobs_mode='raw_logits')
+    agent._prev_chunk_last_logit = None
+
+    first_outputs = agent._get_outputs_with_logprobs(first_logits, first_inputs, 0, model_metas=None)
+    assert first_outputs.logprobs.indices[:, 0].tolist() == [1, 2]
+    torch.testing.assert_close(agent._prev_chunk_last_logit, first_logits[-1:])
+
+    final_inputs = _input_logprob_model_inputs([3, 4, 5], [0, 1])
+    final_inputs.is_chunk = True
+    final_inputs.is_first_chunk = False
+    final_inputs.is_last_chunk = True
+    final_logits = torch.arange(100, 116, dtype=torch.float32).reshape(2, 8)
+
+    outputs = agent._get_outputs_with_logprobs(final_logits, final_inputs, 0, model_metas=None)
+    compact = outputs.logprobs
+
+    expected_logits = torch.cat([first_logits[-1:], final_logits], dim=0)
+    assert compact.indices[:, 0].tolist() == [3, 4, 5]
+    torch.testing.assert_close(compact.vals[:, 0], expected_logits.gather(-1, compact.indices.long())[:, 0])
+    assert agent._prev_chunk_last_logit is None
+
+
+def test_input_compaction_accepts_empty_pre_boundary_chunk():
+    inputs = _input_logprob_model_inputs([0, 1, 2], [])
+    inputs.is_chunk = True
+    inputs.is_first_chunk = True
+    inputs.is_last_chunk = False
+    input_logits = torch.empty((0, 8))
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.misc_config = SimpleNamespace(logprobs_mode='raw_logits')
+    agent._prev_chunk_last_logit = None
+
+    outputs = agent._get_outputs_with_logprobs(input_logits, inputs, 2, model_metas=None)
+
+    assert outputs.logprobs.vals.shape == (0, 3)
+    assert outputs.logprobs.indices.shape == (0, 3)
+    assert agent._prev_chunk_last_logit is None
+
+
+def test_dp_dummy_skips_input_compaction_without_sampling_inputs():
+    inputs = _input_logprob_model_inputs([0], None)
+    inputs.is_dummy = True
+    generated = SimpleNamespace(next_token_ids=torch.tensor([0]),
+                                output_token_ids=torch.tensor([[0]]),
+                                logprobs=None)
+
+    async def spec_sampling(_inputs, _extra, _sampling):
+        return generated
+
+    async def spec_forward(_inputs, extra, _sampling):
+        return extra
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.rank = 0
+    agent.spec_agent = SimpleNamespace(is_enabled=lambda: True,
+                                       async_sampling_logits=spec_sampling,
+                                       async_model_forward=spec_forward)
+
+    result = asyncio.run(
+        agent._step_postprocess_with_output(last_logits=torch.zeros((1, 8)),
+                                            logits=torch.zeros((1, 8)),
+                                            inputs=inputs,
+                                            sampling_inputs=None,
+                                            stopping_criteria=None,
+                                            model_metas=None,
+                                            need_broadcast_next=False))
+
+    assert result[-2] is generated.next_token_ids
+
+
+def test_mtp_sampling_still_delegates_generated_rows():
+    generated = SimpleNamespace(next_token_ids=torch.tensor([5]),
+                                output_token_ids=torch.tensor([[5, 6]]),
+                                logprobs='spec-generated')
+
+    async def spec_sampling(_inputs, _extra, _sampling):
+        return generated
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.spec_agent = SimpleNamespace(is_enabled=lambda: True,
+                                       async_sampling_logits=spec_sampling)
+    result = asyncio.run(
+        agent.async_sampling_logits(torch.zeros((1, 8)),
+                                    _input_logprob_model_inputs([0, 1, 2], [0, 1]),
+                                    SimpleNamespace(), SamplingInputs(max_num_logprobs=0)))
+
+    assert result[0] is generated.next_token_ids
+    assert result[1] == 'spec-generated'
+    assert result[2] is generated.output_token_ids
+
+
+def test_ordinary_non_final_chunk_keeps_upstream_generated_logprob_row(monkeypatch):
+    import lmdeploy.pytorch.engine.model_agent.agent as agent_module
+
+    class _Processor:
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __call__(self, logits):
+            return logits, logits
+
+        def sampling(self, logits):
+            return torch.tensor([3])
+
+        async def accept_guided_tokens(self, token_ids):
+            pass
+
+        def compute_logprobs(self, raw_logprobs, token_ids):
+            indices = token_ids[:, None]
+            return raw_logprobs.gather(-1, indices), indices.to(torch.int32)
+
+    monkeypatch.setattr(agent_module, 'FusedLogitsProcessor', _Processor)
+    inputs = _input_logprob_model_inputs([0, 1, 2], [0, 1])
+    inputs.is_chunk = True
+    inputs.is_last_chunk = False
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.misc_config = SimpleNamespace(logprobs_mode='raw_logits')
+    agent.guided_decoding_manager = None
+    agent.spec_agent = SimpleNamespace(is_enabled=lambda: False)
+    agent.agent_strategy = SimpleNamespace(post_sampling=lambda _i, _l, ids, extra: (ids, extra))
+
+    result = asyncio.run(
+        agent.async_sampling_logits(torch.zeros((1, 8)), inputs, SimpleNamespace(),
+                                    SamplingInputs(max_num_logprobs=0)))
+
+    assert result[1] is not None
+
 
 @pytest.fixture
 def event_loop():
@@ -510,7 +816,8 @@ def test_async_model_forward_preserves_cache_inputs_through_forward_impl():
     from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
     from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
-    model_inputs = SimpleNamespace()
+    model_inputs = SimpleNamespace(
+        is_dummy=False, is_decoding=False, logits_indices=None, seq_logit_length=None)
     cache_inputs = CacheCheckpointInputs(kv_restore_plan=torch.tensor([[1], [2]]))
     hidden_states = torch.ones(1, 1, 2)
     seen = []
@@ -1129,7 +1436,14 @@ class TestMemDecodeModelAgentLifecycle:
         calls = []
         base_hidden = torch.arange(20, dtype=torch.float32).reshape(1, 5, 4)
         memory_hidden = torch.arange(30, dtype=torch.float32).reshape(1, 5, 6)
-        inputs = SimpleNamespace(seq_length=torch.tensor([2, 3]), is_chunk=False)
+        inputs = SimpleNamespace(
+            seq_length=torch.tensor([2, 3]),
+            is_chunk=False,
+            is_dummy=False,
+            is_decoding=False,
+            logits_indices=None,
+            seq_logit_length=None,
+        )
 
         class _MemDecodeAgent:
 

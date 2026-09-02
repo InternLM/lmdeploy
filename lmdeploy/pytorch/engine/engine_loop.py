@@ -203,6 +203,31 @@ class EngineLoop:
         self.inputs_maker.reset_runtime_state()
 
     @staticmethod
+    def _append_input_logprobs(batched_outputs: 'BatchedOutputs', running: 'SeqList',
+                               model_inputs: 'ModelInputs | None'):
+        """Append compact prefill rows to their request-owned response."""
+        if model_inputs is None or model_inputs.is_decoding or model_inputs.logits_indices is None:
+            return
+        compact = batched_outputs.logprobs
+        row_counts = model_inputs.seq_logit_length.tolist()
+        num_rows = sum(row_counts)
+        if (compact is None or compact.vals.shape != compact.indices.shape
+                or num_rows != compact.vals.shape[0]):
+            raise RuntimeError('input-logprob compact output mismatch')
+
+        offset = 0
+        for msg, row_count in zip(running, row_counts, strict=True):
+            end = offset + row_count
+            if row_count > 0:
+                if msg.resp._input_logprobs is None:
+                    msg.resp._input_logprobs = []
+                msg.resp._input_logprobs.extend(
+                    zip(compact.vals[offset:end].tolist(),
+                        compact.indices[offset:end].tolist(),
+                        strict=True))
+            offset = end
+
+    @staticmethod
     def _log_resps(outputs: list[InferOutput]):
         """Log resps."""
         if logger.level <= logging.DEBUG:
@@ -290,10 +315,8 @@ class EngineLoop:
 
             return logit
 
-        def __get_logprobs(batched_outputs: 'BatchedOutputs'):
+        def __get_logprobs(logprobs, stop_positions, batch_size: int):
             """Get valid logprobs."""
-            batch_size = batched_outputs.stop_pos.size(0)
-            logprobs = batched_outputs.logprobs
             if logprobs is None:
                 return [None for _ in range(batch_size)]
             num_decode_tokens = logprobs.indices.shape[0] // batch_size
@@ -304,7 +327,7 @@ class EngineLoop:
                 start = idx * num_decode_tokens
                 end = (idx + 1) * num_decode_tokens
                 mask = logprobs.indices[start:end][:, 0] >= 0
-                stop_pos = batched_outputs.stop_pos[idx]
+                stop_pos = stop_positions[idx] if stop_positions is not None else -1
                 # only apply when stopped
                 if stop_pos > -1:
                     mask = torch.logical_and(mask, stop_pos >= range_tensor)
@@ -316,6 +339,13 @@ class EngineLoop:
         logits = batched_outputs.logits
         all_routed_experts = batched_outputs.all_routed_experts
         ce_loss = batched_outputs.ce_loss
+        logprobs = batched_outputs.logprobs
+        is_prefill_logprobs_mode = (model_inputs is not None and not model_inputs.is_decoding
+                                    and model_inputs.logits_indices is not None)
+        if is_prefill_logprobs_mode:
+            self._append_input_logprobs(batched_outputs, running, model_inputs)
+            # Packed scoring rows do not enter generated-row splitting below.
+            logprobs = None
 
         if model_inputs is not None and (model_inputs.is_chunk and not model_inputs.is_last_chunk):
             # chunk long context does not need to update seqs and outputs
@@ -327,9 +357,8 @@ class EngineLoop:
             return dict()
 
         new_token_timestamp = batched_outputs.new_token_timestamp
-        logprobs = batched_outputs.logprobs
 
-        all_logprobs = __get_logprobs(batched_outputs)
+        all_logprobs = __get_logprobs(logprobs, batched_outputs.stop_pos, len(running))
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
@@ -346,12 +375,15 @@ class EngineLoop:
                 continue
             token_ids = msg.generated_ids
             finish = msg.status == MessageStatus.STOPPED or msg.status == MessageStatus.TO_BE_MIGRATED
-            if not finish and len(token_ids) == 0:
-                continue
-            resp_data = msg.resp.data
-            if resp_data is not None and len(resp_data.get('token_ids', [])) == len(token_ids):
-                # no new tokens
-                continue
+            input_logprobs = msg.resp._input_logprobs
+            if input_logprobs is None:
+                if not finish and len(token_ids) == 0:
+                    continue
+                resp_data = msg.resp.data
+                if (resp_data is not None and 'token_ids' in resp_data
+                        and len(resp_data['token_ids']) == len(token_ids)):
+                    # no new tokens
+                    continue
             session_id = msg.session_id
             if msg.resp_cache:
                 cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
@@ -364,6 +396,8 @@ class EngineLoop:
             if logprobs is not None and num_logprobs > 0:
                 cur_logprobs = list([_dat[:num_logprobs + 1] for _dat in vals_indices]
                                     for vals_indices in all_logprobs[idx])
+            if input_logprobs is not None:
+                cur_logprobs = input_logprobs
 
             # get spec stats info
             spec_info = None

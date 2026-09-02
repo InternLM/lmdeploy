@@ -3,6 +3,8 @@ import pytest
 from pydantic import ValidationError
 
 from lmdeploy import GenerationConfig, Tokenizer
+from lmdeploy.messages import Response
+from lmdeploy.pytorch.messages import SamplingParam
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.utils import get_hf_gen_cfg
 
@@ -11,6 +13,33 @@ def test_generation_config_repetition_ngram_clamped():
     c = GenerationConfig(repetition_ngram_size=-1, repetition_ngram_threshold=-2)
     assert c.repetition_ngram_size == 0
     assert c.repetition_ngram_threshold == 0
+
+
+def test_input_logprobs_contract_and_sampling_conversion():
+    assert GenerationConfig().logprob_start_len == -1
+
+    for start in (-1, 0, 3):
+        config = GenerationConfig(logprobs=0, logprob_start_len=start)
+        param = SamplingParam.from_gen_config(config)
+        assert param.num_logprobs == 0
+        assert param.logprob_start_len == start
+
+    # Preserve upstream generated-only validation behavior.
+    GenerationConfig(logprobs=-1)
+    with pytest.raises(ValueError, match='logprobs must be non-negative'):
+        GenerationConfig(logprobs=-1, logprob_start_len=0)
+    with pytest.raises(ValueError, match='greater than or equal to -1'):
+        GenerationConfig(logprobs=0, logprob_start_len=-2)
+    with pytest.raises(ValueError, match='logprobs must be non-negative'):
+        GenerationConfig(logprob_start_len=0)
+
+
+@pytest.mark.parametrize('carrier', [[], [{2: -0.5}]])
+def test_response_extend_preserves_logprob_carrier(carrier):
+    response = Response('', 0, 3)
+    assert not hasattr(response, 'input_logprobs')
+    response.extend(Response('', 0, 3, logprobs=carrier))
+    assert response.logprobs == carrier
 
 
 def test_chat_completion_request_repetition_ngram_ge_zero():
