@@ -14,10 +14,12 @@ class DlinferAttentionMetadata(AttentionMetadata):
     block_size: int = 64
     attention_mask: Sequence[Tensor] = tuple()
     is_prefill_no_cache: bool | None = None
-    max_q_seq_len: int = 1
+    max_q_seqlen: int = 1
     max_kv_seq_len: int = 1
+    kv_flatten_size: int = 1
+    cu_seqlens_q_cpu: Tensor | None = None
+    kv_seqlens_cpu: Tensor | None = None
     quant_meta: dict = None
-    cu_seq_lens_kv: Tensor | None = None
     has_initial_state: Tensor | None = None
     is_multi_token_decoding: bool = False
     spec_conv_offsets: Sequence[Tensor] | None = None
@@ -55,10 +57,11 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             **kwargs,
         )
 
-        from lmdeploy.pytorch.kernels.dlinfer import fill_kv_cache, paged_attention_fwd
+        from lmdeploy.pytorch.kernels.dlinfer import fill_kv_cache, paged_attention_fwd, sparse_attention_fwd
 
         self.fill_kv_cache = fill_kv_cache
         self.paged_attention_fwd = paged_attention_fwd
+        self.sparse_attention_fwd = sparse_attention_fwd
 
     def forward(
         self,
@@ -77,18 +80,19 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         """forward."""
 
         block_offsets = attn_metadata.block_offsets
-        q_start_loc = attn_metadata.q_start_loc
         q_seqlens = attn_metadata.q_seqlens
+        cu_seqlens_q = attn_metadata.cu_seqlens_q
         kv_seqlens = attn_metadata.kv_seqlens
+        cu_seqlens_q_cpu = attn_metadata.cu_seqlens_q_cpu
+        kv_seqlens_cpu = attn_metadata.kv_seqlens_cpu
         is_decoding = attn_metadata.is_decoding
         kv_start_indices = attn_metadata.kv_start_indices
         block_size = attn_metadata.block_size
         attn_mask = attn_metadata.attention_mask
         is_prefill_no_cache = attn_metadata.is_prefill_no_cache
-        max_q_seq_len = attn_metadata.max_q_seq_len
+        max_q_seqlen = attn_metadata.max_q_seqlen
         max_kv_seq_len = attn_metadata.max_kv_seq_len
         quant_bits = attn_metadata.quant_policy
-        cu_seq_lens_kv = attn_metadata.cu_seq_lens_kv
 
         if attn_metadata.quant_meta is not None:
             k_scales_zeros = [next(attn_metadata.quant_meta['k_scales']),
@@ -122,6 +126,20 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             o_shape = q_shape[:-1] + (self.v_head_size, )
             attn_output = query.new_empty(o_shape)
 
+        if nsa_indices is not None:
+            return self.sparse_attention_fwd(
+                query,
+                k_cache,
+                v_cache,
+                nsa_indices,
+                block_offsets,
+                cu_seqlens_q[1:],
+                kv_seqlens,
+                value_head_size=self.v_head_size,
+                softmax_scale=self.scale,
+                attn_output=attn_output,
+            )
+
         attn_output = self.paged_attention_fwd(
             query,
             key,
@@ -130,11 +148,9 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             k_cache,
             v_cache,
             block_offsets,
-            q_start_loc=q_start_loc,
             q_seqlens=q_seqlens,
             kv_seqlens=kv_seqlens,
-            cu_seq_lens_kv=cu_seq_lens_kv,
-            max_q_seq_len=max_q_seq_len,
+            max_q_seq_len=max_q_seqlen,
             max_kv_seq_len=max_kv_seq_len,
             is_decoding=is_decoding,
             block_size=block_size,
@@ -147,6 +163,9 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             kv_scales=kv_scales,
             kv_zeros=kv_zeros,
             quant_bits=quant_bits,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_q_cpu=cu_seqlens_q_cpu,
+            kv_seqlens_cpu=kv_seqlens_cpu,
         )
 
         return attn_output

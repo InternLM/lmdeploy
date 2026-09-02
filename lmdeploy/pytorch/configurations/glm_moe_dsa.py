@@ -1,5 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import json
+import os
+
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.utils import get_logger
 
@@ -19,6 +22,20 @@ class GlmMoeDsaModelConfigBuilder(DeepseekV32ModelConfigBuilder):
     def build(cls, hf_config, model_path: str | None = None, **kwargs):
         """build."""
         is_draft_model = kwargs.get('is_draft_model', False)
+        device_type = kwargs.get('device_type', 'auto')
+        modelslim_path = os.path.join(model_path, 'quant_model_description.json') if model_path else None
+        if device_type in ('ascend', 'npu') and modelslim_path and os.path.isfile(modelslim_path):
+            with open(modelslim_path, encoding='utf-8') as f:
+                quant_description = json.load(f)
+            if not isinstance(quant_description, dict):
+                raise TypeError(f'Expected a JSON object in {modelslim_path}.')
+            hf_config.quantization_config = {
+                'quant_method': 'modelslim',
+                'quant_dtype': 'int8',
+                'quant_description': quant_description,
+            }
+            logger.info(f'Using Ascend ModelSlim quantization metadata from {modelslim_path}.')
+
         quantization_config = getattr(hf_config, 'quantization_config', None)
         is_lmdeploy_patched_fp8 = (quantization_config is not None
                                    and quantization_config.get('quant_method') == 'fp8'
