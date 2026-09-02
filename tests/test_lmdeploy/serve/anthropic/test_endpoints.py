@@ -275,10 +275,6 @@ class _AnthropicTestClient:
 class _ToolAndReasoningParser:
     tool_parser_cls = object
 
-    @classmethod
-    def supports_required_tool_choice(cls):
-        return True
-
     def __init__(self, request):
         self.request = request
         self.tool_parser = object()
@@ -536,88 +532,33 @@ def test_messages_tools_require_tool_parser():
     assert '--tool-call-parser' in response.json()['error']['message']
 
 
-def test_messages_any_tool_choice_requires_tools():
+@pytest.mark.parametrize('tool_choice', ['any', {'type': 'any'}])
+def test_messages_any_tool_choice_requires_tools(tool_choice):
     response = _post_messages(
         _make_client(response_parser_cls=_ToolAndReasoningParser),
-        tool_choice={
-            'type': 'any',
-        },
+        tool_choice=tool_choice,
     )
 
     assert response.status_code == 400
     assert 'requires at least one tool' in response.json()['error']['message']
 
 
-def test_messages_any_string_tool_choice_requires_tools():
+@pytest.mark.parametrize(
+    ('tools', 'tool_choice', 'error_fragment'),
+    [
+        (None, {'type': 'tool', 'name': 'search'}, 'requires at least one tool'),
+        ([SEARCH_TOOL], {'type': 'tool', 'name': 'missing'}, "not found in `tools`: 'missing'"),
+    ],
+)
+def test_messages_named_tool_choice_validation(tools, tool_choice, error_fragment):
     response = _post_messages(
         _make_client(response_parser_cls=_ToolAndReasoningParser),
-        tool_choice='any',
+        tools=tools,
+        tool_choice=tool_choice,
     )
 
     assert response.status_code == 400
-    assert 'requires at least one tool' in response.json()['error']['message']
-
-
-def test_messages_any_tool_choice_rejects_unsupported_parser():
-    class _UnsupportedRequiredToolParser(_ToolAndReasoningParser):
-
-        @classmethod
-        def supports_required_tool_choice(cls):
-            return False
-
-    response = _post_messages(
-        _make_client(response_parser_cls=_UnsupportedRequiredToolParser),
-        tools=[SEARCH_TOOL],
-        tool_choice={
-            'type': 'any',
-        },
-    )
-
-    assert response.status_code == 400
-    assert 'does not support `tool_choice={"type":"any"}`' in response.json()['error']['message']
-
-
-def test_messages_tool_choice_tool_requires_tools():
-    response = _post_messages(
-        _make_client(response_parser_cls=_ToolAndReasoningParser),
-        tool_choice={
-            'type': 'tool',
-            'name': 'search',
-        },
-    )
-
-    assert response.status_code == 400
-    assert 'requires at least one tool' in response.json()['error']['message']
-
-
-def test_messages_tool_choice_tool_rejects_unknown_tool():
-    response = _post_messages(
-        _make_client(response_parser_cls=_ToolAndReasoningParser),
-        tools=[SEARCH_TOOL],
-        tool_choice={
-            'type': 'tool',
-            'name': 'missing',
-        },
-    )
-
-    assert response.status_code == 400
-    assert "not found in `tools`: 'missing'" in response.json()['error']['message']
-
-
-def test_messages_tool_choice_tool_checks_unknown_tool_before_parser():
-    response = _post_messages(
-        _make_client(),
-        tools=[SEARCH_TOOL],
-        tool_choice={
-            'type': 'tool',
-            'name': 'missing',
-        },
-    )
-
-    message = response.json()['error']['message']
-    assert response.status_code == 400
-    assert "not found in `tools`: 'missing'" in message
-    assert '--tool-call-parser' not in message
+    assert error_fragment in response.json()['error']['message']
 
 
 def test_messages_beta_accepts_system_role_message():

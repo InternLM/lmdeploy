@@ -71,7 +71,7 @@ def _response_error_from_finish_reason(finish_reason: str | None,
     if finish_reason == 'parse_error':
         return ResponseError(
             code='server_error',
-            message=error_message or 'Response output failed required tool validation.')
+            message=error_message or 'Response output failed validation.')
     if finish_reason == 'error':
         response_code = (
             'invalid_prompt' if error_code in {

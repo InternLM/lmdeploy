@@ -170,40 +170,6 @@ def test_responses_streaming_error_finish_reason_emits_failed_event(
     assert payloads[-1]['response']['error']['code'] == 'server_error'
 
 
-def test_responses_streaming_parse_error_emits_failed_event(sse_payloads):
-    request = ResponsesRequest(model='fake-model', input='Hi there', stream=True)
-
-    async def _parsed_stream():
-        yield ChatStreamChunk(
-            delta_message=DeltaMessage(role='assistant', content=''),
-            tool_emitted=False,
-            finish_reason='parse_error',
-            token_ids=[],
-            logprobs=None,
-            input_token_len=8,
-            generate_token_len=1,
-            cached_tokens=0,
-            reasoning_tokens=0,
-        )
-
-    async def _collect_events():
-        return [
-            event async for event in stream_response(
-                _parsed_stream(),
-                request=request,
-                model_name='fake-model',
-                created_time=123,
-            )
-        ]
-
-    payloads = sse_payloads(asyncio.run(_collect_events()))
-
-    assert payloads[-1]['type'] == 'response.failed'
-    assert payloads[-1]['response']['status'] == 'failed'
-    assert payloads[-1]['response']['error']['code'] == 'server_error'
-    assert 'required tool validation' in payloads[-1]['response']['error']['message']
-
-
 def test_responses_streaming_exception_emits_failed_event(
         sse_payloads, passthrough_response_parser_cls):
     request = ResponsesRequest(model='fake-model', input='Hi', stream=True)

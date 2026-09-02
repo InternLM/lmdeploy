@@ -104,10 +104,6 @@ class _Parser:
     def __init__(self, request):
         self.request = request
 
-    @classmethod
-    def supports_required_tool_choice(cls):
-        return True
-
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
         return [(DeltaMessage(role='assistant', content=delta_text), False)]
 
@@ -118,15 +114,8 @@ class _Parser:
         return True
 
 
-class _RequiredToolParser(ToolParser):
-
-    @classmethod
-    def build_required_tool_response_format(cls, request, tools, *, reasoning: bool):
-        return {'type': 'structural_tag', 'format': {'type': 'const_string', 'value': '<tool_call>'}}
-
-
 class _RequiredResponseParser(BaseResponseParser):
-    tool_parser_cls = _RequiredToolParser
+    tool_parser_cls = ToolParser
 
 
 def _request(**kwargs):
@@ -154,13 +143,7 @@ def _tools():
 
 
 def test_runner_forwards_parser_adjusted_response_format_to_engine():
-    response_format = {
-        'type': 'structural_tag',
-        'format': {
-            'type': 'const_string',
-            'value': '<tool_call>',
-        },
-    }
+    response_format = {'type': 'json_object'}
 
     class _AdjustingParser(_Parser):
 
@@ -223,13 +206,17 @@ def test_runner_skips_preprocess_for_raw_input_ids():
     assert context.async_engine.preprocess_kwargs['input_ids'] == [1, 2, 3]
 
 
-@pytest.mark.parametrize(('finish_reason', 'expected'), [('stop', 'parse_error'), ('length', 'length')])
-def test_runner_required_validation_preserves_length(finish_reason, expected):
-    class _InvalidRequiredParser(_Parser):
-
-        def __init__(self, request):
-            super().__init__(request)
-            self.request = request.model_copy(update={'response_format': {'type': 'structural_tag', 'format': {}}})
+@pytest.mark.parametrize(
+    ('request_kwargs', 'finish_reason', 'expected'),
+    [
+        ({'return_token_ids': True}, 'stop', 'parse_error'),
+        ({'return_token_ids': True}, 'length', 'parse_error'),
+        ({'tool_choice': 'required', 'tools': _tools()}, 'stop', 'parse_error'),
+        ({'tool_choice': 'required', 'tools': _tools()}, 'length', 'length'),
+    ],
+)
+def test_runner_terminal_validation(request_kwargs, finish_reason, expected):
+    class _InvalidParser(_Parser):
 
         def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None):
             return False
@@ -247,12 +234,12 @@ def test_runner_required_validation_preserves_length(finish_reason, expected):
             cache_block_ids=None,
         )
     ]
-    context = _FakeServerContext(_InvalidRequiredParser, outputs)
+    context = _FakeServerContext(_InvalidParser, outputs)
 
     async def _run():
         chat_runner = await ChatRunner.prepare(
             context,
-            _request(tool_choice='required', tools=_tools()),
+            _request(**request_kwargs),
         )
         return await chat_runner.collect()
 

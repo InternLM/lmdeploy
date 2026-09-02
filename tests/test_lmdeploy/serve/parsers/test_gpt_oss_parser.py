@@ -86,6 +86,29 @@ def _scripted_events() -> dict[int, dict]:
     }
 
 
+def _required_request():
+    return ChatCompletionRequest(
+        model='openai/gpt-oss-20b',
+        messages=[],
+        tools=[{
+            'type': 'function',
+            'function': {
+                'name': 'get_weather',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'city': {
+                            'type': 'string',
+                        },
+                    },
+                    'required': ['city'],
+                },
+            },
+        }],
+        tool_choice='required',
+    )
+
+
 class TestGptOssResponseParser:
     """Unit tests for :class:`GptOssResponseParser` (Harmony token
     streaming)."""
@@ -330,27 +353,7 @@ class TestGptOssResponseParser:
         ],
     )
     def test_required_validation_requires_call_terminator(self, stream, suffix, expected):
-        request = ChatCompletionRequest(
-            model='openai/gpt-oss-20b',
-            messages=[],
-            tools=[{
-                'type': 'function',
-                'function': {
-                    'name': 'get_weather',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': {
-                            'city': {
-                                'type': 'string',
-                            },
-                        },
-                        'required': ['city'],
-                    },
-                },
-            }],
-            tool_choice='required',
-        )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request)
+        parser = gpt_oss_mod.GptOssResponseParser(request=_required_request())
         text = (
             '<|channel|>commentary to=functions.get_weather'
             '<|constrain|>json<|message|>{"city":"Paris"}'
@@ -370,27 +373,7 @@ class TestGptOssResponseParser:
     @pytest.mark.parametrize('stream', [False, True])
     @pytest.mark.parametrize(('finish_reason', 'expected'), [('stop', True), ('length', False)])
     def test_required_validation_accepts_engine_stripped_call_stop_token(self, stream, finish_reason, expected):
-        request = ChatCompletionRequest(
-            model='openai/gpt-oss-20b',
-            messages=[],
-            tools=[{
-                'type': 'function',
-                'function': {
-                    'name': 'get_weather',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': {
-                            'city': {
-                                'type': 'string',
-                            },
-                        },
-                        'required': ['city'],
-                    },
-                },
-            }],
-            tool_choice='required',
-        )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request)
+        parser = gpt_oss_mod.GptOssResponseParser(request=_required_request())
         text = (
             '<|channel|>commentary to=functions.get_weather'
             '<|constrain|>json<|message|>{"city":"Paris"}'
@@ -405,6 +388,14 @@ class TestGptOssResponseParser:
             valid = parser.validate_complete('', finish_reason=finish_reason)
 
         assert valid is expected
+
+    def test_required_response_format_is_valid_xgrammar(self):
+        import xgrammar as xgr
+
+        parser = gpt_oss_mod.GptOssResponseParser(request=_required_request())
+
+        grammar = xgr.Grammar.from_structural_tag(parser.request.response_format)
+        assert isinstance(grammar, xgr.Grammar)
 
     @pytest.mark.parametrize(
         ('recipient', 'expected'),

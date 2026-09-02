@@ -134,87 +134,6 @@ def test_responses_tools_require_tool_parser(responses_endpoint,
     assert '--tool-call-parser' in body['error']['message']
 
 
-def test_responses_required_tool_choice_forwards_structural_response_format(
-        responses_endpoint, fake_raw_request,
-        passthrough_response_parser_cls):
-    response_format = {
-        'type': 'structural_tag',
-        'format': {
-            'type': 'const_string',
-            'value': '<tool_call>',
-        },
-    }
-
-    class _CapturingToolParser(passthrough_response_parser_cls):
-        tool_parser_cls = object()
-
-        @classmethod
-        def supports_required_tool_choice(cls):
-            return True
-
-        def __init__(self, request):
-            super().__init__(request)
-            if request.tool_choice == 'required':
-                self.request = request.model_copy(update={'response_format': response_format})
-                type(self).last_request = self.request
-
-    endpoint, context = responses_endpoint
-    context.response_parser_cls = _CapturingToolParser
-    request = ResponsesRequest(
-        model='fake-model',
-        input='Hi',
-        tools=[{
-            'type': 'function',
-            'name': 'search',
-            'parameters': {
-                'type': 'object',
-            },
-        }],
-        tool_choice='required',
-    )
-
-    response = asyncio.run(endpoint(request, fake_raw_request))
-
-    assert _CapturingToolParser.last_request.tool_choice == 'required'
-    assert response['tool_choice'] == 'required'
-    assert context.async_engine.preprocess_kwargs['tools'] is not None
-    assert context.async_engine.preprocess_kwargs['gen_config'].response_format == response_format
-
-
-def test_responses_required_tool_choice_rejects_unsupported_parser(
-        responses_endpoint, fake_raw_request,
-        passthrough_response_parser_cls):
-
-    class _UnsupportedRequiredToolParser(passthrough_response_parser_cls):
-        tool_parser_cls = object()
-
-        @classmethod
-        def supports_required_tool_choice(cls):
-            return False
-
-    endpoint, context = responses_endpoint
-    context.response_parser_cls = _UnsupportedRequiredToolParser
-    request = ResponsesRequest(
-        model='fake-model',
-        input='Hi',
-        tools=[{
-            'type': 'function',
-            'name': 'search',
-            'parameters': {
-                'type': 'object',
-            },
-        }],
-        tool_choice='required',
-    )
-
-    response = asyncio.run(endpoint(request, fake_raw_request))
-
-    assert response.status_code == 400
-    body = json.loads(response.body)
-    assert body['error']['param'] == 'tool_choice'
-    assert 'does not support `tool_choice="required"`' in body['error']['message']
-
-
 def test_responses_non_streaming_cleans_up_session(
         responses_endpoint, fake_raw_request):
     endpoint, context = responses_endpoint
@@ -410,43 +329,6 @@ def test_responses_parser_request_uses_max_completion_tokens(
     asyncio.run(endpoint(request, fake_raw_request))
 
     assert passthrough_response_parser_cls.last_request.max_completion_tokens == 17
-
-
-def test_responses_parse_error_returns_failed_response(
-        responses_endpoint, fake_raw_request, passthrough_response_parser_cls):
-    class _InvalidRequiredParser(passthrough_response_parser_cls):
-        tool_parser_cls = object()
-
-        @classmethod
-        def supports_required_tool_choice(cls):
-            return True
-
-        def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None):
-            return False
-
-    endpoint, context = responses_endpoint
-    context.response_parser_cls = _InvalidRequiredParser
-
-    response = asyncio.run(
-        endpoint(
-            ResponsesRequest(
-                model='fake-model',
-                input='Hi',
-                tools=[{
-                    'type': 'function',
-                    'name': 'search',
-                    'parameters': {
-                        'type': 'object',
-                    },
-                }],
-                tool_choice='required',
-            ),
-            fake_raw_request,
-        ))
-
-    assert response['status'] == 'failed'
-    assert response['error']['code'] == 'server_error'
-    assert 'required tool validation' in response['error']['message']
 
 
 def test_responses_engine_error_is_not_returned_as_bad_request(

@@ -202,11 +202,6 @@ class ResponseParser:
         self.request = request
         self.reasoning_tokens = None
 
-    @classmethod
-    def supports_required_tool_choice(cls) -> bool:
-        """Whether this parser can constrain native required tool calls."""
-        return False
-
     @abstractmethod
     def stream_chunk(self,
                      delta_text: str,
@@ -300,11 +295,6 @@ class BaseResponseParser(ResponseParser):
             cls.tool_parser_cls = ToolParserManager.get(tool_parser_name)
 
     @classmethod
-    def supports_required_tool_choice(cls) -> bool:
-        tcls = cls.tool_parser_cls
-        return bool(tcls is not None and tcls.supports_required_tool_choice())
-
-    @classmethod
     def chat_template_kwargs_from_request(cls, request: ChatCompletionRequest) -> dict:
         """Normalize parser-related template kwargs from the request.
 
@@ -340,17 +330,12 @@ class BaseResponseParser(ResponseParser):
             and self.enable_thinking is not False
             and self.reasoning_parser.starts_in_reasoning_mode()
         )
-        self._required_tool_validators = (
-            _build_required_tool_validators(request.tools or [])
-            if request.tool_choice == 'required' else {}
-        )
-
         required_response_format = None
         if request.tool_choice == 'required':
+            self._required_tool_validators = _build_required_tool_validators(request.tools or [])
             if tcls is None:
                 raise ValueError('`tool_choice="required"` requires a configured tool-call parser.')
             required_response_format = tcls.build_required_tool_response_format(
-                request,
                 request.tools or [],
                 reasoning=self.reasoning_enabled,
             )
@@ -373,7 +358,7 @@ class BaseResponseParser(ResponseParser):
         self._received_any_text = False
 
         self.profile = self._build_profile()
-        if self.reasoning_enabled and self.profile.starts_in_reasoning_mode:
+        if self.reasoning_enabled:
             self._mode = self.MODE_REASONING
         else:
             self._mode = self.MODE_PLAIN
@@ -764,9 +749,7 @@ class BaseResponseParser(ResponseParser):
         reasoning_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         pos = 0
-        mode = self.MODE_REASONING if (
-            self.reasoning_enabled and self.profile.starts_in_reasoning_mode
-        ) else self.MODE_PLAIN
+        mode = self.MODE_REASONING if self.reasoning_enabled else self.MODE_PLAIN
         n = len(text)
         plain_open_tags = [
             t for t in (self.profile.reasoning_open_tag, self.profile.tool_open_tag) if t
@@ -853,7 +836,7 @@ class BaseResponseParser(ResponseParser):
     def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None) -> bool:
         text = self._get_accumulated_text() if text is None else text
 
-        if self.reasoning_enabled and self.profile.starts_in_reasoning_mode:
+        if self.reasoning_enabled:
             close_tag = self.profile.reasoning_close_tag
             close_idx = text.find(close_tag) if close_tag else -1
             if close_idx < 0:

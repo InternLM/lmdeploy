@@ -19,6 +19,7 @@ class Qwen3CoderToolParser(XmlToolParser):
     """Tool parser for Qwen3Coder XML tool-call payloads."""
 
     structural_tag_model = 'qwen_3_coder'
+    reasoning_structural_tag_model = 'qwen_3_5'
 
     func_prefix = '<function='
     func_suffix = '</function>'
@@ -28,13 +29,6 @@ class Qwen3CoderToolParser(XmlToolParser):
         r'^\s*<function=[^\s>\n]+>\s*(?:<parameter=[^\s>\n]+>.*?</parameter>\s*)*</function>\s*$',
         re.DOTALL,
     )
-
-    @classmethod
-    def get_structural_tag_model(cls, request, *, reasoning: bool) -> str:
-        """Use Qwen3.5's structural format only for thinking output."""
-        if reasoning:
-            return 'qwen_3_5'
-        return cls.structural_tag_model
 
     def _reset_incremental_state(self) -> None:
         self._func_name: str | None = None

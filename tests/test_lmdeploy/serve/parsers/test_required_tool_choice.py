@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
-from copy import deepcopy
 
 import pytest
 
@@ -102,38 +101,31 @@ def _walk_formats(value):
 
 
 @pytest.mark.parametrize(
-    'model_format',
+    'parser_name',
     [
-        'qwen_3',
-        'qwen_3_5',
-        'qwen_3_coder',
-        'llama',
-        'kimi',
-        'glm_4_7',
-        'deepseek_v3_2',
-        'deepseek_v4',
+        'qwen2d5',
+        'qwen3',
+        'qwen3coder',
+        'llama3',
+        'kimi-k2',
+        'glm47',
+        'deepseek-v32',
+        'deepseek-v4',
+        'internlm',
+        'interns2-preview',
     ],
 )
 @pytest.mark.parametrize('reasoning', [False, True])
-def test_xgrammar_structural_formats_require_schema_constrained_calls(model_format, reasoning, xgrammar_compiler):
-    tools = _tools()
-    original = deepcopy(tools)
-
-    if model_format == 'kimi':
-        parser_cls = ToolParserManager.get('kimi-k2')
-    else:
-        class XGrammarToolParser(ToolParser):
-            structural_tag_model = model_format
-
-        parser_cls = XGrammarToolParser
+def test_builtin_required_formats_compile(parser_name, reasoning, xgrammar_compiler):
+    request = _request()
+    tools = request.tools
+    parser_cls = ToolParserManager.get(parser_name)
 
     response_format = parser_cls.build_required_tool_response_format(
-        _request(),
         tools,
         reasoning=reasoning,
     )
 
-    assert tools == original
     assert response_format['type'] == 'structural_tag'
     formats = list(_walk_formats(response_format['format']))
     required_groups = [
@@ -144,30 +136,28 @@ def test_xgrammar_structural_formats_require_schema_constrained_calls(model_form
 
     serialized = str(response_format)
     for tool in tools:
-        assert tool['function']['name'] in serialized
-        assert str(tool['function']['parameters']) in serialized
+        assert tool.function.name in serialized
+        assert str(tool.function.parameters) in serialized
 
     xgr, compiler = xgrammar_compiler
     compiled = compiler.compile_structural_tag(response_format)
     assert isinstance(compiled, xgr.CompiledGrammar)
 
 
-def test_structural_format_rejects_empty_tools():
-    class XGrammarToolParser(ToolParser):
-        structural_tag_model = 'qwen_3'
+def test_required_rejects_tool_parser_without_response_format(monkeypatch):
+    class UnsupportedToolParser(ToolParser):
+        pass
 
-    with pytest.raises(ValueError, match='requires at least one tool'):
-        XGrammarToolParser.build_required_tool_response_format(_request(), [], reasoning=False)
+    parser_cls = ResponseParserManager.get('default')
+    monkeypatch.setattr(parser_cls, 'tool_parser_cls', UnsupportedToolParser)
+
+    with pytest.raises(ValueError, match='does not support `tool_choice="required"`'):
+        parser_cls(_request())
 
 
-def test_internlm_required_response_format_is_parser_specific():
-    parser_cls = ToolParserManager.get('internlm')
-
-    response_format = parser_cls.build_required_tool_response_format(
-        _request(),
-        _tools(),
-        reasoning=True,
-    )
+def test_internlm_required_response_format_is_parser_specific(configured_parser):
+    parser = configured_parser(reasoning=True, tool_parser='internlm')
+    response_format = parser.request.response_format
 
     assert response_format['type'] == 'structural_tag'
     assert response_format['format']['type'] == 'sequence'
@@ -176,99 +166,23 @@ def test_internlm_required_response_format_is_parser_specific():
     assert '<|action_end|>' in serialized
 
 
-def test_llama_required_response_format_is_parser_specific():
-    parser_cls = ToolParserManager.get('llama3')
-
-    response_format = parser_cls.build_required_tool_response_format(
-        _request(model='meta-llama/Llama-3.1-8B'),
-        _tools(),
-        reasoning=False,
-    )
+def test_llama_required_response_format_is_parser_specific(configured_parser):
+    parser = configured_parser(tool_parser='llama3', model='meta-llama/Llama-3.1-8B')
+    response_format = parser.request.response_format
 
     tags = [item for item in _walk_formats(response_format) if item['type'] == 'tag']
     assert tags
     assert all(tag['begin'].startswith('<|python_tag|>') for tag in tags)
 
-
-@pytest.mark.parametrize(
-    ('parser_name', 'model', 'reasoning', 'expected'),
-    [
-        ('qwen2d5', 'Qwen/Qwen2.5-7B', False, 'qwen_3'),
-        ('qwen3', 'Qwen/Qwen3-8B', True, 'qwen_3'),
-        ('qwen3coder', 'Qwen/Qwen3-Coder', False, 'qwen_3_coder'),
-        ('qwen3coder', 'Qwen/Qwen3.5-35B', False, 'qwen_3_coder'),
-        ('qwen3coder', 'Qwen/Qwen3-Coder', True, 'qwen_3_5'),
-        ('llama3', 'meta-llama/Llama-3.1-8B', False, 'llama'),
-        ('glm47', 'zai-org/GLM-4.7', True, 'glm_4_7'),
-        ('deepseek-v32', 'deepseek-ai/DeepSeek-V3.2', True, 'deepseek_v3_2'),
-        ('deepseek-v4', 'deepseek-ai/DeepSeek-V4', True, 'deepseek_v4'),
-        ('internlm', 'internlm/internlm2-chat-7b', False, 'internlm'),
-    ],
-)
-def test_builtin_parser_structural_format_mapping(parser_name, model, reasoning, expected):
-    parser_cls = ToolParserManager.get(parser_name)
-
-    assert parser_cls.get_structural_tag_model(_request(model=model), reasoning=reasoning) == expected
-    assert parser_cls.supports_required_tool_choice() is True
-
-
-def test_custom_parser_is_unsupported_without_structural_format():
-
-    class CustomToolParser(ToolParser):
-        pass
-
-    assert CustomToolParser.supports_required_tool_choice() is False
-
-
-def test_required_uses_tool_parser_response_format_builder():
-    response_format = {
-        'type': 'structural_tag',
-        'format': {
-            'type': 'const_string',
-            'value': '<custom_required_tool_call>',
-        },
-    }
-
-    class CustomRequiredToolParser(ToolParser):
-
-        @classmethod
-        def build_required_tool_response_format(cls, request, tools, *, reasoning: bool):
-            assert request.tool_choice == 'required'
-            assert tools
-            return response_format
-
-        @classmethod
-        def get_tool_open_tag(cls):
-            return '<tool_call>'
-
-        @classmethod
-        def get_tool_close_tag(cls):
-            return '</tool_call>'
-
-        @classmethod
-        def get_tool_payload_format(cls):
-            return 'json'
-
-        def decode_tool_incremental(self, added_text: str, *, final: bool):
-            return []
-
-        def parse_tool_call_complete(self, payload: str):
-            return None
-
-    parser_cls = ResponseParserManager.get('default')
-    old_reasoning_cls = parser_cls.reasoning_parser_cls
-    old_tool_cls = parser_cls.tool_parser_cls
-    try:
-        parser_cls.reasoning_parser_cls = None
-        parser_cls.tool_parser_cls = CustomRequiredToolParser
-
-        assert CustomRequiredToolParser.supports_required_tool_choice() is True
-        parser = parser_cls(_request())
-
-        assert parser.request.response_format == response_format
-    finally:
-        parser_cls.reasoning_parser_cls = old_reasoning_cls
-        parser_cls.tool_parser_cls = old_tool_cls
+    text = (
+        '<|python_tag|>{"name":"get_weather","parameters":{"city":"Paris"}}'
+        '<|python_tag|>{"name":"get_time","parameters":{"timezone":"UTC"}}'
+    )
+    content, tool_calls, reasoning = parser.parse_complete(text)
+    assert content is None
+    assert reasoning is None
+    assert [call.function.name for call in tool_calls] == ['get_weather', 'get_time']
+    assert parser.validate_complete(text) is True
 
 
 def test_required_overrides_response_format_without_mutating_tools(configured_parser):
@@ -385,7 +299,6 @@ def test_deepseek_required_default_disables_reasoning_grammar(
         tool_parser=tool_parser,
     )
 
-    assert parser.reasoning_enabled is False
     assert parser.request.response_format['format']['elements'][0]['type'] == 'const_string'
 
     completion = (

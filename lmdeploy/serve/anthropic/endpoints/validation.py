@@ -140,11 +140,10 @@ def _validate_input_request(request: MessagesRequest):
 
 
 def _validate_tool_choice_request(request: MessagesRequest, parser_cls):
-    if _is_tool_choice_any(request.tool_choice):
-        if not request.tools:
-            return create_error_response(
-                HTTPStatus.BAD_REQUEST,
-                '`tool_choice={"type":"any"}` requires at least one tool.')
+    if _is_tool_choice_any(request.tool_choice) and not request.tools:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            '`tool_choice={"type":"any"}` requires at least one tool.')
 
     if _is_tool_choice_tool(request.tool_choice):
         tool_name = request.tool_choice.name
@@ -162,12 +161,6 @@ def _validate_tool_choice_request(request: MessagesRequest, parser_cls):
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
             'Please launch the api_server with --tool-call-parser if you want to use tool calling.')
-
-    if _is_tool_choice_any(request.tool_choice):
-        if not parser_cls.supports_required_tool_choice():
-            return create_error_response(
-                HTTPStatus.BAD_REQUEST,
-                'The configured tool-call parser does not support `tool_choice={"type":"any"}`.')
 
     return None
 

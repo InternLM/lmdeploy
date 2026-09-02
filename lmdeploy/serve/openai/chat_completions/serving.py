@@ -56,7 +56,7 @@ def register(router: APIRouter, server_context) -> None:
         The request should be a JSON object with the following fields:
 
         - **model**: model name. Available from /v1/models.
-        - **messages** (list): chat history in OpenAI format. Example:
+        - **messages**: chat history in OpenAI format. Chat history example:
           ``[{"role": "user", "content": "hi"}]``.
         - **temperature** (float): to modulate the next token probability
         - **top_p** (float): If set to float < 1, only the smallest set of most
@@ -150,9 +150,7 @@ def register(router: APIRouter, server_context) -> None:
             )
 
         # Resolve input: messages has priority over input_ids/image_data
-        messages_empty = (request.messages is None or request.messages == ''
-                          or (isinstance(request.messages, list)
-                              and len(request.messages) == 0))
+        messages_empty = request.messages is None or len(request.messages) == 0
         resolved_input_ids = None
         if messages_empty and request.input_ids is not None:
             # /generate-style input: use input_ids (+ optional image_data)

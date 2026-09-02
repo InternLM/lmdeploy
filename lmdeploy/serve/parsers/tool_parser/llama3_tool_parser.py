@@ -27,15 +27,11 @@ class Llama3JsonToolParser(ToolParser):
         return 'json'
 
     @classmethod
-    def build_required_tool_response_format(cls, request, tools: list, *, reasoning: bool) -> dict | None:
+    def build_required_tool_response_format(cls, tools: list, *, reasoning: bool) -> dict:
         response_format = super().build_required_tool_response_format(
-            request,
             tools,
             reasoning=reasoning,
         )
-        if response_format is None:
-            return None
-
         for tag in response_format['format']['tags']:
             tag['begin'] = '<|python_tag|>' + tag['begin']
         return response_format

@@ -362,14 +362,6 @@ def _validate_tool_choice_request(request: ResponsesRequest,
     """Validate tool parser availability for a Responses request."""
 
     tool_choice = request.tool_choice
-    if _is_required_tool_choice(tool_choice):
-        if not tools:
-            return error_response(
-                HTTPStatus.BAD_REQUEST,
-                "Tool choice 'required' must be specified with `tools`.",
-                param='tool_choice',
-            )
-
     tool_choice_dict = _as_dict(tool_choice)
     if tool_choice_dict:
         tool_choice_type = tool_choice_dict.get('type')
@@ -408,20 +400,7 @@ def _validate_tool_choice_request(request: ResponsesRequest,
                 param='tools',
             )
 
-    if _is_required_tool_choice(tool_choice):
-        supports_required_tool_choice = getattr(parser_cls, 'supports_required_tool_choice', None)
-        if supports_required_tool_choice is None or not supports_required_tool_choice():
-            return error_response(
-                HTTPStatus.BAD_REQUEST,
-                'The configured tool-call parser does not support `tool_choice="required"`.',
-                param='tool_choice',
-            )
-
     return None
-
-
-def _is_required_tool_choice(tool_choice: Any) -> bool:
-    return tool_choice == 'required'
 
 
 def _is_known_string_tool_choice(tool_choice: Any) -> bool:

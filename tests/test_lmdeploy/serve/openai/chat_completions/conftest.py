@@ -74,7 +74,7 @@ class PassthroughResponseParser:
     def parse_complete(self, text, token_ids=None, **kwargs):
         return text, None, None
 
-    def validate_complete(self, raw_text=None):
+    def validate_complete(self, raw_text=None, *, finish_reason=None):
         return True
 
 
