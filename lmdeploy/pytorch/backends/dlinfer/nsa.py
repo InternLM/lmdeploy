@@ -11,46 +11,51 @@ logger = get_logger('lmdeploy')
 
 
 class DlinferNSAIndexBF16(BaseNSAIndexFP8):
-    """Ascend BF16 implementation of the legacy NSAIndexFP8 interface."""
+    """Ascend BF16 implementation of the NSA indexer interface."""
 
     supports_fused_preprocess = False
     requires_unfused_hadamard = False
 
     def __init__(self, topk: int, softmax_scale: float, block_size: int,
                  fill: int):
+        super().__init__()
         self.topk = topk
         self.softmax_scale = softmax_scale
         self.block_size = block_size
 
     def get_step_metadata(self, attn_metadata) -> NSAIndexMeta:
-        """Adapt dlinfer attention metadata to the backend-neutral NSA form."""
+        """Build the per-step metadata consumed by the Lightning Indexer."""
+        if attn_metadata is None:
+            raise RuntimeError('Ascend NSA metadata is required.')
+
         if isinstance(attn_metadata, NSAIndexMeta):
             return attn_metadata
 
-        q_seqlens = attn_metadata.q_seqlens
-        kv_seqlens = attn_metadata.kv_seqlens
-        cu_seqlen_q = attn_metadata.cu_seqlens_q
-        cu_seqlen_k = getattr(attn_metadata, 'cu_seqlens_k', None)
-        if cu_seqlen_k is None:
-            cu_seqlen_k = torch.cat((kv_seqlens.new_zeros(1), kv_seqlens.cumsum(0)))
-        block_size = getattr(attn_metadata, 'block_size', self.block_size)
-        max_q_seqlen = getattr(attn_metadata, 'max_q_seqlen', None)
-        if max_q_seqlen is None:
-            max_q_seqlen = int(q_seqlens.max().item())
-        max_kv_seqlen = getattr(attn_metadata, 'max_kv_seq_len', None)
-        if max_kv_seqlen is None:
-            max_kv_seqlen = int(kv_seqlens.max().item())
+        q_seqlens = getattr(attn_metadata, 'q_seqlens', None)
+        kv_seqlens = getattr(attn_metadata, 'kv_seqlens', None)
+        cu_seqlens_q = getattr(attn_metadata, 'cu_seqlens_q', None)
+        if q_seqlens is None or kv_seqlens is None or cu_seqlens_q is None:
+            raise RuntimeError(
+                'Ascend NSA metadata is missing sequence lengths.')
+
         return NSAIndexMeta(
-            cu_seqlen_q=cu_seqlen_q,
+            cu_seqlen_q=cu_seqlens_q,
             q_seqlens=q_seqlens,
             k_seqlens=kv_seqlens,
-            cu_seqlen_k=cu_seqlen_k,
+            cu_seqlen_k=getattr(attn_metadata, 'cu_seqlens_k', None),
             block_offset=attn_metadata.block_offsets,
-            max_q_seqlen=max_q_seqlen,
-            max_kv_seqlen=max_kv_seqlen,
+            # Lightning Indexer consumes the per-request lengths directly;
+            # unlike CUDA top-k, it does not need a flattened causal-length
+            # vector.  Avoid deriving host scalars here so this path remains
+            # safe during Ascend graph replay.
+            indexer_kv_seqlens=getattr(attn_metadata, 'indexer_kv_seqlens', None),
+            max_q_seqlen=getattr(attn_metadata, 'max_q_seqlen', None),
+            max_kv_seqlen=getattr(
+                attn_metadata, 'max_kv_seq_len',
+                getattr(attn_metadata, 'max_kv_seqlen', None)),
             kv_flatten_size=getattr(attn_metadata, 'kv_flatten_size', None),
-            block_size=block_size,
-            is_decoding=attn_metadata.is_decoding,
+            block_size=getattr(attn_metadata, 'block_size', self.block_size),
+            is_decoding=getattr(attn_metadata, 'is_decoding', False),
             kv_start_indices=getattr(attn_metadata, 'kv_start_indices', None),
         )
 
@@ -59,7 +64,7 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
         q: Tensor,
         k: Tensor,
         weights: Tensor,
-        k_cache: Tensor,
+        indexer_k_cache: Tensor,
         meta: NSAIndexMeta,
     ) -> Tensor:
         if meta.kv_start_indices is None:
@@ -68,7 +73,7 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
         if meta.cu_seqlen_q is None:
             raise RuntimeError("Ascend NSA metadata is missing cu_seqlen_q")
 
-        k_cache = k_cache.unsqueeze(-2)
+        k_cache = indexer_k_cache.unsqueeze(-2)
         k = k.unsqueeze(-2)
         fill_kv_cache(
             k,
@@ -104,10 +109,10 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
         q: Tensor,
         k: Tensor,
         weights: Tensor,
-        k_cache: Tensor,
+        indexer_k_cache: Tensor,
         meta: NSAIndexMeta,
     ) -> Tensor:
-        return self._forward_index(q, k, weights, k_cache, meta)
+        return self._forward_index(q, k, weights, indexer_k_cache, meta)
 
     def forward_fused(
         self,
@@ -118,7 +123,7 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
         norm_bias: Tensor,
         cos: Tensor,
         sin: Tensor,
-        k_cache: Tensor,
+        indexer_k_cache: Tensor,
         norm_eps: float,
         head_gate_scale: float,
         rope_interleaved: bool,
