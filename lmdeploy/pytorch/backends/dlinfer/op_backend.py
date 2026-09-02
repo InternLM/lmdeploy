@@ -25,7 +25,11 @@ class DlinferOpsBackend(DefaultOpsBackend):
         from ..awq_modules import LinearW4A16BuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
         from ..linear import LinearBuildSpec
-        from ..moe import FusedMoEBuildSpec, SoftmaxTopKBuildSpec
+        from ..moe import (
+            FusedMoEBuildSpec,
+            FusedMoEW8A8BuildSpec,
+            SoftmaxTopKBuildSpec,
+        )
         from ..norm import RMSNormBuildSpec
         from ..qmodules import LinearW8A8BuildSpec, RMSNormW8A8BuildSpec
         from ..rotary_embedding import RotaryEmbeddingBuildSpec
@@ -107,6 +111,9 @@ class DlinferOpsBackend(DefaultOpsBackend):
         if isinstance(spec, FusedMoEBuildSpec):
             from .moe import _build_fused_moe
             return cast(ImplT, _build_fused_moe(spec))
+        if isinstance(spec, FusedMoEW8A8BuildSpec):
+            from .moe import _build_fused_moe_w8a8
+            return cast(ImplT, _build_fused_moe_w8a8(spec))
         return super().build_op(spec, enable_deterministic=enable_deterministic)
 
     @classmethod
