@@ -269,8 +269,8 @@ def test_sparse_mla_prefill_routes_by_kv_length(monkeypatch):
 
 def test_tilelang_sparse_mla_decode_zero_copy_matches_selected_reference(monkeypatch):
     pytest.importorskip('tilelang')
-    if not torch.cuda.is_available():
-        pytest.skip('TileLang SparseMLA requires a CUDA GPU')
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip('TileLang SparseMLA requires an SM90 GPU')
     _disable_dynamic_compile(monkeypatch)
     from lmdeploy.pytorch.kernels.cuda.tilelang_sparse_mla import tilelang_sparse_mla_forward
 
