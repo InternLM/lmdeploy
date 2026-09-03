@@ -12,7 +12,12 @@ from lmdeploy.pytorch.backends.cuda.step_metadata import (
     CudaSequenceMetadata,
     register_step_metadata_impl,
 )
-from lmdeploy.pytorch.consts import DSA_INDEX_SCALE_BYTES
+from lmdeploy.pytorch.consts import (
+    DSA_INDEX_SCALE_BYTES,
+    DSA_INDEXER_K_CACHE_NAME,
+    dsa_packed_indexer_k_cache_shape,
+)
+from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheGeometry, BlockCacheRequest
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
@@ -345,6 +350,21 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         self._sparse_index_topk = _get_sparse_index_topk(topk)
         self._step_meta_group: int | None = None
         register_step_metadata_impl(self)
+
+    def get_block_cache_requests(self, geometry: BlockCacheGeometry,
+                                 head_dim: int) -> tuple[BlockCacheRequest, ...]:
+        """Request one DeepGEMM-compatible packed cache row per indexer."""
+        if geometry.logical_block_size != geometry.kernel_block_size:
+            raise ValueError(
+                'DSA indexer cache requires equal logical and kernel block sizes, '
+                f'got {geometry.logical_block_size} and {geometry.kernel_block_size}.')
+        request = BlockCacheRequest(
+            name=DSA_INDEXER_K_CACHE_NAME,
+            shape=dsa_packed_indexer_k_cache_shape(geometry.kernel_block_size, head_dim),
+            dtype=torch.uint8,
+            per_row_contiguous=True,
+        )
+        return (request, )
 
     def _should_skip_scoring(self, meta: NSAIndexMeta) -> bool:
         """Whether dense prefill makes index scoring unnecessary."""

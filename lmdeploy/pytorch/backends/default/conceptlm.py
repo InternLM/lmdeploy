@@ -286,7 +286,8 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
         )
 
     def decode_concept_position_ids(self, position_ids: Tensor) -> Tensor:
-        """Return compressed-timeline RoPE positions for decode concept rows."""
+        """Return compressed-timeline RoPE positions for decode concept
+        rows."""
         concept_index = torch.div(
             position_ids + 1,
             self.chunk_size,

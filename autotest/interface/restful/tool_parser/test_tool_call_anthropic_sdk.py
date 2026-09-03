@@ -1169,8 +1169,7 @@ class TestAnthropicSdkToolCall(_ToolCallTestBase):
         )
 
     def test_sdk_stream_vlm_user_image_base64_solid_color(self, backend, model_case):
-        """SDK streaming + 1×1 red PNG: final text (or raw event blob) should
-        mention a red-ish color."""
+        """SDK streaming + 1×1 red PNG should mention a red-ish color."""
 
         model_name = APIClient(BASE_URL).available_models[0]
         if not _model_likely_supports_anthropic_vlm(model_name):

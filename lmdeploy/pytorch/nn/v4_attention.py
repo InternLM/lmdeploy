@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Mapping
+
 import torch
 from torch import nn
 
@@ -25,10 +27,12 @@ class V4Attention(nn.Module):
                 kv: torch.Tensor,
                 attn_sink: torch.Tensor,
                 attn_metadata: V4AttentionMetadata,
-                caches: dict,
+                window_state_fp8: torch.Tensor,
+                block_caches: Mapping[str, torch.Tensor],
                 slot: torch.Tensor,
                 index_out: V4IndexerOutput | None = None):
         """Unified forward — dispatches to decoding or prefilling
         internally."""
-        return self.impl.forward(query, kv, attn_sink, attn_metadata, caches, slot,
+        return self.impl.forward(query, kv, attn_sink, attn_metadata,
+                                 window_state_fp8, block_caches, slot,
                                  index_out=index_out)
