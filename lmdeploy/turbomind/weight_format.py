@@ -27,10 +27,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import ClassVar, NamedTuple
 
-import _turbomind as _tm
 import torch
 from torch import Tensor
 
+from . import _tm
 from .linear import Linear
 
 _GENERIC_FLOAT_DTYPES = frozenset({

@@ -4,8 +4,9 @@
 import argparse
 import sys
 
-import _turbomind as _tm
 import torch
+
+from lmdeploy.turbomind import _tm
 
 DEV = torch.device('cuda')
 

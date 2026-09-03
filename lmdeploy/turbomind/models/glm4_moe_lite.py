@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import _turbomind as _tm
-
 if TYPE_CHECKING:
     from transformers import Glm4MoeLiteConfig
 
+from .. import _tm
 from ..builders import (
     DecoderLayerBuilder,
     DecoderLayerConfig,

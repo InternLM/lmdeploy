@@ -14,19 +14,12 @@ from typing import TYPE_CHECKING, Literal
 
 import torch
 
-try:
-    import _turbomind as _tm
-except ImportError:
-    _tm = None
+from lmdeploy.turbomind import _tm
 
 if TYPE_CHECKING:
     from lmdeploy.turbomind.weight_format import WeightFormat
 
-__all__ = ['ExecPlan', 'Linear', 'Weight', 'WeightPlan', 'is_available']
-
-def is_available() -> bool:
-    """Return whether the native TurboMind extension can be imported."""
-    return _tm is not None
+__all__ = ['ExecPlan', 'Linear', 'Weight', 'WeightPlan']
 
 
 _TORCH_TO_TM_NAME = {torch.uint8: 'TYPE_UINT8', torch.int32: 'TYPE_INT32', torch.float16: 'TYPE_FP16', torch.bfloat16: 'TYPE_BF16', torch.float32: 'TYPE_FP32', torch.float8_e4m3fn: 'TYPE_FP8_E4M3'}

@@ -7,12 +7,12 @@ import hashlib
 from types import SimpleNamespace
 from typing import Any
 
-import _turbomind as _tm
 import torch
 from transformers import PretrainedConfig
 
 from lmdeploy.vl.constants import Modality
 
+from .. import _tm
 from ..builders import (
     AttentionBuilder,
     Builder,

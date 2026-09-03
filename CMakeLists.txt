@@ -364,18 +364,32 @@ link_directories(
 add_subdirectory(src)
 
 # install python api
-if (BUILD_PY_FFI)
-  if (CALL_FROM_SETUP_PY)
-    install(TARGETS _turbomind DESTINATION ${CMAKE_INSTALL_PREFIX})
-    install(TARGETS _xgrammar DESTINATION ${CMAKE_INSTALL_PREFIX})
-    if (TARGET turbomind_nccl_stub)
-      install(TARGETS turbomind_nccl_stub DESTINATION ${CMAKE_INSTALL_PREFIX})
-    endif()
-  else()
-    install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
-    install(TARGETS _xgrammar DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
-    if (TARGET turbomind_nccl_stub)
-      install(TARGETS turbomind_nccl_stub DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
-    endif()
+if(BUILD_PY_FFI)
+  set(_TURBOMIND_PYTHON_PACKAGE_DIR "${CMAKE_SOURCE_DIR}/lmdeploy/turbomind")
+
+  set_target_properties(
+    _turbomind
+    PROPERTIES
+      LIBRARY_OUTPUT_DIRECTORY "$<1:${_TURBOMIND_PYTHON_PACKAGE_DIR}>"
+      RUNTIME_OUTPUT_DIRECTORY "$<1:${_TURBOMIND_PYTHON_PACKAGE_DIR}>")
+
+  if(TARGET turbomind_nccl_stub)
+    set_target_properties(
+      turbomind_nccl_stub
+      PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "$<1:${_TURBOMIND_PYTHON_PACKAGE_DIR}/lib>"
+        RUNTIME_OUTPUT_DIRECTORY "$<1:${_TURBOMIND_PYTHON_PACKAGE_DIR}/lib>")
   endif()
-endif ()
+
+  install(
+    TARGETS _turbomind
+    LIBRARY DESTINATION .
+    RUNTIME DESTINATION .)
+
+  if(TARGET turbomind_nccl_stub)
+    install(
+      TARGETS turbomind_nccl_stub
+      LIBRARY DESTINATION lib
+      RUNTIME DESTINATION lib)
+  endif()
+endif()

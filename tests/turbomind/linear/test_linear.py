@@ -3,18 +3,20 @@ from __future__ import annotations
 import pytest
 import torch
 
-from . import linear as linear_mod
+from lmdeploy import turbomind
+
+if not turbomind.is_available():
+    pytest.skip('TurboMind is not built', allow_module_level=True)
+
+from lmdeploy.turbomind import _tm
+
 from .cases import case_by_name, expand_suite
 from .fixture import LinearFixture
 
 cuda_required = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
-tm_required = pytest.mark.skipif(not linear_mod.is_available(), reason='_turbomind required')
 
 
-@tm_required
 def test_weight_format_dtype_contract():
-    import _turbomind as tm
-
     from lmdeploy.turbomind.weight_format import (
         _GENERIC_FLOAT_DTYPES,
         AWQFormat,
@@ -99,13 +101,13 @@ def test_weight_format_dtype_contract():
                 assert linear.tensors['scales'].dtype == dtype
                 if (
                     weight_format.zeros_dtype
-                    != tm.DataType.TYPE_INVALID
+                    != _tm.DataType.TYPE_INVALID
                 ):
                     assert linear.tensors['zeros'].dtype == dtype
                 data_format = weight_format.make_data_format()
                 assert (
                     data_format.scales.dtype
-                    == tm.DataType.TYPE_GENERIC_FLOAT
+                    == _tm.DataType.TYPE_GENERIC_FLOAT
                 )
 
     assert not AWQFormat(block_in=128).accepts({
@@ -113,14 +115,13 @@ def test_weight_format_dtype_contract():
         '.scales': torch.ones((1, 8), dtype=torch.float16),
     })
 
-    fp16 = TrivialFormat(weight_dtype=tm.DataType.TYPE_FP16)
-    bf16 = TrivialFormat(weight_dtype=tm.DataType.TYPE_BF16)
+    fp16 = TrivialFormat(weight_dtype=_tm.DataType.TYPE_FP16)
+    bf16 = TrivialFormat(weight_dtype=_tm.DataType.TYPE_BF16)
     assert fp16 != bf16
     assert len({fp16, bf16}) == 2
 
 
 @cuda_required
-@tm_required
 @pytest.mark.parametrize('run', expand_suite('smoke'), ids=lambda r: f'{r.case.name}_m{r.batch_size}')
 def test_smoke_linear_correctness(run):
     try:
@@ -147,7 +148,6 @@ def test_smoke_linear_correctness(run):
 
 
 @cuda_required
-@tm_required
 def test_rank_three_dense_input():
     case = case_by_name()['llama2_7b_o__bf16_bf16_bf16']
     fx = LinearFixture(case)

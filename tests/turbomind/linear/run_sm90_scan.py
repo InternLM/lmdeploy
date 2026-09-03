@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import math
 import os
@@ -34,6 +33,8 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+from lmdeploy.turbomind import _tm
 
 from .cases import LinearCase, expand_suite
 
@@ -153,10 +154,7 @@ def resolve_python(command: str) -> str:
 
 
 def extension_fingerprint() -> dict[str, str | int]:
-    spec = importlib.util.find_spec('_turbomind')
-    if spec is None or spec.origin is None:
-        raise RuntimeError('_turbomind_extension_not_found')
-    path = Path(spec.origin).resolve()
+    path = Path(_tm.__file__).resolve()
     stat = path.stat()
     return {'path': str(path), 'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
 

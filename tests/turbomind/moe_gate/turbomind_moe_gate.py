@@ -4,17 +4,17 @@ from dataclasses import dataclass
 
 import torch
 
+from lmdeploy import turbomind
+
 REQUIRED_NATIVE_BRIDGE_SYMBOLS = ('moe_gate_v2',)
 K_MOE_GATE_VEC_SIZE = 4
 K_MOE_GATE_MAX_TILES = 16
 
 
 def _load_native_bridge(required_symbols=REQUIRED_NATIVE_BRIDGE_SYMBOLS):
-    try:
-        import _turbomind as tm
-    except ImportError:
+    if not turbomind.is_available():
         return None
-    return tm if all(hasattr(tm, symbol) for symbol in required_symbols) else None
+    return turbomind._tm if all(hasattr(turbomind._tm, symbol) for symbol in required_symbols) else None
 
 
 def is_available() -> bool:

@@ -5,11 +5,11 @@ from __future__ import annotations
 import math
 from types import SimpleNamespace
 
-import _turbomind as _tm
 import torch
 
 from lmdeploy.archs import get_model_arch
 
+from .. import _tm
 from ..builders import _act_type_id
 from ..linear import Linear, _dequant_linear
 

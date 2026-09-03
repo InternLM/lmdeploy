@@ -139,9 +139,11 @@ class Engine:
                  trust_remote_code: bool = False):
         self.tokenizer = Tokenizer(model_path)
         if isinstance(engine_config, TurbomindEngineConfig):
+            from lmdeploy import turbomind
+            if not turbomind.is_available():
+                raise RuntimeError('TurboMind was requested but its native module is unavailable.') from turbomind._import_error
             from lmdeploy.turbomind import TurboMind
-            tm_model = TurboMind.from_pretrained(model_path, engine_config=engine_config,
-                                                 trust_remote_code=trust_remote_code)
+            tm_model = TurboMind.from_pretrained(model_path, engine_config=engine_config, trust_remote_code=trust_remote_code)
             self.backend = 'turbomind'
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine

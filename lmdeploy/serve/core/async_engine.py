@@ -204,11 +204,10 @@ class AsyncEngine:
                          trust_remote_code: bool = False,
                          **kwargs):
         """Inner build method for turbomind backend."""
-        from lmdeploy import turbomind as tm
-        return tm.TurboMind.from_pretrained(model_path,
-                                            engine_config=backend_config,
-                                            trust_remote_code=trust_remote_code,
-                                            **kwargs)
+        from lmdeploy import turbomind
+        if not turbomind.is_available():
+            raise RuntimeError('TurboMind was requested but its native module is unavailable.') from turbomind._import_error
+        return turbomind.TurboMind.from_pretrained(model_path, engine_config=backend_config, trust_remote_code=trust_remote_code, **kwargs)
 
     def _build_pytorch(self,
                        model_path: str,

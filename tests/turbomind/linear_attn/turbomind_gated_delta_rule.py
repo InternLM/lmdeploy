@@ -4,6 +4,8 @@ from dataclasses import dataclass, replace
 
 import torch
 
+from lmdeploy import turbomind
+
 from .benchmark import (
     BenchmarkRequest,
     BenchmarkTask,
@@ -31,11 +33,9 @@ REQUIRED_NATIVE_BRIDGE_SYMBOLS = (
 
 
 def _load_native_bridge(required_symbols=REQUIRED_NATIVE_BRIDGE_SYMBOLS):
-    try:
-        import _turbomind as tm
-    except ImportError:
+    if not turbomind.is_available():
         return None
-    return tm if all(hasattr(tm, symbol) for symbol in required_symbols) else None
+    return turbomind._tm if all(hasattr(turbomind._tm, symbol) for symbol in required_symbols) else None
 
 
 def _require_native_bridge(required_symbols=REQUIRED_NATIVE_BRIDGE_SYMBOLS):

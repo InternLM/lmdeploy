@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import _turbomind as _tm
 import torch
 
 from lmdeploy.archs import get_model_arch, search_nested_config
@@ -9,6 +8,7 @@ from lmdeploy.pytorch.config import override_hf_config
 from lmdeploy.utils import get_logger
 
 from ..utils import _get_and_verify_max_len
+from . import _tm
 from .builders import _torch_dtype_to_cpp
 from .models.base import INPUT_MODELS
 from .models.utils import source_model_config

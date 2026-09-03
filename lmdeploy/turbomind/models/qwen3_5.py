@@ -25,11 +25,11 @@ import re
 import struct
 from typing import TYPE_CHECKING, Any
 
-import _turbomind as _tm
 import torch
 
 from lmdeploy.vl.constants import Modality
 
+from .. import _tm
 from ..builders import (
     AttentionBuilder,
     Builder,

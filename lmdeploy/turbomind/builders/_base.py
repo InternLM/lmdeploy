@@ -3,9 +3,9 @@
 import enum
 import math
 
-import _turbomind as _tm
 import torch
 
+from .. import _tm
 from ..linear import Linear
 
 # ---------------------------------------------------------------------------

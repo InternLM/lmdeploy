@@ -4,18 +4,13 @@
 The backend owns an architecture-specific weight layout while preserving LMDeploy's canonical AWQ parameters.
 """
 
-import functools
-import importlib
-import sys
 import weakref
 from dataclasses import dataclass
-from pathlib import Path
-from types import ModuleType
 
 import torch
 
-import lmdeploy
 import lmdeploy.pytorch.distributed as dist
+from lmdeploy.turbomind import _tm
 
 from ..awq_modules import LinearW4A16Impl
 from .awq_modules import _is_turbomind_gemm_capability_supported
@@ -24,22 +19,22 @@ from .awq_modules import _is_turbomind_gemm_capability_supported
 class _LinearRuntime:
     """Share one native TurboMind Linear executor per CUDA stream."""
 
-    def __init__(self, tm: ModuleType, device: torch.device, stream: torch.cuda.Stream):
+    def __init__(self, device: torch.device, stream: torch.cuda.Stream):
         self.device = device
         self.stream = stream
-        self.context = tm.create_device_context(stream.cuda_stream)
+        self.context = _tm.create_device_context(stream.cuda_stream)
         with torch.cuda.device(device), self.context:
-            self.linear = tm.LlamaLinear()
+            self.linear = _tm.LlamaLinear()
 
-    def forward(self, tm: ModuleType, x, weight):
+    def forward(self, x, weight):
         """Plan and execute one dense linear operation."""
         with torch.cuda.device(self.device), self.context:
-            input_tensor = tm.from_dlpack_with_strides(x)
+            input_tensor = _tm.from_dlpack_with_strides(x)
             exec_plan = self.linear.get_exec_plan(weight, input_tensor)
             if exec_plan is None:
                 raise NotImplementedError('No TurboMind GEMM kernel accepts the AWQ execution problem.')
             out = torch.empty_strided(exec_plan.output_shape, exec_plan.output_stride, dtype=torch.float16, device=x.device)
-            self.linear.forward_dense(exec_plan, input_tensor, weight, tm.from_dlpack_with_strides(out))
+            self.linear.forward_dense(exec_plan, input_tensor, weight, _tm.from_dlpack_with_strides(out))
         return out
 
     def __del__(self):
@@ -56,7 +51,7 @@ class _LinearRuntime:
 _runtime_pool = weakref.WeakValueDictionary()
 
 
-def _get_runtime(tm: ModuleType, device: torch.device, stream: torch.cuda.Stream):
+def _get_runtime(device: torch.device, stream: torch.cuda.Stream):
     """Return the shared executor for a device and Torch CUDA stream."""
     key = (device.index, stream.cuda_stream)
     runtime = _runtime_pool.get(key)
@@ -64,7 +59,7 @@ def _get_runtime(tm: ModuleType, device: torch.device, stream: torch.cuda.Stream
         if torch.cuda.is_current_stream_capturing():
             raise RuntimeError('Run one eager TurboMind W4A16 forward on this '
                                'CUDA stream before graph capture.')
-        runtime = _LinearRuntime(tm, device, stream)
+        runtime = _LinearRuntime(device, stream)
         _runtime_pool[key] = runtime
     return runtime
 
@@ -91,33 +86,7 @@ class _PreparedLinear:
                 del weight
 
 
-@functools.lru_cache(maxsize=1)
-def _load_turbomind() -> ModuleType:
-    """Load the _turbomind extension built and shipped by LMDeploy."""
-    lib_dir = (Path(lmdeploy.__file__).resolve().parent / 'lib').resolve()
-    lib_dir_str = str(lib_dir)
-    if lib_dir_str not in sys.path:
-        sys.path.insert(0, lib_dir_str)
-
-    try:
-        tm = importlib.import_module('_turbomind')
-    except (ImportError, OSError) as error:
-        raise RuntimeError(
-            'The TurboMind W4A16 backend requires LMDeploy\'s bundled '
-            '_turbomind extension. Rebuild/install LMDeploy with TurboMind '
-            f'enabled. Import error: {error}') from error
-
-    module_file = getattr(tm, '__file__', None)
-    if module_file is None or Path(module_file).resolve().parent != lib_dir:
-        raise RuntimeError(
-            'Loaded _turbomind is not LMDeploy\'s bundled extension: '
-            f'{module_file!r}. Expected it under {lib_dir}. Remove the '
-            'external turbomind package from this process and retry.')
-
-    return tm
-
-
-def _prepare_turbomind_linear(tm: ModuleType, in_features: int, out_features: int, group_size: int, qweight: torch.Tensor, scales: torch.Tensor, qzeros: torch.Tensor):
+def _prepare_turbomind_linear(in_features: int, out_features: int, group_size: int, qweight: torch.Tensor, scales: torch.Tensor, qzeros: torch.Tensor):
     """Prepare canonical AWQ tensors through TurboMind's planned weight API."""
     from lmdeploy.turbomind.weight_format import AWQFormat
 
@@ -130,32 +99,32 @@ def _prepare_turbomind_linear(tm: ModuleType, in_features: int, out_features: in
     packed = {kind: weight_format.pack(tensor, kind) for kind, tensor in normalized.items()}
 
     stream = torch.cuda.current_stream(qweight.device)
-    runtime = _get_runtime(tm, qweight.device, stream)
+    runtime = _get_runtime(qweight.device, stream)
     with runtime.context:
-        query = tm.WeightQuery()
+        query = _tm.WeightQuery()
         query.weight_format = weight_format.make_data_format()
-        query.data_type = tm.DataType.TYPE_FP16
-        query.input_dtype = tm.DataType.TYPE_FP16
-        query.output_dtype = tm.DataType.TYPE_FP16
+        query.data_type = _tm.DataType.TYPE_FP16
+        query.input_dtype = _tm.DataType.TYPE_FP16
+        query.output_dtype = _tm.DataType.TYPE_FP16
         query.grouped = False
         plan = runtime.linear.get_weight_plan(query)
         if plan is None:
             raise NotImplementedError('No TurboMind GEMM family accepts the AWQ weight format.')
 
-        config = tm.LinearConfig()
+        config = _tm.LinearConfig()
         config.input_dim = in_features
         config.output_dim = out_features
-        config.data_type = tm.DataType.TYPE_FP16
+        config.data_type = _tm.DataType.TYPE_FP16
         config.format = query.weight_format
         config.has_bias = False
 
-        weight = tm.LinearWeight(config)
+        weight = _tm.LinearWeight(config)
         weight.set_plan(plan)
         for kind, item in packed.items():
             logical_shape = list(item.tensor.shape) if item.alloc_shape is None else item.alloc_shape
-            logical_dtype = tm.DataType.TYPE_FP16 if item.alloc_dtype is None else item.alloc_dtype
+            logical_dtype = _tm.DataType.TYPE_FP16 if item.alloc_dtype is None else item.alloc_dtype
             destination = weight.param(kind).alloc(logical_shape, logical_dtype)
-            tm.copy_bytes_on_stream(item.tensor, destination, stream.cuda_stream)
+            _tm.copy_bytes_on_stream(item.tensor, destination, stream.cuda_stream)
         weight.prepare()
 
     # Publish the private layout only after all normalization and prepare work
@@ -233,18 +202,9 @@ class TurbomindAwqLinearW4A16Impl(LinearW4A16Impl):
         self._release_prepared()
         self._validate_weights(qweight, scales, qzeros, bias)
 
-        tm = _load_turbomind()
         device = qweight.device
         with torch.cuda.device(device):
-            self._prepared = _prepare_turbomind_linear(
-                tm,
-                self.in_features,
-                self.out_features,
-                self.group_size,
-                qweight,
-                scales,
-                qzeros,
-            )
+            self._prepared = _prepare_turbomind_linear(self.in_features, self.out_features, self.group_size, qweight, scales, qzeros)
 
         # The model/state_dict must remain in canonical checkpoint layout.
         return qweight, scales, qzeros, bias
@@ -290,15 +250,14 @@ class TurbomindAwqLinearW4A16Impl(LinearW4A16Impl):
                                   dtype=torch.float16,
                                   device=prepared.device)
             else:
-                tm = _load_turbomind()
                 stream = torch.cuda.current_stream(prepared.device)
                 stream_ptr = stream.cuda_stream
                 op_input.record_stream(stream)
                 runtime = prepared.runtimes.get(stream_ptr)
                 if runtime is None:
-                    runtime = _get_runtime(tm, prepared.device, stream)
+                    runtime = _get_runtime(prepared.device, stream)
                     prepared.runtimes[stream_ptr] = runtime
-                out = runtime.forward(tm, op_input, prepared.weight)
+                out = runtime.forward(op_input, prepared.weight)
             if bias is not None:
                 out = out + bias
             out = out.reshape(out_shape)

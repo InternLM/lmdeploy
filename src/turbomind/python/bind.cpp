@@ -60,6 +60,10 @@ namespace turbomind::python_linear {
 void bind_linear(pybind11::module_& m);
 }
 
+namespace turbomind::python {
+void bind_xgrammar(pybind11::module_& m);
+}
+
 using ft::core::Tensor;
 
 // prepare to bind container
@@ -425,6 +429,7 @@ void bind_moe_gate_v2(pybind11::module_& m);
 
 PYBIND11_MODULE(_turbomind, m)
 {
+    turbomind::python::bind_xgrammar(m);
     py::module_ multimodal = m.def_submodule("multimodal");
 
     using MMInput        = ft::multimodal::Input;

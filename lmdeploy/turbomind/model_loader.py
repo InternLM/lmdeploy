@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """ModelLoader: coordinates loading a model's weights into the TurboMind runtime."""
-import _turbomind as _tm
 import torch
 
+from . import _tm
 from .builders._base import Context, ParallelGroup
 from .checkpoint import Prefix, create_checkpoint
 

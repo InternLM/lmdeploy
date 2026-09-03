@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import math
 
-import _turbomind as _tm
 import torch
 
+from .. import _tm
 from ..linear import Linear, pad_input_groups, pad_output_groups, transform_output_dim
 from ._base import Builder, ParallelGroup, SplitSide
 
