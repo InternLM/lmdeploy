@@ -282,7 +282,7 @@ class MultimodalProcessor:
             raise RuntimeError(f'unsupported prompt type: {type(prompt)}')
 
     @staticmethod
-    def format_prompts(prompts: Any, allowed_media_domains: list[str] | None = None) -> list[dict]:
+    def format_prompts(prompts: Any) -> list[dict]:
         """Format prompts."""
         if not isinstance(prompts, list):
             prompts = [prompts]
@@ -295,8 +295,7 @@ class MultimodalProcessor:
         if all(MultimodalProcessor._is_str_images_pair(prompt) for prompt in prompts):
             # batch of (prompt, image or [images]) or (image or [images], prompt) ->
             # [[openai_gpt4v_message], [openai_gpt4v_message], ...]
-            return [[MultimodalProcessor._re_format_prompt_images_pair(prompt, allowed_media_domains)]
-                    for prompt in prompts]
+            return [[MultimodalProcessor._re_format_prompt_images_pair(prompt)] for prompt in prompts]
         raise ValueError(f'Unsupported prompts: {prompts}. Only support str, openai message format, '
                          'or (prompt, image or [images]) or (image or [images], prompt) pair.')
 
@@ -327,7 +326,7 @@ class MultimodalProcessor:
         return isinstance(obj, list) and all(MultimodalProcessor._is_image(img) for img in obj)
 
     @staticmethod
-    def _re_format_prompt_images_pair(prompt: tuple, allowed_media_domains: list[str] | None = None) -> dict:
+    def _re_format_prompt_images_pair(prompt: tuple) -> dict:
         """Reformat the prompt to openai message format."""
         messages = {'role': 'user', 'content': []}
         prompt, images = prompt
@@ -341,8 +340,7 @@ class MultimodalProcessor:
             # 'image_url': means url or local path to image.
             # 'image_data': means PIL.Image.Image object.
             if isinstance(image, str):
-                image = load_from_url(image, ImageMediaIO(), allowed_media_domains=allowed_media_domains)
-                item = {'type': 'image_data', 'image_data': {'data': image}}
+                item = {'type': 'image_url', 'image_url': {'url': image}}
             elif isinstance(image, PIL.Image.Image):
                 item = {'type': 'image_data', 'image_data': {'data': image}}
             else:
