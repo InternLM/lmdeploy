@@ -75,6 +75,7 @@ class SamplingParam:
     out_last_hidden_states: bool = False
     out_ce_loss: bool = False
     num_logprobs: int = -1
+    logprob_start_len: int = -1
     return_routed_experts: bool = False
 
     # ngram
@@ -172,6 +173,7 @@ class SamplingParam:
             out_logits=(output_logits is not None),
             out_ce_loss=gen_config.return_ppl,
             num_logprobs=logprobs,
+            logprob_start_len=gen_config.logprob_start_len,
             return_routed_experts=gen_config.return_routed_experts,
             repetition_ngram_size=repetition_ngram_size,
             repetition_ngram_threshold=repetition_ngram_threshold,
@@ -182,6 +184,7 @@ class MessageStatus(enum.Enum):
     """Status of a sequence."""
 
     WAITING = enum.auto()
+    WAITING_FOR_REMOTE_KVS = enum.auto()
     READY = enum.auto()
     STOPPED = enum.auto()
     RUNNING = enum.auto()
@@ -324,6 +327,9 @@ class SchedulerSession:
         status = MessageStatus.WAITING if migration_request is None else MessageStatus.MIGRATION_WAITING
         seq.set_state(build_seq_state(self.scheduler, seq, status))
         self.seq_manager.add_sequence(seq)
+        connector = self.scheduler.kv_connector
+        if connector is not None:
+            connector.on_new_request(seq)
 
         # metrics
         seq.record_event(EventType.QUEUED)
@@ -789,6 +795,14 @@ class SchedulerSequence:
         return self._num_history_ids + self._num_token_ids
 
     @property
+    def logprob_start_pos(self) -> int:
+        """Absolute source-token boundary for current-input scoring."""
+        start = self.sampling_param.logprob_start_len
+        if self.sampling_param.num_logprobs < 0 or start < 0:
+            return -1
+        return self.input_start_pos + start
+
+    @property
     def num_images(self):
         return self._num_images
 
@@ -925,6 +939,14 @@ class SchedulerSequence:
             clamped = next_step
         return clamped
 
+    def get_prefix_cache_max_candidate_step(self):
+        """Get the exclusive raw prefix-reuse limit before safety rewinds."""
+        max_step = self.num_valid_ids - 1
+        logprob_start = self.logprob_start_pos
+        if logprob_start >= 0:
+            max_step = min(max_step, logprob_start)
+        return max(0, max_step)
+
     def is_prefix_cache_boundary_safe(self, step: int):
         """Check that an exact cache boundary is outside multimodal spans."""
         if any(span.start < step < span.end for span in self.prefix_cache.multimodal_spans):
@@ -932,9 +954,9 @@ class SchedulerSequence:
         return not any(emb.start < step < emb.end for emb in self.history_embeddings.embeddings)
 
     def get_prefix_cache_max_match_step(self):
-        """Get the deepest prefix step allowed for a cache hit."""
+        """Get the deepest effective prefix step allowed for a cache hit."""
         block_size = self.block_size
-        max_step = ((self.num_valid_ids - 1) // block_size) * block_size
+        max_step = self.clamp_prefix_cache_match_step(self.get_prefix_cache_max_candidate_step())
         recompute_blocks = max(0, self.prefix_cache.recompute_overlap.recompute_blocks)
         if recompute_blocks > 0:
             max_step = max(0, max_step - recompute_blocks * block_size)

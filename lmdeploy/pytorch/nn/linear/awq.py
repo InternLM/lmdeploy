@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from contextlib import nullcontext
 from typing import Any
 
 import torch
@@ -38,12 +39,15 @@ class AwqLinear(LinearBase):
         qweight, scales, qzeros, bias = self.create_weights(in_features, out_features, w_bit, group_size, bias,
                                                             self.dtype, self.device)
         impl_builder = get_backend().get_layer_impl_builder(OpType.LinearW4A16)
-        self.impl = impl_builder.build(in_features,
-                                       out_features,
-                                       w_bit,
-                                       group_size,
-                                       bias is not None,
-                                       dtype=scales.dtype)
+        # Provider checks must inspect the device that owns these weights.
+        device_guard = torch.cuda.device(scales.device) if scales.is_cuda else nullcontext()
+        with device_guard:
+            self.impl = impl_builder.build(in_features,
+                                           out_features,
+                                           w_bit,
+                                           group_size,
+                                           bias is not None,
+                                           dtype=scales.dtype)
         self.register_all_parameters(qweight, scales, qzeros, bias)
 
         self.in_features = in_features

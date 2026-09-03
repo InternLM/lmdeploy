@@ -358,11 +358,6 @@ class DeepseekV2BMM(nn.Module):
 
     def _update_batch(self, batch: int):
         """Update out features."""
-        dist_config = get_dist_manager().current_config()
-        if dist_config.dp > 1:
-            # MLA Q projections use dp_disable_tp=True, so DP mode keeps
-            # q_nope full-head; absorb BMM weights must use the same layout.
-            return batch
         world_size, _ = get_tp_world_rank('attn')
         batch = batch // world_size
         return batch
@@ -373,10 +368,8 @@ class DeepseekV2BMM(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
         """Weight loader."""
-        dist_config = get_dist_manager().current_config()
-        if dist_config.dp == 1:
-            world_size, rank = get_tp_world_rank('attn')
-            weight = weight.chunk(world_size, 0)[rank]
+        world_size, rank = get_tp_world_rank('attn')
+        weight = weight.chunk(world_size, 0)[rank]
         param.data.copy_(weight)
 
     def forward(self, x: torch.Tensor, output: torch.Tensor):
@@ -411,7 +404,6 @@ class DeepseekV2Attention(nn.Module):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
-                dp_disable_tp=True,
             )
         else:
             self.q_a_proj = build_colwise_linear(
@@ -436,7 +428,6 @@ class DeepseekV2Attention(nn.Module):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
-                dp_disable_tp=True,
             )
 
         self.kv_a_proj_with_mqa = build_colwise_linear(
@@ -537,12 +528,7 @@ class DeepseekV2Attention(nn.Module):
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        dist_config = get_dist_manager().current_config()
-        if dist_config.dp > 1:
-            num_heads = self.num_heads
-        else:
-            world_size = dist_config.world_size
-            num_heads = self.num_heads // world_size
+        num_heads = self.attn_fwd.num_heads
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
 
@@ -804,8 +790,8 @@ class DeepseekV2MLP(nn.Module):
                 is_tp = True
                 all_reduce = False
             else:
-                # do not split weight on dp
-                # TODO: support dp+tp?
+                # TODO: support shared-expert TP under DP. Until shared-expert
+                # partials join the routed-expert reduction, keep the MLP replicated.
                 is_tp = False
                 all_reduce = False
         else:

@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import torch
@@ -36,8 +37,7 @@ class BaseV4Indexer(ABC):
     def forward(self,
                 query: torch.Tensor,
                 weights: torch.Tensor,
-                index_kv_cache: torch.Tensor,
-                index_kv_scale_cache: torch.Tensor | None,
+                block_caches: Mapping[str, torch.Tensor],
                 meta: V4IndexerMetadata) -> V4IndexerOutput:
         raise NotImplementedError
 

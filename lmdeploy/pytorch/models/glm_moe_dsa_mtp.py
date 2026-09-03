@@ -55,6 +55,7 @@ class GlmMoeDsaMultiTokenPredictorLayer(nn.Module):
                              config.rms_norm_eps,
                              dtype=dtype,
                              device=device)
+        # Keep the recurrent MTP projection replicated across TP ranks.
         self.eh_proj = build_colwise_linear(
             config.hidden_size * 2,
             config.hidden_size,
@@ -63,7 +64,6 @@ class GlmMoeDsaMultiTokenPredictorLayer(nn.Module):
             device=device,
             is_tp=False,
             quant_config=quantization_config,
-            dp_disable_tp=True,
         )
         self.shared_head = GlmMoeDsaSharedHead(config,
                                                dtype=dtype,

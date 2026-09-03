@@ -89,7 +89,8 @@ class ConfigBuilder:
             migration_backend=engine_config.migration_backend,
             role=engine_config.role,
             # reserve 1 blocks for dummy input and padding
-            num_reserved_gpu_blocks=1)
+            num_reserved_gpu_blocks=1,
+            kv_transfer_config=copy.deepcopy(engine_config.kv_transfer_config))
         return cache_config
 
     @staticmethod
@@ -217,12 +218,8 @@ class ConfigBuilder:
         """Build spec decode config."""
         def _build_draft_dist_ctx(dist_config, draft_arch):
             # TODO support tp > 1, ep > 1 for other methods
-            if speculative_config.method in ('qwen3_5_mtp', 'hy3_mtp'):
+            if speculative_config.method in ('deepseek_mtp', 'qwen3_5_mtp', 'hy3_mtp'):
                 draft_dist_config = dist_config
-            elif speculative_config.method == 'deepseek_mtp':
-                from lmdeploy.pytorch.transformers import config_from_pretrained
-                hf_config = config_from_pretrained(target_model, trust_remote_code=trust_remote_code)
-                draft_dist_config = dist_config if hf_config.model_type == 'glm_moe_dsa' else DistConfig()
             elif speculative_config.method == 'eagle3' and draft_arch == _EAGLE3_DEEPSEEK_ARCH:
                 draft_dist_config = dist_config
             else:

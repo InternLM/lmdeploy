@@ -1,11 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import torch
 
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
 from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
+from lmdeploy.pytorch.consts import V4_COMPRESSED_KV_R4_CACHE_NAME, V4_COMPRESSED_KV_R128_CACHE_NAME
 from lmdeploy.pytorch.kernels.cuda.v4_sparse_indices import (
     build_decode_compressed_sparse_indices,
     build_decode_prefix_compressed_sparse_indices,
@@ -322,6 +324,12 @@ class _V4AttentionExecutorBase:
     def _pack_window_fp8(self):
         return self.impl._pack_window_fp8
 
+    def _get_compressed_kv_cache(self, block_caches: Mapping[str, torch.Tensor]):
+        cache_name = self.impl.compressed_kv_cache_name
+        if cache_name is None:
+            return None
+        return block_caches[cache_name]
+
     @staticmethod
     def _pad_query_heads(query: torch.Tensor, attn_sink: torch.Tensor):
         num_heads = query.size(2) if query.dim() == 4 else query.size(1)
@@ -354,16 +362,16 @@ class _V4AttentionExecutorBase:
 class _V4DecodeExecutor(_V4AttentionExecutorBase):
     """Decode-time sparse FlashMLA path."""
 
-    def _write_window(self, kv, attn_caches, slot, attn_metadata):
+    def _write_window(self, kv, window_state_fp8, slot, attn_metadata):
         """Write decode KV to FP8 window cache."""
         window_pos = attn_metadata.decode_window.window_pos
         slot_idx = slot.clamp(min=0)
         kv_decode = kv[:, 0]  # [bsz, head_dim]
-        self._pack_window_fp8(kv_decode, attn_caches['window_state_fp8'], slot_idx, window_pos)
-        return attn_caches['window_state_fp8'].index_select(0, slot_idx)
+        self._pack_window_fp8(kv_decode, window_state_fp8, slot_idx, window_pos)
+        return window_state_fp8.index_select(0, slot_idx)
 
     def forward(self, query, kv, attn_sink, attn_metadata: CudaV4AttentionMetadata,
-                caches, slot, index_out=None):
+                window_state_fp8, block_caches, slot, index_out=None):
         # Model sends [1, bsz, n_heads, head_dim] for decode; FlashMLA expects [bsz, 1, ...]
         if query.size(0) == 1 and query.size(1) > 1:
             query = query.transpose(0, 1).contiguous()
@@ -375,7 +383,7 @@ class _V4DecodeExecutor(_V4AttentionExecutorBase):
         block_size = attn_metadata.block_size
 
         # Phase 1: Write window state + FP8 pack
-        window_state_fp8 = self._write_window(kv, caches, slot, attn_metadata)
+        window_state_fp8 = self._write_window(kv, window_state_fp8, slot, attn_metadata)
 
         # Phase 2: Window indices (pre-computed once per step)
         decode_window = attn_metadata.decode_window
@@ -390,7 +398,7 @@ class _V4DecodeExecutor(_V4AttentionExecutorBase):
         compressed_cache_fp8 = None
 
         if self.compress_ratio:
-            compressed_cache_fp8 = caches['compressed_kv_fp8']
+            compressed_cache_fp8 = self._get_compressed_kv_cache(block_caches)
             if index_out is not None:
                 indices_in_kvcache = index_out.indices_in_kvcache.unsqueeze(1)  # [bsz, 1, topk_width]
                 topk_length = index_out.topk_length
@@ -459,11 +467,11 @@ class _V4DecodeExecutor(_V4AttentionExecutorBase):
 class _V4PrefillExecutor(_V4AttentionExecutorBase):
     """Prefill-time flatten, sparse index assembly, and FlashMLA path."""
 
-    def _write_window(self, kv, attn_caches, attn_metadata):
+    def _write_window(self, kv, window_state_fp8, attn_metadata):
         """Batched ring-buffer FP8 pack for all prefill sequences."""
         kv_flat = kv.squeeze(0)  # [total_tokens, head_dim]
         prefill_window = attn_metadata.prefill_window
-        self._pack_window_fp8(kv_flat, attn_caches['window_state_fp8'],
+        self._pack_window_fp8(kv_flat, window_state_fp8,
                               prefill_window.slot, prefill_window.ring_pos)
 
     def _select_compress_topk(self, index_out, attn_metadata: CudaV4AttentionMetadata):
@@ -485,7 +493,7 @@ class _V4PrefillExecutor(_V4AttentionExecutorBase):
         return None, prefill_ratio.compress_width
 
     def forward(self, query, kv, attn_sink, attn_metadata: CudaV4AttentionMetadata,
-                caches, slot, index_out=None):
+                window_state_fp8, block_caches, slot, index_out=None):
         start_pos = attn_metadata.start_pos
         total_lens = attn_metadata.kv_seqlens
         q_seqlens = attn_metadata.q_seqlens
@@ -501,10 +509,10 @@ class _V4PrefillExecutor(_V4AttentionExecutorBase):
         cu_seqlens_k = prefill_ratio.cu_seqlens_k
         flat_kv_lens = prefill_ratio.flat_kv_lens
 
-        fp8_compressed_kv_cache = caches['compressed_kv_fp8'] if self.compress_ratio else None
+        fp8_compressed_kv_cache = self._get_compressed_kv_cache(block_caches)
         raw_kv = kv.squeeze(0)  # [total_q_tokens, head_dim]
         flat_kv, cu_seqlens_k = self._flatten_v4_kv(
-            caches['window_state_fp8'],
+            window_state_fp8,
             block_offsets, total_lens,
             self.window_size, self.compress_ratio,
             total_flat_kv_tokens, max_flat_kv_len,
@@ -516,7 +524,7 @@ class _V4PrefillExecutor(_V4AttentionExecutorBase):
             start_pos=start_pos)
 
         # Phase 3: Write window state + FP8 pack
-        self._write_window(kv, caches, attn_metadata)
+        self._write_window(kv, window_state_fp8, attn_metadata)
 
         # Phase 4: Build FlashMLA-ready sparse indices directly.
         prefill_shared = attn_metadata.prefill_shared
@@ -554,6 +562,14 @@ class TritonV4AttentionImpl:
         self.scale = scale
         self.window_size = window_size
         self.compress_ratio = compress_ratio
+        try:
+            self.compressed_kv_cache_name = {
+                0: None,
+                4: V4_COMPRESSED_KV_R4_CACHE_NAME,
+                128: V4_COMPRESSED_KV_R128_CACHE_NAME,
+            }[compress_ratio]
+        except KeyError as e:
+            raise ValueError(f'Unsupported V4 compression ratio: {compress_ratio}.') from e
         import flash_mla
         self.flash_mla = flash_mla
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
@@ -564,14 +580,16 @@ class TritonV4AttentionImpl:
         self._prefill_executor = _V4PrefillExecutor(self)
 
     def forward(self, query, kv, attn_sink, attn_metadata: CudaV4AttentionMetadata,
-                caches, slot, index_out=None):
+                window_state_fp8, block_caches, slot, index_out=None):
         """Dispatch V4 attention to decode or prefill execution."""
         if attn_metadata.is_decoding:
             return self._decode_executor.forward(
-                query, kv, attn_sink, attn_metadata, caches, slot,
+                query, kv, attn_sink, attn_metadata, window_state_fp8,
+                block_caches, slot,
                 index_out=index_out)
         return self._prefill_executor.forward(
-            query, kv, attn_sink, attn_metadata, caches, slot,
+            query, kv, attn_sink, attn_metadata, window_state_fp8,
+            block_caches, slot,
             index_out=index_out)
 
 
