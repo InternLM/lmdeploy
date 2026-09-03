@@ -258,7 +258,6 @@ def _require_client_and_model(url):
 
 def _run_logprobs_test(port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
-<<<<<<< HEAD
     client, model_name = get_client_and_model(http_url)
     response = client.chat.completions.create(
         model=model_name,
@@ -269,24 +268,6 @@ def _run_logprobs_test(port: int = DEFAULT_PORT):
         top_logprobs=10,
     )
     output = response.model_dump()
-=======
-    api_client = APIClient(http_url)
-    model_name = api_client.available_models[0]
-    output = None
-    for output in api_client.chat_completions_v1(model=model_name,
-                                                 messages=[{
-                                                     'role': 'user',
-                                                     'content': 'Hi, pls intro yourself'
-                                                 }],
-                                                 max_tokens=5,
-                                                 temperature=0.01,
-                                                 logprobs=True,
-                                                 top_logprobs=10):
-        continue
-    if output is None:
-        assert False, 'No output received from logprobs test'
-    print(output)
->>>>>>> origin/sync-upstream-main
     assert_chat_completions_batch_return(output, model_name, check_logprobs=True, logprobs_num=10)
     assert output.get('choices')[0].get('finish_reason') == 'length'
     assert output.get('usage').get('completion_tokens') == 6 or output.get('usage').get('completion_tokens') == 5
