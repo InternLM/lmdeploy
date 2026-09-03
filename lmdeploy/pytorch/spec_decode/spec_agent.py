@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from functools import partial
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -16,6 +17,8 @@ from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from ..distributed import DistContext, get_dist_manager
 from ..engine.cache_engine import CacheEngine
+from ..engine.cache_engine.collector import collect_block_cache_requests
+from ..engine.cache_engine.plan import build_block_cache_plan
 from ..engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
 from ..engine.model_agent.agent import BatchedLogProbs
 from ..model_inputs import DPMeta, ModelInputs
@@ -122,6 +125,40 @@ class SpecModelAgent(BaseSpecModelAgent):
         sessions."""
         self._prev_chunk_last.clear()
 
+    @staticmethod
+    def _shift_packed_prefill_inputs(input_tensor: torch.Tensor,
+                                     seq_length: torch.Tensor,
+                                     next_token_ids: torch.Tensor,
+                                     replacement_indices: torch.Tensor | None =
+                                     None) -> torch.Tensor:
+        """Shift each packed request independently for EAGLE prefill.
+
+        Target states at token ``t`` are paired with the input for token
+        ``t + 1``. Packed requests must be shifted within their own boundaries.
+        During verification, ``replacement_indices`` identifies the row that
+        receives each request's replacement or bonus token.
+        """
+        if input_tensor.dim() not in (2, 3):
+            raise ValueError(
+                f'packed prefill shift expects [1, T] or [1, T, H], got '
+                f'{tuple(input_tensor.shape)}')
+        shifted = input_tensor.clone()
+        if replacement_indices is not None:
+            if replacement_indices.numel() != seq_length.numel():
+                raise ValueError(
+                    'replacement_indices must contain one entry per packed '
+                    'request')
+        last_indices = seq_length.cumsum(0) - 1
+        shifted[:, :-1] = input_tensor[:, 1:]
+        # Restore request boundaries before writing replacement tokens. This
+        # matters when verification replaces a position before the true end.
+        shifted[:, last_indices] = input_tensor[:, last_indices]
+        write_indices = (
+            last_indices
+            if replacement_indices is None else replacement_indices)
+        shifted[:, write_indices] = next_token_ids
+        return shifted
+
     @contextmanager
     def draft_context(self):
         """Draft-local dist context."""
@@ -156,17 +193,36 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                              backend_config=self.backend_config,
                                                              device=self.device)
 
+    def build_cache_plan(self, cache_config: CacheConfig | None) -> int:
+        """Build and retain the rank-local draft cache plan."""
+        if cache_config is None:
+            self.block_cache_plan = None
+            return 0
+        with self.draft_context():
+            draft_tp = self.draft_dist_ctx.dist_config.attn_tp
+            cache_request_model = self.proposer.model
+            # Ray may recollect plans after the model has been graph-wrapped.
+            if not isinstance(cache_request_model, torch.nn.Module):
+                cache_request_model = cache_request_model.get_model()
+            request_collector = partial(collect_block_cache_requests, cache_request_model)
+            self.block_cache_plan = build_block_cache_plan(
+                self.model_config,
+                cache_config,
+                draft_tp,
+                request_collector=request_collector,
+            )
+            return self.block_cache_plan.logical_block_nbytes
+
     def build_cache_engine(self, cache_stream: torch.cuda.Stream):
         """Build cache engine."""
         if self.cache_config is not None:
             with self.draft_context():
                 draft_tp = self.draft_dist_ctx.dist_config.attn_tp
                 self.cache_engine = CacheEngine(self.cache_config,
-                                                self.model_config,
                                                 rank=0 if draft_tp == 1 else self.dist_ctx.rank,
                                                 tp_rank=self.draft_dist_ctx.attn_tp_group.rank,
-                                                world_size=draft_tp,
-                                                cache_stream=cache_stream)
+                                                cache_stream=cache_stream,
+                                                block_cache_plan=self.block_cache_plan)
 
     def _build_dp_meta_from_main(self, input_ids: torch.Tensor, dp_meta: DPMeta | None):
         """Build DP meta for draft inputs after MTP input shifting."""
@@ -204,16 +260,23 @@ class SpecModelAgent(BaseSpecModelAgent):
             # chunks. Keep pending chunk carry here; a new first chunk clears it
             # explicitly, and the final chunk consumes it.
             # Case A: non-chunked — shift left by 1, place next_token at end
-            input_ids = model_inputs.input_ids.clone()
-            input_ids[:, :-1] = model_inputs.input_ids[:, 1:]
-            input_ids[:, last_token_indices] = next_token_ids
+            input_ids = self._shift_packed_prefill_inputs(
+                model_inputs.input_ids,
+                model_inputs.seq_length,
+                next_token_ids,
+                replacement_indices=(
+                    last_token_indices if model_inputs.is_decoding else None),
+            )
 
             if target_inputs_embeds is not None:
-                input_embeds = target_inputs_embeds.clone()
-                input_embeds[:, :-1, :] = target_inputs_embeds[:, 1:, :]
-                next_token_embeds = self.proposer.embed_input_ids(next_token_ids)
-                input_embeds[:, last_token_indices, :] = next_token_embeds
-                target_inputs_embeds = input_embeds
+                target_inputs_embeds = self._shift_packed_prefill_inputs(
+                    target_inputs_embeds,
+                    model_inputs.seq_length,
+                    self.proposer.embed_input_ids(next_token_ids),
+                    replacement_indices=(
+                        last_token_indices
+                        if model_inputs.is_decoding else None),
+                )
 
         else:
             if model_inputs.is_first_chunk:

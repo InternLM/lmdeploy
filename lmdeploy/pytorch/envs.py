@@ -180,6 +180,10 @@ with set_envs():
     blocked_fp8_gemm_backend = env_to_choice('LMDEPLOY_BLOCKED_FP8_GEMM_BACKEND', 'auto',
                                              {'auto', 'deepgemm', 'gluon', 'triton'})
 
+    # W4A16 GEMM
+    w4a16_gemm_backend = env_to_choice('LMDEPLOY_W4A16_GEMM_BACKEND', 'auto',
+                                       {'auto', 'triton', 'turbomind'})
+
     # model agent
     skip_warmup = env_to_bool('LMDEPLOY_SKIP_WARMUP', False)
 
@@ -224,8 +228,11 @@ with set_envs():
     # qwen3.5 recurrent_state dtype
     fp32_mamba_ssm_dtype = env_to_bool('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', False)
 
-    # deepseekv3.2 indexer fusion
+    # DSA indexer fusion
     disable_dsa_indexer_fusion = env_to_bool('LMDEPLOY_DISABLE_DSA_INDEXER_FUSION', False)
+
+    # DSA indexer score memory
+    dsa_indexer_max_logits_mb = max(1, env_to_int('LMDEPLOY_DSA_INDEXER_MAX_LOGITS_MB', 512))
 
     # cudagraph
     # fake capture flag for debug cudagraph padding behavior

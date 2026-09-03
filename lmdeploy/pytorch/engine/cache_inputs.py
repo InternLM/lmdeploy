@@ -9,17 +9,16 @@ StateCacheCopyPlan = tuple[tuple[int, ...], tuple[int, ...]]
 
 @dataclass(frozen=True)
 class CacheCheckpointInputs:
-    """One-forward cache restore and save plans.
+    """Cache-copy plans consumed by exactly one model forward.
 
     KV plans contain physical GPU block-offset pairs at scheduler-block
-    granularity with shape ``[2, N]``. They are transferred to the cache device
-    with the rest of the forward payload.
-    State plans stay as compact host integer sequences because
-    ``StateCacheEngine`` schedules those copies from the host.
+    granularity with shape ``[2, N]``. They move to the cache device with the
+    other forward payloads. State plans remain compact host integer sequences
+    because ``StateCacheEngine`` schedules those copies from the host.
 
-    This object is deliberately separate from ``ModelInputs``: checkpoint
-    operations are consumed once and must not participate in decode-step
-    merge, reindex, or advance logic.
+    Checkpoint operations deliberately do not belong to ``ModelInputs``:
+    retained model inputs participate in decode-step merge, reindex, and
+    advance operations, while these plans must execute only once.
     """
 
     kv_restore_plan: torch.Tensor | None = None

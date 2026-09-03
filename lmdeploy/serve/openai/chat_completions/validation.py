@@ -64,12 +64,23 @@ def check_request(request: ChatCompletionRequest,
         return f'The top_k {request.top_k!r} cannot be a negative integer.'
     if request.temperature is not None and not (0 <= request.temperature <= 2):
         return f'The temperature {request.temperature!r} must be in [0, 2]'
+    if request.min_p is not None and not (0 <= request.min_p <= 1):
+        return f'The min_p {request.min_p!r} must be in [0, 1].'
+    if request.max_completion_tokens is not None and request.max_completion_tokens <= 0:
+        return f'The max_completion_tokens {request.max_completion_tokens!r} must be a positive integer.'
+    if 'max_tokens' in request.model_fields_set:
+        max_tokens = request.model_dump(include={'max_tokens'})['max_tokens']
+        if max_tokens is not None and max_tokens <= 0:
+            return f'The max_tokens {max_tokens!r} must be a positive integer.'
+    if request.min_new_tokens is not None and request.min_new_tokens < 0:
+        return f'The min_new_tokens {request.min_new_tokens!r} cannot be a negative integer.'
+    if request.top_logprobs is not None and request.top_logprobs > 20:
+        return f'The top_logprobs {request.top_logprobs!r} must be in [0, 20].'
+
     # Validate input_ids and image_data constraints.
     # messages has higher priority. input_ids and image_data are only used when
-    # messages is empty (None, '', or []). image_data requires input_ids.
-    messages_empty = (request.messages is None or request.messages == ''
-                      or (isinstance(request.messages, list)
-                          and len(request.messages) == 0))
+    # messages is empty. image_data requires input_ids.
+    messages_empty = len(request.messages) == 0
     if not messages_empty:
         # messages is active — input_ids and image_data must not be set
         if request.input_ids is not None:
@@ -78,10 +89,12 @@ def check_request(request: ChatCompletionRequest,
             return 'image_data cannot be used when messages is non-empty. messages takes priority.'
     else:
         # messages is empty — input_ids and image_data are the active inputs
-        if request.input_ids is not None and len(request.input_ids) == 0:
-            return 'The input_ids must not be an empty list.'
         if request.image_data is not None and request.input_ids is None:
             return 'image_data requires input_ids to be set when messages is empty.'
+        if request.input_ids is None:
+            return 'messages must not be empty unless input_ids is set.'
+        if len(request.input_ids) == 0:
+            return 'The input_ids must not be an empty list.'
 
     parser_cls = server_context.response_parser_cls
     if request.tool_choice != 'none' and request.tools:

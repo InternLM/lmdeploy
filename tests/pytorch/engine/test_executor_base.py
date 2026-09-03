@@ -4,13 +4,16 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.messages import PytorchEngineConfig, QuantPolicy
 from lmdeploy.pytorch.config import CacheConfig, StateCacheSpec
 from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as update_deepseek_v4_cache_config
 from lmdeploy.pytorch.disagg.config import EngineRole
-from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
-from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _CacheBlockSize
+from lmdeploy.pytorch.engine.executor import _finalize_sparse_mla_cache_policy
+from lmdeploy.pytorch.engine.executor import base as executor_base
+from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _WorkerCachePlanSizes
+from lmdeploy.pytorch.engine.executor.uni_executor import UniExecutor
 
 
 class _RecordingExecutor(ExecutorBase):
@@ -40,6 +43,26 @@ class _RecordingExecutor(ExecutorBase):
 
     def warmup(self):
         self.calls.append('warmup')
+
+
+def test_finalize_sparse_mla_cache_policy_before_executor_build():
+    model_config = SimpleNamespace(mla_index_topk=2048, mla_kv_cache_dtype='bfloat16')
+    cache_config = SimpleNamespace(quant_policy=QuantPolicy.FP8)
+
+    _finalize_sparse_mla_cache_policy([model_config], cache_config)
+
+    assert model_config.mla_kv_cache_dtype == 'fp8_ds_mla'
+    assert cache_config.quant_policy == QuantPolicy.NONE
+
+
+@pytest.mark.parametrize('quant_policy',
+                         [QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.FP8_E5M2, QuantPolicy.TURBO_QUANT])
+def test_finalize_sparse_mla_cache_policy_rejects_other_quantization(quant_policy):
+    model_config = SimpleNamespace(mla_index_topk=2048, mla_kv_cache_dtype='bfloat16')
+    cache_config = SimpleNamespace(quant_policy=quant_policy)
+
+    with pytest.raises(ValueError, match='Sparse MLA does not support quant_policy'):
+        _finalize_sparse_mla_cache_policy([model_config], cache_config)
 
 
 def test_init_warms_up_model_by_default():
@@ -93,6 +116,41 @@ def test_get_num_gpu_blocks_rejects_empty_cache_block():
         ExecutorBase._get_num_gpu_blocks(available_mem=4096, cache_block_size=0)
 
 
+def test_dsa_score_workspace_uses_configured_logits_budget(monkeypatch):
+    monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', 7)
+    executor = object.__new__(ExecutorBase)
+    executor.model_config = SimpleNamespace(mla_index_topk=2048)
+
+    assert executor._get_dsa_score_workspace_size() == 7 << 20
+
+    executor.model_config.mla_index_topk = None
+    assert executor._get_dsa_score_workspace_size() == 0
+
+
+def test_runtime_size_reserves_dsa_score_workspace(monkeypatch):
+    monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', 1)
+    executor = object.__new__(ExecutorBase)
+    executor.model_config = SimpleNamespace(mla_index_topk=2048)
+    executor.cache_config = SimpleNamespace(
+        cache_max_entry_count=1.0,
+        max_prefill_token_num=16,
+        max_batches=2,
+    )
+    executor.specdecode_config = None
+
+    runtime_size, max_prefill_token_num = executor._get_runtime_size(
+        [4 << 20], [_WorkerCachePlanSizes(target=1024)], vocab_size=100)
+
+    generic_runtime_size = (16 + 2 * 2) * 100 * 2
+    assert runtime_size == (1 << 20) + generic_runtime_size
+    assert max_prefill_token_num == 16
+
+
+def test_get_min_num_gpu_blocks_rejects_worker_count_mismatch():
+    with pytest.raises(ValueError, match='same worker ranks'):
+        ExecutorBase._get_min_num_gpu_blocks([4096, 4096], [256])
+
+
 def test_sync_spec_cache_block_size_updates_kernel_block_size():
     executor = object.__new__(ExecutorBase)
     executor.cache_config = CacheConfig(max_batches=1,
@@ -113,14 +171,15 @@ def test_sync_spec_cache_block_size_updates_kernel_block_size():
     assert spec_cache_config.kernel_block_size == 16
 
 
-def test_adjust_block_size_uses_deepseek_v4_cache_hook_before_large_head_dim_rule():
+def test_adjust_block_size_uses_deepseek_v4_hook_and_syncs_model_config():
     executor = object.__new__(ExecutorBase)
     executor.cache_config = CacheConfig(max_batches=1,
                                         block_size=192,
                                         kernel_block_size=64,
                                         num_cpu_blocks=0,
                                         num_gpu_blocks=0)
-    executor.model_config = SimpleNamespace(k_head_dim=512,
+    executor.model_config = SimpleNamespace(block_size=192,
+                                            k_head_dim=512,
                                             use_flash_mla=False,
                                             update_cache_config_func=update_deepseek_v4_cache_config)
 
@@ -129,6 +188,7 @@ def test_adjust_block_size_uses_deepseek_v4_cache_hook_before_large_head_dim_rul
     assert executor.cache_config.block_size == 256
     assert executor.cache_config.kernel_block_size == 256
     assert executor.cache_config.window_size == -1
+    assert executor.model_config.block_size == 256
 
 
 def test_executor_disables_prefix_cache_with_generic_sliding_window():
@@ -216,74 +276,36 @@ def test_executor_disables_prefix_cache_with_pd_role():
     assert not cache_config.enable_prefix_caching
 
 
-def test_get_rank_cache_block_sizes_only_charges_spec_rank():
-    executor = object.__new__(ExecutorBase)
-    executor.dist_config = SimpleNamespace(attn_tp=2)
+def test_get_rank_cache_block_sizes_uses_worker_local_plans():
+    plans = [
+        _WorkerCachePlanSizes(target=256, spec=128),
+        _WorkerCachePlanSizes(target=256),
+        _WorkerCachePlanSizes(target=192, spec=96, memory=64),
+    ]
 
-    cache_block_sizes = executor._get_rank_cache_block_sizes(4, _CacheBlockSize(target=256, spec=128))
+    cache_block_sizes = ExecutorBase._get_rank_cache_block_sizes(plans)
 
-    assert cache_block_sizes == [384, 256, 384, 256]
-
-
-def test_get_rank_cache_block_sizes_charges_all_ranks_when_spec_tp_matches_target():
-    executor = object.__new__(ExecutorBase)
-    executor.dist_config = SimpleNamespace(attn_tp=4)
-    executor.specdecode_config = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=4))
-
-    cache_block_sizes = executor._get_rank_cache_block_sizes(4, _CacheBlockSize(target=256, spec=128))
-
-    assert cache_block_sizes == [384, 384, 384, 384]
+    assert cache_block_sizes == [384, 256, 352]
 
 
-def test_get_cache_block_sizes_uses_spec_tp(monkeypatch):
-    executor = object.__new__(ExecutorBase)
-    executor.dist_config = SimpleNamespace(attn_tp=4)
-    executor.cache_config = object()
-    executor.model_config = object()
-    executor.specdecode_config = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=4))
-    executor.misc_config = SimpleNamespace(memdecode_config=None)
+def test_uni_executor_prepares_named_worker_cache_plan_sizes():
+    executor = object.__new__(UniExecutor)
+    cache_config = object()
     spec_cache_config = object()
-    spec_model_config = object()
-    world_sizes = []
-
-    def fake_get_cache_block_size(cache_config, model_config, world_size):
-        world_sizes.append(world_size)
-        return 256 if model_config is executor.model_config else 128
-
-    monkeypatch.setattr(CacheEngine, 'get_cache_block_size', fake_get_cache_block_size)
-
-    cache_block_size = executor._get_cache_block_sizes(spec_cache_config, spec_model_config)
-
-    assert cache_block_size == _CacheBlockSize(target=256, spec=128)
-    assert world_sizes == [4, 4]
-
-
-def test_get_cache_block_sizes_includes_nested_memdecode_memory_model(monkeypatch):
-    executor = object.__new__(ExecutorBase)
-    memory_model_config = object()
-    executor.dist_config = SimpleNamespace(attn_tp=8)
-    executor.cache_config = object()
-    executor.model_config = object()
-    executor.misc_config = SimpleNamespace(
-        memdecode_config=SimpleNamespace(memory_model_config=memory_model_config))
-    executor.specdecode_config = None
     calls = []
 
-    def fake_get_cache_block_size(cache_config, model_config, world_size):
-        calls.append((cache_config, model_config, world_size))
-        if model_config is memory_model_config:
-            return 64
-        return 256
+    def build_cache_plans(received_cache_config, received_spec_cache_config):
+        calls.append((received_cache_config, received_spec_cache_config))
+        return 256, 128, 64
 
-    monkeypatch.setattr(CacheEngine, 'get_cache_block_size', fake_get_cache_block_size)
+    executor.model_agent = SimpleNamespace(build_cache_plans=build_cache_plans)
 
-    cache_block_size = executor._get_cache_block_sizes(None, None)
+    cache_block_sizes = executor._prepare_worker_cache_plans(cache_config, spec_cache_config)
 
-    assert cache_block_size == _CacheBlockSize(target=256, memory=64)
-    assert calls == [
-        (executor.cache_config, executor.model_config, 8),
-        (executor.cache_config, memory_model_config, 8),
+    assert cache_block_sizes == [
+        _WorkerCachePlanSizes(target=256, spec=128, memory=64),
     ]
+    assert calls == [(cache_config, spec_cache_config)]
 
 
 def test_validate_memdecode_configs_rejects_specdecode():
@@ -317,7 +339,11 @@ def test_update_num_gpu_blocks_can_be_limited_by_non_spec_rank():
                                         cache_max_entry_count=1.0)
     spec_cache_config = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
 
-    executor._update_num_gpu_blocks([2048, 768], _CacheBlockSize(target=256, spec=256), spec_cache_config)
+    cache_block_sizes = [
+        _WorkerCachePlanSizes(target=256, spec=256),
+        _WorkerCachePlanSizes(target=256),
+    ]
+    executor._update_num_gpu_blocks([2048, 768], cache_block_sizes, spec_cache_config)
 
     assert executor.cache_config.num_gpu_blocks == 3
     assert spec_cache_config.num_gpu_blocks == 3
@@ -336,7 +362,7 @@ def test_get_state_cache_mem_uses_prefix_cache_state_budget():
     mem = executor._get_state_cache_mem()
 
     expected_num_state_caches = 4 + 2 + 3
-    expected_mem = StateCacheEngine.get_cache_state_size(state_shapes) * expected_num_state_caches
+    expected_mem = StateCacheEngine.get_state_slot_nbytes(state_shapes) * expected_num_state_caches
     assert executor.cache_config.num_state_caches == expected_num_state_caches
     assert mem == expected_mem
 
@@ -345,7 +371,7 @@ def test_get_mem_state_cache_mem_uses_memory_model_state_specs():
     executor = object.__new__(ExecutorBase)
     state_specs = [StateCacheSpec('memory_state', (96, ), torch.float32, layer_ids=[1, 3])]
     state_shapes = [(spec.shape, spec.dtype) for spec in state_specs]
-    memory_model_config = SimpleNamespace(states_shapes=state_shapes, state_cache_specs=state_specs, num_layers=4)
+    memory_model_config = SimpleNamespace(states_shapes=state_shapes, state_cache_specs=state_specs)
     executor.cache_config = CacheConfig(max_batches=1,
                                         block_size=64,
                                         num_cpu_blocks=0,
@@ -356,8 +382,7 @@ def test_get_mem_state_cache_mem_uses_memory_model_state_specs():
 
     mem = executor._get_mem_state_cache_mem()
 
-    expected = StateCacheEngine.get_cache_state_size(
-        state_shapes, state_specs=state_specs, num_layers=memory_model_config.num_layers) * 2
+    expected = StateCacheEngine.get_state_slot_nbytes(state_shapes, state_specs=state_specs) * 2
     assert mem == expected
 
 

@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
@@ -293,6 +294,92 @@ def test_prepare_inputs_from_main_dp_non_last_first_chunk_shifts_last_token_indi
     torch.testing.assert_close(agent._prev_chunk_last['hidden_states'], target_hidden_states[:, -1:])
     assert draft_inputs.dp_meta is model_inputs.dp_meta
     assert agent.proposer.model.update_inputs_calls == 1
+
+
+def test_shift_packed_prefill_inputs_without_host_sync(monkeypatch):
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    input_ids = torch.tensor([[10, 11, 12, 20, 30, 31]])
+    seq_length = torch.tensor([3, 1, 2])
+    next_token_ids = torch.tensor([13, 21, 32])
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            torch.Tensor,
+            'tolist',
+            lambda self: pytest.fail('unexpected Tensor.tolist'),
+        )
+        shifted = SpecModelAgent._shift_packed_prefill_inputs(
+            input_ids,
+            seq_length,
+            next_token_ids,
+        )
+
+    torch.testing.assert_close(
+        shifted,
+        torch.tensor([[11, 12, 13, 21, 31, 32]]),
+    )
+
+
+def test_shift_packed_prefill_embeddings_with_replacement_indices():
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    input_embeds = torch.tensor([[[10., 100.], [11., 110.], [12., 120.],
+                                  [20., 200.], [21., 210.]]])
+    seq_length = torch.tensor([3, 2])
+    next_token_embeds = torch.tensor([[13., 130.], [22., 220.]])
+    replacement_indices = torch.tensor([1, 3])
+
+    shifted = SpecModelAgent._shift_packed_prefill_inputs(
+        input_embeds,
+        seq_length,
+        next_token_embeds,
+        replacement_indices=replacement_indices,
+    )
+
+    torch.testing.assert_close(
+        shifted,
+        torch.tensor([[[11., 110.], [13., 130.], [12., 120.],
+                       [22., 220.], [21., 210.]]]),
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
+def test_shift_packed_prefill_inputs_cuda_graph_replays():
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    input_ids = torch.tensor(
+        [[10, 11, 12, 20, 21]],
+        device='cuda',
+    )
+    seq_length = torch.tensor([3, 2], device='cuda')
+    next_token_ids = torch.tensor([13, 22], device='cuda')
+    replacement_indices = torch.tensor([1, 3], device='cuda')
+    SpecModelAgent._shift_packed_prefill_inputs(
+        input_ids,
+        seq_length,
+        next_token_ids,
+        replacement_indices=replacement_indices,
+    )
+    torch.cuda.synchronize()
+
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        shifted = SpecModelAgent._shift_packed_prefill_inputs(
+            input_ids,
+            seq_length,
+            next_token_ids,
+            replacement_indices=replacement_indices,
+        )
+
+    input_ids.copy_(torch.tensor([[30, 31, 32, 40, 41]], device='cuda'))
+    next_token_ids.copy_(torch.tensor([33, 42], device='cuda'))
+    graph.replay()
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(
+        shifted,
+        torch.tensor([[31, 33, 32, 42, 41]], device='cuda'),
+    )
 
 
 def test_prepare_inputs_from_main_last_chunk_keeps_long_context_kv_metadata():

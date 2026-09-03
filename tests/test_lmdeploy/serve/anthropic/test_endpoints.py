@@ -12,8 +12,16 @@ from pydantic import ValidationError
 from lmdeploy.serve.anthropic.protocol import CountTokensRequest, MessagesRequest
 from lmdeploy.serve.anthropic.router import create_anthropic_router
 from lmdeploy.serve.anthropic.streaming import stream_messages_response
+from lmdeploy.serve.core.chat_runner import ChatStreamChunk
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
-from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
+from lmdeploy.serve.openai.protocol import (
+    ChatCompletionRequest,
+    DeltaFunctionCall,
+    DeltaMessage,
+    DeltaToolCall,
+    FunctionCall,
+    ToolCall,
+)
 from lmdeploy.serve.utils.server_utils import protocol_error_response
 
 ANTHROPIC_HEADERS = {'anthropic-version': '2023-06-01'}
@@ -74,6 +82,16 @@ class _FakeChatTemplate:
         return '\n'.join(parts)
 
 
+class _SystemFirstChatTemplate(_FakeChatTemplate):
+
+    def messages2prompt(self, messages, **kwargs):
+        for index, message in enumerate(messages):
+            if message['role'] == 'system' and index != 0:
+                raise ValueError('System message must be at the beginning.')
+        parts = [f"{item['role']}:{item['content']}" for item in messages]
+        return '\n'.join(parts)
+
+
 class _FakeEngine:
 
     def __init__(
@@ -81,13 +99,14 @@ class _FakeEngine:
             *,
             logprobs_mode='raw_logprobs',
             enable_return_routed_experts: bool = True,
+            chat_template=None,
     ):
         self.model_name = 'fake-model'
         self.backend_config = SimpleNamespace(adapters=['adapter-model'],
                                              logprobs_mode=logprobs_mode,
                                              enable_return_routed_experts=enable_return_routed_experts)
         self.tokenizer = _FakeTokenizer()
-        self.chat_template = _FakeChatTemplate()
+        self.chat_template = chat_template or _FakeChatTemplate()
         self.preprocess_calls = []
         self.generate_calls = []
 
@@ -105,6 +124,8 @@ class _FakeEngine:
                 input_token_len=8,
                 generate_token_len=1,
                 finish_reason=None,
+                cached_tokens=0,
+                cache_block_ids=None,
                 routed_experts=[[[1, 2, 3]]],
                 logprobs=[{101: -0.5, 102: -1.2}],
             )
@@ -114,6 +135,8 @@ class _FakeEngine:
                 input_token_len=8,
                 generate_token_len=2,
                 finish_reason='stop',
+                cached_tokens=0,
+                cache_block_ids=None,
                 routed_experts=[[[1, 2, 3]]],
                 logprobs=[{102: -0.3, 103: -2.1}],
             )
@@ -126,6 +149,8 @@ class _BasicParser:
 
     def __init__(self, request):
         self.request = request
+        self.tool_parser = None
+        self.reasoning_tokens = None
 
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
         return [(DeltaMessage(role='assistant', content=delta_text), False)]
@@ -144,11 +169,13 @@ class _FakeServerContext:
             response_parser_cls=_BasicParser,
             logprobs_mode='raw_logprobs',
             enable_return_routed_experts: bool = True,
+            chat_template=None,
     ):
         self.session_mgr = _FakeSessionManager()
         self.async_engine = _FakeEngine(
             logprobs_mode=logprobs_mode,
             enable_return_routed_experts=enable_return_routed_experts,
+            chat_template=chat_template,
         )
         self.async_engine.session_mgr = self.session_mgr
         self.default_gen_config = {}
@@ -250,6 +277,8 @@ class _ToolAndReasoningParser:
 
     def __init__(self, request):
         self.request = request
+        self.tool_parser = object()
+        self.reasoning_tokens = None
 
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
         if delta_text.startswith('Hello'):
@@ -350,6 +379,25 @@ def test_messages_non_stream():
     assert len(context.session_mgr.removed) == 1
 
 
+@pytest.mark.parametrize(
+    ('field_name', 'value'),
+    [
+        pytest.param('temperature', -0.1, id='temperature-below-range'),
+        pytest.param('temperature', 1.1, id='temperature-above-range'),
+        pytest.param('top_p', -0.1, id='top-p-below-range'),
+        pytest.param('top_p', 1.1, id='top-p-above-range'),
+        pytest.param('top_k', -1, id='negative-top-k'),
+    ],
+)
+def test_messages_rejects_invalid_sampling_parameter(field_name, value):
+    response = _post_messages(_make_client(), **{field_name: value})
+
+    assert response.status_code == 400
+    data = response.json()
+    assert data['type'] == 'error'
+    assert field_name in data['error']['message']
+
+
 def test_messages_count_tokens_rejects_empty_messages():
     response = _post_count_tokens(_make_client(), messages=[])
 
@@ -395,15 +443,53 @@ def _sse_payloads(body: str):
     ]
 
 
+async def _parsed_stream(result_generator, response_parser):
+    streaming_tools = False
+    async for res in result_generator:
+        token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
+        stream_deltas = response_parser.stream_chunk(
+            res.response or '',
+            token_ids,
+            final=res.finish_reason is not None,
+        )
+        if not stream_deltas:
+            if res.finish_reason is None and not token_ids:
+                continue
+            stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
+
+        for delta_index, (delta_message, tool_emitted) in enumerate(stream_deltas):
+            if tool_emitted:
+                streaming_tools = True
+            is_last_delta = delta_index == len(stream_deltas) - 1
+            finish_reason = res.finish_reason if is_last_delta else None
+            if finish_reason == 'stop' and streaming_tools:
+                finish_reason = 'tool_calls'
+            yield ChatStreamChunk(
+                delta_message=delta_message,
+                tool_emitted=tool_emitted,
+                finish_reason=finish_reason,
+                token_ids=token_ids,
+                logprobs=getattr(res, 'logprobs', None),
+                input_token_len=res.input_token_len,
+                generate_token_len=res.generate_token_len,
+                cached_tokens=getattr(res, 'cached_tokens', 0),
+                routed_experts=getattr(res, 'routed_experts', None) if finish_reason is not None else None,
+                reasoning_tokens=getattr(response_parser, 'reasoning_tokens', None),
+                is_last_delta=is_last_delta,
+            )
+
+
 def _collect_stream_response_payloads(result_generator, response_parser, **kwargs):
     async def _collect_events():
         return [
             event async for event in stream_messages_response(
-                result_generator,
+                _parsed_stream(result_generator, response_parser),
                 request_id='msg_test',
-                model='fake-model',
-                response_parser=response_parser,
-                **kwargs,
+                request=ChatCompletionRequest(
+                    model='fake-model',
+                    messages=[],
+                    **kwargs,
+                ),
             )
         ]
 
@@ -437,6 +523,13 @@ def test_messages_return_routed_experts_requires_engine_flag():
 
     assert response.status_code == 400
     assert 'enable-return-routed-experts' in response.json()['error']['message']
+
+
+def test_messages_tools_require_tool_parser():
+    response = _post_messages(_make_client(), tools=[SEARCH_TOOL])
+
+    assert response.status_code == 400
+    assert '--tool-call-parser' in response.json()['error']['message']
 
 
 def test_messages_beta_accepts_system_role_message():
@@ -485,6 +578,68 @@ def test_messages_beta_accepts_system_role_message():
             'content': 'hi',
         },
     ]
+
+
+def test_messages_merges_inline_system_for_system_first_template():
+    context = _FakeServerContext(chat_template=_SystemFirstChatTemplate())
+    response = _post_messages(
+        _make_client(server_context=context),
+        system='Top-level.',
+        messages=[
+            {
+                'role': 'user',
+                'content': 'first',
+            },
+            {
+                'role': 'system',
+                'content': 'Inline.',
+            },
+            {
+                'role': 'user',
+                'content': 'second',
+            },
+        ],
+    )
+
+    assert response.status_code == 200
+    args, _kwargs = context.async_engine.preprocess_calls[-1]
+    assert args[0] == [
+        {
+            'role': 'system',
+            'content': 'Top-level.Inline.',
+        },
+        {
+            'role': 'user',
+            'content': 'first',
+        },
+        {
+            'role': 'user',
+            'content': 'second',
+        },
+    ]
+
+
+def test_messages_count_tokens_merges_inline_system_for_system_first_template():
+    context = _FakeServerContext(chat_template=_SystemFirstChatTemplate())
+    response = _post_count_tokens(
+        _make_client(server_context=context),
+        messages=[
+            {
+                'role': 'user',
+                'content': 'first',
+            },
+            {
+                'role': 'system',
+                'content': 'Inline.',
+            },
+            {
+                'role': 'user',
+                'content': 'second',
+            },
+        ],
+    )
+
+    assert response.status_code == 200
 
 
 def test_messages_non_stream_with_reasoning_and_tool_use_blocks():
@@ -536,6 +691,23 @@ def test_messages_streaming_usage_matches_anthropic_event_spec():
         'output_tokens': 1,
     }
     assert message_delta['usage'] == {'output_tokens': 2}
+    assert len(context.session_mgr.removed) == 1
+
+
+def test_messages_unconsumed_streaming_response_cleans_up_session():
+    context = _FakeServerContext()
+    router = create_anthropic_router(context)
+    endpoint = next(route.endpoint for route in router.routes if route.path == '/v1/messages')
+
+    async def _close_without_consuming():
+        response = await endpoint(
+            MessagesRequest(**_messages_payload(stream=True)),
+            _FakeRawRequest(ANTHROPIC_HEADERS),
+        )
+        await response.close()
+
+    asyncio.run(_close_without_consuming())
+
     assert len(context.session_mgr.removed) == 1
 
 

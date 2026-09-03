@@ -25,6 +25,7 @@ class Glm47ToolParser(XmlToolParser):
     arg_key_end_token = '</arg_key>'
     arg_value_start_token = '<arg_value>'
     arg_value_end_token = '</arg_value>'
+    validate_tool_names = True
     _complete_payload_pattern = re.compile(
         r'^\s*[^\s<]+(?:\s*<arg_key>[^<]+</arg_key>\s*<arg_value>.*?</arg_value>)*\s*$',
         re.DOTALL,

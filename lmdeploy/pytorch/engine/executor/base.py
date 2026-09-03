@@ -4,18 +4,18 @@ import asyncio
 import contextlib
 from typing import Any, NamedTuple
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.engine.cache_engine import CacheEngine
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 
 
-class _CacheBlockSize(NamedTuple):
-    """Memory size of one logical cache block."""
+class _WorkerCachePlanSizes(NamedTuple):
+    """Per-plan bytes for one logical cache block on one worker."""
 
     target: int
     spec: int = 0
@@ -187,6 +187,8 @@ class ExecutorBase:
     @staticmethod
     def _get_min_num_gpu_blocks(available_mems: list[int], cache_block_sizes: list[int]) -> int:
         """Get the minimum GPU blocks fitting on all ranks."""
+        if len(available_mems) != len(cache_block_sizes):
+            raise ValueError('Free-memory and cache-plan results must contain the same worker ranks.')
         # All ranks must use the same logical num_gpu_blocks, even if their
         # per-rank cache footprint differs. The smallest rank capacity wins.
         num_gpu_blocks = [
@@ -195,45 +197,32 @@ class ExecutorBase:
         ]
         return min(num_gpu_blocks)
 
-    def _get_spec_attn_tp(self) -> int:
-        """Get draft/spec attention TP."""
-        specdecode_config = getattr(self, 'specdecode_config', None)
-        spec_dist_config = getattr(specdecode_config, 'dist_config', None)
-        return getattr(spec_dist_config, 'attn_tp', 1)
-
-    def _get_rank_cache_block_sizes(self, num_ranks: int, cache_block_size: _CacheBlockSize) -> list[int]:
+    @staticmethod
+    def _get_rank_cache_block_sizes(cache_block_sizes: list[_WorkerCachePlanSizes]) -> list[int]:
         """Get per-rank KV cache block sizes."""
-        if cache_block_size.spec == 0:
-            return [cache_block_size.target + cache_block_size.memory] * num_ranks
+        return [cache_block_size.total for cache_block_size in cache_block_sizes]
 
-        attn_tp = self.dist_config.attn_tp
-        draft_tp = self._get_spec_attn_tp()
-        if draft_tp > 1:
-            # Draft/spec cache is sharded across the same TP ranks as the
-            # target, so every participating rank carries the sharded footprint.
-            return [cache_block_size.total] * num_ranks
+    def _get_dsa_score_workspace_size(self) -> int:
+        """Return the bounded sparse-indexer score workspace in bytes."""
+        if getattr(self.model_config, 'mla_index_topk', None) is None:
+            return 0
+        return _envs.dsa_indexer_max_logits_mb * (1 << 20)
 
-        # Draft TP=1 only builds the draft/spec cache on one rank in each
-        # attention-TP group. Other ranks can use the memory that would have
-        # gone to spec cache for additional target KV blocks.
-        return [
-            cache_block_size.total if rank % attn_tp == 0 else cache_block_size.target + cache_block_size.memory
-            for rank in range(num_ranks)
-        ]
-
-    def _get_runtime_size(self, free_mems: list[int], cache_block_size: _CacheBlockSize,
+    def _get_runtime_size(self, free_mems: list[int], cache_block_sizes: list[_WorkerCachePlanSizes],
                           vocab_size: int) -> tuple[int, int]:
         """Find best prefill num."""
         cache_max_entry_count = self.cache_config.cache_max_entry_count
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         max_batches = self.cache_config.max_batches
-        rank_cache_block_sizes = self._get_rank_cache_block_sizes(len(free_mems), cache_block_size)
+        rank_cache_block_sizes = self._get_rank_cache_block_sizes(cache_block_sizes)
+        dsa_score_workspace = self._get_dsa_score_workspace_size()
         runtime_cache_size = 0
         while max_prefill_token_num > 0:
             # Runtime buffers scale mostly with the prefill token budget and
             # logits/vocab size. They are not pageable KV cache, so reserve
             # them before applying the KV cache memory ratio.
             runtime_cache_size = int((max_prefill_token_num + max_batches * 2) * vocab_size * 2)
+            runtime_cache_size += dsa_score_workspace
             available_mems = [int((free_mem - runtime_cache_size) * cache_max_entry_count) for free_mem in free_mems]
             # Keep at least a small number of KV blocks after runtime reserve.
             # If not possible, reduce the prefill token budget and try again.
@@ -246,6 +235,9 @@ class ExecutorBase:
         """Adjust block_size."""
         if self.model_config.update_cache_config_func is not None:
             self.model_config.update_cache_config_func(self.cache_config)
+            # TODO: Remove this mirror after graph and warmup metadata consume
+            # CacheConfig.block_size directly.
+            self.model_config.block_size = self.cache_config.block_size
             return
         if self.model_config.use_flash_mla is True:
             if self.cache_config.block_size != 64:
@@ -292,10 +284,7 @@ class ExecutorBase:
         if model_config is None:
             model_config = getattr(self, 'model_config', None)
         state_specs = getattr(model_config, 'state_cache_specs', None)
-        num_layers = getattr(model_config, 'num_layers', None)
-        mems = StateCacheEngine.get_cache_state_size(states_shapes,
-                                                     state_specs=state_specs,
-                                                     num_layers=num_layers)
+        mems = StateCacheEngine.get_state_slot_nbytes(states_shapes, state_specs=state_specs)
         mems *= num_state_caches
 
         return mems
@@ -364,36 +353,19 @@ class ExecutorBase:
             return None, None
         return self.specdecode_config.cache_config, self.specdecode_config.model_config
 
-    def _get_cache_block_sizes(self, spec_cache_config: CacheConfig | None,
-                               spec_model_config: ModelConfig | None) -> _CacheBlockSize:
-        """Get per-block KV cache memory for target and spec models."""
-        cache_block_size = CacheEngine.get_cache_block_size(self.cache_config, self.model_config,
-                                                            self.dist_config.attn_tp)
-        memory_cache_block_size = 0
-        memdecode_config = self.misc_config.memdecode_config
-        if memdecode_config is not None:
-            memory_model_config = memdecode_config.memory_model_config
-            memory_cache_block_size = CacheEngine.get_cache_block_size(
-                self.cache_config,
-                memory_model_config,
-                self.dist_config.attn_tp,
-            )
+    def _prepare_worker_cache_plans(self, cache_config: CacheConfig,
+                                    spec_cache_config: CacheConfig | None = None) -> list[_WorkerCachePlanSizes]:
+        """Ask each worker to retain its cache plans and return byte sizes."""
+        raise NotImplementedError('Not Implemented.')
 
-        spec_cache_block_size = 0
-        if spec_cache_config is not None:
-            draft_tp = self._get_spec_attn_tp()
-            spec_cache_block_size = CacheEngine.get_cache_block_size(spec_cache_config, spec_model_config, draft_tp)
-
-        return _CacheBlockSize(
-            target=cache_block_size,
-            spec=spec_cache_block_size,
-            memory=memory_cache_block_size,
-        )
-
-    def _reserve_runtime_mem(self, free_mems: list[int], cache_block_size: _CacheBlockSize,
+    def _reserve_runtime_mem(self, free_mems: list[int], cache_block_sizes: list[_WorkerCachePlanSizes],
                              spec_cache_config: CacheConfig | None) -> list[int]:
         """Reserve runtime memory and update prefill token limit if needed."""
-        runtime_mem, max_prefill_token_num = self._get_runtime_size(free_mems, cache_block_size,
+        dsa_score_workspace = self._get_dsa_score_workspace_size()
+        if dsa_score_workspace > 0:
+            logger.info('Reserve %d MiB for DSA prefill score workspace.',
+                        dsa_score_workspace >> 20)
+        runtime_mem, max_prefill_token_num = self._get_runtime_size(free_mems, cache_block_sizes,
                                                                     self.model_config.vocab_size)
         if self.cache_config.max_prefill_token_num != max_prefill_token_num:
             if max_prefill_token_num <= 0:
@@ -408,7 +380,7 @@ class ExecutorBase:
         logger.debug(f'estimated max runtime memory: {runtime_mem >> 20} mb')
         return free_mems
 
-    def _update_num_gpu_blocks(self, free_mems: list[int], cache_block_size: _CacheBlockSize,
+    def _update_num_gpu_blocks(self, free_mems: list[int], cache_block_sizes: list[_WorkerCachePlanSizes],
                                spec_cache_config: CacheConfig | None) -> None:
         """Update target and spec GPU block counts from remaining memory."""
         if self.cache_config.num_gpu_blocks != 0:
@@ -419,7 +391,7 @@ class ExecutorBase:
             return
 
         available_mems = [int(free_mem * self.cache_config.cache_max_entry_count) for free_mem in free_mems]
-        rank_cache_block_sizes = self._get_rank_cache_block_sizes(len(free_mems), cache_block_size)
+        rank_cache_block_sizes = self._get_rank_cache_block_sizes(cache_block_sizes)
         self.cache_config.num_gpu_blocks = self._get_min_num_gpu_blocks(available_mems, rank_cache_block_sizes)
         if self.cache_config.num_gpu_blocks <= 2:
             raise RuntimeError('No enough gpu memory for kv cache.')
@@ -435,12 +407,12 @@ class ExecutorBase:
         self.cache_config.states_shapes = self.model_config.states_shapes
 
         spec_cache_config, spec_model_config = self._get_spec_configs()
-        cache_block_size = self._get_cache_block_sizes(spec_cache_config, spec_model_config)
+        cache_block_sizes = self._prepare_worker_cache_plans(self.cache_config, spec_cache_config)
 
         free_mems = self._get_free_gpu_mems()
         free_mems = self._reserve_state_cache_mem(free_mems)
-        free_mems = self._reserve_runtime_mem(free_mems, cache_block_size, spec_cache_config)
-        self._update_num_gpu_blocks(free_mems, cache_block_size, spec_cache_config)
+        free_mems = self._reserve_runtime_mem(free_mems, cache_block_sizes, spec_cache_config)
+        self._update_num_gpu_blocks(free_mems, cache_block_sizes, spec_cache_config)
 
         self.set_cache_config(self.cache_config, spec_cache_config)
         self.set_model_config(self.model_config, spec_model_config)

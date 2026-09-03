@@ -111,6 +111,11 @@ class WorkerWrapperBase:
         """Set all model config."""
         self.model_agent.set_model_config(model_config, spec_model_config)
 
+    def build_cache_plans(self, cache_config: CacheConfig,
+                          spec_cache_config: CacheConfig | None = None) -> tuple[int, int, int]:
+        """Build this worker's model-local cache plans."""
+        return self.model_agent.build_cache_plans(cache_config, spec_cache_config)
+
     def build_graph_runner(self):
         """Build graph runner."""
         self.model_agent.build_graph_runner()
@@ -185,6 +190,10 @@ class WorkerWrapperBase:
         ret = await self.model_agent.get_output_async()
         ret = self.pack_output(ret)
         return ret
+
+    def shutdown_kv_connector(self):
+        """Drain and close the worker-local KV connector."""
+        self.model_agent.shutdown_kv_connector()
 
     def release(self):
         """Stop engine loop."""

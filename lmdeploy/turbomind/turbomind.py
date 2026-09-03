@@ -97,7 +97,14 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.mlp_dp_size = parallel.mlp_dp_size
         cfg.mlp_tp_size = parallel.mlp_tp_size
     if cfg.ep > 1:
-        assert cfg.nnodes == 1, 'ep > 1 is only supported in single-node mode'
+        if cfg.moe_a2a_backend == 'auto':
+            cfg.moe_a2a_backend = 'deepep' if cfg.nnodes > 1 else 'default'
+        if cfg.moe_a2a_backend == 'deepep':
+            assert cfg.communicator == 'nccl', 'deepep backend only supports nccl communicator'
+            # Reduce the number of QPs used in multithreaded scenarios.
+            os.environ.setdefault('NCCL_CROSS_NIC', '0')
+        if cfg.communicator in ['cuda-ipc', 'native']:
+            assert cfg.nnodes == 1, f'{cfg.communicator} communicator only supports single-node'
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
     # update devices
     cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
@@ -267,6 +274,7 @@ class TurboMind:
         ec.nnodes = engine_config.nnodes
         ec.node_rank = engine_config.node_rank
         ec.communicator = engine_config.communicator
+        ec.moe_a2a_backend = engine_config.moe_a2a_backend
 
         logger.info(f'turbomind engine config:\n\n'
                     f'dtype={engine_config.dtype}, state_dtype={state_dtype}, '
@@ -275,7 +283,9 @@ class TurboMind:
                     f'devices={engine_config.devices}, '
                     f'tp={engine_config.attn_tp_size}, '
                     f'dp={engine_config.attn_dp_size}, '
-                    f'cp={engine_config.attn_cp_size}')
+                    f'cp={engine_config.attn_cp_size}, '
+                    f'ep={engine_config.ep}, '
+                    f'moe_a2a_backend={engine_config.moe_a2a_backend}')
 
         model_comm = _tm.TurboMind.create(model_dir='', engine_config=ec)
         self._create_weight(model_comm)
@@ -723,6 +733,8 @@ class TurboMindInstance:
                     decode_grammar = gen_config.response_format[decode_grammar_type]
                 elif decode_grammar_type == 'json_object':
                     decode_grammar = '{"type" : "object", "additionalProperties": true}'
+                elif decode_grammar_type == 'structural_tag':
+                    decode_grammar = gen_config.response_format[decode_grammar_type]
 
                 if decode_grammar_type == 'json_schema':
                     decode_grammar = json.dumps(decode_grammar)
@@ -733,12 +745,15 @@ class TurboMindInstance:
                 elif decode_grammar_type == 'json_object':
                     decode_grammar = str(decode_grammar)
                     grammar = compiler.compile_json_schema(decode_grammar)
+                elif decode_grammar_type == 'structural_tag':
+                    decode_grammar = json.dumps(decode_grammar)
+                    grammar = compiler.compile_structural_tag(decode_grammar)
                 else:
                     assert False, f'Decode grammar type {decode_grammar_type} should be in ' \
-                                   '["json_schema", "regex_schema", "json_object"]'
+                                   '["json_schema", "regex_schema", "json_object", "structural_tag"]'
 
                 self.model_inst.set_grammar(grammar)
-            except ValueError as e:
+            except (ValueError, KeyError) as e:
                 logger.warning(f'Failed to initialize guided decoding, '
                                f'disable guided decoding: {e}')
                 gen_config.response_format = None
