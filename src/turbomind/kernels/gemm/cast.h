@@ -19,6 +19,12 @@ void transpose_u4(uint4_t* dst, const uint4_t* src, int s, int c, cudaStream_t s
 
 void fuse_scales_and_zeros(half* fused, const half* scales, half* zeros, size_t n, cudaStream_t st = {});
 
+// Produce packed {BF16 scale, BF16 effective-zero} pairs, where
+// effective_zero = zero + 128 for the consumer's biased UINT4-to-BF16 decode.
+// `src_type` describes both input arrays and may be FP16, BF16, or FP32.
+void fuse_scales_and_zeros_bf16(
+    bfloat16_t* fused, const void* scales, const void* zeros, DataType src_type, size_t n, cudaStream_t st = {});
+
 template<class T>
 void interleave_output_dims_impl(T* fused, const T* a, const T* b, int m, int k, cudaStream_t st);
 

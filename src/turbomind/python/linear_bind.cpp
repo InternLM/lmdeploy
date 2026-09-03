@@ -267,27 +267,30 @@ void bind_linear(py::module_& m)
         [](std::shared_ptr<core::Tensor> quant,
            std::shared_ptr<core::Tensor> scales,
            std::shared_ptr<core::Tensor> zeros,
+           std::shared_ptr<core::Tensor> global_scale,
            std::shared_ptr<core::Tensor> dequant,
            std::shared_ptr<core::Tensor> src,
            std::shared_ptr<core::Tensor> rbits,
            int                           group_size) {
-            core::Tensor      quant_t   = TensorFromShared(quant, "quant");
-            core::Tensor      scales_t  = TensorFromShared(scales, "scales");
-            core::Tensor      zeros_t   = TensorOrEmpty(zeros);
-            core::Tensor      dequant_t = TensorFromShared(dequant, "dequant");
-            core::Tensor      src_t     = TensorFromShared(src, "src");
+            core::Tensor      quant_t        = TensorFromShared(quant, "quant");
+            core::Tensor      scales_t       = TensorFromShared(scales, "scales");
+            core::Tensor      zeros_t        = TensorOrEmpty(zeros);
+            core::Tensor      global_scale_t = TensorOrEmpty(global_scale);
+            core::Tensor      dequant_t      = TensorFromShared(dequant, "dequant");
+            core::Tensor      src_t          = TensorFromShared(src, "src");
             Buffer_<unsigned> r;
             if (rbits && *rbits) {
                 r = Buffer_<unsigned>((unsigned*)rbits->raw_data(), rbits->size(), rbits->device());
             }
             {
                 py::gil_scoped_release release;
-                QuantizeGroupwise(quant_t, scales_t, zeros_t, dequant_t, src_t, r, group_size);
+                QuantizeGroupwise(quant_t, scales_t, zeros_t, global_scale_t, dequant_t, src_t, r, group_size);
             }
         },
         py::arg("quant"),
         py::arg("scales"),
-        py::arg("zeros") = py::none(),
+        py::arg("zeros")        = py::none(),
+        py::arg("global_scale") = py::none(),
         py::arg("dequant"),
         py::arg("src"),
         py::arg("rbits") = py::none(),

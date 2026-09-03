@@ -7,6 +7,7 @@
 #include "src/turbomind/core/registry.h"
 #include "src/turbomind/kernels/gemm/cast.h"
 #include "src/turbomind/kernels/gemm/convert.h"
+#include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
@@ -172,8 +173,20 @@ void LinearWeight::prepare()
         // General quantization format conversion path.
         using namespace gemm;
 
-        auto [conv_w, conv_s] =
-            GetConverters(data_type, weight_format.dtype, input_dtype(), is_grouped_, getSMVersion());
+        const int   group_size = weight_format.block_sizes.empty() ? 0 : weight_format.block_sizes[0];
+        const auto  converters = GetConverters(ConverterRequest{
+            data_type,
+            weight_format.dtype,
+            input_dtype(),
+            is_grouped_,
+            getSMVersion(),
+            input_dim,
+            output_dim,
+            group_size,
+            epilogue,
+        });
+        const auto* conv_w     = converters.weight;
+        const auto* conv_s     = converters.qparams;
 
         // SM90 dense + grouped BF16/FP16: no pack converter (GetConverters returns {}),
         // but GMMA+TMA need physical (N, K) with K contiguous (same as FP8 native
@@ -253,8 +266,20 @@ void LinearWeight::prepare()
             }
             kd.pack = conv_w->pack;
 
-            TM_CUDA_CHECK(cudaMemsetAsync(weight.raw_data(), 0, weight.byte_size(), stream));
-            TM_CHECK(conv_w->Convert(tmp.data(), w_desc, weight.raw_data(), kd, stream) == 0);
+            Tensor packed_weight;
+            void*  packed_dst   = weight.raw_data();
+            size_t packed_bytes = weight.byte_size();
+            if (conv_w->storage_bits > bits) {
+                packed_bytes = (tmp.size() * conv_w->storage_bits + 7) / 8;
+                packed_weight = Tensor{{static_cast<core::ssize_t>(packed_bytes)}, kUint8, kDEVICE};
+                packed_dst = packed_weight.raw_data();
+            }
+
+            TM_CUDA_CHECK(cudaMemsetAsync(packed_dst, 0, packed_bytes, stream));
+            TM_CHECK(conv_w->Convert(tmp.data(), w_desc, packed_dst, kd, stream) == 0);
+            if (packed_weight) {
+                weight = std::move(packed_weight);
+            }
 
             kd.type = weight_format.dtype;
             if (is_A) {
@@ -264,14 +289,56 @@ void LinearWeight::prepare()
         }
 
         if (conv_s) {
+            if (converters.qparam_encoding == QParamEncoding::kBf16BlockScale) {
+                TM_CHECK(scales);
+                TM_CHECK_EQ(scales.dtype(), kFloat);
+                TM_CHECK_EQ(scales.ndim(), 2);
+                TM_CHECK_EQ(scales.shape(0), input_dim / Sm90Fp8E4M3Format::kGroupSize);
+                TM_CHECK_EQ(scales.shape(1), output_dim / Sm90Fp8E4M3Format::kScaleGroupN);
+                TM_CHECK(scales.is_contiguous());
+
+                MatrixLayout s_desc{
+                    kFloat, kRowMajor, (int)scales.shape(0), (int)scales.shape(1), (int)scales.stride(0)};
+                MatrixLayout qd = s_desc;
+                Tensor       packed_q{{scales.size() * Sm90Fp8E4M3Format::kQparamValuesTile}, kBfloat16, kDEVICE};
+                TM_CHECK(conv_s->Convert(scales.raw_data(), s_desc, packed_q.raw_data(), qd, stream) == 0);
+                scales = std::move(packed_q);
+                q_desc = qd;
+                return;
+            }
+
             const auto order_s = conv_s->order;
             const auto pack_s  = conv_s->pack;
             const bool is_A    = get_operand_tag(conv_s->pack) == OPERAND_U;
 
-            Tensor   tmp_q;
-            DataType scale_type;
+            Tensor     tmp_q;
+            DataType   scale_type;
+            const bool is_nvfp4 = converters.qparam_encoding == QParamEncoding::kNvFp4Scale;
+            const bool is_mxfp4_fp8_folded =
+                converters.qparam_encoding == QParamEncoding::kMxFp4Fp8Folded;
+            const bool is_mxfp4_fp8_unfolded =
+                converters.qparam_encoding == QParamEncoding::kMxFp4Fp8Unfolded;
+            const bool is_mxfp4_fp8 = is_mxfp4_fp8_folded || is_mxfp4_fp8_unfolded;
+            const bool is_mxfp4 = converters.qparam_encoding == QParamEncoding::kMxFp4UnbiasedExponent
+                                  || is_mxfp4_fp8;
 
-            if (zeros) {
+            if (converters.qparam_encoding == QParamEncoding::kBf16ScaleEffZero) {
+                TM_CHECK(scales);
+                if (zeros) {
+                    TM_CHECK_EQ(scales.dtype(), zeros.dtype());
+                }
+                tmp_q = {{scales.size(), 2}, kBfloat16, kDEVICE};
+                fuse_scales_and_zeros_bf16(tmp_q.data<bfloat16_t>(),
+                                           scales.raw_data(),
+                                           zeros ? zeros.raw_data() : nullptr,
+                                           scales.dtype(),
+                                           scales.size(),
+                                           stream);
+                scale_type = kUint32;
+                zeros      = {};
+                scales     = empty_like(tmp_q);
+            }
+            else if (zeros) {
                 tmp_q = {{scales.size(), 2}, kHalf, kDEVICE};
                 fuse_scales_and_zeros(
                     tmp_q.data<half>(), scales.data<half>(), zeros.data<half>(), scales.size(), stream);
@@ -288,6 +355,12 @@ void LinearWeight::prepare()
                 tmp_q = empty_like(scales);
                 Copy(scales, tmp_q);
                 scale_type = kUint8;
+            }
+
+            if (is_nvfp4) {
+                TM_CHECK(global_scale);
+                TM_CHECK_EQ(global_scale.dtype(), kFloat);
+                TM_CHECK_EQ(global_scale.size(), 1);
             }
 
             if (data_type == kHalf && weight_format.dtype == kFloat4_e2m1) {
@@ -311,7 +384,32 @@ void LinearWeight::prepare()
             MatrixLayout qd = s_desc;
             qd.pack         = pack_s;
 
-            TM_CHECK(conv_s->Convert(tmp_q.raw_data(), s_desc, scales.raw_data(), qd, stream) == 0);
+            Tensor packed_q;
+            void*  q_dst = scales.raw_data();
+            if (is_mxfp4) {
+                core::ssize_t packed_values = scales.size();
+                if (is_mxfp4_fp8) {
+                    constexpr int kSourceValuesPerRecord = 4 * 64;
+                    TM_CHECK_EQ(packed_values % kSourceValuesPerRecord, 0);
+                    const int values_per_record = is_mxfp4_fp8_folded ?
+                                                      Sm90MxFp4Fp8FoldedFormat::kQparamValuesFragment :
+                                                      Sm90MxFp4Fp8UnfoldedFormat::kQparamValuesFragment;
+                    packed_values = packed_values / kSourceValuesPerRecord * values_per_record;
+                }
+                const DataType packed_type = kUint8;
+                packed_q = Tensor{{packed_values}, packed_type, kDEVICE};
+                q_dst    = packed_q.raw_data();
+            }
+
+            TM_CHECK(conv_s->Convert(tmp_q.raw_data(), s_desc, q_dst, qd, stream) == 0);
+            if (is_mxfp4_fp8) {
+                TM_CHECK_EQ(qd.pack, pack_s);
+                k_desc.pack = is_mxfp4_fp8_folded ? kSm90MxFp4Fp8FoldedWeightPack :
+                                                    kSm90MxFp4Fp8UnfoldedWeightPack;
+            }
+            if (is_mxfp4) {
+                scales = std::move(packed_q);
+            }
 
             if (is_A) {
                 qd = transpose(qd);

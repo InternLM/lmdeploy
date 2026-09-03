@@ -51,6 +51,11 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument('--batch', type=str, default='', help='comma-separated batch sizes')
     p.add_argument('--tp', type=str, default='1', help='comma-separated TP sizes')
     p.add_argument('--ep', type=str, default='1', help='comma-separated EP sizes')
+    p.add_argument(
+        '--exact-parallel',
+        action='store_true',
+        help='run only the single --tp/--ep pair (used to replay one concrete records file)',
+    )
     p.add_argument('--warmup', type=int, default=10)
     p.add_argument('--iters', type=int, default=50)
     p.add_argument('--tune', action='store_true')
@@ -59,6 +64,7 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument('--print-diffs', action='store_true')
     p.add_argument('--no-validate', action='store_true')
     p.add_argument('--no-l2-flush', action='store_true')
+    p.add_argument('--quiet', action='store_true', help='suppress per-run result rows')
     return p
 
 
@@ -98,9 +104,21 @@ def main(argv: list[str] | None = None) -> int:
         tps=tps,
         eps=eps,
     )
+    if args.exact_parallel:
+        if tps is None or eps is None or len(tps) != 1 or len(eps) != 1:
+            raise ValueError('exact_parallel_requires_single_tp_and_ep')
+        exact_tp = tps[0]
+        exact_ep = eps[0]
+        runs = tuple(
+            run
+            for run in runs
+            if run.case.tp == exact_tp and run.case.ep == exact_ep
+        )
+        if not runs:
+            raise ValueError(f'unsupported_exact_parallel_tp{exact_tp}_ep{exact_ep}')
     tune, import_path, export_path = resolve_tune_paths(args)
     device = torch.device('cuda')
-    flusher = None if args.no_l2_flush else L2CacheFlusher(device)
+    flusher = None if args.no_l2_flush or args.iters == 0 else L2CacheFlusher(device)
 
     # Group runs by concrete local shape so weights build once per batch sweep.
     by_case: dict[tuple[str, int, int], list] = {}
@@ -181,7 +199,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.iters == 0:
                     row['latency_ms'] = 0.0
                     row['tflops'] = 0.0
-                print(row)
+                if not args.quiet:
+                    print(row)
             assert fx.linear is not None
             if export_path:
                 # Per-case export so a full-suite scan does not overwrite previous records;

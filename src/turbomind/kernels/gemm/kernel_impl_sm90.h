@@ -184,6 +184,8 @@ public:
                const MatrixLayout& _Bdesc,
                const void*         V,
                const MatrixLayout& _Vdesc,
+               const void*         global_scale,
+               const MatrixLayout& global_scale_desc,
                float               beta,
                const void*         C,
                const MatrixLayout& Cdesc,
@@ -196,6 +198,8 @@ public:
                Workspace&          workspace,
                cudaStream_t        stream) override
     {
+        (void)global_scale;
+        (void)global_scale_desc;
         using Sched = typename Gemm::Scheduler;
 
         MatrixLayout Adesc = _Adesc;

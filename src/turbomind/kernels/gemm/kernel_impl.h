@@ -118,6 +118,8 @@ public:
                const MatrixLayout& _Bdesc,
                const void*         V,
                const MatrixLayout& _Vdesc,
+               const void*         global_scale,
+               const MatrixLayout& global_scale_desc,
                float               beta,
                const void*         C,
                const MatrixLayout& Cdesc,
@@ -132,6 +134,8 @@ public:
     {
         (void)W;
         (void)Wdesc;
+        (void)global_scale;
+        (void)global_scale_desc;
         MatrixLayout Adesc = _Adesc;
 
         const int m = Ddesc.rows;

@@ -6,6 +6,18 @@
 
 namespace turbomind::gemm {
 
+using WG_1x1 = cute::Layout<cute::Shape<cute::_1, cute::_1>>;
+using WG_1x2 = cute::Layout<cute::Shape<cute::_1, cute::_2>>;
+using WG_1x3 = cute::Layout<cute::Shape<cute::_1, cute::_3>>;
+using WG_2x1 = cute::Layout<cute::Shape<cute::_2, cute::_1>>;
+
+// Kernel configs express math-WG tiling in public GEMM tile order (M, N).
+// Weight-as-A WGMMA uses (GMMA-M, GMMA-N) = (tile N, tile M), so reverse
+// those modes only at the TiledMma boundary.
+template<class WGLayout>
+using GmmaAtomLayoutMNK = decltype(cute::make_layout(
+    cute::make_shape(cute::size<1>(WGLayout{}), cute::size<0>(WGLayout{}), cute::_1{})));
+
 // Identical to cutlass::gemm::collective::detail::ss_smem_selector
 // (sm90_common.inl:273-319). Including that .inl from TurboMind headers is
 // awkward (it is meant to be pulled inside cutlass::gemm::collective::detail).
@@ -64,7 +76,7 @@ CUTE_HOST_DEVICE constexpr auto gmma_ss_smem_selector()
 // TILE_BATCH = GMMA-N extent = problem M_batch (tokens)       → GMMA-B = activation
 // LlamaLinear API A/B stay act/weight; MMA operands are swapped relative to that API.
 // AtomLayoutMNK comes from the Tile_ (CuTe Layout<Shape<...>>).
-template<int TILE_OUT, int TILE_BATCH, int TILE_K, class AtomLayoutMNK_>
+template<int TILE_OUT, int TILE_BATCH, int TILE_K, class AtomLayoutMNK_, int MmaN_ = 0>
 struct GmmaBF16Traits {
     using ElementA = cutlass::bfloat16_t;  // GMMA-A = weight
     using ElementB = cutlass::bfloat16_t;  // GMMA-B = activation
@@ -90,10 +102,15 @@ struct GmmaBF16Traits {
     // TILE_BATCH/kAtomN. Select the op from that per-WG tile; otherwise
     // MMA_64x128 on TILE_BATCH=128 with 2 WGs along N OOBs SMEM (atom N=128
     // but each WG owns only 64). Same for M with AtomLayout<_2,_1,_1>.
-    using WgTileShape = cute::Shape<cute::Int<TILE_OUT / kAtomM>, cute::Int<TILE_BATCH / kAtomN>, cute::Int<TILE_K>>;
+    static constexpr int kMmaN = MmaN_ ? MmaN_ : TILE_BATCH / kAtomN;
+    static_assert(TILE_BATCH % (kAtomN * kMmaN) == 0, "TILE_BATCH vs WGMMA N");
+    static constexpr int kMmaNSlices = TILE_BATCH / (kAtomN * kMmaN);
+    using WgTileShape = cute::Shape<cute::Int<TILE_OUT / kAtomM>, cute::Int<kMmaN>, cute::Int<TILE_K>>;
 
-    using TiledMma = decltype(cute::make_tiled_mma(
-        cute::GMMA::ss_op_selector<ElementA, ElementB, ElementC, WgTileShape, MajorA, MajorB>(), AtomLayoutMNK{}));
+    using MmaAtom = decltype(cute::GMMA::ss_op_selector<ElementA, ElementB, ElementC, WgTileShape, MajorA, MajorB>());
+    using TiledMma = decltype(cute::make_tiled_mma(MmaAtom{}, AtomLayoutMNK{}));
+    using WgTiledMma = decltype(cute::make_tiled_mma(MmaAtom{}, cute::Layout<cute::Shape<cute::_1, cute::_1, cute::_1>>{}));
+    static_assert(cute::tile_size<1>(TiledMma{}) == kAtomN * kMmaN);
 
     // One SoT SMEM atom for TMA + GMMA (MMA.md §6). OUT×K and BATCH×K, K-major.
     using SmemLayoutAtomA = decltype(gmma_ss_smem_selector<MajorA, ElementA, cute::Int<TILE_OUT>, cute::Int<TILE_K>>());

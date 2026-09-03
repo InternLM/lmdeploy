@@ -36,6 +36,8 @@ public:
                        const MatrixLayout& Bdesc,
                        const void*         V,
                        const MatrixLayout& Vdesc,
+                       const void*         global_scale,
+                       const MatrixLayout& global_scale_desc,
                        float               beta,
                        const void*         C,
                        const MatrixLayout& Cdesc,

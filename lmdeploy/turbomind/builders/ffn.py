@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 
+import _turbomind as _tm
 import torch
 
 from ..linear import Linear, round_up_input_groups, round_up_output_groups, transform_output_dim
@@ -79,9 +80,13 @@ def _is_sm90() -> bool:
 def _should_fuse_silu(w1_linear: Linear, act_type: str, is_moe: bool = False) -> bool:
     """Determine if fused SiLU should be used for w1+w3 fusion.
 
-    Packing depends on format: SM90 FP8 uses [g128|u128|...] and SM90 BF16
-    uses [g64|u64|...]; int4/mxfp4 use element interleave. Controllable via
-    config.fuse_silu after commit.
+    Gold standard condition (from GEMM kernel constraints — trust it):
+
+    act_type == SiLU && (int4 || mxfp4 || fp8 || moe)
+
+    Packing depends on format: FP8 uses [g128|u128|...], SM90 BF16 and
+    BF16-compute U4 K128 use [g64|u64|...], and legacy int4/mxfp4 use element
+    interleave. Controllable via config.fuse_silu after commit.
     """
     if act_type not in ('', 'silu', 'SiLU'):
         return False
@@ -108,11 +113,21 @@ def _should_fuse_silu(w1_linear: Linear, act_type: str, is_moe: bool = False) ->
     return True
 
 
-def _fused_silu_block(w1: Linear) -> int | None:
+def _fused_silu_block(w1: Linear, compute_type=None) -> int | None:
     """Return the gate/up block width required by the fused SiLU kernel."""
     if w1.weight_format.name == 'fp8' and _is_sm90():
         return _SM90_FP8_FUSED_SILU_BLOCK
-    if _is_sm90() and w1.tensors['weight'].dtype == torch.bfloat16:
+    if (w1.weight_format.name == 'mxfp4'
+            and w1.weight_format.block_in == 32
+            and compute_type == _tm.DataType.TYPE_BF16 and _is_sm90()):
+        return _SM90_FP8_FUSED_SILU_BLOCK
+    if not _is_sm90():
+        return None
+    if w1.tensors['weight'].dtype == torch.bfloat16:
+        return _SM90_BF16_FUSED_SILU_BLOCK
+    if (compute_type == _tm.DataType.TYPE_BF16
+            and w1.weight_format.weight_dtype == _tm.DataType.TYPE_UINT4
+            and w1.weight_format.block_in == 128):
         return _SM90_BF16_FUSED_SILU_BLOCK
     return None
 
@@ -141,6 +156,7 @@ def fuse_w1w3(
     tp: int,
     act_type: str,
     is_moe: bool = False,
+    compute_type=None,
 ) -> tuple[Linear | None, bool]:
     """Optionally fuse w1/w3 on full (unsharded) tensors for FFN.
 
@@ -150,10 +166,12 @@ def fuse_w1w3(
 
     TP sharding is NOT done here — the caller's commit path handles it
     via split_side=SplitSide.OUTPUT.  ``tp`` is only used for the
-    block-scale alignment check in ``_can_fuse_w1w3``.
+    block-scale alignment check in ``_can_fuse_w1w3``. ``compute_type`` is
+    optional for backward-compatible callers and selects the native SM90
+    BF16×U4 packing when supplied by ``FfnBuilder``.
     """
     fused_silu = _should_fuse_silu(w1, act_type, is_moe)
-    pack_block = _fused_silu_block(w1) if fused_silu else None
+    pack_block = _fused_silu_block(w1, compute_type) if fused_silu else None
     can_fuse = _can_fuse_w1w3(w1, tp, pack_block=pack_block)
 
     if can_fuse:
@@ -231,7 +249,8 @@ class FfnBuilder(Builder):
             act_type = {0: 'silu', 1: 'gpt-oss'}.get(act_type, 'silu')
         fused, fused_silu = fuse_w1w3(
             w1, w3, self.tp.size, act_type,
-            is_moe=self.config.is_expert)
+            is_moe=self.config.is_expert,
+            compute_type=self._ctx.data_type)
 
         self.config.fuse_silu = fused_silu
 

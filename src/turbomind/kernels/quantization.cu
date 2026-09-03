@@ -506,6 +506,92 @@ struct FloatingPointQuantizer {
     }
 };
 
+template<class T_, class Q_>
+struct NvFp4Quantizer {
+    using T = T_;
+    using Q = Q_;
+
+    using Scale = uint8_t;
+    using Zero  = void;
+
+    using traits = FloatingPoint<2, 1>;
+
+    static constexpr int bits = traits::bits;
+
+    const float* global_scale_;
+
+    __host__ __device__ explicit NvFp4Quantizer(const float* global_scale): global_scale_{global_scale} {}
+
+    template<int N, class Z, class R>
+    __device__ void operator()(const Array<T, N>&    x,
+                               const Array<bool, N>& pred,
+                               const R&              rbits,
+                               Array<Q, N>&          q,
+                               Array<T, N>&          d,
+                               Scale&                scale,
+                               Z /*ignore*/,
+                               int threads) const
+    {
+        auto  f      = cast<float>(x);
+        float absmax = 0.f;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            if (pred[i]) {
+                absmax = fmaxf(absmax, fabsf(f[i]));
+            }
+        }
+        for (int offset = threads / 2; offset >= 1; offset /= 2) {
+            absmax = fmaxf(absmax, __shfl_xor_sync(0xffffffffu, absmax, offset));
+        }
+
+        const float global_scale = *global_scale_;
+        const float block_scale  = absmax / (traits::max_normal * global_scale);
+        scale                    = __nv_cvt_float_to_fp8(block_scale, __NV_SATFINITE, __NV_E4M3);
+
+        const auto  scale_half_raw  = __nv_cvt_fp8_to_halfraw(scale, __NV_E4M3);
+        const float scale_e4m3      = __half2float(reinterpret_cast<const __half&>(scale_half_raw));
+        const float effective_scale = scale_e4m3 * global_scale;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            if (effective_scale == 0.f) {
+                q[i] = Q{};
+                d[i] = (T)0.f;
+            }
+            else {
+                q[i] = traits::from_f32(f[i] / effective_scale, rbits[i]);
+                d[i] = traits::to_f32(q[i]) * effective_scale;
+            }
+        }
+    }
+};
+
+template<class T, int BlockSize>
+__global__ void FindNvFp4GlobalScale_Kernel(float* global_scale, const T* x, Array<int, 2> stride, int M, int K)
+{
+    using BlockReduce = cub::BlockReduce<float, BlockSize>;
+    __shared__ typename BlockReduce::TempStorage temp;
+
+    float absmax = 0.f;
+    for (int idx = blockIdx.x * BlockSize + threadIdx.x; idx < M * K; idx += gridDim.x * BlockSize) {
+        const int m = idx / K;
+        const int k = idx - m * K;
+        absmax      = fmaxf(absmax, fabsf((float)x[stride[0] * m + stride[1] * k]));
+    }
+    absmax = BlockReduce(temp).Reduce(absmax, cub::Max{});
+    if (threadIdx.x == 0) {
+        atomicMax(reinterpret_cast<unsigned*>(global_scale), __float_as_uint(absmax));
+    }
+}
+
+__global__ void FinalizeNvFp4GlobalScale_Kernel(float* global_scale)
+{
+    constexpr float kMaxCombined = FloatingPoint<2, 1>::max_normal * 448.f;
+    const float     absmax       = *global_scale;
+    *global_scale                = absmax > 0.f ? absmax / kMaxCombined : 1.f;
+}
+
 template<int vec_size,
          class Quantizer,
          class T = typename Quantizer::T,
@@ -587,12 +673,13 @@ __global__ void QuantizeGroupwise_Kernel(Quantizer       quantizer,
     }
 }
 
-void QuantizeGroupwise(Tensor            quant,    // (m,k)
-                       Tensor            scales,   // (m,k/g)
-                       Tensor            zeros,    // (m,k/g)
-                       Tensor            dequant,  // (m,k)
-                       Tensor            src,      // (m,k)
-                       Buffer_<unsigned> rbits,    // (m*k)
+void QuantizeGroupwise(Tensor            quant,         // (m,k)
+                       Tensor            scales,        // (m,k/g)
+                       Tensor            zeros,         // (m,k/g)
+                       Tensor            global_scale,  // scalar FP32 for NVFP4
+                       Tensor            dequant,       // (m,k)
+                       Tensor            src,           // (m,k)
+                       Buffer_<unsigned> rbits,         // (m*k)
                        int               group_size)
 {
     // std::cout << quant << std::endl;
@@ -663,11 +750,40 @@ void QuantizeGroupwise(Tensor            quant,    // (m,k)
     else if (src.dtype() == kHalf && quant.dtype() == kUint4) {
         invoke(IntegralQuantizer<half_t, 4, uint16_t>{});
     }
+    else if (src.dtype() == kBfloat16 && quant.dtype() == kUint4) {
+        invoke(IntegralQuantizer<bfloat16_t, 4, uint16_t>{});
+    }
     else if (src.dtype() == kBfloat16 && quant.dtype() == kFloat4_e2m1) {
-        invoke(FloatingPointQuantizer<bfloat16_t, 2, 1, uint16_t>{});
+        if (group_size == 16) {
+            TM_CHECK(global_scale);
+            TM_CHECK_EQ(global_scale.dtype(), kFloat);
+            TM_CHECK_EQ(global_scale.size(), 1);
+            constexpr int kBlock = 256;
+            TM_CUDA_CHECK(cudaMemsetAsync(global_scale.raw_data(), 0, sizeof(float), stream));
+            FindNvFp4GlobalScale_Kernel<bfloat16_t, kBlock><<<std::min(cdiv(m * k, kBlock), 1024), kBlock, 0, stream>>>(
+                global_scale.data<float>(), src.data<bfloat16_t>(), stride_2d(src), m, k);
+            FinalizeNvFp4GlobalScale_Kernel<<<1, 1, 0, stream>>>(global_scale.data<float>());
+            invoke(NvFp4Quantizer<bfloat16_t, uint16_t>{global_scale.data<float>()});
+        }
+        else {
+            invoke(FloatingPointQuantizer<bfloat16_t, 2, 1, uint16_t>{});
+        }
     }
     else if (src.dtype() == kHalf && quant.dtype() == kFloat4_e2m1) {
-        invoke(FloatingPointQuantizer<half_t, 2, 1, uint16_t>{});
+        if (group_size == 16) {
+            TM_CHECK(global_scale);
+            TM_CHECK_EQ(global_scale.dtype(), kFloat);
+            TM_CHECK_EQ(global_scale.size(), 1);
+            constexpr int kBlock = 256;
+            TM_CUDA_CHECK(cudaMemsetAsync(global_scale.raw_data(), 0, sizeof(float), stream));
+            FindNvFp4GlobalScale_Kernel<half_t, kBlock><<<std::min(cdiv(m * k, kBlock), 1024), kBlock, 0, stream>>>(
+                global_scale.data<float>(), src.data<half_t>(), stride_2d(src), m, k);
+            FinalizeNvFp4GlobalScale_Kernel<<<1, 1, 0, stream>>>(global_scale.data<float>());
+            invoke(NvFp4Quantizer<half_t, uint16_t>{global_scale.data<float>()});
+        }
+        else {
+            invoke(FloatingPointQuantizer<half_t, 2, 1, uint16_t>{});
+        }
     }
     else {
         TM_LOG_FATAL("Unsupported types: {}, {}", to_string(src.dtype()), to_string(quant.dtype()));

@@ -81,6 +81,7 @@ def quantize_groupwise(
     src,
     group_size: int,
     zeros=None,
+    global_scale=None,
     rbits=None,
 ) -> None:
     """Thin wrapper over tm.QuantizeGroupwise (Context stream).
@@ -91,6 +92,7 @@ def quantize_groupwise(
         quant=quant,
         scales=scales,
         zeros=zeros,
+        global_scale=global_scale,
         dequant=dequant,
         src=src,
         rbits=rbits,
@@ -187,11 +189,15 @@ def link_experts(experts: Sequence[Weight]) -> Weight:
 
     weights: list[tuple[int, int]] = []
     scales: list[tuple[int, int]] = []
+    global_scales: list[tuple[int, int]] = []
     for e in experts:
         weights.append((tensor_data_ptr(e.param_tensor('weight')), int(e._impl.k_desc.ld)))
         scales_t = e.param_tensor('scales')
         if scales_t:
             scales.append((tensor_data_ptr(scales_t), int(e._impl.q_desc.ld)))
+        global_scale_t = e.param_tensor('global_scale')
+        if global_scale_t:
+            global_scales.append((tensor_data_ptr(global_scale_t), 1))
 
     fused.set_param(
         'weight',
@@ -199,6 +205,8 @@ def link_experts(experts: Sequence[Weight]) -> Weight:
     )
     if scales:
         fused.set_param('scales', make_strided_ptrs(scales, e0.param_tensor('scales').type))
+    if global_scales:
+        fused.set_param('global_scale', make_strided_ptrs(global_scales, e0.param_tensor('global_scale').type))
     fused._impl.k_desc.ld = 0
     fused._impl.q_desc.ld = 0
     fused._impl.k_desc.offsets = 0
@@ -246,12 +254,14 @@ class Weight:
             if input_dim % group_size != 0:
                 raise ValueError(f'input_dim_{input_dim}_not_divisible_by_group_size_{group_size}')
             scale_shape = [input_dim // group_size, output_dim]
-            # uint4: f16/bf16 scales+zeros; fp4: ue8m0 scales (uint8).
+            # uint4: f16/bf16 scales+zeros; fp4: UE8M0/UE4M3 scales (uint8).
             if weight_type == 'fp4_e2m1':
                 scale_dtype = tm.DataType.TYPE_UINT8
             else:
                 scale_dtype = dt
             self._impl.param('scales').alloc(scale_shape, scale_dtype)
+            if weight_type == 'fp4_e2m1' and group_size == 16:
+                self._impl.param('global_scale').alloc([1], tm.DataType.TYPE_FP32)
             if weight_type == 'uint4':
                 self._impl.param('zeros').alloc(scale_shape, scale_dtype)
 
@@ -263,13 +273,43 @@ class Weight:
         """
         self._impl.set_grouped(grouped)
 
+    def set_input_type(self, input_type: str) -> None:
+        """Override the derived activation format for mixed-input kernel tests."""
+        if input_type == 'fp8_e4m3':
+            is_mxfp4_k32 = self._weight_type == 'fp4_e2m1' and self._group_size == 32
+            if self._impl.input_format.dtype != to_tm_dtype(input_type) and not is_mxfp4_k32:
+                raise ValueError('fp8_input_format_not_derived')
+            if is_mxfp4_k32:
+                tm = _tm()
+                fmt = self._impl.input_format
+                fmt.dtype = tm.DataType.TYPE_FP8_E4M3
+                fmt.block_sizes = [128, 1]
+                fmt.scales.dtype = tm.DataType.TYPE_FP32
+                fmt.zeros.dtype = tm.DataType.TYPE_INVALID
+            return
+        if input_type != self._data_type:
+            raise ValueError(f'unsupported_input_type_{input_type}')
+
+        tm = _tm()
+        fmt = self._impl.input_format
+        fmt.dtype = to_tm_dtype(input_type)
+        fmt.block_sizes = [1, 1]
+        fmt.scales.dtype = tm.DataType.TYPE_INVALID
+        fmt.zeros.dtype = tm.DataType.TYPE_INVALID
+
     def set_epilogue(self, epilogue) -> None:
         """Set GEMM epilogue (e.g. tm.Epilogue.kGatedSilu for fused SiLU)."""
         tm = _tm()
         self._impl.epilogue = epilogue
         # Mirror FfnWeight::prepare: SM90 FP8 fused SiLU writes FP8 + group scales.
         major, _ = torch.cuda.get_device_capability()
-        if (epilogue == tm.Epilogue.kGatedSilu and self._weight_type == 'fp8_e4m3' and major == 9):
+        is_mxfp4_k32 = self._weight_type == 'fp4_e2m1' and self._group_size == 32
+        supports_fp8_fused_output = (
+            major == 9
+            and self._impl.input_format.dtype == tm.DataType.TYPE_FP8_E4M3
+            and (self._weight_type == 'fp8_e4m3' or is_mxfp4_k32)
+        )
+        if epilogue == tm.Epilogue.kGatedSilu and supports_fp8_fused_output:
             self._impl.set_fp8_fused_silu_output()
 
     def prepare(self) -> None:
@@ -324,6 +364,11 @@ class Weight:
             quant=self.param_tensor('weight').t(),
             scales=self.param_tensor('scales').t(),
             zeros=None if zeros is None else zeros.t(),
+            global_scale=(
+                self.param_tensor('global_scale')
+                if self._weight_type == 'fp4_e2m1' and self._group_size == 16
+                else None
+            ),
             dequant=dequant_weight.param_tensor('weight').t(),
             src=src_weight.param_tensor('weight').t(),
             group_size=self._group_size,

@@ -36,6 +36,7 @@ TOLERANCES = {
     ('fp16', 'fp16'): {'quant_vs_dequant': {'max_abs': 1e-2, 'mean_abs': 1e-3}},
     ('bf16', 'fp8_e4m3'): {'quant_vs_dequant': {'max_abs': 0.25, 'mean_abs': 0.05}},
     ('fp16', 'fp8_e4m3'): {'quant_vs_dequant': {'max_abs': 0.25, 'mean_abs': 0.05}},
+    ('bf16', 'uint4'): {'quant_vs_dequant': {'max_abs': 0.25, 'mean_abs': 0.05}},
     ('fp16', 'uint4'): {'quant_vs_dequant': {'max_abs': 0.25, 'mean_abs': 0.05}},
     ('bf16', 'fp4_e2m1'): {'quant_vs_dequant': {'max_abs': 0.25, 'mean_abs': 0.05}},
     ('fp16', 'fp4_e2m1'): {'quant_vs_dequant': {'max_abs': 0.25, 'mean_abs': 0.05}},
@@ -274,7 +275,7 @@ class LinearFixture:
             inter = c.output_dim // 2
             w1 = torch.randn(c.input_dim, inter, device=self.device, dtype=dtype) * scale
             w3 = torch.randn(c.input_dim, inter, device=self.device, dtype=dtype) * scale
-            return block_pack_w1w3(w1, w3, fused_silu_block(c.weight_type))
+            return block_pack_w1w3(w1, w3, fused_silu_block(c.weight_type, c.input_type))
         return torch.randn(c.input_dim, c.output_dim, device=self.device, dtype=dtype) * scale
 
     def _apply_fuse_silu_epilogue(self, weight: Weight) -> None:
@@ -285,11 +286,11 @@ class LinearFixture:
     def _allocate_weight_triple(self) -> tuple[Weight, Weight, Weight]:
         c = self.case
         with self.on_tm_stream():
-            return (
-                Weight(c.input_dim, c.output_dim, c.data_type, c.data_type, 0),
-                Weight(c.input_dim, c.output_dim, c.data_type, c.weight_type, c.group_size),
-                Weight(c.input_dim, c.output_dim, c.data_type, c.data_type, 0),
-            )
+            w_original = Weight(c.input_dim, c.output_dim, c.data_type, c.data_type, 0)
+            w_quant = Weight(c.input_dim, c.output_dim, c.data_type, c.weight_type, c.group_size)
+            w_quant.set_input_type(c.input_type)
+            w_dequant = Weight(c.input_dim, c.output_dim, c.data_type, c.data_type, 0)
+            return w_original, w_quant, w_dequant
 
     def _make_weight_triple(self) -> tuple[Weight, Weight, Weight, torch.Tensor, torch.Tensor]:
         c = self.case
@@ -299,10 +300,10 @@ class LinearFixture:
         # Clone dequant before prepare(): groupwise/fp8 prepare may repack storage.
         with self.on_tm_stream():
             w_original.prepare()
-            w_quant.prepare()
-            w_dequant.prepare()
             if c.fuse_silu:
                 self._apply_fuse_silu_epilogue(w_quant)
+            w_quant.prepare()
+            w_dequant.prepare()
         return w_original, w_quant, w_dequant, w, w_deq_torch
 
     def _build_dense_weights(self) -> None:
@@ -337,9 +338,9 @@ class LinearFixture:
                 # Production MoE sets this via FfnWeight::prepare (is_expert_).
                 # Required so GetConverters packs bf16/fp16 B for Config_F16_g.
                 w_quant.set_grouped(True)
-                w_quant.prepare()
                 if c.fuse_silu:
                     self._apply_fuse_silu_epilogue(w_quant)
+                w_quant.prepare()
                 self.sync_tm()
             fused = link_experts(self.e_quant)
             if c.fuse_silu:
@@ -441,11 +442,12 @@ class LinearFixture:
             x_deq = self.x_dequant if self.x_dequant is not None else self.x_original
             self.d_dequant = dense_gemm(x_deq, self.w_dequant_torch)
         if c.fuse_silu:
-            block = fused_silu_block(c.weight_type)
+            block = fused_silu_block(c.weight_type, c.input_type)
             self.d_original = apply_block_fused_silu(self.d_original, block)
             self.d_dequant = apply_block_fused_silu(self.d_dequant, block)
             # SM90 FP8 fused path quantizes after SiLU; reference matches QuantizeSymm.
-            if c.weight_type == 'fp8_e4m3':
+            is_mxfp4_k32 = c.weight_type == 'fp4_e2m1' and c.group_size == 32
+            if c.input_type == 'fp8_e4m3' and (c.weight_type == 'fp8_e4m3' or is_mxfp4_k32):
                 _, _, self.d_original = quantize_symm_row_fp8(self.d_original)
                 _, _, self.d_dequant = quantize_symm_row_fp8(self.d_dequant)
 

@@ -5,6 +5,7 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/registry.h"
 #include "src/turbomind/kernels/gemm/convert.h"
+#include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
@@ -97,26 +98,37 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
 
     std::vector<std::pair<void*, int>> weights;
     std::vector<std::pair<void*, int>> scales;
+    std::vector<std::pair<void*, int>> global_scales;
+    const bool is_mxfp4_fp8 = e0.k_desc.pack == gemm::kSm90MxFp4Fp8FoldedWeightPack;
+    auto stream = core::Context::stream().handle();
 
     for (int i = 0; i < n; ++i) {
         auto& e = *experts(i);
+        if (is_mxfp4_fp8) {
+            TM_CHECK_EQ(e.k_desc.pack, gemm::kSm90MxFp4Fp8FoldedWeightPack);
+            TM_CHECK_EQ(e.q_desc.pack, gemm::kSm90MxFp4Fp8FoldedQParamPack);
+        }
         weights.emplace_back(e.weight.raw_data(), e.k_desc.ld);
         if (e.scales) {
             scales.emplace_back(e.scales.raw_data(), e.q_desc.ld);
+        }
+        if (e.global_scale) {
+            global_scales.emplace_back(e.global_scale.raw_data(), 1);
         }
         if (e.bias) {
             Copy(e.bias, d.bias.slice(i, 1).squeeze(0));
         }
     }
-
-    auto stream = core::Context::stream().handle();
-
     auto make_strided_ptr = [&](const auto& ptrs) {
         return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
     };
     d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_format.dtype, kDEVICE};
     if (e0.scales) {
         d.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
+    }
+    if (e0.global_scale) {
+        TM_CHECK_EQ((int)global_scales.size(), n);
+        d.global_scale = Tensor{make_strided_ptr(global_scales), {n}, e0.global_scale.dtype(), kDEVICE};
     }
     // MatrixLayout.ld == 0 identifies the StridedPtr expert table.
     d.k_desc.ld = d.q_desc.ld = 0;

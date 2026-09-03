@@ -157,6 +157,12 @@ struct LlamaLinear::Impl {
 
         auto&& [A, desc_A, U, desc_U] = GetOperandA(weight, input, input_scales, indices, offsets);
         auto&& [B, desc_B, V, desc_V] = GetOperandB(weight);
+        const Tensor& global_scale = weight.global_scale;
+        MatrixLayout  global_scale_desc{};
+        if (global_scale) {
+            global_scale_desc = {global_scale.dtype(), kRowMajor, 1, 1, weight.k_desc.ld == 0 ? 0 : 1};
+            global_scale_desc.num = weight.k_desc.num;
+        }
 
         Tensor& D = output;
         if (!D) {
@@ -200,6 +206,8 @@ struct LlamaLinear::Impl {
                             desc_B,
                             V.data_or((void*)nullptr),
                             desc_V,
+                            global_scale.data_or((void*)nullptr),
+                            global_scale_desc,
                             0.f,
                             D.raw_data(),
                             desc_D,

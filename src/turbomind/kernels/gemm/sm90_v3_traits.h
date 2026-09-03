@@ -21,6 +21,7 @@ struct Sm90V3Tile_128x192 {
     static constexpr int WG_N    = 1;
     static constexpr int Stages  = 4;
     static constexpr int kMaxOpN = 192;
+    static constexpr int kEpiStorageStages = 2;
 
     static constexpr int kProducerRegsTma     = 40;
     static constexpr int kMathRegsTma         = 232;  // (504-40)/2
@@ -34,8 +35,10 @@ struct Sm90V3Tile_128x256 {
     static constexpr int TILE_K  = 128;
     static constexpr int WG_M    = 2;
     static constexpr int WG_N    = 1;
-    static constexpr int Stages  = 3;  // SMEM: N=256 needs Stages≤3
+    // One 16-KiB epilogue ring slot leaves enough SMEM for a fourth TMA stage.
+    static constexpr int Stages  = 4;
     static constexpr int kMaxOpN = 128;
+    static constexpr int kEpiStorageStages = 1;
 
     static constexpr int kProducerRegsTma     = 40;
     static constexpr int kMathRegsTma         = 232;
@@ -52,14 +55,15 @@ struct Sm90V3Tile_64x256 {
     static constexpr int WG_N    = 1;
     static constexpr int Stages  = 4;
     static constexpr int kMaxOpN = 128;
+    static constexpr int kEpiStorageStages = 2;
 
     // Math RF model (kMaxOpN=128 → atom 64×128, ITER_N=2):
-    //   AccumC 128 + FragC 64 peak ≈ 192, +U/V/ctrl ≈ 208.
+    //   AccumC 128 + FragC 64 peak ≈ 192, +U/V/epi/ctrl ≈ 216.
     // Producer .dec must be ≤ ptxas temporal (~192); 256 is illegal.
     static constexpr int kProducerRegsTma     = 40;
-    static constexpr int kMathRegsTma         = 208;
+    static constexpr int kMathRegsTma         = 216;
     static constexpr int kProducerRegsIndexed = 88;
-    static constexpr int kMathRegsIndexed     = 208;
+    static constexpr int kMathRegsIndexed     = 216;
 };
 
 }  // namespace turbomind::gemm

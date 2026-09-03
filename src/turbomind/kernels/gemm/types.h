@@ -41,10 +41,12 @@ using Pack = uint32_t;
 
 typedef enum MMA_Tag
 {
-    HMMA_16816 = 0x100,  // sm80+
-    HMMA_1688  = 0x200,  // sm75
-    HMMA_884   = 0x300,  // sm70
-    HMMA_SIMT  = 0x400,  // sm75-
+    HMMA_16816    = 0x100,  // sm80+
+    HMMA_1688     = 0x200,  // sm75
+    HMMA_884      = 0x300,  // sm70
+    HMMA_SIMT     = 0x400,  // sm75-
+    GMMA_64x16_RS = 0x500,  // sm90, register-source A fragment
+    GMMA_64x32_RS = 0x600,  // sm90, native FP8 register-source A fragment
 } MMA_Tag;
 
 typedef enum Op_Tag

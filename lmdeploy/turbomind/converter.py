@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import _turbomind as _tm
 import torch
 
 from lmdeploy.archs import get_model_arch, search_nested_config
@@ -25,33 +26,39 @@ from .weight_format import (
 
 logger = get_logger('lmdeploy')
 
+_U4_MODEL_FORMATS = frozenset({'awq', 'gptq', 'compressed-tensors'})
+
 
 def _build_resolver(model_format: str | None,
                     group_size: int | None,
-                    dtype: torch.dtype) -> (WeightFormatResolver, torch.dtype):
+                    dtype: torch.dtype,
+                    *,
+                    use_bf16_u4: bool = False) -> (WeightFormatResolver, torch.dtype):
     """Build the active resolver: quantized format (if any) + trivial fallback.
 
-    Called after the int4 fp16 force but before the ``compressed-tensors →
-    awq`` rename, so compressed-tensors models get ``CompressedTensorFormat``.
+    Eligible SM90 U4 formats use the native BF16 path by default. Explicit
+    FP16 selection keeps the legacy path available for testing.
+
+    Called before the ``compressed-tensors → awq`` rename, so
+    compressed-tensors models get ``CompressedTensorFormat``.
     """
     formats: list[WeightFormat] = []
     if model_format in (None, 'hf'):
         pass
     elif model_format == 'awq':
         formats.append(AWQFormat(block_in=group_size))
-        dtype = torch.float16
     elif model_format == 'gptq':
         formats.append(GPTQFormat(block_in=group_size))
-        dtype = torch.float16
     elif model_format == 'compressed-tensors':
         formats.append(CompressedTensorFormat(block_in=group_size))
-        dtype = torch.float16
     elif model_format == 'fp8':
         formats.append(FP8Format())
     elif model_format == 'mxfp4':
         formats.append(MXFP4Format())
     else:
         raise ValueError(f'unknown model_format: {model_format!r}')
+    if model_format in _U4_MODEL_FORMATS and not use_bf16_u4:
+        dtype = torch.float16
     formats.append(TrivialFormat())
     return WeightFormatResolver(data_type=_torch_dtype_to_cpp(dtype), formats=formats), dtype
 
@@ -208,7 +215,8 @@ def get_tm_config(model_path,
     group_size = _validate_quant_group_size(engine_config.model_format, group_size)
 
     # 3. Resolve dtype and format overrides.
-    dtype = _resolve_dtype(engine_config.dtype, hf_model_cfg)
+    requested_dtype = engine_config.dtype
+    dtype = _resolve_dtype(requested_dtype, hf_model_cfg)
     dtype = getattr(torch, dtype)
 
     # Capture the user/file dtype before _build_resolver may force fp16 for
@@ -217,10 +225,26 @@ def get_tm_config(model_path,
     # inherit the text path's forced fp16.
     vision_dtype = dtype
 
+    # Route production AWQ/GPTQ/CT loads to the native BF16 kernel whenever
+    # the model and device are eligible. Explicit dtype=float16 is retained as
+    # the test-only escape hatch for the legacy kernel.
+    use_native_sm90_u4 = (
+        requested_dtype != 'float16'
+        and engine_config.model_format in _U4_MODEL_FORMATS
+        and group_size == 128
+        and getattr(_tm, 'has_sm90_mixed_kernel', lambda: False)()
+        and torch.cuda.is_available()
+        and torch.cuda.get_device_capability() == (9, 0)
+    )
+    if use_native_sm90_u4:
+        dtype = torch.bfloat16
+
     # Build resolver after dtype is finalized but before the CT→AWQ rename,
     # so compressed-tensors models instantiate CompressedTensorFormat.
     resolver, dtype = _build_resolver(engine_config.model_format,
-                                      group_size, dtype)
+                                      group_size,
+                                      dtype,
+                                      use_bf16_u4=use_native_sm90_u4)
 
     engine_config.dtype = str(dtype).split('.')[1]
 

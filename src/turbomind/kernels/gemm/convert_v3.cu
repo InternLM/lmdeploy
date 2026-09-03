@@ -1,11 +1,13 @@
 
 #include <array>
 #include <cstdlib>
+#include <numeric>
 
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/convert.cuh"
 #include "src/turbomind/kernels/gemm/convert.h"
+#include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -101,12 +103,211 @@ int WeightPackEnv()
     return v;
 }
 
-std::array<const LayoutConverter*, 2> GetConverters(DataType data_type,
-                                                    DataType weight_type,  //
-                                                    DataType input_type,
-                                                    bool     grouped,
-                                                    int      sm)
+bool HasSm90MixedKernel()
 {
+    return TM_GEMM_HAS_SM90_MIXED;
+}
+
+namespace {
+
+template<class Format>
+inline constexpr bool is_sm90_mxfp4_fp8_format_v =
+    std::is_same_v<Format, Sm90MxFp4Fp8FoldedFormat>
+    || std::is_same_v<Format, Sm90MxFp4Fp8UnfoldedFormat>;
+
+template<class Format>
+struct Sm90PrepackedWeightConverter: LayoutConverter {
+    Sm90PrepackedWeightConverter()
+    {
+        order        = Format::kConverterOrder;
+        pack         = Format::kWeightPack;
+        storage_bits = Format::kWeightBits;
+    }
+
+    int
+    Convert(const void* S, const MatrixLayout& Sdesc, void* D, MatrixLayout& Ddesc, cudaStream_t stream) const override
+    {
+        TM_CHECK_NOTNULL(S);
+        TM_CHECK_NOTNULL(D);
+        TM_CHECK_EQ(Sdesc.type, kBfloat16);
+        TM_CHECK_EQ(Sdesc.pack, 0U);
+        TM_CHECK(Sdesc.order == Format::kConverterOrder);
+        if constexpr (Format::kConverterOrder == kRowMajor) {
+            TM_CHECK_EQ(Sdesc.ld, Sdesc.cols);
+        }
+        else {
+            TM_CHECK_EQ(Sdesc.ld, Sdesc.rows);
+        }
+        constexpr int output_alignment = std::is_same_v<Format, Sm90U4Format>
+                                             || is_sm90_mxfp4_fp8_format_v<Format> ?
+                                             kSm90MixedFragmentN :
+                                             kSm90MixedTileN;
+        TM_CHECK_EQ(Sdesc.rows % output_alignment, 0);
+        constexpr int input_alignment = is_sm90_mxfp4_fp8_format_v<Format> ?
+                                            128 :
+                                            std::lcm(kSm90MixedTileK, Format::kGroupSize);
+        TM_CHECK_EQ(Sdesc.cols % input_alignment, 0);
+        TM_CHECK_GE(Sdesc.cols, 128);
+
+        if constexpr (std::is_same_v<Format, Sm90MxFp4Fp8FoldedFormat>) {
+            PackSm90MxFp4Fp8FoldedWeight(
+                static_cast<uint32_t*>(D), static_cast<const uint16_t*>(S), Sdesc.rows, Sdesc.cols, stream);
+        }
+        else if constexpr (std::is_same_v<Format, Sm90MxFp4Fp8UnfoldedFormat>) {
+            PackSm90MxFp4Fp8UnfoldedWeight(
+                static_cast<uint32_t*>(D), static_cast<const uint16_t*>(S), Sdesc.rows, Sdesc.cols, stream);
+        }
+        else if constexpr (std::is_same_v<Format, Sm90MxFp4Format>
+                           || std::is_same_v<Format, Sm90NvFp4Format>) {
+            PackSm90Fp4PrmtWeight(
+                static_cast<uint32_t*>(D), static_cast<const uint16_t*>(S), Sdesc.rows, Sdesc.cols, stream);
+        }
+        else if constexpr (Format::kWeightBits == 4) {
+            PackSm90U4Weight(
+                static_cast<uint32_t*>(D), static_cast<const uint16_t*>(S), Sdesc.rows, Sdesc.cols, stream);
+        }
+        else {
+            static_assert(std::is_same_v<Format, Sm90Fp8E4M3Format>);
+            PackSm90Fp8E4M3Weight(
+                static_cast<uint32_t*>(D), static_cast<const uint16_t*>(S), Sdesc.rows, Sdesc.cols, stream);
+        }
+
+        Ddesc      = Sdesc;
+        Ddesc.type = data_type_v<typename Format::WeightType>;
+        Ddesc.pack = pack;
+        Ddesc.ld   = Sdesc.ld;
+        return 0;
+    }
+};
+
+template<class Format>
+struct Sm90Prepacked4QParamConverter: LayoutConverter {
+    Sm90Prepacked4QParamConverter()
+    {
+        order = kColMajor;
+        pack  = Format::kQparamPack;
+    }
+
+    int
+    Convert(const void* S, const MatrixLayout& Sdesc, void* D, MatrixLayout& Ddesc, cudaStream_t stream) const override
+    {
+        TM_CHECK_NOTNULL(S);
+        TM_CHECK_NOTNULL(D);
+        TM_CHECK_EQ(Sdesc.type, data_type_v<typename Format::QparamSourceType>);
+        TM_CHECK_EQ(Sdesc.pack, 0U);
+        TM_CHECK(Sdesc.order == kColMajor);
+        TM_CHECK_EQ(Sdesc.ld, Sdesc.rows);
+        constexpr int output_alignment = std::is_same_v<Format, Sm90U4Format>
+                                             || is_sm90_mxfp4_fp8_format_v<Format> ?
+                                             kSm90MixedFragmentN :
+                                             kSm90MixedTileN;
+        TM_CHECK_EQ(Sdesc.rows % output_alignment, 0);
+
+        // The source is physically [K/group, N]. Pack each OUT64 fragment as
+        // the 32 {lo, hi} qparam pairs consumed by the RS operand-A lanes.
+        if constexpr (std::is_same_v<Format, Sm90U4Format>) {
+            PackSm90U4QParams(static_cast<uint32_t*>(D),
+                              static_cast<const uint32_t*>(S),
+                              Sdesc.rows,
+                              Sdesc.cols,
+                              stream);
+        }
+        else if constexpr (std::is_same_v<Format, Sm90MxFp4Format>) {
+            PackSm90MxFp4QParams(static_cast<uint8_t*>(D),
+                                 static_cast<const uint8_t*>(S),
+                                 Sdesc.rows,
+                                 Sdesc.cols,
+                                 stream);
+        }
+        else if constexpr (std::is_same_v<Format, Sm90MxFp4Fp8FoldedFormat>) {
+            Sm90MxFp4Fp8FoldedPackStats* stats{};
+            const char* stats_env = std::getenv("TM_GEMM_MXFP4_FOLD_STATS");
+            const bool collect_stats = stats_env && stats_env[0] == '1' && stats_env[1] == '\0';
+            TM_CUDA_CHECK(cudaMallocAsync(&stats, sizeof(*stats), stream));
+            TM_CUDA_CHECK(cudaMemsetAsync(stats, 0, sizeof(*stats), stream));
+            PackSm90MxFp4Fp8FoldedQParams(static_cast<uint8_t*>(D),
+                                          static_cast<const uint8_t*>(S),
+                                          Sdesc.rows,
+                                          Sdesc.cols,
+                                          stream,
+                                          stats);
+            Sm90MxFp4Fp8FoldedPackStats host{};
+            TM_CUDA_CHECK(cudaMemcpyAsync(&host, stats, sizeof(host), cudaMemcpyDeviceToHost, stream));
+            TM_CUDA_CHECK(cudaStreamSynchronize(stream));
+            TM_CHECK_GT(host.total_records, 0ull);
+            // This kernel family has one physical image and one arithmetic
+            // schedule: every OUT64 x K128 record must share a base exponent.
+            // Reject incompatible checkpoints before publishing descriptors.
+            TM_CHECK_EQ(host.foldable_records, host.total_records);
+            if (collect_stats) {
+                TM_LOG_INFO("SM90 MXFP4 foldable records: {}/{} ({:.2f}%)",
+                            host.foldable_records,
+                            host.total_records,
+                            host.total_records ? 100. * host.foldable_records / host.total_records : 0.);
+            }
+            TM_CUDA_CHECK(cudaFreeAsync(stats, stream));
+        }
+        else if constexpr (std::is_same_v<Format, Sm90MxFp4Fp8UnfoldedFormat>) {
+            PackSm90MxFp4Fp8UnfoldedQParams(static_cast<uint8_t*>(D),
+                                            static_cast<const uint8_t*>(S),
+                                            Sdesc.rows,
+                                            Sdesc.cols,
+                                            stream);
+        }
+        else {
+            static_assert(std::is_same_v<Format, Sm90NvFp4Format>);
+            PackSm90Fp4QParams(static_cast<uint8_t*>(D),
+                               static_cast<const uint8_t*>(S),
+                               Sdesc.rows,
+                               Sdesc.cols,
+                               stream);
+        }
+
+        Ddesc      = Sdesc;
+        Ddesc.type = data_type_v<typename Format::QparamType>;
+        Ddesc.pack = pack;
+        return 0;
+    }
+};
+
+struct Sm90Fp8E4M3QParamConverter: LayoutConverter {
+    Sm90Fp8E4M3QParamConverter()
+    {
+        order = kRowMajor;
+        pack  = Sm90Fp8E4M3Format::kQparamPack;
+    }
+
+    int
+    Convert(const void* S, const MatrixLayout& Sdesc, void* D, MatrixLayout& Ddesc, cudaStream_t stream) const override
+    {
+        TM_CHECK_NOTNULL(S);
+        TM_CHECK_NOTNULL(D);
+        TM_CHECK_EQ(Sdesc.type, kFloat);
+        TM_CHECK_EQ(Sdesc.pack, 0U);
+        TM_CHECK(Sdesc.order == kRowMajor);
+        TM_CHECK_EQ(Sdesc.ld, Sdesc.cols);
+
+        PackSm90Fp8E4M3Scales(
+            static_cast<bfloat16_t*>(D), static_cast<const float*>(S), Sdesc.rows, Sdesc.cols, stream);
+
+        Ddesc      = Sdesc;
+        Ddesc.type = kBfloat16;
+        Ddesc.pack = pack;
+        Ddesc.ld   = Sdesc.cols * Sm90Fp8E4M3Format::kQparamValuesTile;
+        return 0;
+    }
+};
+
+}  // namespace
+
+ConverterSet GetConverters(const ConverterRequest& request)
+{
+    const auto data_type   = request.data_type;
+    const auto weight_type = request.weight_type;
+    const auto input_type  = request.input_type;
+    const auto grouped     = request.grouped;
+    const auto sm          = request.sm;
+
     constexpr constant<kRowMajor> kRow{};
     constexpr constant<kColMajor> kCol{};
 
@@ -125,6 +326,74 @@ std::array<const LayoutConverter*, 2> GetConverters(DataType data_type,
     const int pack_env = WeightPackEnv();
     if (pack_env == 0) {
         return {};
+    }
+
+    const bool use_sm90_mxfp4_fp8 = HasSm90MixedKernel() && request.sm == 90
+                                     && request.data_type == kBfloat16
+                                     && request.input_type == kFloat8_e4m3
+                                     && request.weight_type == kFloat4_e2m1
+                                     && request.group_size == Sm90MxFp4Fp8UnfoldedFormat::kGroupSize
+                                     && request.input_dim >= 256
+                                     && request.input_dim % 128 == 0 && request.output_dim >= 64
+                                     && request.output_dim % 64 == 0;
+    if (use_sm90_mxfp4_fp8) {
+        const bool fuse_silu = request.epilogue == Epilogue::kGatedSilu;
+        if (request.epilogue != Epilogue::kNone && !fuse_silu) {
+            return {};
+        }
+        if (fuse_silu && request.output_dim % 256 != 0) {
+            return {};
+        }
+        static const Sm90PrepackedWeightConverter<Sm90MxFp4Fp8FoldedFormat>  weight_converter;
+        static const Sm90Prepacked4QParamConverter<Sm90MxFp4Fp8FoldedFormat> qparam_converter;
+        return {&weight_converter, &qparam_converter, QParamEncoding::kMxFp4Fp8Folded};
+    }
+
+    // Grouped experts are prepared one at a time before
+    // MoeWeight::LinkLinearExperts builds the StridedPtr tables. The native
+    // pack is therefore identical for dense and grouped weights.
+    const bool use_sm90_u4 = HasSm90MixedKernel() && sm == 90 && data_type == kBfloat16 && input_type == kBfloat16
+                             && weight_type == kUint4 && request.group_size == Sm90U4Format::kGroupSize
+                             && request.input_dim >= 2 * kSm90MixedTileK
+                             && request.input_dim % std::lcm(kSm90MixedTileK, Sm90U4Format::kGroupSize) == 0
+                             && request.output_dim % kSm90MixedFragmentN == 0;
+    if (use_sm90_u4) {
+        static const Sm90PrepackedWeightConverter<Sm90U4Format>  weight_converter;
+        static const Sm90Prepacked4QParamConverter<Sm90U4Format> qparam_converter;
+        return {&weight_converter, &qparam_converter, QParamEncoding::kBf16ScaleEffZero};
+    }
+
+    const bool use_sm90_mxfp4 = HasSm90MixedKernel() && sm == 90 && data_type == kBfloat16 && input_type == kBfloat16
+                                && weight_type == kFloat4_e2m1 && request.group_size == Sm90MxFp4Format::kGroupSize
+                                && request.input_dim >= 2 * kSm90MixedTileK
+                                && request.input_dim % std::lcm(kSm90MixedTileK, Sm90MxFp4Format::kGroupSize) == 0
+                                && request.output_dim % kSm90MixedTileN == 0;
+    if (use_sm90_mxfp4) {
+        static const Sm90PrepackedWeightConverter<Sm90MxFp4Format>  weight_converter;
+        static const Sm90Prepacked4QParamConverter<Sm90MxFp4Format> qparam_converter;
+        return {&weight_converter, &qparam_converter, QParamEncoding::kMxFp4UnbiasedExponent};
+    }
+
+    const bool use_sm90_nvfp4 = HasSm90MixedKernel() && sm == 90 && data_type == kBfloat16 && input_type == kBfloat16
+                                && weight_type == kFloat4_e2m1 && request.group_size == Sm90NvFp4Format::kGroupSize
+                                && request.input_dim >= 2 * kSm90MixedTileK
+                                && request.input_dim % std::lcm(kSm90MixedTileK, Sm90NvFp4Format::kGroupSize) == 0
+                                && request.output_dim % kSm90MixedTileN == 0;
+    if (use_sm90_nvfp4) {
+        static const Sm90PrepackedWeightConverter<Sm90NvFp4Format>  weight_converter;
+        static const Sm90Prepacked4QParamConverter<Sm90NvFp4Format> qparam_converter;
+        return {&weight_converter, &qparam_converter, QParamEncoding::kNvFp4Scale};
+    }
+
+    const bool use_sm90_fp8_e4m3 = HasSm90MixedKernel() && sm == 90 && data_type == kBfloat16 && input_type == kBfloat16
+                                   && weight_type == kFloat8_e4m3 && request.group_size == Sm90Fp8E4M3Format::kGroupSize
+                                   && request.input_dim >= 2 * kSm90MixedTileK
+                                   && request.input_dim % Sm90Fp8E4M3Format::kGroupSize == 0
+                                   && request.output_dim % kSm90MixedTileN == 0;
+    if (use_sm90_fp8_e4m3) {
+        static const Sm90PrepackedWeightConverter<Sm90Fp8E4M3Format> weight_converter;
+        static const Sm90Fp8E4M3QParamConverter                      qparam_converter;
+        return {&weight_converter, &qparam_converter, QParamEncoding::kBf16BlockScale};
     }
 
     if (weight_type == kHalf || weight_type == kBfloat16) {

@@ -296,3 +296,16 @@ models:
     weights:
       - {name: gate_up, kind: moe_gate_up, output_dim: 1024, input_dim: 2048}
       - {name: down, kind: moe_down, output_dim: 2048, input_dim: 512}
+  - name: synthetic_16k
+    max_tp: 1
+    max_ep: 1
+    weights:
+      - {name: gate_up, kind: dense, output_dim: 16384, input_dim: 16384, tp_axis: output}
+  - name: synthetic_indexed_16k
+    max_tp: 1
+    max_ep: 1
+    moe:
+      expert_num: 2
+      experts_per_token: 1
+    weights:
+      - {name: gate_up, kind: moe_gate_up, output_dim: 16384, input_dim: 16384}

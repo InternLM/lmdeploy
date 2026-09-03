@@ -26,6 +26,7 @@
 #include "src/turbomind/engine/multimodal_input.h"
 #include "src/turbomind/kernels/copy/copy.h"
 #include "src/turbomind/kernels/norm/norm.h"
+#include "src/turbomind/kernels/gemm/convert.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
@@ -633,6 +634,7 @@ PYBIND11_MODULE(_turbomind, m)
           py::arg("weight_dtype"),
           py::arg("block_in"),
           py::arg("block_out"));
+    m.def("has_sm90_mixed_kernel", &turbomind::gemm::HasSm90MixedKernel);
 
     // --- Config struct bindings ---
     py::class_<turbomind::core::ModuleConfig>(m, "ModuleConfig")

@@ -101,6 +101,7 @@ public:
     X(weight)                                                                                                          \
     X(bias)                                                                                                            \
     X(scales)                                                                                                          \
+    X(global_scale)                                                                                                    \
     X(zeros)
 
     TM_MODULE_DECLARE(LinearWeight, LINEAR_WEIGHT_CHILDREN, LINEAR_WEIGHT_PARAMS)

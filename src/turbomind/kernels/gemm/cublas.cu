@@ -51,6 +51,8 @@ public:
                const MatrixLayout& Bdesc,
                const void*         V,
                const MatrixLayout& Vdesc,
+               const void*         global_scale,
+               const MatrixLayout& global_scale_desc,
                float               beta,
                const void*         C,
                const MatrixLayout& Cdesc,
@@ -65,6 +67,8 @@ public:
     {
         (void)W;
         (void)Wdesc;
+        (void)global_scale;
+        (void)global_scale_desc;
         cublasOperation_t transa = Adesc.order == kColMajor ? CUBLAS_OP_N : CUBLAS_OP_T;
         cublasOperation_t transb = Bdesc.order == kColMajor ? CUBLAS_OP_N : CUBLAS_OP_T;
 
@@ -221,6 +225,8 @@ public:
                const MatrixLayout& Bdesc,
                const void*         V,
                const MatrixLayout& Vdesc,
+               const void*         global_scale,
+               const MatrixLayout& global_scale_desc,
                float               beta,
                const void*         C,
                const MatrixLayout& Cdesc,
@@ -235,6 +241,8 @@ public:
     {
         (void)W;
         (void)Wdesc;
+        (void)global_scale;
+        (void)global_scale_desc;
         if (!Adesc.offsets || !Ddesc.offsets) {
             fprintf(
                 stderr,

@@ -73,7 +73,8 @@ def main() -> int:
         log = args.outdir / f'{name}.log'
         cmd = [
             sys.executable,
-            'tests/turbomind/linear/bench_linear.py',
+            '-m',
+            'tests.turbomind.linear.bench_linear',
             '--suite', 'full',
             '--case', name,
             '--type', 'bf16_bf16_bf16',
