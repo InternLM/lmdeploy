@@ -285,7 +285,6 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
-                dp_disable_tp=True,
                 prefix=f'{prefix}.q_proj' if prefix else '',
             )
         elif self.use_fused_qkv_a:
@@ -326,7 +325,6 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
-                dp_disable_tp=True,
                 prefix=f'{prefix}.q_b_proj' if prefix else '',
             )
 
