@@ -450,11 +450,10 @@ def all_gather_inner(
 class MultimemAllGatherer:
     """Guarded last-dim multimem all-gather with NCCL fallback.
 
-    Owns one symmetric buffer and admits the input contract collectively on the
-    first eager call. Subsequent calls require the same dtype, layout and device
-    on every rank; token count may vary but must be TP-invariant. The returned
-    tensor owns its storage so a later collective cannot overwrite logits that
-    are still being consumed on another stream.
+    Owns one symmetric buffer and admits the input contract collectively on the first eager call. Subsequent calls
+    require the same dtype, layout and device on every rank; token count may vary but must be TP-invariant. The returned
+    tensor owns its storage so a later collective cannot overwrite logits that are still being consumed on another
+    stream.
     """
 
     _UNINIT = object()
@@ -529,7 +528,8 @@ class MultimemAllGatherer:
                 and x.shape[-1] * state.world_size == state.hidden_dim)
 
     def prepare(self, device: torch.device | str) -> bool:
-        """Collectively allocate and rendezvous the arena before graph capture."""
+        """Collectively allocate and rendezvous the arena before graph
+        capture."""
         if self._state is self._UNINIT:
             state = self._build(torch.device(device))
             if state is not self._UNINIT:

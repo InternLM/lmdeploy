@@ -100,10 +100,9 @@ def _update_runtime_env_nsys(runtime_env: dict):
 def _needs_symm_mem_device_setup(dist_config: DistConfig) -> bool:
     """Whether Ray workers must preserve peer CUDA-device visibility.
 
-    Ray normally narrows every actor to one visible GPU, which remaps that
-    device to local ordinal zero. CUDA symmetric-memory rendezvous identifies
-    allocations by the process-local device ordinal, so TP actors on one host
-    must instead inherit the full visibility and select their assigned GPU.
+    Ray normally narrows every actor to one visible GPU, which remaps that device to local ordinal zero. CUDA symmetric-
+    memory rendezvous identifies allocations by the process-local device ordinal, so TP actors on one host must instead
+    inherit the full visibility and select their assigned GPU.
     """
     from lmdeploy.pytorch.backends.cuda.comm.communicator import should_try_symm_mem
     return (should_try_symm_mem(dist_config)
