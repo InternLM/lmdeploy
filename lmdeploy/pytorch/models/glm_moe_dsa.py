@@ -56,55 +56,6 @@ def _resolve_dsa_indexer_fusion(indexer_topk: IndexerTopKFP8) -> bool:
     return fusion_requested and fusion_supported
 
 
-def _dequantize_blocked_fp8(weight: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
-    """Dequantize a 2D block-FP8 checkpoint tensor."""
-    dim_w0, dim_w1 = weight.shape
-    dim_s0, dim_s1 = scale.shape
-    assert dim_w0 % dim_s0 == 0 and dim_w1 % dim_s1 == 0
-    weight = weight.reshape(dim_s0, dim_w0 // dim_s0, dim_s1, dim_w1 // dim_s1)
-    weight = weight.float() * scale.reshape(dim_s0, 1, dim_s1, 1)
-    return weight.to(dtype).reshape(dim_w0, dim_w1)
-
-
-def _load_fused_indexer_weight(name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
-                               load_buffers: dict) -> bool:
-    """Load separate checkpoint projections into one fused BF16 weight."""
-    is_wk = '.self_attn.indexer.wk.' in name
-    is_gate = '.self_attn.indexer.weights_proj.' in name
-    if not (is_wk or is_gate):
-        return False
-
-    indexer_prefix = name.rsplit('.indexer.', 1)[0] + '.indexer'
-    fused_param = params_dict.get(f'{indexer_prefix}.wk_weights_proj.weight')
-    if fused_param is None:
-        return False
-
-    if is_gate:
-        if not name.endswith('.weight'):
-            return False
-        gate = loaded_weight.to(device=fused_param.device, dtype=fused_param.dtype)
-        fused_param.data[-gate.size(0):].copy_(gate)
-        return True
-
-    if name.endswith('.weight') and loaded_weight.dtype != torch.float8_e4m3fn:
-        wk = loaded_weight.to(device=fused_param.device, dtype=fused_param.dtype)
-        fused_param.data[:wk.size(0)].copy_(wk)
-        return True
-
-    is_weight = name.endswith('.weight')
-    is_scale = name.endswith('.weight_scale_inv')
-    if not (is_weight or is_scale):
-        return False
-
-    buffer = load_buffers.setdefault(f'{indexer_prefix}.wk', {})
-    buffer['weight' if is_weight else 'scale'] = loaded_weight.to(fused_param.device)
-    if 'weight' in buffer and 'scale' in buffer:
-        wk = _dequantize_blocked_fp8(buffer['weight'], buffer['scale'], fused_param.dtype)
-        fused_param.data[:wk.size(0)].copy_(wk)
-        load_buffers.pop(f'{indexer_prefix}.wk')
-    return True
-
-
 class GlmMoeDsaIndexer(nn.Module):
 
     def __init__(self,
