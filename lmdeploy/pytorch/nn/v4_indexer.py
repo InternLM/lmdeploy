@@ -1,4 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Mapping
+
+import torch
 from torch import nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
@@ -22,7 +25,6 @@ class V4Indexer(nn.Module):
     def forward(self,
                 query,
                 weights,
-                index_kv_cache,
-                index_kv_scale_cache,
+                block_caches: Mapping[str, torch.Tensor],
                 meta: V4IndexerMetadata) -> V4IndexerOutput:
-        return self.impl.forward(query, weights, index_kv_cache, index_kv_scale_cache, meta)
+        return self.impl.forward(query, weights, block_caches, meta)
