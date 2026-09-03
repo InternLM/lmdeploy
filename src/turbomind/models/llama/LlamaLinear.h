@@ -2,9 +2,11 @@
 #pragma once
 
 #include <istream>
+#include <optional>
 #include <ostream>
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/models/linear_weight.h"
 
 namespace turbomind {
@@ -40,7 +42,33 @@ public:
                  Ref<Tensor>         output,
                  Ref<Tensor>         output_scales);
 
+    void Forward(const gemm::ExecPlan& plan,
+                 const Tensor&         input,
+                 const Tensor&         input_scales,
+                 const LinearWeight&   weight,
+                 const Buffer_<int>&   indices,
+                 const Buffer_<int>&   offsets,
+                 Ref<Tensor>           output,
+                 Ref<Tensor>           output_scales);
+
+    gemm::OutputSpec GetOutputSpec(const Tensor& input, const LinearWeight& weight, const Buffer_<int>& indices = {}) const;
+
+    std::optional<gemm::ExecPlan> GetExecPlan(const Tensor& input,
+                                              const LinearWeight& weight,
+                                              const Buffer_<int>& indices = {},
+                                              const Buffer_<int>& offsets = {});
+
+    std::optional<gemm::ExecPlan> Tune(const Tensor&       input,
+                                       const Tensor&       input_scales,
+                                       const LinearWeight& weight,
+                                       const Buffer_<int>& indices,
+                                       const Buffer_<int>& offsets,
+                                       Ref<Tensor>         output,
+                                       Ref<Tensor>         output_scales);
+
     void set_measure(bool measure);
+
+    gemm::Gemm& gemm() noexcept;
 
     [[maybe_unused]] int Export(std::ostream& os);
 

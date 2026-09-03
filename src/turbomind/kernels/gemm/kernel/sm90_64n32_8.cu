@@ -1,22 +1,82 @@
 
 #include <cuda.h>
 
-// We need modifiable TMA, which is added in 12.3
-#if (__CUDACC_VER_MAJOR__ > 12 || (__CUDACC_VER_MAJOR__ >= 12 && __CUDACC_VER_MINOR__ >= 3))
-
 #include "src/turbomind/kernels/gemm/arch.h"
+#include "src/turbomind/kernels/gemm/convert.h"
 #include "src/turbomind/kernels/gemm/gemm_universal_sm90_fp8_wa.h"
 #include "src/turbomind/kernels/gemm/gemm_universal_sm90_v3.h"
+#include "src/turbomind/kernels/gemm/kernel/e4m3.h"
 #include "src/turbomind/kernels/gemm/kernel_impl_sm90.h"
 #include "src/turbomind/kernels/gemm/sm90_fp8_wa_traits.h"
 #include "src/turbomind/kernels/gemm/sm90_v3_traits.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
 #include "src/turbomind/kernels/gemm/registrar.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/models/linear_weight.h"
 
 namespace turbomind::gemm {
 
 namespace {
+void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+{
+    ApplyWeightBridge(linear, bridge, stream);
+    TM_CHECK_EQ(linear.weight.dtype(), kFloat8_e4m3);
+    TM_CHECK_EQ(linear.scales.dtype(), kFloat);
+
+    Tensor weight{{linear.weight.shape(1), linear.weight.shape(0)}, kFloat8_e4m3, kDEVICE};
+    invokeTransposeAxis01(static_cast<uint8_t*>(weight.raw_data()),
+                          static_cast<uint8_t*>(linear.weight.raw_data()),
+                          linear.weight.shape(0),
+                          linear.weight.shape(1),
+                          1,
+                          stream);
+    linear.weight = std::move(weight);
+    linear.k_desc = MatrixLayout{kFloat8_e4m3,
+                                 kColMajor,
+                                 (int)linear.weight.shape(1),
+                                 (int)linear.weight.shape(0),
+                                 (int)linear.weight.stride(0),
+                                 0,
+                                 0,
+                                 nullptr,
+                                 nullptr};
+
+    Tensor scales{{linear.scales.shape(1), linear.scales.shape(0)}, kFloat, kDEVICE};
+    invokeTransposeAxis01(static_cast<float*>(scales.raw_data()),
+                          static_cast<float*>(linear.scales.raw_data()),
+                          linear.scales.shape(0),
+                          linear.scales.shape(1),
+                          1,
+                          stream);
+    linear.scales = std::move(scales);
+    linear.q_desc = MatrixLayout{kFloat,
+                                 kColMajor,
+                                 (int)linear.scales.shape(1),
+                                 (int)linear.scales.shape(0),
+                                 (int)linear.scales.stride(0),
+                                 0,
+                                 0,
+                                 nullptr,
+                                 nullptr};
+}
+
+const Family w8a8{28,
+                  300,
+                  DataFormat{kFloat8_e4m3, {128, 1}, kFloat},
+                  kBfloat16,
+                  1,
+                  1,
+                  1,
+                  1,
+                  false,
+                  true,
+                  supports_e4m3<kFloat, 128>,
+                  pack,
+                  128,
+                  DataFormat{kFloat8_e4m3, {128, 1}, kFloat},
+                  true,
+                  fp8_output_spec};
 
 // Registers one SM90 v3 (FP8 act-as-A) GMMA kernel. Grouped-ness follows striding:
 // dense (kFlat) is ungrouped, MoE (kIndexed / kBlocked) is grouped.
@@ -24,7 +84,7 @@ template<Order raster, Striding striding, class Tile, bool silu = false, int mc_
 void add_v3(Collector& c)
 {
     constexpr bool grouped = striding != Striding::kFlat;
-    c.add(std::make_unique<KernelImplSm90<GemmUniversalSm90_v3<raster, mc_a, mc_b, grouped, striding, Tile, silu>>>());
+    c.add<KernelImplSm90<GemmUniversalSm90_v3<raster, mc_a, mc_b, grouped, striding, Tile, silu>>>();
 }
 
 // Registers one SM90 FP8 weight-as-A GMMA kernel. TILE_M < 64 dense tiles have no
@@ -33,11 +93,10 @@ template<Order raster, Striding striding, class Tile, bool silu = false, int mc_
 void add_wa(Collector& c)
 {
     constexpr bool grouped = striding != Striding::kFlat;
-    c.add(
-        std::make_unique<KernelImplSm90<GemmUniversalSm90_Fp8Wa<raster, mc_a, mc_b, grouped, striding, Tile, silu>>>());
+    c.add<KernelImplSm90<GemmUniversalSm90_Fp8Wa<raster, mc_a, mc_b, grouped, striding, Tile, silu>>>();
 }
 
-Registrar reg([](Collector& c, int /*arch*/) {
+Registrar reg(w8a8, [](Collector& c) {
     // Catalog pruned per full-suite scans tmp/sm90_fp8wa_scan1 + tmp/sm90_v3_scan1
     // (2026-07-26, H200, TP/EP 1/2/4/8, swizzle 0-3; both FP8 types exercise the same
     // kernel pool, refs combined). `refs: N` = dispatch records (tuned selections);
@@ -176,9 +235,3 @@ Registrar reg([](Collector& c, int /*arch*/) {
 }  // namespace
 
 }  // namespace turbomind::gemm
-
-#else
-
-// CUDA too old for modifiable TMA: no SM90 GMMA kernels from this TU.
-
-#endif

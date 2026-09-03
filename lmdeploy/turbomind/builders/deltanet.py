@@ -83,7 +83,7 @@ class DeltaNetBuilder(Builder):
                             num_k_heads=self.config.num_k_heads,
                             num_v_heads=self.config.num_v_heads)
         q, k, v, z, b, a = dequant_mixed(q, k, v, in_proj_z, in_proj_b, in_proj_a,
-                                           data_type=self.config.data_type)
+                                         dtype=self._ctx.dtype)
         fused = fuse_gdn(q, k, v, z, b, a, tp=self.tp.size)
         self._add_linear('in_proj_all', fused, SplitSide.OUTPUT)
         if out_proj is not None:

@@ -40,7 +40,8 @@ static std::optional<GemmDesc> get_gemm_desc(const Operation&    operation,
         return {};
     }
 
-    GemmDesc desc{arch,
+    GemmDesc desc{operation.family,
+                  arch,
                   Adesc.type,
                   Bdesc.type,
                   Ddesc.type,

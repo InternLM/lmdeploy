@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "src/turbomind/kernels/gemm/kernel.h"
+#include "src/turbomind/kernels/gemm/family.h"
 
 namespace turbomind::gemm {
 
@@ -18,6 +19,11 @@ public:
         return ptrs_;
     }
 
+    [[nodiscard]] const std::vector<const Family*>& families() const
+    {
+        return families_;
+    }
+
 private:
     bool Add(std::unique_ptr<Kernel> kernel);
 
@@ -25,6 +31,7 @@ private:
     int                                  arch_;
     std::vector<std::unique_ptr<Kernel>> kernels_;
     std::vector<Kernel*>                 ptrs_;
+    std::vector<const Family*>     families_;
 };
 
 }  // namespace turbomind::gemm

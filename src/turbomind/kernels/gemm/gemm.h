@@ -3,11 +3,18 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <cuda_runtime.h>
 
+#include "src/turbomind/kernels/gemm/exec_plan.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/gemm/weight_plan.h"
+
+namespace turbomind {
+class LlamaLinear;
+}
 
 namespace turbomind::gemm {
 
@@ -20,27 +27,35 @@ public:
 
     ~Gemm();
 
-    [[nodiscard]] int Run(const Operation&    operation,
-                          float               alpha,
-                          const void*         A,
-                          const MatrixLayout& Adesc,
-                          const void*         U,
-                          const MatrixLayout& Udesc,
-                          const void*         B,
-                          const MatrixLayout& Bdesc,
-                          const void*         V,
-                          const MatrixLayout& Vdesc,
-                          const void*         global_scale,
-                          const MatrixLayout& global_scale_desc,
-                          float               beta,
-                          const void*         C,
-                          const MatrixLayout& Cdesc,
-                          void*               D,
-                          const MatrixLayout& Ddesc,
-                          void*               W,
-                          const MatrixLayout& Wdesc,
-                          const Workspace&    workspace,
-                          cudaStream_t        stream);
+    struct Arguments {
+        Operation    operation{};
+        float        alpha{1.f};
+        const void*  A{};
+        MatrixLayout Adesc{};
+        const void*  U{};
+        MatrixLayout Udesc{};
+        const void*  B{};
+        MatrixLayout Bdesc{};
+        const void*  V{};
+        MatrixLayout Vdesc{};
+        const void*  global_scale{};
+        MatrixLayout global_scale_desc{};
+        float        beta{};
+        const void*  C{};
+        MatrixLayout Cdesc{};
+        void*        D{};
+        MatrixLayout Ddesc{};
+        void*        W{};
+        MatrixLayout Wdesc{};
+        Workspace    workspace{};
+        cudaStream_t stream{};
+    };
+
+    std::optional<WeightPlan> GetWeightPlan(const WeightQuery& query) const;
+
+    std::vector<DataType> DataTypes(const DataFormat& weight_format) const;
+
+    [[nodiscard]] int Run(const ExecPlan& plan, const Arguments& args);
 
     [[maybe_unused]] int Export(std::ostream& os);
 
@@ -49,6 +64,11 @@ public:
     [[nodiscard]] std::vector<int> GetTuningSeq() const;
 
 private:
+    friend class ::turbomind::LlamaLinear;
+
+    std::optional<ExecPlan> GetExecPlan(const Arguments& args);
+    std::optional<ExecPlan> Tune(const Arguments& args);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

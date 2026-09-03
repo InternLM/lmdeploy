@@ -47,8 +47,6 @@ __device__ __forceinline__ E2m1Bf16ByteTable make_nvfp4_e2m1_bf16_byte_table(uin
 template<>
 struct Sm90MixedDequant<Sm90NvFp4Format> {
     static constexpr int kWordsPerThreadKBlock = 1;
-    static constexpr int kScaleGroups          = kSm90MixedTileK / Sm90NvFp4Format::kGroupSize;
-    static_assert(kScaleGroups == 4);
 
     struct SharedStorage {
         cute::array_aligned<E2m1Bf16ByteTable, kNvFp4E2m1TableCount, 16> tables;
@@ -68,23 +66,26 @@ struct Sm90MixedDequant<Sm90NvFp4Format> {
 
     template<int RestM>
     struct Registers {
-        uint16_t scale_pair[kScaleGroups][RestM]{};
+        uint16_t scale_pair[RestM]{};
     };
 
     template<int RestM, int AtomM, int TileOut>
-    __device__ static void load(Registers<RestM>& regs, const uint8_t* q, int segment_base, int segment_stride, int local_tid)
+    __device__ static void
+    load(Registers<RestM>& regs,
+         const uint8_t*    q,
+         int               segment_base,
+         int               segment_stride,
+         int               group,
+         int               local_tid)
     {
         static_assert(TileOut == RestM * AtomM * 64);
         const int pair = local_tid / 4;
 
         CUTE_UNROLL
-        for (int group = 0; group < kScaleGroups; ++group) {
-            CUTE_UNROLL
-            for (int rest_m = 0; rest_m < RestM; ++rest_m) {
-                const int   segment  = segment_base + rest_m * segment_stride;
-                const auto* fragment = q + group * TileOut + segment * kSm90MixedFragmentN;
-                regs.scale_pair[group][rest_m] = reinterpret_cast<const uint16_t*>(fragment)[pair];
-            }
+        for (int rest_m = 0; rest_m < RestM; ++rest_m) {
+            const int   segment  = segment_base + rest_m * segment_stride;
+            const auto* fragment = q + group * TileOut + segment * kSm90MixedFragmentN;
+            regs.scale_pair[rest_m] = reinterpret_cast<const uint16_t*>(fragment)[pair];
         }
     }
 
@@ -93,11 +94,11 @@ struct Sm90MixedDequant<Sm90NvFp4Format> {
     dequant(const uint32_t*      packed,
             const Registers<RestM>& regs,
             int                  rest_m,
-            int                  kb,
+            int /*local_tid*/,
             const SharedStorage& storage,
             nv_bfloat16*         out)
     {
-        const uint16_t scales = regs.scale_pair[kb][rest_m];
+        const uint16_t scales = regs.scale_pair[rest_m];
         const auto     table_lo = storage.tables[static_cast<uint8_t>(scales)];
         const auto     table_hi = storage.tables[static_cast<uint8_t>(scales >> 8)];
         auto*          h        = reinterpret_cast<uint32_t*>(out);

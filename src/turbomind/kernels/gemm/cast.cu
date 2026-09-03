@@ -164,67 +164,6 @@ void fuse_scales_and_zeros(half* fused, const half* scales, half* zeros, size_t 
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
-#if ENABLE_BF16
-
-namespace {
-
-__device__ float qparam_to_float(half value)
-{
-    return __half2float(value);
-}
-
-__device__ float qparam_to_float(nv_bfloat16 value)
-{
-    return __bfloat162float(value);
-}
-
-__device__ float qparam_to_float(float value)
-{
-    return value;
-}
-
-template<class T>
-__global__ void fuse_scales_and_zeros_bf16_kernel(nv_bfloat16* fused, const T* scales, const T* zeros, size_t n)
-{
-    for (size_t idx = threadIdx.x + (size_t)blockDim.x * blockIdx.x; idx < n; idx += (size_t)blockDim.x * gridDim.x) {
-        const float scale  = qparam_to_float(scales[idx]);
-        const float zero   = zeros ? qparam_to_float(zeros[idx]) : 0.f;
-        fused[idx * 2]     = __float2bfloat16_rn(scale);
-        fused[idx * 2 + 1] = __float2bfloat16_rn(zero + 128.f);
-    }
-}
-
-}  // namespace
-
-#endif
-
-void fuse_scales_and_zeros_bf16(
-    bfloat16_t* fused, const void* scales, const void* zeros, DataType src_type, size_t n, cudaStream_t st)
-{
-#if ENABLE_BF16
-    constexpr int block = 256;
-    constexpr int grid  = 256;
-    if (src_type == kHalf) {
-        fuse_scales_and_zeros_bf16_kernel<<<grid, block, 0, st>>>(
-            (nv_bfloat16*)fused, (const half*)scales, (const half*)zeros, n);
-    }
-    else if (src_type == kBfloat16) {
-        fuse_scales_and_zeros_bf16_kernel<<<grid, block, 0, st>>>(
-            (nv_bfloat16*)fused, (const nv_bfloat16*)scales, (const nv_bfloat16*)zeros, n);
-    }
-    else if (src_type == kFloat) {
-        fuse_scales_and_zeros_bf16_kernel<<<grid, block, 0, st>>>(
-            (nv_bfloat16*)fused, (const float*)scales, (const float*)zeros, n);
-    }
-    else {
-        TM_LOG_FATAL("Unsupported BF16 qparam source type: {}", to_string(src_type));
-    }
-    TM_CUDA_CHECK(cudaGetLastError());
-#else
-    TM_LOG_FATAL("BF16 qparam fusion requires ENABLE_BF16");
-#endif
-}
-
 template<int VecSize, class T>
 __global__ void
 interleave_output_dims_kernel(T* __restrict__ fused, const T* __restrict__ a, const T* __restrict__ b, int m, int k)
@@ -325,6 +264,39 @@ Tensor BlockscaleToGroupscale(const Tensor& scales, DataType data_type, int bloc
     TM_CUDA_CHECK(cudaGetLastError());
 
     return ret;
+}
+
+template<class T>
+__global__ void ReplicateQParams_Kernel(T* dst, const T* src, int rows, int cols, int2 factors)
+{
+    const int64_t idx = threadIdx.x + (int64_t)blockIdx.x * blockDim.x;
+    const int64_t n   = (int64_t)rows * factors.x * cols * factors.y;
+    if (idx < n) {
+        const int dst_cols = cols * factors.y;
+        const int r        = idx / dst_cols;
+        const int c        = idx % dst_cols;
+        dst[idx]           = src[(r / factors.x) * cols + c / factors.y];
+    }
+}
+
+Tensor ReplicateQParams(const Tensor& src, int2 factors, cudaStream_t stream)
+{
+    TM_CHECK(src);
+    TM_CHECK_EQ(src.ndim(), 2);
+    if (factors.x == 1 && factors.y == 1) {
+        return src;
+    }
+    const int rows = src.shape(0);
+    const int cols = src.shape(1);
+    Tensor    dst{{rows * factors.x, cols * factors.y}, src.dtype(), kDEVICE};
+    auto      invoke = [&](auto value) {
+        using T = decltype(value);
+        ReplicateQParams_Kernel<<<(dst.size() + 255) / 256, 256, 0, stream>>>(
+            dst.data<T>(), src.data<T>(), rows, cols, factors);
+    };
+    TM_DISPATCH_DTYPES(src.dtype(), invoke, half_t, bfloat16_t, float);
+    TM_CUDA_CHECK(cudaGetLastError());
+    return dst;
 }
 
 }  // namespace turbomind

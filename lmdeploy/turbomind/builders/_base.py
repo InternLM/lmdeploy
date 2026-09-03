@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import enum
+import math
 
 import _turbomind as _tm
 import torch
@@ -19,8 +20,8 @@ class SplitSide(enum.Enum):
     INPUT  -- row-parallel:    split along the input dimension  (axis  0)
     """
 
-    OUTPUT = 'output'
-    INPUT = 'input'
+    OUTPUT = "output"
+    INPUT = "input"
 
 
 # ---------------------------------------------------------------------------
@@ -28,13 +29,13 @@ class SplitSide(enum.Enum):
 # ---------------------------------------------------------------------------
 
 _TORCH_TO_CPP: dict[torch.dtype, _tm.DataType] = {
-    torch.float32:  _tm.DataType.TYPE_FP32,
-    torch.float16:  _tm.DataType.TYPE_FP16,
+    torch.float32: _tm.DataType.TYPE_FP32,
+    torch.float16: _tm.DataType.TYPE_FP16,
     torch.bfloat16: _tm.DataType.TYPE_BF16,
-    torch.int32:    _tm.DataType.TYPE_INT32,
-    torch.int64:    _tm.DataType.TYPE_INT64,
-    torch.int8:     _tm.DataType.TYPE_INT8,
-    torch.uint8:    _tm.DataType.TYPE_UINT8,
+    torch.int32: _tm.DataType.TYPE_INT32,
+    torch.int64: _tm.DataType.TYPE_INT64,
+    torch.int8: _tm.DataType.TYPE_INT8,
+    torch.uint8: _tm.DataType.TYPE_UINT8,
 }
 
 _CPP_TO_TORCH: dict[_tm.DataType, torch.dtype] = {v: k for k, v in _TORCH_TO_CPP.items()}
@@ -49,7 +50,7 @@ _SPLIT_SIDE_TO_DIM: dict[SplitSide, int] = {SplitSide.OUTPUT: -1, SplitSide.INPU
 
 def _act_type_id(act_str: str) -> int:
     """Convert activation_type string to C++ ActivationType enum value."""
-    return {'silu': 0, 'gpt-oss': 1}.get(act_str, 0)
+    return {"silu": 0, "gpt-oss": 1}.get(act_str, 0)
 
 
 def _torch_dtype_to_cpp(dtype: torch.dtype):
@@ -68,10 +69,9 @@ def _cast_shard_for_tm(shard: torch.Tensor, tm_tensor) -> torch.Tensor:
     return shard
 
 
-
-def _copy_shard_to_param(handle, param_name: str, shard: torch.Tensor, *,
-                         alloc_shape: list[int] | None = None,
-                         alloc_dtype=None) -> None:
+def _copy_shard_to_param(
+    handle, param_name: str, shard: torch.Tensor, *, alloc_shape: list[int] | None = None, alloc_dtype=None
+) -> None:
     """Allocate the C++ param slot, cast, and copy the shard.
 
     Invariant: ``dst.byte_size == shard.nbytes`` after the cast.  Upstream
@@ -94,13 +94,12 @@ def _copy_shard_to_param(handle, param_name: str, shard: torch.Tensor, *,
     dst = handle.param(param_name).alloc(alloc_shape, alloc_dtype)
     shard = _cast_shard_for_tm(shard, dst)
     assert dst.byte_size == shard.nbytes, (
-        f'{param_name}: alloc byte_size={dst.byte_size} != '
-        f'shard.nbytes={shard.nbytes}')
+        f"{param_name}: alloc byte_size={dst.byte_size} != shard.nbytes={shard.nbytes}"
+    )
     dst.copy_from(shard)
 
 
-def _shard(tensor: torch.Tensor, split_dim: int | None, tp: int,
-           rank: int) -> torch.Tensor:
+def _shard(tensor: torch.Tensor, split_dim: int | None, tp: int, rank: int) -> torch.Tensor:
     """Return the ``rank``-th split along ``split_dim``, or the tensor
     unchanged.
 
@@ -125,7 +124,7 @@ class BuiltModule:
     to the underlying list so callers can ``zip(BuiltModule, contexts)`` etc.
     """
 
-    __slots__ = ('handles',)
+    __slots__ = ("handles",)
 
     def __init__(self, handles):
         self.handles = handles
@@ -139,10 +138,17 @@ class BuiltModule:
 
 class Context:
     """Bundle of per-GPU contexts and the model compute dtype."""
-    def __init__(self, devices, data_type):
+
+    def __init__(self, devices, gemm, data_type, gemm_input_dtype):
         self.devices = devices
+        self.gemm = gemm
         self.data_type = data_type
+        self.gemm_input_dtype = gemm_input_dtype
         self._active_mask_stack = [(True,) * len(devices)]
+
+    @property
+    def dtype(self):
+        return _CPP_TO_TORCH[self.data_type]
 
     @property
     def active_mask(self):
@@ -169,6 +175,7 @@ class _ActiveMaskScope:
 
 class ParallelGroup:
     """Bundle a parallelism size with per-GPU ranks."""
+
     def __init__(self, size, ranks):
         self.size = size
         self.ranks = ranks
@@ -205,9 +212,9 @@ class Builder:
         self._built = False
         self._ctx = ctx
         self._active_mask = ctx.active_mask
-        self.tp = ParallelGroup(1, None)   # default: no TP
+        self.tp = ParallelGroup(1, None)  # default: no TP
         self.config = config
-        if hasattr(self.config, 'data_type'):
+        if hasattr(self.config, "data_type"):
             self.config.data_type = ctx.data_type
         self._pending_tensors = {}
         self._pending_children = {}
@@ -220,13 +227,11 @@ class Builder:
     def __setattr__(self, name: str, value):
         if isinstance(value, Builder):
             raise TypeError(
-                f'{type(self).__name__}.{name}: assign .build() output '
-                f'(BuiltModule), not the Builder itself')
+                f"{type(self).__name__}.{name}: assign .build() output (BuiltModule), not the Builder itself"
+            )
         if isinstance(value, BuiltModule):
             if self._built:
-                raise RuntimeError(
-                    f'{type(self).__name__} is built; '
-                    f'cannot assign {name!r}')
+                raise RuntimeError(f"{type(self).__name__} is built; cannot assign {name!r}")
             self._add_child(name, value.handles)
             return
         object.__setattr__(self, name, value)
@@ -251,25 +256,57 @@ class Builder:
     # Add methods — stage into pending dicts (pre-build only)
     # ------------------------------------------------------------------
 
-    def _add_linear(self, name: str, linear: Linear,
-                       split_side: SplitSide | None = None):
+    def _make_gemm_query(self, linear: Linear, *, grouped: bool = False):
+        query = _tm.WeightQuery()
+        query.data_type = self.config.data_type
+        query.weight_format = linear.weight_format.make_data_format()
+        query.input_dtype = self._ctx.gemm_input_dtype
+        query.grouped = grouped
+        return query
+
+    def _query_gemm(self, query):
+        with self._ctx.devices[0]:
+            plan = self._ctx.gemm.get_weight_plan(query)
+        if plan is None:
+            raise RuntimeError("no GEMM kernel family for this component")
+        return plan
+
+    def _add_linear(self, name: str, linear: Linear, split_side: SplitSide | None = None, plan=None):
         """Create standalone LinearWeight modules and copy tensor data.
 
         Creates per-GPU LinearWeight modules via ``_tm.create_module``
         at commit time.  Attachment to the parent module is deferred to
         ``build()`` via ``_commit_child``.
         """
-        assert not self._built, (
-            f"{type(self).__name__} is built; commit '{name}' rejected")
+        assert not self._built, f"{type(self).__name__} is built; commit '{name}' rejected"
 
-        w = linear.tensors.get('weight')
+        w = linear.tensors.get("weight")
         if w is None:
             return
 
-        # --- GPU-invariant preparation -------------------------------------
-        fmt = linear.weight_format
+        if plan is None:
+            plan = self._query_gemm(self._make_gemm_query(linear))
 
+        family = plan.family
+        fmt = linear.weight_format
+        ((min_k, min_n), (align_k, align_n)) = plan.shape_constraints
         tp = self.tp.size if split_side else 1
+        k = int(w.shape[0])
+        n = int(w.shape[-1])
+        if split_side == SplitSide.INPUT:
+            min_k *= tp
+            align_k *= tp
+        elif split_side == SplitSide.OUTPUT:
+            min_n *= tp
+            align_n *= tp
+        if k < min_k or k % align_k or n < min_n or n % align_n:
+            raise RuntimeError(
+                f"{name}: {family} requires K >= {min_k}, "
+                f"K % {align_k} == 0, N >= {min_n}, and "
+                f"N % {align_n} == 0; got K={k} N={n}"
+            )
+
+        # --- GPU-invariant preparation -------------------------------------
         split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
 
         in_dim, out_dim = w.shape[0], w.shape[-1]
@@ -280,19 +317,17 @@ class Builder:
 
         compute_dtype = self.config.data_type
         lin_cfg = _tm.LinearConfig()
-        lin_cfg.input_dim  = in_dim
+        lin_cfg.input_dim = in_dim
         lin_cfg.output_dim = out_dim
-        lin_cfg.data_type  = compute_dtype or _tm.DataType.TYPE_INVALID
-        lin_cfg.format     = linear.weight_format.make_data_format(compute_dtype)
-        lin_cfg.has_bias   = 'bias' in linear.tensors
+        lin_cfg.data_type = compute_dtype or _tm.DataType.TYPE_INVALID
+        lin_cfg.format = linear.weight_format.make_data_format()
+        lin_cfg.has_bias = "bias" in linear.tensors
 
         packed = {k: fmt.pack(t, k) for k, t in linear.tensors.items()}
         tensors = {k: p.tensor for k, p in packed.items()}
 
         kind_split_dims = {
-            kind: None if (kind == 'bias' and split_side == SplitSide.INPUT)
-                  else split_dim
-            for kind in tensors
+            kind: None if (kind == "bias" and split_side == SplitSide.INPUT) else split_dim for kind in tensors
         }
 
         if tp > 1 and split_dim is not None:
@@ -301,8 +336,8 @@ class Builder:
                 if kind_split_dim is not None:
                     d = tensor.shape[kind_split_dim]
                     assert d % tp == 0, (
-                        f'TP split: {name}.{kind} dim {kind_split_dim} '
-                        f'has size {d}, not divisible by tp={tp}.')
+                        f"TP split: {name}.{kind} dim {kind_split_dim} has size {d}, not divisible by tp={tp}."
+                    )
 
         # --- Per-GPU: standalone creation + tensor copy --------------------
         handles = []
@@ -314,36 +349,31 @@ class Builder:
                 rank = self._rank_for(i) if tp > 1 else 0
 
                 mod = _tm.create_module(lin_cfg)
+                mod.set_plan(plan)
 
                 for kind, tensor in tensors.items():
                     shard = _shard(tensor, kind_split_dims[kind], tp, rank)
 
-                    alloc_shape, alloc_dtype = packed[kind].alloc_shape, \
-                                               packed[kind].alloc_dtype
-                    if alloc_shape is not None and split_dim is not None \
-                            and tp > 1:
+                    alloc_shape, alloc_dtype = packed[kind].alloc_shape, packed[kind].alloc_dtype
+                    if alloc_shape is not None and split_dim is not None and tp > 1:
                         alloc_shape = list(alloc_shape)
                         alloc_shape[split_dim] //= tp
-                    if alloc_dtype is None and kind == 'weight':
+                    if alloc_dtype is None and kind == "weight":
                         alloc_dtype = self.config.data_type
 
-                    _copy_shard_to_param(mod, kind, shard,
-                                         alloc_shape=alloc_shape,
-                                         alloc_dtype=alloc_dtype)
+                    _copy_shard_to_param(mod, kind, shard, alloc_shape=alloc_shape, alloc_dtype=alloc_dtype)
 
                 handles.append(mod)
 
         self._add_child(name, handles)
 
-    def _add_tensor(self, name: str, tensor: torch.Tensor | None,
-                       split_side: SplitSide | None = None):
+    def _add_tensor(self, name: str, tensor: torch.Tensor | None, split_side: SplitSide | None = None):
         """Stage a raw-tensor commit under ``name``.
 
         Applied during
         ``build()`` in ``_commit_tensor``.
         """
-        assert not self._built, (
-            f"{type(self).__name__} is built; commit '{name}' rejected")
+        assert not self._built, f"{type(self).__name__} is built; commit '{name}' rejected"
         if tensor is not None:
             self._pending_tensors[name] = (tensor, split_side)
 
@@ -356,10 +386,8 @@ class Builder:
 
         Applied during ``build()`` in ``_commit_child``.
         """
-        assert not self._built, (
-            f"{type(self).__name__} is built; commit '{name}' rejected")
-        assert name not in self._pending_children, (
-            f"{type(self).__name__}: duplicate child commit '{name}'")
+        assert not self._built, f"{type(self).__name__} is built; commit '{name}' rejected"
+        assert name not in self._pending_children, f"{type(self).__name__}: duplicate child commit '{name}'"
         self._pending_children[name] = handles
 
     # ------------------------------------------------------------------
@@ -404,7 +432,7 @@ class Builder:
 
     def _cfg_for_rank(self, gpu_idx: int):
         """Clone config and set tp_rank if tp > 1."""
-        if self.tp.size > 1 and hasattr(self.config, 'tp_rank'):
+        if self.tp.size > 1 and hasattr(self.config, "tp_rank"):
             cfg = self.config.clone()
             cfg.tp_rank = self.tp.ranks[gpu_idx]
             return cfg
@@ -412,8 +440,7 @@ class Builder:
 
     def _commit_child(self, name: str, handles: list):
         """Attach pre-created per-GPU child handles to parent handles."""
-        for i, (parent_h, child_h) in enumerate(
-                zip(self._handles, handles, strict=True)):
+        for i, (parent_h, child_h) in enumerate(zip(self._handles, handles, strict=True)):
             if parent_h is None or child_h is None:
                 continue
             with self._ctx.devices[i]:
@@ -423,8 +450,7 @@ class Builder:
     # Commit methods — drain pending dicts to C++ modules
     # ------------------------------------------------------------------
 
-    def _commit_tensor(self, name: str, tensor: torch.Tensor,
-                      split_side: SplitSide | None = None):
+    def _commit_tensor(self, name: str, tensor: torch.Tensor, split_side: SplitSide | None = None):
         """Commit a raw tensor to a named parameter on all GPUs.
 
         Parameters
@@ -445,5 +471,4 @@ class Builder:
             with self._ctx.devices[i]:
                 rank = self._rank_for(i) if tp > 1 else 0
                 shard = _shard(tensor, split_dim, tp, rank)
-                _copy_shard_to_param(handle, name, shard,
-                                     alloc_dtype=None)
+                _copy_shard_to_param(handle, name, shard, alloc_dtype=None)

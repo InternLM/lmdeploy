@@ -91,18 +91,19 @@ mixed_tma_load_with_barrier(const cute::TmaDescriptor* desc,
 }
 
 // One word contains eight U4 values in operand-A fragment order.  LOP3
-// materializes four BF16x2 pairs biased by +128; metadata stores
-// {scale, effective_zero=zero+128}.
-__device__ __forceinline__ void u4_unpack_dequant(uint32_t     packed,
-                                                  uint32_t     scale_lo_pair,
-                                                  uint32_t     zero_lo_pair,
-                                                  uint32_t     scale_hi_pair,
-                                                  uint32_t     zero_hi_pair,
-                                                  nv_bfloat16* out)
+// materializes four BF16x2 pairs biased by +128; packed qparams are expanded
+// immediately before the dequantization arithmetic.
+__device__ __forceinline__ void
+u4_unpack_dequant(uint32_t packed, uint32_t scales, uint32_t zeros, nv_bfloat16* out)
 {
     constexpr uint32_t kBf16x2_128 = 0x43004300u;
     constexpr uint32_t kNibbleMask = 0x000f000fu;
     constexpr uint32_t kLut        = (0xf0 & 0xcc) | 0xaa;
+
+    uint32_t zero_pair;
+    asm volatile("lop3.b32 %0, %1, %2, %3, %4;"
+                 : "=r"(zero_pair)
+                 : "r"(zeros), "n"(kNibbleMask), "n"(kBf16x2_128), "n"(kLut));
 
     auto* h = reinterpret_cast<uint32_t*>(out);
     asm volatile("lop3.b32 %0, %1, %2, %3, %4;"
@@ -118,21 +119,21 @@ __device__ __forceinline__ void u4_unpack_dequant(uint32_t     packed,
                  : "=r"(h[3])
                  : "r"(packed >> 12), "n"(kNibbleMask), "n"(kBf16x2_128), "n"(kLut));
 
-    auto& scale_lo = reinterpret_cast<const nv_bfloat162&>(scale_lo_pair);
-    auto& zero_lo  = reinterpret_cast<const nv_bfloat162&>(zero_lo_pair);
-    auto& scale_hi = reinterpret_cast<const nv_bfloat162&>(scale_hi_pair);
-    auto& zero_hi  = reinterpret_cast<const nv_bfloat162&>(zero_hi_pair);
-    auto* h2       = reinterpret_cast<nv_bfloat162*>(out);
+    const auto& scale = reinterpret_cast<const nv_bfloat162&>(scales);
+    const auto& zero  = reinterpret_cast<const nv_bfloat162&>(zero_pair);
+    auto*       h2    = reinterpret_cast<nv_bfloat162*>(out);
 
-    h2[0] = __hmul2(__hsub2(h2[0], zero_lo), scale_lo);
-    h2[1] = __hmul2(__hsub2(h2[1], zero_hi), scale_hi);
-    h2[2] = __hmul2(__hsub2(h2[2], zero_lo), scale_lo);
-    h2[3] = __hmul2(__hsub2(h2[3], zero_hi), scale_hi);
+    // __bfloat162bfloat162 broadcasts x/y to both BF16 lanes; SM90 lowers
+    // these operands to the H0_H0/H1_H1 modifiers without materializing pairs.
+    h2[0] = __hmul2(__hsub2(h2[0], __bfloat162bfloat162(zero.x)), __bfloat162bfloat162(scale.x));
+    h2[1] = __hmul2(__hsub2(h2[1], __bfloat162bfloat162(zero.y)), __bfloat162bfloat162(scale.y));
+    h2[2] = __hmul2(__hsub2(h2[2], __bfloat162bfloat162(zero.x)), __bfloat162bfloat162(scale.x));
+    h2[3] = __hmul2(__hsub2(h2[3], __bfloat162bfloat162(zero.y)), __bfloat162bfloat162(scale.y));
 }
 
 // Decode two direct and two nibble-rotated E4M3 pair planes into the BF16 register fragment consumed by one
 // m64n*k16 RS WGMMA operand-A lane, then apply the B128 weight scale.
-__device__ __forceinline__ void fp8_e4m3_unpack_dequant(const uint32_t* packed, uint32_t scale_pair, nv_bfloat16* out)
+__device__ __forceinline__ void fp8_e4m3_unpack_dequant(const uint32_t* packed, uint16_t scale_bits, nv_bfloat16* out)
 {
     constexpr uint32_t kDirectPairMask = 0x87f087f0u;
     constexpr uint32_t kShiftLeftMask  = 0x080f080fu;
@@ -149,15 +150,19 @@ __device__ __forceinline__ void fp8_e4m3_unpack_dequant(const uint32_t* packed, 
         h[i + 2]         = ((x & kShiftLeftMask) << 4) | ((x & kShiftRightMask) >> 4);
     }
 
+    const auto& scale = reinterpret_cast<const nv_bfloat16&>(scale_bits);
+    auto*       h2    = reinterpret_cast<nv_bfloat162*>(out);
+
+    // SM90 lowers the scalar BF16 broadcast to H0_H0 without materializing a BF16x2 scale pair.
     CUTE_UNROLL
     for (int i = 0; i < 4; ++i) {
         asm("mul.rn.bf16x2 %0, %1, %2;" : "=r"(h[i]) : "r"(h[i]), "r"(kNormalizePair));
-        asm("mul.rn.bf16x2 %0, %1, %2;" : "=r"(h[i]) : "r"(h[i]), "r"(scale_pair));
+        h2[i] = __hmul2(h2[i], __bfloat162bfloat162(scale));
     }
 }
 
-template<>
-struct Sm90MixedDequant<Sm90U4Format> {
+template<int GroupSize>
+struct Sm90MixedDequant<Sm90U4Format<GroupSize>> {
     static constexpr int kWordsPerThreadKBlock = 1;
 
     struct SharedStorage {};
@@ -171,33 +176,34 @@ struct Sm90MixedDequant<Sm90U4Format> {
 
     template<int RestM>
     struct Registers {
-        uint32_t scale_lo_pair[RestM]{};
-        uint32_t zero_lo_pair[RestM]{};
-        uint32_t scale_hi_pair[RestM]{};
-        uint32_t zero_hi_pair[RestM]{};
+        uint32_t scales[RestM]{};
+        uint32_t zeros[RestM]{};
     };
 
     template<int RestM, int AtomM, int TileOut>
-    __device__ static void load(Registers<RestM>& regs, const uint8_t* smem, int segment_base, int segment_stride, int local_tid)
+    __device__ static void
+    load(Registers<RestM>& regs,
+         const uint8_t*    smem,
+         int               segment_base,
+         int               segment_stride,
+         int               group,
+         int               local_tid)
     {
         static_assert(TileOut == RestM * AtomM * 64);
-        const auto* q = reinterpret_cast<const uint32_t*>(smem);
-
         CUTE_UNROLL
         for (int rest_m = 0; rest_m < RestM; ++rest_m) {
-            const int      segment     = segment_base + rest_m * segment_stride;
-            const int      pair        = local_tid / 4;
-            const uint2    lo_hi       = reinterpret_cast<const uint2*>(q + segment * 64)[pair];
-            const uint32_t lo          = lo_hi.x;
-            const uint32_t hi          = lo_hi.y;
-            const uint32_t s_lo        = lo & 0xffffu;
-            const uint32_t z_lo        = lo >> 16;
-            const uint32_t s_hi        = hi & 0xffffu;
-            const uint32_t z_hi        = hi >> 16;
-            regs.scale_lo_pair[rest_m] = s_lo | (s_lo << 16);
-            regs.zero_lo_pair[rest_m]  = z_lo | (z_lo << 16);
-            regs.scale_hi_pair[rest_m] = s_hi | (s_hi << 16);
-            regs.zero_hi_pair[rest_m]  = z_hi | (z_hi << 16);
+            constexpr int kScaleBytes = kSm90MixedFragmentN * sizeof(bfloat16_t);
+            const int     segment     = segment_base + rest_m * segment_stride;
+            const auto* fragment =
+                smem + (group * TileOut / kSm90MixedFragmentN + segment)
+                           * Sm90U4Format<GroupSize>::kQparamValuesFragment;
+            const int pair = local_tid / 4;
+            const uint32_t scales = reinterpret_cast<const uint32_t*>(fragment)[pair];
+            // The 16 lanes owning one 8x16 core matrix broadcast its eight
+            // packed zero points.
+            const uint32_t zero_word = reinterpret_cast<const uint32_t*>(fragment + kScaleBytes)[pair / 4];
+            regs.scales[rest_m] = scales;
+            regs.zeros[rest_m]  = zero_word;
         }
     }
 
@@ -206,24 +212,19 @@ struct Sm90MixedDequant<Sm90U4Format> {
     dequant(const uint32_t*      packed,
             const Registers<RestM>& regs,
             int                  rest_m,
-            int /*kb*/,
+            int                  local_tid,
             const SharedStorage&,
             nv_bfloat16* out)
     {
-        u4_unpack_dequant(packed[0],
-                          regs.scale_lo_pair[rest_m],
-                          regs.zero_lo_pair[rest_m],
-                          regs.scale_hi_pair[rest_m],
-                          regs.zero_hi_pair[rest_m],
-                          out);
+        const int      pair  = local_tid / 4;
+        const uint32_t zeros = regs.zeros[rest_m] >> ((pair % 4) * 4);
+        u4_unpack_dequant(packed[0], regs.scales[rest_m], zeros, out);
     }
 };
 
 template<>
 struct Sm90MixedDequant<Sm90MxFp4Format> {
     static constexpr int kWordsPerThreadKBlock = 1;
-    static constexpr int kScaleGroups          = kSm90MixedTileK / Sm90MxFp4Format::kGroupSize;
-    static_assert(kScaleGroups == 2);
 
     struct SharedStorage {};
 
@@ -236,23 +237,26 @@ struct Sm90MixedDequant<Sm90MxFp4Format> {
 
     template<int RestM>
     struct Registers {
-        uint16_t exponent_pair[kScaleGroups][RestM]{};
+        uint16_t exponent_pair[RestM]{};
     };
 
     template<int RestM, int AtomM, int TileOut>
-    __device__ static void load(Registers<RestM>& regs, const uint8_t* q, int segment_base, int segment_stride, int local_tid)
+    __device__ static void
+    load(Registers<RestM>& regs,
+         const uint8_t*    q,
+         int               segment_base,
+         int               segment_stride,
+         int               group,
+         int               local_tid)
     {
         static_assert(TileOut == RestM * AtomM * 64);
         const int pair = local_tid / 4;
 
         CUTE_UNROLL
-        for (int group = 0; group < kScaleGroups; ++group) {
-            CUTE_UNROLL
-            for (int rest_m = 0; rest_m < RestM; ++rest_m) {
-                const int   segment  = segment_base + rest_m * segment_stride;
-                const auto* fragment = q + group * TileOut + segment * kSm90MixedFragmentN;
-                regs.exponent_pair[group][rest_m] = reinterpret_cast<const uint16_t*>(fragment)[pair];
-            }
+        for (int rest_m = 0; rest_m < RestM; ++rest_m) {
+            const int   segment  = segment_base + rest_m * segment_stride;
+            const auto* fragment = q + group * TileOut + segment * kSm90MixedFragmentN;
+            regs.exponent_pair[rest_m] = reinterpret_cast<const uint16_t*>(fragment)[pair];
         }
     }
 
@@ -261,12 +265,11 @@ struct Sm90MixedDequant<Sm90MxFp4Format> {
     dequant(const uint32_t*      packed,
             const Registers<RestM>& regs,
             int                  rest_m,
-            int                  kb,
+            int /*local_tid*/,
             const SharedStorage&,
             nv_bfloat16* out)
     {
-        const int group = kb / (Sm90MxFp4Format::kGroupSize / 16);
-        e2m1_prmt_unpack_scaled(packed[0], regs.exponent_pair[group][rest_m], out);
+        e2m1_prmt_unpack_scaled(packed[0], regs.exponent_pair[rest_m], out);
     }
 };
 
@@ -285,19 +288,19 @@ struct Sm90MixedDequant<Sm90Fp8E4M3Format> {
 
     template<int RestM>
     struct Registers {
-        uint32_t scale_pair[RestM]{};
+        uint16_t scale[RestM]{};
     };
 
     template<int RestM, int AtomM, int TileOut>
-    __device__ static void load(Registers<RestM>& regs, const uint8_t* smem, int segment_base, int segment_stride, int /*local_tid*/)
+    __device__ static void load(
+        Registers<RestM>& regs, const uint8_t* smem, int segment_base, int segment_stride, int /*group*/, int /*local_tid*/)
     {
         static_assert(TileOut == RestM * AtomM * 64);
         const auto* scale = reinterpret_cast<const uint16_t*>(smem);
         CUTE_UNROLL
         for (int rest_m = 0; rest_m < RestM; ++rest_m) {
-            const int      segment  = segment_base + rest_m * segment_stride;
-            const uint16_t value    = scale[segment * Sm90Fp8E4M3Format::kQparamValuesFragment];
-            regs.scale_pair[rest_m] = uint32_t(value) | (uint32_t(value) << 16);
+            const int segment = segment_base + rest_m * segment_stride;
+            regs.scale[rest_m] = scale[segment * Sm90Fp8E4M3Format::kQparamValuesFragment];
         }
     }
 
@@ -306,11 +309,11 @@ struct Sm90MixedDequant<Sm90Fp8E4M3Format> {
     dequant(const uint32_t*      packed,
             const Registers<RestM>& regs,
             int                  rest_m,
-            int /*kb*/,
+            int /*local_tid*/,
             const SharedStorage&,
             nv_bfloat16* out)
     {
-        fp8_e4m3_unpack_dequant(packed, regs.scale_pair[rest_m], out);
+        fp8_e4m3_unpack_dequant(packed, regs.scale[rest_m], out);
     }
 };
 
@@ -516,7 +519,7 @@ template<Order    raster_order,
          Striding kStridingA_,
          class Tile_,
          bool kSupportsFusedSilu_ = false,
-         class Format_            = Sm90U4Format>
+         class Format_            = Sm90U4Format<128>>
 struct GemmUniversalSm90Mixed {
     using Arch    = Sm90;
     using Tile    = Tile_;
@@ -1304,15 +1307,19 @@ private:
                 const int  packed_segment_base   = contiguous_fused_wg ? wg_m * kRestM : wg_m;
                 const int  packed_segment_stride = contiguous_fused_wg ? 1 : kAtomM;
 
-                auto load_qparams = [&](int stage) {
+                auto load_qparams = [&](int stage, int group) {
                     auto*     q     = storage.Q.data() + stage * kQparamBytesStage;
-                    Dequant::template load<kRestM, kAtomM, TILE_N>(qregs, q, packed_segment_base, packed_segment_stride, local_tid);
+                    Dequant::template load<kRestM, kAtomM, TILE_N>(
+                        qregs, q, packed_segment_base, packed_segment_stride, group, local_tid);
                 };
 
                 auto load_k_block = [&](int kb, int stage) {
                     constexpr int kWordsPerThread  = Dequant::kWordsPerThreadKBlock;
                     constexpr int kWordsPerKBlock  = WARPGROUP_SIZE * kWordsPerThread;
                     constexpr int kWordsPerKSlice  = kOutputFragments * kWordsPerKBlock;
+                    if (kb % (Format::kGroupSize / kSm90MixedFragmentK) == 0) {
+                        load_qparams(stage, kb / (Format::kGroupSize / kSm90MixedFragmentK));
+                    }
                     CUTE_UNROLL
                     for (int rest_m = 0; rest_m < kRestM; ++rest_m) {
                         const int       segment = packed_segment_base + rest_m * packed_segment_stride;
@@ -1324,7 +1331,7 @@ private:
                             packed,
                             qregs,
                             rest_m,
-                            kb,
+                            local_tid,
                             storage,
                             reinterpret_cast<nv_bfloat16*>(frag.data()));
                     }
@@ -1339,12 +1346,6 @@ private:
                     pipeline.consumer_wait(pipe_state, token);
                     const int stage = pipe_state.index();
                     ++pipe_state;
-                    if constexpr (kKTilesPerQGroup == 1) {
-                        load_qparams(stage);
-                    }
-                    else if (k_tile % kKTilesPerQGroup == 0) {
-                        load_qparams(stage);
-                    }
 
                     load_k_block(0, stage);
                     CUTE_UNROLL

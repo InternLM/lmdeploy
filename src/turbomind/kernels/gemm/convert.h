@@ -5,18 +5,22 @@
 #include <utility>
 #include <vector>
 
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
+namespace turbomind {
+class LinearWeight;
+}
+
 namespace turbomind::gemm {
+
+struct WeightBridge;
 
 struct LayoutConverter {
 
     Order order;
     Pack  pack;
-    // Optional physical size of a persistent packed element.  Zero means
-    // that the packed representation has the public dtype's bit width.
-    int   storage_bits{};
 
     virtual int Convert(const void*         S,  //
                         const MatrixLayout& Sdesc,
@@ -25,44 +29,24 @@ struct LayoutConverter {
                         cudaStream_t        stream) const = 0;
 };
 
-enum class QParamEncoding
-{
-    kDefault,
-    kBf16ScaleEffZero,
-    kBf16BlockScale,
-    kMxFp4UnbiasedExponent,
-    kMxFp4Fp8Folded,
-    kMxFp4Fp8Unfolded,
-    kNvFp4Scale,
-};
-
-struct ConverterRequest {
-    DataType data_type{};
-    DataType weight_type{};
-    DataType input_type{};
-    bool     grouped{};
-    int      sm{};
-    int      input_dim{};
-    int      output_dim{};
-    int      group_size{};
-    Epilogue epilogue{};
-};
-
-struct ConverterSet {
-    const LayoutConverter* weight{};
-    const LayoutConverter* qparams{};
-    QParamEncoding         qparam_encoding{QParamEncoding::kDefault};
-};
-
-// Pointers to singletons
-ConverterSet GetConverters(const ConverterRequest& request);
+template<class Arch, Order order, uint32_t pack, class Stype, class Dtype>
+const LayoutConverter& GetImpl();
 
 // TM_GEMM_WEIGHT_PACK: unset/-1 = auto, 0 = force plain, 1 = force pack
 int WeightPackEnv();
 
-// Whether this extension was compiled with the native SM90 prepacked mixed
-// precision converters and kernel catalog.
-bool HasSm90MixedKernel();
+void ApplyWeightBridge(LinearWeight&, const WeightBridge&, cudaStream_t);
+void PackWeight(LinearWeight&, const LayoutConverter&, cudaStream_t);
+void PackWeight(LinearWeight&,
+                Pack,
+                void (*)(uint32_t*, const uint16_t*, int, int, cudaStream_t),
+                cudaStream_t);
+void PackQParams(LinearWeight&, const LayoutConverter&, QuantDesc, cudaStream_t);
+void PackQParams(LinearWeight&,
+                 QuantDesc,
+                 Pack,
+                 void (*)(uint8_t*, const uint8_t*, int, int, cudaStream_t),
+                 cudaStream_t);
 
 // Free with `cudaFree`
 void* MakeStridedPtrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream);

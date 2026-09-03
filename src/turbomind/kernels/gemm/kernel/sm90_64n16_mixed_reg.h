@@ -9,17 +9,17 @@
 namespace turbomind::gemm::detail {
 
 template<class Format,
-         Order raster,
+         Order    raster,
          Striding striding,
          class Tile,
-         bool silu = false,
-         int multicast_a = 1,
-         int multicast_b = 1>
+         bool silu        = false,
+         int  multicast_a = 1,
+         int  multicast_b = 1>
 void add(Collector& c)
 {
     constexpr bool grouped = striding != Striding::kFlat;
     using Gemm = GemmUniversalSm90Mixed<raster, multicast_a, multicast_b, grouped, striding, Tile, silu, Format>;
-    c.add(std::make_unique<KernelImplSm90Mixed<Gemm>>());
+    c.add<KernelImplSm90Mixed<Gemm>>();
 }
 
 }  // namespace turbomind::gemm::detail

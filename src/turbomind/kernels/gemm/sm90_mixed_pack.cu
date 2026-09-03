@@ -506,6 +506,72 @@ pack_sm90_qparams_kernel(D* dst, const S* src, int output_dim, int total_tiles)
     }
 }
 
+__global__ __launch_bounds__(256) void pack_sm90_u4_qparams_kernel(uint8_t*          dst,
+                                                                   const bfloat16_t* scales,
+                                                                   const bfloat16_t* zeros,
+                                                                   int               output_dim,
+                                                                   int               total_tiles)
+{
+    using namespace cute;
+
+    using TiledMma = GmmaMixedPackTraits::TiledMma;
+    static_assert(size(TiledMma{}) == Int<256>{});
+    static_assert(tile_size<0>(TiledMma{}) == Int<kSm90MixedTileN>{});
+
+    const int tiles_n     = (output_dim + kSm90MixedTileN - 1) / kSm90MixedTileN;
+    const int fragments_n = output_dim / kSm90MixedFragmentN;
+
+    for (int tile = blockIdx.x; tile < total_tiles; tile += gridDim.x) {
+        const int group  = tile / tiles_n;
+        const int tile_n = tile % tiles_n;
+
+        TiledMma tiled_mma;
+        auto     identity = make_identity_tensor(Shape<Int<kSm90MixedTileN>, Int<kSm90MixedFragmentK>>{});
+        auto     thr_mma  = tiled_mma.get_thread_slice(threadIdx.x);
+        auto     tAcA     = thr_mma.partition_A(identity);
+        static_assert(size(tAcA) == Int<8>{});
+
+        const int local_tid  = threadIdx.x % 128;
+        const int warpgroup  = threadIdx.x / 128;
+        const int fragment_n = tile_n * (kSm90MixedTileN / kSm90MixedFragmentN) + warpgroup;
+        if (fragment_n < fragments_n && local_tid % 4 == 0) {
+            const int pair = local_tid / 4;
+            const int m_lo = get<0>(tAcA(0));
+            const int m_hi = get<0>(tAcA(2));
+
+            const auto* tile_scales = scales + (int64_t)group * output_dim + tile_n * kSm90MixedTileN;
+            const auto* tile_zeros =
+                zeros ? zeros + (int64_t)group * output_dim + tile_n * kSm90MixedTileN : nullptr;
+            auto* fragment =
+                dst + ((int64_t)group * fragments_n + fragment_n) * kSm90U4QparamValuesFragment;
+
+            reinterpret_cast<uint32_t*>(fragment)[pair] =
+                uint32_t(__bfloat16_as_ushort(tile_scales[m_lo]))
+                | (uint32_t(__bfloat16_as_ushort(tile_scales[m_hi])) << 16);
+
+            const uint8_t zero_lo = tile_zeros ? static_cast<uint8_t>(__bfloat162int_rz(tile_zeros[m_lo])) : 0;
+            const uint8_t zero_hi = tile_zeros ? static_cast<uint8_t>(__bfloat162int_rz(tile_zeros[m_hi])) : 0;
+            const uint32_t zero_pair = zero_lo | (zero_hi << 4);
+            const unsigned mask      = __activemask();
+            const int      lane_base = (local_tid % 32) & ~15;
+            const uint32_t zero_0    = __shfl_sync(mask, zero_pair, lane_base);
+            const uint32_t zero_1    = __shfl_sync(mask, zero_pair, lane_base + 4);
+            const uint32_t zero_2    = __shfl_sync(mask, zero_pair, lane_base + 8);
+            const uint32_t zero_3    = __shfl_sync(mask, zero_pair, lane_base + 12);
+            if (local_tid % 16 == 0) {
+                // Store the four low zeros followed by the four high zeros so
+                // a four-bit lane shift aligns both with the LOP3 nibble mask.
+                const uint32_t zero_word = (zero_0 & 0x0fu) | ((zero_1 & 0x0fu) << 4)
+                                           | ((zero_2 & 0x0fu) << 8) | ((zero_3 & 0x0fu) << 12)
+                                           | ((zero_0 & 0xf0u) << 12) | ((zero_1 & 0xf0u) << 16)
+                                           | ((zero_2 & 0xf0u) << 20) | ((zero_3 & 0xf0u) << 24);
+                reinterpret_cast<uint32_t*>(fragment + kSm90MixedFragmentN * sizeof(bfloat16_t))[pair / 4] =
+                    zero_word;
+            }
+        }
+    }
+}
+
 __global__ void pack_sm90_fp8_e4m3_scales_kernel(
     bfloat16_t* dst, const float* src, int group_count, int output_pack_count)
 {
@@ -588,10 +654,23 @@ void PackSm90QParams(D* dst, const S* src, int output_dim, int group_count, cuda
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
-void PackSm90U4QParams(
-    uint32_t* dst, const uint32_t* src, int output_dim, int group_count, cudaStream_t stream)
+void PackSm90U4QParams(uint8_t*          dst,
+                       const bfloat16_t* scales,
+                       const bfloat16_t* zeros,
+                       int               output_dim,
+                       int               group_count,
+                       cudaStream_t      stream)
 {
-    PackSm90QParams(dst, src, output_dim, group_count, stream);
+    TM_CHECK_NOTNULL(dst);
+    TM_CHECK_NOTNULL(scales);
+    TM_CHECK_GT(output_dim, 0);
+    TM_CHECK_GT(group_count, 0);
+    TM_CHECK_EQ(output_dim % kSm90MixedFragmentN, 0);
+
+    const int total_tiles = group_count * ((output_dim + kSm90MixedTileN - 1) / kSm90MixedTileN);
+    const int grid        = std::min(total_tiles, 65535);
+    pack_sm90_u4_qparams_kernel<<<grid, 256, 0, stream>>>(dst, scales, zeros, output_dim, total_tiles);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void PackSm90Fp4QParams(uint8_t* dst, const uint8_t* src, int output_dim, int group_count, cudaStream_t stream)

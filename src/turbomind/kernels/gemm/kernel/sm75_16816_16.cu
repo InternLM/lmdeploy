@@ -2,8 +2,11 @@
 
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/arch/config_sm75_s16816.h"
+#include "src/turbomind/kernels/gemm/convert.cuh"
+#include "src/turbomind/kernels/gemm/kernel/floating_point.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/models/linear_weight.h"
 
 namespace turbomind::gemm {
 
@@ -13,7 +16,11 @@ using S = cache_policy::Stream;
 using D = cache_policy::Default;
 
 namespace {
-Registrar reg([](Collector& c, int /*arch*/) {
+constexpr auto f16_packer = pack_fp<Sm75, kRowMajor, HMMA_16816 | OPERAND_B | 1, kHalf>;
+
+const Family f16{6, 190, kHalf, kHalf, 32, 8, 1, 1, true, true, supports_fp<kHalf>, f16_packer};
+
+Registrar reg(f16, [](Collector& c) {
     if constexpr (1) {
         // clang-format off
         using C = Config_F16<kColMajor, 0>;
@@ -30,6 +37,6 @@ Registrar reg([](Collector& c, int /*arch*/) {
         // clang-format on
     }
 });
-}
+}  // namespace
 
 }  // namespace turbomind::gemm

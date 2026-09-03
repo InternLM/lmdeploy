@@ -84,7 +84,7 @@ public:
         }
     };
 
-    KernelImplSm90Bf16()
+    explicit KernelImplSm90Bf16(const Family& family): Kernel{family}
     {
         // After SM90 BF16 prepare: B is (K, N) ColMajor view of physical (N, K).
         desc_.order_a = kRowMajor;  // A: (M, K)
@@ -111,9 +111,9 @@ public:
         desc_.cta_tile            = {TILE_M, TILE_N, TILE_K};
         desc_.mma_tile            = {1, 1, 1};
         desc_.atom_layout         = {cute::size<0>(typename Gemm::AtomLayoutMNK{}),
-                             cute::size<1>(typename Gemm::AtomLayoutMNK{}),
-                             cute::size<2>(typename Gemm::AtomLayoutMNK{})};
-        desc_.supports_fused_silu = Gemm::kSupportsFusedSilu;
+                                     cute::size<1>(typename Gemm::AtomLayoutMNK{}),
+                                     cute::size<2>(typename Gemm::AtomLayoutMNK{})};
+        desc_.supported_epilogues = Gemm::kSupportsFusedSilu ? Epilogue::kGatedSilu : Epilogue::kNone;
 
         info_.chunk_size_k = Gemm::TILE_K;
 
@@ -288,15 +288,15 @@ public:
         CUtensorMap tm_u{};
         CUtensorMap tm_v{};
 
-        const auto param_A = to_param((void*)A, Adesc);
-        const auto param_B = to_param((void*)B, Bdesc);
+        const auto        param_A = to_param((void*)A, Adesc);
+        const auto        param_B = to_param((void*)B, Bdesc);
         const MatrixParam param_U{};
         const MatrixParam param_V{};
-        const auto param_C = to_param((void*)D, Ddesc);
+        const auto        param_C = to_param((void*)D, Ddesc);
 
         if constexpr (is_grouped_gemm) {
-            const size_t tma_workspace_bytes = (size_t)num_groups * Gemm::kTmaDescNum * sizeof(CUtensorMap)
-                                               + (size_t)(num_groups + 1) * sizeof(int);
+            const size_t tma_workspace_bytes =
+                (size_t)num_groups * Gemm::kTmaDescNum * sizeof(CUtensorMap) + (size_t)(num_groups + 1) * sizeof(int);
             TM_CHECK_LE(tma_workspace_bytes, workspace.tensormaps_size);
             sched.offsets_ = Gemm::PrepareTmaDescs(tm_a,
                                                    tm_b,

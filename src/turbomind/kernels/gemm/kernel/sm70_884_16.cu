@@ -1,8 +1,11 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/kernels/gemm/arch/config_sm70_s884.h"
+#include "src/turbomind/kernels/gemm/convert.cuh"
+#include "src/turbomind/kernels/gemm/kernel/floating_point.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/models/linear_weight.h"
 
 namespace turbomind::gemm {
 
@@ -12,7 +15,11 @@ using S = cache_policy::Stream;
 using D = cache_policy::Default;
 
 namespace {
-Registrar reg([](Collector& c, int /*arch*/) {
+constexpr auto f16_packer = pack_fp<Sm70, kRowMajor, HMMA_884 | OPERAND_B | 1, kHalf>;
+
+const Family f16{1, 190, kHalf, kHalf, 16, 8, 1, 1, true, true, supports_fp<kHalf>, f16_packer};
+
+Registrar reg(f16, [](Collector& c) {
     if constexpr (1) {
         // clang-format off
         using C = Config_F16<kColMajor, 0>;

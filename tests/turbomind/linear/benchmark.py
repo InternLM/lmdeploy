@@ -6,8 +6,12 @@ from dataclasses import dataclass
 
 import torch
 
+from lmdeploy.utils import get_logger
+
 from .cases import VALID_SUITES, expand_suite
 from .fixture import LinearFixture
+
+logger = get_logger('lmdeploy')
 
 
 @dataclass(frozen=True)
@@ -127,7 +131,14 @@ def main(argv: list[str] | None = None) -> int:
         by_case.setdefault(key, []).append(run)
 
     for case_runs in by_case.values():
-        fx = LinearFixture(case_runs[0].case, device=device)
+        try:
+            fx = LinearFixture(case_runs[0].case, device=device)
+        except NotImplementedError as e:
+            if case_names is not None:
+                raise
+            case = case_runs[0].case
+            logger.warning(f'Unsupported benchmark case {case.name} (tp={case.tp}, ep={case.ep}): {e}')
+            continue
         try:
             assert fx.linear is not None
             if import_path:
@@ -161,41 +172,32 @@ def main(argv: list[str] | None = None) -> int:
                     if not args.no_validate:
                         fx.check_tolerances(metrics)
                 if tune or args.iters > 0:
-                    assert fx.linear is not None
-                    with fx.on_tm_stream() as stream:
-                        # Tune before warmup/timed so measure overhead is not in TFLOPS.
-                        # One forward is enough: GEMM measure policy runs its own internal iters.
-                        if tune:
-                            fx.linear.set_measure(True)
+                    stream = torch.cuda.current_stream(fx.device)
+                    if tune:
+                        fx.tune()
+                    if args.iters > 0:
+                        for _ in range(args.warmup):
                             fx.run_linear_forward()
-                            fx.sync_tm()
-                            fx.linear.set_measure(False)
-                            fx.release_forward_result()
-                        if args.iters > 0:
-                            for _ in range(args.warmup):
-                                fx.run_linear_forward()
-                                fx.release_forward_result()
-                            fx.sync_tm()
-                            start = torch.cuda.Event(enable_timing=True)
-                            end = torch.cuda.Event(enable_timing=True)
-                            elapsed_ms = 0.0
-                            # L2 flush is on the TM stream, before the timing window.
-                            for _ in range(args.iters):
-                                if flusher is not None:
-                                    flusher()
-                                start.record(stream)
-                                fx.run_linear_forward()
-                                end.record(stream)
-                                fx.release_forward_result()
-                                end.synchronize()
-                                elapsed_ms += start.elapsed_time(end)
-                            ms = elapsed_ms / args.iters
-                            row['latency_ms'] = ms
-                            tokens = None
-                            if run.case.expert_num:
-                                tokens = run.batch_size * run.case.experts_per_token
-                            flops = flop_count(run.batch_size, run.case.output_dim, run.case.input_dim, tokens)
-                            row['tflops'] = (flops / (ms * 1e-3)) / 1e12
+                        stream.synchronize()
+                        start = torch.cuda.Event(enable_timing=True)
+                        end = torch.cuda.Event(enable_timing=True)
+                        elapsed_ms = 0.0
+                        for _ in range(args.iters):
+                            if flusher is not None:
+                                flusher()
+                            start.record(stream)
+                            fx.run_linear_forward()
+                            end.record(stream)
+                            end.synchronize()
+                            elapsed_ms += start.elapsed_time(end)
+                    if args.iters > 0:
+                        ms = elapsed_ms / args.iters
+                        row['latency_ms'] = ms
+                        tokens = None
+                        if run.case.expert_num:
+                            tokens = run.batch_size * run.case.experts_per_token
+                        flops = flop_count(run.batch_size, run.case.output_dim, run.case.input_dim, tokens)
+                        row['tflops'] = (flops / (ms * 1e-3)) / 1e12
                 if args.iters == 0:
                     row['latency_ms'] = 0.0
                     row['tflops'] = 0.0

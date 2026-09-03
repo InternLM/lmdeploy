@@ -1,460 +1,368 @@
+"""Torch-facing TurboMind linear API.
+
+Use ``Linear.get_weight_plan()`` followed by ``prepare_weight()`` or ``fuse_weight()`` to create a reusable ``Weight``, then obtain an ``ExecPlan`` with ``get_exec_plan()`` or ``tune()`` and execute with ``Linear`` or ``forward_moe()``. Execution uses the current Torch CUDA stream and allocates outputs from the plan when destinations are omitted.
+"""
+
 from __future__ import annotations
 
-import ctypes
+import copy
+import math
+import os
 from collections.abc import Sequence
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Literal
 
 import torch
 
-_TM = None
+try:
+    import _turbomind as _tm
+except ImportError:
+    _tm = None
 
+if TYPE_CHECKING:
+    from lmdeploy.turbomind.weight_format import WeightFormat
 
-def _tm():
-    global _TM
-    if _TM is None:
-        import _turbomind as tm
-        _TM = tm
-    return _TM
-
+__all__ = ['ExecPlan', 'Linear', 'Weight', 'WeightPlan', 'is_available']
 
 def is_available() -> bool:
-    try:
-        _tm()
-        return True
-    except Exception:
-        return False
+    """Return whether the native TurboMind extension can be imported."""
+    return _tm is not None
 
 
-_DTYPE_TO_TM = {
-    'bf16': 'TYPE_BF16',
-    'fp16': 'TYPE_FP16',
-    'fp8_e4m3': 'TYPE_FP8_E4M3',
-    'uint4': 'TYPE_UINT4',
-    'fp4_e2m1': 'TYPE_FP4_E2M1',
-}
+_TORCH_TO_TM_NAME = {torch.uint8: 'TYPE_UINT8', torch.int32: 'TYPE_INT32', torch.float16: 'TYPE_FP16', torch.bfloat16: 'TYPE_BF16', torch.float32: 'TYPE_FP32', torch.float8_e4m3fn: 'TYPE_FP8_E4M3'}
 
 
-def to_tm_dtype(name: str):
-    tm = _tm()
-    key = _DTYPE_TO_TM[name]
-    return getattr(tm.DataType, key)
+def _to_tm_dtype(dtype):
+    """Convert a Torch dtype to its TurboMind data type."""
+    return getattr(_tm.DataType, _TORCH_TO_TM_NAME[dtype])
 
 
-def _resolve_block_sizes(weight_type: str, group_size: int) -> tuple[int, int]:
-    # Match ResolveLinearWeightFormat rules in data_format.cc.
-    if weight_type == 'fp8_e4m3':
-        return 128, 128
-    if weight_type in ('uint4', 'fp4_e2m1'):
-        return (group_size or 1), 1
-    return 1, 1
+def _to_torch_dtype(dtype):
+    """Convert a TurboMind data type to its Torch dtype."""
+    return next(torch_dtype for torch_dtype, name in _TORCH_TO_TM_NAME.items() if dtype == getattr(_tm.DataType, name))
 
 
-def quantize_symm_block(src, out=None, scale=None):
-    """Thin wrapper over tm.QuantizeSymmBlock (Context stream).
+class WeightPlan:
+    """Selected family and preparation contract for a source weight format."""
 
-    Returns (out, scale) TM tensors. Caller must Param.set them onto Weight when scale was newly allocated (typical for
-    empty scales).
-    """
-    return _tm().QuantizeSymmBlock(out=out, scale=scale, src=src)
+    __slots__ = ('_impl', '_weight_format', '_dtype', '_grouped', '_shape_constraints')
 
-
-def dequantize_symm_block(src, scale, out=None):
-    """Thin wrapper over tm.DequantizeSymmBlock (Context stream)."""
-    return _tm().DequantizeSymmBlock(out=out, src=src, scale=scale)
+    @property
+    def shape_constraints(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        """Return minimum and alignment constraints for ``(K, N)``."""
+        return self._shape_constraints
 
 
-def quantize_symm(src, out=None, scale=None):
-    """Thin wrapper over tm.QuantizeSymm (row/group act quant, Context
-    stream)."""
-    return _tm().QuantizeSymm(out=out, scale=scale, src=src)
+class ExecPlan:
+    """Selected kernel and output allocation contract for one execution problem."""
 
+    __slots__ = ('_impl',)
 
-def dequantize_symm(src, scale, out=None):
-    """Thin wrapper over tm.DequantizeSymm (Context stream)."""
-    return _tm().DequantizeSymm(out=out, src=src, scale=scale)
+    @property
+    def output(self) -> torch.Tensor:
+        """Return a meta tensor describing the required output."""
+        spec = self._impl
+        return torch.empty_strided(spec.output_shape, spec.output_stride, dtype=_to_torch_dtype(spec.output_dtype), device='meta')
 
-
-def quantize_groupwise(
-    *,
-    quant,
-    scales,
-    dequant,
-    src,
-    group_size: int,
-    zeros=None,
-    global_scale=None,
-    rbits=None,
-) -> None:
-    """Thin wrapper over tm.QuantizeGroupwise (Context stream).
-
-    Callers must pass K-major views (``.t()``) matching testbed_v3 GenerateWeight.
-    """
-    _tm().QuantizeGroupwise(
-        quant=quant,
-        scales=scales,
-        zeros=zeros,
-        global_scale=global_scale,
-        dequant=dequant,
-        src=src,
-        rbits=rbits,
-        group_size=group_size,
-    )
-
-
-def activation_needs_quantize(weight: Weight) -> bool:
-    """True when LlamaLinear will QuantizeSymm activations for this weight."""
-    return weight._impl.input_format.dtype != weight._impl.data_type
-
-
-def tensor_data_ptr(tm_tensor) -> int:
-    """Device pointer from a TurboMind Tensor `.data` capsule."""
-    cap = tm_tensor.data
-    fn = ctypes.pythonapi.PyCapsule_GetPointer
-    fn.restype = ctypes.c_void_p
-    fn.argtypes = [ctypes.py_object, ctypes.c_char_p]
-    ptr = fn(cap, None)
-    if not ptr:
-        raise RuntimeError('null_tensor_data_ptr')
-    return int(ptr)
-
-
-def make_strided_ptrs(ptrs: Sequence[tuple[int, int]], dtype):
-    """Build owned StridedPtr tensor via tm.MakeStridedPtrs (Context
-    stream)."""
-    return _tm().MakeStridedPtrs(list(ptrs), dtype)
-
-
-def invoke_moe_dispatch(src: torch.Tensor, f2n: torch.Tensor, experts_per_token: int, out: torch.Tensor | None = None):
-    tm = _tm()
-    y = tm.invokeMoeDispatch(
-        out=None if out is None else tm.from_dlpack_with_strides(out),
-        src=tm.from_dlpack_with_strides(src),
-        f2n=tm.from_dlpack_with_strides(f2n),
-        expert_per_token=experts_per_token,
-    )
-    return torch.from_dlpack(y) if out is None else out
-
-
-def invoke_moe_combine(
-    out: torch.Tensor,
-    src: torch.Tensor,
-    scales: torch.Tensor,
-    en2f: torch.Tensor,
-    experts_per_token: int,
-    *,
-    bias: torch.Tensor | None = None,
-    f2E: torch.Tensor | None = None,
-    dst_scales: torch.Tensor | None = None,
-    bscale: float = 1.0,
-    dst_scale: float = 0.0,
-) -> torch.Tensor:
-    """Mirror testbed_v3 Run() invokeMoeCombine (out must be preallocated)."""
-    tm = _tm()
-    tm.invokeMoeCombine(
-        out=tm.from_dlpack_with_strides(out),
-        src=tm.from_dlpack_with_strides(src),
-        bias=None if bias is None else tm.from_dlpack_with_strides(bias),
-        scales=tm.from_dlpack_with_strides(scales),
-        en2f=tm.from_dlpack_with_strides(en2f),
-        f2E=None if f2E is None else tm.from_dlpack_with_strides(f2E),
-        dst_scales=None if dst_scales is None else tm.from_dlpack_with_strides(dst_scales),
-        experts_per_token=experts_per_token,
-        bscale=bscale,
-        dst_scale=dst_scale,
-    )
-    return out
-
-
-def link_experts(experts: Sequence[Weight]) -> Weight:
-    """Port of testbed_v3 / moe_weight LinkExperts into a fused Weight view.
-
-    Experts must already be prepare()'d and kept alive for as long as the fused view is used (pointers alias expert
-    storage). Call on the Context stream.
-    """
-    if not experts:
-        raise ValueError('link_experts_requires_non_empty')
-    e0 = experts[0]
-    fused = Weight(
-        e0._input_dim,
-        e0._output_dim,
-        e0._data_type,
-        e0._weight_type,
-        e0._group_size,
-        has_bias=e0._has_bias,
-    )
-    e0._impl.copy_metadata_to(fused._impl)
-
-    n = len(experts)
-    fused._impl.k_desc.num = n
-    fused._impl.q_desc.num = n
-
-    weights: list[tuple[int, int]] = []
-    scales: list[tuple[int, int]] = []
-    global_scales: list[tuple[int, int]] = []
-    for e in experts:
-        weights.append((tensor_data_ptr(e.param_tensor('weight')), int(e._impl.k_desc.ld)))
-        scales_t = e.param_tensor('scales')
-        if scales_t:
-            scales.append((tensor_data_ptr(scales_t), int(e._impl.q_desc.ld)))
-        global_scale_t = e.param_tensor('global_scale')
-        if global_scale_t:
-            global_scales.append((tensor_data_ptr(global_scale_t), 1))
-
-    fused.set_param(
-        'weight',
-        make_strided_ptrs(weights, fused._impl.weight_format.dtype),
-    )
-    if scales:
-        fused.set_param('scales', make_strided_ptrs(scales, e0.param_tensor('scales').type))
-    if global_scales:
-        fused.set_param('global_scale', make_strided_ptrs(global_scales, e0.param_tensor('global_scale').type))
-    fused._impl.k_desc.ld = 0
-    fused._impl.q_desc.ld = 0
-    fused._impl.k_desc.offsets = 0
-    fused._impl.q_desc.offsets = 0
-    return fused
+    @property
+    def output_scales(self) -> torch.Tensor | None:
+        """Return a meta tensor describing output scales, if required."""
+        spec = self._impl
+        if spec.output_scales_dtype == _tm.DataType.TYPE_INVALID:
+            return None
+        return torch.empty_strided(spec.output_scales_shape, spec.output_scales_stride, dtype=_to_torch_dtype(spec.output_scales_dtype), device='meta')
 
 
 class Weight:
-    """Adapter over tm.LinearWeight.
+    """Prepared native weight handle owned by the caller."""
 
-    Instances use the TurboMind Context stream; destroy them before exiting the enclosing device_context().
-    """
+    __slots__ = ('_impl', '_experts')
 
-    def __init__(
-        self,
-        input_dim: int,
-        output_dim: int,
-        data_type: str,
-        weight_type: str,
-        group_size: int = 0,
-        has_bias: bool = False,
-    ) -> None:
-        tm = _tm()
-        dt = to_tm_dtype(data_type)
-        wt = to_tm_dtype(weight_type)
-        block_in, block_out = _resolve_block_sizes(weight_type, group_size)
-        cfg = tm.LinearConfig()
-        cfg.input_dim = input_dim
-        cfg.output_dim = output_dim
-        cfg.data_type = dt
-        cfg.format = tm.ResolveLinearWeightFormat(dt, wt, block_in, block_out)
-        cfg.has_bias = has_bias
-        self._input_dim = input_dim
-        self._output_dim = output_dim
-        self._data_type = data_type
-        self._weight_type = weight_type
-        self._group_size = group_size
-        self._has_bias = has_bias
-        self._impl = tm.LinearWeight(cfg)
-        self._impl.param('weight').alloc([input_dim, output_dim], wt)
-        # Groupwise formats need scales (/zeros) in MN-major (K/g, N).
-        if weight_type in ('uint4', 'fp4_e2m1'):
-            if group_size <= 0:
-                raise ValueError('groupwise_weight_requires_positive_group_size')
-            if input_dim % group_size != 0:
-                raise ValueError(f'input_dim_{input_dim}_not_divisible_by_group_size_{group_size}')
-            scale_shape = [input_dim // group_size, output_dim]
-            # uint4: f16/bf16 scales+zeros; fp4: UE8M0/UE4M3 scales (uint8).
-            if weight_type == 'fp4_e2m1':
-                scale_dtype = tm.DataType.TYPE_UINT8
-            else:
-                scale_dtype = dt
-            self._impl.param('scales').alloc(scale_shape, scale_dtype)
-            if weight_type == 'fp4_e2m1' and group_size == 16:
-                self._impl.param('global_scale').alloc([1], tm.DataType.TYPE_FP32)
-            if weight_type == 'uint4':
-                self._impl.param('zeros').alloc(scale_shape, scale_dtype)
+    @property
+    def is_graph_compatible(self) -> bool:
+        """Return whether the prepared family supports CUDA graph capture."""
+        return bool(self._impl.is_graph_compatible)
 
-    def set_grouped(self, grouped: bool) -> None:
-        """Mark expert weights for grouped-GEMM layout conversion in prepare().
-
-        Mirrors FfnWeight::prepare for is_expert_: without this, bf16/fp16 MoE
-        weights stay flat and SM90 Config_F16_g (ibb + packed B) cannot match.
-        """
-        self._impl.set_grouped(grouped)
-
-    def set_input_type(self, input_type: str) -> None:
-        """Override the derived activation format for mixed-input kernel tests."""
-        if input_type == 'fp8_e4m3':
-            is_mxfp4_k32 = self._weight_type == 'fp4_e2m1' and self._group_size == 32
-            if self._impl.input_format.dtype != to_tm_dtype(input_type) and not is_mxfp4_k32:
-                raise ValueError('fp8_input_format_not_derived')
-            if is_mxfp4_k32:
-                tm = _tm()
-                fmt = self._impl.input_format
-                fmt.dtype = tm.DataType.TYPE_FP8_E4M3
-                fmt.block_sizes = [128, 1]
-                fmt.scales.dtype = tm.DataType.TYPE_FP32
-                fmt.zeros.dtype = tm.DataType.TYPE_INVALID
-            return
-        if input_type != self._data_type:
-            raise ValueError(f'unsupported_input_type_{input_type}')
-
-        tm = _tm()
-        fmt = self._impl.input_format
-        fmt.dtype = to_tm_dtype(input_type)
-        fmt.block_sizes = [1, 1]
-        fmt.scales.dtype = tm.DataType.TYPE_INVALID
-        fmt.zeros.dtype = tm.DataType.TYPE_INVALID
-
-    def set_epilogue(self, epilogue) -> None:
-        """Set GEMM epilogue (e.g. tm.Epilogue.kGatedSilu for fused SiLU)."""
-        tm = _tm()
-        self._impl.epilogue = epilogue
-        # Mirror FfnWeight::prepare: SM90 FP8 fused SiLU writes FP8 + group scales.
-        major, _ = torch.cuda.get_device_capability()
-        is_mxfp4_k32 = self._weight_type == 'fp4_e2m1' and self._group_size == 32
-        supports_fp8_fused_output = (
-            major == 9
-            and self._impl.input_format.dtype == tm.DataType.TYPE_FP8_E4M3
-            and (self._weight_type == 'fp8_e4m3' or is_mxfp4_k32)
-        )
-        if epilogue == tm.Epilogue.kGatedSilu and supports_fp8_fused_output:
-            self._impl.set_fp8_fused_silu_output()
-
-    def prepare(self) -> None:
-        self._impl.prepare()
-
-    def weight_tensor(self) -> torch.Tensor:
-        return torch.from_dlpack(self._impl.param('weight').get())
-
-    def copy_weight_from(self, src: torch.Tensor, *, stream_ptr: int) -> None:
-        """Copy contiguous ``src`` into this weight on ``stream_ptr`` (Context::stream).
-
-        Must not use Tensor.copy_from: that path is default-stream cudaMemcpy and
-        cannot participate in the harness's scoped Context-stream ownership.
-
-        ``src`` must be materialized and contiguous before entering the Context-stream
-        boundary. This method will not create caller-owned storage inside that scope.
-        """
-        if not src.is_contiguous():
-            raise ValueError('copy_weight_from_requires_contiguous_src')
-        tm = _tm()
-        src_tm = tm.from_dlpack(src)
-        tm.generic_copy_on_stream(src_tm, self.param_tensor('weight'), stream_ptr)
-
-    def param_tensor(self, name: str):
-        return self._impl.param(name).get()
-
-    def set_param(self, name: str, tensor) -> None:
-        self._impl.param(name).set(tensor)
-
-    def quantize_symm_block_from(self, src_weight: Weight) -> None:
-        out, scale = quantize_symm_block(
-            src_weight.param_tensor('weight'),
-            out=self.param_tensor('weight'),
-            scale=None,
-        )
-        self.set_param('weight', out)
-        self.set_param('scales', scale)
-
-    def dequantize_symm_block_from(self, quant_weight: Weight) -> None:
-        out = dequantize_symm_block(
-            quant_weight.param_tensor('weight'),
-            quant_weight.param_tensor('scales'),
-            out=self.param_tensor('weight'),
-        )
-        self.set_param('weight', out)
-
-    def quantize_groupwise_into(self, src_weight: Weight, dequant_weight: Weight) -> None:
-        """Port of testbed_v3 GenerateWeight uint4/fp4 path (K-major via
-        .t())."""
-        zeros = self.param_tensor('zeros') if self._weight_type == 'uint4' else None
-        quantize_groupwise(
-            quant=self.param_tensor('weight').t(),
-            scales=self.param_tensor('scales').t(),
-            zeros=None if zeros is None else zeros.t(),
-            global_scale=(
-                self.param_tensor('global_scale')
-                if self._weight_type == 'fp4_e2m1' and self._group_size == 16
-                else None
-            ),
-            dequant=dequant_weight.param_tensor('weight').t(),
-            src=src_weight.param_tensor('weight').t(),
-            group_size=self._group_size,
-        )
+    def close(self) -> None:
+        """Release the prepared weight and any retained expert weights."""
+        experts = self._experts
+        self._impl = None
+        self._experts = None
+        if experts is not None:
+            for expert in experts:
+                expert.close()
 
 
 class Linear:
-    """Adapter over tm.LlamaLinear.
+    """Plan, prepare, tune, and execute TurboMind linear operations from Torch."""
 
-    Instances use the TurboMind Context stream; destroy them before exiting the enclosing device_context().
-    """
+    __slots__ = ('device', '_impl', '_context')
 
-    def __init__(self) -> None:
-        self._impl = _tm().LlamaLinear()
-        # TM tensors backing the latest forward dlpack views (Context pool).
-        self._forward_keep_alive: tuple | None = None
+    def __init__(self, device: torch.device | str | int = 'cuda'):
+        """Create an executor for a CUDA device."""
+        if isinstance(device, int):
+            resolved_device = torch.device('cuda', device)
+        else:
+            resolved_device = torch.device(device)
+        if resolved_device.index is None:
+            resolved_device = torch.device('cuda', torch.cuda.current_device())
+        self.device = resolved_device
+        self._impl = None
+        self._context = None
+        with self._activate():
+            try:
+                self._impl = _tm.LlamaLinear()
+            except Exception:
+                self._impl = None
+                raise
 
-    def forward_dense(
-        self,
-        x: torch.Tensor,
-        weight: Weight,
-        out: torch.Tensor | None = None,
-        input_scales: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        tm = _tm()
-        xin = tm.from_dlpack_with_strides(x)
-        oin = None if out is None else tm.from_dlpack_with_strides(out)
-        iscales = None if input_scales is None else tm.from_dlpack_with_strides(input_scales)
-        y, ys = self._impl.forward_dense(xin, weight._impl, oin, iscales, None)
-        return self._pack_forward_result(y, ys)
+    @contextmanager
+    def _activate(self):
+        """Activate the cached native context for the current Torch CUDA stream."""
+        with torch.cuda.device(self.device):
+            stream = torch.cuda.current_stream(self.device)
+            context = self._context
+            if context is None or context.stream_ptr != stream.cuda_stream:
+                context = _tm.create_device_context(stream.cuda_stream)
+                self._context = context
+            with context:
+                yield stream
 
-    def forward_moe(
-        self,
-        x: torch.Tensor,
-        weight: Weight,
-        f2n: torch.Tensor | None,
-        offsets: torch.Tensor,
-        out: torch.Tensor | None = None,
-        input_scales: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        tm = _tm()
-        y, ys = self._impl.forward_moe(
-            tm.from_dlpack_with_strides(x),
-            weight._impl,
-            None if f2n is None else tm.from_dlpack_with_strides(f2n),
-            tm.from_dlpack_with_strides(offsets),
-            None if out is None else tm.from_dlpack_with_strides(out),
-            None if input_scales is None else tm.from_dlpack_with_strides(input_scales),
-            None,
-        )
-        return self._pack_forward_result(y, ys)
+    def close(self) -> None:
+        """Release the native executor on its device."""
+        with self._activate():
+            self._impl = None
+        self._context = None
 
-    def _pack_forward_result(self, y, ys) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Return torch views of Context-stream results (FP8 dequantized to
-        bf16).
+    def get_weight_plan(self, *, weight_format: WeightFormat, dtype: torch.dtype, input_dtype: torch.dtype | None = None, output_dtype: torch.dtype | None = None, grouped: bool = False, fusion_type: Literal['silu'] | None = None) -> WeightPlan:
+        """Select a weight family and expose its source-shape constraints."""
+        weight_format = copy.copy(weight_format)
+        data_format = weight_format.make_data_format()
+        query = _tm.WeightQuery()
+        query.weight_format = data_format
+        query.data_type = _to_tm_dtype(dtype)
+        query.input_dtype = _to_tm_dtype(dtype if input_dtype is None else input_dtype)
+        query.output_dtype = _to_tm_dtype(dtype if output_dtype is None else output_dtype)
+        query.grouped = grouped
 
-        Views alias TM pool storage. Callers must transfer them through LinearFixture's stream boundary before releasing
-        the backing TM tensors.
-        """
-        if ys:
-            y_bf16 = dequantize_symm(y, ys)
-            self._forward_keep_alive = (y, ys, y_bf16)
-            y_t = torch.from_dlpack(y_bf16)
-            if y_t.dtype != torch.bfloat16:
-                raise TypeError(f'expected bf16 dequant output, got {y_t.dtype}')
-            return y_t, torch.from_dlpack(ys)
-        self._forward_keep_alive = (y, ys)
-        return torch.from_dlpack(y), None
+        impl = self._impl.get_weight_plan(query)
+        if impl is None:
+            raise NotImplementedError(f'no GEMM family accepts format={data_format}, dtype={dtype}, input_dtype={input_dtype}, output_dtype={output_dtype}, grouped={grouped}')
 
-    def release_forward_result(self) -> None:
-        self._forward_keep_alive = None
+        minimum, alignment = impl.shape_constraints
+        min_k, min_n = minimum
+        align_k, align_n = alignment
+        alignment = (align_k, math.lcm(align_n, weight_format.block_out or 1))
 
-    def set_measure(self, on: bool) -> None:
-        self._impl.set_measure(on)
+        if fusion_type == 'silu':
+            block_out = weight_format.block_out or 1
+            if block_out == 128 and (dtype if input_dtype is None else input_dtype) == torch.bfloat16:
+                raise NotImplementedError('BF16-input block-out-128 FP8 SiLU fusion is not supported')
+            minimum = (min_k, (min_n + 1) // 2)
+            alignment = (align_k, math.lcm(block_out, align_n // math.gcd(align_n, 2)))
 
-    def import_records(self, path: str) -> int:
-        return int(self._impl.import_records(path))
+        result = WeightPlan()
+        result._impl = impl
+        result._weight_format = weight_format
+        result._dtype = dtype
+        result._grouped = grouped
+        result._shape_constraints = (minimum, alignment)
+        return result
 
-    def export_records(self, path: str) -> int:
-        return int(self._impl.export_records(path))
+    def _normalize_params(self, weight_format, weight, scales, zeros):
+        """Normalize source weight components into TurboMind logical layouts."""
+        raw = {'weight': weight, 'scales': scales, 'zeros': zeros}
+        raw = {kind: tensor for kind, tensor in raw.items() if tensor is not None}
+        normalized = {kind: weight_format.normalize(tensor, kind).contiguous() for kind, tensor in raw.items()}
+        if weight_format.zeros_dtype != _tm.DataType.TYPE_INVALID and 'zeros' not in normalized:
+            normalized['zeros'] = weight_format.synthesize_zeros(normalized['scales']).contiguous()
+        if 'zeros' in normalized:
+            normalized['zeros'] = normalized['zeros'].to(normalized['scales'].dtype).contiguous()
+        return normalized
 
+    def _copy_param(self, impl, name, src, *, logical_shape, logical_dtype, stream):
+        """Allocate a native parameter and copy its source bytes on the active stream."""
+        dst = impl.param(name).alloc(logical_shape, logical_dtype)
+        _tm.copy_bytes_on_stream(src, dst, stream.cuda_stream)
 
-def device_context():
-    """Enter/exit a TurboMind device Context (stream).
+    def _prepare_one(self, normalized, *, weight_format, plan, dtype, stored_output_dim, stream):
+        """Allocate and pack one normalized weight with a selected native plan."""
+        source_weight = normalized['weight']
+        input_dim = source_weight.shape[0]
 
-    Objects that use the Context stream — notably Linear/LlamaLinear and Weight/LinearWeight — must be destroyed before
-    exiting this context.
-    """
-    return _tm().create_device_context()
+        data_format = weight_format.make_data_format()
+        config = _tm.LinearConfig()
+        config.input_dim = input_dim
+        config.output_dim = stored_output_dim
+        config.data_type = _to_tm_dtype(dtype)
+        config.format = data_format
+        config.has_bias = False
+
+        impl = _tm.LinearWeight(config)
+        impl.set_plan(plan)
+        packed = {kind: weight_format.pack(tensor, kind) for kind, tensor in normalized.items()}
+        for kind, item in packed.items():
+            tensor = item.tensor
+            logical_shape = (list(tensor.shape) if item.alloc_shape is None else list(item.alloc_shape))
+            logical_dtype = (_to_tm_dtype(tensor.dtype) if item.alloc_dtype is None else item.alloc_dtype)
+            self._copy_param(impl, kind, tensor, logical_shape=logical_shape, logical_dtype=logical_dtype, stream=stream)
+
+        impl.prepare()
+
+        handle = Weight()
+        handle._impl = impl
+        handle._experts = None
+        return handle
+
+    def _prepare_grouped(self, normalized_experts, *, weight_format, plan, dtype, stored_output_dim, stream):
+        """Prepare expert weights and link them into one grouped weight handle."""
+        experts = []
+        try:
+            for params in normalized_experts:
+                experts.append(self._prepare_one(params, weight_format=weight_format, plan=plan, dtype=dtype, stored_output_dim=stored_output_dim, stream=stream))
+
+            impl = _tm.LinkLinearExperts([expert._impl for expert in experts])
+            handle = Weight()
+            handle._impl = impl
+            handle._experts = experts
+            return handle
+        except Exception:
+            for expert in reversed(experts):
+                expert.close()
+            raise
+
+    def prepare_weight(self, weight: torch.Tensor | Sequence[torch.Tensor], *, plan: WeightPlan, scales: torch.Tensor | Sequence[torch.Tensor] | None = None, zeros: torch.Tensor | Sequence[torch.Tensor] | None = None) -> Weight:
+        """Normalize and pack a dense weight or sequence of expert weights."""
+        weight_format = plan._weight_format
+        dtype = plan._dtype
+        impl_plan = plan._impl
+
+        if not plan._grouped:
+            with self._activate() as stream:
+                normalized = self._normalize_params(weight_format, weight, scales, zeros)
+                return self._prepare_one(normalized, weight_format=weight_format, plan=impl_plan, dtype=dtype, stored_output_dim=normalized['weight'].shape[1], stream=stream)
+
+        weights = list(weight)
+        expert_scales = [None] * len(weights) if scales is None else list(scales)
+        expert_zeros = [None] * len(weights) if zeros is None else list(zeros)
+
+        with self._activate() as stream:
+            normalized_experts = [self._normalize_params(weight_format, expert_weight, expert_scale, expert_zero) for expert_weight, expert_scale, expert_zero in zip(weights, expert_scales, expert_zeros)]
+            return self._prepare_grouped(normalized_experts, weight_format=weight_format, plan=impl_plan, dtype=dtype, stored_output_dim=normalized_experts[0]['weight'].shape[1], stream=stream)
+
+    def _interleave_gate_up(self, gate, up, groups):
+        """Interleave gate and up components in the selected family block layout."""
+        gate_groups = gate.unflatten(-1, (groups, -1))
+        up_groups = up.unflatten(-1, (groups, -1))
+        return torch.stack((gate_groups, up_groups), dim=-2).flatten(-3, -1).contiguous()
+
+    def fuse_weight(self, weight: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]], *, plan: WeightPlan, scales: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None, zeros: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None) -> Weight:
+        """Normalize, interleave, and pack gate/up weights for fused SiLU execution."""
+        weight_format = plan._weight_format
+        dtype = plan._dtype
+        impl_plan = plan._impl
+        gate_weight, up_weight = weight
+
+        if plan._grouped:
+            gate_weights = list(gate_weight)
+            up_weights = list(up_weight)
+        else:
+            gate_weights = [gate_weight]
+            up_weights = [up_weight]
+
+        count = len(gate_weights)
+        if scales is None:
+            gate_scales = [None] * count
+            up_scales = [None] * count
+        else:
+            gate_scale_arg, up_scale_arg = scales
+            gate_scales = list(gate_scale_arg) if plan._grouped else [gate_scale_arg]
+            up_scales = list(up_scale_arg) if plan._grouped else [up_scale_arg]
+
+        if zeros is None:
+            gate_zeros = [None] * count
+            up_zeros = [None] * count
+        else:
+            gate_zero_arg, up_zero_arg = zeros
+            gate_zeros = list(gate_zero_arg) if plan._grouped else [gate_zero_arg]
+            up_zeros = list(up_zero_arg) if plan._grouped else [up_zero_arg]
+
+        with self._activate() as stream:
+            normalized_pairs = []
+            for gate_weight, up_weight, gate_scale, up_scale, gate_zero, up_zero in zip(gate_weights, up_weights, gate_scales, up_scales, gate_zeros, up_zeros):
+                gate = self._normalize_params(weight_format, gate_weight, gate_scale, gate_zero)
+                up = self._normalize_params(weight_format, up_weight, up_scale, up_zero)
+                normalized_pairs.append((gate, up))
+
+            projection_n = normalized_pairs[0][0]['weight'].shape[1]
+            activation = _tm.ActivationType.kSilu
+            gate_up_block = impl_plan.gate_up(activation, projection_n)
+            if not gate_up_block:
+                raise NotImplementedError('selected family cannot represent SiLU fusion')
+            groups = projection_n // gate_up_block
+            combined_experts = []
+            for gate, up in normalized_pairs:
+                combined = {kind: self._interleave_gate_up(gate[kind], up[kind], groups) for kind in gate}
+                combined_experts.append(combined)
+
+            stored_output_dim = projection_n * 2
+            if plan._grouped:
+                return self._prepare_grouped(combined_experts, weight_format=weight_format, plan=impl_plan, dtype=dtype, stored_output_dim=stored_output_dim, stream=stream)
+            return self._prepare_one(combined_experts[0], weight_format=weight_format, plan=impl_plan, dtype=dtype, stored_output_dim=stored_output_dim, stream=stream)
+
+    def get_exec_plan(self, x: torch.Tensor, weight: Weight, *, offsets: torch.Tensor | None = None, indices: torch.Tensor | None = None) -> ExecPlan:
+        """Select an immutable execution plan for an input and prepared weight."""
+        tm = _tm
+        impl = self._impl.get_exec_plan(weight._impl, tm.from_dlpack_with_strides(x), None if indices is None else tm.from_dlpack_with_strides(indices), None if offsets is None else tm.from_dlpack_with_strides(offsets))
+        if impl is None:
+            raise NotImplementedError('no GEMM kernel accepts the execution problem')
+        exec_plan = ExecPlan()
+        exec_plan._impl = impl
+        return exec_plan
+
+    def _allocate_output(self, spec, out: torch.Tensor | None, out_scales: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Allocate any omitted output tensors according to an execution plan."""
+        if out is None:
+            out = torch.empty_strided(spec.output_shape, spec.output_stride, dtype=_to_torch_dtype(spec.output_dtype), device=self.device)
+        if out_scales is None and spec.output_scales_dtype != _tm.DataType.TYPE_INVALID:
+            out_scales = torch.empty_strided(spec.output_scales_shape, spec.output_scales_stride, dtype=_to_torch_dtype(spec.output_scales_dtype), device=self.device)
+        return out, out_scales
+
+    def __call__(self, x: torch.Tensor, weight: Weight, *, exec_plan: ExecPlan, out: torch.Tensor | None = None, input_scales: torch.Tensor | None = None, out_scales: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Execute a dense linear operation with an explicit execution plan."""
+        with self._activate():
+            out, out_scales = self._allocate_output(exec_plan._impl, out, out_scales)
+            self._impl.forward_dense(exec_plan._impl, _tm.from_dlpack_with_strides(x), weight._impl, _tm.from_dlpack_with_strides(out), None if input_scales is None else _tm.from_dlpack_with_strides(input_scales), None if out_scales is None else _tm.from_dlpack_with_strides(out_scales))
+        return out, out_scales
+
+    def forward_moe(self, x: torch.Tensor, weight: Weight, *, exec_plan: ExecPlan, offsets: torch.Tensor, out: torch.Tensor | None = None, indices: torch.Tensor | None = None, input_scales: torch.Tensor | None = None, out_scales: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Execute a grouped linear operation with optional indexed input."""
+        with self._activate():
+            out, out_scales = self._allocate_output(exec_plan._impl, out, out_scales)
+            self._impl.forward_moe(exec_plan._impl, _tm.from_dlpack_with_strides(x), weight._impl, None if indices is None else _tm.from_dlpack_with_strides(indices), _tm.from_dlpack_with_strides(offsets), _tm.from_dlpack_with_strides(out), None if input_scales is None else _tm.from_dlpack_with_strides(input_scales), None if out_scales is None else _tm.from_dlpack_with_strides(out_scales))
+        return out, out_scales
+
+    def tune(self, x: torch.Tensor, weight: Weight, *, offsets: torch.Tensor | None = None, indices: torch.Tensor | None = None, out: torch.Tensor | None = None, input_scales: torch.Tensor | None = None, out_scales: torch.Tensor | None = None) -> tuple[ExecPlan, torch.Tensor, torch.Tensor | None]:
+        """Measure feasible kernels and return the selected execution plan and outputs."""
+        tm = _tm
+        input_impl = tm.from_dlpack_with_strides(x)
+        indices_impl = None if indices is None else tm.from_dlpack_with_strides(indices)
+        offsets_impl = None if offsets is None else tm.from_dlpack_with_strides(offsets)
+        input_scales_impl = None if input_scales is None else tm.from_dlpack_with_strides(input_scales)
+        with self._activate():
+            output_spec = self._impl._get_output_spec(weight._impl, input_impl, indices_impl)
+            out, out_scales = self._allocate_output(output_spec, out, out_scales)
+            impl = self._impl.tune(input_impl, weight._impl, indices_impl, offsets_impl, tm.from_dlpack_with_strides(out), input_scales_impl, None if out_scales is None else tm.from_dlpack_with_strides(out_scales))
+        if impl is None:
+            raise NotImplementedError('no GEMM kernel accepts the execution problem')
+        exec_plan = ExecPlan()
+        exec_plan._impl = impl
+        return exec_plan, out, out_scales
+
+    def import_records(self, path: str | os.PathLike[str]) -> int:
+        """Import cached kernel-selection records from a file."""
+        return int(self._impl.import_records(os.fspath(path)))
+
+    def export_records(self, path: str | os.PathLike[str]) -> int:
+        """Export cached kernel-selection records to a file."""
+        return int(self._impl.export_records(os.fspath(path)))

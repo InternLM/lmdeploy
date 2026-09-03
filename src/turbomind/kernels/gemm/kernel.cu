@@ -9,10 +9,21 @@
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
+#include "src/turbomind/kernels/gemm/family.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 
 namespace turbomind::gemm {
+
+Kernel::Kernel(const Family& family): family_{family}, desc_{}, info_{}
+{
+    desc_.family = family.id;
+}
+
+bool Kernel::is_available(int arch) const noexcept
+{
+    return is_arch_compatible(desc_.arch, arch);
+}
 
 bool accept(Striding a, Striding b)
 {
@@ -48,6 +59,14 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
         printf("S\n");
 
     // printf("%d %d\n", desc.arch, desc_.arch);
+
+    if (desc.family && desc.family != family().id) {
+        return false;
+    }
+
+    if ((int)desc.epilogue & ~(int)desc_.supported_epilogues) {
+        return false;
+    }
 
     if (!is_arch_compatible(desc_.arch, desc.arch)) {
         return false;
@@ -109,6 +128,10 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
         return false;
     }
 
+    if (desc.quant_b && desc.k % desc.quant_b.group_size) {
+        return false;
+    }
+
     if constexpr (debug)
         printf("F\n");
 
@@ -156,7 +179,7 @@ std::string Kernel::GetName() const
     if (desc_.atom_layout.x) {
         ss << "_atom" << desc_.atom_layout.x << "x" << desc_.atom_layout.y << "x" << desc_.atom_layout.z;
     }
-    if (desc_.supports_fused_silu) {
+    if ((desc_.supported_epilogues & Epilogue::kGatedSilu) != Epilogue::kNone) {
         ss << "_fused_silu";
     }
     if (desc_.group_axis >= 0) {
@@ -176,12 +199,14 @@ std::string Kernel::GetName() const
 
 class TransposedKernel: public Kernel {
 public:
-    explicit TransposedKernel(Kernel& kernel): kernel_(&kernel)
+    explicit TransposedKernel(Kernel& kernel): Kernel{kernel.family()}, kernel_(&kernel)
     {
         desc_ = kernel.desc();
         info_ = kernel.info();
 
         desc_.transpose = !desc_.transpose;
+        desc_.supported_epilogues = static_cast<Epilogue>((int)desc_.supported_epilogues
+                                                          & ~(int)Epilogue::kGatedSilu);
     }
 
     int Launch(const Operation&    operation,
@@ -235,8 +260,7 @@ public:
 
     bool is_feasible(const GemmDesc& desc) const noexcept override
     {
-        // The fused-SiLU gate pairing is defined along n and does not transpose.
-        if ((int)desc.epilogue & (int)Epilogue::kGatedSilu) {
+        if ((int)desc.epilogue & ~(int)desc_.supported_epilogues) {
             return false;
         }
         return kernel_->is_feasible(desc);

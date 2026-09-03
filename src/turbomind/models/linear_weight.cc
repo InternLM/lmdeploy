@@ -2,16 +2,11 @@
 
 #include "src/turbomind/models/linear_weight.h"
 
-#include "src/turbomind/core/allocator.h"
-#include "src/turbomind/core/data_type.h"
+#include <utility>
+
+#include "src/turbomind/core/check.h"
+#include "src/turbomind/core/context.h"
 #include "src/turbomind/core/registry.h"
-#include "src/turbomind/kernels/gemm/cast.h"
-#include "src/turbomind/kernels/gemm/convert.h"
-#include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
-#include "src/turbomind/kernels/gemm/types.h"
-#include "src/turbomind/kernels/gemm/utils.h"
-#include "src/turbomind/kernels/gpt_kernels.h"
-#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
@@ -23,41 +18,6 @@ LinearWeight::LinearWeight(const core::LinearConfig& cfg):
     weight_format(cfg.format),
     has_bias_(cfg.has_bias)
 {
-    std::tie(input_format, output_format) = DeriveActivationFormats(weight_format, data_type, getSMVersion());
-}
-
-std::pair<DataFormat, DataFormat> DeriveActivationFormats(const DataFormat& weight_format, DataType data_type, int sm)
-{
-    DataFormat in_fmt;
-    DataFormat out_fmt;
-    in_fmt.dtype        = data_type;
-    in_fmt.block_sizes  = {1, 1};
-    out_fmt.dtype       = data_type;
-    out_fmt.block_sizes = {1, 1};
-
-    // Empty weight_format (from LinearBuilder.set_weight path for embeddings /
-    // lm_head): treat as trivial. No quantization on I/O.
-    if (weight_format.dtype == DataType{}) {
-        return {in_fmt, out_fmt};
-    }
-
-    if (!weight_format.is_quantized()) {
-        return {in_fmt, out_fmt};
-    }
-
-    if (weight_format.dtype == kFloat8_e4m3) {
-        if (sm == 90) {
-            int gs              = weight_format.block_sizes[0];  // K-axis, tensor-shape order
-            in_fmt.dtype        = kFloat8_e4m3;
-            in_fmt.block_sizes  = {gs, 1};
-            in_fmt.scales.dtype = kFloat;
-        }
-        return {in_fmt, out_fmt};
-    }
-
-    // FP4 / U4 / U8: input stays in model activation dtype — the GEMM
-    // upcasts / dequants on the fly. output_format is also activation dtype.
-    return {in_fmt, out_fmt};
 }
 
 gemm::QuantDesc MakeQuantDesc(const DataFormat& fmt)
@@ -65,18 +25,11 @@ gemm::QuantDesc MakeQuantDesc(const DataFormat& fmt)
     if (!fmt.is_quantized()) {
         return {gemm::QuantType::kNone, 0};
     }
-    int gs = (fmt.block_sizes.size() > 0) ? fmt.block_sizes[0] : 1;
-
-    if (fmt.dtype == kFloat8_e4m3) {
-        // Weight format has bidirectional blocking {128, 128} → B-type.
-        // Activation format has K-axis-only blocking {gs, 1} → K-type.
-        if (fmt.block_sizes.size() > 1 && fmt.block_sizes[1] > 1) {
-            return {gemm::QuantType::kB, gs};
-        }
-        return {gemm::QuantType::kK, gs};
+    const int group_size = fmt.block_sizes.empty() ? 1 : fmt.block_sizes[0];
+    if (fmt.dtype == kFloat8_e4m3 && fmt.block_sizes.size() > 1 && fmt.block_sizes[1] > 1) {
+        return {gemm::QuantType::kB, group_size};
     }
-    // FP4 / U4 / U8: K-grouped quantization
-    return {gemm::QuantType::kK, gs};
+    return {gemm::QuantType::kK, group_size};
 }
 
 void LinearWeight::copy_metadata_to(LinearWeight& dst) const
@@ -84,340 +37,38 @@ void LinearWeight::copy_metadata_to(LinearWeight& dst) const
     dst.input_dim     = input_dim;
     dst.output_dim    = output_dim;
     dst.data_type     = data_type;
+    dst.family        = family;
     dst.weight_format = weight_format;
     dst.input_format  = input_format;
     dst.output_format = output_format;
     dst.epilogue      = epilogue;
     dst.has_bias_     = has_bias_;
-    dst.is_grouped_   = is_grouped_;
     dst.prepared_     = prepared_;
     dst.k_desc        = k_desc;
     dst.q_desc        = q_desc;
 }
 
-// ======================================================================
-// prepare (weight format conversion)
-// ======================================================================
+void LinearWeight::set_plan(gemm::WeightPlan plan)
+{
+    plan_ = std::move(plan);
+}
+
+bool LinearWeight::is_graph_compatible() const
+{
+    return TM_CHECK_NOTNULL(family)->is_graph_compatible();
+}
 
 void LinearWeight::prepare()
 {
     if (!weight) {
         return;
     }
-
     if (prepared_) {
         return;
     }
-
+    TM_CHECK(plan_);
+    plan_->pack(*this, core::Context::stream().handle());
     EnsureFloatDtype(bias, data_type);
-
-    // Set up GEMM descriptor (was previously in do_allocate)
-    k_desc.type  = weight.dtype();
-    k_desc.order = gemm::kRowMajor;
-    k_desc.rows  = input_dim;
-    k_desc.cols  = output_dim;
-    k_desc.ld    = output_dim;
-
-    // No format conversion needed if weight_spec was never set (trivial weights
-    // loaded via commit_tensor, e.g. tok_embeddings, output head).
-    if (weight_format.dtype == DataType{}) {
-        EnsureFloatDtype(weight, data_type);
-        if (weight.dtype() == data_type) {
-            k_desc.type = data_type;
-        }
-        prepared_ = true;
-        return;
-    }
-
-    auto stream = core::Context::stream().handle();
-
-    // TM_GEMM_WEIGHT_PACK=0: keep load-time storage; no transpose / tiled pack.
-    if (gemm::WeightPackEnv() == 0) {
-        return;
-    }
-
-    if (weight_format.dtype == kFloat8_e4m3 && input_dtype() != kFloat8_e4m3) {
-        // Pre-SM90 kernels implement weight-only FP8 x (B)F16 GEMM. They
-        // consume K-group scales, whereas checkpoints carry 128x128 block
-        // scales for the native FP8 path. Expand each N-block scale over
-        // its 128 output channels and describe the converted format as
-        // K-groupwise before selecting/packing the legacy kernel layout.
-        // Checkpoints may store block scales as bf16/fp16 (Qwen3.5 FP8);
-        // BlockscaleToGroupscale dispatches over the source dtype directly.
-        const int group_size         = weight_format.block_sizes.at(0);
-        scales                       = BlockscaleToGroupscale(scales, data_type, group_size);
-        weight_format.block_sizes[1] = 1;
-        weight_format.scales.dtype   = data_type;
-    }
-
-    if (weight_format.dtype == kFloat8_e4m3 && input_dtype() == kFloat8_e4m3) {
-        // FP8 native path: transpose weight and scales for native kernels.
-        auto process = [&](Tensor& x, MatrixLayout& d, auto dtype) {
-            using T = decltype(dtype);
-            Tensor trans{{x.shape(1), x.shape(0)}, x.dtype(), kDEVICE};
-            invokeTransposeAxis01((T*)trans.raw_data(), (T*)x.raw_data(), x.shape(0), x.shape(1), 1, stream);
-            x = std::move(trans);
-            d = MatrixLayout{x.dtype(), gemm::kColMajor, (int)x.shape(1), (int)x.shape(0), (int)x.stride(0)};
-        };
-
-        TM_CHECK_EQ(weight.dtype(), kFloat8_e4m3);
-        process(weight, k_desc, uint8_t{});
-
-        // FP8 native path requires f32 scales; cast if loaded as bf16/fp16.
-        EnsureFloatDtype(scales, kFloat);
-
-        TM_CHECK_EQ(scales.dtype(), kFloat);
-        process(scales, q_desc, float{});
-    }
-    else {
-        // General quantization format conversion path.
-        using namespace gemm;
-
-        const int   group_size = weight_format.block_sizes.empty() ? 0 : weight_format.block_sizes[0];
-        const auto  converters = GetConverters(ConverterRequest{
-            data_type,
-            weight_format.dtype,
-            input_dtype(),
-            is_grouped_,
-            getSMVersion(),
-            input_dim,
-            output_dim,
-            group_size,
-            epilogue,
-        });
-        const auto* conv_w     = converters.weight;
-        const auto* conv_s     = converters.qparams;
-
-        // SM90 dense + grouped BF16/FP16: no pack converter (GetConverters returns {}),
-        // but GMMA+TMA need physical (N, K) with K contiguous (same as FP8 native
-        // prepare). Plain (K, N) row-major cannot use SW128 TMA boxes along K.
-        // Grouped experts prepare as 2D before MoeWeight::LinkLinearExperts; SM100
-        // grouped stays (K, N) for cuBLAS (sm gate excludes >= 100).
-        if (!conv_w && getSMVersion() >= 90 && getSMVersion() < 100
-            && (weight_format.dtype == kBfloat16 || weight_format.dtype == kHalf)) {
-            Tensor trans{{weight.shape(1), weight.shape(0)}, weight.dtype(), kDEVICE};
-            if (weight.dtype() == kBfloat16) {
-                invokeTransposeAxis01((nv_bfloat16*)trans.raw_data(),
-                                      (nv_bfloat16*)weight.raw_data(),
-                                      weight.shape(0),
-                                      weight.shape(1),
-                                      1,
-                                      stream);
-            }
-            else {
-                invokeTransposeAxis01(
-                    (half*)trans.raw_data(), (half*)weight.raw_data(), weight.shape(0), weight.shape(1), 1, stream);
-            }
-            weight       = std::move(trans);
-            k_desc.type  = weight.dtype();
-            k_desc.order = gemm::kColMajor;
-            k_desc.rows  = (int)weight.shape(1);
-            k_desc.cols  = (int)weight.shape(0);
-            k_desc.ld    = (int)weight.stride(0);
-            k_desc.pack  = {};
-        }
-
-        if (conv_w) {
-            const auto order_w = conv_w->order;
-            const bool is_A    = get_operand_tag(conv_w->pack) == OPERAND_A;
-            const bool is_B    = !is_A;
-
-            const int bits = byte_size(weight_format.dtype, 8);
-
-            Tensor_<uint16_t> tmp{{input_dim, output_dim}, kDEVICE};
-
-            if (bits == 4) {
-                extend_to_u16(tmp.data(), (const uint4_t*)weight.raw_data(), tmp.size(), stream);
-            }
-            else if (bits == 8) {
-                extend_to_u16(tmp.data(), (const uint8_t*)weight.raw_data(), tmp.size(), stream);
-            }
-            else if (bits == 16) {
-                TM_CUDA_CHECK(
-                    cudaMemcpyAsync(tmp.raw_data(), weight.raw_data(), weight.byte_size(), cudaMemcpyDefault, stream));
-            }
-
-            if (order_w == kRowMajor) {
-                Tensor_<uint16_t> trans{{output_dim, input_dim}, kDEVICE};
-                invokeTransposeAxis01(trans.data(), tmp.data(), input_dim, output_dim, 1, stream);
-                tmp = trans;
-            }
-
-            MatrixLayout w_desc{
-                data_type,
-                order_w,
-                (int)output_dim,
-                (int)input_dim,
-                order_w == kRowMajor ? (int)input_dim : (int)output_dim,
-            };
-
-            if (is_B) {
-                std::swap(w_desc.rows, w_desc.cols);
-                w_desc.order = ~w_desc.order;
-            }
-
-            MatrixLayout kd = w_desc;
-            kd.type         = weight_format.dtype;
-            if (bits == 4) {
-                kd.type = data_type_v<uint4_t>;
-            }
-            else if (bits == 8) {
-                kd.type = data_type_v<uint8_t>;
-            }
-            kd.pack = conv_w->pack;
-
-            Tensor packed_weight;
-            void*  packed_dst   = weight.raw_data();
-            size_t packed_bytes = weight.byte_size();
-            if (conv_w->storage_bits > bits) {
-                packed_bytes = (tmp.size() * conv_w->storage_bits + 7) / 8;
-                packed_weight = Tensor{{static_cast<core::ssize_t>(packed_bytes)}, kUint8, kDEVICE};
-                packed_dst = packed_weight.raw_data();
-            }
-
-            TM_CUDA_CHECK(cudaMemsetAsync(packed_dst, 0, packed_bytes, stream));
-            TM_CHECK(conv_w->Convert(tmp.data(), w_desc, packed_dst, kd, stream) == 0);
-            if (packed_weight) {
-                weight = std::move(packed_weight);
-            }
-
-            kd.type = weight_format.dtype;
-            if (is_A) {
-                kd = transpose(kd);
-            }
-            k_desc = kd;
-        }
-
-        if (conv_s) {
-            if (converters.qparam_encoding == QParamEncoding::kBf16BlockScale) {
-                TM_CHECK(scales);
-                TM_CHECK_EQ(scales.dtype(), kFloat);
-                TM_CHECK_EQ(scales.ndim(), 2);
-                TM_CHECK_EQ(scales.shape(0), input_dim / Sm90Fp8E4M3Format::kGroupSize);
-                TM_CHECK_EQ(scales.shape(1), output_dim / Sm90Fp8E4M3Format::kScaleGroupN);
-                TM_CHECK(scales.is_contiguous());
-
-                MatrixLayout s_desc{
-                    kFloat, kRowMajor, (int)scales.shape(0), (int)scales.shape(1), (int)scales.stride(0)};
-                MatrixLayout qd = s_desc;
-                Tensor       packed_q{{scales.size() * Sm90Fp8E4M3Format::kQparamValuesTile}, kBfloat16, kDEVICE};
-                TM_CHECK(conv_s->Convert(scales.raw_data(), s_desc, packed_q.raw_data(), qd, stream) == 0);
-                scales = std::move(packed_q);
-                q_desc = qd;
-                return;
-            }
-
-            const auto order_s = conv_s->order;
-            const auto pack_s  = conv_s->pack;
-            const bool is_A    = get_operand_tag(conv_s->pack) == OPERAND_U;
-
-            Tensor     tmp_q;
-            DataType   scale_type;
-            const bool is_nvfp4 = converters.qparam_encoding == QParamEncoding::kNvFp4Scale;
-            const bool is_mxfp4_fp8_folded =
-                converters.qparam_encoding == QParamEncoding::kMxFp4Fp8Folded;
-            const bool is_mxfp4_fp8_unfolded =
-                converters.qparam_encoding == QParamEncoding::kMxFp4Fp8Unfolded;
-            const bool is_mxfp4_fp8 = is_mxfp4_fp8_folded || is_mxfp4_fp8_unfolded;
-            const bool is_mxfp4 = converters.qparam_encoding == QParamEncoding::kMxFp4UnbiasedExponent
-                                  || is_mxfp4_fp8;
-
-            if (converters.qparam_encoding == QParamEncoding::kBf16ScaleEffZero) {
-                TM_CHECK(scales);
-                if (zeros) {
-                    TM_CHECK_EQ(scales.dtype(), zeros.dtype());
-                }
-                tmp_q = {{scales.size(), 2}, kBfloat16, kDEVICE};
-                fuse_scales_and_zeros_bf16(tmp_q.data<bfloat16_t>(),
-                                           scales.raw_data(),
-                                           zeros ? zeros.raw_data() : nullptr,
-                                           scales.dtype(),
-                                           scales.size(),
-                                           stream);
-                scale_type = kUint32;
-                zeros      = {};
-                scales     = empty_like(tmp_q);
-            }
-            else if (zeros) {
-                tmp_q = {{scales.size(), 2}, kHalf, kDEVICE};
-                fuse_scales_and_zeros(
-                    tmp_q.data<half>(), scales.data<half>(), zeros.data<half>(), scales.size(), stream);
-                scale_type = kUint32;
-                zeros      = {};
-                scales     = empty_like(tmp_q);
-            }
-            else if (weight_format.dtype == kFloat8_e4m3) {
-                tmp_q = empty_like(scales);
-                Copy(scales, tmp_q);
-                scale_type = kUint16;
-            }
-            else {
-                tmp_q = empty_like(scales);
-                Copy(scales, tmp_q);
-                scale_type = kUint8;
-            }
-
-            if (is_nvfp4) {
-                TM_CHECK(global_scale);
-                TM_CHECK_EQ(global_scale.dtype(), kFloat);
-                TM_CHECK_EQ(global_scale.size(), 1);
-            }
-
-            if (data_type == kHalf && weight_format.dtype == kFloat4_e2m1) {
-                AdjustUe8m0ScaleForHalf(tmp_q.data<uint8_t>(), tmp_q.size(), stream);
-            }
-
-            int          gs = weight_format.block_sizes[0];  // K-axis, tensor-shape order
-            MatrixLayout s_desc{
-                scale_type,
-                order_s,
-                (int)output_dim,
-                (int)input_dim / gs,
-                (int)output_dim,
-            };
-
-            if (!is_A) {
-                std::swap(s_desc.rows, s_desc.cols);
-                s_desc.order = ~s_desc.order;
-            }
-
-            MatrixLayout qd = s_desc;
-            qd.pack         = pack_s;
-
-            Tensor packed_q;
-            void*  q_dst = scales.raw_data();
-            if (is_mxfp4) {
-                core::ssize_t packed_values = scales.size();
-                if (is_mxfp4_fp8) {
-                    constexpr int kSourceValuesPerRecord = 4 * 64;
-                    TM_CHECK_EQ(packed_values % kSourceValuesPerRecord, 0);
-                    const int values_per_record = is_mxfp4_fp8_folded ?
-                                                      Sm90MxFp4Fp8FoldedFormat::kQparamValuesFragment :
-                                                      Sm90MxFp4Fp8UnfoldedFormat::kQparamValuesFragment;
-                    packed_values = packed_values / kSourceValuesPerRecord * values_per_record;
-                }
-                const DataType packed_type = kUint8;
-                packed_q = Tensor{{packed_values}, packed_type, kDEVICE};
-                q_dst    = packed_q.raw_data();
-            }
-
-            TM_CHECK(conv_s->Convert(tmp_q.raw_data(), s_desc, q_dst, qd, stream) == 0);
-            if (is_mxfp4_fp8) {
-                TM_CHECK_EQ(qd.pack, pack_s);
-                k_desc.pack = is_mxfp4_fp8_folded ? kSm90MxFp4Fp8FoldedWeightPack :
-                                                    kSm90MxFp4Fp8UnfoldedWeightPack;
-            }
-            if (is_mxfp4) {
-                scales = std::move(packed_q);
-            }
-
-            if (is_A) {
-                qd = transpose(qd);
-            }
-            q_desc = qd;
-        }
-    }
-
     prepared_ = true;
 }
 

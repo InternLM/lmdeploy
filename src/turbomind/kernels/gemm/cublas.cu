@@ -5,11 +5,14 @@
 #include "src/turbomind/core/data_type.h"
 
 #include "src/turbomind/kernels/gemm/arch.h"
+#include "src/turbomind/kernels/gemm/cublas.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/matrix_ptr.h"
+#include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 #include <cstdio>
@@ -19,7 +22,7 @@ namespace turbomind::gemm {
 
 class CublasKernel: public Kernel {
 public:
-    explicit CublasKernel(): cublas_{}
+    CublasKernel(const Family& family, bool (*available)(int)): Kernel{family}, cublas_{}, available_{available}
     {
         cublasCreate(&cublas_);
         if (0) {
@@ -116,8 +119,16 @@ public:
         return ec == CUBLAS_STATUS_SUCCESS ? 0 : 1;
     }
 
+    bool is_available(int arch) const noexcept override
+    {
+        return Kernel::is_available(arch) && available_(arch);
+    }
+
     bool is_feasible(const GemmDesc& desc) const noexcept override
     {
+        if (desc.family && desc.family != family().id) {
+            return false;
+        }
         constexpr std::tuple flat3{Striding::kFlat, Striding::kFlat, Striding::kFlat};
 
         if (std::tie(desc.striding_a, desc.striding_b, desc.striding_c) != flat3) {
@@ -168,12 +179,19 @@ private:
     cudaStream_t   stream_{};
     void*          workspace_{};
     size_t         workspace_size_{};
+    bool (*available_)(int);
 };
+
+void add_cublas(Collector& collector, bool (*available)(int))
+{
+    collector.add<CublasKernel>(available);
+}
 
 #if defined(ENABLE_CUBLAS_GROUPED)
 
-// Grouped GEMM via cublasGemmGroupedBatchedEx (CUDA 12.5+, SM100).
-// Requires standard (K,N) row-major weight; GetConverters skips tiled conversion on SM100 for grouped BF16.
+// Grouped GEMM via cublasGemmGroupedBatchedEx (CUDA 12.5+).
+// Requires the source-preserving (K,N) row-major weight published by the
+// grouped cuBLAS family's Pack implementation.
 // Problem (row-major): D_i = A_i * B_i^T  with A_i (M_i,K), B_i (N,K), D_i (M_i,N).
 // cuBLAS (col-major):  C = alpha*op(A)*op(B) + beta*C.
 // Map: C_cublas = D^T (N,M_i), A_cublas = B_i (N,K), B_cublas = A_i as (K,M_i) column-major (same bytes as row-major
@@ -183,7 +201,7 @@ private:
 
 class CublasGroupedKernel: public Kernel {
 public:
-    explicit CublasGroupedKernel(): cublas_{}
+    explicit CublasGroupedKernel(const Family& family): Kernel{family}, cublas_{}
     {
         cublasCreate(&cublas_);
         cublasSetWorkspace(cublas_, nullptr, 0);
@@ -191,7 +209,7 @@ public:
 
         desc_.backend    = 1;
         desc_.group_axis = 0;  // batch dim along M (ragged M per group)
-        desc_.arch       = 1000;
+        desc_.arch       = 0;
         desc_.order_a    = kRowMajor;
         desc_.order_b    = kColMajor;
         desc_.order_c    = kRowMajor;
@@ -253,6 +271,7 @@ public:
                 Adesc.rows);
             return 1;
         }
+
         const int group_count = Adesc.num;
         if (group_count <= 0 || Bdesc.num != group_count || Ddesc.num != group_count) {
             fprintf(stderr,
@@ -262,6 +281,20 @@ public:
                     Ddesc.num);
             return 1;
         }
+
+        Tensor      dispatched_A;
+        const void* input = A;
+        if (Adesc.idxs) {
+            Tensor source{const_cast<void*>(A),
+                          {{Adesc.rows, Adesc.cols}, {Adesc.ld, 1}},
+                          Adesc.type,
+                          kDEVICE};
+            dispatched_A = Tensor{{Adesc.rows, Adesc.cols}, Adesc.type, kDEVICE};
+            invokeMoeDispatch(
+                dispatched_A, source, Adesc.idxs, Adesc.rows, Adesc.offsets + group_count, stream);
+            input = dispatched_A.raw_data();
+        }
+
         (void)cudaGetLastError();
 
         if (stream_ != stream) {
@@ -371,7 +404,7 @@ public:
             n_active.push_back(M_i);
             lda_active.push_back(N);
             a_active.push_back(weight_ptr);
-            b_active.push_back(static_cast<const char*>(A) + ptr_offsets[i] * Adesc.ld * elem_size);
+            b_active.push_back(static_cast<const char*>(input) + ptr_offsets[i] * Adesc.ld * elem_size);
             c_active.push_back(static_cast<char*>(D) + ptr_offsets[i] * Ddesc.ld * elem_size);
         }
 
@@ -432,6 +465,9 @@ public:
 
     bool is_feasible(const GemmDesc& desc) const noexcept override
     {
+        if (desc.family && desc.family != family().id) {
+            return false;
+        }
         if (desc.num <= 1 || desc.group_axis < 0) {
             return false;
         }
@@ -484,14 +520,72 @@ private:
 #endif  // ENABLE_CUBLAS_GROUPED
 
 namespace {
-Registrar reg([](Collector& c, int arch) {
-    c.add(std::make_unique<CublasKernel>());
-#if defined(ENABLE_CUBLAS_GROUPED)
-    if (Sm100::is_compatible(arch)) {
-        c.add(std::make_unique<CublasGroupedKernel>());
+bool bf16_available(int arch)
+{
+    return arch >= Sm80::value;
+}
+
+template<DataType Dtype, bool Grouped>
+std::optional<WeightBridge> supports(const DataFormat& format, bool grouped)
+{
+    if (Grouped && !grouped) {
+        return std::nullopt;
     }
+    return format == DataFormat{Dtype} ? std::optional{WeightBridge{}} : std::nullopt;
+}
+
+template<DataType Dtype, bool Grouped>
+void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t)
+{
+    TM_CHECK(!bridge);
+    TM_CHECK_EQ(linear.weight.dtype(), Dtype);
+    linear.k_desc = MatrixLayout{Dtype,
+                                 kRowMajor,
+                                 linear.input_dim,
+                                 linear.output_dim,
+                                 linear.output_dim,
+                                 0,
+                                 0,
+                                 nullptr,
+                                 nullptr};
+    linear.q_desc = {};
+}
+
+const Family dense_f16{100, 90, kHalf, kHalf, 1, 1, 1, 1,
+                       false, false, supports<kHalf, false>, pack<kHalf, false>};
+const Family dense_bf16{101, 100, kBfloat16, kBfloat16, 1, 1, 1, 1,
+                        false, false, supports<kBfloat16, false>, pack<kBfloat16, false>};
+const Family grouped_f16{102, 90, kHalf, kHalf, 1, 1, 1, 1,
+                         false, true, supports<kHalf, true>, pack<kHalf, true>, 0, {}, false};
+const Family grouped_bf16{103, 100, kBfloat16, kBfloat16, 1, 1, 1, 1,
+                          false, true, supports<kBfloat16, true>, pack<kBfloat16, true>, 0, {}, false};
+const Family f16_f32{104, 90, kHalf, kFloat, 1, 1, 1, 1,
+                     false, false, supports<kHalf, false>, pack<kHalf, false>};
+const Family bf16_f32{105, 100, kBfloat16, kFloat, 1, 1, 1, 1,
+                      false, false, supports<kBfloat16, false>, pack<kBfloat16, false>};
+
+Registrar reg[]{
+{dense_f16, [](Collector& c) {
+    add_cublas(c);
+}},
+{dense_bf16, [](Collector& c) {
+    add_cublas(c, bf16_available);
+}},
+{f16_f32, [](Collector& c) {
+    add_cublas(c);
+}},
+{bf16_f32, [](Collector& c) {
+    add_cublas(c, bf16_available);
+}},
+#if defined(ENABLE_CUBLAS_GROUPED)
+{grouped_f16, [](Collector& c) {
+    c.add<CublasGroupedKernel>();
+}},
+{grouped_bf16, [](Collector& c) {
+    c.add<CublasGroupedKernel>();
+}},
 #endif
-});
+};
 }  // namespace
 
 }  // namespace turbomind::gemm

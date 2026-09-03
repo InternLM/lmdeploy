@@ -2,20 +2,49 @@
 
 #include <cuda.h>
 
-// We need modifiable TMA, which is added in 12.3
-#if (__CUDACC_VER_MAJOR__ > 12 || (__CUDACC_VER_MAJOR__ >= 12 && __CUDACC_VER_MINOR__ >= 3))
-
 #include "src/turbomind/kernels/gemm/arch.h"
+#include "src/turbomind/kernels/gemm/cublas.h"
+#include "src/turbomind/kernels/gemm/convert.h"
 #include "src/turbomind/kernels/gemm/gemm_universal_sm90_bf16.h"
+#include "src/turbomind/kernels/gemm/kernel/floating_point.h"
 #include "src/turbomind/kernels/gemm/kernel_impl_sm90_bf16.h"
 #include "src/turbomind/kernels/gemm/sm90_bf16_traits.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
 #include "src/turbomind/kernels/gemm/registrar.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/models/linear_weight.h"
 
 namespace turbomind::gemm {
 
 namespace {
+void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+{
+    ApplyWeightBridge(linear, bridge, stream);
+    TM_CHECK_EQ(linear.weight.dtype(), kBfloat16);
+    Tensor trans{{linear.weight.shape(1), linear.weight.shape(0)}, kBfloat16, kDEVICE};
+    invokeTransposeAxis01(static_cast<nv_bfloat16*>(trans.raw_data()),
+                          static_cast<nv_bfloat16*>(linear.weight.raw_data()),
+                          linear.weight.shape(0),
+                          linear.weight.shape(1),
+                          1,
+                          stream);
+    linear.weight        = std::move(trans);
+    linear.k_desc        = MatrixLayout{kBfloat16,
+                                        kColMajor,
+                                        linear.input_dim,
+                                        linear.output_dim,
+                                        (int)linear.weight.stride(0),
+                                        0,
+                                        0,
+                                        nullptr,
+                                        nullptr};
+    linear.q_desc        = {};
+    linear.weight_format = kBfloat16;
+}
+
+const Family bf16{
+    27, 250, kBfloat16, kBfloat16, 1, 1, 1, 1, true, true, supports_fp<kBfloat16>, pack, 64, kBfloat16};
 
 // Registers one SM90 BF16 GMMA kernel: cluster (1,1), no multicast. Grouped-ness follows
 // striding: dense (kFlat) is ungrouped, MoE (kIndexed / kBlocked) is grouped. Tile_ carries
@@ -24,11 +53,12 @@ template<Order raster, Striding striding, class Tile, bool silu = false, int l2_
 void add_kernel(Collector& c)
 {
     constexpr bool grouped = striding != Striding::kFlat;
-    c.add(std::make_unique<
-          KernelImplSm90Bf16<GemmUniversalSm90_Bf16<raster, 1, 1, grouped, striding, Tile, silu, l2_hint_w>>>());
+    c.add<KernelImplSm90Bf16<GemmUniversalSm90_Bf16<raster, 1, 1, grouped, striding, Tile, silu, l2_hint_w>>>();
 }
 
-Registrar reg([](Collector& c, int /*arch*/) {
+Registrar reg(bf16, [](Collector& c) {
+    add_cublas(c, Sm90::is_compatible);
+
     // Catalog pruned per full-suite scan tmp/sm90_bf16_scan5; refs refreshed per
     // tmp/sm90_bf16_scan8 (2026-07-26, H200, TP/EP 1/2/4/8, swizzle 0-3). `refs: N` =
     // dispatch records (tuned selections) the kernel accumulated across the scan;
@@ -196,9 +226,3 @@ Registrar reg([](Collector& c, int /*arch*/) {
 }  // namespace
 
 }  // namespace turbomind::gemm
-
-#else
-
-// CUDA too old for modifiable TMA: no SM90 GMMA kernels from this TU.
-
-#endif

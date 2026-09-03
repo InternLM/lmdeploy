@@ -3,24 +3,6 @@ from __future__ import annotations
 import torch
 
 _SM90_FP8_FUSED_SILU_BLOCK = 128
-_SM90_BF16_FUSED_SILU_BLOCK = 64
-_SM90_FP4_FUSED_SILU_BLOCK = 64
-_SM90_U4_FUSED_SILU_BLOCK = 64
-
-
-def fused_silu_block(weight_type: str, input_type: str) -> int:
-    if input_type == 'fp8_e4m3':
-        return _SM90_FP8_FUSED_SILU_BLOCK
-    if input_type == 'bf16':
-        return _SM90_BF16_FUSED_SILU_BLOCK
-    return {
-        'fp8_e4m3': _SM90_FP8_FUSED_SILU_BLOCK,
-        'bf16': _SM90_BF16_FUSED_SILU_BLOCK,
-        'fp4_e2m1': _SM90_FP4_FUSED_SILU_BLOCK,
-        'uint4': _SM90_U4_FUSED_SILU_BLOCK,
-    }[weight_type]
-
-
 def compare_tensors(actual: torch.Tensor, expected: torch.Tensor) -> dict[str, float]:
     if actual.shape != expected.shape:
         raise ValueError(f'shape_mismatch_{tuple(actual.shape)}_{tuple(expected.shape)}')

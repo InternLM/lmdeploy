@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
+import _turbomind as _tm
+
 from ._base import Builder, ParallelGroup, SplitSide
 
 # ---------------------------------------------------------------------------
@@ -31,7 +33,10 @@ class MoeBuilder(Builder):
 
     def add_gate(self, name, linear):
         """Commit a gate linear (broadcast, no split)."""
-        self._add_linear(name, linear, split_side=None)
+        query = self._make_gemm_query(linear)
+        query.output_dtype = _tm.DataType.TYPE_FP32
+        self._add_linear(name, linear, split_side=None,
+                         plan=self._query_gemm(query))
 
     def add_param(self, name, tensor, split_side=None):
         """Commit a non-expert MoE parameter."""

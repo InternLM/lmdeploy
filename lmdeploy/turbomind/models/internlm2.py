@@ -96,7 +96,7 @@ class InternLM2Model(TextModel):
         o = self._linear(pfx + 'wo')
 
         def reorder(x):
-            return reorder_rotary_emb(x, cfg.head_dim, cfg.rope.dim, resolver=self._resolver)
+            return reorder_rotary_emb(x, cfg.head_dim, cfg.rope.dim, dtype=self._ctx.dtype)
 
         q, k = [reorder(x) for x in (q, k)]
 

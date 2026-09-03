@@ -37,7 +37,7 @@ public:
     using OpU = typename Gemm::OperandU;
     using OpV = typename Gemm::OperandV;
 
-    KernelImpl()
+    explicit KernelImpl(const Family& family): Kernel{family}
     {
         desc_.order_a = OpA::kOrder;
         desc_.order_b = transpose(OpB::kOrder);

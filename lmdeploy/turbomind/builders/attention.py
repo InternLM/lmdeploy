@@ -98,7 +98,7 @@ class AttentionBuilder(Builder):
 
         Pipeline: dequant_mixed -> repeat_kv_for_tp -> fuse_qkv -> commit.
         """
-        q, k, v, gate = dequant_mixed(q, k, v, gate, data_type=self.config.data_type)
+        q, k, v, gate = dequant_mixed(q, k, v, gate, dtype=self._ctx.dtype)
         k, v = repeat_kv_for_tp(k, v, tp=self.tp.size,
                                 head_dim=self.config.head_dim)
         # After KV head repeat, push the padded-global kv_head_num onto

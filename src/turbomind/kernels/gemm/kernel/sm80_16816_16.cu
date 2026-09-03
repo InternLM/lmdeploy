@@ -2,8 +2,11 @@
 
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/arch/config_sm80_s16816.h"
+#include "src/turbomind/kernels/gemm/convert.cuh"
+#include "src/turbomind/kernels/gemm/kernel/floating_point.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/models/linear_weight.h"
 
 namespace turbomind::gemm {
 
@@ -13,9 +16,17 @@ using S = cache_policy::Stream;
 using D = cache_policy::Default;
 
 namespace {
-Registrar reg([](Collector& c, int /*arch*/) {
-    if constexpr (1) {
-        // clang-format off
+constexpr auto f16_packer  = pack_fp<Arch<80>, kRowMajor, HMMA_16816 | OPERAND_B | 1, kHalf>;
+constexpr auto bf16_packer = pack_fp<Arch<80>, kRowMajor, HMMA_16816 | OPERAND_B | 1, kBfloat16>;
+
+const Family f16{13, 190, kHalf, kHalf, 32, 8, 1, 1, true, true, supports_fp<kHalf>, f16_packer};
+const Family bf16{14, 200, kBfloat16, kBfloat16, 32, 8, 1, 1, true, true, supports_fp<kBfloat16>, bf16_packer};
+
+Registrar reg[]{
+    {f16,
+     [](Collector& c) {
+         if constexpr (1) {
+             // clang-format off
         using C = Config_F16_g<Sm80, half, kColMajor>;
         c.add<C::Type<256, 128,  64, 4, 2, 1, D, D, 3,   0 , 1, 1>>();
         c.add<C::Type<128, 256,  64, 2, 4, 1, D, D, 3,   0 , 1, 1>>(); // 10
@@ -32,11 +43,13 @@ Registrar reg([](Collector& c, int /*arch*/) {
         c.add<C::Type< 32, 128,  64, 1, 4, 1, D, S, 3, true, 1, 1>>();
         c.add<C::Type< 16,  64, 128, 1, 2, 2, D, S, 3, true, 1, 1>>(); // 10
         c.add<C::Type< 16, 128,  64, 1, 4, 1, D, S, 3, true, 1, 1>>();
-        // clang-format on
-    }
-
-    if constexpr (1) {
-        // clang-format off
+             // clang-format on
+         }
+     }},
+    {bf16,
+     [](Collector& c) {
+         if constexpr (1) {
+             // clang-format off
         using C = Config_F16_g<Sm80, nv_bfloat16, kColMajor>;
         c.add<C::Type<256, 128,  64, 4, 2, 1, D, D, 3,   0 , 1, 1>>();
         c.add<C::Type<128, 256,  64, 2, 4, 1, D, D, 3,   0 , 1, 1>>(); // 10
@@ -53,9 +66,10 @@ Registrar reg([](Collector& c, int /*arch*/) {
         c.add<C::Type< 32, 128,  64, 1, 4, 1, D, S, 3, true, 1, 1>>();
         c.add<C::Type< 16,  64, 128, 1, 2, 2, D, S, 3, true, 1, 1>>(); // 10
         c.add<C::Type< 16, 128,  64, 1, 4, 1, D, S, 3, true, 1, 1>>();
-        // clang-format on
-    }
-});
-}
+             // clang-format on
+         }
+     }},
+};
+}  // namespace
 
 }  // namespace turbomind::gemm

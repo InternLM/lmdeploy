@@ -9,7 +9,6 @@
 
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
-#include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
 #include "src/turbomind/kernels/quantization.h"
@@ -18,6 +17,8 @@
 #include "src/turbomind/models/llama/LlamaLinear.h"
 
 #include "src/turbomind/utils/cuda_utils.h"
+
+#include <optional>
 
 namespace turbomind {
 
@@ -79,35 +80,8 @@ struct LlamaLinear::Impl {
         const bool has_indices = static_cast<bool>(indices) && indices.size() > 0;
         const int  m           = has_indices ? indices.size() : input.shape(0);
 
-        // Currently, FP8 only; INT8 may be added later
-        if (input.dtype() != weight.input_dtype()) {
-            TM_SCOPE_CALL(QuantizeSymm(A, U, input, st));
-        }
-        else {
-            A = input;
-            if (weight.input_dtype() == kFloat8_e4m3) {
-                TM_CHECK(input_scales) << "FP8 input requires input_scales companion (dynamic group scales)";
-                U = input_scales;
-            }
-        }
-
-        // SM100+ grouped bf16/fp16: use chunk() weights so Activation() runs separately.
-        // FP8 SM90 gathers A/U in-kernel (GemmUniversalSm90_v3 indexed); do not host-dispatch.
-        const bool is_cublas_grouped = offsets && getSMVersion() == 100 && weight.weight_format.dtype == kBfloat16;
-        if (has_indices && is_cublas_grouped) {
-            const int  k                = A.shape(1);
-            Tensor     A_e              = {{m, k}, A.dtype(), kDEVICE};
-            const int* num_valid_tokens = offsets ? offsets.data() + offsets.size() - 1 : nullptr;
-            TM_SCOPE_CALL(invokeMoeDispatch(A_e, A, indices.data(), m, num_valid_tokens, st));
-            if (U) {
-                Tensor U_e;
-                TM_SCOPE_CALL(invokeMoeDispatchScales(U_e, U, indices.data(), m, num_valid_tokens, st));
-                U = U_e;
-            }
-            A       = A_e;
-            indices = {};  // indices already applied
-            // has_indices no longer used below
-        }
+        TM_CHECK(weight.family);
+        weight.family->ConvertInput(A, U, weight, input, input_scales, st);
 
         MatrixLayout desc_A{A.dtype(), gemm::Order::kRowMajor, m, (int)A.shape(1), (int)A.stride(0)};
         MatrixLayout desc_U{};
@@ -118,45 +92,59 @@ struct LlamaLinear::Impl {
             desc_A.num = desc_U.num = weight.k_desc.num;
             desc_A.offsets = desc_U.offsets = const_cast<int*>(offsets.data());
         }
-        // Re-check after optional dispatch clears indices.
-        if (indices && indices.size() > 0) {
+        if (has_indices) {
             desc_A.idxs = desc_U.idxs = const_cast<int*>(indices.data());
         }
 
         return {A, desc_A, U, desc_U};
     }
 
-    void AllocOutputScales(Tensor& scales, int m, int out_dim)
+    Operation GetOperation(const LinearWeight& weight) const
     {
-        constexpr int group_size = 128;
-        constexpr int alignment  = 16 / sizeof(float);  // match QuantizeSymm
-        const int     s_dim      = cdiv(out_dim, group_size);
-        const int     aligned_m  = round_up(m, alignment);
-        if (!scales || scales.shape(0) != s_dim || scales.shape(1) != m || scales.stride(0) != aligned_m) {
-            scales = Tensor_<float>{{{s_dim, m}, {aligned_m, 1}}, kDEVICE};
-        }
+        Operation operation{};
+        operation.dispatch  = dispatch_policy_;
+        operation.epilogue  = weight.epilogue;
+        operation.quant_a   = MakeQuantDesc(weight.input_format);
+        operation.quant_b   = MakeQuantDesc(weight.weight_format);
+        operation.batch_dim = 0;
+        operation.family    = weight.family->id;
+        return operation;
     }
 
-    void Forward(const Tensor&       input,
-                 const Tensor&       input_scales,
-                 const LinearWeight& weight,
-                 const Buffer_<int>& indices,
-                 const Buffer_<int>& offsets,
-                 Tensor&             output,
-                 Tensor&             output_scales)
+    OutputSpec GetOutputSpec(const Tensor& input, const LinearWeight& weight, const Buffer_<int>& indices) const
     {
-        TM_FUNCTION_SCOPE();
-        using namespace gemm;
+        const bool grouped = weight.k_desc.ld == 0;
+        const bool indexed = static_cast<bool>(indices) && indices.size() > 0;
+        const int  k       = input.shape(-1);
+        const int  m       = indexed ? indices.size() : input.size() / k;
 
-        Operation op{};
-        op.dispatch  = dispatch_policy_;
-        op.epilogue  = weight.epilogue;
-        op.quant_a   = MakeQuantDesc(weight.input_format);
-        op.quant_b   = MakeQuantDesc(weight.weight_format);
-        op.batch_dim = 0;
+        auto output_shape = input.shape();
+        if (grouped) {
+            output_shape = {m, weight.output_dim};
+        }
+        else {
+            output_shape.back() = weight.output_dim;
+        }
+        return weight.family->output_spec(core::Layout{std::move(output_shape)}, weight.epilogue);
+    }
 
-        auto&& [A, desc_A, U, desc_U] = GetOperandA(weight, input, input_scales, indices, offsets);
+    Gemm::Arguments GetArguments(Tensor& A,
+                                 Tensor& U,
+                                 const OutputSpec& output_spec,
+                                 const Tensor& input,
+                                 const Tensor& input_scales,
+                                 const LinearWeight& weight,
+                                 const Buffer_<int>& indices,
+                                 const Buffer_<int>& offsets,
+                                 Tensor& output,
+                                 Tensor& output_scales)
+    {
+        Tensor in = input.view({-1, input.shape(-1)});
+        MatrixLayout desc_A;
+        MatrixLayout desc_U;
+        std::tie(A, desc_A, U, desc_U) = GetOperandA(weight, in, input_scales, indices, offsets);
         auto&& [B, desc_B, V, desc_V] = GetOperandB(weight);
+
         const Tensor& global_scale = weight.global_scale;
         MatrixLayout  global_scale_desc{};
         if (global_scale) {
@@ -166,16 +154,16 @@ struct LlamaLinear::Impl {
 
         Tensor& D = output;
         if (!D) {
-            int dim = weight.epilogue == Epilogue::kGatedSilu ? weight.output_dim / 2 : weight.output_dim;
-            D       = Tensor{{desc_A.rows, dim}, weight.output_dtype(), kDEVICE};
+            D = Tensor{output_spec.layout, output_spec.dtype, kDEVICE};
         }
+        Tensor D_gemm = D.view({-1, D.shape(-1)});
 
         MatrixLayout desc_D{
-            output.dtype(),
+            D_gemm.dtype(),
             kRowMajor,
-            (int)output.shape(0),
+            static_cast<int>(D_gemm.shape(0)),
             weight.output_dim,
-            (int)output.stride(0),
+            static_cast<int>(D_gemm.stride(0)),
         };
 
         if (offsets) {
@@ -183,41 +171,58 @@ struct LlamaLinear::Impl {
             desc_D.offsets = const_cast<int*>(offsets.data());
         }
 
+        Tensor&      W = output_scales;
         MatrixLayout desc_W{};
         void*        W_ptr = nullptr;
-        if (weight.output_dtype() == kFloat8_e4m3) {
-            const int out_cols = weight.epilogue == Epilogue::kGatedSilu ? weight.output_dim / 2 : weight.output_dim;
-            AllocOutputScales(output_scales, desc_A.rows, out_cols);
-            desc_W = {output_scales.dtype(),
+        if (output_spec.scales_dtype != kNull) {
+            if (!W) {
+                W = Tensor{output_spec.scales_layout, output_spec.scales_dtype, kDEVICE};
+            }
+            desc_W = {W.dtype(),
                       kColMajor,
-                      (int)output_scales.shape(1),
-                      (int)output_scales.shape(0),
-                      (int)output_scales.stride(0)};
-            W_ptr  = output_scales.raw_data();
+                      static_cast<int>(W.shape(1)),
+                      static_cast<int>(W.shape(0)),
+                      static_cast<int>(W.stride(0))};
+            W_ptr  = W.raw_data();
         }
 
-        auto ec = gemm_.Run(op,
-                            1.f,
-                            A.raw_data(),
-                            desc_A,
-                            U.data_or((void*)nullptr),
-                            desc_U,
-                            B.raw_data(),
-                            desc_B,
-                            V.data_or((void*)nullptr),
-                            desc_V,
-                            global_scale.data_or((void*)nullptr),
-                            global_scale_desc,
-                            0.f,
-                            D.raw_data(),
-                            desc_D,
-                            D.raw_data(),
-                            desc_D,
-                            W_ptr,
-                            desc_W,
-                            workspace_,
-                            core::Context::stream().handle());
+        Gemm::Arguments args{};
+        args.operation         = GetOperation(weight);
+        args.A                 = A.raw_data();
+        args.Adesc             = desc_A;
+        args.U                 = U.data_or((void*)nullptr);
+        args.Udesc             = desc_U;
+        args.B                 = B.raw_data();
+        args.Bdesc             = desc_B;
+        args.V                 = V.data_or((void*)nullptr);
+        args.Vdesc             = desc_V;
+        args.global_scale      = global_scale.data_or((void*)nullptr);
+        args.global_scale_desc = global_scale_desc;
+        args.C                 = D_gemm.raw_data();
+        args.Cdesc             = desc_D;
+        args.D                 = D_gemm.raw_data();
+        args.Ddesc             = desc_D;
+        args.W                 = W_ptr;
+        args.Wdesc             = desc_W;
+        args.workspace         = workspace_;
+        args.stream            = core::Context::stream().handle();
+        return args;
+    }
 
+    void Forward(const ExecPlan& plan,
+                 const Tensor& input,
+                 const Tensor& input_scales,
+                 const LinearWeight& weight,
+                 const Buffer_<int>& indices,
+                 const Buffer_<int>& offsets,
+                 Tensor& output,
+                 Tensor& output_scales)
+    {
+        TM_FUNCTION_SCOPE();
+        Tensor A;
+        Tensor U;
+        Gemm::Arguments args = GetArguments(A, U, plan.output_spec(), input, input_scales, weight, indices, offsets, output, output_scales);
+        const int ec = gemm_.Run(plan, args);
         if (ec) {
             TM_LOG_ERROR("{}: {}", __PRETTY_FUNCTION__, ec);
         }
@@ -231,11 +236,18 @@ struct LlamaLinear::Impl {
 
 LlamaLinear::LlamaLinear(): impl_{std::make_shared<Impl>()} {}
 
+gemm::Gemm& LlamaLinear::gemm() noexcept
+{
+    return impl_->gemm_;
+}
+
 void LlamaLinear::Forward(const Tensor&       input,  //
                           const LinearWeight& weight,
                           Ref<Tensor>         output)
 {
-    Forward(input, weight, {}, {}, output);
+    Tensor input_scales;
+    Tensor output_scales;
+    Forward(input, input_scales, weight, {}, {}, output, output_scales);
 }
 
 void LlamaLinear::Forward(const Tensor&       input,  //
@@ -244,14 +256,9 @@ void LlamaLinear::Forward(const Tensor&       input,  //
                           const Buffer_<int>& offsets,
                           Ref<Tensor>         output)
 {
-    Tensor in = input.view({-1, input.shape(-1)});
-
-    if (output.get()) {
-        output.get() = output.get().view({-1, output.get().shape(-1)});
-    }
-
-    Tensor in_s, out_s;
-    impl_->Forward(in, in_s, weight, indices, offsets, output.get(), out_s);
+    Tensor input_scales;
+    Tensor output_scales;
+    Forward(input, input_scales, weight, indices, offsets, output, output_scales);
 }
 
 void LlamaLinear::Forward(const Tensor&       input,
@@ -262,13 +269,20 @@ void LlamaLinear::Forward(const Tensor&       input,
                           Ref<Tensor>         output,
                           Ref<Tensor>         output_scales)
 {
-    Tensor in = input.view({-1, input.shape(-1)});
+    TM_FUNCTION_SCOPE();
+    OutputSpec output_spec = impl_->GetOutputSpec(input, weight, indices);
+    Tensor A;
+    Tensor U;
+    Gemm::Arguments args = impl_->GetArguments(A, U, output_spec, input, input_scales, weight, indices, offsets, output.get(), output_scales.get());
 
-    if (output.get()) {
-        output.get() = output.get().view({-1, output.get().shape(-1)});
+    auto exec_plan = impl_->dispatch_policy_ & DispatchPolicy::kMeasure ? impl_->gemm_.Tune(args) : impl_->gemm_.GetExecPlan(args);
+
+    TM_CHECK(exec_plan);
+    exec_plan->output_spec_ = std::move(output_spec);
+    const int ec = impl_->gemm_.Run(*exec_plan, args);
+    if (ec) {
+        TM_LOG_ERROR("{}: {}", __PRETTY_FUNCTION__, ec);
     }
-
-    impl_->Forward(in, input_scales, weight, indices, offsets, output.get(), output_scales.get());
 }
 
 void LlamaLinear::Forward(const Tensor&       input,
@@ -280,9 +294,92 @@ void LlamaLinear::Forward(const Tensor&       input,
     Forward(input, input_scales, weight, {}, {}, output, output_scales);
 }
 
+void LlamaLinear::Forward(const ExecPlan& plan,
+                          const Tensor& input,
+                          const Tensor& input_scales,
+                          const LinearWeight& weight,
+                          const Buffer_<int>& indices,
+                          const Buffer_<int>& offsets,
+                          Ref<Tensor> output,
+                          Ref<Tensor> output_scales)
+{
+    impl_->Forward(plan, input, input_scales, weight, indices, offsets, output.get(), output_scales.get());
+}
+
+OutputSpec LlamaLinear::GetOutputSpec(const Tensor& input, const LinearWeight& weight, const Buffer_<int>& indices) const
+{
+    return impl_->GetOutputSpec(input, weight, indices);
+}
+
+std::optional<ExecPlan> LlamaLinear::GetExecPlan(const Tensor& input,
+                                                 const LinearWeight& weight,
+                                                 const Buffer_<int>& indices,
+                                                 const Buffer_<int>& offsets)
+{
+    const bool indexed = static_cast<bool>(indices) && indices.size() > 0;
+    const int  k       = input.shape(-1);
+    const int  m       = indexed ? indices.size() : input.size() / k;
+
+    OutputSpec output_spec = impl_->GetOutputSpec(input, weight, indices);
+
+    MatrixLayout desc_A{weight.input_format.dtype, kRowMajor, m, k, k};
+    MatrixLayout desc_U{};
+    MatrixLayout desc_B = weight.k_desc;
+    MatrixLayout desc_V = weight.q_desc;
+    MatrixLayout desc_D{output_spec.dtype, kRowMajor, m, weight.output_dim, static_cast<int>(output_spec.layout.stride(-2))};
+
+    if (offsets) {
+        desc_A.num = desc_U.num = desc_D.num = desc_B.num;
+        desc_A.offsets = desc_U.offsets = desc_D.offsets = const_cast<int*>(offsets.data());
+    }
+    if (indexed) {
+        desc_A.idxs = desc_U.idxs = const_cast<int*>(indices.data());
+    }
+
+    Gemm::Arguments args{};
+    args.operation = impl_->GetOperation(weight);
+    args.Adesc = desc_A;
+    args.Udesc = desc_U;
+    args.Bdesc = desc_B;
+    args.Vdesc = desc_V;
+    args.Cdesc = desc_D;
+    args.Ddesc = desc_D;
+    args.workspace = impl_->workspace_;
+
+    auto plan = impl_->gemm_.GetExecPlan(args);
+    if (plan) {
+        plan->output_spec_ = std::move(output_spec);
+    }
+    return plan;
+}
+
+std::optional<ExecPlan> LlamaLinear::Tune(const Tensor& input,
+                                          const Tensor& input_scales,
+                                          const LinearWeight& weight,
+                                          const Buffer_<int>& indices,
+                                          const Buffer_<int>& offsets,
+                                          Ref<Tensor> output,
+                                          Ref<Tensor> output_scales)
+{
+    OutputSpec output_spec = impl_->GetOutputSpec(input, weight, indices);
+    Tensor A;
+    Tensor U;
+    Gemm::Arguments args = impl_->GetArguments(A, U, output_spec, input, input_scales, weight, indices, offsets, output.get(), output_scales.get());
+    args.operation.dispatch = DispatchPolicy::kMeasure;
+    auto exec_plan = impl_->gemm_.Tune(args);
+    if (!exec_plan) {
+        return std::nullopt;
+    }
+    exec_plan->output_spec_ = std::move(output_spec);
+    if (impl_->gemm_.Run(*exec_plan, args)) {
+        return std::nullopt;
+    }
+    return exec_plan;
+}
+
 void LlamaLinear::set_measure(bool measure)
 {
-    impl_->dispatch_policy_ = measure ? gemm::DispatchPolicy::kMeasure : gemm::DispatchPolicy::kReuse;
+    impl_->dispatch_policy_ = measure ? gemm::DispatchPolicy::kAppend : gemm::DispatchPolicy::kReuse;
 }
 
 int LlamaLinear::Export(std::ostream& os)

@@ -101,7 +101,7 @@ public:
         }
     };
 
-    KernelImplSm90()
+    explicit KernelImplSm90(const Family& family): Kernel{family}
     {
         desc_.order_a = kRowMajor;  // m, k
         desc_.order_b = kColMajor;  // k, n
@@ -110,7 +110,7 @@ public:
         desc_.type_a              = data_type_v<typename Gemm::Ta>;
         desc_.type_b              = data_type_v<typename Gemm::Tb>;
         desc_.type_c              = data_type_v<typename Gemm::Tc>;
-        desc_.supports_fused_silu = Gemm::kSupportsFusedSilu;
+        desc_.supported_epilogues = Gemm::kSupportsFusedSilu ? Epilogue::kGatedSilu : Epilogue::kNone;
 
         desc_.striding_a = Gemm::kStridingA;
         desc_.striding_b = Gemm::kStridingB;

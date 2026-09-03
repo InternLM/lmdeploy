@@ -130,6 +130,16 @@ enum class Epilogue : int
     kGatedSilu          = 0x2,
 };
 
+constexpr Epilogue operator|(Epilogue a, Epilogue b)
+{
+    return static_cast<Epilogue>(static_cast<int>(a) | static_cast<int>(b));
+}
+
+constexpr Epilogue operator&(Epilogue a, Epilogue b)
+{
+    return static_cast<Epilogue>(static_cast<int>(a) & static_cast<int>(b));
+}
+
 struct QuantDesc {
     QuantType type;
     int       group_size;
@@ -184,6 +194,7 @@ struct Operation {
     QuantDesc      quant_a;
     QuantDesc      quant_b;
     int            batch_dim;
+    std::uint32_t  family{};
     // void*          reserved;
 };
 

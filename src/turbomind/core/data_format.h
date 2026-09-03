@@ -2,6 +2,7 @@
 #pragma once
 
 #include "src/turbomind/core/data_type.h"
+#include <utility>
 #include <vector>
 
 namespace turbomind {
@@ -12,10 +13,15 @@ inline bool IsTrivialFloatType(DataType t) noexcept
     return t == kFloat || t == kHalf || t == kBfloat16;
 }
 
+/// True for concrete trivial floats and the metadata-only generic-float matcher.
+inline bool IsFloatFormatType(DataType t) noexcept
+{
+    return t == kGenericFloat || IsTrivialFloatType(t);
+}
+
 /// Descriptor for a single quantization parameter (scales or zeros).
 struct QuantParamDesc {
-    DataType dtype{};       // kNull means "not present"
-    bool     transposed{};  // stored transposed w.r.t. data tensor
+    DataType dtype{};  // kNull means "not present"
 
     bool present() const noexcept
     {
@@ -30,8 +36,34 @@ struct DataFormat {
     QuantParamDesc   scales{};
     QuantParamDesc   zeros{};
 
+    DataFormat() = default;
+
+    DataFormat(DataType dtype): dtype{dtype}, block_sizes{1, 1} {}
+
+    DataFormat(DataType         dtype,
+               std::vector<int> block_sizes,
+               DataType         scales_dtype = kNull,
+               DataType         zeros_dtype  = kNull):
+        dtype{dtype},
+        block_sizes{std::move(block_sizes)},
+        scales{scales_dtype},
+        zeros{zeros_dtype}
+    {
+    }
+
     /// True if any quantization parameter is present or any block_size > 1.
-    bool is_quantized() const noexcept;
+    bool is_quantized() const noexcept
+    {
+        if (scales.present() || zeros.present()) {
+            return true;
+        }
+        for (int bs : block_sizes) {
+            if (bs > 1) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /// Number of dimensions described by this format.
     int rank() const noexcept
@@ -40,11 +72,15 @@ struct DataFormat {
     }
 };
 
-/// Construct the DataFormat for a linear weight tensor in TM [in, out] layout.
-/// block_sizes stored in tensor-shape order: {block_in, block_out}, so
-/// block_sizes[0] is the K-axis group size and block_sizes[1] is the N-axis.
-/// Scales / zeros dtypes are derived from (data_type, weight_dtype) per the
-/// format's GEMM convention. Validates that the combination is supported.
-DataFormat ResolveLinearWeightFormat(DataType data_type, DataType weight_dtype, int block_in, int block_out);
+inline bool operator==(const DataFormat& a, const DataFormat& b) noexcept
+{
+    return a.dtype == b.dtype && a.block_sizes == b.block_sizes && a.scales.dtype == b.scales.dtype
+           && a.zeros.dtype == b.zeros.dtype;
+}
+
+inline bool operator!=(const DataFormat& a, const DataFormat& b) noexcept
+{
+    return !(a == b);
+}
 
 }  // namespace turbomind

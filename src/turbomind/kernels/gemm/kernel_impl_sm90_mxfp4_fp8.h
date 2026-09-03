@@ -18,20 +18,20 @@ extern __shared__ __align__(1024) char smem_buf[];
 
 template<class Kernel>
 __global__ void __launch_bounds__(Kernel::CTA_SIZE, 1)
-gemm_universal_sm90_mxfp4_fp8(const __grid_constant__ typename Kernel::TmaActivation tm_a,
-                              const __grid_constant__ typename Kernel::TmaPacked tm_b,
-                              const __grid_constant__ typename Kernel::TmaQparam tm_v,
-                              const __grid_constant__ CUtensorMap tm_u,
-                              const __grid_constant__ CUtensorMap tm_c,
-                              MatrixParam param_A,
-                              MatrixParam param_B,
-                              MatrixParam param_V,
-                              MatrixParam param_U,
-                              MatrixParam param_C,
-                              MatrixParam param_W,
-                              bool fuse_silu,
-                              typename Kernel::Scheduler sched,
-                              void* tensormap_buf)
+    gemm_universal_sm90_mxfp4_fp8(const __grid_constant__ typename Kernel::TmaActivation tm_a,
+                                  const __grid_constant__ typename Kernel::TmaPacked     tm_b,
+                                  const __grid_constant__ typename Kernel::TmaQparam     tm_v,
+                                  const __grid_constant__ CUtensorMap                    tm_u,
+                                  const __grid_constant__ CUtensorMap                    tm_c,
+                                  MatrixParam                                            param_A,
+                                  MatrixParam                                            param_B,
+                                  MatrixParam                                            param_V,
+                                  MatrixParam                                            param_U,
+                                  MatrixParam                                            param_C,
+                                  MatrixParam                                            param_W,
+                                  bool                                                   fuse_silu,
+                                  typename Kernel::Scheduler                             sched,
+                                  void*                                                  tensormap_buf)
 {
 #if __CUDA_ARCH__
     if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {
@@ -77,54 +77,54 @@ public:
         }
     };
 
-    KernelImplSm90MxFp4Fp8()
+    explicit KernelImplSm90MxFp4Fp8(const Family& family): Kernel{family}
     {
-        desc_.order_a = kRowMajor;
-        desc_.order_b = Gemm::Format::kPublicWeightOrder;
-        desc_.order_c = kRowMajor;
-        desc_.type_a = kFloat8_e4m3;
-        desc_.type_b = kFloat4_e2m1;
-        desc_.type_c = kBfloat16;
-        desc_.striding_a = Gemm::kStridingA;
-        desc_.striding_b = Gemm::kStridingB;
-        desc_.striding_c = Gemm::kStridingC;
-        desc_.pack_a = {};
-        desc_.pack_b = Gemm::Format::kWeightPack;
-        desc_.pack_u = {};
-        desc_.pack_v = Gemm::Format::kQparamPack;
-        desc_.quant_a = QuantDesc{QuantType::kK, 128};
-        desc_.quant_b = QuantDesc{QuantType::kK, 32};
-        desc_.cta_tile = {TILE_M, TILE_N, TILE_K};
-        desc_.mma_tile = {64, Gemm::kOpN, 32};
+        desc_.order_a     = kRowMajor;
+        desc_.order_b     = Gemm::Format::kPublicWeightOrder;
+        desc_.order_c     = kRowMajor;
+        desc_.type_a      = kFloat8_e4m3;
+        desc_.type_b      = kFloat4_e2m1;
+        desc_.type_c      = kBfloat16;
+        desc_.striding_a  = Gemm::kStridingA;
+        desc_.striding_b  = Gemm::kStridingB;
+        desc_.striding_c  = Gemm::kStridingC;
+        desc_.pack_a      = {};
+        desc_.pack_b      = Gemm::Format::kWeightPack;
+        desc_.pack_u      = {};
+        desc_.pack_v      = Gemm::Format::kQparamPack;
+        desc_.quant_a     = QuantDesc{QuantType::kK, 128};
+        desc_.quant_b     = QuantDesc{QuantType::kK, 32};
+        desc_.cta_tile    = {TILE_M, TILE_N, TILE_K};
+        desc_.mma_tile    = {64, Gemm::kOpN, 32};
         desc_.atom_layout = {Gemm::kAtomM, Gemm::kAtomN, 1};
-        desc_.align = {1, 64, 128};
-        desc_.op_class = OpClass::kGMMA_q64n32;
-        desc_.raster = Gemm::kRasterOrder;
+        desc_.align       = {1, 64, 128};
+        desc_.op_class    = OpClass::kGMMA_q64n32;
+        desc_.raster      = Gemm::kRasterOrder;
         AlgoBits algo{};
-        algo.family = 3;
-        algo.math_wgs = Gemm::kMathWarpGroups;
-        algo.folded_pack = Gemm::Format::kFolded;
+        algo.family        = 3;
+        algo.math_wgs      = Gemm::kMathWarpGroups;
+        algo.folded_pack   = Gemm::Format::kFolded;
         algo.unfolded_pack = Gemm::Format::kUnfolded;
         if constexpr (Gemm::Format::kFolded) {
-            desc_.c_tile = {Gemm::kEpilogueTileM, Gemm::kEpilogueTileN};
+            desc_.c_tile         = {Gemm::kEpilogueTileM, Gemm::kEpilogueTileN};
             algo.epilogue_stages = Gemm::kEpilogueStages;
         }
         else {
             desc_.c_tile = {TILE_M, TILE_N};
         }
-        desc_.algo = algo.u32();
-        desc_.policy_a = 0;
-        desc_.policy_b = 0;
-        desc_.cluster_shape = {Gemm::Cluster::M, Gemm::Cluster::N};
-        desc_.stages = Gemm::Stages;
-        desc_.split_k = 1;
-        desc_.supports_fused_silu = Gemm::kSupportsFusedSilu;
-        desc_.group_axis = Gemm::is_grouped_gemm ? 0 : -1;
-        desc_.arch = Gemm::Arch::value;
+        desc_.algo                = algo.u32();
+        desc_.policy_a            = 0;
+        desc_.policy_b            = 0;
+        desc_.cluster_shape       = {Gemm::Cluster::M, Gemm::Cluster::N};
+        desc_.stages              = Gemm::Stages;
+        desc_.split_k             = 1;
+        desc_.supported_epilogues = Gemm::kSupportsFusedSilu ? Epilogue::kGatedSilu : Epilogue::kNone;
+        desc_.group_axis          = Gemm::is_grouped_gemm ? 0 : -1;
+        desc_.arch                = Gemm::Arch::value;
 
-        info_.chunk_size_k = TILE_K;
+        info_.chunk_size_k      = TILE_K;
         info_.dynamic_smem_size = Gemm::kSmemSize;
-        auto func = gemm_universal_sm90_mxfp4_fp8<Gemm>;
+        auto func               = gemm_universal_sm90_mxfp4_fp8<Gemm>;
         cudaFuncGetAttributes(&info_.attr, func);
         if (info_.dynamic_smem_size > (48 << 10)) {
             cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, info_.dynamic_smem_size);
@@ -132,43 +132,43 @@ public:
         cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(
             &info_.max_active_ctas, func, Gemm::CTA_SIZE, info_.dynamic_smem_size);
-        sm_count_ = getSMCount();
+        sm_count_  = getSMCount();
         info_.name = GetName();
     }
 
-    int Launch(const Operation& operation,
-               float alpha,
-               const void* A,
+    int Launch(const Operation&    operation,
+               float               alpha,
+               const void*         A,
                const MatrixLayout& Adesc,
-               const void* U,
+               const void*         U,
                const MatrixLayout& Udesc,
-               const void* B,
+               const void*         B,
                const MatrixLayout& Bdesc,
-               const void* V,
+               const void*         V,
                const MatrixLayout& Vdesc,
                const void*,
                const MatrixLayout&,
-               float beta,
-               const void* C,
+               float               beta,
+               const void*         C,
                const MatrixLayout& Cdesc,
-               void* D,
+               void*               D,
                const MatrixLayout& Ddesc,
-               void* W,
+               void*               W,
                const MatrixLayout& Wdesc,
-               int swizzle,
-               int splits,
-               Workspace& workspace,
-               cudaStream_t stream) override
+               int                 swizzle,
+               int                 splits,
+               Workspace&          workspace,
+               cudaStream_t        stream) override
     {
         (void)C;
         (void)Cdesc;
         (void)splits;
-        using Sched = typename Gemm::Scheduler;
-        const int m = Ddesc.rows;
-        const int n = Ddesc.cols;
-        const int k = Adesc.cols;
-        const int num_groups = std::max(Adesc.num, 1);
-        const bool fuse_silu = (static_cast<int>(operation.epilogue) & static_cast<int>(Epilogue::kGatedSilu)) != 0;
+        using Sched           = typename Gemm::Scheduler;
+        const int  m          = Ddesc.rows;
+        const int  n          = Ddesc.cols;
+        const int  k          = Adesc.cols;
+        const int  num_groups = std::max(Adesc.num, 1);
+        const bool fuse_silu  = (static_cast<int>(operation.epilogue) & static_cast<int>(Epilogue::kGatedSilu)) != 0;
 
         if constexpr (Gemm::Format::kUnfolded) {
             TM_CHECK(operation.epilogue == Epilogue::kNone);
@@ -226,7 +226,7 @@ public:
         Sched sched{};
         sched.init({m, n, k, num_groups}, swizzle, {TILE_M, TILE_N, TILE_K});
         sched.next_cluster_id_ = TM_CHECK_NOTNULL(workspace.flags);
-        sched.offsets_ = nullptr;
+        sched.offsets_         = nullptr;
         if (Sched::is_dynamic) {
             TM_CUDA_CHECK(cudaMemsetAsync(workspace.flags, 0, sizeof(int), stream));
         }
@@ -234,46 +234,40 @@ public:
         TM_CHECK(Adesc.order == kRowMajor);
         auto tm_a = [&] {
             if constexpr (Gemm::Format::kFolded) {
-                return make_2d_tma_desc(
-                    Gemm::kStridingA == Striding::kIndexed ? nullptr : const_cast<void*>(A),
-                    Adesc,
-                    {Gemm::kTmaBoxM, TILE_K},
-                    CU_TENSOR_MAP_SWIZZLE_128B);
+                return make_2d_tma_desc(Gemm::kStridingA == Striding::kIndexed ? nullptr : const_cast<void*>(A),
+                                        Adesc,
+                                        {Gemm::kTmaBoxM, TILE_K},
+                                        CU_TENSOR_MAP_SWIZZLE_128B);
             }
             else {
-                return Gemm::MakeTmaActivation(
-                    Gemm::kStridingA == Striding::kIndexed ? nullptr : const_cast<void*>(A),
-                    m,
-                    k,
-                    Adesc.ld ? Adesc.ld : k);
+                return Gemm::MakeTmaActivation(Gemm::kStridingA == Striding::kIndexed ? nullptr : const_cast<void*>(A),
+                                               m,
+                                               k,
+                                               Adesc.ld ? Adesc.ld : k);
             }
         }();
-        auto tm_b = Gemm::MakeTmaPacked(Gemm::is_grouped_gemm ? nullptr : const_cast<void*>(B), n, k);
-        auto tm_v = Gemm::MakeTmaQparam(Gemm::is_grouped_gemm ? nullptr : const_cast<void*>(V), n, k);
+        auto        tm_b = Gemm::MakeTmaPacked(Gemm::is_grouped_gemm ? nullptr : const_cast<void*>(B), n, k);
+        auto        tm_v = Gemm::MakeTmaQparam(Gemm::is_grouped_gemm ? nullptr : const_cast<void*>(V), n, k);
         CUtensorMap tm_u{};
         if constexpr (Gemm::kStridingA != Striding::kIndexed) {
             tm_u = make_2d_tma_desc(
-                const_cast<void*>(U),
-                Udesc,
-                {Gemm::kBoxU / Gemm::kMulticastU, 1},
-                CU_TENSOR_MAP_SWIZZLE_NONE);
+                const_cast<void*>(U), Udesc, {Gemm::kBoxU / Gemm::kMulticastU, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
         MatrixLayout Ddesc_tma = Ddesc;
         if (fuse_silu) {
             TM_CHECK_EQ(Ddesc_tma.cols % 2, 0);
             Ddesc_tma.cols /= 2;
         }
-        auto tm_c = fuse_silu
-                        ? make_2d_tma_desc(D,
-                                           Ddesc_tma,
-                                           {static_cast<uint32_t>(TILE_M),
-                                            static_cast<uint32_t>(TILE_N / 2)},
-                                           CU_TENSOR_MAP_SWIZZLE_NONE)
-                        : make_2d_tma_desc(D,
-                                           Ddesc_tma,
-                                           {static_cast<uint32_t>(Gemm::kTmaStoreM),
-                                            static_cast<uint32_t>(Gemm::kTmaStoreN)},
-                                           CU_TENSOR_MAP_SWIZZLE_128B);
+        auto tm_c =
+            fuse_silu ?
+                make_2d_tma_desc(D,
+                                 Ddesc_tma,
+                                 {static_cast<uint32_t>(TILE_M), static_cast<uint32_t>(TILE_N / 2)},
+                                 CU_TENSOR_MAP_SWIZZLE_NONE) :
+                make_2d_tma_desc(D,
+                                 Ddesc_tma,
+                                 {static_cast<uint32_t>(Gemm::kTmaStoreM), static_cast<uint32_t>(Gemm::kTmaStoreN)},
+                                 CU_TENSOR_MAP_SWIZZLE_128B);
         const auto param_A = to_param(const_cast<void*>(A), Adesc);
         const auto param_B = to_param(const_cast<void*>(B), Bdesc);
         const auto param_V = to_param(const_cast<void*>(V), Vdesc);
@@ -282,8 +276,8 @@ public:
         const auto param_W = to_param(W, Wdesc);
 
         if constexpr (Gemm::is_grouped_gemm) {
-            const size_t tma_workspace_bytes = size_t(num_groups) * Gemm::kTmaDescNum * sizeof(CUtensorMap)
-                                               + size_t(num_groups + 1) * sizeof(int);
+            const size_t tma_workspace_bytes =
+                size_t(num_groups) * Gemm::kTmaDescNum * sizeof(CUtensorMap) + size_t(num_groups + 1) * sizeof(int);
             TM_CHECK_LE(tma_workspace_bytes, workspace.tensormaps_size);
             const CUtensorMap& tm_a_desc = [&]() -> const CUtensorMap& {
                 if constexpr (Gemm::Format::kFolded) {
@@ -311,21 +305,21 @@ public:
             TM_CUDA_CHECK(cudaGetLastError());
         }
 
-        constexpr int cluster_size = Gemm::kClusterSize;
-        int grid = sm_count_ * info_.max_active_ctas / cluster_size * cluster_size;
+        constexpr int      cluster_size = Gemm::kClusterSize;
+        int                grid         = sm_count_ * info_.max_active_ctas / cluster_size * cluster_size;
         cudaLaunchConfig_t config{};
-        config.gridDim = grid;
-        config.blockDim = Gemm::CTA_SIZE;
-        config.dynamicSmemBytes = Gemm::kSmemSize;
-        config.stream = stream;
-        auto func = gemm_universal_sm90_mxfp4_fp8<Gemm>;
+        config.gridDim           = grid;
+        config.blockDim          = Gemm::CTA_SIZE;
+        config.dynamicSmemBytes  = Gemm::kSmemSize;
+        config.stream            = stream;
+        auto                func = gemm_universal_sm90_mxfp4_fp8<Gemm>;
         cudaLaunchAttribute attrs[1];
-        attrs[0].id = cudaLaunchAttributeClusterDimension;
+        attrs[0].id               = cudaLaunchAttributeClusterDimension;
         attrs[0].val.clusterDim.x = cluster_size;
         attrs[0].val.clusterDim.y = 1;
         attrs[0].val.clusterDim.z = 1;
-        config.attrs = attrs;
-        config.numAttrs = 1;
+        config.attrs              = attrs;
+        config.numAttrs           = 1;
         int max_active_cluster{};
         cudaOccupancyMaxActiveClusters(&max_active_cluster, func, &config);
         config.gridDim = std::min<int>(config.gridDim.x, max_active_cluster * cluster_size);
@@ -367,8 +361,8 @@ public:
                 return false;
             }
         }
-        if ((static_cast<int>(desc.epilogue) & ~static_cast<int>(Epilogue::kGatedSilu)) != 0
-            || desc.k < 2 * TILE_K || desc.k % TILE_K != 0 || desc.n <= 0 || desc.n % 64 != 0) {
+        if ((static_cast<int>(desc.epilogue) & ~static_cast<int>(Epilogue::kGatedSilu)) != 0 || desc.k < 2 * TILE_K
+            || desc.k % TILE_K != 0 || desc.n <= 0 || desc.n % 64 != 0) {
             return false;
         }
         if constexpr (Gemm::is_grouped_gemm) {
@@ -376,8 +370,7 @@ public:
             // activation/output addressing contract.  The generic matcher
             // otherwise treats a single-group fff operation as compatible
             // with ibb/bbb and lets an indexed kernel win dense tuning.
-            if (desc.striding_a != Gemm::kStridingA
-                || desc.striding_b != Gemm::kStridingB
+            if (desc.striding_a != Gemm::kStridingA || desc.striding_b != Gemm::kStridingB
                 || desc.striding_c != Gemm::kStridingC) {
                 return false;
             }
@@ -388,7 +381,7 @@ public:
                 return false;
             }
             GemmDesc canonical = desc;
-            canonical.type_c = desc_.type_c;
+            canonical.type_c   = desc_.type_c;
             return Kernel::is_feasible(canonical);
         }
         if constexpr (Gemm::kSupportsFusedSilu) {

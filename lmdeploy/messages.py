@@ -266,6 +266,9 @@ class TurbomindEngineConfig:
             one of the following values, ['auto', 'float16', 'bfloat16']
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
+        gemm_input_dtype: preferred GEMM input dtype. It can be None,
+            'float16', 'bfloat16', or 'float8_e4m3'. This reorders eligible
+            kernel families without changing the model dtype contract.
         model_format: the layout of the deployed model. It can be one
             of the following values [hf, awq, gptq, compressed-tensors,
             fp8, mxfp4]. `hf` means a Hugging Face model (.bin,
@@ -357,6 +360,7 @@ class TurbomindEngineConfig:
     """
 
     dtype: str = 'auto'
+    gemm_input_dtype: str | None = None
     model_format: str | None = None
     tp: int = 1
     dp: int = 1
@@ -403,6 +407,7 @@ class TurbomindEngineConfig:
     def __post_init__(self):
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
+        assert self.gemm_input_dtype in (None, 'float16', 'bfloat16', 'float8_e4m3')
         assert self.tp >= 1, 'tp must be a positive integer'
         assert self.ep >= 1, 'ep must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'

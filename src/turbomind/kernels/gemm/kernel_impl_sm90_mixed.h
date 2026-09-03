@@ -23,16 +23,17 @@ namespace turbomind::gemm {
 extern __shared__ __align__(1024) char smem_buf[];
 
 template<class Kernel>
-__global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_sm90_mixed(const __grid_constant__ CUtensorMap tm_a,
-                                                                              const __grid_constant__ typename Kernel::TmaPacked tm_b,
-                                                                              const __grid_constant__ typename Kernel::TmaQparam tm_v,
-                                                                              const __grid_constant__ CUtensorMap tm_c,
-                                                                              const MatrixParam          param_A,
-                                                                              const MatrixParam          param_G,
-                                                                              const MatrixParam          param_C,
-                                                                              bool                       fuse_silu,
-                                                                              typename Kernel::Scheduler sched,
-                                                                              void*                      tensormap_buf)
+__global__ void __launch_bounds__(Kernel::CTA_SIZE, 1)
+    gemm_kernel_sm90_mixed(const __grid_constant__ CUtensorMap                tm_a,
+                           const __grid_constant__ typename Kernel::TmaPacked tm_b,
+                           const __grid_constant__ typename Kernel::TmaQparam tm_v,
+                           const __grid_constant__ CUtensorMap                tm_c,
+                           const MatrixParam                                  param_A,
+                           const MatrixParam                                  param_G,
+                           const MatrixParam                                  param_C,
+                           bool                                               fuse_silu,
+                           typename Kernel::Scheduler                         sched,
+                           void*                                              tensormap_buf)
 {
 #if __CUDA_ARCH__
     if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {
@@ -66,7 +67,7 @@ public:
         }
     };
 
-    KernelImplSm90Mixed()
+    explicit KernelImplSm90Mixed(const Family& family): Kernel{family}
     {
         // Direct LlamaLinear API.  Internally the mainloop swaps operands so
         // packed B is WGMMA RS operand A.
@@ -118,7 +119,7 @@ public:
         desc_.cluster_shape       = {Gemm::Cluster::M, Gemm::Cluster::N};
         desc_.stages              = Gemm::Stages;
         desc_.split_k             = 1;
-        desc_.supports_fused_silu = Gemm::kSupportsFusedSilu;
+        desc_.supported_epilogues = Gemm::kSupportsFusedSilu ? Epilogue::kGatedSilu : Epilogue::kNone;
         desc_.group_axis          = is_grouped_gemm ? 0 : -1;
         desc_.arch                = Gemm::Arch::value;
 
@@ -267,7 +268,8 @@ public:
             TM_CHECK_EQ(Cdesc_tma.cols % 2, 0);
             Cdesc_tma.cols /= 2;
         }
-        auto tm_c = make_2d_tma_desc((void*)D, Cdesc_tma, {Gemm::kTmaStoreM, Gemm::kTmaStoreN}, get_tma_swizzle(Gemm::kSwizzleC));
+        auto tm_c = make_2d_tma_desc(
+            (void*)D, Cdesc_tma, {Gemm::kTmaStoreM, Gemm::kTmaStoreN}, get_tma_swizzle(Gemm::kSwizzleC));
 
         const auto param_A = to_param((void*)A, Adesc);
         const auto param_B = to_param((void*)B, Bdesc);
@@ -276,8 +278,8 @@ public:
         const auto param_C = to_param((void*)D, Ddesc);
 
         if constexpr (is_grouped_gemm) {
-            const size_t tma_workspace_bytes = (size_t)num_groups * Gemm::kTmaDescNum * sizeof(CUtensorMap)
-                                               + (size_t)(num_groups + 1) * sizeof(int);
+            const size_t tma_workspace_bytes =
+                (size_t)num_groups * Gemm::kTmaDescNum * sizeof(CUtensorMap) + (size_t)(num_groups + 1) * sizeof(int);
             TM_CHECK_LE(tma_workspace_bytes, workspace.tensormaps_size);
             sched.offsets_ = Gemm::PrepareTmaDescs(tm_a,
                                                    *tm_b.get_tma_descriptor(),
@@ -295,7 +297,7 @@ public:
         }
 
         constexpr int cluster_size = Gemm::kClusterSize;
-        int grid = sm_count_ * info_.max_active_ctas / cluster_size * cluster_size;
+        int           grid         = sm_count_ * info_.max_active_ctas / cluster_size * cluster_size;
 
         cudaLaunchConfig_t config{};
         config.gridDim          = grid;

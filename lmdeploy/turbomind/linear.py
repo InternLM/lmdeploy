@@ -69,7 +69,7 @@ def concat_out_dim(xs: list[Linear]) -> Linear:
 # ---------------------------------------------------------------------------
 
 
-def _dequant_linear(linear: Linear, *, data_type) -> Linear:
+def _dequant_linear(linear: Linear, *, dtype: torch.dtype) -> Linear:
     """Dequantize a quantized Linear to trivial.
 
     ``TrivialFormat.dequant`` is identity, so already-trivial inputs round-trip
@@ -78,26 +78,33 @@ def _dequant_linear(linear: Linear, *, data_type) -> Linear:
     ``NotImplementedError`` — calling ``_dequant_linear`` on one of those is a
     broken-fusion-group configuration, and the raise names it at the call site.
     """
+    from .builders._base import _torch_dtype_to_cpp
     from .weight_format import TrivialFormat
 
     fmt = linear.weight_format
-    new_tensors = fmt.dequant(linear.tensors, data_type)
-    trivial = TrivialFormat()
+    new_tensors = {
+        kind: tensor.to(dtype)
+        for kind, tensor in fmt.dequant(
+            linear.tensors,
+            dtype,
+        ).items()
+    }
+    trivial = TrivialFormat(weight_dtype=_torch_dtype_to_cpp(dtype))
     return Linear(tensors=new_tensors, weight_format=trivial)
 
 
-def dequant_mixed(*linears: Linear | None, data_type) -> tuple[Linear | None, ...]:
+def dequant_mixed(*linears: Linear | None, dtype: torch.dtype) -> tuple[Linear | None, ...]:
     """Dequantize linears to a common trivial format when formats differ.
 
     Trivial inputs round-trip safely through ``_dequant_linear``.
     None args pass through unchanged.
     """
-    formats = {l.weight_format.name for l in linears if l is not None}
+    formats = {linear.weight_format for linear in linears if linear is not None}
     if len(formats) <= 1:
         return linears
     return tuple(
-        _dequant_linear(l, data_type=data_type) if l is not None else l
-        for l in linears
+        _dequant_linear(linear, dtype=dtype) if linear is not None else linear
+        for linear in linears
     )
 
 

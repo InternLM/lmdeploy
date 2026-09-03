@@ -4,7 +4,7 @@ ep=1).
 
 Runs bench_linear with real tuning (--iters > 0 skips the pre-tune forward, so the
 GEMM Measure path actually measures) and dumps per-spec measurements via
-TM_GEMM_TUNE_VERBOSE=1. Kernel names encode the scheduler raster order in the
+TM_GEMM_VERBOSE=1. Kernel names encode the scheduler raster order in the
 trailing policy digits: `_00` = col-major scheduler, `_01` = row-major scheduler.
 """
 
@@ -67,7 +67,7 @@ def main() -> int:
     env['CUDA_VISIBLE_DEVICES'] = args.gpu
     env['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
     env['TM_GEMM_TUNE'] = 'swizzle=[0,1,2,3]'
-    env['TM_GEMM_TUNE_VERBOSE'] = '1'
+    env['TM_GEMM_VERBOSE'] = '1'
 
     for name in case_names:
         log = args.outdir / f'{name}.log'

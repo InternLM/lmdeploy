@@ -324,32 +324,26 @@ def _reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
         return x.view(-1, head_num, 2, head_dim // 2).transpose(2, 3).reshape(x.shape)
 
 
-def reorder_rotary_emb(x, head_dim: int, rope_dim: int, *, resolver=None):
+def reorder_rotary_emb(x, head_dim: int, rope_dim: int, *, dtype: torch.dtype):
     """Apply RoPE layout permutation.
 
     Accepts either a ``Linear`` or a raw ``torch.Tensor``.
 
     For ``Linear`` inputs the permutation is applied to every tensor in the
     bundle with quantization awareness (block-alignment check, dequant
-    fallback, block-level shuffling for scales/zeros). ``resolver`` is
-    required and must not be ``None`` — it supplies the compute dtype
-    threaded into ``_dequant_linear``.
+    fallback, block-level shuffling for scales/zeros). ``dtype`` is the
+    computation dtype used by the dequantization fallback.
 
     For ``torch.Tensor`` inputs the element-level interleave-transpose is
-    applied directly. ``resolver`` is ignored.
+    applied directly.
     """
     if isinstance(x, Linear):
-        if resolver is None:
-            raise TypeError(
-                'resolver is required when passing a Linear to reorder_rotary_emb'
-            )
-        data_type = resolver.data_type
         wfmt = x.weight_format
         block_out = wfmt.block_out or 0
 
         # If blocks don't align with heads, dequant first
         if block_out and block_out % head_dim != 0:
-            x = _dequant_linear(x, data_type=data_type)
+            x = _dequant_linear(x, dtype=dtype)
             block_out = 0
 
         new_tensors = {}

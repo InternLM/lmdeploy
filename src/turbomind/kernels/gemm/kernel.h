@@ -15,6 +15,8 @@
 
 namespace turbomind::gemm {
 
+class Family;
+
 struct KernelMetric {
     int64_t mio_cost;
     int64_t mma_cost;
@@ -22,9 +24,11 @@ struct KernelMetric {
 
 class Kernel {
 public:
-    Kernel(): desc_{}, info_{} {}
+    explicit Kernel(const Family& family);
 
     virtual ~Kernel() = default;
+
+    virtual bool is_available(int arch) const noexcept;
 
     virtual int Launch(const Operation&    operation,
                        float               alpha,
@@ -107,11 +111,17 @@ public:
         return info_.name;
     }
 
+    const Family& family() const noexcept
+    {
+        return family_;
+    }
+
 protected:
     std::string GetName() const;
 
-    KernelDesc desc_;
-    KernelInfo info_;
+    const Family& family_;
+    KernelDesc          desc_;
+    KernelInfo          info_;
 };
 
 struct ClusteringParam {

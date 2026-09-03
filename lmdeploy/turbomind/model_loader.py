@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """ModelLoader: coordinates loading a model's weights into the TurboMind runtime."""
+import _turbomind as _tm
 import torch
 
 from .builders._base import Context, ParallelGroup
@@ -26,9 +27,17 @@ class ModelLoader:
 
     def _bind_runtime(self):
         mc = self.model_comm
+        gemm_input_dtype = {
+            None: _tm.DataType.TYPE_INVALID,
+            'float16': _tm.DataType.TYPE_FP16,
+            'bfloat16': _tm.DataType.TYPE_BF16,
+            'float8_e4m3': _tm.DataType.TYPE_FP8_E4M3,
+        }[self.engine_config.gemm_input_dtype]
         ctx = Context(
             [mc.context(g) for g in range(self.gpu_count)],
+            mc.gemm(0),
             data_type=self.data_type,
+            gemm_input_dtype=gemm_input_dtype,
         )
         ec = self.engine_config
 

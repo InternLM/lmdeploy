@@ -1,5 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 
@@ -12,9 +13,9 @@ namespace turbomind::gemm {
 Registry::Registry(std::shared_ptr<cudaDeviceProp> device_prop):
     device_prop_{std::move(device_prop)}, arch_{device_prop_->major * 100 + device_prop_->minor * 10}
 {
-    for (auto& register_fn : gKernelFactories()) {
-        Collector collector;
-        register_fn(collector, arch_);
+    for (auto& [family, register_fn] : gKernelFactories()) {
+        Collector collector{*family};
+        register_fn(collector);
         for (auto& k : collector.release()) {
             Add(std::move(k));
         }
@@ -25,7 +26,7 @@ bool Registry::Add(std::unique_ptr<Kernel> kernel)
 {
     bool is_valid = true;
 
-    if (!is_arch_compatible(kernel->arch(), arch_)) {
+    if (!kernel->is_available(arch_)) {
         is_valid = false;
     }
 
@@ -42,6 +43,14 @@ bool Registry::Add(std::unique_ptr<Kernel> kernel)
     }
 
     if (is_valid) {
+        const Family* family = &kernel->family();
+        if (std::find(families_.begin(), families_.end(), family) == families_.end()) {
+            TM_CHECK(family->id != 0);
+            for (const Family* other : families_) {
+                TM_CHECK(other->id != family->id);
+            }
+            families_.push_back(family);
+        }
         ptrs_.push_back(kernels_.emplace_back(transpose(*kernel)).get());
         ptrs_.push_back(kernels_.emplace_back(std::move(kernel)).get());
     }

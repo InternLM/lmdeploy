@@ -21,14 +21,9 @@ set(GEMM2_KERNELS_SM90
     kernel/sm90_16816_8.cu
     kernel/sm90_64n32_8.cu
     kernel/sm90_64n16_4.cu
-    kernel/sm90_64n16_4_flat_col.cu
-    kernel/sm90_64n16_4_indexed_row.cu
-    kernel/sm90_64n16_4_indexed_col.cu
-    kernel/sm90_64n16_4_blocked_row.cu
-    kernel/sm90_64n16_4_blocked_col.cu
     kernel/sm90_64n16_mxfp4.cu
     kernel/sm90_64n32_mxfp4_fp8_folded.cu
-    kernel/sm90_64n32_mxfp4_fp8_unfolded.cu
+    # kernel/sm90_64n32_mxfp4_fp8_unfolded.cu
     kernel/sm90_64n16_nvfp4.cu
     kernel/sm90_64n16_e4m3.cu
     kernel/sm90_64n16_16.cu
@@ -152,6 +147,8 @@ if(GEMM2_SM90_ARCHS)
 endif()
 
 add_library(gemm2_core
+        family.cc
+        weight_plan.cc
         gemm.cu
         kernel.cu
         registry.cu
@@ -184,12 +181,10 @@ endforeach()
 add_library(gemm2 INTERFACE)
 target_link_libraries(gemm2 INTERFACE "$<LINK_GROUP:RESCAN,${_gemm2_link_group}>")
 
-# cublasGemmGroupedBatchedEx (CUDA 12.5+): grouped batched GEMM for MoE on SM100
-set(_archs_100 "${CMAKE_CUDA_ARCHITECTURES}")
-list(FILTER _archs_100 INCLUDE REGEX "^100")
-if(_archs_100 AND CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL "12.5")
+# cublasGemmGroupedBatchedEx (CUDA 12.5+): grouped batched GEMM for MoE
+if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL "12.5")
     target_compile_definitions(gemm2_kernels PRIVATE ENABLE_CUBLAS_GROUPED=1)
-    message(STATUS "GEMM: ENABLE_CUBLAS_GROUPED=1 (cublasGemmGroupedBatchedEx for MoE on SM100)")
+    message(STATUS "GEMM: ENABLE_CUBLAS_GROUPED=1 (cublasGemmGroupedBatchedEx for MoE)")
 endif()
 
 target_compile_options(gemm2_core PRIVATE

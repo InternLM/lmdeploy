@@ -8,7 +8,7 @@ from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.pytorch.config import override_hf_config
 from lmdeploy.utils import get_logger
 
-from ..utils import _get_and_verify_max_len, is_bf16_supported
+from ..utils import _get_and_verify_max_len
 from .builders import _torch_dtype_to_cpp
 from .models.base import INPUT_MODELS
 from .models.utils import source_model_config
@@ -26,22 +26,10 @@ from .weight_format import (
 
 logger = get_logger('lmdeploy')
 
-_U4_MODEL_FORMATS = frozenset({'awq', 'gptq', 'compressed-tensors'})
 
-
-def _build_resolver(model_format: str | None,
-                    group_size: int | None,
-                    dtype: torch.dtype,
-                    *,
-                    use_bf16_u4: bool = False) -> (WeightFormatResolver, torch.dtype):
-    """Build the active resolver: quantized format (if any) + trivial fallback.
-
-    Eligible SM90 U4 formats use the native BF16 path by default. Explicit
-    FP16 selection keeps the legacy path available for testing.
-
-    Called before the ``compressed-tensors → awq`` rename, so
-    compressed-tensors models get ``CompressedTensorFormat``.
-    """
+def _build_quantized_formats(
+        model_format: str | None,
+        group_size: int | None) -> list[WeightFormat]:
     formats: list[WeightFormat] = []
     if model_format in (None, 'hf'):
         pass
@@ -52,15 +40,34 @@ def _build_resolver(model_format: str | None,
     elif model_format == 'compressed-tensors':
         formats.append(CompressedTensorFormat(block_in=group_size))
     elif model_format == 'fp8':
-        formats.append(FP8Format())
+        formats.extend((FP8Format(block_out=128), FP8Format(block_out=1)))
     elif model_format == 'mxfp4':
         formats.append(MXFP4Format())
     else:
         raise ValueError(f'unknown model_format: {model_format!r}')
-    if model_format in _U4_MODEL_FORMATS and not use_bf16_u4:
-        dtype = torch.float16
-    formats.append(TrivialFormat())
-    return WeightFormatResolver(data_type=_torch_dtype_to_cpp(dtype), formats=formats), dtype
+    return formats
+
+
+def _get_executable_dtypes(
+        formats: list[WeightFormat],
+        device) -> set[str]:
+    executable: set[str] = set()
+
+    with torch.cuda.device(device):
+        gemm = _tm.Gemm()
+        for name in ('bfloat16', 'float16'):
+            candidate = _torch_dtype_to_cpp(getattr(torch, name))
+            candidate_formats = [
+                *formats,
+                TrivialFormat(weight_dtype=candidate),
+            ]
+            if all(
+                    candidate in gemm.data_types(
+                        fmt.make_data_format())
+                    for fmt in candidate_formats):
+                executable.add(name)
+
+    return executable
 
 
 def _deep_merge(base: dict, override: dict, path: str = '') -> dict:
@@ -131,29 +138,27 @@ def get_registered_name(model_path: str, arch: str = None):
     return register_name
 
 
-def _resolve_dtype(requested: str, hf_model_cfg) -> str:
-    """Resolve 'auto' dtype against the HF config and the current device.
-
-    Prefers `dtype` over the deprecated `torch_dtype` key. Falls back to
-    float16 on hardware that does not support bfloat16.
-    """
-    has_bf16 = is_bf16_supported()
+def _resolve_dtype(requested: str, hf_model_cfg,
+                   executable: set[str]) -> str:
+    """Resolve the request against publisher metadata and executable dtypes."""
     dtype = requested
     if dtype == 'auto':
         if getattr(hf_model_cfg, 'text_config', None):
             hf_model_cfg = hf_model_cfg.text_config
         elif getattr(hf_model_cfg, 'llm_config', None):
             hf_model_cfg = hf_model_cfg.llm_config
-        dtype = 'bfloat16' if has_bf16 else 'float16'
-        torch_dtype = getattr(hf_model_cfg, 'dtype', None)
-        if torch_dtype is None:
-            torch_dtype = getattr(hf_model_cfg, 'torch_dtype', None)
+        config_dtype = getattr(hf_model_cfg, 'dtype', None)
+        if config_dtype is None:
+            config_dtype = getattr(hf_model_cfg, 'torch_dtype', None)
         TORCH_DTYPE_MAP = {torch.bfloat16: 'bfloat16', torch.float16: 'float16'}
-        dtype = TORCH_DTYPE_MAP.get(torch_dtype, dtype)
+        dtype = TORCH_DTYPE_MAP.get(config_dtype)
+        if dtype not in executable:
+            dtype = ('bfloat16' if 'bfloat16' in executable else 'float16')
 
-    if dtype == 'bfloat16' and not has_bf16:
-        logger.warning('data type fallback to float16 since '
-                       'torch.cuda.is_bf16_supported is False')
+    if dtype not in executable:
+        if 'float16' not in executable:
+            raise RuntimeError('no executable data type for this device')
+        logger.warning('data type downgraded to float16')
         dtype = 'float16'
     return dtype
 
@@ -216,37 +221,27 @@ def get_tm_config(model_path,
 
     # 3. Resolve dtype and format overrides.
     requested_dtype = engine_config.dtype
-    dtype = _resolve_dtype(requested_dtype, hf_model_cfg)
-    dtype = getattr(torch, dtype)
-
-    # Capture the user/file dtype before _build_resolver may force fp16 for
-    # AWQ/GPTQ/CT. VL checkpoints list 'vision' in modules_to_not_convert, so
-    # the ViT sub-tree is unquantized and should keep this dtype rather than
-    # inherit the text path's forced fp16.
-    vision_dtype = dtype
-
-    # Route production AWQ/GPTQ/CT loads to the native BF16 kernel whenever
-    # the model and device are eligible. Explicit dtype=float16 is retained as
-    # the test-only escape hatch for the legacy kernel.
-    use_native_sm90_u4 = (
-        requested_dtype != 'float16'
-        and engine_config.model_format in _U4_MODEL_FORMATS
-        and group_size == 128
-        and getattr(_tm, 'has_sm90_mixed_kernel', lambda: False)()
-        and torch.cuda.is_available()
-        and torch.cuda.get_device_capability() == (9, 0)
+    quantized_formats = _build_quantized_formats(
+        engine_config.model_format,
+        group_size,
     )
-    if use_native_sm90_u4:
-        dtype = torch.bfloat16
+    executable = _get_executable_dtypes(
+        quantized_formats,
+        engine_config.devices[0],
+    )
+    dtype_name = _resolve_dtype(
+        requested_dtype,
+        hf_model_cfg,
+        executable,
+    )
+    dtype = getattr(torch, dtype_name)
+    data_type = _torch_dtype_to_cpp(dtype)
+    resolver = WeightFormatResolver(formats=[
+        *quantized_formats,
+        TrivialFormat(weight_dtype=data_type),
+    ])
 
-    # Build resolver after dtype is finalized but before the CT→AWQ rename,
-    # so compressed-tensors models instantiate CompressedTensorFormat.
-    resolver, dtype = _build_resolver(engine_config.model_format,
-                                      group_size,
-                                      dtype,
-                                      use_bf16_u4=use_native_sm90_u4)
-
-    engine_config.dtype = str(dtype).split('.')[1]
+    engine_config.dtype = dtype_name
 
     # 4. Resolve session_len default.
     session_len_default = _get_and_verify_max_len(hf_model_cfg, None)
@@ -274,10 +269,25 @@ def get_tm_config(model_path,
     init_kwargs = {}
     if getattr(model_cls, '_vision', False):
         init_kwargs['language_model_only'] = engine_config.language_model_only
-        if not engine_config.language_model_only:
-            init_kwargs['vision_resolver'] = WeightFormatResolver(
-                data_type=_torch_dtype_to_cpp(vision_dtype),
-                formats=[TrivialFormat()])
+        vision_config = getattr(hf_model_cfg, 'vision_config', None)
+        if (not engine_config.language_model_only
+                and vision_config is not None):
+            vision_executable = _get_executable_dtypes(
+                [],
+                engine_config.devices[0],
+            )
+            vision_dtype_name = _resolve_dtype(
+                requested_dtype,
+                vision_config,
+                vision_executable,
+            )
+            vision_dtype = getattr(torch, vision_dtype_name)
+            vision_data_type = _torch_dtype_to_cpp(vision_dtype)
+            vision_resolver = WeightFormatResolver(formats=[
+                TrivialFormat(weight_dtype=vision_data_type),
+            ])
+            init_kwargs['vision_resolver'] = vision_resolver
+            init_kwargs['vision_data_type'] = vision_data_type
     model = model_cls(cfg, resolver=resolver, **init_kwargs)
 
-    return model, model_path, resolver.data_type
+    return model, model_path, data_type

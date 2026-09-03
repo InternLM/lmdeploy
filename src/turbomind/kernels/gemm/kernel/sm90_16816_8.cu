@@ -2,8 +2,11 @@
 
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/arch/config_sm80_s16816.h"
+#include "src/turbomind/kernels/gemm/convert.cuh"
+#include "src/turbomind/kernels/gemm/kernel/e4m3.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/models/linear_weight.h"
 
 namespace turbomind::gemm {
 
@@ -13,7 +16,13 @@ using S = cache_policy::Stream;
 using D = cache_policy::Default;
 
 namespace {
-Registrar reg([](Collector& c, int /*arch*/) {
+constexpr auto e4m3_packer =
+    pack_e4m3<Arch<80>, kColMajor, HMMA_16816 | OPERAND_A | 1, kColMajor, HMMA_16816 | OPERAND_U | 1, kBfloat16>;
+
+const Family e4m3{
+    21, 200, kBfloat16, kBfloat16, 128, 8, 1, 1, true, true, supports_e4m3<kBfloat16, 1>, e4m3_packer};
+
+Registrar reg(e4m3, [](Collector& c) {
     if constexpr (1) {
         // clang-format off
         using Cd = Config_E4M3<Sm90, bfloat16_t, 16, kColMajor>;
@@ -37,6 +46,6 @@ Registrar reg([](Collector& c, int /*arch*/) {
         // clang-format on
     }
 });
-}
+}  // namespace
 
 }  // namespace turbomind::gemm
