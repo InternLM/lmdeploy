@@ -719,14 +719,8 @@ PYBIND11_MODULE(_turbomind, m)
             "shape"_a);
     m.def(
         "from_dlpack",
-        [](py::object obj, py::object stream) {
-            py::capsule cap;
-            if (stream.is_none()) {
-                cap = obj.attr("__dlpack__")();
-            }
-            else {
-                cap = obj.attr("__dlpack__")("stream"_a = stream);
-            }
+        [](py::object obj) {
+            py::capsule cap = obj.attr("__dlpack__")();
             DLManagedTensor* dlmt =
                 static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
             auto ret = DLManagedTensorToTritonTensor(dlmt);
@@ -734,8 +728,7 @@ PYBIND11_MODULE(_turbomind, m)
             cap.set_name("used_dltensor");
             return ret;
         },
-        "dl_managed_tensor"_a,
-        "stream"_a = py::none());
+        "dl_managed_tensor"_a);
     m.def("from_dlpack", [](py::object obj, std::vector<ft::core::ssize_t> logical_shape, ft::DataType logical_dtype) {
         py::capsule cap = obj.attr("__dlpack__")();
         auto* dlmt = static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
