@@ -254,7 +254,9 @@ def get_hf_gen_cfg(path: str, trust_remote_code: bool = False):
             model_cfg, _ = PretrainedConfig.get_config_dict(path)
             if not model_cfg:
                 return {}
-            cfg = GenerationConfig.from_model_config(PretrainedConfig.from_dict(model_cfg))
+            from lmdeploy.hf_configs import config_from_pretrained
+            model_cfg = config_from_pretrained(path, trust_remote_code=trust_remote_code)
+            cfg = GenerationConfig.from_model_config(model_cfg)
         except OSError:
             return {}
     return cfg.to_dict()
