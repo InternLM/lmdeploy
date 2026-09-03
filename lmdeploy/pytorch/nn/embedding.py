@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import logging
+
 import torch
 import torch.distributed as dist
 from torch import nn
@@ -9,6 +11,23 @@ from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_t
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
 DEFAULT_VOCAB_PADDING_SIZE = 64
+logger = logging.getLogger(__name__)
+
+
+def _tp_agree(local_ready: bool, device: torch.device, group: dist.ProcessGroup) -> bool:
+    """Resolve an optional LM-head provider decision on every TP rank."""
+    ready = torch.tensor(int(local_ready), dtype=torch.int32, device=device)
+    dist.all_reduce(ready, op=dist.ReduceOp.MIN, group=group)
+    return bool(ready.item())
+
+
+def _tp_same_config(values: tuple[int, ...], device: torch.device, group: dist.ProcessGroup) -> bool:
+    """Return whether every TP rank supplied the same integer config."""
+    lower = torch.tensor(values, dtype=torch.int64, device=device)
+    upper = lower.clone()
+    dist.all_reduce(lower, op=dist.ReduceOp.MIN, group=group)
+    dist.all_reduce(upper, op=dist.ReduceOp.MAX, group=group)
+    return bool(torch.equal(lower, upper))
 
 
 def pad_vocab_size(vocab_size: int, pad_to: int = DEFAULT_VOCAB_PADDING_SIZE) -> int:
@@ -146,24 +165,64 @@ class ParallelLMHead(ParallelEmbedding):
         self.impl = builder.build(hidden_size, self.vocab_size_padded, bias, dtype=dtype)
 
         self._symm_mem_gatherer = None
-        if self.all_reduce and _envs.enable_symm_mem_lmhead:
+        self._symm_mem_device = self.weight.device
+        self._symm_mem_dtype = self.weight.dtype
+        if self.all_reduce and self.weight.device.type == 'cuda':
+            device = self.weight.device
+            if device.index is None:
+                device = torch.device('cuda', torch.cuda.current_device())
+            requested = _envs.enable_symm_mem_lmhead and self.weight.dtype == torch.bfloat16
+            if not _tp_agree(requested, device, self.tp_group):
+                return
+
+            gathered_width = self.tp * self.vocab_size_padded
+            capacity = _envs.symm_mem_lmhead_max_mb * 1024 * 1024
+            max_tokens = capacity // (gathered_width * torch.bfloat16.itemsize)
+            same_config = _tp_same_config((capacity, gathered_width, max_tokens), device, self.tp_group)
+            if max_tokens <= 0 or not same_config:
+                if self.tp_rank == 0:
+                    logger.warning('symmetric-memory LM-head disabled because TP ranks have inconsistent arena config')
+                return
+
+            gatherer_cls = None
             try:
                 from lmdeploy.pytorch.backends.cuda.comm.symm_mem_allgather import MultimemAllGatherer
+                gatherer_cls = MultimemAllGatherer
+            except ImportError as exc:
+                if self.tp_rank == 0:
+                    logger.warning('symmetric-memory LM-head unavailable: %s', exc)
+            if not _tp_agree(gatherer_cls is not None, device, self.tp_group):
+                return
 
-                gathered_width = self.tp * self.vocab_size_padded
-                capacity = _envs.symm_mem_lmhead_max_mb * 1024 * 1024
-                max_tokens = capacity // (gathered_width * torch.bfloat16.itemsize)
-                if max_tokens > 0:
-                    self._symm_mem_gatherer = MultimemAllGatherer(group=self.tp_group,
-                                                                  rank=self.tp_rank,
-                                                                  gathered_width=gathered_width,
-                                                                  max_tokens=max_tokens)
-            except ImportError:
-                pass
+            gatherer = gatherer_cls(group=self.tp_group,
+                                    rank=self.tp_rank,
+                                    gathered_width=gathered_width,
+                                    max_tokens=max_tokens)
+            if gatherer.prepare(device):
+                self._symm_mem_gatherer = gatherer
 
     def tie_weights(self, embedding: ParallelEmbedding):
         """Tie the local LM-head shard to a parallel embedding shard."""
         self.weight = embedding.weight
+
+    def _apply(self, fn, recurse=True):
+        """Keep the symmetric arena aligned with model device moves."""
+        previous_device = self._symm_mem_device
+        previous_dtype = self._symm_mem_dtype
+        result = super()._apply(fn, recurse=recurse)
+        current_device = self.weight.device
+        current_dtype = self.weight.dtype
+        gatherer = self._symm_mem_gatherer
+        if gatherer is not None and (current_device != previous_device or current_dtype != previous_dtype):
+            if previous_device.type == 'cuda':
+                gatherer.release()
+            self._symm_mem_device = current_device
+            self._symm_mem_dtype = current_dtype
+            if current_dtype != torch.bfloat16:
+                self._symm_mem_gatherer = None
+            elif current_device.type == 'cuda' and not gatherer.prepare(current_device):
+                self._symm_mem_gatherer = None
+        return result
 
     def get_local_logits(self, hidden_states: torch.Tensor):
         """Compute logits for the vocabulary shard owned by this rank."""
