@@ -23,6 +23,12 @@ class CudaOpsBackend(DefaultOpsBackend):
         return 'cuda'
 
     @classmethod
+    def get_cache_backend(cls):
+        """Get CUDA cache layouts and local primitives."""
+        from .cache import CudaCacheBackend
+        return CudaCacheBackend
+
+    @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
         """Get cuda layer builder."""
         if layer_type == OpType.PagedAttention:
@@ -114,9 +120,6 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.GatedDeltaRule:
             from .gated_delta_rule import CudaGatedDeltaRuleBuilder
             return CudaGatedDeltaRuleBuilder
-        elif layer_type == OpType.CacheBlockCopy:
-            from .cache_block_copy import CudaCacheBlockCopyBuilder
-            return CudaCacheBlockCopyBuilder
         else:
             logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)

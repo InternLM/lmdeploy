@@ -5,6 +5,7 @@ from collections import deque
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
+from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
 from typing import Any
@@ -23,9 +24,11 @@ from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_engine.collector import collect_block_cache_requests
+from lmdeploy.pytorch.engine.cache_engine.plan import build_block_cache_plan
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
-from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
 from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVConnectorRole, build_kv_connector
 from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
@@ -183,7 +186,7 @@ def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: d
         issued_cache_op = True
 
     if issued_cache_op:
-        cache_engine.events.wait()
+        cache_engine.swap_event.wait()
 
 
 def _restore_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None,
@@ -195,7 +198,7 @@ def _restore_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpoint
     if cache_inputs.kv_restore_plan is not None:
         cache_engine.copy_logical_blocks(cache_inputs.kv_restore_plan)
     if cache_inputs.state_restore_plan is not None:
-        state_cache_engine.copy_caches(*cache_inputs.state_restore_plan)
+        state_cache_engine.copy_slots(*cache_inputs.state_restore_plan)
 
 
 def _save_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None,
@@ -207,13 +210,14 @@ def _save_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInp
     if cache_inputs.kv_save_plan is not None:
         cache_engine.copy_logical_blocks(cache_inputs.kv_save_plan)
     if cache_inputs.state_save_plan is not None:
-        state_cache_engine.copy_caches(*cache_inputs.state_save_plan)
+        state_cache_engine.copy_slots(*cache_inputs.state_save_plan)
 
 
 @torch.inference_mode()
 def model_forward(
     model: torch.nn.Module,
     inputs: ModelInputs,
+    model_config: ModelConfig,
     cache_engine: CacheEngine,
     state_cache_engine: StateCacheEngine,
     stream: torch.cuda.Stream = None,
@@ -226,14 +230,14 @@ def model_forward(
         ctx_mgr = model.ctx_mgr
         context = ctx_mgr.build_context(
             inputs=inputs,
-            model_config=cache_engine.model_config,
+            model_config=model_config,
             cache_config=cache_engine.cache_config,
             kv_caches=cache_engine.gpu_cache,
             state_caches=state_cache_engine.state_caches,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
 
-        # Attach named cache views for models that declare block_cache_specs / state_cache_specs.
+        # Attach operator-owned block caches and configured state caches.
         context.block_caches = cache_engine.block_caches
         context.named_state_caches = state_cache_engine.named_state_caches
 
@@ -368,6 +372,9 @@ class BaseModelAgent:
 
         self.patched_model = None
         self.cache_engine = None
+        self.block_cache_plan = None
+        # Exact target/draft bytes used when cache capacity was calculated.
+        self._cache_plan_block_nbytes: tuple[int, int]
         self.state_cache_engine = None
         self.kv_connector = None
         self.profiler: AgentProfiler = None
@@ -427,7 +434,7 @@ class BaseModelAgent:
         """Initialize request-local decode and chunk state."""
         self.step_inputs = self.strategy_factory.build_step_inputs()
         self._prev_chunk_output: dict = None
-        # chunked-prefill ppl: last logit row of the previous chunk, used to score the cross-chunk boundary token
+        # Last logit row of the previous chunk, used to score cross-chunk prompt tokens.
         self._prev_chunk_last_logit: torch.Tensor | None = None
 
     def reset_runtime_state(self):
@@ -562,6 +569,22 @@ class BaseModelAgent:
         output['hidden_states'] = hidden_states
         return output
 
+    def _get_input_logits(self, hidden_states: torch.Tensor, inputs: ModelInputs):
+        """Project the selected scoring rows with at most one lm-head call."""
+        if not self._is_prefill_input_logprobs(inputs):
+            return None
+        logits_indices = inputs.logits_indices
+        flat_hidden = hidden_states.reshape(-1, hidden_states.shape[-1])
+        selected_hidden = flat_hidden.index_select(0, logits_indices)
+        return self.get_logits(selected_hidden[None])[0]
+
+    @staticmethod
+    def _is_prefill_input_logprobs(inputs: ModelInputs | None) -> bool:
+        """Whether this prefill step uses the V2 scoring-only input-logprob
+        path."""
+        return (inputs is not None and not inputs.is_dummy and not inputs.is_decoding
+                and inputs.logits_indices is not None and inputs.seq_logit_length is not None)
+
     async def _async_model_forward(
         self,
         inputs: ModelInputs,
@@ -569,19 +592,25 @@ class BaseModelAgent:
         cache_inputs: CacheCheckpointInputs | None = None,
     ):
         """Model forward."""
-        if self.memdecode_agent is not None and return_logits:
+        memdecode_agent = getattr(self, 'memdecode_agent', None)
+        if memdecode_agent is not None and return_logits:
             raise RuntimeError('MemDecode does not support returned prompt logits yet.')
 
         ret = await self.async_forward(inputs, cache_inputs=cache_inputs)
+        if self._is_prefill_input_logprobs(inputs):
+            # This is the only lm-head projection for scoring: return before
+            # the ordinary all/sampling-logits projection below.
+            ret['logits'] = self._get_input_logits(ret['hidden_states'][0], inputs)
+            return ret
 
         if not return_logits:
             ret = self._postprocess_forward_output(ret, inputs)
 
-        if self.memdecode_agent is not None:
+        if memdecode_agent is not None:
             base_hidden_states = ret['hidden_states']
             base_logits = self.get_logits(base_hidden_states)
 
-            return await self.memdecode_agent.fuse_with_base(
+            return await memdecode_agent.fuse_with_base(
                 inputs=inputs,
                 base_output=ret,
                 base_logits=base_logits,
@@ -593,6 +622,58 @@ class BaseModelAgent:
         logits = self.get_logits(hidden_states)
         ret['logits'] = logits
         return ret
+
+    def _get_outputs_with_logprobs(
+        self,
+        input_logits: torch.Tensor | None,
+        inputs: ModelInputs,
+        num_logprobs: int,
+        model_metas: list[dict[str, Any]] | None,
+    ):
+        """Build the scoring-only output without generation modifiers."""
+        input_logprobs = None
+        if input_logits is not None:
+            source_indices = inputs.logits_indices
+            input_ids = inputs.input_ids.flatten()
+            if inputs.is_chunk:
+                prev_chunk_last_logit = None if inputs.is_first_chunk else self._prev_chunk_last_logit
+                if source_indices.numel() > 0 and not inputs.is_last_chunk:
+                    self._prev_chunk_last_logit = input_logits[-1:].clone()
+                    input_logits = input_logits[:-1]
+                    source_indices = source_indices[:-1]
+                else:
+                    self._prev_chunk_last_logit = None
+            else:
+                prev_chunk_last_logit = None
+
+            targets = input_ids.index_select(0, source_indices + 1)
+            if prev_chunk_last_logit is not None:
+                input_logits = torch.cat([prev_chunk_last_logit, input_logits], dim=0)
+                targets = torch.cat([input_ids[:1], targets])
+            if self.misc_config.logprobs_mode == 'raw_logprobs':
+                input_logits = input_logits.log_softmax(dim=-1)
+            target_indices = targets[:, None]
+            vals = input_logits.gather(-1, target_indices)
+            if num_logprobs > 0:
+                topk_vals, topk_indices = _torch_topk(input_logits, num_logprobs, dim=-1)
+                vals = torch.cat([vals, topk_vals], dim=-1)
+                target_indices = torch.cat([target_indices, topk_indices], dim=-1)
+            input_logprobs = BatchedLogProbs(vals=vals, indices=target_indices.to(torch.int32))
+
+        batch_size = inputs.seq_length.numel()
+        device = inputs.input_ids.device
+        return BatchedOutputs(
+            next_token_ids=torch.zeros(batch_size,
+                                       dtype=inputs.input_ids.dtype,
+                                       device=device),
+            stopped=torch.ones(batch_size, dtype=torch.bool, device=device),
+            stop_pos=torch.full((batch_size,),
+                                -1,
+                                dtype=torch.long,
+                                device=device),
+            model_metas=model_metas,
+            logprobs=input_logprobs,
+        )
 
     async def async_sampling_logits(self, logits: torch.Tensor, inputs: ModelInputs,
                                     extra_inputs: ExtraInputs, sampling_inputs: SamplingInputs):
@@ -965,6 +1046,7 @@ class BaseModelAgent:
                      f'is_last_chunk={inputs.is_last_chunk} '
                      f'dp_meta={inputs.dp_meta} '
                      f'is_decoding={inputs.is_decoding}')
+        prefill_input_logprobs = self._is_prefill_input_logprobs(inputs)
         output = await self._async_model_forward(
             inputs,
             return_logits=return_logits or return_ce_loss,
@@ -979,6 +1061,24 @@ class BaseModelAgent:
             connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
             if connector_output is not None:
                 self._push_output(BatchedOutputs.connector_only(connector_output))
+            return
+
+        # input-logprob mode is scoring-only: this branch emits compact
+        # logprob rows, and falling through would wrongly run sampling /
+        # sequence-update on a max_tokens=0 request.
+        if prefill_input_logprobs:
+            model_metas = output.get('model_metas')
+            connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+            if self.need_output:
+                output = self._get_outputs_with_logprobs(output.get('logits'), inputs,
+                                                         sampling_inputs.max_num_logprobs, model_metas)
+                output.kv_connector_output = connector_output
+                self._push_output(output)
+            elif connector_output is not None:
+                self._push_output(BatchedOutputs.connector_only(connector_output))
+            if inputs.is_chunk and not inputs.is_last_chunk:
+                self._prev_chunk_output = {'model_metas': model_metas}
+
             return
 
         logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
@@ -1299,6 +1399,31 @@ class BaseModelAgent:
             if self.memdecode_agent is not None:
                 self.memdecode_agent.build_model(self.misc_config.empty_init, build_model_ctx=self.build_model_ctx)
 
+    def build_cache_plans(self, cache_config: CacheConfig,
+                          spec_cache_config: CacheConfig | None = None) -> tuple[int, int, int]:
+        """Build worker-local plans and return target/spec/memory block
+        bytes."""
+        with self.all_context():
+            tp = self.dist_config.attn_tp
+            cache_request_model = self.patched_model
+            # Ray may recollect plans after the model has been graph-wrapped.
+            if not isinstance(cache_request_model, torch.nn.Module):
+                cache_request_model = cache_request_model.get_model()
+            request_collector = partial(collect_block_cache_requests, cache_request_model)
+            self.block_cache_plan = build_block_cache_plan(
+                self.model_config,
+                cache_config,
+                tp,
+                request_collector=request_collector,
+            )
+            target_nbytes = self.block_cache_plan.logical_block_nbytes
+            spec_nbytes = self.spec_agent.build_cache_plan(spec_cache_config)
+            memory_nbytes = 0
+            if self.memdecode_agent is not None:
+                memory_nbytes = self.memdecode_agent.build_cache_plan(cache_config)
+            self._cache_plan_block_nbytes = (target_nbytes, spec_nbytes)
+            return target_nbytes, spec_nbytes, memory_nbytes
+
     def build_graph_runner(self):
         """Build graph runner."""
         with self.all_context():
@@ -1336,11 +1461,10 @@ class BaseModelAgent:
             tp_rank = dist_ctx.attn_tp_group.rank
 
             self.cache_engine = CacheEngine(self.cache_config,
-                                            self.model_config,
                                             rank=self.rank,
                                             tp_rank=tp_rank,
-                                            world_size=tp,
-                                            cache_stream=self.cache_stream)
+                                            cache_stream=self.cache_stream,
+                                            block_cache_plan=self.block_cache_plan)
             self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
 
             self.kv_connector = build_kv_connector(
@@ -1363,6 +1487,7 @@ class BaseModelAgent:
         output = model_forward(
             self.patched_model,
             inputs,
+            self.model_config,
             self.cache_engine,
             state_cache_engine=self.state_cache_engine,
             stream=self.stream,
@@ -1642,6 +1767,26 @@ class BaseModelAgent:
         torch.cuda.empty_cache()
         self.state.to_sleep.clear()
 
+    def _rebuild_models_after_level2_sleep(self):
+        """Rebuild models, cache bindings, and graph runners in that order."""
+        expected_block_nbytes = self._cache_plan_block_nbytes
+        old_empty_init = self.misc_config.empty_init
+        self.misc_config.empty_init = True
+        try:
+            self.build_model()
+            target_nbytes, spec_nbytes, _ = self.build_cache_plans(
+                self.cache_config,
+                self.spec_agent.cache_config,
+            )
+            actual_block_nbytes = (target_nbytes, spec_nbytes)
+            if actual_block_nbytes != expected_block_nbytes:
+                raise RuntimeError(
+                    'Level-2 wakeup rebuilt cache plans with different logical-block sizes: '
+                    f'expected target/draft {expected_block_nbytes}, got {actual_block_nbytes}.')
+            self.build_graph_runner()
+        finally:
+            self.misc_config.empty_init = old_empty_init
+
     @torch.inference_mode()
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
@@ -1661,11 +1806,7 @@ class BaseModelAgent:
                     spec_model.to(torch.cuda.current_device())
             else:
                 # user should update weights after wakeup
-                old_empty_init = self.misc_config.empty_init
-                self.misc_config.empty_init = True
-                self.build_model()
-                self.build_graph_runner()
-                self.misc_config.empty_init = old_empty_init
+                self._rebuild_models_after_level2_sleep()
 
         if 'kv_cache' in tags:
             self.build_cache_engine()
@@ -1683,5 +1824,6 @@ class BaseModelAgent:
             self.memdecode_agent.release()
         self.patched_model = None
         self.cache_engine = None
+        self.block_cache_plan = None
         self.state_cache_engine = None
         torch.cuda.empty_cache()

@@ -175,3 +175,12 @@ async def _async_test_ray_stream_error_before_first_output():
 
 def test_ray_stream_error_before_first_output():
     asyncio.run(_async_test_ray_stream_error_before_first_output())
+
+
+def test_engine_output_gather_preserves_logprob_carrier_states():
+    for carrier in [None, [], [{2: -0.5}]]:
+        gather = EngineOutputGather()
+        final = EngineOutput(ResponseType.FINISH, [], logprobs=carrier)
+        gather.add(1, final)
+        assert gather.pop(1, final).logprobs == carrier
+        assert 1 not in gather._output

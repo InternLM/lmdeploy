@@ -117,6 +117,10 @@ class GenerationConfig:
             around special tokens. The behavior of Fast tokenizers is to have
             this to False. This is setup to True in slow tokenizers.
         logprobs: Number of log probabilities to return per output token.
+        logprob_start_len: Source-token boundary in the current
+            model-processed input after multimodal expansion. Rows are returned
+            for tokens after this boundary. ``-1`` disables input logprobs
+            while preserving generated-token logprobs.
         response_format: Generate responses according to given formatting.
             Examples:
 
@@ -173,6 +177,7 @@ class GenerationConfig:
     skip_special_tokens: bool = True
     spaces_between_special_tokens: bool = True
     logprobs: int = None
+    logprob_start_len: int = -1
     response_format: dict | None = None
     logits_processors: list[LogitsProcessor] | None = None
     output_logits: Literal['all', 'generation'] = None
@@ -243,6 +248,10 @@ class GenerationConfig:
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
+        if self.logprob_start_len < -1:
+            raise ValueError('logprob_start_len must be greater than or equal to -1')
+        if self.logprob_start_len >= 0 and (self.logprobs is None or self.logprobs < 0):
+            raise ValueError('logprobs must be non-negative when logprob_start_len is non-negative')
         if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:
             self.repetition_ngram_size = 0
             self.repetition_ngram_threshold = 0
@@ -649,7 +658,9 @@ class Response:
             stop point or a provided stop sequence, 'length' if the maximum
             number of tokens specified in the request was reached.
         token_ids: the output token ids.
-        logprobs: the top logprobs for each output position.
+        logprobs: the top logprobs for each output position. For a scoring-only
+            input-logprob request, this field carries the complete ordered
+            input-token rows on the terminal response.
         index: it refers to the position index of the input request batch.
     """
     text: str
@@ -716,7 +727,7 @@ class Response:
         self.index = other.index
         if other.token_ids:
             self.token_ids += other.token_ids
-        if other.logprobs:
+        if other.logprobs is not None:
             self.logprobs = self.logprobs or []
             self.logprobs += other.logprobs
         self.routed_experts = other.routed_experts
@@ -789,8 +800,9 @@ class EngineOutput:
     Args:
         status: the response type.
         token_ids: the newly generated token ids in each iteration.
-        logprobs: the top logprobs for each output
-            position.
+        logprobs: the top logprobs for each output position. For a scoring-only
+            input-logprob request, this internal field carries the complete
+            ordered input-token rows on its terminal output.
         cache_block_ids: send cache blocks back for migration in
             Disaggregated LLM Serving when Prefill Engine is Done.
         req_metrics: request metrics information
