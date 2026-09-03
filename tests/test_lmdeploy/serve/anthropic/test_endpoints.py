@@ -22,6 +22,8 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
+from lmdeploy.serve.parsers.response_parser import BaseResponseParser
+from lmdeploy.serve.parsers.tool_parser.interns2preview_tool_parser import InternS2PreviewToolParser
 from lmdeploy.serve.utils.server_utils import protocol_error_response
 
 ANTHROPIC_HEADERS = {'anthropic-version': '2023-06-01'}
@@ -930,6 +932,101 @@ def test_stream_messages_response_closes_text_before_resuming_tool_delta():
     assert any(
         item['type'] == 'content_block_stop' and item['index'] == 1
         for item in payloads[:resumed_tool_delta_index])
+
+
+def test_stream_messages_response_interns2preview_inter_tool_whitespace_uses_text_block():
+    """Keep InternS2Preview's inter-tool newline off open tool-use blocks."""
+
+    class _InternS2PreviewResponseParser(BaseResponseParser):
+        reasoning_parser_cls = None
+        tool_parser_cls = InternS2PreviewToolParser
+
+    request = ChatCompletionRequest(
+        model='fake-model',
+        messages=[],
+        stream=True,
+        tool_choice='auto',
+        tools=[
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'city': {
+                                'type': 'string'
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'get_news',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'topic': {
+                                'type': 'string'
+                            }
+                        },
+                    },
+                },
+            },
+        ],
+    )
+    response_parser = _InternS2PreviewResponseParser(request)
+    raw_response = (
+        '<tool_call>\n<function=get_weather>\n<parameter=city>Paris</parameter>\n</function>\n</tool_call>'
+        '\n'
+        '<tool_call>\n<function=get_news>\n<parameter=topic>France</parameter>\n</function>\n</tool_call>')
+
+    async def _result_generator():
+        yield SimpleNamespace(
+            response=raw_response,
+            token_ids=[1],
+            input_token_len=8,
+            generate_token_len=1,
+            finish_reason='stop',
+        )
+
+    payloads = _collect_stream_response_payloads(_result_generator(), response_parser)
+    block_events = [item for item in payloads if item['type'].startswith('content_block_')]
+
+    assert [(item['type'], item['index']) for item in block_events] == [
+        ('content_block_start', 0),
+        ('content_block_delta', 0),
+        ('content_block_stop', 0),
+        ('content_block_start', 1),
+        ('content_block_delta', 1),
+        ('content_block_stop', 1),
+        ('content_block_start', 2),
+        ('content_block_delta', 2),
+        ('content_block_stop', 2),
+    ]
+    assert [
+        item['content_block']['type'] for item in block_events
+        if item['type'] == 'content_block_start'
+    ] == ['tool_use', 'text', 'tool_use']
+    assert [
+        item['delta'] for item in block_events
+        if item['type'] == 'content_block_delta'
+    ] == [
+        {
+            'type': 'input_json_delta',
+            'partial_json': '{"city": "Paris"}',
+        },
+        {
+            'type': 'text_delta',
+            'text': '\n',
+        },
+        {
+            'type': 'input_json_delta',
+            'partial_json': '{"topic": "France"}',
+        },
+    ]
 
 
 def test_stream_messages_response_maps_stop_to_tool_use_on_empty_terminal_chunk():
