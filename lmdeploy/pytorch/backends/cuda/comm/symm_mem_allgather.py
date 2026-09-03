@@ -332,7 +332,8 @@ def create_state(
     Collective: call
     once outside CUDA-graph capture with identical args on every rank.
     """
-    assert type(group) is dist.ProcessGroup, f"Expected ProcessGroup, got {type(group)}"
+    if not isinstance(group, dist.ProcessGroup):
+        raise TypeError(f"Expected dist.ProcessGroup, got {type(group)}")
     assert hidden_size % _NUMEL_PER_THREAD == 0, (
         f"hidden_size={hidden_size} must be a multiple of {_NUMEL_PER_THREAD} "
         f"bf16 for 16-byte multimem.st row alignment"
