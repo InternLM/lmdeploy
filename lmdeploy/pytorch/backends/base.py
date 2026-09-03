@@ -9,7 +9,10 @@ import torch
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 
+from .cache import CacheBackend
+
 ImplT = TypeVar('ImplT')
+
 
 class BuildSpec(Generic[ImplT]):
     """Build request whose type parameter is the result interface."""
@@ -66,6 +69,12 @@ class OpsBackend(ABC):
         dtype: torch.dtype,
     ) -> tuple[int, ...]:
         """Get block shape of v."""
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def get_cache_backend(cls) -> type[CacheBackend]:
+        """Get the cache backend provider."""
         raise NotImplementedError
 
     @classmethod

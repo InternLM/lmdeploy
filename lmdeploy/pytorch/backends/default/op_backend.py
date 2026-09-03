@@ -19,7 +19,6 @@ class DefaultOpsBackend(OpsBackend):
         from ..activation import GeluAndMulBuildSpec, SiluAndMulBuildSpec
         from ..apply_rotary_emb import ApplyRotaryEmbBuildSpec
         from ..awq_modules import LinearW4A16BuildSpec
-        from ..cache_block_copy import CacheBlockCopyBuildSpec
         from ..embedding import EmbeddingBuildSpec
         from ..linear import LinearBuildSpec
         from ..moe import SoftmaxTopKBuildSpec
@@ -58,9 +57,6 @@ class DefaultOpsBackend(OpsBackend):
         if isinstance(spec, EmbeddingBuildSpec):
             from .embedding import DefaultEmbeddingImpl
             return cast(ImplT, DefaultEmbeddingImpl(spec.start_index, spec.end_index))
-        if isinstance(spec, CacheBlockCopyBuildSpec):
-            from .cache_block_copy import _build_cache_block_copy
-            return cast(ImplT, _build_cache_block_copy(spec))
         if isinstance(spec, RouterGemmBuildSpec):
             from .moe_router import DefaultRouterGemmImpl
             return cast(ImplT, DefaultRouterGemmImpl(out_dtype=spec.output_dtype))
@@ -123,6 +119,12 @@ class DefaultOpsBackend(OpsBackend):
             num_heads,
             head_size,
         )
+
+    @classmethod
+    def get_cache_backend(cls):
+        """Get the default cache backend provider."""
+        from .cache import DefaultCacheBackend
+        return DefaultCacheBackend
 
     @staticmethod
     def init():

@@ -24,6 +24,12 @@ class CudaOpsBackend(DefaultOpsBackend):
         return 'cuda'
 
     @classmethod
+    def get_cache_backend(cls):
+        """Get CUDA cache layouts and local primitives."""
+        from .cache import CudaCacheBackend
+        return CudaCacheBackend
+
+    @classmethod
     def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed CUDA operator implementation."""
         from ..activation import SiluAndMulBuildSpec
@@ -31,7 +37,6 @@ class CudaOpsBackend(DefaultOpsBackend):
         from ..attention import PagedAttentionBuildSpec, V4AttentionBuildSpec
         from ..awq_modules import LinearW4A16BuildSpec
         from ..blockedf8_modules import LinearBlockedF8BuildSpec
-        from ..cache_block_copy import CacheBlockCopyBuildSpec
         from ..causal_conv1d import CausalConv1dBuildSpec
         from ..compressor import V4CompressorBuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
@@ -103,7 +108,15 @@ class CudaOpsBackend(DefaultOpsBackend):
             )
         if isinstance(spec, V4CompressorBuildSpec):
             from .v4_compressor import TritonV4CompressorImpl
-            return cast(ImplT, TritonV4CompressorImpl(spec.compress_ratio, spec.overlap, spec.head_dim))
+            return cast(
+                ImplT,
+                TritonV4CompressorImpl(
+                    spec.compress_ratio,
+                    spec.overlap,
+                    spec.head_dim,
+                    spec.is_indexer,
+                ),
+            )
         if isinstance(spec, HCPrePostBuildSpec):
             from .hc_prepost import TritonHCPrePostImpl
             return cast(ImplT, TritonHCPrePostImpl(spec.hc_mult, spec.sinkhorn_iters, spec.eps))
@@ -131,9 +144,6 @@ class CudaOpsBackend(DefaultOpsBackend):
         if isinstance(spec, GatedDeltaRuleBuildSpec):
             from .gated_delta_rule import CudaGatedDeltaRuleImpl
             return cast(ImplT, CudaGatedDeltaRuleImpl())
-        if isinstance(spec, CacheBlockCopyBuildSpec):
-            from .cache_block_copy import CudaCacheBlockCopyImpl
-            return cast(ImplT, CudaCacheBlockCopyImpl(spec.packed_caches, spec.pages_per_block))
         if isinstance(spec, LinearW4A16BuildSpec):
             from .awq_modules import _build_linear_w4a16
             return cast(ImplT, _build_linear_w4a16(spec))

@@ -1,9 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import random
+from collections.abc import Mapping
 
 import torch
 
-from lmdeploy.pytorch.consts import V4_INDEX_SCALE_BYTES
+from lmdeploy.pytorch.consts import (
+    V4_INDEX_KV_R4_CACHE_NAME,
+    V4_INDEX_KV_R4_SCALE_CACHE_NAME,
+    V4_INDEX_SCALE_BYTES,
+)
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
@@ -131,9 +136,10 @@ class TritonV4IndexerImpl(V4IndexerImpl):
     def forward(self,
                 query: torch.Tensor,
                 weights: torch.Tensor,
-                index_kv_cache: torch.Tensor,
-                index_kv_scale_cache: torch.Tensor | None,
+                block_caches: Mapping[str, torch.Tensor],
                 meta: V4IndexerMetadata) -> V4IndexerOutput:
+        index_kv_cache = block_caches[V4_INDEX_KV_R4_CACHE_NAME]
+        index_kv_scale_cache = block_caches.get(V4_INDEX_KV_R4_SCALE_CACHE_NAME)
         block_offsets = meta.block_offsets
         cu_q_seqlens = meta.cu_q_seqlens
         kv_seqlens = meta.kv_seqlens

@@ -110,6 +110,12 @@ class DlinferOpsBackend(DefaultOpsBackend):
         return super().build_op(spec, enable_deterministic=enable_deterministic)
 
     @classmethod
+    def get_cache_backend(cls):
+        """Get the native dlinfer cache backend provider."""
+        from .cache import DlinferCacheBackend
+        return DlinferCacheBackend
+
+    @classmethod
     def build_communicator(cls, cpu_group, device_group, dist_config):
         """Build a DLInfer communicator."""
         from lmdeploy.pytorch import envs

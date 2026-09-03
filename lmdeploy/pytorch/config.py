@@ -406,16 +406,6 @@ class MemDecodeConfig:
 
 
 @dataclass
-class BlockCacheSpec:
-    """Spec for a named block-scoped cache (e.g. compressed KV)."""
-    name: str
-    layer_ids: list[int]
-    shape: tuple[int, ...]
-    dtype: torch.dtype
-    alignment: int = 256
-
-
-@dataclass
 class StateCacheSpec:
     """Spec for a named sequence-scoped state cache (e.g. compressor
     scratch)."""
@@ -458,9 +448,6 @@ class ModelConfig:
     dllm_mask_token: int = 0
     dllm_block_length: int = None
 
-    # Added for deepseekv3.2 nsa index
-    # caches would be added after kv cache
-    cache_shapes: list[tuple[list[int], torch.dtype]] = field(default_factory=list)
     # added for qwen3_next
     # could used for any SSM model.
     states_shapes: list[tuple[tuple[int], torch.dtype]] = field(default_factory=list)
@@ -468,12 +455,9 @@ class ModelConfig:
     # and requires prepare_chunk_indices during prefill
     is_gated_delta: bool = False
 
-    # Named cache specs for models that need multiple block/state caches.
-    # V4 uses these instead of cache_shapes/states_shapes for formal resource declaration.
-    block_cache_specs: list[BlockCacheSpec] = field(default_factory=list)
+    # Named state-cache specs for models that need layered sequence state.
     state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
     use_standard_kv_cache: bool = True
-    post_build_func: Callable[['ModelConfig', int], None] | None = None
 
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
@@ -580,8 +564,6 @@ class ModelConfig:
         # add quant_config
         model_config.quant_config = QuantizationConfig.from_config(hf_config)
         model_config.block_size = block_size
-        if model_config.post_build_func is not None:
-            model_config.post_build_func(model_config, block_size)
         return model_config
 
     @classmethod
