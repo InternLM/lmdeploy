@@ -164,6 +164,19 @@ class TestQwen3_5ResponseParserStreaming:
 
         assert calls == []
 
+    def test_incremental_incomplete_function_header_does_not_emit_arguments(self):
+        """An unfinished function header cannot open an argument stream."""
+        parser = Qwen3CoderToolParser()
+        parser.start_tool_call()
+
+        assert parser.decode_tool_incremental('<function', final=False) == []
+        calls = parser.decode_tool_incremental(
+            '<parameter=query>nvd</parameter>',
+            final=True,
+        )
+
+        assert calls == []
+
     def test_parse_complete_parallel_tool_calls_keep_distinct_arguments(self):
         """Regression: parallel tool calls must not reuse the first call's args."""
         response_parser = _build_response_parser()
