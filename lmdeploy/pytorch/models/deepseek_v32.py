@@ -38,6 +38,7 @@ from .deepseek_v2 import (
     DeepseekV2MoE,
     yarn_get_mscale,
 )
+from .patch import add_prefix
 
 
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
@@ -278,7 +279,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
-                prefix=f'{prefix}.q_proj' if prefix else '',
+                prefix=add_prefix('q_proj', prefix),
             )
         else:
             self.fused_qkv_a_proj = build_merged_colwise_linear(
@@ -290,7 +291,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 is_tp=False,
                 quant_config=quantization_config,
                 out_names=[0, 1],
-                prefix=f'{prefix}.fused_qkv_a_proj' if prefix else '',
+                prefix=add_prefix('fused_qkv_a_proj', prefix),
             )
             self.q_a_layernorm = RMSNorm(config.q_lora_rank,
                                          1e-6,
@@ -305,7 +306,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
-                prefix=f'{prefix}.q_b_proj' if prefix else '',
+                prefix=add_prefix('q_b_proj', prefix),
             )
 
         if self.q_lora_rank is None:
@@ -317,7 +318,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 device=device,
                 is_tp=False,
                 quant_config=quantization_config,
-                prefix=f'{prefix}.kv_a_proj_with_mqa' if prefix else '',
+                prefix=add_prefix('kv_a_proj_with_mqa', prefix),
             )
         self.kv_a_layernorm = RMSNorm(config.kv_lora_rank,
                                       1e-6,
@@ -361,7 +362,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
             is_tp=True,
             quant_config=quantization_config,
             all_reduce=all_reduce,
-            prefix=f'{prefix}.o_proj' if prefix else '',
+            prefix=add_prefix('o_proj', prefix),
         )
 
         self.indexer = self._build_indexer(config, layer_idx, dtype, device, prefix)
@@ -497,10 +498,10 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
             dtype=dtype,
             device=device,
             all_reduce=not defer_attn_all_reduce,
-            prefix=f'{prefix}.self_attn' if prefix else '')
+            prefix=add_prefix('self_attn', prefix))
 
         # mlp
-        mlp_prefix = f'{prefix}.mlp' if prefix else ''
+        mlp_prefix = add_prefix('mlp', prefix)
         self.mlp = (DeepseekV2MoE(
             config,
             layer_idx,
