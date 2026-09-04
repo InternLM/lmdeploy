@@ -268,13 +268,6 @@ class DeepseekV32Attention(DeepseekV2Attention):
         num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
         num_key_value_heads = getattr(config, 'num_key_value_heads', 1)
         use_flash_mla = getattr(config, 'use_flash_mla', False)
-        # ModelSlim W8A8 stores independent activation/dequantization scales
-        # for q_a_proj and kv_a_proj_with_mqa. They cannot be represented by
-        # one merged static-W8A8 operator, so keep those projections separate.
-        quant_method = (quantization_config.get('quant_method')
-                        if isinstance(quantization_config, dict) else None)
-        self.use_fused_qkv_a = (self.q_lora_rank is not None
-                                and quant_method != 'modelslim')
 
         if self.q_lora_rank is None:
             self.q_proj = build_colwise_linear(
@@ -287,7 +280,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 quant_config=quantization_config,
                 prefix=f'{prefix}.q_proj' if prefix else '',
             )
-        elif self.use_fused_qkv_a:
+        else:
             self.fused_qkv_a_proj = build_merged_colwise_linear(
                 self.hidden_size,
                 [config.q_lora_rank, config.kv_lora_rank + config.qk_rope_head_dim],
@@ -298,17 +291,6 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 quant_config=quantization_config,
                 out_names=[0, 1],
                 prefix=f'{prefix}.fused_qkv_a_proj' if prefix else '',
-            )
-        else:
-            self.q_a_proj = build_colwise_linear(
-                self.hidden_size,
-                config.q_lora_rank,
-                bias=config.attention_bias,
-                dtype=dtype,
-                device=device,
-                is_tp=False,
-                quant_config=quantization_config,
-                prefix=f'{prefix}.q_a_proj' if prefix else '',
             )
 
         if self.q_lora_rank is not None:
@@ -329,17 +311,6 @@ class DeepseekV32Attention(DeepseekV2Attention):
             )
 
         if self.q_lora_rank is None:
-            self.kv_a_proj_with_mqa = build_colwise_linear(
-                self.hidden_size,
-                config.kv_lora_rank + config.qk_rope_head_dim,
-                bias=config.attention_bias,
-                dtype=dtype,
-                device=device,
-                is_tp=False,
-                quant_config=quantization_config,
-                prefix=f'{prefix}.kv_a_proj_with_mqa' if prefix else '',
-            )
-        elif not self.use_fused_qkv_a:
             self.kv_a_proj_with_mqa = build_colwise_linear(
                 self.hidden_size,
                 config.kv_lora_rank + config.qk_rope_head_dim,
@@ -442,13 +413,10 @@ class DeepseekV32Attention(DeepseekV2Attention):
         if self.q_lora_rank is None:
             q_a_states = hidden_states
             key_states = self.kv_a_proj_with_mqa(hidden_states[0, :, None])
-        elif self.use_fused_qkv_a:
+        else:
             q_a_states, key_states = self.fused_qkv_a_proj(hidden_states).split(
                 [self.q_lora_rank, nope_size + pe_size], dim=-1)
             key_states = key_states[0, :, None]
-        else:
-            q_a_states = self.q_a_proj(hidden_states)
-            key_states = self.kv_a_proj_with_mqa(hidden_states[0, :, None])
 
         query_states, q_pe, qr = self._q_proj(q_a_states, num_heads, nope_size, pe_size)
         key_states, value_states, k_pe = self._kv_proj(key_states, nope_size)

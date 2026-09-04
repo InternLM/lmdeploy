@@ -66,14 +66,6 @@ class GlmMoeDsaIndexer(nn.Module):
                                          is_tp=False,
                                          quant_config=quant_config,
                                          prefix=f'{prefix}.wq_b' if prefix else '')
-        self.softmax_scale = self.head_dim**-0.5
-        self.indexer_topk = IndexerTopKFP8(self.index_topk,
-                                           self.softmax_scale,
-                                           self.head_dim,
-                                           block_size=128,
-                                           fill=-1,
-                                           # MTP may reuse its first iteration's indices in later drafts.
-                                           allow_short_prefill_scoring_skip=layer_idx < config.num_hidden_layers)
         self.use_fusion = not _envs.disable_dsa_indexer_fusion
         if self.use_fusion:
             self.wk_weights_proj = build_colwise_linear(self.dim,
@@ -97,7 +89,16 @@ class GlmMoeDsaIndexer(nn.Module):
                                                      device=device,
                                                      is_tp=False)
         self.k_norm = LayerNorm(self.head_dim, device=device)
+        self.softmax_scale = self.head_dim**-0.5
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
+        self.indexer_topk = IndexerTopKFP8(self.index_topk,
+                                           self.softmax_scale,
+                                           self.head_dim,
+                                           block_size=128,
+                                           fill=-1,
+                                           # MTP may reuse its first iteration's indices in later drafts.
+                                           allow_short_prefill_scoring_skip=layer_idx
+                                           < config.num_hidden_layers)
 
 
     def _apply_rotary_pos_emb(self, q_pe: torch.Tensor, k_pe: torch.Tensor,
@@ -378,12 +379,6 @@ class GlmMoeDsaForCausalLM(DeepseekV32ForCausalLM):
                  device: torch.device = None):
         super().__init__(config, ctx_mgr, dtype=dtype, device=device)
         self.enable_return_routed_experts = get_build_model_context().enable_return_routed_experts
-
-    def load_weights(self, weights):
-        # ModelSlim QuaRot checkpoints carry this auxiliary MTP weight in the
-        # main checkpoint index.  The target model does not consume it.
-        weights = ((name, weight) for name, weight in weights if name != 'rot.weight')
-        return super().load_weights(weights)
 
     def forward(
         self,
