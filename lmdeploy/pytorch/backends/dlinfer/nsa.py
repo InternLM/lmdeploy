@@ -2,8 +2,10 @@
 import torch
 from torch import Tensor
 
-from lmdeploy.utils import get_logger
+from lmdeploy.pytorch.consts import DSA_INDEXER_K_CACHE_NAME
+from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheGeometry, BlockCacheRequest
 from lmdeploy.pytorch.kernels.dlinfer import fill_kv_cache, lightning_indexer
+from lmdeploy.utils import get_logger
 
 from ..nsa import BaseNSAIndexFP8, BaseNSAIndexFP8Builder, NSAIndexMeta
 
@@ -22,6 +24,28 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
         self.topk = topk
         self.softmax_scale = softmax_scale
         self.block_size = block_size
+
+    def get_block_cache_requests(self, geometry: BlockCacheGeometry,
+                                 head_dim: int) -> tuple[BlockCacheRequest, ...]:
+        """Request the Ascend Lightning Indexer K cache.
+
+        Unlike the CUDA implementation, the Ascend kernel consumes a native
+        BF16 cache row. The contiguous block layout therefore stores one row
+        as ``[kernel_block_size, head_dim]``; ``_forward_index`` adds the
+        singleton head axis expected by ``lightning_indexer``.
+        """
+        if geometry.logical_block_size != geometry.kernel_block_size:
+            raise ValueError(
+                'Ascend DSA indexer cache requires equal logical and kernel '
+                f'block sizes, got {geometry.logical_block_size} and '
+                f'{geometry.kernel_block_size}.')
+        request = BlockCacheRequest(
+            name=DSA_INDEXER_K_CACHE_NAME,
+            shape=(geometry.kernel_block_size, 1, head_dim),
+            dtype=torch.bfloat16,
+            per_row_contiguous=True,
+        )
+        return (request, )
 
     def get_step_metadata(self, attn_metadata) -> NSAIndexMeta:
         """Build the per-step metadata consumed by the Lightning Indexer."""
@@ -73,13 +97,12 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
         if meta.cu_seqlen_q is None:
             raise RuntimeError("Ascend NSA metadata is missing cu_seqlen_q")
 
-        k_cache = indexer_k_cache.unsqueeze(-2)
         k = k.unsqueeze(-2)
         fill_kv_cache(
             k,
             k,
-            k_cache,
-            k_cache,
+            indexer_k_cache,
+            indexer_k_cache,
             meta.kv_start_indices,
             k_scales_zeros=(),
             v_scales_zeros=(),
@@ -91,7 +114,7 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
         block_offset = meta.block_offset
         indices = lightning_indexer(
             q.contiguous(),
-            k_cache,
+            indexer_k_cache,
             weights.to(dtype=q.dtype).contiguous(),
             actual_seq_lengths_query=actual_q,
             actual_seq_lengths_key=actual_k,
