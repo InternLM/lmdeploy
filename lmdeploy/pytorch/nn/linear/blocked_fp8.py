@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any
+from typing import Any, NamedTuple
 
 import torch
 
@@ -271,8 +271,28 @@ class MergedBlockedF8Linear(BlockedF8Linear):
         return loaded_weight.split(self.split_section, dim=0)
 
 
+class _QKVShardPlan(NamedTuple):
+    """Physical FP8 shard and its logical output view."""
+
+    shard_idx: int
+    weight_start: int
+    weight_load_rows: int
+    physical_rows: int
+    valid_start: int
+    logical_rows: int
+    scale_start: int
+    scale_rows: int
+
+
 class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
-    """Qkv blockedf8 linear."""
+    """Blocked-FP8 QKV projection with checkpoint-aware output sharding.
+
+    ``checkpoint_output_shard_sizes`` gives the Q/K/V row counts in one
+    native checkpoint TP partition. Runtime TP shards are selected inside
+    those partitions so weight rows and scale rows stay paired.
+    ``continuous_qkv_scale_layout`` preserves checkpoints whose FP8 block
+    coordinate continues across the Q/K/V boundaries within each partition.
+    """
 
     def __init__(self,
                  in_features: int,
@@ -287,7 +307,9 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
                  device: torch.device | None = None,
                  is_tp: bool = True,
                  dp_gather: bool = False,
-                 num_replicate_kv_heads: int = 1):
+                 num_replicate_kv_heads: int = 1,
+                 checkpoint_output_shard_sizes: tuple[int, int, int] | None = None,
+                 continuous_qkv_scale_layout: bool = False):
         self.block_size = 128
         self.init_tp_args(is_tp, all_reduce=False, colwise=True, layer_type='attn')
         QKVMixin.__init__(self,
@@ -300,7 +322,12 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
                           tp=self.tp,
                           tp_rank=self.tp_rank)
 
-        all_out_features = self.get_qkv_out_feautures()
+        logical_out_features = self.get_qkv_out_feautures()
+        self.logical_out_features = logical_out_features
+        self.checkpoint_output_shard_sizes = checkpoint_output_shard_sizes
+        self.continuous_qkv_scale_layout = continuous_qkv_scale_layout
+        self._output_shard_plans = self._build_output_shard_plans(logical_out_features)
+        all_out_features = tuple(plan.physical_rows for plan in self._output_shard_plans)
         out_names = ('q', 'k', 'v')
         super().__init__(in_features,
                          all_out_features,
@@ -313,48 +340,134 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
                          out_names=out_names,
                          dp_gather=dp_gather,
                          layer_type='attn')
+        self.scale_split_section = [plan.scale_rows for plan in self._output_shard_plans]
 
     def _update_all_out_features(self, all_out_features: list[int], replicate: list[bool] | None):
         """Update all out features."""
         return all_out_features
 
+    def _build_output_shard_plans(self, logical_sections: tuple[int, int, int]):
+        """Align TP-local Q/K/V inside their checkpoint quant shards."""
+        _, rank = self.get_tp_world_rank()
+        quant_shards = getattr(self, 'checkpoint_output_shard_sizes', None) or self.qkv_split_section
+        continuous_qkv_scales = getattr(self, 'continuous_qkv_scale_layout', False)
+        if len(logical_sections) != 3 or len(quant_shards) != 3:
+            raise ValueError('Blocked-FP8 QKV sharding requires exactly three Q/K/V sections.')
+        trailing_padding = 0
+        if continuous_qkv_scales:
+            trailing_padding = div_up(sum(logical_sections), self.block_size) * self.block_size \
+                - sum(logical_sections)
+        plans = []
+        for shard_idx, (shard_id, logical_rows, source_rows, quant_shard_rows) in enumerate(
+                zip(('q', 'k', 'v'), logical_sections, self.qkv_split_section, quant_shards)):
+            rank_idx = rank if shard_id == 'q' else rank // self.num_replicate_kv_heads
+            logical_start = rank_idx * logical_rows
+            logical_end = logical_start + logical_rows
+            if logical_end > source_rows:
+                raise ValueError(
+                    f'QKV {shard_id} TP shard [{logical_start}:{logical_end}] exceeds {source_rows} source rows.')
+            if quant_shard_rows <= 0 or source_rows % quant_shard_rows:
+                raise ValueError(
+                    f'QKV {shard_id} source rows {source_rows} must be divisible by checkpoint '
+                    f'quantization shard size {quant_shard_rows}.')
+            quant_shard_idx = logical_start // quant_shard_rows
+            quant_shard_start = quant_shard_idx * quant_shard_rows
+            quant_shard_end = quant_shard_start + quant_shard_rows
+            if logical_end > quant_shard_end:
+                raise ValueError(
+                    f'QKV {shard_id} TP shard [{logical_start}:{logical_end}] crosses checkpoint '
+                    f'quantization shard [{quant_shard_start}:{quant_shard_end}].')
+            relative_start = logical_start - quant_shard_start
+            relative_end = logical_end - quant_shard_start
+            if continuous_qkv_scales:
+                if relative_start % self.block_size:
+                    raise ValueError(
+                        f'Fused QKV {shard_id} TP shard starts at unaligned checkpoint row '
+                        f'{relative_start}; its scale blocks cannot be repacked without requantization.')
+                physical_rows = logical_rows + (trailing_padding if shard_idx == 2 else 0)
+                scales_per_quant_shard = div_up(quant_shard_rows, self.block_size)
+                scale_start = quant_shard_idx * scales_per_quant_shard + relative_start // self.block_size
+                scale_rows = div_up(logical_rows, self.block_size)
+                plans.append(
+                    _QKVShardPlan(shard_idx, logical_start, logical_rows, physical_rows, 0,
+                                  logical_rows, scale_start, scale_rows))
+                continue
+            physical_relative_start = relative_start // self.block_size * self.block_size
+            physical_relative_end = div_up(relative_end, self.block_size) * self.block_size
+            physical_rows = physical_relative_end - physical_relative_start
+            weight_start = quant_shard_start + physical_relative_start
+            weight_end = min(quant_shard_start + physical_relative_end, quant_shard_end)
+            weight_load_rows = weight_end - weight_start
+            valid_start = relative_start - physical_relative_start
+            scales_per_quant_shard = div_up(quant_shard_rows, self.block_size)
+            scale_start = quant_shard_idx * scales_per_quant_shard + physical_relative_start // self.block_size
+            scale_rows = physical_rows // self.block_size
+            plans.append(
+                _QKVShardPlan(shard_idx, weight_start, weight_load_rows, physical_rows, valid_start,
+                              logical_rows, scale_start, scale_rows))
+        if continuous_qkv_scales:
+            physical_scale_rows = div_up(sum(plan.physical_rows for plan in plans), self.block_size)
+            source_scale_rows = sum(plan.scale_rows for plan in plans)
+            if physical_scale_rows != source_scale_rows:
+                raise ValueError(
+                    'Fused QKV checkpoint scale rows do not match the packed runtime output: '
+                    f'{source_scale_rows} != {physical_scale_rows}.')
+        return tuple(plans)
+
+    def _get_output_shard(self, shard_id: Any) -> _QKVShardPlan:
+        """Return checkpoint weight/scale rows for a TP-local shard."""
+        return self._output_shard_plans[self.out_names_map[shard_id]]
+
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """Weight loader."""
-        _, rank = self.get_tp_world_rank()
-        shard_idx = self.out_names_map[shard_id]
-
-        num_head = self.num_q_heads if shard_id == 'q' \
-            else self.num_kv_heads
-        head_dim = self.head_size if shard_id in ['q', 'k'] \
-            else self.head_size_v
-        # update to duplicate k/v for tp_size > num_kv_heads
-        rank_idx = rank if shard_id == 'q' \
-            else rank // self.num_replicate_kv_heads
-        sec_len = num_head * head_dim
+        plan = self._get_output_shard(shard_id)
         all_out_features = self.all_out_features
         if param._weight_type == 'scales':
             loaded_weight = loaded_weight.to(torch.float32)
-            all_out_features = [sec // self.block_size for sec in all_out_features]
-            sec_len = sec_len // self.block_size
-
-        sec_start = rank_idx * sec_len
+            all_out_features = self.scale_split_section
+            sec_start, sec_len = plan.scale_start, plan.scale_rows
+        else:
+            sec_start, sec_len = plan.weight_start, plan.weight_load_rows
 
         loaded_weight = loaded_weight.narrow(dim=0, start=sec_start, length=sec_len)
-        param_w = param.data.split(all_out_features, 0)[shard_idx]
-        param_w.copy_(loaded_weight)
+        param_w = param.data.split(all_out_features, 0)[plan.shard_idx]
+        if param._weight_type == 'scales':
+            param_w.copy_(loaded_weight)
+        else:
+            param_w.zero_()
+            param_w.narrow(0, 0, sec_len).copy_(loaded_weight)
 
     def weight_loader_with_quant(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """Weight loader with weight quant."""
         if loaded_weight.dtype != param.dtype:
-            # quant loaded weight
-            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device),
+            if self.continuous_qkv_scale_layout:
+                raise ValueError('Fused QKV output quantization requires native blocked-FP8 checkpoint weights.')
+            plan = self._get_output_shard(shard_id)
+            physical_weight = torch.zeros((plan.physical_rows, loaded_weight.shape[1]),
+                                          dtype=loaded_weight.dtype,
+                                          device=param.device)
+            physical_weight[:plan.weight_load_rows].copy_(
+                loaded_weight.narrow(0, plan.weight_start, plan.weight_load_rows))
+            quanted_weight, scaling = quant_blocked_fp8(physical_weight,
                                                         param.dtype,
                                                         self.block_size,
                                                         scale_fmt=self.scale_fmt)
-            self.weight_loader(self.weight, quanted_weight, shard_id)
-            self.weight_loader(self.weight_scale_inv, scaling, shard_id)
+            self.weight.data.split(self.all_out_features, 0)[plan.shard_idx].copy_(quanted_weight)
+            self.weight_scale_inv.data.split(self.scale_split_section, 0)[plan.shard_idx].copy_(scaling)
         else:
             return self.weight_loader(param, loaded_weight, shard_id)
+
+    def split_qkv(self, x: torch.Tensor):
+        """Crop physical alignment rows and restore logical Q/K/V heads."""
+        physical = x.split(self.all_out_features, dim=-1)
+        q, k, v = (
+            value.narrow(-1, plan.valid_start, plan.logical_rows)
+            for value, plan in zip(physical, self._output_shard_plans)
+        )
+        q = q.unflatten(-1, (self.num_q_heads, self.head_size))
+        k = k.unflatten(-1, (self.num_kv_heads, self.head_size))
+        v = v.unflatten(-1, (self.num_kv_heads, self.head_size_v))
+        return q, k, v
 
     def weight_spliter(self, loaded_weight: torch.Tensor, layout: str = 'default'):
         """Weight spliter."""
@@ -362,5 +475,5 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
         assert layout == 'default'
         qkv_split_section = self.qkv_split_section
         if loaded_weight.dim() == 2 and loaded_weight.dtype != self.fp8_dtype:
-            qkv_split_section = [sec // self.block_size for sec in qkv_split_section]
+            qkv_split_section = [div_up(sec, self.block_size) for sec in qkv_split_section]
         return loaded_weight.split(qkv_split_section, dim=0)

@@ -218,7 +218,7 @@ class ConfigBuilder:
         """Build spec decode config."""
         def _build_draft_dist_ctx(dist_config, draft_arch):
             # TODO support tp > 1, ep > 1 for other methods
-            if speculative_config.method in ('deepseek_mtp', 'qwen3_5_mtp', 'hy3_mtp'):
+            if speculative_config.method in ('deepseek_mtp', 'hy3_mtp', 'mimo_mtp', 'qwen3_5_mtp'):
                 draft_dist_config = dist_config
             elif speculative_config.method == 'eagle3' and draft_arch == _EAGLE3_DEEPSEEK_ARCH:
                 draft_dist_config = dist_config
@@ -228,6 +228,14 @@ class ConfigBuilder:
 
         specdecode_config = None
         if speculative_config is not None:
+            if speculative_config.method == 'mimo_mtp':
+                target_hf_config = config_from_pretrained(target_model, trust_remote_code=trust_remote_code)
+                if target_hf_config.model_type != 'mimo_v2_flash':
+                    raise ValueError(
+                        f'mimo_mtp requires a MiMo-V2-Flash target, got {target_hf_config.model_type!r}.')
+                if not 1 <= speculative_config.num_speculative_tokens <= 3:
+                    raise ValueError('MiMo-V2-Flash mimo_mtp requires 1 to 3 draft tokens per step, '
+                                     f'got {speculative_config.num_speculative_tokens}.')
             draft_model = speculative_config.model
             if draft_model and not os.path.exists(speculative_config.model):
                 draft_model = get_model(draft_model, engine_config.download_dir, engine_config.revision)

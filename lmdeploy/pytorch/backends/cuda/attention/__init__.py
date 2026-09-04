@@ -7,6 +7,7 @@ from lmdeploy.pytorch.backends.attention import AttentionBuilder
 from lmdeploy.utils import get_logger
 
 from .default import TritonAttentionImpl, TritonAttentionMetadata
+from .fa3_capabilities import fa3_build_supports_head_dims
 from .v4 import TritonV4AttentionBuilder  # noqa: F401
 
 logger = get_logger('lmdeploy')
@@ -34,7 +35,11 @@ def use_fa3_warning():
 
 
 @functools.lru_cache
-def _enable_fa3(alibi: bool, learnable_sink: bool, block_sparse_size: int, head_size: int) -> bool:
+def _enable_fa3(alibi: bool,
+                learnable_sink: bool,
+                block_sparse_size: int,
+                head_size: int,
+                v_head_size: int | None = None) -> bool:
     """Check if FA3 should be enabled.
 
     FA3 is enabled when:
@@ -46,7 +51,8 @@ def _enable_fa3(alibi: bool, learnable_sink: bool, block_sparse_size: int, head_
     Returns:
         True if FA3 should be enabled, False otherwise.
     """
-    enable = not alibi and not learnable_sink and block_sparse_size == 1 and head_size <= 256
+    enable = (not alibi and not learnable_sink and block_sparse_size == 1
+              and fa3_build_supports_head_dims(head_size, v_head_size))
     if enable and not use_fa3_warning():
         enable = False
     return enable
@@ -92,6 +98,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         mla_index_topk: int | None = None,
         learnable_sink: bool = False,
         block_sparse_size: int = 1,
+        enable_fa3: bool = True,
         **kwargs,
     ) -> TritonAttentionImpl:
         """Build appropriate attention implementation.
@@ -110,6 +117,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
             mla_index_topk: Sparse MLA top-k width, or ``None`` for dense MLA.
             learnable_sink: Whether to use learnable sink tokens.
             block_sparse_size: Block sparse attention size.
+            enable_fa3: Whether this attention configuration may use FA3.
             **kwargs: Additional arguments.
 
         Returns:
@@ -131,7 +139,8 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
             causal=causal,
             **kwargs,
         )
-        enable_fa3 = _enable_fa3(alibi, learnable_sink, block_sparse_size, head_size)
+        enable_fa3 = enable_fa3 and _enable_fa3(
+            alibi, learnable_sink, block_sparse_size, head_size, v_head_size)
 
         if use_flash_mla is True:
             if mla_index_topk is not None:

@@ -125,6 +125,38 @@ def _build_decode_model_forward(model: torch.nn.Module) -> Callable[..., Any]:
     )
 
 
+def _supports_non_fa3_speculative_graph(model: torch.nn.Module) -> bool:
+    """Resolve the model capability for non-FA3 speculative Graphs."""
+    capability = getattr(model, 'supports_non_fa3_speculative_graph', None)
+    return bool(capability()) if callable(capability) else False
+
+
+def _requires_fa3_for_spec_decode(model: torch.nn.Module, model_config: ModelConfig) -> bool:
+    """Return whether this speculative model requires FA3 CUDA Graphs."""
+    return (
+        model_config.model_paradigm == 'ar_spec'
+        and not getattr(model_config, 'use_flash_mla', False)
+        and not _supports_non_fa3_speculative_graph(model)
+    )
+
+
+def _snapshot_capture_cache(cache: list[torch.Tensor], block_offsets: torch.Tensor,
+                            batch_size: int) -> tuple[torch.Tensor, list[torch.Tensor]]:
+    """Copy request-visible cache blocks before stateful graph capture."""
+    block_ids = torch.unique(block_offsets[:batch_size]).long()
+    snapshot = [tensor.index_select(0, block_ids).clone() for tensor in cache]
+    return block_ids, snapshot
+
+
+def _restore_capture_cache(cache: list[torch.Tensor], block_ids: torch.Tensor,
+                           snapshot: list[torch.Tensor]) -> None:
+    """Restore request-visible cache blocks after graph warmup/capture."""
+    if len(cache) != len(snapshot):
+        raise RuntimeError(f'CUDA Graph cache changed from {len(snapshot)} to {len(cache)} tensors during capture.')
+    for tensor, saved in zip(cache, snapshot):
+        tensor.index_copy_(0, block_ids, saved)
+
+
 class CUDASingleGraphRunner:
     """Cuda single graph runner."""
 
@@ -253,13 +285,9 @@ class CUDAGraphRunner(GraphRunner):
         self.max_batches = cache_config.max_batches
         self.num_blocks = cache_config.num_gpu_blocks
 
-        # Speculative decoding on CUDA requires FlashAttention-3 (FA3),
-        # unless the model uses FlashMLA (e.g., DeepSeek MTP) which handles
-        # multi-token decoding queries natively.
-        # FA3 is available on SM80+ (Ampere and above) GPUs with CUDA >= 12.3.
-        # Without FA3, the Triton paged attention kernel cannot handle
-        # multi-token decoding queries (max_q_seqlen > 1) used in spec decoding.
-        if model_config.model_paradigm == 'ar_spec' and not getattr(model_config, 'use_flash_mla', False):
+        # Most speculative models require FA3 for multi-token decode. Models
+        # with a validated alternative backend may opt out explicitly.
+        if _requires_fa3_for_spec_decode(model, model_config):
             from .attention import use_fa3
             if not use_fa3:
                 sm = torch.cuda.get_device_capability()
@@ -375,7 +403,29 @@ class CUDAGraphRunner(GraphRunner):
                 model_config=self.model_config,
                 device=self.device,
             )
-            output = runner.capture(**kwargs)
+            cache = self.model.get_cudagraph_capture_cache(
+                kwargs['past_key_values'], spec_step_idx=int(kwargs.get('spec_step_idx', 0)))
+            cache_snapshot = None
+            if cache is not None:
+                runtime_meta = kwargs['attn_metadata']
+                batch_size = runtime_meta.q_seqlens.numel()
+                block_ids, cache_snapshot = _snapshot_capture_cache(
+                    cache, runtime_meta.block_offsets, batch_size)
+            try:
+                output = runner.capture(**kwargs)
+            finally:
+                if cache_snapshot is not None:
+                    # Warmup and capture both execute the model. Always undo
+                    # their writes, including when capture raises.
+                    _restore_capture_cache(cache, block_ids, cache_snapshot)
+            if cache_snapshot is not None:
+                try:
+                    # Perform exactly one semantic forward from the restored
+                    # state before making the captured graph discoverable.
+                    output = runner.forward(**kwargs)
+                except Exception:
+                    _restore_capture_cache(cache, block_ids, cache_snapshot)
+                    raise
             self._runner_map[graph_key] = runner
             # SSM would update the state in capture(warmup), replay the graph will leads unexpected state update.
             return output

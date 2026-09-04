@@ -165,6 +165,10 @@ class _DummyProposer:
     def __init__(self):
         self.get_outputs_calls = 0
         self.update_inputs_decoding_calls = 0
+        self.advance_draft_depth_calls = 0
+        self.advance_extra_inputs = []
+        self.next_extra_inputs = object()
+        self.next_depth_dp_num_tokens = None
         self.model = _DummyDraftModel()
 
     async def get_outputs(self, outputs, inputs, extra_inputs=None, guided_processors=None):
@@ -187,6 +191,34 @@ class _DummyProposer:
             target_hidden_states=target_hidden_states,
             model_metas=model_metas,
         )
+
+    def advance_draft_depth(self,
+                            inputs,
+                            extra_inputs,
+                            draft_token_ids,
+                            target_hidden_states,
+                            model_metas,
+                            *,
+                            first_depth):
+        """Mirror the default recurrent draft transition for agent tests."""
+        self.advance_draft_depth_calls += 1
+        self.advance_extra_inputs.append(extra_inputs)
+        if first_depth:
+            inputs = self.update_inputs_decoding(inputs, extra_inputs, draft_token_ids.transpose(0, 1),
+                                                 target_hidden_states, model_metas)
+            extra_inputs.last_token_indices = None
+        else:
+            step_seqlens = inputs.seq_length.new_ones(inputs.seq_length.size(0))
+            inputs = inputs.step(draft_token_ids.transpose(0, 1), step_seqlens)
+            inputs.model_metas = model_metas
+            inputs.target_hidden_states = target_hidden_states
+        return inputs, self.next_extra_inputs
+
+    def get_draft_depth_token_counts(self, dp_meta):
+        """Return the configured depth layout or the recurrent default."""
+        if self.next_depth_dp_num_tokens is not None:
+            return self.next_depth_dp_num_tokens
+        return dp_meta.dp_batches
 
 
 def test_guided_serial_bitmask_updates_inference_tensor():
@@ -536,6 +568,7 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
     assert forward_calls == 1
     assert agent.proposer.get_outputs_calls == 0
     assert agent.proposer.update_inputs_decoding_calls == 0
+    assert agent.proposer.advance_draft_depth_calls == 0
 
 
 def test_async_model_forward_dp_non_last_chunk_pads_block_offsets(monkeypatch):
@@ -571,6 +604,8 @@ def test_async_model_forward_dp_non_last_chunk_pads_block_offsets(monkeypatch):
     assert forward_calls == agent.num_spec_tokens
     assert agent.proposer.get_outputs_calls == agent.num_spec_tokens
     assert agent.proposer.update_inputs_decoding_calls == 1
+    assert agent.proposer.advance_draft_depth_calls == agent.num_spec_tokens - 1
+    assert agent.proposer.advance_extra_inputs == [extra_inputs, agent.proposer.next_extra_inputs]
     assert agent.proposer.model.update_inputs_calls == agent.num_spec_tokens - 1
     assert forwarded_inputs[0] is inputs
     assert [inp.block_offsets.size(1) for inp in forwarded_inputs] == [1, 2, 2]
@@ -607,6 +642,40 @@ def test_async_model_forward_preserves_dp_global_decoding_in_draft_loop(monkeypa
     asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
 
     assert agent.proposer.model.update_inputs_dp_is_decoding == [True, True]
+
+
+def test_async_model_forward_uses_proposer_dp_token_layout(monkeypatch):
+    """Draft architectures may preserve varlen tokens across MTP depths."""
+    import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
+    from lmdeploy.pytorch.model_inputs import DPMeta
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    build_num_tokens = []
+
+    def _build(seqlen, num_tokens):
+        build_num_tokens.append(list(num_tokens))
+        return DPMeta()
+
+    monkeypatch.setattr(spec_agent_mod.DPMeta, 'build', staticmethod(_build))
+    dp_meta = DPMeta(
+        dp_batches=[1, 1],
+        dp_is_decoding=False,
+        dp_draft_num_tokens=[5, 9],
+    )
+    inputs, extra_inputs = _make_non_last_chunk_inputs(dp_meta=dp_meta)
+    inputs.is_chunk = False
+
+    agent = object.__new__(SpecModelAgent)
+    agent.num_spec_tokens = 3
+    agent.rank = 0
+    agent.proposer = _DummyProposer()
+    agent.proposer.next_depth_dp_num_tokens = [5, 9]
+    agent.guided_helper = GuidedSpecHelper()
+    agent._forward_impl = lambda _inputs: {}
+
+    asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+
+    assert build_num_tokens == [[5, 9]]
 
 
 def test_spec_model_agent_warmup_adds_dp_meta_for_draft_capture(monkeypatch):
@@ -648,6 +717,12 @@ def test_spec_model_agent_warmup_adds_dp_meta_for_draft_capture(monkeypatch):
 
         def get_capture_batch_sizes(self):
             return [2]
+
+        def get_model(self):
+            return self
+
+        def get_cudagraph_warmup_specs(self, max_query_len):
+            return ((max_query_len, 0), (1, 0))
 
     class DummyProposer:
 

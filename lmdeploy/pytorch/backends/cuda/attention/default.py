@@ -126,6 +126,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         logit_softcapping: float = 0.0,
         causal: bool = True,
         block_sparse_size: int = 1,
+        enable_paged_multi_token_decode: bool = False,
         **kwargs,
     ):
         super().__init__(
@@ -156,6 +157,10 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         self.flash_attention_fwd = flash_attn_varlen_func
 
         self.block_sparse_size = block_sparse_size
+        self.supports_paged_multi_token_decode = (
+            enable_paged_multi_token_decode
+            or getattr(type(self), 'supports_paged_multi_token_decode', False)
+        )
         self._step_meta_group: int | None = None
 
         register_step_metadata_impl(self)
@@ -188,6 +193,9 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
     ) -> int:
         """Get max q seqlen."""
         if attn_metadata.is_decoding:
+            if self.supports_paged_multi_token_decode:
+                batch_size = attn_metadata.block_offsets.size(0)
+                return query.size(0) // batch_size
             max_q_seqlen = self.block_sparse_size
         else:
             if attn_metadata.max_q_seqlen is not None:
@@ -293,6 +301,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             quant_policy=quant_policy,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
+            causal_multi_token=self.supports_paged_multi_token_decode and max_q_seqlen > 1,
         )
         return attn_output
 
@@ -418,6 +427,10 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         Returns:
             Attention output tensor.
         """
+        kernel_metadata = self.get_step_kernel_metadata(attn_metadata)
+        if kernel_metadata is not None:
+            attn_metadata = kernel_metadata
+
         # Shared preparation
         max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
 
