@@ -113,7 +113,7 @@ git pull upstream main
   pytest tests/test_runner/test_runner.py
   ```
 
-  If the unit test fails for lack of dependencies, you can install the dependencies referring to the [guidance](#unit-test)
+  If the unit test fails for lack of dependencies, you can install the dependencies referring to the [guidance](#4-commit-the-code-and-pass-the-unit-test)
 
 - If the documents are modified/added, we should check the rendering result referring to [guidance](#document-rendering)
 
