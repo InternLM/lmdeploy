@@ -5,11 +5,31 @@ from types import SimpleNamespace
 import torch
 
 from lmdeploy.messages import QuantPolicy
-from lmdeploy.pytorch.backends.cuda.attention.default import TritonAttentionMetadata
+from lmdeploy.pytorch.backends.cuda.attention import TritonAttentionBuilder
+from lmdeploy.pytorch.backends.cuda.attention.default import TritonAttentionImpl, TritonAttentionMetadata
 from lmdeploy.pytorch.backends.cuda.attention.fa3 import FA3Impl
 
 _BLOCK_SIZE = 16
 _PREFILL_SEQLENS = (29, 18)
+
+
+def test_attention_builder_falls_back_when_fa3_lacks_asymmetric_head_shape(monkeypatch):
+    """Avoid dispatching a head shape omitted from the installed FA3 wheel."""
+    import lmdeploy.pytorch.backends.cuda.attention as attention_mod
+
+    flags = {
+        'FLASHATTENTION_DISABLE_HDIM192': False,
+        'FLASH_ATTENTION_DISABLE_HDIMDIFF192': True,
+    }
+    monkeypatch.setitem(sys.modules, 'flash_attn_config', SimpleNamespace(CONFIG={'build_flags': flags}))
+    monkeypatch.setattr(attention_mod, 'use_fa3_warning', lambda: True)
+    attention_mod._enable_fa3.cache_clear()
+    try:
+        impl = TritonAttentionBuilder.build(num_heads=8, head_size=192, num_kv_heads=2, v_head_size=128)
+    finally:
+        attention_mod._enable_fa3.cache_clear()
+
+    assert type(impl) is TritonAttentionImpl
 
 
 def _make_prefill_metadata(q_seqlens, block_offsets):

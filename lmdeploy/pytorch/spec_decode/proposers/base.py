@@ -135,7 +135,47 @@ class BaseSpecProposer:
             mrope_pos_ids=mrope_pos_ids,
             target_hidden_states=target_hidden_states,
             model_metas=model_metas,
+            spec_step_idx=model_inputs.spec_step_idx + 1,
         )
+
+    def advance_draft_depth(self,
+                            model_inputs: ModelInputs,
+                            extra_inputs: ExtraInputs | None,
+                            next_input_ids: torch.Tensor,
+                            target_hidden_states: torch.Tensor,
+                            model_metas: list[Any],
+                            *,
+                            first_depth: bool) -> tuple[ModelInputs, ExtraInputs | None]:
+        """Advance recurrent draft state to the next speculative depth.
+
+        The first transition converts target-model inputs into compact draft decoding inputs. Later transitions advance
+        those decoding inputs by one token. Subclasses may override this transition for architectures whose draft depths
+        do not follow autoregressive time.
+        """
+        if first_depth:
+            if extra_inputs is None:
+                raise ValueError('The first draft-depth transition requires extra inputs.')
+            model_inputs = self.update_inputs_decoding(model_inputs, extra_inputs, next_input_ids.transpose(0, 1),
+                                                       target_hidden_states, model_metas)
+            # Compact recurrent inputs contain one row per request, so later
+            # draft outputs no longer require last-token selection.
+            extra_inputs.last_token_indices = None
+        else:
+            step_seqlens = model_inputs.seq_length.new_ones(model_inputs.seq_length.size(0))
+            model_inputs = model_inputs.step(next_input_ids.transpose(0, 1), step_seqlens)
+            model_inputs.model_metas = model_metas
+            model_inputs.target_hidden_states = target_hidden_states
+            if model_inputs.target_position_ids is not None:
+                model_inputs.target_position_ids += 1
+        return model_inputs, None
+
+    def get_draft_depth_token_counts(self, dp_meta) -> list[int]:
+        """Return per-rank token counts after advancing a draft depth.
+
+        Recurrent draft models compact the next depth to one token per active request, so the DP batch counts are also
+        the token counts. Draft architectures that retain a varlen sequence across depths may override this contract.
+        """
+        return dp_meta.dp_batches
 
     def embed_input_ids(self, input_ids: torch.Tensor):
         """embed_input_ids."""

@@ -14,4 +14,10 @@ class ARSpecCudagraphStrategy(CudagraphStrategy):
         if num_tokens == origin_batch_size:
             return batch_size
 
+        if self.method == 'mimo_mtp':
+            if num_tokens % origin_batch_size != 0:
+                raise ValueError('MiMo MTP CUDA Graph requires a uniform query length per batch.')
+            query_len = num_tokens // origin_batch_size
+            return batch_size * query_len
+
         return batch_size * (self.num_spec_tokens + 1)

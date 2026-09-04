@@ -233,6 +233,8 @@ class ModelInputs:
     logits_indices: torch.LongTensor | None = None
     # Number of compact logprob rows emitted for each sequence.
     seq_logit_length: torch.LongTensor | None = None
+    # Prediction-depth index for multi-layer MTP draft models.
+    spec_step_idx: int = 0
     is_chunk: bool = False
     is_first_chunk: bool = False
     is_last_chunk: bool = False
@@ -261,6 +263,7 @@ class ModelInputs:
             sum_kv_seqlen=self.sum_kv_seqlen + self.max_q_seqlen * self.seq_length.numel(),
             logits_indices=None,
             seq_logit_length=None,
+            spec_step_idx=self.spec_step_idx + 1,
             mrope_pos_ids=mrope_pos_ids,
         )
 
@@ -345,6 +348,7 @@ class StepContext:
     # for draft model
     target_hidden_states: torch.Tensor | None = None
     target_inputs_embeds: torch.Tensor | None = None
+    spec_step_idx: int = 0
 
     # states for ssm
     state_caches: list | None = None
@@ -430,6 +434,7 @@ class StepContext:
             state_offsets=inputs.state_offsets,
             target_hidden_states=inputs.target_hidden_states,
             target_inputs_embeds=inputs.target_inputs_embeds,
+            spec_step_idx=inputs.spec_step_idx,
             mrope_position_ids=inputs.mrope_pos_ids,
             is_chunk_multimodal=inputs.is_chunk_multimodal,
             is_dummy=inputs.is_dummy,

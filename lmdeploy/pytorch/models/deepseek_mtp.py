@@ -284,6 +284,7 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
             target_hidden_states=target_hidden_states,
+            spec_step_idx=context.spec_step_idx,
         )
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],

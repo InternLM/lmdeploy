@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import copy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -53,9 +54,32 @@ class CudaGraphMeta:
 class CudaGraphMixin:
     """Mixin class to support cudagraph."""
 
+    def get_cudagraph_warmup_specs(self, max_query_len: int) -> tuple[tuple[int, int], ...]:
+        """Return query-length and speculative-depth pairs to pre-capture.
+
+        Recurrent draft models use one graph for multi-token verification and one graph for single-token drafting.
+        Models with depth-specific graph state may override this method to enumerate every runtime pair.
+        """
+        return ((max_query_len, 0), (1, 0))
+
+    def supports_non_fa3_speculative_graph(self) -> bool:
+        """Return whether speculative CUDA Graph can use a non-FA3 backend."""
+        return False
+
     def get_cudagraph_extra_key(self, **kwargs) -> tuple:
         """Get model-specific CUDA graph keys."""
         return ()
+
+    def get_cudagraph_capture_cache(self,
+                                    past_key_values: list[list[torch.Tensor]],
+                                    **kwargs) -> list[torch.Tensor] | None:
+        """Return mutable cache tensors that capture must preserve.
+
+        Stateful models may opt in by returning the cache tensors touched by Graph warmup and capture. The runner
+        snapshots only request-visible blocks and restores them before the first semantic replay.
+        """
+        del past_key_values, kwargs
+        return None
 
     def support_cuda_graph(
         self,
@@ -176,6 +200,11 @@ class CudaGraphMixin:
         q_start_loc: Tensor = attn_metadata.q_start_loc
         q_seqlens: Tensor = attn_metadata.q_seqlens
         kv_seqlens: Tensor = attn_metadata.kv_seqlens
+        # Redirect only the metadata view passed to the captured model.  A
+        # graph is replayed once immediately after capture; mutating the
+        # caller-owned object here would make that replay read graph buffers
+        # as its source, then erase them with the zero_ calls below.
+        attn_metadata = copy.copy(attn_metadata)
         input_buffers: BuffType = graph_meta.input_buffers
 
         num_tokens = input_ids.size(-1)
