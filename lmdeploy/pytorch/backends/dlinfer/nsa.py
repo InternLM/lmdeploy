@@ -16,7 +16,7 @@ logger = get_logger('lmdeploy')
 
 @dataclass
 class DlinferNSAIndexMeta(NSAIndexMeta):
-    """dlinfer-specific NSA metadata for Ascend cache writes."""
+    """Dlinfer-specific NSA metadata for Ascend cache writes."""
 
     kv_start_indices: Tensor | None = None
 
