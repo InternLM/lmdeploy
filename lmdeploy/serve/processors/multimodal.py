@@ -220,8 +220,8 @@ class MultimodalProcessor:
                                **kwargs):
         """Process prompt and return prompt string and input_ids.
 
-        Handles both text-only and multimodal prompts. If multimodal input is detected
-        and vl_encoder is available, processes images accordingly.
+        Handles both text-only and multimodal prompts. Multimodal input is
+        rejected when no vision encoder is available.
 
         Args:
             prompt: Input prompt as string or list of message dicts.
@@ -237,6 +237,9 @@ class MultimodalProcessor:
         Returns:
             dict with 'prompt' (str) and 'input_ids' (list[int]) keys for text-only,
             or dict with multimodal data for multimodal prompts.
+
+        Raises:
+            ValueError: If multimodal input is provided to a text-only model.
         """
         # Handle string input
         if isinstance(prompt, str):
@@ -253,8 +256,11 @@ class MultimodalProcessor:
             # Check if multimodal input exists
             has_multimodal_input = self._has_multimodal_input(prompt)
 
-            # If no multimodal input or no vl_encoder, use text-only processing
-            if not has_multimodal_input or self.vl_encoder is None:
+            if has_multimodal_input and self.vl_encoder is None:
+                raise ValueError('Multimodal input is not supported by this model.')
+
+            # If no multimodal input, use text-only processing
+            if not has_multimodal_input:
                 return await self._get_text_prompt_input(prompt=prompt,
                                                          do_preprocess=do_preprocess,
                                                          adapter_name=adapter_name,
@@ -276,7 +282,7 @@ class MultimodalProcessor:
             raise RuntimeError(f'unsupported prompt type: {type(prompt)}')
 
     @staticmethod
-    def format_prompts(prompts: Any, allowed_media_domains: list[str] | None = None) -> list[dict]:
+    def format_prompts(prompts: Any) -> list[dict]:
         """Format prompts."""
         if not isinstance(prompts, list):
             prompts = [prompts]
@@ -289,8 +295,7 @@ class MultimodalProcessor:
         if all(MultimodalProcessor._is_str_images_pair(prompt) for prompt in prompts):
             # batch of (prompt, image or [images]) or (image or [images], prompt) ->
             # [[openai_gpt4v_message], [openai_gpt4v_message], ...]
-            return [[MultimodalProcessor._re_format_prompt_images_pair(prompt, allowed_media_domains)]
-                    for prompt in prompts]
+            return [[MultimodalProcessor._re_format_prompt_images_pair(prompt)] for prompt in prompts]
         raise ValueError(f'Unsupported prompts: {prompts}. Only support str, openai message format, '
                          'or (prompt, image or [images]) or (image or [images], prompt) pair.')
 
@@ -321,7 +326,7 @@ class MultimodalProcessor:
         return isinstance(obj, list) and all(MultimodalProcessor._is_image(img) for img in obj)
 
     @staticmethod
-    def _re_format_prompt_images_pair(prompt: tuple, allowed_media_domains: list[str] | None = None) -> dict:
+    def _re_format_prompt_images_pair(prompt: tuple) -> dict:
         """Reformat the prompt to openai message format."""
         messages = {'role': 'user', 'content': []}
         prompt, images = prompt
@@ -335,8 +340,7 @@ class MultimodalProcessor:
             # 'image_url': means url or local path to image.
             # 'image_data': means PIL.Image.Image object.
             if isinstance(image, str):
-                image = load_from_url(image, ImageMediaIO(), allowed_media_domains=allowed_media_domains)
-                item = {'type': 'image_data', 'image_data': {'data': image}}
+                item = {'type': 'image_url', 'image_url': {'url': image}}
             elif isinstance(image, PIL.Image.Image):
                 item = {'type': 'image_data', 'image_data': {'data': image}}
             else:
