@@ -47,15 +47,6 @@ class IndexerTopKFP8(nn.Module):
             return block_caches.row(binding.cache_name, binding.consumer_row)
         return block_caches[binding.cache_name][binding.consumer_row]
 
-    @property
-    def supports_fused_preprocess(self) -> bool:
-        """Whether the selected backend has fused indexer preprocessing."""
-        return self.index_impl.supports_fused_preprocess
-
-    @property
-    def requires_unfused_hadamard(self) -> bool:
-        """Whether the unfused backend expects Hadamard-rotated Q/K."""
-        return self.index_impl.requires_unfused_hadamard
     def forward(
         self,
         q: Tensor,

@@ -10,7 +10,6 @@ from lmdeploy.pytorch.model_inputs import StepContextManager, get_step_ctx_manag
 from lmdeploy.pytorch.nn import ApplyRotaryEmb
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
 from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8
-from lmdeploy.utils import get_logger
 
 from .deepseek_v2 import DeepseekV2MoE
 from .deepseek_v32 import (
@@ -22,8 +21,6 @@ from .deepseek_v32 import (
     rotate_activation,
 )
 from .patch import get_build_model_context
-
-logger = get_logger('lmdeploy')
 
 
 def _get_layer_indexer_type(config: Any, layer_idx: int | None) -> str:
@@ -42,18 +39,6 @@ def _get_layer_idx_from_weight_name(name: str) -> int | None:
         except ValueError:
             return None
     return None
-
-
-def _resolve_dsa_indexer_fusion(indexer_topk: IndexerTopKFP8) -> bool:
-    """Resolve the requested fusion mode against backend capabilities."""
-    fusion_requested = not _envs.disable_dsa_indexer_fusion
-    fusion_supported = indexer_topk.supports_fused_preprocess
-    if fusion_requested and not fusion_supported:
-        backend_impl = type(indexer_topk.index_impl).__name__
-        logger.warning(
-            'DSA indexer fused preprocessing was requested but is not '
-            f'supported by {backend_impl}; falling back to the unfused path.')
-    return fusion_requested and fusion_supported
 
 
 class GlmMoeDsaIndexer(nn.Module):
@@ -89,8 +74,7 @@ class GlmMoeDsaIndexer(nn.Module):
                                            fill=-1,
                                            # MTP may reuse its first iteration's indices in later drafts.
                                            allow_short_prefill_scoring_skip=layer_idx < config.num_hidden_layers)
-        self.use_fusion = _resolve_dsa_indexer_fusion(self.indexer_topk)
-        self.use_unfused_hadamard = self.indexer_topk.requires_unfused_hadamard
+        self.use_fusion = not _envs.disable_dsa_indexer_fusion
         if self.use_fusion:
             self.wk_weights_proj = build_colwise_linear(self.dim,
                                                         self.head_dim + self.n_heads,
@@ -156,9 +140,8 @@ class GlmMoeDsaIndexer(nn.Module):
         q_pe, k_pe = self._apply_rotary_pos_emb(q_pe, k_pe, freqs_cis)
         q = torch.cat([q_pe, q_nope], dim=-1)
         k = torch.cat([k_pe[0], k_nope[0, :, None]], dim=-1)
-        if self.use_unfused_hadamard:
-            q = rotate_activation(q)
-            k = rotate_activation(k)
+        q = rotate_activation(q)
+        k = rotate_activation(k)
         weights = self.weights_proj(x) * self.n_heads**-0.5
         return self.indexer_topk(q[0],
                                  k[:, 0],
