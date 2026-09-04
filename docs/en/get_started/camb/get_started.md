@@ -3,7 +3,7 @@
 The usage of lmdeploy on a Cambricon device is almost the same as its usage on CUDA with PytorchEngine in lmdeploy.
 Please read the original [Get Started](../get_started.md) guide before reading this tutorial.
 
-Here is the [supported model list](../../supported_models/supported_models.md#PyTorchEngine-on-Other-Platforms).
+Here is the [supported model list](../../supported_models/supported_models.md#pytorchengine-on-other-platforms).
 
 > \[!IMPORTANT\]
 > We have uploaded a docker image to aliyun.
