@@ -40,7 +40,7 @@ def make_tensors(torch_tensor):
     tm_dst: contiguous turbomind Tensor initialized with garbage (to detect copy bugs)
     golden: contiguous torch tensor with the expected result
     """
-    tm_src = _tm.from_dlpack_with_strides(torch_tensor)
+    tm_src = _tm.from_dlpack(torch_tensor)
 
     # Allocate an uninitialized destination to detect copy failures
     contig = torch_tensor.contiguous()

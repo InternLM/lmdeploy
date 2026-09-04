@@ -27,7 +27,7 @@ from .reference import (
 REQUIRED_NATIVE_BRIDGE_SYMBOLS = (
     'delta_rule_plan',
     'delta_rule_run',
-    'from_dlpack_with_strides',
+    'from_dlpack',
     'delta_rule_prepare_state_tma_descs',
 )
 
@@ -55,7 +55,7 @@ class NativeBridge:
     tm: object
 
     def tensor(self, x: torch.Tensor | None):
-        return None if x is None else self.tm.from_dlpack_with_strides(x)
+        return None if x is None else self.tm.from_dlpack(x)
 
     def plan(
         self,

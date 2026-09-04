@@ -153,22 +153,22 @@ class LinearFixture:
             if case.weight_type == 'fp8_e4m3':
                 raw_weight = torch.empty_like(source, dtype=torch.float8_e4m3fn)
                 raw_scales = torch.empty(((output_dim + 127) // 128, (case.input_dim + 127) // 128), dtype=torch.float32, device=self.device)
-                tm.QuantizeSymmBlock(out=tm.from_dlpack_with_strides(raw_weight), scale=tm.from_dlpack_with_strides(raw_scales), src=tm.from_dlpack_with_strides(source))
-                tm.DequantizeSymmBlock(out=tm.from_dlpack_with_strides(dequant), src=tm.from_dlpack_with_strides(raw_weight), scale=tm.from_dlpack_with_strides(raw_scales))
+                tm.QuantizeSymmBlock(out=tm.from_dlpack(raw_weight), scale=tm.from_dlpack(raw_scales), src=tm.from_dlpack(source))
+                tm.DequantizeSymmBlock(out=tm.from_dlpack(dequant), src=tm.from_dlpack(raw_weight), scale=tm.from_dlpack(raw_scales))
                 return raw_weight, raw_scales, None, original, dequant.t()
 
             if case.weight_type == 'uint4':
                 raw_weight = torch.empty((output_dim, case.input_dim // 8), dtype=torch.int32, device=self.device)
-                quant = tm.from_dlpack(raw_weight, [output_dim, case.input_dim], tm.DataType.TYPE_UINT4)
+                quant = tm.from_dlpack(raw_weight).reinterpret(tm.DataType.TYPE_UINT4, [output_dim, case.input_dim])
                 raw_scales = torch.empty((output_dim, case.input_dim // case.group_size), dtype=dtype, device=self.device)
                 raw_zeros = torch.empty_like(raw_scales)
-                tm.QuantizeGroupwise(quant=quant, scales=tm.from_dlpack_with_strides(raw_scales), zeros=tm.from_dlpack_with_strides(raw_zeros), dequant=tm.from_dlpack_with_strides(dequant), src=tm.from_dlpack_with_strides(source), group_size=case.group_size)
+                tm.QuantizeGroupwise(quant=quant, scales=tm.from_dlpack(raw_scales), zeros=tm.from_dlpack(raw_zeros), dequant=tm.from_dlpack(dequant), src=tm.from_dlpack(source), group_size=case.group_size)
                 return raw_weight, raw_scales, None, original, dequant.t()
 
             raw_blocks = torch.empty((output_dim, case.input_dim // 32, 16), dtype=torch.uint8, device=self.device)
-            quant = tm.from_dlpack(raw_blocks, [output_dim, case.input_dim], tm.DataType.TYPE_FP4_E2M1)
+            quant = tm.from_dlpack(raw_blocks).reinterpret(tm.DataType.TYPE_FP4_E2M1, [output_dim, case.input_dim])
             raw_scales = torch.empty((output_dim, case.input_dim // 32), dtype=torch.uint8, device=self.device)
-            tm.QuantizeGroupwise(quant=quant, scales=tm.from_dlpack_with_strides(raw_scales), zeros=None, dequant=tm.from_dlpack_with_strides(dequant), src=tm.from_dlpack_with_strides(source), group_size=32)
+            tm.QuantizeGroupwise(quant=quant, scales=tm.from_dlpack(raw_scales), zeros=None, dequant=tm.from_dlpack(dequant), src=tm.from_dlpack(source), group_size=32)
             return raw_blocks, raw_scales, None, original, dequant.t()
 
     def _build_weights(self) -> None:
@@ -263,8 +263,8 @@ class LinearFixture:
         x_dequant = torch.empty_like(x)
         tm = _tm
         with self._quantization_context():
-            tm.QuantizeSymm(out=tm.from_dlpack_with_strides(x_quant), scale=tm.from_dlpack_with_strides(x_scales), src=tm.from_dlpack_with_strides(x))
-            tm.DequantizeSymm(out=tm.from_dlpack_with_strides(x_dequant), src=tm.from_dlpack_with_strides(x_quant), scale=tm.from_dlpack_with_strides(x_scales))
+            tm.QuantizeSymm(out=tm.from_dlpack(x_quant), scale=tm.from_dlpack(x_scales), src=tm.from_dlpack(x))
+            tm.DequantizeSymm(out=tm.from_dlpack(x_dequant), src=tm.from_dlpack(x_quant), scale=tm.from_dlpack(x_scales))
         self.x_original = x_quant
         self.x_dequant = x_dequant
         self.input_scales = x_scales
@@ -358,7 +358,7 @@ class LinearFixture:
         self.d_quant = torch.empty(output.shape, dtype=self._torch_dtype(), device=self.device)
         tm = _tm
         with self._quantization_context():
-            tm.DequantizeSymm(out=tm.from_dlpack_with_strides(self.d_quant), src=tm.from_dlpack_with_strides(output), scale=tm.from_dlpack_with_strides(output_scales))
+            tm.DequantizeSymm(out=tm.from_dlpack(self.d_quant), src=tm.from_dlpack(output), scale=tm.from_dlpack(output_scales))
 
     def tune(self) -> None:
         case = self.case

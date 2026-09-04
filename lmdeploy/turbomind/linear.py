@@ -179,7 +179,7 @@ class Linear:
     def _copy_param(self, impl, name, src, *, logical_shape, logical_dtype, stream):
         """Allocate a native parameter and copy its source bytes on the active stream."""
         dst = impl.param(name).alloc(logical_shape, logical_dtype)
-        _tm.copy_bytes_on_stream(src, dst, stream.cuda_stream)
+        dst.copy_from(src, stream.cuda_stream)
 
     def _prepare_one(self, normalized, *, weight_format, plan, dtype, stored_output_dim, stream):
         """Allocate and pack one normalized weight with a selected native plan."""
@@ -309,7 +309,7 @@ class Linear:
     def get_exec_plan(self, x: torch.Tensor, weight: Weight, *, offsets: torch.Tensor | None = None, indices: torch.Tensor | None = None) -> ExecPlan:
         """Select an immutable execution plan for an input and prepared weight."""
         tm = _tm
-        impl = self._impl.get_exec_plan(weight._impl, tm.from_dlpack_with_strides(x), None if indices is None else tm.from_dlpack_with_strides(indices), None if offsets is None else tm.from_dlpack_with_strides(offsets))
+        impl = self._impl.get_exec_plan(weight._impl, tm.from_dlpack(x), None if indices is None else tm.from_dlpack(indices), None if offsets is None else tm.from_dlpack(offsets))
         if impl is None:
             raise NotImplementedError('no GEMM kernel accepts the execution problem')
         exec_plan = ExecPlan()
@@ -328,27 +328,27 @@ class Linear:
         """Execute a dense linear operation with an explicit execution plan."""
         with self._activate():
             out, out_scales = self._allocate_output(exec_plan._impl, out, out_scales)
-            self._impl.forward_dense(exec_plan._impl, _tm.from_dlpack_with_strides(x), weight._impl, _tm.from_dlpack_with_strides(out), None if input_scales is None else _tm.from_dlpack_with_strides(input_scales), None if out_scales is None else _tm.from_dlpack_with_strides(out_scales))
+            self._impl.forward_dense(exec_plan._impl, _tm.from_dlpack(x), weight._impl, _tm.from_dlpack(out), None if input_scales is None else _tm.from_dlpack(input_scales), None if out_scales is None else _tm.from_dlpack(out_scales))
         return out, out_scales
 
     def forward_moe(self, x: torch.Tensor, weight: Weight, *, exec_plan: ExecPlan, offsets: torch.Tensor, out: torch.Tensor | None = None, indices: torch.Tensor | None = None, input_scales: torch.Tensor | None = None, out_scales: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Execute a grouped linear operation with optional indexed input."""
         with self._activate():
             out, out_scales = self._allocate_output(exec_plan._impl, out, out_scales)
-            self._impl.forward_moe(exec_plan._impl, _tm.from_dlpack_with_strides(x), weight._impl, None if indices is None else _tm.from_dlpack_with_strides(indices), _tm.from_dlpack_with_strides(offsets), _tm.from_dlpack_with_strides(out), None if input_scales is None else _tm.from_dlpack_with_strides(input_scales), None if out_scales is None else _tm.from_dlpack_with_strides(out_scales))
+            self._impl.forward_moe(exec_plan._impl, _tm.from_dlpack(x), weight._impl, None if indices is None else _tm.from_dlpack(indices), _tm.from_dlpack(offsets), _tm.from_dlpack(out), None if input_scales is None else _tm.from_dlpack(input_scales), None if out_scales is None else _tm.from_dlpack(out_scales))
         return out, out_scales
 
     def tune(self, x: torch.Tensor, weight: Weight, *, offsets: torch.Tensor | None = None, indices: torch.Tensor | None = None, out: torch.Tensor | None = None, input_scales: torch.Tensor | None = None, out_scales: torch.Tensor | None = None) -> tuple[ExecPlan, torch.Tensor, torch.Tensor | None]:
         """Measure feasible kernels and return the selected execution plan and outputs."""
         tm = _tm
-        input_impl = tm.from_dlpack_with_strides(x)
-        indices_impl = None if indices is None else tm.from_dlpack_with_strides(indices)
-        offsets_impl = None if offsets is None else tm.from_dlpack_with_strides(offsets)
-        input_scales_impl = None if input_scales is None else tm.from_dlpack_with_strides(input_scales)
+        input_impl = tm.from_dlpack(x)
+        indices_impl = None if indices is None else tm.from_dlpack(indices)
+        offsets_impl = None if offsets is None else tm.from_dlpack(offsets)
+        input_scales_impl = None if input_scales is None else tm.from_dlpack(input_scales)
         with self._activate():
             output_spec = self._impl._get_output_spec(weight._impl, input_impl, indices_impl)
             out, out_scales = self._allocate_output(output_spec, out, out_scales)
-            impl = self._impl.tune(input_impl, weight._impl, indices_impl, offsets_impl, tm.from_dlpack_with_strides(out), input_scales_impl, None if out_scales is None else tm.from_dlpack_with_strides(out_scales))
+            impl = self._impl.tune(input_impl, weight._impl, indices_impl, offsets_impl, tm.from_dlpack(out), input_scales_impl, None if out_scales is None else tm.from_dlpack(out_scales))
         if impl is None:
             raise NotImplementedError('no GEMM kernel accepts the execution problem')
         exec_plan = ExecPlan()
