@@ -6,6 +6,7 @@ from .internlm2_tool_parser import Internlm2ToolParser
 from .interns2preview_tool_parser import InternS2PreviewToolParser
 from .kimi_k2_tool_parser import KimiK2ToolParser
 from .llama3_tool_parser import Llama3JsonToolParser
+from .mimo_tool_parser import MiMoToolParser
 from .qwen2d5_tool_parser import Qwen2d5ToolParser
 from .qwen3_tool_parser import Qwen3ToolParser
 from .qwen3coder_tool_parser import Qwen3CoderToolParser
@@ -21,6 +22,7 @@ __all__ = [
     'Glm47ToolParser',
     'Internlm2ToolParser',
     'Llama3JsonToolParser',
+    'MiMoToolParser',
     'Qwen2d5ToolParser',
     'Qwen3ToolParser',
     'Qwen3CoderToolParser',

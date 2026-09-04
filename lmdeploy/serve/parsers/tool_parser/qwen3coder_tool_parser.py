@@ -103,7 +103,7 @@ class Qwen3CoderToolParser(XmlToolParser):
         if val_end == -1:
             self._in_progress_value = True
             return False
-        param_val_str = content[self._value_start:val_end].strip()
+        param_val_str = content[self._value_start:val_end]
         self._args[self._open_param_name] = self._parse_param_value(param_val_str)
         self._open_param_name = None
         self._value_start = -1
@@ -156,13 +156,14 @@ class Qwen3CoderToolParser(XmlToolParser):
                 self._scan_pos = next_pos
                 continue
 
-            param_val_str = content[val_start:val_end].strip()
+            param_val_str = content[val_start:val_end]
             self._args[param_name] = self._parse_param_value(param_val_str)
             self._scan_pos = next_pos
             self._in_progress_value = False
 
     @staticmethod
     def _parse_param_value(param_val_str: str) -> Any:
+        param_val_str = param_val_str.strip()
         try:
             parsed_val = json.loads(param_val_str)
             return parsed_val if isinstance(parsed_val, str) else param_val_str
@@ -211,7 +212,7 @@ class Qwen3CoderToolParser(XmlToolParser):
             if val_end == -1:
                 break
 
-            param_val_str = content[val_start:val_end].strip()
+            param_val_str = content[val_start:val_end]
             args_dict[param_name] = self._parse_param_value(param_val_str)
             search_idx = val_end + len(self.param_suffix)
 
