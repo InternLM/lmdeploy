@@ -1,11 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.utils import get_logger
 
 from .deepseek_v2 import DeepseekV2ModelConfigBuilder
-
-logger = get_logger('lmdeploy')
 
 
 def _check_env_v32(device: str = 'cuda'):
