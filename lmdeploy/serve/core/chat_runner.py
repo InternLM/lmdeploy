@@ -105,9 +105,14 @@ class ChatRunner:
 
         try:
             response_parser = parser_cls(request)
+            parsed_request = response_parser.request
+            required_format = parsed_request.response_format
+            if request.tool_choice == 'required' and (
+                    not isinstance(required_format, dict) or required_format.get('type') != 'structural_tag'):
+                raise ValueError(
+                    f'Response parser {parser_cls.__name__!r} does not support `tool_choice="required"`.')
         except (SchemaError, ValueError) as err:
             raise RequestError(ErrorCode.INVALID_REQUEST, str(err)) from err
-        parsed_request = response_parser.request
 
         gen_config = _build_runner_generation_config(
             parsed_request,

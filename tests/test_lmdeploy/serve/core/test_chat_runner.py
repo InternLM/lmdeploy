@@ -218,6 +218,16 @@ def test_runner_skips_preprocess_for_raw_input_ids():
 def test_runner_terminal_validation(request_kwargs, finish_reason, expected):
     class _InvalidParser(_Parser):
 
+        def __init__(self, request):
+            super().__init__(request)
+            if request.tool_choice == 'required':
+                self.request = request.model_copy(update={
+                    'response_format': {
+                        'type': 'structural_tag',
+                        'format': {},
+                    }
+                })
+
         def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None):
             return False
 
@@ -246,6 +256,19 @@ def test_runner_terminal_validation(request_kwargs, finish_reason, expected):
     result = asyncio.run(_run())
 
     assert result.finish_reason == expected
+
+
+def test_runner_rejects_required_tool_choice_for_unsupported_response_parser():
+    context = _FakeServerContext(_Parser)
+
+    with pytest.raises(RequestError) as exc_info:
+        asyncio.run(ChatRunner.prepare(
+            context,
+            _request(tool_choice='required', tools=_tools()),
+        ))
+
+    assert exc_info.value.code == ErrorCode.INVALID_REQUEST
+    assert 'does not support `tool_choice="required"`' in exc_info.value.message
 
 
 def test_runner_stream_chunks_preserve_metadata():

@@ -106,12 +106,10 @@ def _walk_formats(value):
         'qwen2d5',
         'qwen3',
         'qwen3coder',
-        'llama3',
         'kimi-k2',
         'glm47',
         'deepseek-v32',
         'deepseek-v4',
-        'internlm',
         'interns2-preview',
     ],
 )
@@ -155,34 +153,10 @@ def test_required_rejects_tool_parser_without_response_format(monkeypatch):
         parser_cls(_request())
 
 
-def test_internlm_required_response_format_is_parser_specific(configured_parser):
-    parser = configured_parser(reasoning=True, tool_parser='internlm')
-    response_format = parser.request.response_format
-
-    assert response_format['type'] == 'structural_tag'
-    assert response_format['format']['type'] == 'sequence'
-    serialized = str(response_format)
-    assert '<|action_start|><|plugin|>' in serialized
-    assert '<|action_end|>' in serialized
-
-
-def test_llama_required_response_format_is_parser_specific(configured_parser):
-    parser = configured_parser(tool_parser='llama3', model='meta-llama/Llama-3.1-8B')
-    response_format = parser.request.response_format
-
-    tags = [item for item in _walk_formats(response_format) if item['type'] == 'tag']
-    assert tags
-    assert all(tag['begin'].startswith('<|python_tag|>') for tag in tags)
-
-    text = (
-        '<|python_tag|>{"name":"get_weather","parameters":{"city":"Paris"}}'
-        '<|python_tag|>{"name":"get_time","parameters":{"timezone":"UTC"}}'
-    )
-    content, tool_calls, reasoning = parser.parse_complete(text)
-    assert content is None
-    assert reasoning is None
-    assert [call.function.name for call in tool_calls] == ['get_weather', 'get_time']
-    assert parser.validate_complete(text) is True
+@pytest.mark.parametrize('tool_parser', ['internlm', 'intern-s1', 'llama3'])
+def test_required_rejects_unsupported_builtin_tool_parser(configured_parser, tool_parser):
+    with pytest.raises(ValueError, match='does not support `tool_choice="required"`'):
+        configured_parser(tool_parser=tool_parser)
 
 
 def test_required_overrides_response_format_without_mutating_tools(configured_parser):

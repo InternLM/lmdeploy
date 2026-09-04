@@ -86,29 +86,6 @@ def _scripted_events() -> dict[int, dict]:
     }
 
 
-def _required_request():
-    return ChatCompletionRequest(
-        model='openai/gpt-oss-20b',
-        messages=[],
-        tools=[{
-            'type': 'function',
-            'function': {
-                'name': 'get_weather',
-                'parameters': {
-                    'type': 'object',
-                    'properties': {
-                        'city': {
-                            'type': 'string',
-                        },
-                    },
-                    'required': ['city'],
-                },
-            },
-        }],
-        tool_choice='required',
-    )
-
-
 class TestGptOssResponseParser:
     """Unit tests for :class:`GptOssResponseParser` (Harmony token
     streaming)."""
@@ -342,60 +319,6 @@ class TestGptOssResponseParser:
         assert len(tool_calls) == 1
         assert tool_calls[0].function.name == 'echo'
         assert tool_calls[0].function.arguments == '{"x":1}'
-
-    @pytest.mark.parametrize('stream', [False, True])
-    @pytest.mark.parametrize(
-        ('suffix', 'expected'),
-        [
-            ('<|call|>', True),
-            ('', False),
-            ('<|end|>', False),
-        ],
-    )
-    def test_required_validation_requires_call_terminator(self, stream, suffix, expected):
-        parser = gpt_oss_mod.GptOssResponseParser(request=_required_request())
-        text = (
-            '<|channel|>commentary to=functions.get_weather'
-            '<|constrain|>json<|message|>{"city":"Paris"}'
-            f'{suffix}'
-        )
-        token_ids = openai_harmony_mod.get_encoding().encode(text, allowed_special='all')
-
-        if stream:
-            parser.stream_chunk('', token_ids)
-            valid = parser.validate_complete()
-        else:
-            parser.parse_complete('', token_ids)
-            valid = parser.validate_complete('')
-
-        assert valid is expected
-
-    @pytest.mark.parametrize('stream', [False, True])
-    @pytest.mark.parametrize(('finish_reason', 'expected'), [('stop', True), ('length', False)])
-    def test_required_validation_accepts_engine_stripped_call_stop_token(self, stream, finish_reason, expected):
-        parser = gpt_oss_mod.GptOssResponseParser(request=_required_request())
-        text = (
-            '<|channel|>commentary to=functions.get_weather'
-            '<|constrain|>json<|message|>{"city":"Paris"}'
-        )
-        token_ids = openai_harmony_mod.get_encoding().encode(text, allowed_special='all')
-
-        if stream:
-            parser.stream_chunk('', token_ids)
-            valid = parser.validate_complete(finish_reason=finish_reason)
-        else:
-            parser.parse_complete('', token_ids)
-            valid = parser.validate_complete('', finish_reason=finish_reason)
-
-        assert valid is expected
-
-    def test_required_response_format_is_valid_xgrammar(self):
-        import xgrammar as xgr
-
-        parser = gpt_oss_mod.GptOssResponseParser(request=_required_request())
-
-        grammar = xgr.Grammar.from_structural_tag(parser.request.response_format)
-        assert isinstance(grammar, xgr.Grammar)
 
     @pytest.mark.parametrize(
         ('recipient', 'expected'),

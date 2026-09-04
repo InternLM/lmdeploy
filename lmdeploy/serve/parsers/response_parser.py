@@ -809,18 +809,13 @@ class BaseResponseParser(ResponseParser):
                     break
                 tool_payload = text[open_idx + len(open_tag):close_idx].strip()
             else:
-                # Llama uses a start marker but no close marker. Bound one
-                # payload at the next start marker so repeated calls remain
-                # parseable in non-streaming responses.
-                payload_start = open_idx + len(open_tag)
-                next_open_idx = text.find(open_tag, payload_start)
-                close_idx = next_open_idx if next_open_idx >= 0 else n
-                tool_payload = text[payload_start:close_idx].strip()
+                close_idx = n
+                tool_payload = text[open_idx + len(open_tag):].strip()
             parsed_call = self.tool_parser.parse_tool_call_complete(tool_payload) if self.tool_parser else None
             if parsed_call and self.tool_parser is not None:
                 parsed_calls = parsed_call if isinstance(parsed_call, list) else [parsed_call]
                 tool_calls.extend(self.tool_parser.filter_tool_calls(parsed_calls))
-                pos = close_idx + len(close_tag) if close_tag else close_idx
+                pos = close_idx + len(close_tag) if close_tag else n
             else:
                 # Tool call parsing failed — fall back to plain text.
                 content_parts.append(text[open_idx:])

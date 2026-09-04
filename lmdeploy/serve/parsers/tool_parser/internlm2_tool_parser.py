@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING
 
 from .tool_parser import ToolParser, ToolParserManager
@@ -16,55 +15,6 @@ if TYPE_CHECKING:
 @ToolParserManager.register_module(['internlm', 'intern-s1'])
 class Internlm2ToolParser(ToolParser):
     """Tool parser for InternLM JSON tool-call payloads."""
-
-    @classmethod
-    def build_required_tool_response_format(cls, tools: list, *, reasoning: bool) -> dict:
-        if not tools:
-            raise ValueError('`tool_choice="required"` requires at least one tool.')
-
-        tags = []
-        for tool in tools:
-            function = tool.function
-            name = function.name
-            parameters = function.parameters
-            if parameters is None:
-                parameters = True
-            tags.append({
-                'type': 'tag',
-                'begin': (
-                    '<|action_start|><|plugin|>\n{"name": '
-                    f'{json.dumps(name, ensure_ascii=False)}, "parameters": '
-                ),
-                'content': {
-                    'type': 'json_schema',
-                    'json_schema': parameters,
-                },
-                'end': '}<|action_end|>',
-            })
-
-        tool_calls = {
-            'type': 'tags_with_separator',
-            'tags': tags,
-            'separator': '',
-            'at_least_one': True,
-        }
-        if not reasoning:
-            return {'type': 'structural_tag', 'format': tool_calls}
-
-        return {
-            'type': 'structural_tag',
-            'format': {
-                'type': 'sequence',
-                'elements': [{
-                    'type': 'tag',
-                    'begin': '',
-                    'content': {
-                        'type': 'any_text',
-                    },
-                    'end': '</think>',
-                }, tool_calls],
-            },
-        }
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         if request.tools and request.tool_choice != 'none':

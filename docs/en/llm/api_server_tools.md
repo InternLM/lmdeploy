@@ -64,7 +64,7 @@ print(response.choices[0].finish_reason)       # tool_calls
 print(response.choices[0].message.tool_calls)  # one or more calls
 ```
 
-This mode requires a non-empty `tools` list and a tool parser selected with `--tool-call-parser`; otherwise, the server returns HTTP 400. The required-tool constraint takes precedence over a client-provided `response_format`, because only one guided-decoding constraint can be active. Reasoning produced before the call remains available as `reasoning_content`. If the token limit is reached before a call is complete, `finish_reason` remains `length`.
+This mode requires a non-empty `tools` list and a compatible tool parser selected with `--tool-call-parser`; otherwise, the server returns HTTP 400. It is not currently supported by the `gpt-oss`, `internlm`, `intern-s1`, or `llama3` parsers. The required-tool constraint takes precedence over a client-provided `response_format`, because only one guided-decoding constraint can be active. Reasoning produced before the call remains available as `reasoning_content`. If the token limit is reached before a call is complete, `finish_reason` remains `length`.
 
 ## Multiple Round Invocation
 
