@@ -15,9 +15,6 @@ logger = get_logger('lmdeploy')
 class DlinferNSAIndexBF16(BaseNSAIndexFP8):
     """Ascend BF16 implementation of the NSA indexer interface."""
 
-    supports_fused_preprocess = False
-    requires_unfused_hadamard = False
-
     def __init__(self, topk: int, softmax_scale: float, block_size: int,
                  fill: int):
         super().__init__()

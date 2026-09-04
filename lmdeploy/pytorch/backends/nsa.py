@@ -93,9 +93,6 @@ def should_skip_nsa_indexer(model_metas) -> bool:
 
 class NSAIndexFP8Impl(ABC):
 
-    supports_fused_preprocess = False
-    requires_unfused_hadamard = False
-
     @abstractmethod
     def get_block_cache_requests(self, geometry: BlockCacheGeometry,
                                  head_dim: int) -> tuple[BlockCacheRequest, ...]:
