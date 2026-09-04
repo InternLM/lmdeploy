@@ -20,7 +20,7 @@ from .deepseek_v32 import (
     LayerNorm,
     rotate_activation,
 )
-from .patch import get_build_model_context
+from .patch import add_prefix, get_build_model_context
 from .utils.cudagraph import PiecewiseCudaGraphMixin
 
 
@@ -66,7 +66,7 @@ class GlmMoeDsaIndexer(nn.Module):
                                          device=device,
                                          is_tp=False,
                                          quant_config=quant_config,
-                                         prefix=f'{prefix}.wq_b' if prefix else '')
+                                         prefix=add_prefix('wq_b', prefix))
         self.use_fusion = not _envs.disable_dsa_indexer_fusion
         if self.use_fusion:
             self.wk_weights_proj = build_colwise_linear(self.dim,
@@ -218,7 +218,7 @@ class GlmMoeDsaAttention(DeepseekV32Attention):
                                 layer_idx,
                                 dtype=dtype,
                                 device=device,
-                                prefix=f'{prefix}.indexer' if prefix else '')
+                                prefix=add_prefix('indexer', prefix))
 
     def forward(
         self,

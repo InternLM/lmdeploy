@@ -36,6 +36,7 @@ from lmdeploy.pytorch.nn.moe.route import RouterGemm
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .patch import add_prefix
 from .utils.cudagraph import CudaGraphMixin
 
 
@@ -749,7 +750,7 @@ class DeepseekV2MoE(nn.Module):
             all_reduce=moe_all_reduce,
             quant_config=quantization_config,
             layer_idx=layer_idx,
-            prefix=f'{prefix}.experts' if prefix else '',
+            prefix=add_prefix('experts', prefix),
         )
         self.shared_experts = None
         if config.n_shared_experts is not None:
@@ -760,7 +761,7 @@ class DeepseekV2MoE(nn.Module):
                 dtype=dtype,
                 device=device,
                 is_shared_expert=True,
-                prefix=f'{prefix}.shared_experts' if prefix else '',
+                prefix=add_prefix('shared_experts', prefix),
             )
 
         ep = dist_config.ep
@@ -839,7 +840,7 @@ class DeepseekV2MLP(nn.Module):
             device=device,
             quant_config=quantization_config,
             is_tp=is_tp,
-            prefix=f'{prefix}.gate_up_proj' if prefix else '',
+            prefix=add_prefix('gate_up_proj', prefix),
         )
 
         # silu and mul
@@ -855,7 +856,7 @@ class DeepseekV2MLP(nn.Module):
             device=device,
             is_tp=is_tp,
             all_reduce=all_reduce,
-            prefix=f'{prefix}.down_proj' if prefix else '',
+            prefix=add_prefix('down_proj', prefix),
         )
 
     def forward(self, x):
