@@ -27,7 +27,6 @@ class NSAIndexMeta:
     block_size: int = None
     is_decoding: bool = False
     score_meta: object = None
-    kv_start_indices: Tensor = None
 
 
 def _build_indexer_kv_seqlens(num_tokens: int, q_seqlens: Tensor,
