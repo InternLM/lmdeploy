@@ -247,9 +247,19 @@ def get_hf_gen_cfg(path: str, trust_remote_code: bool = False):
     from transformers import GenerationConfig
     try:
         cfg = GenerationConfig.from_pretrained(path, trust_remote_code=trust_remote_code)
-        return cfg.to_dict()
     except OSError:
-        return {}
+        try:
+            # Some checkpoints keep generation attributes such as EOS IDs only
+            # in config.json.
+            model_cfg, _ = PretrainedConfig.get_config_dict(path)
+            if not model_cfg:
+                return {}
+            from lmdeploy.hf_configs import config_from_pretrained
+            model_cfg = config_from_pretrained(path, trust_remote_code=trust_remote_code)
+            cfg = GenerationConfig.from_model_config(model_cfg)
+        except OSError:
+            return {}
+    return cfg.to_dict()
 
 
 def get_model(pretrained_model_name_or_path: str, download_dir: str = None, revision: str = None, token: str = None):
