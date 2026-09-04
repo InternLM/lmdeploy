@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dlinfer.ops as ext_ops
-import torch
 from torch import Tensor
 
 
@@ -19,13 +18,13 @@ def sparse_attention_fwd(
     """Run Ascend sparse MLA attention over split noPE and RoPE caches."""
     if query.size(-1) <= value_head_size:
         raise ValueError(
-            "sparse MLA query must contain both latent and RoPE dimensions")
+            'sparse MLA query must contain both latent and RoPE dimensions')
     if sparse_indices.dim() == 2:
         sparse_indices = sparse_indices.unsqueeze(1)
     if sparse_indices.dim() != 3 or sparse_indices.size(1) != 1:
         raise ValueError(
-            f"sparse indices must have shape [tokens, 1, topk], got "
-            f"{tuple(sparse_indices.shape)}")
+            f'sparse indices must have shape [tokens, 1, topk], got '
+            f'{tuple(sparse_indices.shape)}')
 
     q_nope = query[..., :value_head_size].contiguous()
     q_rope = query[..., value_head_size:].contiguous()

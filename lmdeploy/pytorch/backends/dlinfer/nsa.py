@@ -90,9 +90,9 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
     ) -> Tensor:
         if meta.kv_start_indices is None:
             raise RuntimeError(
-                "Ascend NSA metadata is missing kv_start_indices")
+                'Ascend NSA metadata is missing kv_start_indices')
         if meta.cu_seqlen_q is None:
-            raise RuntimeError("Ascend NSA metadata is missing cu_seqlen_q")
+            raise RuntimeError('Ascend NSA metadata is missing cu_seqlen_q')
 
         k = k.unsqueeze(-2)
         fill_kv_cache(
@@ -120,8 +120,8 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
         )
         if indices.dim() != 3 or indices.size(1) != 1:
             raise RuntimeError(
-                "Ascend Lightning Indexer returned an unexpected shape: "
-                f"{tuple(indices.shape)}")
+                'Ascend Lightning Indexer returned an unexpected shape: '
+                f'{tuple(indices.shape)}')
         return indices.squeeze(1)
 
     def forward(

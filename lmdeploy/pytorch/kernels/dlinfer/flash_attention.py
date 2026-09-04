@@ -21,7 +21,7 @@ def flash_attention_fwd(
     logit_softcapping: float = None,
     causal: bool = True,
 ):
-    actual_seq_lengths_cpu = (q_start_loc + q_seqlens).cpu()    
+    actual_seq_lengths_cpu = (q_start_loc + q_seqlens).cpu()
     return ext_ops.prefill_attention(
         query_states,
         key_states,

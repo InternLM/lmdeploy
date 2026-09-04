@@ -223,7 +223,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             cu_seqlens_q_cpu, kv_seqlens_cpu = None, None
         else:
             cu_seqlens_q_cpu, kv_seqlens_cpu = _get_cpu_attention_metadata(cu_seqlens_q, kv_seqlens)
-        
+
         if not step_context.is_decoding:
             is_prefill_no_cache = (
                 False if is_sparse_attention else torch.equal(
