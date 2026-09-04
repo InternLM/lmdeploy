@@ -127,6 +127,43 @@ class TestQwen3_5ResponseParserStreaming:
                 assert call.function.name == exp_function_name
                 assert call.function.arguments == exp_function_arguments
 
+    def test_incremental_arguments_wait_for_function_name(self):
+        """Do not expose an argument delta before the tool identity exists."""
+        parser = Qwen3CoderToolParser()
+        parser.start_tool_call()
+
+        # This represents an incomplete/unrecognised function header whose
+        # parameter is nevertheless complete. The arguments stay in parser
+        # state rather than becoming the first streamed tool delta.
+        calls = parser.decode_tool_incremental(
+            '<parameter=query>nvd zabbix</parameter>',
+            final=False,
+        )
+        assert calls == []
+
+        calls = parser.decode_tool_incremental('<function=WebSearch>', final=False)
+        assert len(calls) == 2
+        name_call, argument_call = calls
+        assert name_call.id
+        assert name_call.function is not None
+        assert name_call.function.name == 'WebSearch'
+        assert argument_call.id is None
+        assert argument_call.function is not None
+        assert argument_call.function.arguments == '{"query": "nvd zabbix"'
+
+    def test_incremental_empty_function_name_does_not_emit_arguments(self):
+        """Malformed function headers fail closed instead of creating a
+        block."""
+        parser = Qwen3CoderToolParser()
+        parser.start_tool_call()
+
+        calls = parser.decode_tool_incremental(
+            '<function=><parameter=query>nvd</parameter>',
+            final=True,
+        )
+
+        assert calls == []
+
     def test_parse_complete_parallel_tool_calls_keep_distinct_arguments(self):
         """Regression: parallel tool calls must not reuse the first call's args."""
         response_parser = _build_response_parser()

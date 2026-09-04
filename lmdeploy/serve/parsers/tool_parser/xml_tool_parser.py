@@ -85,21 +85,27 @@ class XmlToolParser(ToolParser):
 
         should_close = is_closed or (final and self._close_json_on_final())
 
+        # An Anthropic tool block must be opened with a non-empty id/name.
+        # Argument-only deltas are valid after the name delta, but emitting one
+        # before the name would make the streaming adapter create an invalid
+        # ``content_block_start`` event. Keep the parsed arguments in the
+        # incremental state until the function name has been emitted.
         json_fragments: list[str] = []
-        if not self._xml_has_emitted_json_start and (args_dict or should_close):
-            json_fragments.append('{')
-            self._xml_has_emitted_json_start = True
+        if self._name_emitted:
+            if not self._xml_has_emitted_json_start and (args_dict or should_close):
+                json_fragments.append('{')
+                self._xml_has_emitted_json_start = True
 
-        for key, value in args_dict.items():
-            if key in self._xml_emitted_param_names:
-                continue
-            prefix = ', ' if len(self._xml_emitted_param_names) > 0 else ''
-            json_fragments.append(f'{prefix}\"{key}\": {json.dumps(value, ensure_ascii=False)}')
-            self._xml_emitted_param_names.add(key)
+            for key, value in args_dict.items():
+                if key in self._xml_emitted_param_names:
+                    continue
+                prefix = ', ' if len(self._xml_emitted_param_names) > 0 else ''
+                json_fragments.append(f'{prefix}\"{key}\": {json.dumps(value, ensure_ascii=False)}')
+                self._xml_emitted_param_names.add(key)
 
-        if should_close and self._xml_has_emitted_json_start and not self._xml_json_closed:
-            json_fragments.append('}')
-            self._xml_json_closed = True
+            if should_close and self._xml_has_emitted_json_start and not self._xml_json_closed:
+                json_fragments.append('}')
+                self._xml_json_closed = True
 
         if json_fragments:
             out.append(

@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from lmdeploy.serve.anthropic.protocol import CountTokensRequest, MessagesRequest
 from lmdeploy.serve.anthropic.router import create_anthropic_router
 from lmdeploy.serve.anthropic.streaming import stream_messages_response
-from lmdeploy.serve.core.chat_runner import ChatStreamChunk
+from lmdeploy.serve.core.chat_runner import ChatStreamChunk, should_validate_complete
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
@@ -22,6 +22,9 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
+from lmdeploy.serve.parsers import ResponseParserManager
+from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
+from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 from lmdeploy.serve.utils.server_utils import protocol_error_response
 
 ANTHROPIC_HEADERS = {'anthropic-version': '2023-06-01'}
@@ -333,6 +336,24 @@ class _IncompleteToolParser(_ToolAndReasoningParser):
         return False
 
 
+def _build_qwen_streaming_parser():
+    """Build an isolated response parser for the Qwen3Coder XML protocol."""
+    parser_cls = ResponseParserManager.get('default')
+
+    class _QwenResponseParser(parser_cls):
+        reasoning_parser_cls = ReasoningParserManager.get('default')
+        tool_parser_cls = ToolParserManager.get('qwen3coder')
+
+    request = ChatCompletionRequest(
+        model='fake-model',
+        messages=DEFAULT_MESSAGES,
+        stream=True,
+        tool_choice='auto',
+        chat_template_kwargs={'enable_thinking': True},
+    )
+    return _QwenResponseParser(request=request)
+
+
 def _make_client(response_parser_cls=_BasicParser,
                  *,
                  server_context=None,
@@ -443,7 +464,7 @@ def _sse_payloads(body: str):
     ]
 
 
-async def _parsed_stream(result_generator, response_parser):
+async def _parsed_stream(result_generator, response_parser, request):
     streaming_tools = False
     async for res in result_generator:
         token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
@@ -456,6 +477,11 @@ async def _parsed_stream(result_generator, response_parser):
             if res.finish_reason is None and not token_ids:
                 continue
             stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
+
+        # Mirror ChatRunner.stream(): a terminal chunk whose parser state is
+        # incomplete downgrades the finish reason to 'parse_error'.
+        if (should_validate_complete(request, res.finish_reason) and not response_parser.validate_complete()):
+            res.finish_reason = 'parse_error'
 
         for delta_index, (delta_message, tool_emitted) in enumerate(stream_deltas):
             if tool_emitted:
@@ -480,16 +506,18 @@ async def _parsed_stream(result_generator, response_parser):
 
 
 def _collect_stream_response_payloads(result_generator, response_parser, **kwargs):
+    request = ChatCompletionRequest(
+        model='fake-model',
+        messages=[],
+        **kwargs,
+    )
+
     async def _collect_events():
         return [
             event async for event in stream_messages_response(
-                _parsed_stream(result_generator, response_parser),
+                _parsed_stream(result_generator, response_parser, request),
                 request_id='msg_test',
-                request=ChatCompletionRequest(
-                    model='fake-model',
-                    messages=[],
-                    **kwargs,
-                ),
+                request=request,
             )
         ]
 
@@ -751,6 +779,38 @@ def test_messages_streaming_with_reasoning_and_tool_use_events():
     assert '"type": "input_json_delta"' in body
     assert '"type": "tool_use"' in body
     assert '"output_ids": [102]' in body
+
+
+def test_messages_streaming_rejects_unidentified_xml_tool_call():
+    """Malformed XML must not become an Anthropic tool block with empty
+    identity."""
+
+    async def _result_generator():
+        yield SimpleNamespace(
+            response='<tool_call><parameter=query>nvd zabbix</parameter>',
+            token_ids=[101],
+            input_token_len=8,
+            generate_token_len=1,
+            finish_reason='stop',
+            routed_experts=[[[1, 2, 3]]],
+            logprobs=None,
+        )
+
+    payloads = _collect_stream_response_payloads(
+        _result_generator(),
+        _build_qwen_streaming_parser(),
+        return_routed_experts=True,
+    )
+
+    tool_starts = [
+        item for item in payloads
+        if item['type'] == 'content_block_start'
+        and item['content_block']['type'] == 'tool_use'
+    ]
+    assert tool_starts == []
+
+    message_delta = next(item for item in payloads if item['type'] == 'message_delta')
+    assert message_delta['delta']['stop_reason'] == 'parse_error'
 
 
 def test_messages_streaming_validate_complete_marks_parse_error():
