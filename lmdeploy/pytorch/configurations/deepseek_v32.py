@@ -8,19 +8,6 @@ from .deepseek_v2 import DeepseekV2ModelConfigBuilder
 logger = get_logger('lmdeploy')
 
 
-def update_cache_config(cache_config):
-    """Use the block size required by Ascend sparse attention."""
-    required_block_size = 128
-    if cache_config.block_size != required_block_size:
-        logger.warning('Sparse MLA on Ascend requires block_size=128; '
-                       f'adjusting from {cache_config.block_size}.')
-        cache_config.block_size = required_block_size
-    if cache_config.kernel_block_size != required_block_size:
-        logger.warning('Sparse MLA on Ascend requires kernel_block_size=128; '
-                       f'adjusting from {cache_config.kernel_block_size}.')
-        cache_config.kernel_block_size = required_block_size
-
-
 def _check_env_v32(device: str = 'cuda'):
     """Environment check."""
     if device != 'cuda':

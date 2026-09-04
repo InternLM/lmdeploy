@@ -84,6 +84,7 @@ class GlmMoeDsaIndexer(nn.Module):
         self.softmax_scale = self.head_dim**-0.5
         self.indexer_topk = IndexerTopKFP8(self.index_topk,
                                            self.softmax_scale,
+                                           self.head_dim,
                                            block_size=128,
                                            fill=-1,
                                            # MTP may reuse its first iteration's indices in later drafts.
