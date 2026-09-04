@@ -446,10 +446,9 @@ def _launch_config_cached(local_numel: int, configured_threads: int,
                           total_tokens: int, world_size: int):
     """Resolve a launch shape once for each static input/configuration pair.
 
-    Decode reuses a small set of flattened token counts.  Keeping the policy
-    resolution out of the hot path is useful in its own right, and including
-    the environment values in the cache key keeps unit tests and long-lived
-    processes that construct more than one tuning profile deterministic.
+    Decode reuses a small set of flattened token counts.  Keeping the policy resolution out of the hot path is useful in
+    its own right, and including the environment values in the cache key keeps unit tests and long-lived processes that
+    construct more than one tuning profile deterministic.
     """
     if local_numel <= 0 or local_numel % _NUMEL_PER_THREAD != 0:
         raise ValueError(
@@ -655,10 +654,9 @@ def barrier_inner(state: MultimemAllGatherState, *, slot: int,
 class MultimemAllGatherer:
     """Guarded last-dim multimem all-gather with NCCL fallback.
 
-    Owns one symmetric buffer built lazily on the first eager call, and uses
-    the kernel only when the input fits its dtype/shape/alignment contract.
-    The returned tensor owns its storage so a later collective cannot overwrite
-    logits that are still being consumed on another stream.
+    Owns one symmetric buffer built lazily on the first eager call, and uses the kernel only when the input fits its
+    dtype/shape/alignment contract. The returned tensor owns its storage so a later collective cannot overwrite logits
+    that are still being consumed on another stream.
     """
 
     _UNINIT = object()
@@ -875,9 +873,8 @@ class MultimemAllGatherer:
     def prepare(self, device: torch.device | str) -> bool:
         """Collectively materialize the arena before graph capture.
 
-        Call this on every rank after the TP process group is ready.  Forward
-        retains the lazy path for compatibility, but production warmup uses
-        this method so allocation/rendezvous never occurs in a captured region.
+        Call this on every rank after the TP process group is ready.  Forward retains the lazy path for compatibility,
+        but production warmup uses this method so allocation/rendezvous never occurs in a captured region.
         """
         device = torch.device(device)
         if device.type == 'cuda' and device.index is None:
@@ -996,9 +993,8 @@ class MultimemAllGatherer:
               device: torch.device | str) -> bool:
         """Return TP-wide readiness so ranks never split collective paths.
 
-        This setup-only collective is intentionally forbidden during CUDA
-        Graph capture.  Runtime kernels use the immutable decision recorded by
-        their owner after this method returns.
+        This setup-only collective is intentionally forbidden during CUDA Graph capture.  Runtime kernels use the
+        immutable decision recorded by their owner after this method returns.
         """
         # ``is_current_stream_capturing`` itself can query the CUDA driver and
         # raise on CPU-only/unit-test processes.  Consensus is only used as a
