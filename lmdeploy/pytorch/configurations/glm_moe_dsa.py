@@ -19,7 +19,6 @@ class GlmMoeDsaModelConfigBuilder(DeepseekV32ModelConfigBuilder):
     def build(cls, hf_config, model_path: str | None = None, **kwargs):
         """build."""
         is_draft_model = kwargs.get('is_draft_model', False)
-
         quantization_config = getattr(hf_config, 'quantization_config', None)
         is_lmdeploy_patched_fp8 = (quantization_config is not None
                                    and quantization_config.get('quant_method') == 'fp8'
