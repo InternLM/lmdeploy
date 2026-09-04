@@ -167,6 +167,7 @@ class ParallelLMHead(ParallelEmbedding):
         self._symm_mem_gatherer = None
         self._symm_mem_device = self.weight.device
         self._symm_mem_dtype = self.weight.dtype
+        self._logged_nccl_small_token_fallback = False
         if self.all_reduce and self.weight.device.type == 'cuda':
             device = self.weight.device
             if device.index is None:
@@ -178,7 +179,14 @@ class ParallelLMHead(ParallelEmbedding):
             gathered_width = self.tp * self.vocab_size_padded
             capacity = _envs.symm_mem_lmhead_max_mb * 1024 * 1024
             max_tokens = capacity // (gathered_width * torch.bfloat16.itemsize)
-            same_config = _tp_same_config((capacity, gathered_width, max_tokens), device, self.tp_group)
+            barrier_mode = {'auto': 0, 'per_block': 1, 'single': 2}.get(
+                _envs.symm_mem_lmhead_barrier_mode, -1)
+            same_config = _tp_same_config(
+                (capacity, gathered_width, max_tokens,
+                 _envs.symm_mem_lmhead_blocks,
+                 _envs.symm_mem_lmhead_block_threads,
+                 int(_envs.symm_mem_lmhead_autotune), barrier_mode,
+                 _envs.symm_mem_lmhead_min_tokens), device, self.tp_group)
             if max_tokens <= 0 or not same_config:
                 if self.tp_rank == 0:
                     logger.warning('symmetric-memory LM-head disabled because TP ranks have inconsistent arena config')
@@ -198,7 +206,14 @@ class ParallelLMHead(ParallelEmbedding):
                                     rank=self.tp_rank,
                                     gathered_width=gathered_width,
                                     max_tokens=max_tokens)
-            if gatherer.prepare(device):
+            prepared = gatherer.prepare(device)
+            admit_static = getattr(gatherer, 'admit_static', None)
+            if prepared and callable(admit_static):
+                # Freeze the static BF16/layout contract during model setup;
+                # the first decode call can then dispatch directly without
+                # another TP-wide admission reduction.
+                prepared = admit_static(device)
+            if prepared:
                 self._symm_mem_gatherer = gatherer
 
     def tie_weights(self, embedding: ParallelEmbedding):
@@ -220,8 +235,13 @@ class ParallelLMHead(ParallelEmbedding):
             self._symm_mem_dtype = current_dtype
             if current_dtype != torch.bfloat16:
                 self._symm_mem_gatherer = None
-            elif current_device.type == 'cuda' and not gatherer.prepare(current_device):
-                self._symm_mem_gatherer = None
+            elif current_device.type == 'cuda':
+                prepared = gatherer.prepare(current_device)
+                admit_static = getattr(gatherer, 'admit_static', None)
+                if prepared and callable(admit_static):
+                    prepared = admit_static(current_device)
+                if not prepared:
+                    self._symm_mem_gatherer = None
         return result
 
     def get_local_logits(self, hidden_states: torch.Tensor):
@@ -237,10 +257,24 @@ class ParallelLMHead(ParallelEmbedding):
 
         if self._symm_mem_gatherer is not None:
             local_logits_2d = local_logits.reshape(-1, local_logits.shape[-1])
-            gathered = self._symm_mem_gatherer(local_logits_2d)
-            if gathered is not None:
-                output_shape = local_logits.shape[:-1] + (self.tp * local_logits.shape[-1], )
-                return gathered.reshape(output_shape)[..., :self.vocab_size]
+            if local_logits_2d.shape[0] >= _envs.symm_mem_lmhead_min_tokens:
+                # ParallelLMHead has a stable BF16/layout contract after the
+                # first collective admission.  Use the admitted fast path so
+                # steady-state decode avoids repeated host-side validation;
+                # arbitrary gatherer users retain the defensive __call__ API.
+                fast_call = getattr(self._symm_mem_gatherer, 'fast_call', None)
+                gathered = (fast_call(local_logits_2d)
+                            if callable(fast_call) else
+                            self._symm_mem_gatherer(local_logits_2d))
+                if gathered is not None:
+                    output_shape = local_logits.shape[:-1] + (self.tp * local_logits.shape[-1], )
+                    return gathered.reshape(output_shape)[..., :self.vocab_size]
+            elif not self._logged_nccl_small_token_fallback:
+                logger.info(
+                    'symmetric-memory LM-head fallback to NCCL for token_rows=%s '
+                    '(minimum=%s)', local_logits_2d.shape[0],
+                    _envs.symm_mem_lmhead_min_tokens)
+                self._logged_nccl_small_token_fallback = True
 
         input_size = local_logits.size()
         output_size = (input_size[0] * self.tp, ) + input_size[1:]
