@@ -140,10 +140,8 @@ class GlmMoeDsaIndexer(nn.Module):
         k = self.k_norm(self.wk(x))
         k_pe, k_nope = torch.split(k, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
         q_pe, k_pe = self._apply_rotary_pos_emb(q_pe, k_pe, freqs_cis)
-        q = torch.cat([q_pe, q_nope], dim=-1)
-        k = torch.cat([k_pe[0], k_nope[0, :, None]], dim=-1)
-        q = rotate_activation(q)
-        k = rotate_activation(k)
+        q = rotate_activation(torch.cat([q_pe, q_nope], dim=-1))
+        k = rotate_activation(torch.cat([k_pe[0], k_nope[0, :, None]], dim=-1))
         weights = self.weights_proj(x) * self.n_heads**-0.5
         return self.indexer_topk(q[0],
                                  k[:, 0],
