@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 import torch
@@ -9,7 +11,7 @@ from torch.profiler import record_function
 
 from lmdeploy.utils import get_logger
 
-from ...config import ModelConfig, SpecDecodeConfig
+from ...config import CacheConfig, ModelConfig, SpecDecodeConfig
 from ...engine.cache_engine import CacheEngine
 from ...model_inputs import ModelInputs, step_ctx_manager
 from ...models.patch import build_patched_model, update_custom_module_map
@@ -20,6 +22,37 @@ from ..guided_spec_helper import GuidedSpecHelper
 SPEC_PROPOSERS = Registry('spec_proposers')
 
 logger = get_logger('lmdeploy')
+
+
+class ProposalMethod(str, Enum):
+    """How the agent should prepare and execute draft proposal."""
+
+    AUTOREGRESSIVE = 'autoregressive'
+    DIFFUSION = 'diffusion'
+
+
+@dataclass(frozen=True)
+class ProposalContext:
+    """Explicit runtime dependencies for a non-autoregressive proposer."""
+
+    cache_engine: CacheEngine | None
+
+
+@dataclass(frozen=True)
+class ProposalWarmupCase:
+    """One declarative draft warmup input shape."""
+
+    batch_size: int
+    is_decoding: bool
+    max_q_seqlen: int
+    target_hidden_size: int
+
+
+@dataclass(frozen=True)
+class ProposalWarmupPlan:
+    """Ordered proposer-specific cases executed by the agent."""
+
+    cases: tuple[ProposalWarmupCase, ...]
 
 
 @torch.inference_mode()
@@ -61,6 +94,8 @@ def draft_model_forward(
 
 class BaseSpecProposer:
 
+    proposal_method = ProposalMethod.AUTOREGRESSIVE
+
     def __init__(self, specdecode_config: SpecDecodeConfig, device: torch.device = None):
         self.specdecode_config = specdecode_config
         self.model = None
@@ -98,6 +133,26 @@ class BaseSpecProposer:
                     guided_processors: dict | None = None):
         """Get outputs."""
         raise NotImplementedError()
+
+    async def propose(self,
+                      model_inputs: ModelInputs,
+                      extra_inputs: ExtraInputs,
+                      sampling_inputs,
+        proposal_ctx: ProposalContext | None = None):
+        """Run a non-autoregressive proposal method."""
+        raise NotImplementedError(f'{type(self).__name__} does not implement its proposal method.')
+
+    def get_warmup_plan(self,
+                        max_batches: int,
+                        target_model_config: ModelConfig,
+                        capture_batch_sizes: list[int],
+                        cache_config: CacheConfig) -> ProposalWarmupPlan | None:
+        """Return custom warmup shapes, or ``None`` for generic AR warmup."""
+        return None
+
+    def prepare_warmup_forward(self, inputs: ModelInputs, cache_engine: CacheEngine) -> ModelInputs | None:
+        """Prepare one declarative case for forwarding by the agent."""
+        return inputs
 
     @record_function('draft_model_forward')
     def _forward(self, model_inputs: ModelInputs, cache_engine: CacheEngine):

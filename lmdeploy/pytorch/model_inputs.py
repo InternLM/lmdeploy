@@ -513,6 +513,14 @@ class StepContext:
         return attention_mask, position_ids
 
 
+@dataclass(frozen=True)
+class SpecModelBuildContext:
+    """Speculative-decoding metadata needed while building models."""
+
+    target_aux_hidden_state_layers: tuple[int, ...] = ()
+    speculative_mask_token_id: int | None = None
+
+
 @dataclass
 class BuildModelContext:
     """Context for building model."""
@@ -525,6 +533,7 @@ class BuildModelContext:
     tie_word_embeddings: bool = False
     num_spec_tokens: int = 0
     max_batch_size: int = 0
+    spec_model_ctx: SpecModelBuildContext = field(default_factory=SpecModelBuildContext)
 
     @property
     def deep_ep_max_tokens_per_rank(self) -> int:

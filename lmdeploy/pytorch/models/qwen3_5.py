@@ -836,6 +836,9 @@ class Qwen3_5TextModel(nn.Module):
                                 prefix=add_prefix(f'layers.{layer_idx}', prefix))
             for layer_idx in range(self.config.num_hidden_layers)
         ])
+        self.aux_hidden_state_layers: tuple[int, ...] = \
+            get_build_model_context().spec_model_ctx.target_aux_hidden_state_layers
+        self._aux_hidden_state_layers_set: frozenset[int] = frozenset(self.aux_hidden_state_layers)
 
         # build norm
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
@@ -877,6 +880,7 @@ class Qwen3_5TextModel(nn.Module):
                                           attn_metadata)
 
         # decoding
+        aux_hidden_states = []
         residual = None
         for idx, decoder_layer in enumerate(self.layers):
             hidden_states, residual = decoder_layer(
@@ -888,10 +892,14 @@ class Qwen3_5TextModel(nn.Module):
                 gated_delta_meta=gated_delta_meta,
                 all_routed_experts=all_routed_experts,
             )
+            if idx in self._aux_hidden_state_layers_set:
+                aux_hidden_states.append(hidden_states if residual is None else hidden_states + residual)
 
         # norm
         hidden_states, _ = self.norm(hidden_states, residual)
 
+        if len(aux_hidden_states) > 0:
+            return dict(hidden_states=hidden_states, aux_hidden_states=torch.cat(aux_hidden_states, dim=-1))
         return hidden_states
 
     def get_input_embeddings(self):
@@ -972,7 +980,7 @@ class Qwen3_5Model(nn.Module):
 
         output_inputs_embeds = inputs_embeds if return_input_embeds else None
 
-        hidden_states = self.language_model(
+        language_outputs = self.language_model(
             input_ids=input_ids,
             position_ids=position_ids,
             past_key_values=past_key_values,
@@ -982,7 +990,13 @@ class Qwen3_5Model(nn.Module):
             mrope_position_ids=mrope_position_ids,
             all_routed_experts=all_routed_experts,
         )
-        return hidden_states, output_inputs_embeds
+        aux_hidden_states = None
+        if isinstance(language_outputs, dict):
+            hidden_states = language_outputs['hidden_states']
+            aux_hidden_states = language_outputs.get('aux_hidden_states')
+        else:
+            hidden_states = language_outputs
+        return hidden_states, output_inputs_embeds, aux_hidden_states
 
     def get_input_embeddings(self):
         """Get input embeddings."""
@@ -1027,8 +1041,8 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                                           device=device)
         # dense model
         self.enable_return_routed_experts = False
-        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
-
+        bm_ctx = get_build_model_context()
+        self.is_spec_decoding = bm_ctx.num_spec_tokens > 0
 
     def forward(
         self,
@@ -1060,7 +1074,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             all_routed_experts = position_ids.new_empty(
                 (num_tokens, config.num_hidden_layers, config.num_experts_per_tok), dtype=torch.uint16)
 
-        hidden_states, target_inputs_embeds = self.model(
+        hidden_states, target_inputs_embeds, aux_hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
             past_key_values=past_key_values,
@@ -1081,13 +1095,24 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             ts_lens=ts_lens,
             ts_sr=ts_sr,
         )
-        return dict(hidden_states=hidden_states,
-                    all_routed_experts=all_routed_experts,
-                    target_inputs_embeds=target_inputs_embeds)
+        outputs = dict(hidden_states=hidden_states,
+                       all_routed_experts=all_routed_experts,
+                       target_inputs_embeds=target_inputs_embeds)
+        if aux_hidden_states is not None:
+            outputs['aux_hidden_states'] = aux_hidden_states
+        return outputs
 
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
+
+    def get_outputs_cudagraph(self, output_buffers: dict[str, torch.Tensor], input_ids: torch.Tensor, **kwargs):
+        """Return Qwen3.5 target outputs captured by a decode graph."""
+        outputs = super().get_outputs_cudagraph(output_buffers, input_ids, **kwargs)
+        aux_hidden_states = output_buffers.get('aux_hidden_states')
+        if aux_hidden_states is not None:
+            outputs['aux_hidden_states'] = aux_hidden_states[:, :input_ids.size(-1)]
+        return outputs
 
     def prepare_inputs_for_generation(
         self,

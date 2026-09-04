@@ -604,6 +604,87 @@ def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
     assert spec_agent.guided_helper.manager is guided_manager
     assert proposer.guided_helper is spec_agent.guided_helper
 
+def _make_minimal_build_agent(target_layer_ids, mask_token_id=99):
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+    from lmdeploy.pytorch.spec_decode.base import BaseSpecModelAgent
+
+    spec_agent = SimpleNamespace(
+        _enabled=True,
+        is_enabled=lambda: True,
+        method='dflash',
+        specdecode_config=SimpleNamespace(target_layer_ids=target_layer_ids, mask_token_id=mask_token_id),
+        num_spec_tokens=15,
+    )
+    spec_agent.build_model_context = lambda: BaseSpecModelAgent.build_model_context(spec_agent)
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.model_path = 'target-model'
+    agent.adapters = None
+    agent.device = torch.device('cpu')
+    agent.rank = 0
+    agent.model_config = SimpleNamespace(
+        custom_module_map=None,
+        quant_config=None,
+        fp32_lm_head=False,
+        tie_word_embeddings=False,
+    )
+    agent.misc_config = SimpleNamespace(
+        enable_return_routed_experts=False,
+        language_model_only=False,
+        dllm_config=None,
+        empty_init=True,
+    )
+    agent.need_output = False
+    agent.strategy_factory = None
+    agent.cache_config = SimpleNamespace(max_batches=4)
+    agent.spec_agent = spec_agent
+    return agent
+
+
+def test_model_agent_dflash_layers_flow_through_build_context(monkeypatch):
+    import lmdeploy.pytorch.engine.model_agent.agent as agent_mod
+
+    agent = _make_minimal_build_agent(target_layer_ids=(1, 3, 5))
+    captured = {}
+    patched_model = object()
+
+    def build_patched_model(model_config, device=None, build_model_ctx=None):
+        captured['model_config'] = model_config
+        captured['device'] = device
+        captured['build_model_ctx'] = build_model_ctx
+        return patched_model
+
+    monkeypatch.setattr(agent_mod, 'build_patched_model', build_patched_model)
+
+    agent._build_model()
+
+    assert captured['model_config'] is agent.model_config
+    assert captured['device'] == torch.device('cpu')
+    spec_model_ctx = captured['build_model_ctx'].spec_model_ctx
+    assert spec_model_ctx.target_aux_hidden_state_layers == (1, 3, 5)
+    assert spec_model_ctx.speculative_mask_token_id == 99
+    assert agent.patched_model is patched_model
+    assert agent.build_model_ctx is captured['build_model_ctx']
+
+
+def test_spec_agent_build_model_context_is_capability_based():
+    from lmdeploy.pytorch.model_inputs import SpecModelBuildContext
+    from lmdeploy.pytorch.spec_decode.base import BaseSpecModelAgent
+
+    agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+    agent.method = 'qwen3_5_mtp'
+    agent.specdecode_config = SimpleNamespace(target_layer_ids=None, mask_token_id=None)
+
+    assert agent.build_model_context() == SpecModelBuildContext()
+
+    # Model-build capabilities are propagated independently of the algorithm
+    # name. Algorithm-specific parsing and validation happen upstream.
+    agent.specdecode_config = SimpleNamespace(target_layer_ids=(2, 4), mask_token_id=99)
+    assert agent.build_model_context() == SpecModelBuildContext(
+        target_aux_hidden_state_layers=(2, 4), speculative_mask_token_id=99)
+
+    agent.specdecode_config = None
+    assert agent.build_model_context() == SpecModelBuildContext()
+
 
 def test_spec_agent_reset_runtime_state_discards_chunk_carry():
     from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent

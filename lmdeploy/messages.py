@@ -837,7 +837,22 @@ class SpeculativeConfig:
         method: the speculative decoding method.
         model: the path of speculative model.
         num_speculative_tokens: number of generated token of draft model per step
+        dflash_block_size: DFlash query/verify window length. When set, this
+            DFlash-specific value overrides ``num_speculative_tokens`` using
+            ``num_speculative_tokens = dflash_block_size - 1``.
     """
     method: str
     model: str = ''
     num_speculative_tokens: int = 1
+    dflash_block_size: int | None = None
+
+    def __post_init__(self):
+        """Resolve the DFlash block-size override."""
+        if self.dflash_block_size is not None:
+            if self.method != 'dflash':
+                raise ValueError('dflash_block_size is supported only when method="dflash".')
+            if self.dflash_block_size < 2:
+                raise ValueError('dflash_block_size must be an integer greater than or equal to 2.')
+            # DFlash's complete query contains the current/next target token in
+            # slot zero followed by the newly proposed draft tokens.
+            self.num_speculative_tokens = self.dflash_block_size - 1
