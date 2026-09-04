@@ -13,7 +13,7 @@ Exports:
 
 - ``WeightFormatResolver``: holds an ordered list of candidate formats.
   ``resolve(params, prefix, *, index=None,
-  optional=False)`` returns a ``Linear`` bundle in TM layout or raises
+  optional=False)`` returns the selected format and raw checkpoint tensors or raises
   (``KeyError`` on missing tensors without ``optional``, ``ValueError`` when
   tensors exist but no candidate matches).
 
@@ -31,7 +31,6 @@ import torch
 from torch import Tensor
 
 from . import _tm
-from .linear import Linear
 
 _GENERIC_FLOAT_DTYPES = frozenset({
     torch.float16,
@@ -475,13 +474,12 @@ class MXFP4Format(WeightFormat):
 
 
 class WeightFormatResolver:
-    """Resolve a checkpoint prefix to a ``Linear`` bundle in TM layout.
+    """Resolve a checkpoint prefix to a weight format and raw tensors.
 
     Holds an ordered list of candidate formats. ``resolve(params, prefix)``
     probes the checkpoint at the
     given prefix, dispatches to the first candidate whose ``accepts``
-    returns True, and constructs a ``Linear`` with the format's
-    ``make_data_format`` descriptor.
+    returns True, and returns that format with the tensors it accepted.
 
     The suffix probe is scoped to the union of candidate ``suffix_map``
     keys only — not a global "every format ever" list — so adding a new
@@ -505,8 +503,8 @@ class WeightFormatResolver:
         self._formats = formats
         self._suffixes = frozenset(s for f in formats for s in f.suffix_map)
 
-    def resolve(self, pfx, *, index: int | None = None, optional: bool = False):
-        """Resolve to a Linear bundle at the given Prefix."""
+    def resolve(self, pfx, *, index: int | None = None, optional: bool = False) -> tuple[WeightFormat, dict[str, Tensor]] | None:
+        """Resolve the selected format and its raw checkpoint tensors."""
         read = pfx.get if index is not None else pfx.pop
         available = {s: read(s, sep="", index=index) for s in self._suffixes if pfx.has(s, sep="")}
 
@@ -519,18 +517,10 @@ class WeightFormatResolver:
 
         for fmt in self._formats:
             if fmt.accepts(available):
-                return self._build_linear(fmt, available)
+                return fmt, available
 
         raise ValueError(
             f"no weight format accepts tensors at {pfx.prefix!r}: "
             f"got {sorted(available)}, "
             f"tried {[f.name for f in self._formats]}"
         )
-
-    def _build_linear(self, fmt: WeightFormat, available: dict[str, Tensor]) -> Linear:
-        tensors = {kind: fmt.normalize(available[s], kind) for s, kind in fmt.suffix_map.items() if s in available}
-        if fmt.zeros_dtype != _tm.DataType.TYPE_INVALID and "zeros" not in tensors:
-            tensors["zeros"] = fmt.synthesize_zeros(tensors["scales"])
-        if "zeros" in tensors:
-            tensors["zeros"] = tensors["zeros"].to(tensors["scales"].dtype)
-        return Linear(tensors=tensors, weight_format=fmt)

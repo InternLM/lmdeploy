@@ -26,7 +26,7 @@ from ..builders import (
     make_norm_config,
 )
 from ..builders._base import ParallelGroup
-from ..linear import Linear
+from ..builders.linear import Linear
 from ..supported_models import SUPPORTED_ARCHS
 from ..vision_model import VisionModel
 from ..weight_format import TrivialFormat

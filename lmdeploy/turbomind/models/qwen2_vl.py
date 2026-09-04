@@ -25,7 +25,7 @@ from ..builders import (
     make_norm_config,
 )
 from ..builders._base import ParallelGroup
-from ..linear import Linear, transform_input_dim, transform_output_dim
+from ..builders.linear import Linear, transform_input_dim, transform_output_dim
 from ..vision_model import VisionModel
 from ..weight_format import TrivialFormat
 from .base import INPUT_MODELS

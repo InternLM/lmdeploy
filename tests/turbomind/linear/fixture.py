@@ -6,10 +6,11 @@ from contextlib import contextmanager
 
 import torch
 
+from lmdeploy.turbomind import _tm
+from lmdeploy.turbomind.linear import Weight, _to_tm_dtype, get_linear
 from lmdeploy.turbomind.weight_format import CompressedTensorFormat, FP8Format, MXFP4Format, TrivialFormat
 
 from .cases import LinearCase
-from .linear import Linear, Weight, _tm, _to_tm_dtype
 from .reference import compare_tensors, dense_gemm, moe_reference, quantize_symm_row_fp8
 
 TOLERANCES = {('bf16', 'bf16'): {'quant_vs_dequant': {'max_abs': 1e-2, 'mean_abs': 1e-3}}, ('fp16', 'fp16'): {'quant_vs_dequant': {'max_abs': 1e-2, 'mean_abs': 1e-3}}, ('bf16', 'fp8_e4m3'): {'quant_vs_dequant': {'max_abs': 0.25, 'mean_abs': 0.05}}, ('fp16', 'fp8_e4m3'): {'quant_vs_dequant': {'max_abs': 0.25, 'mean_abs': 0.05}}, ('bf16', 'uint4'): {'quant_vs_dequant': {'max_abs': 0.25, 'mean_abs': 0.05}}, ('fp16', 'uint4'): {'quant_vs_dequant': {'max_abs': 0.25, 'mean_abs': 0.05}}, ('bf16', 'fp4_e2m1'): {'quant_vs_dequant': {'max_abs': 0.25, 'mean_abs': 0.05}}, ('fp16', 'fp4_e2m1'): {'quant_vs_dequant': {'max_abs': 0.25, 'mean_abs': 0.05}}}
@@ -69,7 +70,7 @@ class LinearFixture:
             resolved = torch.device('cuda', torch.cuda.current_device())
         self.device = resolved
 
-        self.linear: Linear | None = None
+        self.linear = None
         self.weight_plan = None
         self.exec_plan = None
         self.w_quant: Weight | None = None
@@ -94,8 +95,9 @@ class LinearFixture:
         self.returned_scales: torch.Tensor | None = None
 
         try:
-            self.linear = Linear(self.device)
-            self._build_weights()
+            with torch.cuda.device(self.device):
+                self.linear = get_linear()
+                self._build_weights()
         except Exception:
             self.close()
             raise
@@ -402,7 +404,5 @@ class LinearFixture:
             if self.w_quant is not None:
                 self.w_quant.close()
                 self.w_quant = None
-            if self.linear is not None:
-                self.linear.close()
-                self.linear = None
+            self.linear = None
             self.weight_plan = None

@@ -6,7 +6,7 @@ import math
 import torch
 
 from .. import _tm
-from ..linear import Linear
+from .linear import Linear
 
 # ---------------------------------------------------------------------------
 # SplitSide enum (internal -- not exposed to specs)

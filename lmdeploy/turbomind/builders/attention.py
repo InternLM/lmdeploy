@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import torch
 
-from ..linear import Linear, dequant_mixed, transform_output_dim
+from .linear import Linear, dequant_mixed, transform_output_dim
 from ._base import Builder, ParallelGroup, SplitSide
 
 # ---------------------------------------------------------------------------

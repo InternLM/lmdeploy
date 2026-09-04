@@ -17,6 +17,7 @@ cuda_required = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA r
 
 
 def test_weight_format_dtype_contract():
+    from lmdeploy.turbomind.builders.linear import _build_linear
     from lmdeploy.turbomind.weight_format import (
         _GENERIC_FLOAT_DTYPES,
         AWQFormat,
@@ -24,7 +25,6 @@ def test_weight_format_dtype_contract():
         FP8Format,
         GPTQFormat,
         TrivialFormat,
-        WeightFormatResolver,
     )
 
     expected = frozenset({
@@ -91,13 +91,7 @@ def test_weight_format_dtype_contract():
         for weight_format, available in cases:
             assert weight_format.accepts(available) is accepted
             if accepted:
-                resolver = WeightFormatResolver(
-                    formats=[weight_format],
-                )
-                linear = resolver._build_linear(
-                    weight_format,
-                    available,
-                )
+                linear = _build_linear(weight_format, available)
                 assert linear.tensors['scales'].dtype == dtype
                 if (
                     weight_format.zeros_dtype

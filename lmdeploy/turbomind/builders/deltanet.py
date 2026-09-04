@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import torch
 
-from ..linear import dequant_mixed, transform_output_dim
+from .linear import dequant_mixed, transform_output_dim
 from ._base import Builder, ParallelGroup, SplitSide
 
 

@@ -11,7 +11,7 @@ from lmdeploy.archs import get_model_arch
 
 from .. import _tm
 from ..builders import _act_type_id
-from ..linear import Linear, _dequant_linear
+from ..builders.linear import Linear, _build_linear, _dequant_linear
 
 
 def source_model_config(model_config):
@@ -398,8 +398,8 @@ def read_packed_moe_expert(
         ``TrivialFormat.normalize``. Only affects the ``weight`` kind on
         trivial-format linears; quantized formats use their own normalizers.
     """
-    gate_up = resolver.resolve(gate_up_pfx, index=expert_idx)
-    down    = resolver.resolve(down_pfx,    index=expert_idx)
+    gate_up = _build_linear(*resolver.resolve(gate_up_pfx, index=expert_idx))
+    down = _build_linear(*resolver.resolve(down_pfx, index=expert_idx))
 
     if trans:
         for lin in (gate_up, down):

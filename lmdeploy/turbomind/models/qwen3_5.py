@@ -50,7 +50,7 @@ from ..builders import (
 )
 from ..builders._base import ParallelGroup
 from ..builders.attention import split_output_gate
-from ..linear import Linear
+from ..builders.linear import Linear
 from ..text_model import TextModel
 from ..vision_model import VisionModel
 from ..weight_format import TrivialFormat

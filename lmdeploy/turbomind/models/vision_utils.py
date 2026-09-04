@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 
 from .. import _tm
-from ..linear import Linear, transform_input_dim, transform_output_dim
+from ..builders.linear import Linear, transform_input_dim, transform_output_dim
 from ..weight_format import TrivialFormat
 
 

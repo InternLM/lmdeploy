@@ -18,7 +18,7 @@ from ..builders import (
     TextModelBuilder,
     _act_type_id,
 )
-from ..linear import transform_output_dim
+from ..builders.linear import transform_output_dim
 from ..text_model import TextModel
 from .base import INPUT_MODELS
 from .utils import (

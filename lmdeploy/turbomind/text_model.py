@@ -6,12 +6,13 @@ from abc import ABC
 from typing import TYPE_CHECKING
 
 from .builders import NormBuilder, make_norm_config
+from .builders.linear import _build_linear
 
 if TYPE_CHECKING:
     from transformers import PretrainedConfig
 
     from .checkpoint import Prefix
-    from .linear import Linear
+    from .builders.linear import Linear
 
 
 class TextModel(ABC):
@@ -50,7 +51,10 @@ class TextModel(ABC):
 
     def _linear(self, pfx: Prefix, *,
                 optional: bool = False) -> Linear | None:
-        return self._resolver.resolve(pfx, optional=optional)
+        resolved = self._resolver.resolve(pfx, optional=optional)
+        if resolved is None:
+            return None
+        return _build_linear(*resolved)
 
     def norm(self, pfx, transform=None, *, zero_centered=False):
         weight = pfx.pop('weight')
