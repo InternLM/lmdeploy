@@ -292,8 +292,6 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 out_names=[0, 1],
                 prefix=f'{prefix}.fused_qkv_a_proj' if prefix else '',
             )
-
-        if self.q_lora_rank is not None:
             self.q_a_layernorm = RMSNorm(config.q_lora_rank,
                                          1e-6,
                                          quant_config=quantization_config,
