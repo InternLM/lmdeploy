@@ -787,7 +787,7 @@ def test_messages_streaming_rejects_unidentified_xml_tool_call():
 
     async def _result_generator():
         yield SimpleNamespace(
-            response='<tool_call><parameter=query>nvd zabbix</parameter>',
+            response='</think><tool_call><parameter=query>nvd zabbix</parameter>',
             token_ids=[101],
             input_token_len=8,
             generate_token_len=1,
