@@ -3,6 +3,7 @@ import asyncio
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import replace
+from functools import partial
 
 import torch
 
@@ -10,6 +11,8 @@ from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MemDecodeConfig, ModelConfig
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_engine.collector import collect_block_cache_requests
+from lmdeploy.pytorch.engine.cache_engine.plan import build_block_cache_plan
 from lmdeploy.pytorch.memdecode.fusion import MemDecodeFusion
 from lmdeploy.pytorch.model_inputs import ModelInputs, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, build_patched_model, update_custom_module_map
@@ -82,6 +85,7 @@ class MemDecodeAgent:
         self.model_config = memdecode_config.memory_model_config
         self.cache_config = None
         self.cache_engine = None
+        self.block_cache_plan = None
         self.state_cache_engine = None
         self.model = None
         self.fusion = None
@@ -147,19 +151,29 @@ class MemDecodeAgent:
                                                     backend_config=self.backend_config,
                                                     device=self.device)
 
+    def build_cache_plan(self, cache_config: CacheConfig) -> int:
+        """Build and retain the rank-local memory-model cache plan."""
+        with self.memory_context():
+            tp = get_dist_manager().current_context().dist_config.attn_tp
+            request_collector = partial(collect_block_cache_requests, self.model)
+            self.block_cache_plan = build_block_cache_plan(
+                self.model_config,
+                cache_config,
+                tp,
+                request_collector=request_collector,
+            )
+            return self.block_cache_plan.logical_block_nbytes
+
     def build_cache_engine(self, cache_stream: torch.cuda.Stream):
         """Build cache engine."""
         with self.memory_context():
             dist_ctx = get_dist_manager().current_context()
-            dist_config = dist_ctx.dist_config
-            tp = dist_config.attn_tp
             self.cache_engine = CacheEngine(
                 self.cache_config,
-                self.model_config,
                 rank=self.dist_ctx.rank,
                 tp_rank=dist_ctx.attn_tp_group.rank,
-                world_size=tp,
                 cache_stream=cache_stream,
+                block_cache_plan=self.block_cache_plan,
             )
             if len(self.model_config.states_shapes) > 0:
                 state_cache_config = replace(
@@ -223,6 +237,7 @@ class MemDecodeAgent:
         """Release memory model resources."""
         self.model = None
         self.cache_engine = None
+        self.block_cache_plan = None
         self.state_cache_engine = None
 
 
