@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from lmdeploy.pytorch import messages as messages_module
-from lmdeploy.pytorch.messages import SamplingParam, UpdateTokenMode
+from lmdeploy.pytorch.messages import InputEmbeddings, SamplingParam, UpdateTokenMode
 from lmdeploy.pytorch.paging import Scheduler
 from lmdeploy.vl.constants import Modality
 
@@ -800,3 +800,37 @@ class TestBlockTrie(BlockTrieTestMixin):
         assert block3_identity[0] is seq.prefix_cache.multimodal_spans[2]
         assert len(seq.prefix_cache.block_extra_identity) == 4
         assert seq.prefix_cache.num_indexed_spans == 3
+
+    def test_input_embedding_values_are_part_of_prefix_identity(self, block_trie, block_mgr, scheduler):
+        """Equal placeholder ids must not reuse KV for different embedding
+        values."""
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [7] * block_size + [8]
+
+        def embedding(value):
+            return InputEmbeddings(
+                embeddings=np.full((3, 4), value, dtype=np.float32),
+                start=2,
+                end=5,
+            )
+
+        cached = sess.add_sequence(token_ids, input_embeddings=[embedding(1.0)])
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+
+        # A same-value request is a valid hit and proves the identity is stable.
+        same = sess.add_sequence(token_ids, input_embeddings=[embedding(1.0)])
+        block_trie.match(same)
+        assert same.num_history_ids == block_size
+
+        # Changing only the embedding tensor must force a miss even though token ids and
+        # placeholder ranges are identical.
+        different = sess.add_sequence(token_ids, input_embeddings=[embedding(2.0)])
+        block_trie.match(different)
+        assert different.num_history_ids == 0
+
+        identity = different.get_prefix_cache_extra_identity(0, block_size)
+        assert len(identity) == 1
+        assert identity[0].modality == 'input_embedding'
+        assert identity[0].content_hash != cached.get_prefix_cache_extra_identity(0, block_size)[0].content_hash
