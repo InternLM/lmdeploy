@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from dataclasses import dataclass
+
 import torch
 from torch import Tensor
 
@@ -10,6 +12,13 @@ from lmdeploy.utils import get_logger
 from ..nsa import BaseNSAIndexFP8, BaseNSAIndexFP8Builder, NSAIndexMeta
 
 logger = get_logger('lmdeploy')
+
+
+@dataclass
+class DlinferNSAIndexMeta(NSAIndexMeta):
+    """dlinfer-specific NSA metadata for Ascend cache writes."""
+
+    kv_start_indices: Tensor | None = None
 
 
 class DlinferNSAIndexBF16(BaseNSAIndexFP8):
@@ -44,12 +53,12 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
         )
         return (request, )
 
-    def get_step_metadata(self, attn_metadata) -> NSAIndexMeta:
+    def get_step_metadata(self, attn_metadata) -> DlinferNSAIndexMeta:
         """Build the per-step metadata consumed by the Lightning Indexer."""
         if attn_metadata is None:
             raise RuntimeError('Ascend NSA metadata is required.')
 
-        if isinstance(attn_metadata, NSAIndexMeta):
+        if isinstance(attn_metadata, DlinferNSAIndexMeta):
             return attn_metadata
 
         q_seqlens = getattr(attn_metadata, 'q_seqlens', None)
@@ -59,7 +68,7 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
             raise RuntimeError(
                 'Ascend NSA metadata is missing sequence lengths.')
 
-        return NSAIndexMeta(
+        return DlinferNSAIndexMeta(
             cu_seqlen_q=cu_seqlens_q,
             q_seqlens=q_seqlens,
             k_seqlens=kv_seqlens,
@@ -86,7 +95,7 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
         k: Tensor,
         weights: Tensor,
         indexer_k_cache: Tensor,
-        meta: NSAIndexMeta,
+        meta: DlinferNSAIndexMeta,
     ) -> Tensor:
         if meta.kv_start_indices is None:
             raise RuntimeError(
@@ -130,7 +139,7 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
         k: Tensor,
         weights: Tensor,
         indexer_k_cache: Tensor,
-        meta: NSAIndexMeta,
+        meta: DlinferNSAIndexMeta,
     ) -> Tensor:
         return self._forward_index(q, k, weights, indexer_k_cache, meta)
 
@@ -147,7 +156,7 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
         norm_eps: float,
         head_gate_scale: float,
         rope_interleaved: bool,
-        meta: NSAIndexMeta,
+        meta: DlinferNSAIndexMeta,
     ) -> Tensor:
         raise NotImplementedError(
             'DSA indexer fused preprocessing is not supported on Ascend.')
