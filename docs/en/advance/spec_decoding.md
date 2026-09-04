@@ -104,6 +104,29 @@ deepseek-ai/DeepSeek-V3 \
 --max-batch-size 128
 ```
 
+### MiMo-V2-Flash MTP
+
+MiMo-V2-Flash stores three MTP prediction layers in the target checkpoint, so no separate draft model is required. The following TP 4 configuration is a directly runnable example:
+
+```shell
+lmdeploy serve api_server \
+XiaomiMiMo/MiMo-V2-Flash \
+--backend pytorch \
+--trust-remote-code \
+--tp 4 \
+--session-len 262144 \
+--cache-max-entry-count 0.6 \
+--max-batch-size 128 \
+--speculative-algorithm mimo_mtp \
+--speculative-num-draft-tokens 3
+```
+
+MiMo MTP supports one to three draft tokens per step. TP 4 and TP 8 have been validated. CUDA Graph is enabled by default; prefix caching can be enabled with `--enable-prefix-caching` and uses paged verification without flattening the logical KV sequence.
+
+The full-attention path uses FlashAttention 3 only when the installed implementation supports MiMo's asymmetric Q/K and V head dimensions (192 and 128). Otherwise, LMDeploy selects its Triton implementation before execution.
+
+For an eight-GPU production deployment that combines data-parallel attention and expert parallelism, use `--tp 8 --dp 2 --ep 8 --distributed-executor-backend ray` together with an LMDeploy proxy. This topology has two attention groups of TP 4 while the MoE layers use EP 8.
+
 ## Guided Decoding with Speculative Decoding
 
 Speculative decoding (MTP) can be combined with [structured output](./structed_output.md) so that the draft tokens proposed by the spec model also respect the grammar constraints (e.g. JSON schema, regex). This significantly improves the acceptance rate compared to running spec decoding without grammar masks.
