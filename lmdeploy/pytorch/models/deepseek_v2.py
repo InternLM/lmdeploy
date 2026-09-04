@@ -1196,7 +1196,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         return self.model.get_input_embeddings()
 
     def _map_modelslim_param_name(self, name: str, params_dict: dict[str, nn.Parameter]) -> str | None:
-        """Map ModelSlim checkpoint auxiliary tensors to lmdeploy parameters."""
+        """Map ModelSlim checkpoint auxiliary tensors to lmdeploy
+        parameters."""
         quantization_config = self.quantization_config or {}
         if quantization_config.get('quant_method') != 'modelslim':
             return name

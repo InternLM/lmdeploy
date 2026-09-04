@@ -172,7 +172,8 @@ class StaticW8A8Linear(W8A8Linear):
             'input_scale', torch.nn.Parameter(torch.empty((1, ), dtype=self.dtype, device=device),
                                               requires_grad=False))
         self.register_parameter(
-            'input_offset', torch.nn.Parameter(torch.empty((1, ), dtype=torch.int8, device=device), requires_grad=False))
+            'input_offset',
+            torch.nn.Parameter(torch.empty((1, ), dtype=torch.int8, device=device), requires_grad=False))
         self.register_parameter(
             'deq_scale', torch.nn.Parameter(torch.empty((out_features, ), dtype=torch.float32, device=device),
                                             requires_grad=False))
