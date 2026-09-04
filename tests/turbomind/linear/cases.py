@@ -194,13 +194,9 @@ class LinearCase:
             raise ValueError('fuse_silu_requires_gate_up_shape')
         if self.fuse_silu and self.expert_num > 0 and not self.moe_indexed:
             raise ValueError('moe_fuse_silu_requires_indexed_gate_up')
-        supports_prepacked4_fuse_silu = (
-            self.data_type == 'bf16'
-            and self.input_type == 'bf16'
-            and (
-                (self.weight_type == 'uint4' and self.group_size == 128)
-                or (self.weight_type == 'fp4_e2m1' and self.group_size in (16, 32))
-            )
+        supports_prepacked4_fuse_silu = self.input_type == self.data_type and (
+            (self.data_type in ('fp16', 'bf16') and self.weight_type == 'uint4' and self.group_size == 128)
+            or (self.data_type == 'bf16' and self.weight_type == 'fp4_e2m1' and self.group_size in (16, 32))
         )
         supports_fp8_mxfp4 = (
             self.data_type == 'bf16'
@@ -420,26 +416,19 @@ def is_fp8_mxfp4(type_spec: TypeSpec) -> bool:
 def is_supported(type_spec: TypeSpec, shape: ShapeSpec) -> bool:
     """Drop type×shape cells with no TurboMind kernel / quant path.
 
-    - fp16×uint4 MoE: gemm dispatch has no SM90 f16×u4 grouped kernel today
-      (``No feasible kernel ... sm90_f16_u4k128_..._ibb_...``). The native
-      BF16×U4 K128 path supports grouped indexed/blocked layouts.
     - fp16×fp4: SM90 MXF4 configs are registered for bfloat16 only
       (``sm90_16816_4.cu``); half×e2m1 dense hits ``..._f16_e2m1k32_f16_...`` miss.
     - fp16×fp8: SM90 E4M3 configs use ``bfloat16_t`` as Tc only
       (``sm90_16816_8.cu``); half Tc hits ``..._e4m3..._f16_tnt_...`` miss.
-    - fp16 MoE: SM90 gemm dispatch has no fp16 indexed/blocked grouped kernel
+    - fp16×fp16 MoE: SM90 gemm dispatch has no fp16 indexed/blocked grouped kernel
       (``No feasible kernel ... sm90_f16_f16_f16_tnt_ibb_...``); the GMMA
       grouped kernels are bf16-only.
     """
     if is_fp8_mxfp4(type_spec) and (shape.input_dim % 128 or shape.output_dim % 64):
         return False
-    supports_native_prepacked4 = (
-        type_spec.data_type == 'bf16'
-        and type_spec.input_type == 'bf16'
-        and (
-            (type_spec.weight_type == 'uint4' and type_spec.group_size == 128)
-            or (type_spec.weight_type == 'fp4_e2m1' and type_spec.group_size in (16, 32))
-        )
+    supports_native_prepacked4 = type_spec.input_type == type_spec.data_type and (
+        (type_spec.data_type in ('fp16', 'bf16') and type_spec.weight_type == 'uint4' and type_spec.group_size == 128)
+        or (type_spec.data_type == 'bf16' and type_spec.weight_type == 'fp4_e2m1' and type_spec.group_size in (16, 32))
     )
     if type_spec.weight_type == 'uint4' and shape.expert_num > 0 and not supports_native_prepacked4:
         return False
@@ -459,20 +448,16 @@ def is_supported(type_spec: TypeSpec, shape: ShapeSpec) -> bool:
 def supports_fuse_silu(type_spec: TypeSpec, shape: ShapeSpec) -> bool:
     """FP8/BF16/U4 SM90 gate_up can optionally use block-pack + kGatedSilu.
 
-    BF16-input kernels pair 64-wide gate/up blocks. Only native FP8xFP8 uses
+    FP16/BF16-input kernels pair 64-wide gate/up blocks. Only native FP8xFP8 uses
     128-wide pairs.
     """
     if not shape.name.endswith('_gate_up'):
         return False
     if shape.expert_num > 0 and not shape.moe_indexed:
         return False
-    supports_native_prepacked4 = (
-        type_spec.data_type == 'bf16'
-        and type_spec.input_type == 'bf16'
-        and (
-            (type_spec.weight_type == 'uint4' and type_spec.group_size == 128)
-            or (type_spec.weight_type == 'fp4_e2m1' and type_spec.group_size in (16, 32))
-        )
+    supports_native_prepacked4 = type_spec.input_type == type_spec.data_type and (
+        (type_spec.data_type in ('fp16', 'bf16') and type_spec.weight_type == 'uint4' and type_spec.group_size == 128)
+        or (type_spec.data_type == 'bf16' and type_spec.weight_type == 'fp4_e2m1' and type_spec.group_size in (16, 32))
     )
     supports_weight = (
         type_spec.weight_type in ('fp8_e4m3', 'bf16')
@@ -608,7 +593,7 @@ def _slice_case(case: LinearCase, tp: int, ep: int) -> LinearCase | None:
 
     if case.group_size and input_dim % case.group_size:
         return None
-    if case.data_type == 'bf16' and case.weight_type == 'uint4' and output_dim % 64:
+    if case.data_type in ('fp16', 'bf16') and case.weight_type == 'uint4' and output_dim % 128:
         return None
     fp8_mxfp4 = (
         case.data_type == 'bf16'

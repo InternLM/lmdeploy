@@ -2,12 +2,9 @@
 
 #pragma once
 
-#include "src/turbomind/kernels/gemm/family.h"
 #include "src/turbomind/kernels/gemm/sm90_mixed_traits.h"
 
 namespace turbomind::gemm {
-
-extern const Family Sm90U4Family;
 
 namespace detail {
 

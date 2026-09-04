@@ -3,13 +3,13 @@
 #pragma once
 
 /*
- * SM90 BF16 x prepacked mixed-precision GEMM.
+ * SM90 FP16/BF16 x prepacked mixed-precision GEMM.
  *
  * Public problem:
- *   A: BF16 activation, row-major [BATCH, K]
+ *   A: FP16 or BF16 activation, row-major [BATCH, K]
  *   B: packed U4, MXFP4, NVFP4, or E4M3 weight, col-major logical [K, OUT]
  *   V: format-specific K-group metadata
- *   C: BF16 output, row-major [BATCH, OUT]
+ *   C: FP16 or BF16 output, row-major [BATCH, OUT]
  *
  * Hardware problem:
  *   WGMMA operand A = dequantized weight RS fragment [OUT, K64]
@@ -26,6 +26,7 @@
 #include <type_traits>
 
 #include <cuda_bf16.h>
+#include <cuda_fp16.h>
 
 #include "cute/algorithm/gemm.hpp"
 #include "cute/arch/copy_sm80.hpp"
@@ -90,45 +91,57 @@ mixed_tma_load_with_barrier(const cute::TmaDescriptor* desc,
     }
 }
 
-// One word contains eight U4 values in operand-A fragment order.  LOP3
-// materializes four BF16x2 pairs biased by +128; packed qparams are expanded
-// immediately before the dequantization arithmetic.
-__device__ __forceinline__ void
-u4_unpack_dequant(uint32_t packed, uint32_t scales, uint32_t zeros, nv_bfloat16* out)
+// One word contains eight U4 values in operand-A fragment order. LOP3
+// materializes four 16-bit pairs biased so adjacent bit patterns are adjacent
+// integers; packed qparams are expanded immediately before dequantization.
+template<class T>
+__device__ __forceinline__ void u4_unpack_dequant(uint32_t packed, uint32_t scales, uint32_t zeros, T* out)
 {
-    constexpr uint32_t kBf16x2_128 = 0x43004300u;
+    static_assert(std::is_same_v<T, half_t> || std::is_same_v<T, bfloat16_t>);
+    constexpr uint32_t kBiasPair   = std::is_same_v<T, half_t> ? 0x64006400u : 0x43004300u;
     constexpr uint32_t kNibbleMask = 0x000f000fu;
     constexpr uint32_t kLut        = (0xf0 & 0xcc) | 0xaa;
 
     uint32_t zero_pair;
     asm volatile("lop3.b32 %0, %1, %2, %3, %4;"
                  : "=r"(zero_pair)
-                 : "r"(zeros), "n"(kNibbleMask), "n"(kBf16x2_128), "n"(kLut));
+                 : "r"(zeros), "n"(kNibbleMask), "n"(kBiasPair), "n"(kLut));
 
     auto* h = reinterpret_cast<uint32_t*>(out);
     asm volatile("lop3.b32 %0, %1, %2, %3, %4;"
                  : "=r"(h[0])
-                 : "r"(packed), "n"(kNibbleMask), "n"(kBf16x2_128), "n"(kLut));
+                 : "r"(packed), "n"(kNibbleMask), "n"(kBiasPair), "n"(kLut));
     asm volatile("lop3.b32 %0, %1, %2, %3, %4;"
                  : "=r"(h[1])
-                 : "r"(packed >> 4), "n"(kNibbleMask), "n"(kBf16x2_128), "n"(kLut));
+                 : "r"(packed >> 4), "n"(kNibbleMask), "n"(kBiasPair), "n"(kLut));
     asm volatile("lop3.b32 %0, %1, %2, %3, %4;"
                  : "=r"(h[2])
-                 : "r"(packed >> 8), "n"(kNibbleMask), "n"(kBf16x2_128), "n"(kLut));
+                 : "r"(packed >> 8), "n"(kNibbleMask), "n"(kBiasPair), "n"(kLut));
     asm volatile("lop3.b32 %0, %1, %2, %3, %4;"
                  : "=r"(h[3])
-                 : "r"(packed >> 12), "n"(kNibbleMask), "n"(kBf16x2_128), "n"(kLut));
+                 : "r"(packed >> 12), "n"(kNibbleMask), "n"(kBiasPair), "n"(kLut));
 
-    const auto& scale = reinterpret_cast<const nv_bfloat162&>(scales);
-    const auto& zero  = reinterpret_cast<const nv_bfloat162&>(zero_pair);
-    auto*       h2    = reinterpret_cast<nv_bfloat162*>(out);
+    if constexpr (std::is_same_v<T, half_t>) {
+        const auto& scale = reinterpret_cast<const half2&>(scales);
+        const auto& zero  = reinterpret_cast<const half2&>(zero_pair);
+        auto*       h2    = reinterpret_cast<half2*>(out);
+        h2[0] = __hmul2(__hsub2(h2[0], __half2half2(zero.x)), __half2half2(scale.x));
+        h2[1] = __hmul2(__hsub2(h2[1], __half2half2(zero.y)), __half2half2(scale.y));
+        h2[2] = __hmul2(__hsub2(h2[2], __half2half2(zero.x)), __half2half2(scale.x));
+        h2[3] = __hmul2(__hsub2(h2[3], __half2half2(zero.y)), __half2half2(scale.y));
+    }
+    else {
+        const auto& scale = reinterpret_cast<const nv_bfloat162&>(scales);
+        const auto& zero  = reinterpret_cast<const nv_bfloat162&>(zero_pair);
+        auto*       h2    = reinterpret_cast<nv_bfloat162*>(out);
 
-    // __bfloat162bfloat162 broadcasts x/y to both BF16 lanes; SM90 lowers
-    // these operands to the H0_H0/H1_H1 modifiers without materializing pairs.
-    h2[0] = __hmul2(__hsub2(h2[0], __bfloat162bfloat162(zero.x)), __bfloat162bfloat162(scale.x));
-    h2[1] = __hmul2(__hsub2(h2[1], __bfloat162bfloat162(zero.y)), __bfloat162bfloat162(scale.y));
-    h2[2] = __hmul2(__hsub2(h2[2], __bfloat162bfloat162(zero.x)), __bfloat162bfloat162(scale.x));
-    h2[3] = __hmul2(__hsub2(h2[3], __bfloat162bfloat162(zero.y)), __bfloat162bfloat162(scale.y));
+        // __bfloat162bfloat162 broadcasts x/y to both BF16 lanes; SM90 lowers
+        // these operands to the H0_H0/H1_H1 modifiers without materializing pairs.
+        h2[0] = __hmul2(__hsub2(h2[0], __bfloat162bfloat162(zero.x)), __bfloat162bfloat162(scale.x));
+        h2[1] = __hmul2(__hsub2(h2[1], __bfloat162bfloat162(zero.y)), __bfloat162bfloat162(scale.y));
+        h2[2] = __hmul2(__hsub2(h2[2], __bfloat162bfloat162(zero.x)), __bfloat162bfloat162(scale.x));
+        h2[3] = __hmul2(__hsub2(h2[3], __bfloat162bfloat162(zero.y)), __bfloat162bfloat162(scale.y));
+    }
 }
 
 // Decode two direct and two nibble-rotated E4M3 pair planes into the BF16 register fragment consumed by one
@@ -161,8 +174,8 @@ __device__ __forceinline__ void fp8_e4m3_unpack_dequant(const uint32_t* packed, 
     }
 }
 
-template<int GroupSize>
-struct Sm90MixedDequant<Sm90U4Format<GroupSize>> {
+template<int GroupSize, DataType Dtype>
+struct Sm90MixedDequant<Sm90U4Format<GroupSize, Dtype>> {
     static constexpr int kWordsPerThreadKBlock = 1;
 
     struct SharedStorage {};
@@ -192,11 +205,11 @@ struct Sm90MixedDequant<Sm90U4Format<GroupSize>> {
         static_assert(TileOut == RestM * AtomM * 64);
         CUTE_UNROLL
         for (int rest_m = 0; rest_m < RestM; ++rest_m) {
-            constexpr int kScaleBytes = kSm90MixedFragmentN * sizeof(bfloat16_t);
+            constexpr int kScaleBytes = kSm90MixedFragmentN * sizeof(uint16_t);
             const int     segment     = segment_base + rest_m * segment_stride;
             const auto* fragment =
                 smem + (group * TileOut / kSm90MixedFragmentN + segment)
-                           * Sm90U4Format<GroupSize>::kQparamValuesFragment;
+                           * Sm90U4Format<GroupSize, Dtype>::kQparamValuesFragment;
             const int pair = local_tid / 4;
             const uint32_t scales = reinterpret_cast<const uint32_t*>(fragment)[pair];
             // The 16 lanes owning one 8x16 core matrix broadcast its eight
@@ -214,7 +227,7 @@ struct Sm90MixedDequant<Sm90U4Format<GroupSize>> {
             int                  rest_m,
             int                  local_tid,
             const SharedStorage&,
-            nv_bfloat16* out)
+            data_type_t<Dtype>* out)
     {
         const int      pair  = local_tid / 4;
         const uint32_t zeros = regs.zeros[rest_m] >> ((pair % 4) * 4);
@@ -453,7 +466,7 @@ struct MixedEpiPipeStages<Tile, std::void_t<decltype(Tile::kEpiPipeStages)>> {
 // Grouped descriptor preparation. Every mixed grouped instantiation publishes
 // [A, packed B, V, C]. Indexed kernels normally gather A, but blocked/flat
 // descriptors dispatched through the same instantiation use A's affine map.
-template<Striding kStridingA>
+template<class T, Striding kStridingA>
 __global__ void __launch_bounds__(32, 1) prepare_tma_descs_sm90_mixed(const __grid_constant__ CUtensorMap tm_a,
                                                                       const __grid_constant__ CUtensorMap tm_b,
                                                                       const __grid_constant__ CUtensorMap tm_v,
@@ -484,10 +497,10 @@ __global__ void __launch_bounds__(32, 1) prepare_tma_descs_sm90_mixed(const __gr
         }
     }
 
-    const auto a = resolve<nv_bfloat16, kStridingA>(param_A, g);
+    const auto a = resolve<T, kStridingA>(param_A, g);
     const auto b = detail::resolve_mixed_group_ptr(param_B, g);
     const auto v = detail::resolve_mixed_group_ptr(param_V, g);
-    const auto c = resolve<nv_bfloat16, Striding::kBlocked>(param_C, g);
+    const auto c = resolve<T, Striding::kBlocked>(param_C, g);
 
     Array<const CUtensorMap*, 4> templates;
     templates[0] = &tm_a;
@@ -505,10 +518,10 @@ __global__ void __launch_bounds__(32, 1) prepare_tma_descs_sm90_mixed(const __gr
     dims[2] = -1;
     dims[3] = M_desc;
     Array<uint64_t, 4> strides;
-    strides[0] = (uint64_t)a.ptr.stride * sizeof(nv_bfloat16);
+    strides[0] = (uint64_t)a.ptr.stride * sizeof(T);
     strides[1] = 0;
     strides[2] = 0;
-    strides[3] = (uint64_t)c.ptr.stride * sizeof(nv_bfloat16);
+    strides[3] = (uint64_t)c.ptr.stride * sizeof(T);
     detail::rebase_publish_mixed_tma_descs<4>(out + g * kNum, smem_desc, templates, addrs, dims, strides, lane);
 }
 
@@ -549,10 +562,11 @@ struct GemmUniversalSm90Mixed {
     static constexpr int TILE_K     = kSm90MixedTileK;
     static constexpr int kGroupSize = Format::kGroupSize;
 
-    using Ta = nv_bfloat16;
+    static_assert(Format::kDataType == kHalf || Format::kDataType == kBfloat16);
+    using Ta = data_type_t<Format::kDataType>;
     using Tb = typename Format::WeightType;
     using Tv = typename Format::QparamType;
-    using Tc = nv_bfloat16;
+    using Tc = Ta;
 
     static_assert(TILE_K % kGroupSize == 0 || kGroupSize % TILE_K == 0);
     static constexpr int kKTilesPerQGroup = kGroupSize >= TILE_K ? kGroupSize / TILE_K : 1;
@@ -560,7 +574,9 @@ struct GemmUniversalSm90Mixed {
     static_assert(kKTilesPerQGroup * TILE_K == kQGroupsPerStage * kGroupSize);
 
     using WGLayout      = typename Tile::WGLayout;
-    using Traits        = GmmaMixedTraits<TILE_N, TILE_M, Tile::Stages, WGLayout, detail::MixedMmaN<Tile>::value>;
+    using MmaElement    = std::conditional_t<Format::kDataType == kHalf, cutlass::half_t, cutlass::bfloat16_t>;
+    using Traits        = GmmaMixedTraits<TILE_N, TILE_M, Tile::Stages, WGLayout, detail::MixedMmaN<Tile>::value, MmaElement>;
+    using EpiElement    = typename Traits::ElementB;
     using AtomLayoutMNK = typename Traits::AtomLayoutMNK;
     using TiledMma      = typename Traits::TiledMma;
     using MmaIssue      = detail::GmmaIssue<Traits::kMmaNSlices, detail::MixedSeparateMmaAtoms<Tile>::value, 2>;
@@ -728,8 +744,7 @@ struct GemmUniversalSm90Mixed {
     // Public tile geometry follows GEMM's conventional (M,N) order. WGMMA C and
     // the STSM destination are (N,M), so that physical permutation stays here.
     using CrossWgSiluLayout = cute::Layout<cute::Shape<cute::Int<kEpiM>, cute::Int<kTmaStoreN>>, cute::Stride<cute::Int<kTmaStoreN>, cute::_1>>;
-    using SmemLayoutAtomD = decltype(
-        gmma_ss_smem_selector<cute::GMMA::Major::MN, cutlass::bfloat16_t, cute::Int<kEpiN>, cute::Int<kEpiM>>());
+    using SmemLayoutAtomD = decltype(gmma_ss_smem_selector<cute::GMMA::Major::MN, EpiElement, cute::Int<kEpiN>, cute::Int<kEpiM>>());
     using SmemLayoutDPlane =
         decltype(cute::tile_to_shape(SmemLayoutAtomD{},
                                      cute::make_shape(cute::Int<kEpiN>{}, cute::Int<kEpiM>{}, cute::_1{}),
@@ -816,7 +831,7 @@ struct GemmUniversalSm90Mixed {
             return nullptr;
         }
         int* offsets = reinterpret_cast<int*>(out + num_groups * kTmaDescNum);
-        prepare_tma_descs_sm90_mixed<kStridingA>
+        prepare_tma_descs_sm90_mixed<Ta, kStridingA>
             <<<num_groups, 32, 0, stream>>>(tm_a, tm_b, tm_v, tm_c, param_A, param_B, param_V, param_C, out, offsets, M);
         return offsets;
     }
@@ -1270,7 +1285,7 @@ private:
         using EpiTiledMma = std::conditional_t<kSplitEpiM, typename Traits::WgTiledMma, TiledMma>;
         EpiTiledMma epi_tiled_mma;
         auto tiled_copy_C_atom = cute::make_tiled_copy_C_atom(copy_atom_c, epi_tiled_mma);
-        auto tiled_r2s = cute::make_tiled_copy_S(cute::Copy_Atom<CopyOpR2S, cutlass::bfloat16_t>{}, tiled_copy_C_atom);
+        auto tiled_r2s = cute::make_tiled_copy_S(cute::Copy_Atom<CopyOpR2S, EpiElement>{}, tiled_copy_C_atom);
         auto thr_r2s   = tiled_r2s.get_slice(kSplitEpiM ? local_tid : mma_tid);
         auto tRS_rD_layout = cute::make_layout(cute::take<0, 3>(cute::shape(thr_r2s.partition_S(sD))));
 
@@ -1333,7 +1348,7 @@ private:
                             rest_m,
                             local_tid,
                             storage,
-                            reinterpret_cast<nv_bfloat16*>(frag.data()));
+                            reinterpret_cast<Ta*>(frag.data()));
                     }
                 };
 
@@ -1412,9 +1427,9 @@ private:
                                         int&                      epi_store_count)
     {
         auto tRS_rAcc     = thr_r2s.retile_S(accum);
-        auto tRS_rD       = cute::make_tensor<cutlass::bfloat16_t>(tRS_rD_layout);
+        auto tRS_rD       = cute::make_tensor<EpiElement>(tRS_rD_layout);
         auto tRS_rAcc_frg = cute::recast<cutlass::Array<float, kFragmentSize>>(tRS_rAcc);
-        auto tRS_rD_frg   = cute::recast<cutlass::Array<cutlass::bfloat16_t, kFragmentSize>>(tRS_rD);
+        auto tRS_rD_frg   = cute::recast<cutlass::Array<EpiElement, kFragmentSize>>(tRS_rD);
 
         constexpr int kMmaTileN = cute::size<0>(typename Traits::TileShape{}) / cute::size<1>(decltype(tRS_rAcc){});
         constexpr int kMmaTileM = (kSplitEpiM ? kWgM : cute::size<1>(typename Traits::TileShape{})) / cute::size<2>(decltype(tRS_rAcc){});
@@ -1495,18 +1510,18 @@ private:
                     if constexpr (!kCrossWgSilu) {
                         CUTE_UNROLL
                         for (int epi_v = 0; epi_v < cute::size(tRS_rD_frg); ++epi_v) {
-                            cutlass::Array<cutlass::bfloat16_t, kFragmentSize> dst;
+                            cutlass::Array<EpiElement, kFragmentSize> dst;
                             if constexpr (kFuse) {
                                 auto gate = tRS_rAcc_frg(cute::_, mma_n, mma_m)(r2s_v + epi_v);
                                 auto up   = tRS_rAcc_frg(cute::_, mma_n + 1, mma_m)(r2s_v + epi_v);
                                 CUTE_UNROLL
                                 for (int j = 0; j < kFragmentSize; ++j) {
                                     if constexpr (Format::kHasGlobalScale) {
-                                        dst[j] = cutlass::bfloat16_t(
+                                        dst[j] = EpiElement(
                                             detail::mixed_silu_mul(gate[j] * output_scale, up[j] * output_scale));
                                     }
                                     else {
-                                        dst[j] = cutlass::bfloat16_t(detail::mixed_silu_mul(gate[j], up[j]));
+                                        dst[j] = EpiElement(detail::mixed_silu_mul(gate[j], up[j]));
                                     }
                                 }
                             }
@@ -1515,10 +1530,10 @@ private:
                                 CUTE_UNROLL
                                 for (int j = 0; j < kFragmentSize; ++j) {
                                     if constexpr (Format::kHasGlobalScale) {
-                                        dst[j] = cutlass::bfloat16_t(src[j] * output_scale);
+                                        dst[j] = EpiElement(src[j] * output_scale);
                                     }
                                     else {
-                                        dst[j] = cutlass::bfloat16_t(src[j]);
+                                        dst[j] = EpiElement(src[j]);
                                     }
                                 }
                             }
@@ -1531,7 +1546,7 @@ private:
                             CrossWgSiluLayout{});
                         CUTE_UNROLL
                         for (int epi_v = 0; epi_v < cute::size(tRS_rD_frg); ++epi_v) {
-                            cutlass::Array<cutlass::bfloat16_t, kFragmentSize> dst;
+                            cutlass::Array<EpiElement, kFragmentSize> dst;
                             auto gate = tRS_rAcc_frg(cute::_, mma_n, mma_m)(r2s_v + epi_v);
                             CUTE_UNROLL
                             for (int j = 0; j < kFragmentSize; ++j) {
@@ -1540,11 +1555,11 @@ private:
                                 const int  m        = cute::get<1>(coord_nm);
                                 const float up      = silu_exchange(m, n);
                                 if constexpr (Format::kHasGlobalScale) {
-                                    dst[j] = cutlass::bfloat16_t(
+                                    dst[j] = EpiElement(
                                         detail::mixed_silu_mul(gate[j] * output_scale, up * output_scale));
                                 }
                                 else {
-                                    dst[j] = cutlass::bfloat16_t(detail::mixed_silu_mul(gate[j], up));
+                                    dst[j] = EpiElement(detail::mixed_silu_mul(gate[j], up));
                                 }
                             }
                             tRS_rD_frg(epi_v) = dst;

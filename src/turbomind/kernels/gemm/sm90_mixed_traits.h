@@ -40,15 +40,15 @@ struct GmmaMixedPackTraits {
 // Production GEMM traits. The public tile is BATCH x OUT x K64 while the
 // hardware tile is OUT x BATCH x K64 (packed weight is RS operand A). The
 // persistent weight ABI is [K/16][OUT/64][RS fragment].
-template<int Out, int Batch, int Stages_, class WGLayout_, int MmaN_ = 0>
+template<int Out, int Batch, int Stages_, class WGLayout_, int MmaN_ = 0, class Element_ = cutlass::bfloat16_t>
 struct GmmaMixedTraits {
     static constexpr int TILE_OUT   = Out;
     static constexpr int TILE_BATCH = Batch;
     static constexpr int TILE_K     = 64;
     static constexpr int Stages     = Stages_;
 
-    using ElementA = cutlass::bfloat16_t;
-    using ElementB = cutlass::bfloat16_t;
+    using ElementA = Element_;
+    using ElementB = Element_;
     using ElementC = float;
 
     using WGLayout      = WGLayout_;

@@ -166,20 +166,21 @@ inline constexpr int kSm90MixedTileK     = 64;
 inline constexpr int kSm90MixedFragmentN = 64;
 inline constexpr int kSm90MixedFragmentK = 16;
 inline constexpr int kSm90U4WordsPerTile = kSm90MixedTileN * kSm90MixedTileK / 8;
-inline constexpr int kSm90U4QparamValuesFragment =
-    kSm90MixedFragmentN * sizeof(bfloat16_t) + kSm90MixedFragmentN / 2;
+inline constexpr int kSm90U4QparamValuesFragment = kSm90MixedFragmentN * sizeof(uint16_t) + kSm90MixedFragmentN / 2;
 
 inline constexpr int kSm90Fp8E4M3GroupSize    = 128;
 inline constexpr int kSm90Fp8E4M3WordsPerTile = kSm90MixedTileN * kSm90MixedTileK / 4;
 
-template<int GroupSize>
+template<int GroupSize, DataType Dtype = kBfloat16>
 struct Sm90U4Format {
     static_assert(GroupSize == 32 || GroupSize == 128);
+    static_assert(Dtype == kHalf || Dtype == kBfloat16);
 
     using WeightType = uint4_t;
     using QparamType = uint8_t;
     using QparamSourceType = uint8_t;
 
+    static constexpr DataType kDataType          = Dtype;
     static constexpr Pack kWeightPack           = kSm90MixedWeightPack;
     static constexpr Pack kQparamPack           = kSm90MixedQParamPack;
     static constexpr int  kGroupSize            = GroupSize;
@@ -202,6 +203,7 @@ struct Sm90MxFp4Format {
     using QparamType = uint8_t;
     using QparamSourceType = uint8_t;
 
+    static constexpr DataType kDataType          = kBfloat16;
     static constexpr Pack kWeightPack           = kSm90MixedWeightPack;
     static constexpr Pack kQparamPack           = kSm90MxFp4QParamPack;
     static constexpr int  kGroupSize            = 32;
@@ -278,6 +280,7 @@ struct Sm90NvFp4Format {
     using QparamType = uint8_t;
     using QparamSourceType = uint8_t;
 
+    static constexpr DataType kDataType          = kBfloat16;
     static constexpr Pack kWeightPack           = kSm90MixedWeightPack;
     static constexpr Pack kQparamPack           = kSm90MixedQParamPack;
     static constexpr int  kGroupSize            = 16;
@@ -301,6 +304,7 @@ struct Sm90Fp8E4M3Format {
     using WeightType = fp8_e4m3_t;
     using QparamType = bfloat16_t;
 
+    static constexpr DataType kDataType          = kBfloat16;
     static constexpr Pack kWeightPack           = kSm90MixedWeightPack;
     static constexpr Pack kQparamPack           = kSm90MixedFp8QParamPack;
     static constexpr int  kGroupSize            = kSm90Fp8E4M3GroupSize;
@@ -330,15 +334,11 @@ void PackSm90Fp4PrmtWeight(uint32_t* dst, const uint16_t* src, int output_dim, i
 // order.
 void PackSm90Fp8E4M3Weight(uint32_t* dst, const uint16_t* src, int output_dim, int input_dim, cudaStream_t stream);
 
-// Transform col-major [N, K/group] BF16 scales and zeros into persistent
-// [K/group, N/64, RS qparam fragment] order. Each fragment stores 64 BF16
-// scales followed by 64 U4 zero points packed two per byte.
-void PackSm90U4QParams(uint8_t*          dst,
-                       const bfloat16_t* scales,
-                       const bfloat16_t* zeros,
-                       int               output_dim,
-                       int               group_count,
-                       cudaStream_t      stream);
+// Transform col-major [N, K/group] FP16 or BF16 scales and zeros into persistent
+// [K/group, N/64, RS qparam fragment] order. Each fragment stores 64 scales
+// followed by 64 U4 zero points packed two per byte.
+template<class T>
+void PackSm90U4QParams(uint8_t* dst, const T* scales, const T* zeros, int output_dim, int group_count, cudaStream_t stream);
 
 void PackSm90Fp4QParams(uint8_t* dst, const uint8_t* src, int output_dim, int group_count, cudaStream_t stream);
 

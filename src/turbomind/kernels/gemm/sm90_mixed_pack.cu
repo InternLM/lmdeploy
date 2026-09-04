@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include <cuda_bf16.h>
+#include <cuda_fp16.h>
 #include <cute/tensor.hpp>
 
 #include "src/turbomind/core/check.h"
@@ -506,12 +507,10 @@ pack_sm90_qparams_kernel(D* dst, const S* src, int output_dim, int total_tiles)
     }
 }
 
-__global__ __launch_bounds__(256) void pack_sm90_u4_qparams_kernel(uint8_t*          dst,
-                                                                   const bfloat16_t* scales,
-                                                                   const bfloat16_t* zeros,
-                                                                   int               output_dim,
-                                                                   int               total_tiles)
+template<class T>
+__global__ __launch_bounds__(256) void pack_sm90_u4_qparams_kernel(uint8_t* dst, const T* scales, const T* zeros, int output_dim, int total_tiles)
 {
+    static_assert(std::is_same_v<T, half_t> || std::is_same_v<T, bfloat16_t>);
     using namespace cute;
 
     using TiledMma = GmmaMixedPackTraits::TiledMma;
@@ -545,12 +544,20 @@ __global__ __launch_bounds__(256) void pack_sm90_u4_qparams_kernel(uint8_t*     
             auto* fragment =
                 dst + ((int64_t)group * fragments_n + fragment_n) * kSm90U4QparamValuesFragment;
 
-            reinterpret_cast<uint32_t*>(fragment)[pair] =
-                uint32_t(__bfloat16_as_ushort(tile_scales[m_lo]))
-                | (uint32_t(__bfloat16_as_ushort(tile_scales[m_hi])) << 16);
+            reinterpret_cast<uint32_t*>(fragment)[pair] = uint32_t(reinterpret_cast<const uint16_t&>(tile_scales[m_lo])) | (uint32_t(reinterpret_cast<const uint16_t&>(tile_scales[m_hi])) << 16);
 
-            const uint8_t zero_lo = tile_zeros ? static_cast<uint8_t>(__bfloat162int_rz(tile_zeros[m_lo])) : 0;
-            const uint8_t zero_hi = tile_zeros ? static_cast<uint8_t>(__bfloat162int_rz(tile_zeros[m_hi])) : 0;
+            uint8_t zero_lo = 0;
+            uint8_t zero_hi = 0;
+            if (tile_zeros) {
+                if constexpr (std::is_same_v<T, half_t>) {
+                    zero_lo = static_cast<uint8_t>(__half2int_rz(tile_zeros[m_lo]));
+                    zero_hi = static_cast<uint8_t>(__half2int_rz(tile_zeros[m_hi]));
+                }
+                else {
+                    zero_lo = static_cast<uint8_t>(__bfloat162int_rz(tile_zeros[m_lo]));
+                    zero_hi = static_cast<uint8_t>(__bfloat162int_rz(tile_zeros[m_hi]));
+                }
+            }
             const uint32_t zero_pair = zero_lo | (zero_hi << 4);
             const unsigned mask      = __activemask();
             const int      lane_base = (local_tid % 32) & ~15;
@@ -565,8 +572,7 @@ __global__ __launch_bounds__(256) void pack_sm90_u4_qparams_kernel(uint8_t*     
                                            | ((zero_2 & 0x0fu) << 8) | ((zero_3 & 0x0fu) << 12)
                                            | ((zero_0 & 0xf0u) << 12) | ((zero_1 & 0xf0u) << 16)
                                            | ((zero_2 & 0xf0u) << 20) | ((zero_3 & 0xf0u) << 24);
-                reinterpret_cast<uint32_t*>(fragment + kSm90MixedFragmentN * sizeof(bfloat16_t))[pair / 4] =
-                    zero_word;
+                reinterpret_cast<uint32_t*>(fragment + kSm90MixedFragmentN * sizeof(uint16_t))[pair / 4] = zero_word;
             }
         }
     }
@@ -654,12 +660,8 @@ void PackSm90QParams(D* dst, const S* src, int output_dim, int group_count, cuda
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
-void PackSm90U4QParams(uint8_t*          dst,
-                       const bfloat16_t* scales,
-                       const bfloat16_t* zeros,
-                       int               output_dim,
-                       int               group_count,
-                       cudaStream_t      stream)
+template<class T>
+void PackSm90U4QParams(uint8_t* dst, const T* scales, const T* zeros, int output_dim, int group_count, cudaStream_t stream)
 {
     TM_CHECK_NOTNULL(dst);
     TM_CHECK_NOTNULL(scales);
@@ -672,6 +674,9 @@ void PackSm90U4QParams(uint8_t*          dst,
     pack_sm90_u4_qparams_kernel<<<grid, 256, 0, stream>>>(dst, scales, zeros, output_dim, total_tiles);
     TM_CUDA_CHECK(cudaGetLastError());
 }
+
+template void PackSm90U4QParams(uint8_t*, const half_t*, const half_t*, int, int, cudaStream_t);
+template void PackSm90U4QParams(uint8_t*, const bfloat16_t*, const bfloat16_t*, int, int, cudaStream_t);
 
 void PackSm90Fp4QParams(uint8_t* dst, const uint8_t* src, int output_dim, int group_count, cudaStream_t stream)
 {

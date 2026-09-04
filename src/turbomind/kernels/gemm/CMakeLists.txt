@@ -17,8 +17,8 @@ set(GEMM2_KERNELS_SM80
 )
 set(GEMM2_KERNELS_SM90
     tma.cu
-    kernel/sm90_16816_4.cu
-    kernel/sm90_16816_8.cu
+    # kernel/sm90_16816_4.cu
+    # kernel/sm90_16816_8.cu
     kernel/sm90_64n32_8.cu
     kernel/sm90_64n16_4.cu
     kernel/sm90_64n16_mxfp4.cu
