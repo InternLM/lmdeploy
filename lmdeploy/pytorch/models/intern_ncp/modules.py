@@ -675,9 +675,8 @@ class OlmoAttention(nn.Module):
                 past_key_value: list[torch.Tensor] | None = None,
                 attn_metadata: Any = None):
         """Rewrite of _OlmoSelfAttention.forward."""
-        # qkv proj -> (batch, seq, num_heads, head_dim) each
         qkv_states = self.qkv_proj(hidden_states)
-        qkv_states = qkv_states.flatten(0, -2)  # (-1, heads_total, head_dim)
+        qkv_states = qkv_states.flatten(0, -2)  # [num_tokens, packed_qkv_dim]
         query_states, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
 
         # q, k norm (whole hidden_size)

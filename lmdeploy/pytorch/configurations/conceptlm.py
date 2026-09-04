@@ -224,13 +224,14 @@ class ConceptLMModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
         """build."""
+        trust_remote_code = bool(kwargs.get('trust_remote_code', False))
         _fill_concept_runtime_config(hf_config, model_path)
         _check_concept_runtime_config(hf_config)
         _normalize_concept_rotary_config(hf_config)
 
         # fill missing special token ids from the tokenizer
         if getattr(hf_config, 'bos_token_id', None) is None:
-            cls._fill_special_tokens(hf_config, model_path)
+            cls._fill_special_tokens(hf_config, model_path, trust_remote_code=trust_remote_code)
 
         model_config = DefaultModelConfigBuilder.build(hf_config, model_path, **kwargs)
 
@@ -284,10 +285,10 @@ class ConceptLMModelConfigBuilder(AutoModelConfigBuilder):
         return model_config
 
     @staticmethod
-    def _fill_special_tokens(hf_config, model_path: str = None):
+    def _fill_special_tokens(hf_config, model_path: str = None, trust_remote_code: bool = False):
         try:
             from transformers import AutoTokenizer
-            tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+            tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=trust_remote_code)
             hf_config.bos_token_id = tok.bos_token_id
             hf_config.eos_token_id = tok.eos_token_id
             if getattr(hf_config, 'pad_token_id', None) is None:

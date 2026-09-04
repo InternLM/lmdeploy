@@ -168,6 +168,28 @@ def test_conceptlm_model_config_reports_sparse_export_without_training_config(tm
         AutoModelConfigBuilder.build(hf_config, str(tmp_path))
 
 
+@pytest.mark.parametrize('trust_remote_code', [False, True])
+def test_conceptlm_special_token_fallback_respects_trust_remote_code(tmp_path, monkeypatch, trust_remote_code):
+    hf_config = _make_sparse_conceptlm_hf_config()
+    hf_config.bos_token_id = None
+    hf_config.eos_token_id = None
+    hf_config.pad_token_id = None
+    _write_conceptlm_training_config(tmp_path)
+    tokenizer_calls = []
+
+    def fake_from_pretrained(model_path, trust_remote_code=False):
+        tokenizer_calls.append((model_path, trust_remote_code))
+        return SimpleNamespace(bos_token_id=1, eos_token_id=2, pad_token_id=0)
+
+    monkeypatch.setattr('transformers.AutoTokenizer.from_pretrained', fake_from_pretrained)
+
+    model_config = ModelConfig.from_hf_config(hf_config, str(tmp_path), trust_remote_code=trust_remote_code)
+
+    assert tokenizer_calls == [(str(tmp_path), trust_remote_code)]
+    assert model_config.bos_token_id == 1
+    assert model_config.eos_token_id == [2]
+
+
 def test_conceptlm_yarn_rotary_config_uses_original_context_length(tmp_path):
     hf_config = _make_sparse_conceptlm_hf_config()
     _write_conceptlm_training_config(tmp_path)
