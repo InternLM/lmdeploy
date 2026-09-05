@@ -534,7 +534,7 @@ def terminate_node(node: Node):
         return 'Terminated successfully'
     except:  # noqa
         logger.error(f'Terminate node {node_url} failed.')
-        return 'Failed to terminate node {node_url}, please check the input url.'
+        return f'Failed to terminate node {node_url}, please check the input url.'
 
 
 @app.get('/nodes/terminate_all', dependencies=[Depends(validate_json_request)])
