@@ -51,6 +51,7 @@ class OpType(Enum):
 
     # Gated Delta
     CausalConv1d = auto()
+    GatedDeltaMeta = auto()
     GatedDeltaRule = auto()
 
 

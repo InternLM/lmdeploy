@@ -111,10 +111,11 @@ class ARModelInputsStrategy(ModelInputsStrategy):
                    device: str = 'cpu',
                    dummy_block_id: int = 0,
                    vocab_size: int = 1,
+                   max_q_seqlen: int = 1,
                    meta: MakeDummyMeta | None = None) -> ModelInputs:
         """Create dummy model inputs."""
         return make_dummy_inputs(batch_size,
-                                 max_q_seqlen=1,
+                                 max_q_seqlen=max_q_seqlen,
                                  is_decoding=is_decoding,
                                  device=device,
                                  dummy_block_id=dummy_block_id,

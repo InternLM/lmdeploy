@@ -8,8 +8,8 @@ from torch import nn
 from torch.profiler import record_function
 
 from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaMeta
 from lmdeploy.pytorch.distributed import get_tp_world_rank
-from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 from lmdeploy.utils import get_logger
 
@@ -30,59 +30,22 @@ def build_rmsnorm_gated(hidden_size: int, eps=1e-6, **kwargs):
     return FusedRMSNormGated(hidden_size, eps=eps, **kwargs)
 
 
-class GatedDeltaMeta:
+class GatedDeltaMetaBuilder:
+    """Build shared gated-delta metadata through the selected backend."""
 
-    def __init__(self, num_tokens: int, conv_kernel_size: int, state_ids: torch.Tensor, attn_metadata: Any):
-        self.num_tokens = num_tokens
-        self.is_decoding = attn_metadata.is_decoding
-        self.cu_seqlens = attn_metadata.cu_seqlens_q
-        self.cache_seqlens = None
-        self.num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
-        self.spec_conv_offsets = None
-        self.spec_state_offsets = None
+    def __init__(self) -> None:
+        backend = get_backend()
+        builder = backend.get_layer_impl_builder(OpType.GatedDeltaMeta)
+        self.impl = builder.build()
 
-        device = self.cu_seqlens.device
-
-        # get seq_idx (1, num_tokens)
-        seqlens = attn_metadata.q_seqlens
-        batch_size = seqlens.numel()
-        batch_idx = torch.arange(0, batch_size, dtype=torch.int32, device=device)
-        self.seq_idx = torch.repeat_interleave(batch_idx, seqlens, output_size=num_tokens)[None]
-
-        # conv_idx
-        range_idx = torch.arange(-conv_kernel_size, 0, device=device)
-        self.conv_idx = self.cu_seqlens[1:, None] + range_idx[None]
-        # TODO: fix last chunk with less conv kernel tokens
-        self.conv_idx = self.conv_idx.clamp_min(0)
-
-        self.is_init = None
-        self.is_init_token = None
-        if not self.is_decoding:
-            self.is_init = (attn_metadata.kv_seqlens - attn_metadata.q_seqlens) == 0
-            self.is_init_token = self.is_init.new_zeros(num_tokens, dtype=torch.bool)
-            self.is_init_token.scatter_(0, self.cu_seqlens[:-1].long(), self.is_init)
-
-        # for spec decoding
-        if self.num_spec_tokens > 0:
-            self.cache_seqlens = (attn_metadata.kv_seqlens - attn_metadata.q_seqlens).to(torch.int32)
-            if not self.is_decoding:
-                state_len = conv_kernel_size + self.num_spec_tokens
-                read_conv_offsets = torch.remainder(self.cache_seqlens[:, None] + range_idx[1:][None],
-                                                    state_len)
-                write_conv_offsets = torch.remainder(attn_metadata.kv_seqlens[:, None] + range_idx[None],
-                                                     state_len)
-                self.spec_conv_offsets = (read_conv_offsets, write_conv_offsets)
-
-                read_state_offsets = torch.remainder(self.cache_seqlens, 1 + self.num_spec_tokens)
-                write_state_offsets = torch.remainder(attn_metadata.kv_seqlens, 1 + self.num_spec_tokens)
-                self.spec_state_offsets = (read_state_offsets, write_state_offsets)
-
-        self.conv_state_indices = state_ids.to(torch.int32)
-        # we assume 0 is dummy state, shared by all invalid states.
-        self.valid_state = state_ids >= 0
-        # keep state_ids < 0 so we can ignore invalid init state
-        self.origin_state_ids = state_ids
-        self.state_ids = state_ids.clamp(0)
+    def __call__(
+        self,
+        num_tokens: int,
+        conv_kernel_size: int,
+        state_ids: torch.Tensor,
+        attn_metadata: Any,
+    ) -> GatedDeltaMeta:
+        return self.impl.forward(num_tokens, conv_kernel_size, state_ids, attn_metadata)
 
 
 class CausalConv1dFunc:
@@ -90,97 +53,8 @@ class CausalConv1dFunc:
     def __init__(self, activation: str = 'silu'):
         backend = get_backend()
         builder = backend.get_layer_impl_builder(OpType.CausalConv1d)
-        impl = builder.build()
-        self.causal_conv1d_fn = impl.conv1d_fn
-        self.causal_conv1d_update = impl.update_fn
+        self.impl = builder.build()
         self.activation = activation
-
-    def conv1d_func(self, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, conv_state: torch.Tensor,
-                    gated_delta_meta: GatedDeltaMeta):
-        """
-        x: (b, seqlen, dim)
-        seqlen: (b)
-        out: (b, seqlen, dim)
-        conv_state: (b, dim, kernel_size)
-        """
-        seq_idx = gated_delta_meta.seq_idx
-        conv_idx = gated_delta_meta.conv_idx
-        spec_conv_offsets = gated_delta_meta.spec_conv_offsets
-        state_ids = gated_delta_meta.state_ids
-
-        assert x.dim() == 3
-        if weight.dim() == 3:
-            assert weight.size(1) == 1
-            weight = weight[:, 0]
-
-        # Save conv state (last kernel_size input tokens per sequence).
-        final_state = x[0, conv_idx].transpose(-2, -1)
-
-        # for prefill with spec tokens
-        if spec_conv_offsets is not None:
-            read_offsets, write_offsets = spec_conv_offsets
-            # Read directly: conv_state[state_ids[b], :, read_offsets[b, k]]
-            # read_offsets: (B, ks), skip first -> all_inits: (B, dim, ks-1)
-            all_inits = conv_state[state_ids[:, None, None],
-                                   torch.arange(conv_state.size(1), device=conv_state.device)[None, :, None],
-                                   read_offsets[:, None, :]]
-            # Write directly: conv_state[state_ids[b], :, write_offsets[b, k]] = final_state[b, :, k]
-            conv_state[state_ids[:, None, None],
-                       torch.arange(conv_state.size(1), device=conv_state.device)[None, :, None],
-                       write_offsets[:, None, :]] = final_state
-        else:
-            # Load all initial conv states before overwriting.
-            # (num_seqs, dim, ks-1): last ks-1 raw input values per sequence.
-            all_inits = conv_state[state_ids, :, 1:]
-            conv_state = conv_state.index_copy_(0, state_ids, final_state)
-
-        is_init = gated_delta_meta.is_init
-        all_inits.masked_fill_(is_init[:, None, None], 0.0)
-
-        x = x.transpose(-2, -1)
-        out = self.causal_conv1d_fn(
-            x,
-            weight,
-            bias,
-            seq_idx=seq_idx,
-            initial_states=all_inits,
-            return_final_states=False,
-            activation=self.activation,
-        )
-        out = out.transpose(-2, -1)
-
-        return out, conv_state
-
-    def conv1d_update(
-        self,
-        x: torch.Tensor,
-        weight: torch.Tensor,
-        bias: torch.Tensor,
-        conv_state: torch.Tensor,
-        conv_state_indices: torch.Tensor,
-        cache_seqlens: torch.Tensor | None = None,
-    ):
-        if weight.dim() == 3:
-            assert weight.size(1) == 1
-            weight = weight[:, 0]
-        batch_size = conv_state_indices.size(0)
-        q_seqlen = x.size(1) // batch_size
-        is_spec_decoding = q_seqlen != 1
-        x = x.squeeze(0)
-        if is_spec_decoding:
-            x = x.unflatten(0, (batch_size, q_seqlen)).transpose(1, 2).contiguous()
-        out = self.causal_conv1d_update(
-            x,
-            conv_state,
-            weight,
-            bias,
-            activation=self.activation,
-            conv_state_indices=conv_state_indices,
-            cache_seqlens=cache_seqlens,
-        )
-        if is_spec_decoding:
-            out = out.transpose(1, 2).flatten(0, 1)
-        return out[None], conv_state
 
     @record_function('causal_conv1d')
     def __call__(
@@ -191,15 +65,7 @@ class CausalConv1dFunc:
         conv_state: torch.Tensor,
         gated_delta_meta: GatedDeltaMeta,
     ):
-        if gated_delta_meta.is_decoding:
-            conv_state_indices = gated_delta_meta.conv_state_indices
-            return self.conv1d_update(x,
-                                      weight,
-                                      bias,
-                                      conv_state,
-                                      conv_state_indices,
-                                      cache_seqlens=gated_delta_meta.cache_seqlens)
-        return self.conv1d_func(x, weight, bias, conv_state, gated_delta_meta=gated_delta_meta)
+        return self.impl.forward(x, weight, bias, conv_state, gated_delta_meta, activation=self.activation)
 
 
 class GatedDelta:
@@ -224,59 +90,19 @@ class GatedDelta:
         kv_ratio: int = 1,
     ):
         """call."""
-        is_decoding = gated_delta_meta.is_decoding
-        cu_seqlens = gated_delta_meta.cu_seqlens
-        state_ids = gated_delta_meta.state_ids
-        spec_state_offsets = gated_delta_meta.spec_state_offsets
-        cache_seqlens = gated_delta_meta.cache_seqlens
-
-        query, key, g, beta, qk_l2norm_done = self.impl.prepare_inputs(
+        return self.impl.forward(
             query,
             key,
+            value,
             b,
             a,
             dt_bias,
             a_log_exp,
+            recurrent_state,
+            gated_delta_meta,
             kv_ratio,
-            use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
-            is_decoding=is_decoding,
-            init_token_mask=gated_delta_meta.is_init_token,
+            self.use_qk_l2norm_in_kernel,
         )
-
-        if not is_decoding:
-            core_attn_out, last_recurrent_state = self.impl.chunk_gated_delta_rule(
-                query,
-                key,
-                value,
-                g=g,
-                beta=beta,
-                initial_state=recurrent_state,
-                state_indices=state_ids,
-                output_final_state=True,
-                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel and not qk_l2norm_done,
-                cu_seqlens=cu_seqlens,
-                spec_state_offsets=spec_state_offsets,
-                transpose_state_layout=True,
-            )
-        else:
-            # qkvgb (1, seqlen, ...) -> (B, seqlen, ...)
-            batch_size = state_ids.size(0)
-            core_attn_out, last_recurrent_state = self.impl.fused_recurrent_gated_delta_rule(
-                query[0].unflatten(0, (batch_size, -1)).contiguous(),
-                key[0].unflatten(0, (batch_size, -1)).contiguous(),
-                value[0].unflatten(0, (batch_size, -1)).contiguous(),
-                g=g[0].unflatten(0, (batch_size, -1)).contiguous(),
-                beta=beta[0].unflatten(0, (batch_size, -1)).contiguous(),
-                initial_state=recurrent_state,
-                output_final_state=True,
-                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel and not qk_l2norm_done,
-                state_indices=gated_delta_meta.origin_state_ids,
-                cache_seqlens=cache_seqlens,
-                transpose_state_layout=True,
-            )
-            # out (seqlen, B, ...) -> (1, seqlen * B, ...)
-            core_attn_out = core_attn_out.flatten(0, 1).unsqueeze(0)
-        return core_attn_out, last_recurrent_state
 
 
 class CausalConv1d(nn.Module):
@@ -357,10 +183,4 @@ class CausalConv1d(nn.Module):
 
     def forward(self, x: torch.Tensor, conv_state: torch.Tensor, gated_delta_meta: GatedDeltaMeta):
         """forward."""
-        return self.causal_conv1d_func(x, self.weight, self.bias, conv_state, gated_delta_meta=gated_delta_meta)
-
-
-@record_function('gated_delta_load_state')
-def load_state(past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
-    """Load states from cache."""
-    return past_key_value[:2]
+        return self.causal_conv1d_func(x, self.weight, self.bias, conv_state, gated_delta_meta)

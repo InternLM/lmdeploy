@@ -458,6 +458,9 @@ class PytorchEngineConfig:
             would be allocate according to current environment.
         adapters: The path configs to lora adapters.
         max_prefill_token_num: tokens per iteration.
+        piecewise_cudagraph_max_tokens: Enable piecewise CUDA graph and set its
+            maximum captured prefill token bucket. If not specified, piecewise
+            CUDA graph is disabled.
         cudagraph_capture_batch_sizes: Batch sizes to capture CUDA graphs for.
             If not specified, the engine will infer them from max_batch_size.
             max_batch_size is always captured.
@@ -570,6 +573,7 @@ class PytorchEngineConfig:
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
     kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
+    piecewise_cudagraph_max_tokens: int | None = None
 
     def __post_init__(self):
         """Check input validation."""
@@ -584,6 +588,8 @@ class PytorchEngineConfig:
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
+        assert (self.piecewise_cudagraph_max_tokens is None
+                or self.piecewise_cudagraph_max_tokens > 0), 'invalid piecewise_cudagraph_max_tokens'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'

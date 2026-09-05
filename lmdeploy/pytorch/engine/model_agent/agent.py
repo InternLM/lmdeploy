@@ -15,8 +15,10 @@ import pybase64
 import torch
 import torch.distributed as dist
 from torch.profiler import record_function
+from tqdm.auto import tqdm
 
 from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.graph_runner import prefill_preparation_scope
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
@@ -470,6 +472,41 @@ class BaseModelAgent:
             gpu_mem_physical_free, _ = get_gpu_memory()
             return gpu_mem_physical_free
 
+    def _warmup_prefill(self) -> None:
+        """Warm the prefill shapes requested by the active graph runner."""
+        token_sizes = sorted(self.patched_model.get_prefill_warmup_token_sizes(), reverse=True)
+        if token_sizes:
+            with prefill_preparation_scope():
+                for num_tokens in tqdm(token_sizes, desc='Warming up prefill', disable=self.rank != 0):
+                    inputs = self.inputs_strategy.make_dummy(
+                        1,
+                        is_decoding=False,
+                        device='cuda',
+                        vocab_size=self.model_config.vocab_size,
+                        max_q_seqlen=num_tokens,
+                        meta=self.make_dummy_meta,
+                    )
+                    start = time.perf_counter()
+                    logger.debug('Warmup prefill num_tokens=%d start.', num_tokens)
+                    self._forward_impl(inputs)
+                    torch.cuda.synchronize()
+                    logger.debug('Warmup prefill num_tokens=%d done in %.2f seconds.', num_tokens,
+                                 time.perf_counter() - start)
+        else:
+            inputs = self.inputs_strategy.make_dummy(self.cache_config.max_batches,
+                                                     is_decoding=False,
+                                                     device='cuda',
+                                                     vocab_size=self.model_config.vocab_size,
+                                                     meta=self.make_dummy_meta)
+            if self.dist_config.dp > 1:
+                num_tokens = inputs.input_ids.numel()
+                inputs.build_dp_meta([num_tokens] * self.dist_config.world_size)
+                inputs.dp_meta.dp_is_decoding = False
+            logger.debug('Warmup prefill start.')
+            self._forward_impl(inputs)
+            torch.cuda.synchronize()
+            logger.debug('Warmup prefill done.')
+
     def warmup(self):
         """warmup."""
         from lmdeploy.pytorch.envs import skip_warmup
@@ -484,8 +521,6 @@ class BaseModelAgent:
         with self.all_context(), torch.cuda.stream(self.stream):
             max_batches = self.cache_config.max_batches
             world_size = self.dist_config.world_size
-
-            num_tokens = max_batches
             dp = self.dist_config.dp
 
             if dp > 1:
@@ -493,20 +528,7 @@ class BaseModelAgent:
                 group = self.dist_ctx.cpu_group
                 dist.barrier(group=group)
 
-            # warmup prefill
-            inputs = self.inputs_strategy.make_dummy(max_batches,
-                                                     is_decoding=False,
-                                                     device='cuda',
-                                                     vocab_size=self.model_config.vocab_size,
-                                                     meta=self.make_dummy_meta)
-            if dp > 1:
-                num_tokens = inputs.input_ids.numel()
-                inputs.build_dp_meta([num_tokens] * world_size)
-                inputs.dp_meta.dp_is_decoding = False
-            logger.debug('Warmup prefill start.')
-            self._forward_impl(inputs)
-            torch.cuda.synchronize()
-            logger.debug('Warmup prefill done.')
+            self._warmup_prefill()
 
             # warmup decoding(with cuda graph)
             capture_batch_sizes = self.patched_model.get_capture_batch_sizes()
@@ -514,7 +536,7 @@ class BaseModelAgent:
             if self.cache_config.role == EngineRole.Prefill:
                 # do not warmup decoding for prefill engine
                 capture_batch_sizes = []
-            for num_tokens in capture_batch_sizes:
+            for num_tokens in tqdm(capture_batch_sizes, desc='Warming up decoding', disable=self.rank != 0):
                 inputs = self.inputs_strategy.make_dummy(num_tokens,
                                                          is_decoding=True,
                                                          device='cuda',

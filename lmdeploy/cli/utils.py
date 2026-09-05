@@ -642,6 +642,15 @@ class ArgumentHelper:
                                    help='the max number of tokens per iteration during prefill')
 
     @staticmethod
+    def piecewise_cudagraph_max_tokens(parser):
+        return parser.add_argument('--piecewise-cudagraph-max-tokens',
+                                   type=int,
+                                   default=None,
+                                   help='Enable piecewise CUDA graph in the PyTorch engine and capture prefill '
+                                   'token buckets up to this value. If not specified, piecewise CUDA graph is '
+                                   'disabled')
+
+    @staticmethod
     def cudagraph_capture_batch_sizes(parser):
         return parser.add_argument('--cudagraph-capture-batch-sizes',
                                    type=int,

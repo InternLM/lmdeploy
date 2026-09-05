@@ -23,6 +23,7 @@ from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _renormalize
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
+from ..step_metadata import register_piecewise_graph_impl
 from .ep_utils import gather_outputs_by_attn_tp, split_inputs_by_attn_tp
 
 logger = get_logger('lmdeploy')
@@ -389,6 +390,9 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         # pre-allocate buffer
         self.fusedmoe_build(True)
 
+        self._piecewise_forward: Callable[..., torch.Tensor] | None = None
+        register_piecewise_graph_impl(self)
+
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
         if get_dist_manager().current_context().dist_config.enable_eplb:
@@ -401,6 +405,33 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
             return sliced_phy2log
         else:
             return super().ep_expert_list(world_size=world_size, rank=rank)
+
+    def _forward_moe(self,
+                     hidden_states: torch.Tensor,
+                     topk_weights: torch.Tensor,
+                     topk_ids: torch.LongTensor,
+                     gate_up_weights: torch.Tensor,
+                     gate_up_scale: torch.Tensor,
+                     down_weights: torch.Tensor,
+                     down_scale: torch.Tensor,
+                     gate_up_bias: torch.Tensor = None,
+                     down_bias: torch.Tensor = None,
+                     expert_list: list[int] = None,
+                     act_func: Callable = None,
+                     **kwargs):
+        """forward."""
+        hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights,
+                                                                                    topk_ids)
+
+        topk_weights = self.do_renormalize(topk_weights)
+        step_ctx = get_step_ctx_manager().current_context()
+        low_latency_mode = step_ctx.global_is_decoding() and self.use_deep_gemm
+        moe = self.fusedmoe_build(low_latency_mode)
+        out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
+                                 down_scale, expert_list)
+
+        out_states = gather_outputs_by_attn_tp(out_states, split_size)
+        return out_states
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -416,18 +447,75 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 act_func: Callable = None,
                 **kwargs):
         """forward."""
-        hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights,
-                                                                                    topk_ids)
+        if self._piecewise_forward is not None:
+            return self._piecewise_forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale,
+                                           down_weights, down_scale, gate_up_bias, down_bias, expert_list, act_func,
+                                           **kwargs)
+        return self._forward_moe(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
+                                 down_scale, gate_up_bias, down_bias, expert_list, act_func, **kwargs)
 
-        topk_weights = self.do_renormalize(topk_weights)
-        step_ctx = get_step_ctx_manager().current_context()
-        low_latency_mode = step_ctx.global_is_decoding() and self.use_deep_gemm
-        moe = self.fusedmoe_build(low_latency_mode)
-        out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
-                                 down_scale, expert_list)
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Return whether this DeepEP FP8 MoE implementation supports PCG."""
+        return True
 
-        out_states = gather_outputs_by_attn_tp(out_states, split_size)
-        return out_states
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Install the DeepEP MoE eager boundary owned by this CUDA op."""
+        if self._piecewise_forward is not None:
+            return
+
+        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            ViewTolerantPaddedAdapter,
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        @eager_boundary(
+            adapter_factory=ViewTolerantPaddedAdapter,
+            reuse_bridge_after_next_step=True,
+        )
+        def run_eager_moe(
+            hidden_states: torch.Tensor,
+            topk_weights: torch.Tensor,
+            topk_ids: torch.LongTensor,
+            gate_up_weights: torch.Tensor,
+            gate_up_scale: torch.Tensor,
+            down_weights: torch.Tensor,
+            down_scale: torch.Tensor,
+            gate_up_bias: torch.Tensor = None,
+            down_bias: torch.Tensor = None,
+            expert_list: list[int] = None,
+            act_func: Callable = None,
+            **kwargs,
+        ):
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            raw_tokens = execution.raw_tokens
+            return self._forward_moe(hidden_states[:raw_tokens], topk_weights[:raw_tokens], topk_ids[:raw_tokens],
+                                     gate_up_weights, gate_up_scale, down_weights, down_scale, gate_up_bias, down_bias,
+                                     expert_list, act_func, **kwargs)
+
+        def piecewise_forward(
+            hidden_states: torch.Tensor,
+            topk_weights: torch.Tensor,
+            topk_ids: torch.LongTensor,
+            gate_up_weights: torch.Tensor,
+            gate_up_scale: torch.Tensor,
+            down_weights: torch.Tensor,
+            down_scale: torch.Tensor,
+            gate_up_bias: torch.Tensor = None,
+            down_bias: torch.Tensor = None,
+            expert_list: list[int] = None,
+            act_func: Callable = None,
+            **kwargs,
+        ):
+            if get_piecewise_graph_execution() is None:
+                return self._forward_moe(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale,
+                                         down_weights, down_scale, gate_up_bias, down_bias, expert_list, act_func,
+                                         **kwargs)
+            return run_eager_moe(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
+                                 down_scale, gate_up_bias, down_bias, expert_list, act_func, **kwargs)
+
+        self._piecewise_forward = piecewise_forward
 
     def do_renormalize(self, topk_weights):
         return _renormalize(topk_weights, self.renormalize)

@@ -21,6 +21,7 @@ from .deepseek_v32 import (
     rotate_activation,
 )
 from .patch import get_build_model_context
+from .utils.cudagraph import PiecewiseCudaGraphMixin
 
 
 def _get_layer_indexer_type(config: Any, layer_idx: int | None) -> str:
@@ -342,7 +343,7 @@ class GlmMoeDsaModel(DeepseekV32Model):
                             all_routed_experts=all_routed_experts)
 
 
-class GlmMoeDsaForCausalLM(DeepseekV32ForCausalLM):
+class GlmMoeDsaForCausalLM(DeepseekV32ForCausalLM, PiecewiseCudaGraphMixin):
     model_cls = GlmMoeDsaModel
 
     def __init__(self,

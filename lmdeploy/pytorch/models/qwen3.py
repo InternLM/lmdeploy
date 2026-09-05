@@ -13,7 +13,7 @@ from lmdeploy.pytorch.nn.linear import build_down_linear, build_gateup_linear, b
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import add_prefix
-from .utils.cudagraph import CudaGraphMixin
+from .utils.cudagraph import PiecewiseCudaGraphMixin
 from .utils.model import DeployModelMixinV1, build_embedding
 
 
@@ -315,7 +315,7 @@ class Qwen3model(nn.Module):
         return self.embed_tokens
 
 
-class Qwen3ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
+class Qwen3ForCausalLM(nn.Module, DeployModelMixinV1, PiecewiseCudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
