@@ -156,6 +156,7 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
 
 
 class ResponseParser:
+    supports_required_tool_choice: ClassVar[bool] = False
     reasoning_tokens: int | None
 
     @classmethod
@@ -238,6 +239,7 @@ class BaseResponseParser(ResponseParser):
     reasoning_parser_cls: ClassVar[type[ReasoningParser] | None] = None
     tool_parser_cls: ClassVar[type[ToolParser] | None] = None
     tokenizer: ClassVar[PreTrainedTokenizerBase | None] = None
+    supports_required_tool_choice: ClassVar[bool] = True
     MODE_PLAIN: ClassVar[str] = 'plain'
     MODE_REASONING: ClassVar[str] = 'reasoning'
     MODE_TOOL: ClassVar[str] = 'tool'
@@ -311,7 +313,7 @@ class BaseResponseParser(ResponseParser):
 
         self.request = normalize_chat_request(self.request)
         if request.tool_choice == 'required':
-            required_response_format = self.tool_parser.prepare_required_tools(
+            required_response_format = self.tool_parser.build_required_response_format(
                 request.tools or [], reasoning=self.reasoning_enabled)
             # Internal structural tags override client response_format because
             # an engine can apply only one guided-decoding constraint.
@@ -667,10 +669,6 @@ class BaseResponseParser(ResponseParser):
                                                 and self.enable_thinking is not False)
             self._update_reasoning_tokens(token_ids or [])
 
-        return self._parse_complete(text)
-
-    def _parse_complete(self, text: str) -> tuple[str, list | None, str | None]:
-        """Parse complete text without updating token accounting."""
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_calls: list[ToolCall] = []
@@ -770,14 +768,7 @@ class BaseResponseParser(ResponseParser):
         if self.tool_parser is None or self.request.tool_choice == 'none':
             return True
 
-        if not self.tool_parser.validate_complete(text):
-            return False
-
-        if self.request.tool_choice != 'required':
-            return True
-
-        _, tool_calls, _ = self._parse_complete(text)
-        return self.tool_parser.validate_tool_calls(tool_calls)
+        return self.tool_parser.validate_complete(text)
 
     @staticmethod
     def _find_first(text: str, tags: list[str], start: int) -> tuple[int, str]:

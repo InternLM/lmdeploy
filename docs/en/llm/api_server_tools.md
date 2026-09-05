@@ -50,7 +50,7 @@ print(response)
 
 ## Requiring a Tool Call
 
-Set `tool_choice="required"` when the assistant must call at least one of the supplied functions. LMDeploy constrains generation to the model's native tool-call format and validates function arguments against the corresponding parameter schema.
+Set `tool_choice="required"` when the assistant must call at least one of the supplied functions. LMDeploy uses each function's parameter schema to constrain generation to the model's native tool-call format.
 
 ```python
 response = client.chat.completions.create(

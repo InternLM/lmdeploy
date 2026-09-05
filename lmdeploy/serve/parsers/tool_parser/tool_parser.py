@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import partial_json_parser
@@ -19,7 +18,7 @@ from lmdeploy.serve.openai.protocol import (
 )
 
 if TYPE_CHECKING:
-    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool
 
 ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.parsers.tool_parser'])
 
@@ -61,30 +60,15 @@ def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
     return request.model_copy(update={'tools': tools})
 
 
-@lru_cache(maxsize=128)
-def _check_required_tool_grammar(serialized_format: str) -> None:
-    """Check grammar compilability, caching only successful preflight
-    results."""
-    import xgrammar as xgr
-
-    try:
-        # Construct the grammar before the request reaches the shared engine loop.
-        xgr.Grammar.from_structural_tag(serialized_format)
-    except RuntimeError as err:
-        raise ValueError(f'Unsupported required-tool grammar: {err}') from err
-
-
 class ToolParser:
     """Base class for model-specific tool parsers."""
 
     validate_tool_names: ClassVar[bool] = False
     # XGrammar builtin structural-tag keys for required tool calls.
-    structural_tag_model: str | None = None
-    reasoning_structural_tag_model: str | None = None
+    structural_tag_model: ClassVar[str | None] = None
+    reasoning_structural_tag_model: ClassVar[str | None] = None
 
     def __init__(self):
-        self._function_schemas: dict[str, dict | bool] = {}
-        self._function_validators: dict[str, Any] = {}
         self._tool_payload: str = ''
         self._active_tool_call_id: str = ''
         self._active_tool_index: int = -1
@@ -96,70 +80,27 @@ class ToolParser:
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request payload before rendering, if needed."""
-        self._function_schemas.clear()
-        self._function_validators.clear()
-        # Only XML coercion and required-call validation consume parameter schemas.
-        if request.tools and (request.tool_choice == 'required' or self.get_tool_payload_format() == 'xml'):
-            for tool in request.tools:
-                function = tool.function
-                self._function_schemas[function.name] = function.parameters if function.parameters is not None else True
         request = dump_tools(request)
         if self.validate_tool_names:
             self._allowed_tool_names = self._get_allowed_tool_names(request)
         return request
 
-    def prepare_required_tools(self, tools: list[Any], *, reasoning: bool) -> dict[str, Any]:
-        """Prepare schema validators and a compilable required-tool grammar."""
-        from .schema import create_schema_validator
-
-        structural_tag_model = (self.reasoning_structural_tag_model
-                                if reasoning and self.reasoning_structural_tag_model is not None
-                                else self.structural_tag_model)
+    @classmethod
+    def build_required_response_format(cls, tools: list[Tool], *, reasoning: bool) -> dict[str, Any]:
+        """Build the XGrammar structural-tag format for required tool calls."""
+        structural_tag_model = cls.structural_tag_model
+        if reasoning and cls.reasoning_structural_tag_model is not None:
+            structural_tag_model = cls.reasoning_structural_tag_model
         if structural_tag_model is None:
-            raise ValueError(f'Tool parser {type(self).__name__!r} does not support `tool_choice="required"`.')
-
-        self._function_validators = {
-            name: create_schema_validator(schema) for name, schema in self._function_schemas.items()
-        }
+            raise ValueError(f'Tool parser {cls.__name__!r} does not support `tool_choice="required"`.')
         import xgrammar as xgr
 
-        response_format = xgr.get_model_structural_tag(
+        return xgr.get_model_structural_tag(
             structural_tag_model,
-            [tool.model_dump() for tool in tools],
+            [tool.model_dump(mode='json') for tool in tools],
             tool_choice='required',
             reasoning=reasoning,
         ).model_dump(mode='json')
-        _check_required_tool_grammar(json.dumps(response_format, separators=(',', ':')))
-        return response_format
-
-    def _get_function_validator(self, name: str) -> Any:
-        """Reuse a prepared validator or create one lazily for auto
-        coercion."""
-        validator = self._function_validators.get(name)
-        if validator is None:
-            from jsonschema.validators import validator_for
-            from referencing import Registry
-
-            schema = self._function_schemas[name]
-            validator = validator_for(schema)(schema, registry=Registry())
-            self._function_validators[name] = validator
-        return validator
-
-    def validate_tool_calls(self, tool_calls: list[ToolCall] | None) -> bool:
-        """Validate required calls against the prepared tool schemas."""
-        if not tool_calls:
-            return False
-        for call in tool_calls:
-            validator = self._function_validators.get(call.function.name)
-            if validator is None:
-                return False
-            try:
-                arguments = json.loads(call.function.arguments)
-            except (json.JSONDecodeError, TypeError):
-                return False
-            if not validator.is_valid(arguments):
-                return False
-        return True
 
     @staticmethod
     def _get_allowed_tool_names(request: ChatCompletionRequest) -> set[str]:

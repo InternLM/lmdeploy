@@ -2,7 +2,6 @@ cloudpickle
 einops
 fastapi
 fire
-jsonschema
 mmengine-lite
 numpy
 openai >= 2.45.0

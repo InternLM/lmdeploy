@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lmdeploy.serve.openai.protocol import (
     DeltaFunctionCall,
@@ -10,6 +10,9 @@ from lmdeploy.serve.openai.protocol import (
 )
 
 from .tool_parser import ToolParser
+
+if TYPE_CHECKING:
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
 
 class XmlToolParser(ToolParser):
@@ -20,12 +23,17 @@ class XmlToolParser(ToolParser):
 
     def __init__(self):
         super().__init__()
+        self._function_param_schemas: dict[str, dict[str, dict[str, Any]]] = {}
         self._xml_has_emitted_json_start = False
         self._xml_json_closed = False
         self._xml_emitted_param_names: set[str] = set()
         self._payload_parts: list[str] = []
         self._coerced_args: dict[str, Any] = {}
         self._in_progress_value = False
+
+    def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
+        self._function_param_schemas = self._build_function_param_schemas(request)
+        return super().adjust_request(request)
 
     def start_tool_call(self) -> None:
         super().start_tool_call()
@@ -103,13 +111,73 @@ class XmlToolParser(ToolParser):
                 ))
         return out
 
+    def _build_function_param_schemas(self, request: ChatCompletionRequest) -> dict[str, dict[str, dict[str, Any]]]:
+        """Build function->parameter schema map from request tools."""
+        if not request.tools:
+            return {}
+
+        out: dict[str, dict[str, dict[str, Any]]] = {}
+        for tool in request.tools:
+            parameters = tool.function.parameters
+            if not isinstance(parameters, dict):
+                continue
+            properties = parameters.get('properties')
+            if not isinstance(properties, dict):
+                continue
+
+            param_schemas = {name: schema for name, schema in properties.items() if isinstance(schema, dict)}
+            if param_schemas:
+                out[tool.function.name] = param_schemas
+        return out
+
     @staticmethod
-    def _coerce_value(raw_value: str, schema_type: str) -> Any:
-        """Convert direct JSON types without constructing a schema
-        validator."""
+    def _resolve_schema_type(param_schema: dict[str, Any]) -> str | None:
+        schema_type = param_schema.get('type')
+        if isinstance(schema_type, str):
+            return schema_type
+        if isinstance(schema_type, list):
+            for item in schema_type:
+                if isinstance(item, str) and item != 'null':
+                    return item
+            for item in schema_type:
+                if isinstance(item, str):
+                    return item
+        return None
+
+    @staticmethod
+    def _coerce_value(raw_value: str, schema_type: str | None) -> Any:
         raw_value = raw_value.strip()
-        if schema_type == 'string':
+        if schema_type is None or schema_type == 'string':
+            if not raw_value.startswith('"'):
+                return raw_value
+            try:
+                parsed_val = json.loads(raw_value)
+                return parsed_val if isinstance(parsed_val, str) else raw_value
+            except json.JSONDecodeError:
+                return raw_value
+
+        if schema_type == 'integer':
+            try:
+                parsed_val = json.loads(raw_value)
+            except json.JSONDecodeError:
+                parsed_val = raw_value
+            if isinstance(parsed_val, bool):
+                return raw_value
+            if isinstance(parsed_val, int):
+                return parsed_val
             return raw_value
+
+        if schema_type == 'number':
+            try:
+                parsed_val = json.loads(raw_value)
+            except json.JSONDecodeError:
+                parsed_val = raw_value
+            if isinstance(parsed_val, bool):
+                return raw_value
+            if isinstance(parsed_val, (int, float)):
+                return parsed_val
+            return raw_value
+
         if schema_type == 'boolean':
             lowered = raw_value.lower()
             if lowered == 'true':
@@ -117,34 +185,25 @@ class XmlToolParser(ToolParser):
             if lowered == 'false':
                 return False
             return raw_value
+
         if schema_type == 'null':
             return None if raw_value.lower() == 'null' else raw_value
-        try:
-            parsed = json.loads(raw_value)
-        except json.JSONDecodeError:
-            return raw_value
-        if schema_type == 'integer':
-            return parsed if type(parsed) is int or isinstance(parsed, float) and parsed.is_integer() else raw_value
-        if schema_type == 'number':
-            return parsed if type(parsed) in (int, float) else raw_value
-        if schema_type == 'array':
-            return parsed if isinstance(parsed, list) else raw_value
-        if schema_type == 'object':
-            return parsed if isinstance(parsed, dict) else raw_value
-        return raw_value
 
-    def _coerce_schema_value(self, raw_value: str, schema: dict | bool, func_name: str) -> Any:
-        """Convert complex-schema arguments using the function's validator."""
-        validator = self._get_function_validator(func_name)
-        raw_value = raw_value.strip()
-        if not any(validator.descend(raw_value, schema)):
-            return raw_value
-        json_value = raw_value.lower() if raw_value.lower() in ('true', 'false', 'null') else raw_value
-        try:
-            parsed = json.loads(json_value)
-        except json.JSONDecodeError:
-            return raw_value
-        return parsed if not any(validator.descend(parsed, schema)) else raw_value
+        if schema_type == 'array':
+            try:
+                parsed_val = json.loads(raw_value)
+            except json.JSONDecodeError:
+                return raw_value
+            return parsed_val if isinstance(parsed_val, list) else raw_value
+
+        if schema_type == 'object':
+            try:
+                parsed_val = json.loads(raw_value)
+            except json.JSONDecodeError:
+                return raw_value
+            return parsed_val if isinstance(parsed_val, dict) else raw_value
+
+        return raw_value
 
     def _get_coerced_args(self,
                           func_name: str | None,
@@ -153,11 +212,8 @@ class XmlToolParser(ToolParser):
                           use_cache: bool = True) -> dict[str, Any]:
         if not func_name or not raw_args_dict:
             return raw_args_dict
-        root_schema = self._function_schemas.get(func_name)
-        if not isinstance(root_schema, dict):
-            return raw_args_dict
-        param_schemas = root_schema.get('properties')
-        if not isinstance(param_schemas, dict):
+        param_schemas = self._function_param_schemas.get(func_name, {})
+        if not param_schemas:
             return raw_args_dict
 
         coerced = dict(self._coerced_args) if use_cache else {}
@@ -168,13 +224,11 @@ class XmlToolParser(ToolParser):
                 coerced_value = value
             else:
                 schema = param_schemas.get(key)
-                schema_type = schema.get('type') if isinstance(schema, dict) else None
-                if isinstance(schema_type, str):
-                    coerced_value = self._coerce_value(value, schema_type)
-                elif schema is not None:
-                    coerced_value = self._coerce_schema_value(value, schema, func_name)
-                else:
+                if not isinstance(schema, dict):
                     coerced_value = value
+                else:
+                    schema_type = self._resolve_schema_type(schema)
+                    coerced_value = self._coerce_value(value, schema_type)
             if use_cache:
                 self._coerced_args[key] = coerced_value
             coerced[key] = coerced_value

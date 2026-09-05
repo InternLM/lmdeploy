@@ -8,8 +8,6 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any
 
-from jsonschema.exceptions import SchemaError
-
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.generation_config import build_generation_config
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
@@ -100,14 +98,12 @@ class ChatRunner:
         parser_cls = server_context.response_parser_cls
 
         try:
-            response_parser = parser_cls(request)
-            parsed_request = response_parser.request
-            required_format = parsed_request.response_format
-            if request.tool_choice == 'required' and (
-                    not isinstance(required_format, dict) or required_format.get('type') != 'structural_tag'):
+            if request.tool_choice == 'required' and not parser_cls.supports_required_tool_choice:
                 raise ValueError(
                     f'Response parser {parser_cls.__name__!r} does not support `tool_choice="required"`.')
-        except (SchemaError, ValueError) as err:
+            response_parser = parser_cls(request)
+            parsed_request = response_parser.request
+        except ValueError as err:
             raise RequestError(ErrorCode.INVALID_REQUEST, str(err)) from err
 
         gen_config = _build_runner_generation_config(

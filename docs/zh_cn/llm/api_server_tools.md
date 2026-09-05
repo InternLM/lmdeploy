@@ -50,7 +50,7 @@ print(response)
 
 ## 强制工具调用
 
-当助手必须调用至少一个已提供的函数时，请设置 `tool_choice="required"`。LMDeploy 会将生成结果约束为模型原生的工具调用格式，并根据对应的参数 schema 校验函数参数。
+当助手必须调用至少一个已提供的函数时，请设置 `tool_choice="required"`。LMDeploy 会根据每个函数的参数 schema，将生成结果约束为模型原生的工具调用格式。
 
 ```python
 response = client.chat.completions.create(
