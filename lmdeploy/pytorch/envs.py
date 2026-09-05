@@ -242,6 +242,31 @@ with set_envs():
     # cuda communicator
     enable_flashinfer_allreduce = env_to_bool('LMDEPLOY_ENABLE_FLASHINFER_ALLREDUCE', False)
     enable_symm_mem_allreduce = env_to_bool('LMDEPLOY_ENABLE_SYMM_MEM_ALLREDUCE', False)
+    # Keep NCCL as the production default.  Symmetric-memory LM-head support
+    # is selected only when this process-start environment flag is explicitly
+    # set to ``1``; all tuning flags below are inert otherwise.
+    enable_symm_mem_lmhead = env_to_bool('LMDEPLOY_ENABLE_SYMM_MEM_LMHEAD', False)
+    symm_mem_lmhead_max_mb = max(1, env_to_int('LMDEPLOY_SYMM_MEM_LMHEAD_MAX_MB', 64))
+    # ``0`` means use the shape-aware launch policy. Non-zero values are
+    # deterministic overrides useful for paired tuning on a fixed GPU.
+    symm_mem_lmhead_blocks = max(
+        0, env_to_int('LMDEPLOY_SYMM_MEM_LMHEAD_BLOCKS', 0))
+    symm_mem_lmhead_block_threads = max(
+        0, env_to_int('LMDEPLOY_SYMM_MEM_LMHEAD_BLOCK_THREADS', 0))
+    symm_mem_lmhead_autotune = env_to_bool(
+        'LMDEPLOY_SYMM_MEM_LMHEAD_AUTOTUNE', True)
+    # ``auto`` uses one cross-rank barrier CTA for larger payload grids and
+    # keeps the original per-CTA protocol for tiny grids.  The split form
+    # avoids multiplying signal CAS operations by the payload CTA count.
+    symm_mem_lmhead_barrier_mode = env_to_choice(
+        'LMDEPLOY_SYMM_MEM_LMHEAD_BARRIER_MODE', 'auto',
+        {'auto', 'per_block', 'single'})
+    # Minimum flattened token rows for the symmetric-memory LM-head gather.
+    # Smaller calls use the portable NCCL ``all_gather_into_tensor`` path;
+    # this is useful for decode/M=1 where launch overhead can exceed the
+    # communication savings.  Set this to ``1`` to force V1 for every shape.
+    symm_mem_lmhead_min_tokens = max(
+        1, env_to_int('LMDEPLOY_SYMM_MEM_LMHEAD_MIN_TOKENS', 2))
 
     # opt-ttft
     opt_ttft_policy = env_to_choice('LMDEPLOY_PT_TTFT_POLICY', 'size', {'fifo', 'size'})
