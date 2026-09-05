@@ -542,6 +542,24 @@ class UpdateParamsRequest(BaseModel):
     finished: bool = False
 
 
+class UpdateWeightsFromIPCRequest(BaseModel):
+    """Receive checkpoint-engine CUDA IPC handles keyed by device UUID."""
+    zmq_handles: dict[str, str]
+
+
+class UpdateWeightsFromIPCStatus(BaseModel):
+    """Readiness of the checkpoint-engine weight-update receiver."""
+    ready: bool
+    message: str
+    backend: str | None = None
+    device_type: str | None = None
+    checkpoint_engine_version: str | None = None
+    is_sleeping: bool = False
+    sleeping_tags: list[str] = Field(default_factory=list)
+    device_uuids: list[str] = Field(default_factory=list)
+    worker_ranks: list[int] = Field(default_factory=list)
+
+
 class InitWeightsUpdateGroupRequest(BaseModel):
     """Initialize a torch.distributed process group used to broadcast weights
     from an external trainer into the rollout engine."""

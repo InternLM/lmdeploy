@@ -417,6 +417,16 @@ class AsyncEngine:
         self.sleeping_tags = self.sleeping_tags - set(tags)
         self.is_sleeping = bool(self.sleeping_tags)
 
+    def complete_weights_update(self):
+        """Record that externally supplied weights are ready.
+
+        This does not wake the KV cache or enable inference. The caller must
+        explicitly wake ``kv_cache`` after the weight update succeeds.
+        """
+        self.engine.complete_weights_update()
+        self.sleeping_tags.discard('weights')
+        self.is_sleeping = bool(self.sleeping_tags)
+
     def _determine_gen_config(self, input_ids, gen_config: GenerationConfig | None = None) -> GenerationConfig:
         """Determine the generation configuration."""
         gen_config = deepcopy(gen_config) or GenerationConfig()

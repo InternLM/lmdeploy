@@ -118,6 +118,7 @@ Documentation
    advance/context_parallel.md
    advance/spec_decoding.md
    advance/update_weights.md
+   advance/checkpoint_engine.md
 
 .. toctree::
    :maxdepth: 1

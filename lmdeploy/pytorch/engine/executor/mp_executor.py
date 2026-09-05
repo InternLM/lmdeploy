@@ -378,6 +378,24 @@ class MPExecutor(ExecutorBase):
         """Build cache engine."""
         self.collective_rpc('build_cache_engine')
 
+    @staticmethod
+    def _reduce_worker_status(results: list[tuple[bool, str]], op_name: str) -> tuple[bool, str]:
+        """Reduce status tuples returned by all model workers."""
+        successes, messages = zip(*results)
+        if all(successes):
+            return True, messages[0]
+        message = ' | '.join(f'rank{idx}: {message}' for idx, message in enumerate(messages))
+        return False, f'{op_name}: {message}'
+
+    def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness from all workers."""
+        return self.collective_rpc('get_checkpoint_engine_status')
+
+    def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        results = self.collective_rpc('update_weights_from_ipc', args=(request, reject_reason))
+        return self._reduce_worker_status(results, 'update_weights_from_ipc')
+
     def warmup(self):
         """Build cache engine."""
         self.collective_rpc('warmup')

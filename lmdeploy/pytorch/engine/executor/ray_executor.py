@@ -372,6 +372,15 @@ class RayExecutor(ExecutorBase):
         """Update params."""
         self.collective_rpc('update_params', (request, ))
 
+    def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness from all workers."""
+        return self.collective_rpc('get_checkpoint_engine_status')
+
+    def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        results = self.collective_rpc('update_weights_from_ipc', (request, reject_reason))
+        return self._reduce_worker_status(results, 'update_weights_from_ipc')
+
     def _reduce_worker_status(self, results: list[tuple[bool, str]], op_name: str) -> tuple[bool, str]:
         """Reduce worker status results."""
         successes, messages = zip(*results)

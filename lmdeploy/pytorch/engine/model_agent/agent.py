@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import importlib
 import time
 from collections import deque
 from collections.abc import Mapping
@@ -41,6 +42,7 @@ from lmdeploy.serve.openai.protocol import (
     InitWeightsUpdateGroupRequest,
     UpdateParamsRequest,
     UpdateWeightsFromDistributedRequest,
+    UpdateWeightsFromIPCRequest,
 )
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_logger, init_custom_process_group
@@ -385,6 +387,7 @@ class BaseModelAgent:
         # update_params_ipc_buffer
         self._update_params_ipc_tensor: torch.Tensor | None = None
         self._update_params_ipc_event: torch.cuda.Event | None = None
+        self._checkpoint_engine_zmq_ctx: Any = None
 
         # disaggregated weight-update process groups, keyed by group_name
         self._model_update_group: dict[str, dist.ProcessGroup] = {}
@@ -1506,6 +1509,127 @@ class BaseModelAgent:
             if self.memdecode_agent is not None:
                 self.memdecode_agent.reset_graph_runner()
 
+    def _split_updated_weights(self, weights: list[tuple[str, torch.Tensor]]):
+        """Split target and draft weights using the existing MTP contract."""
+        if not self.spec_agent.is_enabled() or self.spec_agent.method != 'qwen3_5_mtp':
+            return weights, []
+        main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]
+        draft = [(name, weight) for name, weight in weights if name.startswith('mtp.')]
+        return main, draft
+
+    def _load_updated_weight_bucket(self, weights: list[tuple[str, torch.Tensor]], op_name: str):
+        """Load one externally supplied bucket into the target and draft
+        models."""
+        model = self.patched_model.get_model() if self.patched_model is not None else None
+        spec_model = self.spec_agent.get_model()
+        main_weights, draft_weights = self._split_updated_weights(weights)
+        for target, target_weights, tag in [(model, main_weights, 'main'),
+                                            (spec_model, draft_weights, 'draft')]:
+            if target is None or not target_weights:
+                continue
+            renamed = list(ModelWeightLoader._rename_weights_iterator(target_weights, target))
+            logger.info(f'{op_name}: {tag}_num_tensors={len(renamed)}')
+            target.load_weights(iter(renamed))
+
+    def _finalize_updated_weights(self):
+        """Finalize module-specific weights and invalidate captured graphs."""
+        model = self.patched_model.get_model() if self.patched_model is not None else None
+        spec_model = self.spec_agent.get_model()
+        for target in filter(None, [model, spec_model]):
+            for _, mod in target.named_modules():
+                if hasattr(mod, 'update_weights'):
+                    mod.update_weights()
+        torch.cuda.synchronize()
+        # FusedMoE finalization may replace Parameter objects, so captured
+        # graphs must not retain pointers to the previous weights.
+        self.reset_graph_runner()
+
+    def get_checkpoint_engine_status(self) -> dict[str, Any]:
+        """Return local readiness for checkpoint-engine CUDA IPC updates."""
+        with self.all_context():
+            model = self.patched_model.get_model() if self.patched_model is not None else None
+            spec_model = self.spec_agent.get_model()
+            devices = set()
+            for target in filter(None, [model, spec_model]):
+                try:
+                    devices.add(next(target.parameters()).device.type)
+                except StopIteration:
+                    continue
+
+            device_id = torch.cuda.current_device()
+            device_uuid = f'GPU-{torch.cuda.get_device_properties(device_id).uuid!s}'
+            version = None
+            import_error = None
+            try:
+                checkpoint_engine = importlib.import_module('checkpoint_engine')
+                importlib.import_module('checkpoint_engine.worker')
+                version = str(getattr(checkpoint_engine, '__version__', 'unknown'))
+            except Exception as e:  # noqa: BLE001
+                import_error = str(e)
+
+            ready = import_error is None and devices == {'cuda'} and self.memdecode_agent is None
+            if import_error is not None:
+                message = ('checkpoint-engine is unavailable; install '
+                           "'checkpoint-engine==0.4.2': " + import_error)
+            elif self.memdecode_agent is not None:
+                message = 'checkpoint-engine weight updates do not support MemDecode.'
+            elif devices != {'cuda'}:
+                message = f'model weights must be on CUDA before IPC update, got {sorted(devices)}'
+            else:
+                message = 'checkpoint-engine worker is ready.'
+            return {
+                'ready': ready,
+                'message': message,
+                'checkpoint_engine_version': version,
+                'device_uuid': device_uuid,
+                'weight_devices': sorted(devices),
+                'rank': self.rank,
+            }
+
+    @torch.inference_mode()
+    def update_weights_from_ipc(self,
+                                request: UpdateWeightsFromIPCRequest,
+                                reject_reason: str | None = None):
+        """Receive weight buckets through checkpoint-engine CUDA IPC."""
+        with self.all_context():
+            try:
+                zmq = importlib.import_module('zmq')
+                worker = importlib.import_module('checkpoint_engine.worker')
+                if self._checkpoint_engine_zmq_ctx is None:
+                    self._checkpoint_engine_zmq_ctx = zmq.Context()
+
+                device_id = torch.cuda.current_device()
+                device_uuid = f'GPU-{torch.cuda.get_device_properties(device_id).uuid!s}'
+                try:
+                    zmq_handle = request.zmq_handles[device_uuid]
+                except KeyError as e:
+                    raise ValueError(
+                        f'No checkpoint-engine ZMQ handle for local device {device_uuid}. '
+                        f'Available devices: {sorted(request.zmq_handles)}') from e
+
+                def _load_weights(weights: list[tuple[str, torch.Tensor]]):
+                    if reject_reason is not None:
+                        raise RuntimeError(reject_reason)
+                    self._load_updated_weight_bucket(weights, 'update_weights_from_ipc')
+
+                def _post_hook():
+                    self._finalize_updated_weights()
+
+                worker.update_weights_from_ipc(
+                    self._checkpoint_engine_zmq_ctx,
+                    zmq_handle,
+                    device_id=device_id,
+                    run=_load_weights,
+                    post_hook=_post_hook,
+                )
+                torch.cuda.empty_cache()
+                return True, 'Succeeded to update weights from checkpoint-engine IPC.'
+            except Exception as e:  # noqa: BLE001
+                msg = (f'Failed to update weights from checkpoint-engine IPC: {e}. '
+                       'The model weights may be partially updated; discard this instance and reload it.')
+                logger.exception(msg)
+                return False, msg
+
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
         """Update params."""
@@ -1663,34 +1787,10 @@ class BaseModelAgent:
                 else:
                     weights = []
 
-                model = self.patched_model.get_model() if self.patched_model is not None else None
-                spec_model = self.spec_agent.get_model()
-                # Same draft-split rule as update_params (currently only qwen3_5_mtp).
-                if self.spec_agent.is_enabled() and self.spec_agent.method == 'qwen3_5_mtp':
-                    main_weights = [(n, w) for n, w in weights if not n.startswith('mtp.')]
-                    draft_weights = [(n, w) for n, w in weights if n.startswith('mtp.')]
-                else:
-                    main_weights, draft_weights = weights, []
-
-                for m, w, tag in [(model, main_weights, 'main'), (spec_model, draft_weights, 'draft')]:
-                    if m is None or not w:
-                        continue
-                    renamed = list(ModelWeightLoader._rename_weights_iterator(w, m))
-                    logger.info(f'update_weights_from_distributed: {tag}_num_tensors={len(renamed)}')
-                    m.load_weights(iter(renamed))
+                self._load_updated_weight_bucket(weights, 'update_weights_from_distributed')
 
                 if request.finished:
-                    for m in filter(None, [model, spec_model]):
-                        for _, mod in m.named_modules():
-                            if hasattr(mod, 'update_weights'):
-                                mod.update_weights()
-                        torch.cuda.synchronize()
-                    # FusedMoE.update_weights() above replaces the gate_up / down
-                    # Parameter objects (LinearWeights.update_weight registers a new
-                    # nn.Parameter), so any CUDA graph captured before the update
-                    # still references the freed old pointers. Drop the captured
-                    # graphs so the next forward re-captures with the new params.
-                    self.reset_graph_runner()
+                    self._finalize_updated_weights()
 
                 torch.cuda.empty_cache()
                 return True, 'Succeeded to update parameter online.'
@@ -1798,6 +1898,9 @@ class BaseModelAgent:
         """release."""
         self._shutdown_kv_connector()
         self.reset_graph_runner()
+        if self._checkpoint_engine_zmq_ctx is not None:
+            self._checkpoint_engine_zmq_ctx.destroy(linger=0)
+            self._checkpoint_engine_zmq_ctx = None
         if self.memdecode_agent is not None:
             self.memdecode_agent.release()
         self.patched_model = None
