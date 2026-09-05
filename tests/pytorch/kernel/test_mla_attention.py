@@ -12,6 +12,7 @@ from lmdeploy.pytorch.backends.cuda.attention import sparse_mla as sparse_mla_mo
 from lmdeploy.pytorch.backends.cuda.attention.sparse_mla import (
     FlashMLAIndexMapper,
     FlashMLASparseImpl,
+    TileLangSparseMLAImpl,
 )
 from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
 
@@ -34,6 +35,21 @@ def test_flash_mla_builder_selects_sparse_impl(monkeypatch):
     assert TritonAttentionBuilder.build(**kwargs) is dense_output
     assert TritonAttentionBuilder.build(**kwargs, mla_index_topk=2048) is sparse_output
     assert sparse_impl.call_args.kwargs['use_fa3'] is True
+
+
+def test_builder_selects_tilelang_sparse_impl_from_env(monkeypatch):
+    output = object()
+    tilelang_impl = Mock(return_value=output)
+    monkeypatch.setattr(attention_module._envs, 'sparse_mla_backend', 'tilelang')
+    monkeypatch.setattr(sparse_mla_module, 'TileLangSparseMLAImpl', tilelang_impl)
+
+    kwargs = dict(num_heads=64,
+                  head_size=576,
+                  num_kv_heads=1,
+                  use_flash_mla=True,
+                  mla_index_topk=2048)
+    assert TritonAttentionBuilder.build(**kwargs) is output
+    assert tilelang_impl.call_args.kwargs['mla_index_topk'] == 2048
 
 
 def test_flash_mla_decode_index_mapping(monkeypatch):
@@ -130,6 +146,37 @@ def test_bf16_sparse_decode_strided_cache_matches_contiguous_cache(monkeypatch):
     torch.testing.assert_close(output, expected)
 
 
+def test_tilelang_sparse_decode_uses_flat_bf16_cache_view(monkeypatch):
+    _disable_dynamic_compile(monkeypatch)
+    impl = object.__new__(TileLangSparseMLAImpl)
+    impl.scale = 576**-0.5
+    impl.index_mapper = FlashMLAIndexMapper()
+    impl._tilelang_sparse_mla_forward = Mock(
+        return_value=torch.empty(2, 8, 512, dtype=torch.bfloat16))
+
+    query = torch.empty(2, 8, 576, dtype=torch.bfloat16)
+    k_cache = torch.arange(3 * 32 * 576, dtype=torch.float32)
+    k_cache = k_cache.to(torch.bfloat16).view(3, 32, 1, 576)
+    nsa_indices = torch.tensor([[0, 33, -1], [0, 1, 32]])
+    metadata = SimpleNamespace(
+        is_decoding=True,
+        q_seqlens=torch.ones(2, dtype=torch.int32),
+        block_offsets=torch.tensor([[1, 0], [2, 0]], dtype=torch.int32),
+    )
+
+    output = impl._decoding_sparse_bf16(query, k_cache, nsa_indices, metadata)
+
+    args = impl._tilelang_sparse_mla_forward.call_args.args
+    kernel_query, storage_k, indices, scale = args
+    assert kernel_query is query
+    assert storage_k.shape == (96, 1, 576)
+    assert storage_k.untyped_storage().data_ptr() == k_cache.untyped_storage().data_ptr()
+    expected = torch.tensor([[[32, 1, -1]], [[64, 65, 0]]])
+    assert torch.equal(indices, expected)
+    assert scale == impl.scale
+    assert output.shape == (2, 8, 512)
+
+
 def test_fp8_sparse_decode_pads_tp_query_heads_for_aligned_kernel():
     impl = object.__new__(FlashMLASparseImpl)
     impl.causal = True
@@ -218,3 +265,52 @@ def test_sparse_mla_prefill_routes_by_kv_length(monkeypatch):
     assert dense is dense_output
     assert sparse is sparse_output
     assert dense_prefill.call_args.kwargs['nsa_indices'] is None
+
+
+def test_tilelang_sparse_mla_decode_zero_copy_matches_selected_reference(monkeypatch):
+    pytest.importorskip('tilelang')
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip('TileLang SparseMLA requires an SM90 GPU')
+    _disable_dynamic_compile(monkeypatch)
+    from lmdeploy.pytorch.kernels.cuda.tilelang_sparse_mla import tilelang_sparse_mla_forward
+
+    impl = object.__new__(TileLangSparseMLAImpl)
+    impl.scale = 576**-0.5
+    impl.index_mapper = FlashMLAIndexMapper()
+    impl._tilelang_sparse_mla_forward = tilelang_sparse_mla_forward
+
+    batch_size, query_len, num_heads = 2, 2, 8
+    block_size, num_blocks, topk = 64, 4, 64
+    query = torch.randn(batch_size * query_len, num_heads, 576,
+                        dtype=torch.bfloat16, device='cuda') * 0.1
+    k_cache = torch.randn(num_blocks, block_size, 1, 576,
+                          dtype=torch.bfloat16, device='cuda') * 0.1
+    nsa_indices = torch.arange(topk, dtype=torch.int32, device='cuda')
+    nsa_indices = nsa_indices.repeat(batch_size * query_len, 1)
+    nsa_indices[1, -3:] = -1
+    block_offsets = torch.tensor([[2, 0], [3, 1]],
+                                 dtype=torch.int32, device='cuda')
+    metadata = SimpleNamespace(
+        is_decoding=True,
+        q_seqlens=torch.full((batch_size, ), query_len,
+                             dtype=torch.int32, device='cuda'),
+        block_offsets=block_offsets,
+    )
+
+    output = impl._decoding_sparse_bf16(query, k_cache, nsa_indices, metadata)
+
+    physical_indices = impl.index_mapper.map_paged_decode(
+        nsa_indices, block_offsets, query_len, block_size).flatten(0, 1)
+    flat_k = k_cache.flatten(0, 1)
+    expected = []
+    for row, indices in enumerate(physical_indices):
+        valid = indices >= 0
+        selected_kv = flat_k[indices.clamp_min(0)]
+        compact = torch.arange(topk, dtype=torch.int32, device='cuda')
+        compact = compact.masked_fill(~valid, -1)[None, None]
+        expected.append(tilelang_sparse_mla_forward(query[row:row + 1],
+                                                    selected_kv, compact,
+                                                    impl.scale))
+    expected = torch.cat(expected)
+
+    assert torch.equal(output, expected)
