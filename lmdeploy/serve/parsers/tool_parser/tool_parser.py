@@ -29,8 +29,7 @@ class ToolParser:
     """Base class for model-specific tool parsers."""
 
     validate_tool_names: ClassVar[bool] = False
-    # XGrammar builtin structural-tag key. Parsers with a custom grammar can
-    # override build_required_tool_response_format instead.
+    # XGrammar builtin structural-tag keys for required tool calls.
     structural_tag_model: str | None = None
     reasoning_structural_tag_model: str | None = None
 
@@ -99,29 +98,6 @@ class ToolParser:
     def filter_tool_calls(self, calls: list[ToolCall]) -> list[ToolCall]:
         """Drop complete calls whose names are absent from request tools."""
         return [call for call in calls if self.is_valid_tool_name(call.function.name)]
-
-    @classmethod
-    def build_required_tool_response_format(cls, tools: list, *, reasoning: bool) -> dict | None:
-        """Build the guided-decoding format for ``tool_choice="required"``.
-
-        Most parsers only need to declare ``structural_tag_model``. Parsers
-        with custom required-call grammars can override this method.
-        """
-        structural_tag_model = (
-            cls.reasoning_structural_tag_model
-            if reasoning and cls.reasoning_structural_tag_model is not None else cls.structural_tag_model
-        )
-        if structural_tag_model is None:
-            return None
-
-        import xgrammar as xgr
-
-        return xgr.get_model_structural_tag(
-            structural_tag_model,
-            [tool.model_dump() for tool in tools],
-            tool_choice='required',
-            reasoning=reasoning,
-        ).model_dump(mode='json')
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:

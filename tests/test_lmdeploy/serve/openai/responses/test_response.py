@@ -76,6 +76,7 @@ def test_responses_error_finish_reasons_do_not_complete_successfully():
         reasoning_tokens=0,
         finish_reason='abort',
     ).model_dump(exclude_none=True)
+
     assert error_response['status'] == 'failed'
     assert error_response['error']['code'] == 'server_error'
     assert abort_response['status'] == 'cancelled'

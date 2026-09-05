@@ -335,13 +335,23 @@ class BaseResponseParser(ResponseParser):
             self._required_tool_validators = _build_required_tool_validators(request.tools or [])
             if tcls is None:
                 raise ValueError('`tool_choice="required"` requires a configured tool-call parser.')
-            required_response_format = tcls.build_required_tool_response_format(
-                request.tools or [],
-                reasoning=self.reasoning_enabled,
+            structural_tag_model = (
+                tcls.reasoning_structural_tag_model
+                if self.reasoning_enabled and tcls.reasoning_structural_tag_model is not None
+                else tcls.structural_tag_model
             )
-            if required_response_format is None:
+            if structural_tag_model is None:
                 raise ValueError(
                     f'Tool parser {tcls.__name__!r} does not support `tool_choice="required"`.')
+
+            import xgrammar as xgr
+
+            required_response_format = xgr.get_model_structural_tag(
+                structural_tag_model,
+                [tool.model_dump() for tool in request.tools or []],
+                tool_choice='required',
+                reasoning=self.reasoning_enabled,
+            ).model_dump(mode='json')
 
         if self.tool_parser is not None:
             self.request = self.tool_parser.adjust_request(request)

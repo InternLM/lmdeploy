@@ -114,15 +114,15 @@ def _walk_formats(value):
     ],
 )
 @pytest.mark.parametrize('reasoning', [False, True])
-def test_builtin_required_formats_compile(parser_name, reasoning, xgrammar_compiler):
+def test_builtin_required_formats_compile(parser_name, reasoning, xgrammar_compiler, configured_parser):
     request = _request()
     tools = request.tools
-    parser_cls = ToolParserManager.get(parser_name)
-
-    response_format = parser_cls.build_required_tool_response_format(
-        tools,
+    parser = configured_parser(
+        request=request,
         reasoning=reasoning,
+        tool_parser=parser_name,
     )
+    response_format = parser.request.response_format
 
     assert response_format['type'] == 'structural_tag'
     formats = list(_walk_formats(response_format['format']))
