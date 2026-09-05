@@ -2,6 +2,12 @@
 
 LMDeploy exposes a set of metrics via Prometheus, and provides visualization via Grafana.
 
+For the PyTorch backend, `lmdeploy:gpu_cache_usage_perc` reports total logical GPU-block occupancy by default, including
+blocks retained for prefix reuse. Set `LMDEPLOY_ENABLE_REQUEST_CACHE_USAGE_METRIC=1` before starting the server to make
+the same metric report only blocks referenced by live requests. Blocks shared by multiple requests
+are counted once, while blocks held only by the prefix cache or stopped sessions are excluded. The request-only mode is
+useful for comparing request load when routing across replicas.
+
 For the Turbomind backend, `lmdeploy:gpu_cache_usage_perc` is the number of bytes held by live prefix-cache and
 checkpoint objects divided by the configured cache-region size. Prefix-cache hit metrics count prompt tokens that
 the engine actually skips when a request is first scheduled. Turbomind currently reports scheduler metrics for DP 1;
