@@ -3,7 +3,7 @@ import torch
 
 from lmdeploy.pytorch.kernels.cuda import rms_norm
 
-from ..norm import RMSNormBuilder, RMSNormImpl
+from ..norm import RMSNormImpl
 
 
 class TritonRMSNormImpl(RMSNormImpl):
@@ -21,12 +21,3 @@ class TritonRMSNormImpl(RMSNormImpl):
         else:
             x, residual = rms_norm(x, weight, self.eps, residual=residual)
             return x, residual
-
-
-class TritonRMSNormBuilder(RMSNormBuilder):
-    """Triton RMS norm implementation builder."""
-
-    @staticmethod
-    def build(weight: torch.Tensor, eps: float = 1e-6):
-        """build."""
-        return TritonRMSNormImpl(weight, eps)

@@ -51,8 +51,8 @@ def _build_communicator(monkeypatch,
 
 def _build_norm(monkeypatch, *, fused=False):
     impl = Mock()
-    builder = SimpleNamespace(build=Mock(return_value=impl))
-    backend = SimpleNamespace(get_layer_impl_builder=Mock(return_value=builder))
+    backend = Mock()
+    backend.build_op.return_value = impl
     group = Mock()
     group.supports_optimized_all_reduce.return_value = True
     group.supports_fused_all_reduce_residual_rms_norm.return_value = fused

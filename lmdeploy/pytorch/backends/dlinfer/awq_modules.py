@@ -4,7 +4,7 @@ import torch
 
 from lmdeploy.pytorch.kernels.dlinfer import awq_linear
 
-from ..awq_modules import LinearW4A16Builder, LinearW4A16Impl
+from ..awq_modules import LinearW4A16Impl
 
 
 class AwqLinearW4A16Impl(LinearW4A16Impl):
@@ -27,17 +27,3 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
         """forward."""
         out = awq_linear(x, qweight, scales, qzeros, bias, all_reduce, self.group_size)
         return out
-
-
-class AwqLinearW4A16Builder(LinearW4A16Builder):
-    """Awq linear builder."""
-
-    @staticmethod
-    def build(in_features: int,
-              out_features: int,
-              w_bit: int,
-              group_size: int,
-              bias: bool = False,
-              dtype: torch.dtype = None):
-        """build."""
-        return AwqLinearW4A16Impl(in_features, out_features, w_bit, group_size)

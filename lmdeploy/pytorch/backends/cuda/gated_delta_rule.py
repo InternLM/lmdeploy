@@ -10,7 +10,7 @@ import triton.language as tl
 
 from lmdeploy.utils import get_logger
 
-from ..gated_delta_rule import GatedDeltaRuleBuilder, GatedDeltaRuleImpl
+from ..gated_delta_rule import GatedDeltaRuleImpl
 from .step_metadata import CudaStepMetaUpdater, register_step_metadata_impl
 from .utils import has_tilelang
 
@@ -337,10 +337,3 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             cache_seqlens=cache_seqlens,
             transpose_state_layout=transpose_state_layout,
         )
-
-
-class CudaGatedDeltaRuleBuilder(GatedDeltaRuleBuilder):
-
-    @staticmethod
-    def build() -> GatedDeltaRuleImpl:
-        return CudaGatedDeltaRuleImpl()

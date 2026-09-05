@@ -517,6 +517,7 @@ class StepContext:
 class BuildModelContext:
     """Context for building model."""
     language_model_only: bool = False
+    enable_deterministic: bool = False
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False

@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 import torch
 from torch import Tensor
 
+from .base import BuildSpec
+
 if TYPE_CHECKING:
     from ..engine.cache_engine.schema import BlockCacheGeometry, BlockCacheRequest
 
@@ -88,7 +90,7 @@ def should_skip_nsa_indexer(model_metas) -> bool:
         for meta in model_metas)
 
 
-class BaseNSAIndexFP8(ABC):
+class NSAIndexFP8Impl(ABC):
 
     @abstractmethod
     def get_block_cache_requests(self, geometry: BlockCacheGeometry,
@@ -114,11 +116,12 @@ class BaseNSAIndexFP8(ABC):
         """Forward with fused DSA indexer preparation."""
         raise NotImplementedError('Not implemented.')
 
-class BaseNSAIndexFP8Builder:
+@dataclass(frozen=True)
+class NSAIndexFP8BuildSpec(BuildSpec[NSAIndexFP8Impl]):
+    """Immutable requirements for constructing an FP8 NSA indexer."""
 
-    @staticmethod
-    @abstractmethod
-    def build(topk: int, softmax_scale: float, block_size: int = 128, fill: int = -1,
-              allow_short_prefill_scoring_skip: bool = False) -> BaseNSAIndexFP8:
-        """Build layer implementation."""
-        raise NotImplementedError('Not implemented.')
+    top_k: int
+    softmax_scale: float
+    block_size: int = 128
+    fill: int = -1
+    allow_short_prefill_scoring_skip: bool = False

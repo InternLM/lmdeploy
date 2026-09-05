@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import contextlib
+from typing import cast
 
 import torch
 
@@ -8,7 +9,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
-from ..base import OpType
+from ..base import BuildSpec, ImplT
 from ..default import DefaultOpsBackend
 
 logger = get_logger('lmdeploy')
@@ -29,97 +30,187 @@ class CudaOpsBackend(DefaultOpsBackend):
         return CudaCacheBackend
 
     @classmethod
-    def get_layer_impl_builder(cls, layer_type: OpType):
-        """Get cuda layer builder."""
-        if layer_type == OpType.PagedAttention:
-            from .attention import TritonAttentionBuilder
-            return TritonAttentionBuilder
-        elif layer_type == OpType.FlashAttention:
-            from .flash_attention import TritonFlashAttentionBuilder
-            return TritonFlashAttentionBuilder
-        elif layer_type == OpType.ApplyRotaryEmb:
-            from .apply_rotary_emb import TritonApplyRotaryEmbBuilder
-            return TritonApplyRotaryEmbBuilder
-        elif layer_type == OpType.RMSNorm:
-            from .norm import TritonRMSNormBuilder
-            return TritonRMSNormBuilder
-        elif layer_type == OpType.LoRA:
-            from .lora import TritonLoRABuilder
-            return TritonLoRABuilder
-        elif layer_type == OpType.LinearW8A8:
-            from .qmodules import TritonLinearW8A8Builder
-            return TritonLinearW8A8Builder
-        elif layer_type == OpType.RMSNormW8A8:
-            from .qmodules import TritonRMSNormBuilder
-            return TritonRMSNormBuilder
-        elif layer_type == OpType.MultinomialSampling:
-            from .multinomial_sampling import TritonMultinomialSamplingBuilder
-            return TritonMultinomialSamplingBuilder
-        elif layer_type == OpType.RejectionSampling:
-            from .rejection_sampling import CudaRejectionSamplingBuilder
-            return CudaRejectionSamplingBuilder
-        elif layer_type == OpType.SiluAndMul:
-            from .activation import TritonSiluAndMulBuilder
-            return TritonSiluAndMulBuilder
-        elif layer_type == OpType.LinearW4A16:
-            from .awq_modules import AwqLinearW4A16Builder
-            return AwqLinearW4A16Builder
-        elif layer_type == OpType.FusedMoE:
-            from .moe import TritonFusedMoEBuilder
-            return TritonFusedMoEBuilder
-        elif layer_type == OpType.FusedMoEW8A8:
-            from .moe import TritonFusedMoEW8A8Builder
-            return TritonFusedMoEW8A8Builder
-        elif layer_type == OpType.FusedMoEW4A16:
-            from .moe import TritonFusedMoEW4A16Builder
-            return TritonFusedMoEW4A16Builder
-        elif layer_type == OpType.FusedMoEStaticF8:
-            from .moe import TritonFusedMoEStaticF8Builder
-            return TritonFusedMoEStaticF8Builder
-        elif layer_type == OpType.FusedMoEBlockedF8:
-            from .moe import TritonFusedMoEBlockedF8Builder
-            return TritonFusedMoEBlockedF8Builder
-        elif layer_type == OpType.FusedMoEV4FP4:
-            from .moe import TritonFusedMoEV4FP4Builder
-            return TritonFusedMoEV4FP4Builder
-        elif layer_type == OpType.LinearStaticF8:
-            from .static_fp8_modules import (
-                TritonLinearStaticF8Builder,
+    def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
+        """Build a typed CUDA operator implementation."""
+        from ..activation import SiluAndMulBuildSpec
+        from ..apply_rotary_emb import ApplyRotaryEmbBuildSpec
+        from ..attention import PagedAttentionBuildSpec, V4AttentionBuildSpec
+        from ..awq_modules import LinearW4A16BuildSpec
+        from ..blockedf8_modules import LinearBlockedF8BuildSpec
+        from ..causal_conv1d import CausalConv1dBuildSpec
+        from ..compressor import V4CompressorBuildSpec
+        from ..flash_attention import FlashAttentionBuildSpec
+        from ..gated_delta_rule import GatedDeltaRuleBuildSpec
+        from ..hc_prepost import HCPrePostBuildSpec
+        from ..indexer import V4IndexerBuildSpec
+        from ..lora import LoRABuildSpec
+        from ..moe import (
+            FusedMoEBlockedF8BuildSpec,
+            FusedMoEBuildSpec,
+            FusedMoEStaticF8BuildSpec,
+            FusedMoEV4FP4BuildSpec,
+            FusedMoEW4A16BuildSpec,
+            FusedMoEW8A8BuildSpec,
+        )
+        from ..moe_router import RouterGemmBuildSpec, RouterNoauxTCBuildSpec
+        from ..multinomial_sampling import MultinomialSamplingBuildSpec
+        from ..norm import RMSNormBuildSpec
+        from ..nsa import NSAIndexFP8BuildSpec
+        from ..qmodules import LinearW8A8BuildSpec, RMSNormW8A8BuildSpec
+        from ..rejection_sampling import RejectionSamplingBuildSpec
+        from ..static_fp8_modules import LinearStaticF8BuildSpec
+        if isinstance(spec, SiluAndMulBuildSpec):
+            from .activation import TritonSiluAndMulImpl
+            return cast(ImplT, TritonSiluAndMulImpl(spec.inplace))
+        if isinstance(spec, ApplyRotaryEmbBuildSpec):
+            from .apply_rotary_emb import TritonApplyRotaryEmbImpl
+            return cast(ImplT, TritonApplyRotaryEmbImpl())
+        if isinstance(spec, RMSNormBuildSpec):
+            from .norm import TritonRMSNormImpl
+            return cast(ImplT, TritonRMSNormImpl(spec.hidden_size, spec.eps))
+        if isinstance(spec, RMSNormW8A8BuildSpec):
+            from .qmodules import TritonRMSNormW8A8Impl
+            return cast(ImplT, TritonRMSNormW8A8Impl(spec.hidden_size, spec.eps, spec.quant_dtype))
+        if isinstance(spec, MultinomialSamplingBuildSpec):
+            from .multinomial_sampling import TritonMultinomialSamplingImpl
+            return cast(ImplT, TritonMultinomialSamplingImpl())
+        if isinstance(spec, RejectionSamplingBuildSpec):
+            from .rejection_sampling import CudaRejectionSamplingImpl
+            return cast(ImplT, CudaRejectionSamplingImpl())
+        if isinstance(spec, NSAIndexFP8BuildSpec):
+            from .nsa import TritonNSAIndexFP8Impl
+            return cast(
+                ImplT,
+                TritonNSAIndexFP8Impl(
+                    spec.top_k,
+                    spec.softmax_scale,
+                    spec.block_size,
+                    spec.fill,
+                    allow_short_prefill_scoring_skip=spec.allow_short_prefill_scoring_skip,
+                ),
             )
-            return TritonLinearStaticF8Builder
-        elif layer_type == OpType.LinearBlockedF8:
-            from .blockedf8_modules import CudaLinearBlockedF8Builder
-            return CudaLinearBlockedF8Builder
-        elif layer_type == OpType.NSAIndexFP8:
-            from .nsa import TritonNSAIndexFP8Builder
-            return TritonNSAIndexFP8Builder
-        elif layer_type == OpType.V4Attention:
-            from .attention import TritonV4AttentionBuilder
-            return TritonV4AttentionBuilder
-        elif layer_type == OpType.V4Indexer:
-            from .v4_indexer import TritonV4IndexerBuilder
-            return TritonV4IndexerBuilder
-        elif layer_type == OpType.V4Compressor:
-            from .v4_compressor import TritonV4CompressorBuilder
-            return TritonV4CompressorBuilder
-        elif layer_type == OpType.HcPrePost:
-            from .hc_prepost import TritonHcPrePostBuilder
-            return TritonHcPrePostBuilder
-        elif layer_type == OpType.RouterGemm:
-            from .moe_router import CudaRouterGemmBuilder
-            return CudaRouterGemmBuilder
-        elif layer_type == OpType.RouterNoauxTC:
-            from .moe_router import TritonRouterNoauxTCBuilder
-            return TritonRouterNoauxTCBuilder
-        elif layer_type == OpType.CausalConv1d:
-            from .causal_conv1d import CausalConv1dCudaBuilder
-            return CausalConv1dCudaBuilder
-        elif layer_type == OpType.GatedDeltaRule:
-            from .gated_delta_rule import CudaGatedDeltaRuleBuilder
-            return CudaGatedDeltaRuleBuilder
-        else:
-            logger.debug(f'Op {layer_type} fallback to default implementation.')
-            return super().get_layer_impl_builder(layer_type)
+        if isinstance(spec, V4AttentionBuildSpec):
+            from .attention.v4 import TritonV4AttentionImpl
+            return cast(
+                ImplT,
+                TritonV4AttentionImpl(spec.head_dim, spec.scale, spec.window_size, spec.compress_ratio),
+            )
+        if isinstance(spec, V4IndexerBuildSpec):
+            from .v4_indexer import TritonV4IndexerImpl
+            return cast(
+                ImplT,
+                TritonV4IndexerImpl(
+                    spec.index_top_k,
+                    spec.compress_ratio,
+                    spec.num_heads,
+                    spec.head_dim,
+                ),
+            )
+        if isinstance(spec, V4CompressorBuildSpec):
+            from .v4_compressor import TritonV4CompressorImpl
+            return cast(
+                ImplT,
+                TritonV4CompressorImpl(
+                    spec.compress_ratio,
+                    spec.overlap,
+                    spec.head_dim,
+                    spec.is_indexer,
+                ),
+            )
+        if isinstance(spec, HCPrePostBuildSpec):
+            from .hc_prepost import TritonHCPrePostImpl
+            return cast(ImplT, TritonHCPrePostImpl(spec.hc_mult, spec.sinkhorn_iters, spec.eps))
+        if isinstance(spec, RouterGemmBuildSpec):
+            from .moe_router import CudaRouterGemmImpl
+            return cast(ImplT, CudaRouterGemmImpl(out_dtype=spec.output_dtype))
+        if isinstance(spec, RouterNoauxTCBuildSpec):
+            from .moe_router import TritonRouterNoauxTCImpl
+            return cast(
+                ImplT,
+                TritonRouterNoauxTCImpl(
+                    scoring_func=spec.scoring_func,
+                    top_k=spec.top_k,
+                    n_group=spec.n_group,
+                    topk_group=spec.top_k_group,
+                    n_routed_experts=spec.n_routed_experts,
+                    routed_scaling_factor=spec.routed_scaling_factor,
+                    renormalize=spec.renormalize,
+                    router_n_groups=spec.router_n_groups,
+                ),
+            )
+        if isinstance(spec, CausalConv1dBuildSpec):
+            from .causal_conv1d import _build_causal_conv1d
+            return cast(ImplT, _build_causal_conv1d())
+        if isinstance(spec, GatedDeltaRuleBuildSpec):
+            from .gated_delta_rule import CudaGatedDeltaRuleImpl
+            return cast(ImplT, CudaGatedDeltaRuleImpl())
+        if isinstance(spec, LinearW4A16BuildSpec):
+            from .awq_modules import _build_linear_w4a16
+            return cast(ImplT, _build_linear_w4a16(spec))
+        if isinstance(spec, LinearW8A8BuildSpec):
+            from .qmodules import TritonLinearW8A8Impl
+            return cast(
+                ImplT,
+                TritonLinearW8A8Impl(
+                    spec.in_features,
+                    spec.out_features,
+                    spec.output_dtype,
+                    spec.quant_dtype,
+                ),
+            )
+        if isinstance(spec, LinearBlockedF8BuildSpec):
+            from .blockedf8_modules import _build_linear_blocked_f8
+            return cast(ImplT, _build_linear_blocked_f8(spec))
+        if isinstance(spec, LinearStaticF8BuildSpec):
+            from .static_fp8_modules import TritonLinearStaticF8Impl
+            return cast(
+                ImplT,
+                TritonLinearStaticF8Impl(
+                    spec.in_features,
+                    spec.out_features,
+                    out_dtype=spec.output_dtype,
+                ),
+            )
+        if isinstance(spec, LoRABuildSpec):
+            from .lora import TritonLoRAImpl
+            return cast(ImplT, TritonLoRAImpl())
+        if isinstance(spec, FusedMoEBuildSpec):
+            from .moe.default import _build_fused_moe
+            return cast(ImplT, _build_fused_moe(spec))
+        if isinstance(spec, FusedMoEW4A16BuildSpec):
+            from .moe.compressed_tensors import _build_fused_moe_w4a16
+            return cast(ImplT, _build_fused_moe_w4a16(spec))
+        if isinstance(spec, FusedMoEW8A8BuildSpec):
+            from .moe.w8a8 import _build_fused_moe_w8a8
+            return cast(ImplT, _build_fused_moe_w8a8(spec))
+        if isinstance(spec, FusedMoEStaticF8BuildSpec):
+            from .moe.static_fp8 import _build_fused_moe_static_f8
+            return cast(ImplT, _build_fused_moe_static_f8(spec))
+        if isinstance(spec, FusedMoEBlockedF8BuildSpec):
+            from .moe.blocked_fp8 import _build_fused_moe_blocked_f8
+            return cast(ImplT, _build_fused_moe_blocked_f8(spec))
+        if isinstance(spec, FusedMoEV4FP4BuildSpec):
+            from .moe.v4_fp4 import _build_fused_moe_v4_fp4
+            return cast(ImplT, _build_fused_moe_v4_fp4(spec))
+        if isinstance(spec, PagedAttentionBuildSpec):
+            from .attention import _build_paged_attention
+            return cast(ImplT, _build_paged_attention(spec))
+        if isinstance(spec, FlashAttentionBuildSpec):
+            from .flash_attention import TritonFlashAttentionImpl
+            return cast(
+                ImplT,
+                TritonFlashAttentionImpl(
+                    num_heads=spec.num_heads,
+                    head_dim=spec.head_dim,
+                    scale=spec.scale,
+                    num_kv_heads=spec.num_kv_heads,
+                    v_head_dim=spec.v_head_dim,
+                    causal=spec.causal,
+                    sliding_window=spec.sliding_window,
+                    logit_softcapping=spec.logit_softcapping,
+                ),
+            )
+        return super().build_op(spec, enable_deterministic=enable_deterministic)
 
     @staticmethod
     def get_attention_metadata_cls():

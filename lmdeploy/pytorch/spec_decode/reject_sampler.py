@@ -2,7 +2,8 @@
 from torch import LongTensor, Tensor, nn
 from torch.profiler import record_function
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.rejection_sampling import RejectionSamplingBuildSpec
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
 
 
@@ -12,8 +13,7 @@ class RejectionSampler(nn.Module):
     def __init__(self, backend_type: str | None = None):
         super().__init__()
         backend = get_backend(backend_type)
-        impl_builder = backend.get_layer_impl_builder(OpType.RejectionSampling)
-        self._impl = impl_builder.build()
+        self._impl = backend.build_op(RejectionSamplingBuildSpec())
 
     @record_function('rejection_sample')
     def forward(

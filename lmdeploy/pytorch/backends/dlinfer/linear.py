@@ -6,7 +6,7 @@ import torch.distributed as dist
 
 from lmdeploy.pytorch.kernels.dlinfer import linear
 
-from ..linear import LinearBuilder, LinearImpl
+from ..linear import LinearImpl
 
 
 class DlinferLinearImpl(LinearImpl):
@@ -31,12 +31,3 @@ class DlinferLinearImpl(LinearImpl):
         if all_reduce:
             dist.all_reduce(out, group=group)
         return out
-
-
-class DlinferLinearBuilder(LinearBuilder):
-    """Dlinfer linear implementation builder."""
-
-    @staticmethod
-    def build(in_features: int, out_features: int, bias: bool = True, dtype: torch.dtype = None):
-        """build."""
-        return DlinferLinearImpl()

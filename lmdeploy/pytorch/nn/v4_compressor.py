@@ -4,9 +4,10 @@ from collections.abc import Mapping
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.backends.compressor import V4CompressorMetadata
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.compressor import V4CompressorBuildSpec, V4CompressorMetadata
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheBinding, BlockCacheRequestContext
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
 class V4Compressor(nn.Module):
@@ -18,13 +19,15 @@ class V4Compressor(nn.Module):
                  head_dim: int,
                  is_indexer: bool = False):
         super().__init__()
-        backend = get_backend()
-        impl_builder = backend.get_layer_impl_builder(OpType.V4Compressor)
-        self.impl = impl_builder.build(
-            compress_ratio=compress_ratio,
-            overlap=overlap,
-            head_dim=head_dim,
-            is_indexer=is_indexer)
+        self.impl = get_backend().build_op(
+            V4CompressorBuildSpec(
+                compress_ratio=compress_ratio,
+                overlap=overlap,
+                head_dim=head_dim,
+                is_indexer=is_indexer,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
         self._block_cache_bindings: dict[str, BlockCacheBinding] = {}
 
     def get_block_cache_requests(self, context: BlockCacheRequestContext):

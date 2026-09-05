@@ -10,7 +10,7 @@ from lmdeploy.pytorch.backends.cuda.token_dispatcher import (
     use_deepep,
 )
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
-from lmdeploy.pytorch.backends.moe import FusedMoEW4A16Builder, FusedMoEW4A16Impl
+from lmdeploy.pytorch.backends.moe import FusedMoEW4A16BuildSpec, FusedMoEW4A16Impl
 from lmdeploy.pytorch.kernels.cuda.compressed_tensors_w4a16 import (
     fused_moe_w4a16,
     fused_moe_w4a16_masked,
@@ -316,42 +316,26 @@ class DeepEPFusedMoEW4A16Impl(FusedMoEW4A16Impl):
         return gather_outputs_by_attn_tp(out_states, split_size)
 
 
-class TritonFusedMoEW4A16Builder(FusedMoEW4A16Builder):
-    """Build the CUDA eager compressed-tensors MoE implementation."""
-
-    @staticmethod
-    def build(
-        top_k: int,
-        num_experts: int,
-        renormalize: bool = False,
-        num_bits: int = 4,
-        group_size: int = 32,
-        hidden_dim: int = 1,
-        ep_size: int = 1,
-        ep_group: dist.ProcessGroup = None,
-        out_dtype: torch.dtype = torch.bfloat16,
-        num_max_dispatch_tokens_per_rank: int = 128,
-        layer_idx: int = 0,
-    ):
-        if ep_size > 1:
-            return DeepEPFusedMoEW4A16Impl(
-                top_k=top_k,
-                num_experts=num_experts,
-                hidden_dim=hidden_dim,
-                ep_size=ep_size,
-                ep_group=ep_group,
-                renormalize=renormalize,
-                num_bits=num_bits,
-                group_size=group_size,
-                out_dtype=out_dtype,
-                num_max_dispatch_tokens_per_rank=
-                num_max_dispatch_tokens_per_rank,
-                layer_idx=layer_idx,
-            )
-        return TritonFusedMoEW4A16Impl(
-            top_k=top_k,
-            num_experts=num_experts,
-            renormalize=renormalize,
-            num_bits=num_bits,
-            group_size=group_size,
+def _build_fused_moe_w4a16(spec: FusedMoEW4A16BuildSpec) -> FusedMoEW4A16Impl:
+    """Build the selected CUDA compressed-tensors W4A16 MoE."""
+    if spec.ep_size > 1:
+        return DeepEPFusedMoEW4A16Impl(
+            top_k=spec.top_k,
+            num_experts=spec.num_experts,
+            hidden_dim=spec.hidden_dim,
+            ep_size=spec.ep_size,
+            ep_group=spec.ep_group,
+            renormalize=spec.renormalize,
+            num_bits=spec.num_bits,
+            group_size=spec.group_size,
+            out_dtype=spec.output_dtype,
+            num_max_dispatch_tokens_per_rank=spec.num_max_dispatch_tokens_per_rank,
+            layer_idx=spec.layer_idx,
         )
+    return TritonFusedMoEW4A16Impl(
+        top_k=spec.top_k,
+        num_experts=spec.num_experts,
+        renormalize=spec.renormalize,
+        num_bits=spec.num_bits,
+        group_size=spec.group_size,
+    )

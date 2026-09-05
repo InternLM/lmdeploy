@@ -1349,6 +1349,7 @@ class BaseModelAgent:
         enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
 
         build_model_ctx = BuildModelContext(language_model_only=self.misc_config.language_model_only,
+                                            enable_deterministic=self.backend_config.enable_deterministic,
                                             dllm_config=self.misc_config.dllm_config,
                                             strategy_factory=self.strategy_factory,
                                             enable_return_routed_experts=enable_return_routed_experts,

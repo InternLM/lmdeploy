@@ -7,9 +7,12 @@ import torch
 from torch import nn
 from torch.profiler import record_function
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.causal_conv1d import CausalConv1dBuildSpec
+from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaRuleBuildSpec
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 from lmdeploy.utils import get_logger
 
@@ -88,9 +91,10 @@ class GatedDeltaMeta:
 class CausalConv1dFunc:
 
     def __init__(self, activation: str = 'silu'):
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.CausalConv1d)
-        impl = builder.build()
+        impl = get_backend().build_op(
+            CausalConv1dBuildSpec(),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
         self.causal_conv1d_fn = impl.conv1d_fn
         self.causal_conv1d_update = impl.update_fn
         self.activation = activation
@@ -205,9 +209,10 @@ class CausalConv1dFunc:
 class GatedDelta:
 
     def __init__(self, use_qk_l2norm_in_kernel: bool = True):
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.GatedDeltaRule)
-        self.impl = builder.build()
+        self.impl = get_backend().build_op(
+            GatedDeltaRuleBuildSpec(),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
         self.use_qk_l2norm_in_kernel = use_qk_l2norm_in_kernel
 
     def __call__(

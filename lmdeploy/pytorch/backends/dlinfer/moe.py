@@ -11,7 +11,7 @@ from lmdeploy.pytorch.kernels.dlinfer import (
 )
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
-from ..moe import FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopKImpl
+from ..moe import FusedMoEBuildSpec, FusedMoEImpl, SoftmaxTopKImpl
 
 
 class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
@@ -29,17 +29,6 @@ class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
             moe_metadata.router_n_groups = self.n_groups
         routing_weights, selected_experts = moe_gating_topk_softmax(x, self.top_k, moe_metadata)
         return routing_weights, selected_experts
-
-
-class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
-    """Dlinfer softmax topk implementation builder."""
-
-    @staticmethod
-    def build(top_k: int, dim: int = -1, n_groups: int = -1):
-        """build."""
-        return DlinferSoftmaxTopKImpl(top_k, dim, n_groups)
-
-
 class DlinferFusedMoEImpl(FusedMoEImpl):
     """Dlinfer fused moe implementation."""
 
@@ -119,22 +108,12 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
                          self.renormalize, moe_metadata, self.chunked_moe_layout)
 
 
-class DlinferFusedMoEBuilder(FusedMoEBuilder):
-    """Dlinfer fused moe builder."""
-
-    @staticmethod
-    def build(top_k: int,
-              num_experts: int,
-              renormalize: bool = False,
-              hidden_dim: int = 1,
-              ep_size: int = 1,
-              ep_group: torch.distributed.ProcessGroup = None,
-              layer_idx: int = 0,
-              out_dtype: torch.dtype = torch.bfloat16,
-              num_max_dispatch_tokens_per_rank: int = 128):
-        """Build from mlp."""
-        return DlinferFusedMoEImpl(top_k=top_k,
-                                   num_experts=num_experts,
-                                   renormalize=renormalize,
-                                   ep_size=ep_size,
-                                   ep_group=ep_group)
+def _build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
+    """Build a DLINFER fused MoE implementation."""
+    return DlinferFusedMoEImpl(
+        top_k=spec.top_k,
+        num_experts=spec.num_experts,
+        renormalize=spec.renormalize,
+        ep_size=spec.ep_size,
+        ep_group=spec.ep_group,
+    )
