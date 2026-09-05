@@ -307,7 +307,7 @@ class VisionModel(ABC):
         Args:
             messages(list[dict]): the output of `preprocess`
             chat_template: the chat template defined in `lmdeploy/model.py`
-            tokenzer: the tokenizer model
+            tokenizer: the tokenizer model
             chat_template_kwargs: additional arguments for chat template
                 processing, such as `add_vision_id` and `enable_thinking`
         """
@@ -322,7 +322,7 @@ class VisionModel(ABC):
         Args:
             messages(list[dict]): the output of `preprocess`
             chat_template: the chat template defined in `lmdeploy/model.py`
-            tokenzer: the tokenizer model
+            tokenizer: the tokenizer model
             chat_template_kwargs: additional arguments for chat template
                 processing, such as `add_vision_id` and `enable_thinking`
         """
@@ -426,7 +426,7 @@ class VisionModel(ABC):
             prompt(str): the prompt after applying chat template
             IMAGE_TOKEN(str): a placeholder where image tokens will be
                 inserted
-            tokenzer: the tokenizer model
+            tokenizer: the tokenizer model
         """
         # collect all preprocessing result from messages
         preps = [x['content'] for x in messages if x['role'] == 'preprocess']
@@ -460,7 +460,7 @@ class VisionModel(ABC):
             prompt(str): the prompt after applying chat template
             IMAGE_TOKEN(str): a placeholder where image tokens will be
                 inserted
-            tokenzer: the tokenizer model
+            tokenizer: the tokenizer model
         """
         # collect image features from messages
         features = [x['content'] for x in messages if x['role'] == 'forward']
