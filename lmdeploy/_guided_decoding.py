@@ -37,5 +37,6 @@ def compile_response_format(compiler, response_format: dict[str, Any]):
         schema = json.dumps({'type': 'object', 'additionalProperties': True})
         return compiler.compile_json_schema(schema)
     if schema_type == 'structural_tag':
-        return compiler.compile_structural_tag(response_format)
+        return compiler.compile_structural_tag(
+            json.dumps(response_format, ensure_ascii=False))
     raise ValueError(f'unsupported format type: {schema_type}')
