@@ -23,6 +23,7 @@ def run():
             args.model_path
 
     if 'run' in dir(args):
+        from lmdeploy.oci import is_oci_ref
         from lmdeploy.utils import get_model
         model_path = getattr(args, 'model_path', None)
         revision = getattr(args, 'revision', None)
@@ -30,8 +31,11 @@ def run():
         if model_path is not None and not os.path.exists(args.model_path):
             args.model_path = get_model(args.model_path, download_dir=download_dir, revision=revision)
         model_path_or_server = getattr(args, 'model_path_or_server', None)
-        if model_path_or_server is not None and (':' not in model_path_or_server
-                                                 and not os.path.exists(model_path_or_server)):
+        # A ':' normally marks a server address (host:port), but an oci://
+        # reference carries one in its tag, so it is matched before that check.
+        if model_path_or_server is not None and (is_oci_ref(model_path_or_server) or
+                                                 (':' not in model_path_or_server
+                                                  and not os.path.exists(model_path_or_server))):
             args.model_path_or_server = get_model(args.model_path_or_server,
                                                   download_dir=download_dir,
                                                   revision=revision)
