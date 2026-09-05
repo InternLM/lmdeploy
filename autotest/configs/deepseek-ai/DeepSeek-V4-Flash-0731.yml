@@ -11,6 +11,20 @@ h:
   test_coverage:
   - evaluate
   - func
+  interface:
+    pytorch:
+    - suites:
+      - base
+      - logprob
+      - toolcall
+      - hard_schema
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: true
+        tool-call-parser: deepseek-v4
+        reasoning-parser: deepseek-v4
   gen_config:
     temperature: 1.0
     top-p: 1.0
+    chat-template-kwargs:
+      enable_thinking: true
