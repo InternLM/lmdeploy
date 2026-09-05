@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import sys
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -236,7 +237,12 @@ def make_cache_config(
     num_gpu_blocks=1,
     role='kv_both',
 ):
-    extra_config = {}
+    extra_config = {
+        'cache_prefix': 'test-tenant',
+        'kv_cache_format': 'dtype=float16;quant=none',
+        'weights_generation': 0,
+        'weights_version': 'test-weights-v1',
+    }
     if config_path is not None:
         extra_config['mooncake_config_path'] = str(config_path)
     return CacheConfig(
@@ -559,6 +565,8 @@ def test_store_key_uses_lmdeploy_namespace_without_unsupported_geometry():
     metadata = MooncakeStoreKeyMetadata(
         model_name='test-model',
         cache_prefix='tenant-a',
+        kv_cache_format='dtype=float16;quant=none',
+        weights_version='weights-v1',
         tp_size=8,
         block_size=4,
         kv_head_replica_num=4,
@@ -566,7 +574,54 @@ def test_store_key_uses_lmdeploy_namespace_without_unsupported_geometry():
     block_hash = build_prefix_block_hashes(range(4), 4)[0]
 
     assert build_store_key(metadata, 1, block_hash) == (
-        f'tenant-a@test-model@tp_rank:1@group:0@{block_hash.hex()}')
+        f'lmdeploy@namespace:{metadata.namespace_hash}'
+        f'@tp_rank:1@group:0@{block_hash.hex()}')
+
+
+def test_store_keys_partition_tenant_format_and_weights_identity():
+    block_hash = build_prefix_block_hashes(range(4), 4)[0]
+    base = {
+        'model_name': 'test-model',
+        'cache_prefix': 'tenant-a',
+        'kv_cache_format': 'dtype=float16;quant=none',
+        'weights_version': 'weights-v1',
+        'tp_size': 1,
+        'block_size': 4,
+    }
+    variants = (
+        MooncakeStoreKeyMetadata(**base),
+        MooncakeStoreKeyMetadata(**{**base, 'cache_prefix': 'tenant-b'}),
+        MooncakeStoreKeyMetadata(
+            **{**base, 'kv_cache_format': 'dtype=uint8;quant=fp8'}),
+        MooncakeStoreKeyMetadata(**{**base, 'weights_version': 'weights-v2'}),
+        MooncakeStoreKeyMetadata(**base, weights_generation=1),
+    )
+
+    keys = {build_store_key(metadata, 0, block_hash) for metadata in variants}
+
+    assert len(keys) == len(variants)
+
+
+def test_worker_rotates_active_transfer_threads_to_new_weights_generation(tmp_path):
+    worker, _ = make_worker(tmp_path)
+    recv_thread = SimpleNamespace(key_metadata=worker.key_metadata)
+    send_thread = SimpleNamespace(key_metadata=worker.key_metadata)
+    worker.kv_recv_thread = recv_thread
+    worker.kv_send_thread = send_thread
+    old_namespace = worker.key_metadata.namespace_hash
+
+    worker.set_weights_generation(2)
+
+    assert worker.key_metadata.weights_generation == 2
+    assert worker.key_metadata.namespace_hash != old_namespace
+    assert recv_thread.key_metadata is worker.key_metadata
+    assert send_thread.key_metadata is worker.key_metadata
+    worker.set_weights_generation(2)
+    with pytest.raises(ValueError, match='cannot move backwards'):
+        worker.set_weights_generation(1)
+    worker.kv_recv_thread = None
+    worker.kv_send_thread = None
+    worker.shutdown()
 
 
 def test_lookup_server_start_failure_propagates_without_cleanup(tmp_path, monkeypatch):

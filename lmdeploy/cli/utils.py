@@ -843,10 +843,14 @@ class ArgumentHelper:
             default=None,
             help='External KV-cache connector configuration for the PyTorch engine. '
             'Mooncake Store requires MOONCAKE_CONFIG_PATH (or '
-            'kv_connector_extra_config.mooncake_config_path) and does not support '
+            'kv_connector_extra_config.mooncake_config_path), plus explicit '
+            'kv_connector_extra_config.cache_prefix and weights_version values, '
+            'and does not support '
             'distributed_executor_backend="mp". '
             'Example: '
-            "'{\"kv_connector\":\"MooncakeStoreConnector\",\"kv_role\":\"kv_both\"}'.")
+            "'{\"kv_connector\":\"MooncakeStoreConnector\",\"kv_role\":\"kv_both\","
+            "\"kv_connector_extra_config\":{\"cache_prefix\":\"tenant-a\","
+            "\"weights_version\":\"model-v1\"}}'.")
 
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py
