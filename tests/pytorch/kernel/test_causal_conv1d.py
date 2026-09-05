@@ -13,6 +13,20 @@ def do_test():
         return False
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is not available')
+def test_chunk_conv_states_backend_dispatch():
+    from lmdeploy.pytorch.backends.cuda.causal_conv1d import CausalConv1dTilelangImpl
+    from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import chunk_conv_states
+
+    x = torch.randn(1, 65, 32, device='cuda', dtype=torch.bfloat16)
+    impl = CausalConv1dTilelangImpl.__new__(CausalConv1dTilelangImpl)
+
+    actual = impl.chunk_conv_states(x, 4)
+    expected = chunk_conv_states(x, 4)
+
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+
+
 @pytest.mark.skipif(not do_test(), reason='tilelang or causal_conv1d is not available')
 class TestCausalConv1dUpdate:
 

@@ -20,6 +20,8 @@ class AttentionMetadata:
     fill_seqlens: torch.Tensor = None
     cu_seqlens_q: torch.Tensor = None
     cu_seqlens_k: torch.Tensor = None
+    gated_delta_chunk_indices: torch.Tensor = None
+    gated_delta_chunk_offsets: torch.Tensor = None
     quant_policy: QuantPolicy = QuantPolicy.NONE
 
 
