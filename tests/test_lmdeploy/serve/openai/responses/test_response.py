@@ -76,24 +76,10 @@ def test_responses_error_finish_reasons_do_not_complete_successfully():
         reasoning_tokens=0,
         finish_reason='abort',
     ).model_dump(exclude_none=True)
-    parse_error_response = make_response(
-        request=request,
-        model_name='fake-model',
-        created_time=123,
-        text='',
-        input_tokens=8,
-        output_tokens=0,
-        reasoning_tokens=0,
-        finish_reason='parse_error',
-    ).model_dump(exclude_none=True)
-
     assert error_response['status'] == 'failed'
     assert error_response['error']['code'] == 'server_error'
     assert abort_response['status'] == 'cancelled'
     assert abort_response['error']['code'] == 'server_error'
-    assert parse_error_response['status'] == 'failed'
-    assert parse_error_response['error']['code'] == 'server_error'
-    assert parse_error_response['error']['message'] == 'Response output failed validation.'
 
 
 def test_responses_tool_call_response_shape():

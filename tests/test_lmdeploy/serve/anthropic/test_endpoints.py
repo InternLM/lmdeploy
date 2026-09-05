@@ -160,7 +160,7 @@ class _BasicParser:
     def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
         return text, None, None
 
-    def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None):
+    def validate_complete(self, text: str | None = None):
         return True
 
 
@@ -321,7 +321,7 @@ class _ToolAndReasoningParser:
             'internal reasoning',
         )
 
-    def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None):
+    def validate_complete(self, text: str | None = None):
         return True
 
 
@@ -329,7 +329,7 @@ class _IncompleteToolParser(_ToolAndReasoningParser):
     validate_calls = 0
     last_text = None
 
-    def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None):
+    def validate_complete(self, text: str | None = None):
         type(self).validate_calls += 1
         type(self).last_text = text
         return False

@@ -223,7 +223,7 @@ class ResponseParser:
                        **kwargs) -> tuple[str, list | None, str | None]:
         raise NotImplementedError
 
-    def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None) -> bool:
+    def validate_complete(self, text: str | None = None) -> bool:
         return True
 
 @dataclass
@@ -828,7 +828,7 @@ class BaseResponseParser(ResponseParser):
     def _get_accumulated_text(self) -> str:
         return ''.join(self._accumulated_chunks)
 
-    def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None) -> bool:
+    def validate_complete(self, text: str | None = None) -> bool:
         text = self._get_accumulated_text() if text is None else text
 
         if self.reasoning_enabled:

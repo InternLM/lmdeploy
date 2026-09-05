@@ -110,7 +110,7 @@ class _Parser:
     def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
         return text, None, None
 
-    def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None):
+    def validate_complete(self, text: str | None = None):
         return True
 
 
@@ -211,8 +211,11 @@ def test_runner_skips_preprocess_for_raw_input_ids():
     [
         ({'return_token_ids': True}, 'stop', 'parse_error'),
         ({'return_token_ids': True}, 'length', 'parse_error'),
-        ({'tool_choice': 'required', 'tools': _tools()}, 'stop', 'parse_error'),
+        ({'return_routed_experts': True}, 'stop', 'parse_error'),
+        ({'tool_choice': 'required', 'tools': _tools()}, 'stop', 'stop'),
         ({'tool_choice': 'required', 'tools': _tools()}, 'length', 'length'),
+        ({'tool_choice': 'required', 'tools': _tools(), 'return_token_ids': True}, 'stop', 'parse_error'),
+        ({'tool_choice': 'required', 'tools': _tools(), 'return_token_ids': True}, 'length', 'parse_error'),
     ],
 )
 def test_runner_terminal_validation(request_kwargs, finish_reason, expected):
@@ -228,7 +231,7 @@ def test_runner_terminal_validation(request_kwargs, finish_reason, expected):
                     }
                 })
 
-        def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None):
+        def validate_complete(self, text: str | None = None):
             return False
 
     outputs = [

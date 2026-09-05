@@ -67,7 +67,7 @@ class PassthroughResponseParser:
                        **kwargs):
         return text, None, None
 
-    def validate_complete(self, text: str | None = None, *, finish_reason: str | None = None):
+    def validate_complete(self, text: str | None = None):
         return True
 
 

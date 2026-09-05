@@ -15,14 +15,14 @@ class _SessionManager:
         return False
 
 
-def _server_context(response_parser_cls=SimpleNamespace(tool_parser_cls=object())):
+def _server_context():
     return SimpleNamespace(
         engine_config=SimpleNamespace(
             logprobs_mode='raw_logprobs',
             enable_return_routed_experts=False,
         ),
         session_manager=_SessionManager(),
-        response_parser_cls=response_parser_cls,
+        response_parser_cls=SimpleNamespace(tool_parser_cls=object()),
     )
 
 
@@ -33,15 +33,6 @@ def _request(**kwargs):
     )
     request_kwargs.update(kwargs)
     return ChatCompletionRequest(**request_kwargs)
-
-
-def _tools():
-    return [{
-        'type': 'function',
-        'function': {
-            'name': 'get_weather',
-        },
-    }]
 
 
 @pytest.mark.parametrize(
@@ -74,44 +65,3 @@ def test_chat_completions_accepts_raw_input_ids_without_messages():
 
 def test_chat_completions_accepts_null_n_as_unspecified():
     assert check_request(_request(n=None), _server_context()) == ''
-
-
-@pytest.mark.parametrize('tools', [None, []])
-def test_chat_completions_required_tool_choice_requires_tools(tools):
-    error = check_request(
-        _request(tool_choice='required', tools=tools),
-        _server_context(),
-    )
-
-    assert error == '`tool_choice="required"` requires at least one tool.'
-
-
-@pytest.mark.parametrize(
-    'parser_cls',
-    [
-        None,
-        SimpleNamespace(tool_parser_cls=None),
-    ],
-)
-def test_chat_completions_required_tool_choice_requires_parser(parser_cls):
-    error = check_request(
-        _request(
-            tool_choice='required',
-            tools=_tools(),
-        ),
-        _server_context(parser_cls),
-    )
-
-    assert '--tool-call-parser' in error
-
-
-def test_chat_completions_accepts_required_tool_choice():
-    error = check_request(
-        _request(
-            tool_choice='required',
-            tools=_tools(),
-        ),
-        _server_context(),
-    )
-
-    assert error == ''
