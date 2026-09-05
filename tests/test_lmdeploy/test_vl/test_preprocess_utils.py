@@ -11,6 +11,7 @@ class _Tokens:
     image_token_id = 42
     video_token_id = 43
     audio_token_id = 44
+    ts_token_id = 45
 
     def get_token_id_by_modality(self, modality):
         if modality == Modality.IMAGE:
@@ -19,6 +20,8 @@ class _Tokens:
             return self.video_token_id
         if modality == Modality.AUDIO:
             return self.audio_token_id
+        if modality == Modality.TIME_SERIES:
+            return self.ts_token_id
         raise AssertionError(f'unexpected modality: {modality}')
 
 
@@ -97,3 +100,21 @@ def test_expand_audio_items_use_compact_tensor_storage():
     for entry in expanded:
         _assert_compact_storage(entry['input_features'])
         _assert_compact_storage(entry['feature_attention_mask'])
+
+
+def test_expand_time_series_item_preserves_channels():
+    items = {
+        Modality.TIME_SERIES: {
+            'feature': torch.zeros(1, 10, 3, dtype=torch.float32),
+            'ts_sr': torch.tensor([100]),
+            'ts_lens': torch.tensor([10]),
+            'ts_channels': torch.tensor([3]),
+            'offset': [(0, 4)],
+        }
+    }
+
+    expanded = get_expanded_mm_items(items, _Tokens())
+
+    assert len(expanded) == 1
+    assert expanded[0]['ts_channels'].tolist() == [3]
+    assert expanded[0]['ts_token_id'] == _Tokens.ts_token_id
