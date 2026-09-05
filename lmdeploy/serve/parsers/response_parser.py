@@ -182,7 +182,7 @@ class ResponseParser:
         Returns:
             A list of ``(delta_message, tool_calls_emitted)`` pairs. Return
             ``[]`` when this engine step produces no visible delta (for example
-            while buffering a partial protocol tag).
+            while buffering protocol syntax or tool-call payload).
         """
         raise NotImplementedError
 
@@ -348,7 +348,7 @@ class BaseResponseParser(ResponseParser):
             from this stream step. Multiple entries may be returned when one
             engine chunk contains reasoning, content, and tool-call segments.
             Return ``[]`` when this engine step produces no visible delta (for
-            example while buffering a partial protocol tag).
+            example while buffering protocol syntax or tool-call payload).
         """
         self._update_reasoning_tokens(delta_token_ids)
 
@@ -567,8 +567,7 @@ class BaseResponseParser(ResponseParser):
             emit = self._pending
             self._pending = ''
             out = self.tool_parser.decode_tool_incremental(added_text=emit, final=False)
-            if (self.profile.tool_payload_format == 'json'
-                and self._is_complete_json_object(self.tool_parser._tool_payload)):
+            if self.profile.tool_payload_format == 'json' and self.tool_parser._payload_closed:
                 out.extend(self.tool_parser.decode_tool_incremental(added_text='', final=True))
                 out = self.tool_parser.filter_tool_call_deltas(out)
                 self.tool_parser.finish_tool_call()
@@ -794,15 +793,3 @@ class BaseResponseParser(ResponseParser):
                         best = k
                     break
         return best
-
-    @staticmethod
-    def _is_complete_json_object(payload: str) -> bool:
-        payload = payload.strip()
-        if not payload:
-            return False
-        decoder = json.JSONDecoder()
-        try:
-            obj, end = decoder.raw_decode(payload)
-        except json.JSONDecodeError:
-            return False
-        return isinstance(obj, dict) and end == len(payload)

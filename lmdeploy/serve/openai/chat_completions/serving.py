@@ -304,7 +304,7 @@ def register(router: APIRouter, server_context) -> None:
                         output_ids=stream_output_ids)
                     if chunk.cache_block_ids is not None and chunk.is_last_delta:
                         response_json['cache_block_ids'] = chunk.cache_block_ids
-                        response_json['remote_token_ids'] = chunk.token_ids
+                        response_json['remote_token_ids'] = chunk.remote_token_ids
                     yield f'data: {json.dumps(response_json)}\n\n'
                 if final_usage is not None:
                     yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
