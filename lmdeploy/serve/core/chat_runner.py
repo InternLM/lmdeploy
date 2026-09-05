@@ -98,10 +98,13 @@ class ChatRunner:
         parser_cls = server_context.response_parser_cls
 
         try:
+            if request.tool_choice == 'required' and not parser_cls.supports_required_tool_choice:
+                raise ValueError(
+                    f'Response parser {parser_cls.__name__!r} does not support `tool_choice="required"`.')
             response_parser = parser_cls(request)
+            parsed_request = response_parser.request
         except ValueError as err:
             raise RequestError(ErrorCode.INVALID_REQUEST, str(err)) from err
-        parsed_request = response_parser.request
 
         gen_config = _build_runner_generation_config(
             parsed_request,
