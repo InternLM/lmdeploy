@@ -26,6 +26,29 @@ def linear_w8a8(
     return ext_ops.linear_w8a8(a, b, rms_scale, linear_scale, out_dtype, quant_dtype, bias)
 
 
+def linear_w8a8_static(
+    x: Tensor,
+    weight: Tensor,
+    input_scale: Tensor,
+    input_offset: Tensor,
+    deq_scale: Tensor,
+    out_dtype: torch.dtype,
+    quant_dtype: torch.dtype,
+    quant_bias: Tensor = None,
+):
+    """ModelSlim static W8A8 linear kernel."""
+    return ext_ops.linear_w8a8_static(
+        x,
+        weight,
+        input_scale,
+        input_offset,
+        deq_scale,
+        out_dtype,
+        quant_dtype,
+        quant_bias,
+    )
+
+
 def rms_norm_w8a8(
     hidden_states: Tensor,
     weight: Tensor,

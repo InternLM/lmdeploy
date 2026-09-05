@@ -38,6 +38,7 @@ from .deepseek_v2 import (
     DeepseekV2MoE,
     yarn_get_mscale,
 )
+from .patch import add_prefix
 
 
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
@@ -252,7 +253,8 @@ class DeepseekV32Attention(DeepseekV2Attention):
                  layer_idx: int,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 all_reduce: bool = True):
+                 all_reduce: bool = True,
+                 prefix: str = ''):
         nn.Module.__init__(self)
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
@@ -277,6 +279,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
+                prefix=add_prefix('q_proj', prefix),
             )
         else:
             self.fused_qkv_a_proj = build_merged_colwise_linear(
@@ -288,6 +291,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 is_tp=False,
                 quant_config=quantization_config,
                 out_names=[0, 1],
+                prefix=add_prefix('fused_qkv_a_proj', prefix),
             )
             self.q_a_layernorm = RMSNorm(config.q_lora_rank,
                                          1e-6,
@@ -302,6 +306,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
+                prefix=add_prefix('q_b_proj', prefix),
             )
 
         if self.q_lora_rank is None:
@@ -313,6 +318,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 device=device,
                 is_tp=False,
                 quant_config=quantization_config,
+                prefix=add_prefix('kv_a_proj_with_mqa', prefix),
             )
         self.kv_a_layernorm = RMSNorm(config.kv_lora_rank,
                                       1e-6,
@@ -356,11 +362,17 @@ class DeepseekV32Attention(DeepseekV2Attention):
             is_tp=True,
             quant_config=quantization_config,
             all_reduce=all_reduce,
+            prefix=add_prefix('o_proj', prefix),
         )
 
-        self.indexer = self._build_indexer(config, layer_idx, dtype, device)
+        self.indexer = self._build_indexer(config, layer_idx, dtype, device, prefix)
 
-    def _build_indexer(self, config: Any, layer_idx: int, dtype: torch.dtype, device: torch.device):
+    def _build_indexer(self,
+                       config: Any,
+                       layer_idx: int,
+                       dtype: torch.dtype,
+                       device: torch.device,
+                       prefix: str = ''):
         return Indexer(config, layer_idx, dtype=dtype, device=device)
 
     def _q_proj(self, q_a_states, num_heads: int, nope_size: int, pe_size: int):
@@ -461,7 +473,12 @@ class DeepseekV32Attention(DeepseekV2Attention):
 class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
     attention_cls = DeepseekV32Attention
 
-    def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: Any,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         nn.Module.__init__(self)
         self.layer_idx = layer_idx
         quantization_config = None
@@ -476,14 +493,29 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
 
         # build attention layer
         self.self_attn = self.attention_cls(
-            config, layer_idx, dtype=dtype, device=device, all_reduce=not defer_attn_all_reduce)
+            config,
+            layer_idx,
+            dtype=dtype,
+            device=device,
+            all_reduce=not defer_attn_all_reduce,
+            prefix=add_prefix('self_attn', prefix))
 
         # mlp
+        mlp_prefix = add_prefix('mlp', prefix)
         self.mlp = (DeepseekV2MoE(
-            config, layer_idx, dtype=dtype, device=device, all_reduce=not defer_mlp_all_reduce) if
+            config,
+            layer_idx,
+            dtype=dtype,
+            device=device,
+            all_reduce=not defer_mlp_all_reduce,
+            prefix=mlp_prefix) if
                     (config.n_routed_experts is not None and layer_idx >= config.first_k_dense_replace
                      and layer_idx % config.moe_layer_freq == 0) else DeepseekV2MLP(
-                         config, dtype=dtype, device=device, all_reduce=not defer_mlp_all_reduce))
+                         config,
+                         dtype=dtype,
+                         device=device,
+                         all_reduce=not defer_mlp_all_reduce,
+                         prefix=mlp_prefix))
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
@@ -517,7 +549,11 @@ class DeepseekV32Model(DeepseekV2Model):
             ep_size_, _ = get_ep_world_rank()
             EPLBManager.init_global_eplb_metadata(ep_size_, config.n_routed_experts, config.num_hidden_layers)
         self.layers = nn.ModuleList([
-            self.decoder_layer_cls(config, layer_idx, dtype=dtype, device=device)
+            self.decoder_layer_cls(config,
+                                   layer_idx,
+                                   dtype=dtype,
+                                   device=device,
+                                   prefix=f'model.layers.{layer_idx}')
             for layer_idx in range(config.num_hidden_layers)
         ])
 

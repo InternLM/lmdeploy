@@ -126,6 +126,102 @@ class W8A8Linear(LinearBase):
         return self.impl.forward(x, self.weight, self.scale, self.bias, all_reduce, group=self.tp_group)
 
 
+class StaticW8A8Linear(W8A8Linear):
+    """ModelSlim static activation / static weight W8A8 linear.
+
+    The checkpoint stores a per-tensor activation scale/offset and a
+    per-output-channel dequant scale/quant bias.  Dynamic ``W8A8Linear`` only
+    owns a weight scale, so this class keeps the ModelSlim parameter names
+    verbatim to make loading deterministic.
+    """
+
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 bias: bool,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
+                 colwise: bool = True,
+                 is_tp: bool = False,
+                 all_reduce: bool = True,
+                 quant_dtype: torch.dtype | None = torch.int8,
+                 layer_type: str = 'attn'):
+        LinearBase.__init__(self,
+                            dtype=dtype,
+                            device=device,
+                            colwise=colwise,
+                            is_tp=is_tp,
+                            all_reduce=all_reduce,
+                            layer_type=layer_type)
+        if bias:
+            raise ValueError('ModelSlim static W8A8 uses quant_bias and does not support a floating-point bias.')
+        if self.is_tp:
+            in_features, out_features = self._get_io_features(in_features, out_features, colwise)
+        impl_builder = get_backend().get_layer_impl_builder(OpType.LinearW8A8)
+        self.quant_dtype = quant_dtype
+        self.impl = impl_builder.build(in_features,
+                                       out_features,
+                                       False,
+                                       dtype=self.dtype,
+                                       quant_dtype=quant_dtype)
+
+        self.register_parameter(
+            'weight', torch.nn.Parameter(torch.empty((out_features, in_features), dtype=quant_dtype, device=device),
+                                         requires_grad=False))
+        self.register_parameter(
+            'input_scale', torch.nn.Parameter(torch.empty((1, ), dtype=self.dtype, device=device),
+                                              requires_grad=False))
+        self.register_parameter(
+            'input_offset',
+            torch.nn.Parameter(torch.empty((1, ), dtype=torch.int8, device=device), requires_grad=False))
+        self.register_parameter(
+            'deq_scale', torch.nn.Parameter(torch.empty((out_features, ), dtype=torch.float32, device=device),
+                                            requires_grad=False))
+        self.register_parameter(
+            'quant_bias', torch.nn.Parameter(torch.empty((out_features, ), dtype=torch.int32, device=device),
+                                             requires_grad=False))
+        self.bias = None
+        for param in (self.weight, self.input_scale, self.input_offset, self.deq_scale, self.quant_bias):
+            param.weight_loader = self.weight_loader
+
+        self.in_features = in_features
+        self.out_features = out_features
+
+    def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
+        """Shard ModelSlim parameters along the same axis as their output."""
+        if not self.is_tp:
+            return default_weight_loader(param, loaded_weight)
+
+        world_size, rank = self.get_tp_world_rank()
+        if self.colwise:
+            if param is self.input_scale or param is self.input_offset:
+                return default_weight_loader(param, loaded_weight)
+            return default_weight_loader(param, loaded_weight.chunk(world_size, 0)[rank])
+
+        if param is self.weight:
+            return default_weight_loader(param, loaded_weight.chunk(world_size, 1)[rank])
+        if param is self.quant_bias and rank != 0:
+            loaded_weight = torch.zeros_like(loaded_weight)
+        return default_weight_loader(param, loaded_weight)
+
+    def update_weights(self):
+        """Static parameters are already in the layout consumed by dlinfer."""
+
+    def _forward_default(self, x, all_reduce, tp_sizes):
+        quant_bias = self.quant_bias
+        _, rank = self.get_tp_world_rank()
+        if self.is_tp and not self.colwise and rank != 0:
+            quant_bias = None
+        return self.impl.forward_static(x,
+                                        self.weight,
+                                        self.input_scale,
+                                        self.input_offset,
+                                        self.deq_scale,
+                                        quant_bias,
+                                        all_reduce,
+                                        group=self.tp_group)
+
+
 class MergedW8A8Linear(W8A8Linear):
     """Merged w8a8 linear."""
 

@@ -83,8 +83,14 @@ class TritonFusedMoEW8A8Builder(FusedMoEW8A8Builder):
         renormalize: bool = False,
         out_dtype: torch.dtype = torch.float16,
         quant_dtype: torch.dtype = torch.int8,
+        hidden_dim: int = 1,
+        ep_size: int = 1,
+        ep_group: torch.distributed.ProcessGroup = None,
     ):
         """Build from mlp."""
+
+        if ep_size > 1:
+            raise RuntimeError('FusedMoEW8A8 does not support EP mode now.')
         return TritonFusedMoEW8A8Impl(top_k=top_k,
                                       num_experts=num_experts,
                                       renormalize=renormalize,

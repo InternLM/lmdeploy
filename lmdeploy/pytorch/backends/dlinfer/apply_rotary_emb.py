@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from torch import Tensor
 
-from lmdeploy.pytorch.kernels.dlinfer import apply_rotary_pos_emb
+from lmdeploy.pytorch.kernels.dlinfer import apply_rotary_pos_emb, apply_rotary_pos_emb_interleaved
 
 from ..apply_rotary_emb import ApplyRotaryEmbBuilder, ApplyRotaryEmbImpl
 
@@ -15,9 +15,19 @@ class DlinferApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
                 cos: Tensor,
                 sin: Tensor,
                 inplace: bool = True,
-                complex_mode: bool = False):
+                complex_mode: bool = False,
+                return_native_layout: bool = True):
         """forward."""
-        assert not complex_mode, 'Dlinfer backend does not support complex_mode'
+        if complex_mode:
+            if inplace:
+                q_embed = query
+                k_embed = key
+            else:
+                q_embed = None
+                k_embed = None
+            return apply_rotary_pos_emb_interleaved(query, key, cos, sin,
+                                                    q_embed, k_embed,
+                                                    return_native_layout)
         if inplace:
             q_embed = None
             k_embed = None

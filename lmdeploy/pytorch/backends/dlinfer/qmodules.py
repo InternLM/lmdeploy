@@ -4,7 +4,12 @@ import os
 import torch
 import torch.distributed as dist
 
-from lmdeploy.pytorch.kernels.dlinfer.w8a8_kernels import dynamic_quant, linear_w8a8, rms_norm_w8a8
+from lmdeploy.pytorch.kernels.dlinfer.w8a8_kernels import (
+    dynamic_quant,
+    linear_w8a8,
+    linear_w8a8_static,
+    rms_norm_w8a8,
+)
 from lmdeploy.pytorch.models.q_modules import QTensor
 
 from ..qmodules import LinearW8A8Builder, LinearW8A8Impl, RMSNormW8A8Builder, RMSNormW8A8Impl
@@ -45,6 +50,22 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
             input_quant, input_scale = x.tensor, x.scale
 
         out = linear_w8a8(input_quant, weight, input_scale, scale, self.out_dtype, self.quant_dtype, bias)
+        if all_reduce:
+            dist.all_reduce(out, group=group)
+        return out
+
+    def forward_static(self,
+                       x: torch.Tensor,
+                       weight: torch.Tensor,
+                       input_scale: torch.Tensor,
+                       input_offset: torch.Tensor,
+                       deq_scale: torch.Tensor,
+                       quant_bias: torch.Tensor | None = None,
+                       all_reduce: bool = False,
+                       group: torch.distributed.ProcessGroup | None = None):
+        """Forward ModelSlim static W8A8 without dynamic activation scaling."""
+        out = linear_w8a8_static(x, weight, input_scale, input_offset, deq_scale, self.out_dtype,
+                                 self.quant_dtype, quant_bias)
         if all_reduce:
             dist.all_reduce(out, group=group)
         return out
