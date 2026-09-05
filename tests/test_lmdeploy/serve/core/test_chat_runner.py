@@ -11,7 +11,7 @@ from lmdeploy.serve.core.chat_runner import ChatRunner, ChatRunnerOptions
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
 from lmdeploy.serve.parsers.response_parser import BaseResponseParser
-from lmdeploy.serve.parsers.tool_parser.tool_parser import ToolParser
+from lmdeploy.serve.parsers.tool_parser.qwen3_tool_parser import Qwen3ToolParser
 
 
 class _FakeSession:
@@ -112,10 +112,6 @@ class _Parser:
 
     def validate_complete(self, text: str | None = None):
         return True
-
-
-class _RequiredResponseParser(BaseResponseParser):
-    tool_parser_cls = ToolParser
 
 
 def _request(**kwargs):
@@ -309,17 +305,23 @@ def test_runner_close_cleans_prepared_unconsumed_request():
     assert context.session_manager.removed == [context.session_manager.session]
 
 
-def test_runner_invalid_required_tool_schema_raises_request_error():
-    context = _FakeServerContext(_RequiredResponseParser)
+@pytest.mark.parametrize('schema', [
+    {'type': 'not-a-json-schema-type'},
+    {'type': 'object', 'properties': {'value': {'type': 'string', 'pattern': '(?=a)a'}}, 'required': ['value']},
+], ids=['schema_error', 'grammar_value_error'])
+def test_runner_invalid_required_tool_schema_raises_request_error(schema):
+    class RequiredParser(BaseResponseParser):
+        tool_parser_cls = Qwen3ToolParser
+        reasoning_parser_cls = None
+
+    context = _FakeServerContext(RequiredParser)
     request = _request(
         tool_choice='required',
         tools=[{
             'type': 'function',
             'function': {
                 'name': 'search',
-                'parameters': {
-                    'type': 'not-a-json-schema-type',
-                },
+                'parameters': schema,
             },
         }],
     )
@@ -328,6 +330,7 @@ def test_runner_invalid_required_tool_schema_raises_request_error():
         asyncio.run(ChatRunner.prepare(context, request))
 
     assert exc_info.value.code == ErrorCode.INVALID_REQUEST
+    assert context.async_engine.preprocess_kwargs is None
 
 
 def test_runner_parser_complete_error_raises_request_error():

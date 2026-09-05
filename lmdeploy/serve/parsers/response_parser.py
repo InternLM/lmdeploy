@@ -24,6 +24,7 @@ logger = get_logger('lmdeploy')
 
 ResponseParserManager = Registry('response_parser', locations=['lmdeploy.serve.parsers.response_parser'])
 
+
 def validate_parser_names(
     reasoning_parser_name: str | None = None,
     tool_parser_name: str | None = None,
@@ -154,38 +155,6 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
     return request
 
 
-def _build_required_tool_validators(tools: list[Any]) -> dict[str, Any]:
-    """Build JSON Schema validators keyed by required tool name."""
-    from jsonschema.validators import validator_for
-
-    validators = {}
-    for tool in tools:
-        function = tool.function
-        schema = function.parameters if function.parameters is not None else True
-        validator_cls = validator_for(schema)
-        validator_cls.check_schema(schema)
-        validators[function.name] = validator_cls(schema)
-    return validators
-
-
-def _validate_required_tool_calls(tool_calls: list[Any] | None, validators: dict[str, Any]) -> bool:
-    """Validate required calls against their corresponding tool schemas."""
-    if not tool_calls:
-        return False
-
-    for tool_call in tool_calls:
-        validator = validators.get(tool_call.function.name)
-        if validator is None:
-            return False
-        try:
-            arguments = json.loads(tool_call.function.arguments)
-        except (json.JSONDecodeError, TypeError):
-            return False
-        if not validator.is_valid(arguments):
-            return False
-    return True
-
-
 class ResponseParser:
     reasoning_tokens: int | None
 
@@ -225,6 +194,7 @@ class ResponseParser:
 
     def validate_complete(self, text: str | None = None) -> bool:
         return True
+
 
 @dataclass
 class ProtocolProfile:
@@ -330,36 +300,19 @@ class BaseResponseParser(ResponseParser):
             and self.enable_thinking is not False
             and self.reasoning_parser.starts_in_reasoning_mode()
         )
-        required_response_format = None
-        if request.tool_choice == 'required':
-            self._required_tool_validators = _build_required_tool_validators(request.tools or [])
-            if tcls is None:
-                raise ValueError('`tool_choice="required"` requires a configured tool-call parser.')
-            structural_tag_model = (
-                tcls.reasoning_structural_tag_model
-                if self.reasoning_enabled and tcls.reasoning_structural_tag_model is not None
-                else tcls.structural_tag_model
-            )
-            if structural_tag_model is None:
-                raise ValueError(
-                    f'Tool parser {tcls.__name__!r} does not support `tool_choice="required"`.')
-
-            import xgrammar as xgr
-
-            required_response_format = xgr.get_model_structural_tag(
-                structural_tag_model,
-                [tool.model_dump() for tool in request.tools or []],
-                tool_choice='required',
-                reasoning=self.reasoning_enabled,
-            ).model_dump(mode='json')
-
         if self.tool_parser is not None:
             self.request = self.tool_parser.adjust_request(request)
         else:
-            self.request = self.dump_tools(request)
+            if request.tool_choice == 'required':
+                raise ValueError('`tool_choice="required"` requires a configured tool-call parser.')
+            from .tool_parser.tool_parser import dump_tools
+
+            self.request = dump_tools(request)
 
         self.request = normalize_chat_request(self.request)
-        if required_response_format is not None:
+        if request.tool_choice == 'required':
+            required_response_format = self.tool_parser.prepare_required_tools(
+                request.tools or [], reasoning=self.reasoning_enabled)
             # Internal structural tags override client response_format because
             # an engine can apply only one guided-decoding constraint.
             self.request = self.request.model_copy(update={'response_format': required_response_format})
@@ -455,43 +408,6 @@ class BaseResponseParser(ResponseParser):
         ):
             deltas.append((DeltaMessage(role='assistant', content=''), False))
         return deltas
-
-    @staticmethod
-    def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
-        """Dump tools to a list of dicts to fit jinja chat template."""
-        from lmdeploy.serve.openai.protocol import AllowedToolChoice
-
-        if isinstance(request.tool_choice, AllowedToolChoice):
-            allowed_names: set[str] = set()
-            allowed_functions: list[dict] = []
-            for t in request.tool_choice.allowed_tools.tools:
-                func = t.get('function', {})
-                if isinstance(func, dict) and 'name' in func:
-                    allowed_names.add(func['name'])
-                    allowed_functions.append(func)
-
-            if not request.tools:
-                return request.model_copy(update={'tools': allowed_functions or None})
-
-            request_tool_names = {item.function.name for item in request.tools}
-            missing = sorted(allowed_names - request_tool_names)
-            if missing:
-                raise ValueError(f'Allowed tool(s) not found in request.tools: {missing}')
-
-            tools = [item.function.model_dump() for item in request.tools if item.function.name in allowed_names]
-            return request.model_copy(update={'tools': tools})
-
-        if not request.tools:
-            return request.model_copy(update={'tools': None})
-
-        if not isinstance(request.tool_choice, str):
-            tools = [
-                item.function.model_dump() for item in request.tools
-                if item.function.name == request.tool_choice.function.name
-            ]
-        else:
-            tools = [item.function.model_dump() for item in request.tools]
-        return request.model_copy(update={'tools': tools})
 
     def _consume_plain(self) -> tuple[str | None, bool]:
         """Consume buffered text while in plain mode.
@@ -860,10 +776,8 @@ class BaseResponseParser(ResponseParser):
         if self.request.tool_choice != 'required':
             return True
 
-        content, tool_calls, _ = self._parse_complete(text)
-        if content is not None and content.strip():
-            return False
-        return _validate_required_tool_calls(tool_calls, self._required_tool_validators)
+        _, tool_calls, _ = self._parse_complete(text)
+        return self.tool_parser.validate_tool_calls(tool_calls)
 
     @staticmethod
     def _find_first(text: str, tags: list[str], start: int) -> tuple[int, str]:
