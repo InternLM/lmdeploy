@@ -2,6 +2,13 @@
 
 import pytest
 from utils.config_utils import get_interface_backend_list, get_interface_run_config_list
+from utils.pytest_layout_utils import (
+    DISTRIBUTED_DP_EP_EQUAL_LAYOUTS,
+    DISTRIBUTED_DP_EP_LAYOUTS,
+    DISTRIBUTED_TP_DP_EP_LAYOUTS,
+    LOCAL_TP_LAYOUTS,
+    layout_mark,
+)
 from utils.run_interface_restful import (
     run_interface_restful_proxy_distributed_test,
     run_interface_restful_ray_distributed_test,
@@ -27,76 +34,46 @@ def _iface_id(run_config):
     return f"{run_config['backend']}-{run_config['model']}-{layout}"
 
 
-@pytest.mark.gpu_num_1
-@pytest.mark.test_3090
-@pytest.mark.test_ascend
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', _iface_configs({'tp': 1}), ids=_iface_id)
-def test_restful_interface_tp1(config, run_config, worker_id):
+def _iface_layout_marks(layout: dict[str, int]):
+    marks = [pytest.mark.test_ascend]
+    if layout == {'tp': 1}:
+        marks.append(pytest.mark.test_3090)
+    return marks
+
+
+def _build_iface_params(layouts):
+    rows = []
+    for layout in layouts:
+        marks = [layout_mark(layout), pytest.mark.flaky(reruns=0), *_iface_layout_marks(layout)]
+        for run_config in _iface_configs(layout):
+            rows.append(pytest.param(run_config, marks=marks, id=_iface_id(run_config)))
+    return rows
+
+
+_LOCAL_IFACE_PARAMS = _build_iface_params(LOCAL_TP_LAYOUTS)
+_RAY_IFACE_PARAMS = _build_iface_params(({'tp': 16},))
+_PROXY_IFACE_PARAMS = _build_iface_params(
+    DISTRIBUTED_DP_EP_EQUAL_LAYOUTS[:1]
+    + DISTRIBUTED_DP_EP_LAYOUTS
+    + DISTRIBUTED_TP_DP_EP_LAYOUTS,
+)
+
+
+@pytest.mark.parametrize('run_config', _LOCAL_IFACE_PARAMS)
+def test_restful_interface_local(config, run_config, worker_id):
     run_interface_restful_test(config, run_config, worker_id)
 
 
-@pytest.mark.gpu_num_2
-@pytest.mark.test_ascend
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', _iface_configs({'tp': 2}), ids=_iface_id)
-def test_restful_interface_tp2(config, run_config, worker_id):
-    run_interface_restful_test(config, run_config, worker_id)
-
-
-@pytest.mark.gpu_num_4
-@pytest.mark.test_ascend
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', _iface_configs({'tp': 4}), ids=_iface_id)
-def test_restful_interface_tp4(config, run_config, worker_id):
-    run_interface_restful_test(config, run_config, worker_id)
-
-
-@pytest.mark.gpu_num_8
-@pytest.mark.test_ascend
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', _iface_configs({'tp': 8}), ids=_iface_id)
-def test_restful_interface_tp8(config, run_config, worker_id):
-    run_interface_restful_test(config, run_config, worker_id)
-
-
-@pytest.mark.gpu_num_16
-@pytest.mark.test_ascend
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', _iface_configs({'tp': 16}), ids=_iface_id)
-def test_restful_interface_tp16(config, run_config, worker_id):
-    run_interface_restful_test(config, run_config, worker_id)
-
-
-@pytest.mark.gpu_num_distributed_tp16
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', _iface_configs({'tp': 16}), ids=_iface_id)
-def test_restful_interface_distributed_tp16(
-        shared_ray_manager, config, run_config, worker_id):
+@pytest.mark.distributed
+@pytest.mark.parametrize('run_config', _RAY_IFACE_PARAMS)
+def test_restful_interface_ray(shared_ray_manager, config, run_config, worker_id):
     del worker_id
     run_interface_restful_ray_distributed_test(config, run_config, shared_ray_manager)
 
 
-@pytest.mark.gpu_num_distributed_dpep16
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize(
-    'run_config', _iface_configs({'dp': 16, 'ep': 16}), ids=_iface_id,
-)
-def test_restful_interface_distributed_dpep16(
-        shared_proxy_manager, config, run_config, worker_id):
-    del worker_id
-    run_interface_restful_proxy_distributed_test(
-        config, run_config, shared_proxy_manager,
-    )
-
-
-@pytest.mark.gpu_num_distributed_tp2dp4ep8
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize(
-    'run_config', _iface_configs({'tp': 2, 'dp': 4, 'ep': 8}), ids=_iface_id,
-)
-def test_restful_interface_distributed_tp2dp4ep8(
-        shared_proxy_manager, config, run_config, worker_id):
+@pytest.mark.distributed
+@pytest.mark.parametrize('run_config', _PROXY_IFACE_PARAMS)
+def test_restful_interface_proxy(shared_proxy_manager, config, run_config, worker_id):
     del worker_id
     run_interface_restful_proxy_distributed_test(
         config, run_config, shared_proxy_manager,

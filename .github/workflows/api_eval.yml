@@ -164,7 +164,12 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
         eval_suite: ${{ fromJSON(github.event.inputs.eval_suite == 'base' && '["base"]' || github.event.inputs.eval_suite == 'chat' && '["chat"]' || '["chat","base"]') }}
-        gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
+        layout: ['tp1', 'tp2', 'tp4', 'tp8']
+        exclude:
+          - eval_suite: base
+            layout: tp4
+          - eval_suite: base
+            layout: tp8
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -219,12 +224,12 @@ jobs:
             test_files="autotest/evaluate/test_api_base_evaluate.py"
           fi
 
-          mark="${{ matrix.gpu_num }} and ${{ matrix.backend }}"
-          case "${{ matrix.gpu_num }}" in
-            gpu_num_1) xdist_n=8 ;;
-            gpu_num_2) xdist_n=4 ;;
-            gpu_num_4) xdist_n=2 ;;
-            gpu_num_8) xdist_n=1 ;;
+          mark="${{ matrix.layout }} and ${{ matrix.backend }}"
+          case "${{ matrix.layout }}" in
+            tp1) xdist_n=8 ;;
+            tp2) xdist_n=4 ;;
+            tp4) xdist_n=2 ;;
+            tp8) xdist_n=1 ;;
             *) xdist_n=1 ;;
           esac
 

@@ -114,7 +114,7 @@ jobs:
     needs: linux-build
     if: ${{!cancelled()}}
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 50
+    timeout-minutes: 300
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -298,22 +298,22 @@ jobs:
         continue-on-error: true
         if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat'
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'tp1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
-          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'tp2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
-          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'tp4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
-          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'tp8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
@@ -322,22 +322,22 @@ jobs:
         continue-on-error: true
         if: matrix.function == 'pipeline'
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'tp1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'tp2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'tp4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'tp8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
@@ -346,22 +346,22 @@ jobs:
         continue-on-error: true
         if: matrix.function == 'restful'
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'tp1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'tp2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'tp4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'tp8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
@@ -435,49 +435,49 @@ jobs:
           # remove tmp log in testcase
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Test interface restful - gpu_num_1
+      - name: Test interface restful - tp1
         continue-on-error: true
         timeout-minutes: 120
         run: |
           set +e
           echo "INTERFACE_BACKENDS=${INTERFACE_BACKENDS}"
-          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_1' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}
+          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'tp1' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}
           rc=$?
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
           exit $rc
-      - name: Test interface restful - gpu_num_2
+      - name: Test interface restful - tp2
         continue-on-error: true
         timeout-minutes: 120
         run: |
           set +e
-          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_2' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}
+          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'tp2' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}
           rc=$?
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
           exit $rc
-      - name: Test interface restful - gpu_num_4
+      - name: Test interface restful - tp4
         continue-on-error: true
         timeout-minutes: 120
         run: |
           set +e
-          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_4' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}
+          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'tp4' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}
           rc=$?
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
           exit $rc
-      - name: Test interface restful - gpu_num_8
+      - name: Test interface restful - tp8
         continue-on-error: true
         timeout-minutes: 120
         run: |
           set +e
-          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'gpu_num_8' -n 1 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}
+          pytest autotest/interface/restful/test_restful_interface_llm.py -m 'tp8' -n 1 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}
           rc=$?
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
@@ -549,22 +549,22 @@ jobs:
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
-          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'tp1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
-          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'tp2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
-          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'tp4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
           done
-          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_8 and not pr_test' -n 1 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'tp8 and not pr_test' -n 1 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
