@@ -26,6 +26,49 @@ def should_validate_complete(
 
 
 @dataclass
+class _StreamTokenMetadata:
+    """Token metadata buffered across parser steps with no visible delta."""
+
+    token_ids: list[int] | None
+    logprobs: list[dict[int, float]] | None
+
+    @classmethod
+    def from_result(
+        cls,
+        token_ids: list[int] | None,
+        logprobs: list[dict[int, float]] | None,
+        *,
+        keep_token_ids: bool,
+        keep_logprobs: bool,
+    ) -> _StreamTokenMetadata:
+        if keep_logprobs and logprobs is not None and len(token_ids or []) != len(logprobs):
+            raise ValueError('Token ids and logprobs must have the same length.')
+        return cls(
+            list(token_ids or []) if keep_token_ids else None,
+            list(logprobs or []) if keep_logprobs else None,
+        )
+
+    def extend(self, other: _StreamTokenMetadata) -> None:
+        if self.token_ids is not None:
+            assert other.token_ids is not None
+            self.token_ids.extend(other.token_ids)
+        if self.logprobs is not None:
+            assert other.logprobs is not None
+            self.logprobs.extend(other.logprobs)
+
+    def pop_with(self, current: _StreamTokenMetadata) -> _StreamTokenMetadata:
+        merged = _StreamTokenMetadata(
+            token_ids=None if self.token_ids is None else self.token_ids + (current.token_ids or []),
+            logprobs=None if self.logprobs is None else self.logprobs + (current.logprobs or []),
+        )
+        if self.token_ids is not None:
+            self.token_ids.clear()
+        if self.logprobs is not None:
+            self.logprobs.clear()
+        return merged
+
+
+@dataclass
 class ChatRunnerOptions:
     """Endpoint-specific runtime knobs for the shared chat runner."""
 
@@ -52,6 +95,7 @@ class ChatStreamChunk:
     cache_block_ids: list[int] | None = None
     reasoning_tokens: int | None = None
     is_last_delta: bool = True
+    remote_token_ids: list[int] | None = None
 
 
 @dataclass
@@ -98,10 +142,13 @@ class ChatRunner:
         parser_cls = server_context.response_parser_cls
 
         try:
+            if request.tool_choice == 'required' and not parser_cls.supports_required_tool_choice:
+                raise ValueError(
+                    f'Response parser {parser_cls.__name__!r} does not support `tool_choice="required"`.')
             response_parser = parser_cls(request)
+            parsed_request = response_parser.request
         except ValueError as err:
             raise RequestError(ErrorCode.INVALID_REQUEST, str(err)) from err
-        parsed_request = response_parser.request
 
         gen_config = _build_runner_generation_config(
             parsed_request,
@@ -157,22 +204,37 @@ class ChatRunner:
         """Yield parser-normalized streaming chunks and clean up the
         session."""
         streaming_tools = False
+        keep_logprobs = bool(self.request.logprobs or self.request.return_logprob)
+        keep_token_ids = bool(self.request.return_token_ids or keep_logprobs)
+        pending_token_metadata = _StreamTokenMetadata(
+            token_ids=[] if keep_token_ids else None,
+            logprobs=[] if keep_logprobs else None,
+        )
         try:
             async for res in self.result_generator:
                 delta_text = res.response or ''
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
                 try:
+                    current_token_metadata = _StreamTokenMetadata.from_result(
+                        res.token_ids,
+                        res.logprobs,
+                        keep_token_ids=keep_token_ids,
+                        keep_logprobs=keep_logprobs,
+                    )
                     stream_deltas = self.response_parser.stream_chunk(
                         delta_text,
                         delta_token_ids,
                         final=res.finish_reason is not None,
                     )
                     if not stream_deltas:
-                        # Parser may buffer partial protocol tags and emit no visible delta
-                        # while the engine still produced new tokens. Keep metadata attached.
-                        if res.finish_reason is None and not delta_token_ids:
+                        pending_token_metadata.extend(current_token_metadata)
+                        if res.finish_reason is None:
                             continue
-                        stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
+                        current_token_metadata = _StreamTokenMetadata(
+                            token_ids=[] if keep_token_ids else None,
+                            logprobs=[] if keep_logprobs else None,
+                        )
+                        stream_deltas = [(DeltaMessage(role='assistant'), False)]
 
                     if (
                             should_validate_complete(self.request, res.finish_reason)
@@ -194,17 +256,20 @@ class ChatRunner:
                             and streaming_tools):
                         finish_reason = 'tool_calls'
 
+                    stream_token_metadata = (pending_token_metadata.pop_with(current_token_metadata)
+                                             if is_last_delta else _StreamTokenMetadata(None, None))
                     yield ChatStreamChunk(
                         delta_message=delta_message,
                         tool_emitted=tool_emitted,
                         finish_reason=finish_reason,
-                        token_ids=delta_token_ids,
-                        logprobs=res.logprobs,
+                        token_ids=stream_token_metadata.token_ids or [],
+                        logprobs=stream_token_metadata.logprobs,
                         input_token_len=res.input_token_len,
                         generate_token_len=res.generate_token_len,
                         cached_tokens=res.cached_tokens,
                         routed_experts=res.routed_experts if finish_reason is not None else None,
                         cache_block_ids=res.cache_block_ids,
+                        remote_token_ids=delta_token_ids,
                         reasoning_tokens=self.response_parser.reasoning_tokens,
                         is_last_delta=is_last_delta,
                     )

@@ -100,10 +100,11 @@ def register(router: APIRouter, server_context) -> None:
           list of functions for which the model can generate JSON inputs.
         - **tool_choice** (str | object): Controls which (if any) tool is called by
           the model. `none` means the model will not call any tool and instead
-          generates a message. Specifying a particular tool via
+          generates a message. `auto` lets the model choose whether to call a
+          tool, while `required` constrains generation to at least one valid
+          call. Specifying a particular tool via
           ``{"type": "function", "function": {"name": "my_function"}}``
-          forces the model to call that tool. `auto` or `required` will put all
-          the tools informationto the model.
+          forces the model to call that tool.
 
         Additional arguments supported by LMDeploy:
 
@@ -303,7 +304,7 @@ def register(router: APIRouter, server_context) -> None:
                         output_ids=stream_output_ids)
                     if chunk.cache_block_ids is not None and chunk.is_last_delta:
                         response_json['cache_block_ids'] = chunk.cache_block_ids
-                        response_json['remote_token_ids'] = chunk.token_ids
+                        response_json['remote_token_ids'] = chunk.remote_token_ids
                     yield f'data: {json.dumps(response_json)}\n\n'
                 if final_usage is not None:
                     yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'

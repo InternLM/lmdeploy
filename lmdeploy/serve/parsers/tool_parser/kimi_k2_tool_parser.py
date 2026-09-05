@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 class KimiK2ToolParser(ToolParser):
     """Tool parser for the Kimi K2 tool-call section protocol."""
 
+    structural_tag_model = 'kimi'
+
     section_begin = '<|tool_calls_section_begin|>'
     section_end = '<|tool_calls_section_end|>'
     call_begin = '<|tool_call_begin|>'
@@ -28,6 +30,7 @@ class KimiK2ToolParser(ToolParser):
 
     def __init__(self):
         super().__init__()
+        self._tool_payload = ''
         self._section_start_index = 0
         self._stream_scan_pos = 0
         self._stream_emitted_calls = 0
@@ -50,6 +53,7 @@ class KimiK2ToolParser(ToolParser):
         self._reset_stream_state()
 
     def _reset_stream_state(self) -> None:
+        self._tool_payload = ''
         self._stream_scan_pos = 0
         self._stream_emitted_calls = 0
 

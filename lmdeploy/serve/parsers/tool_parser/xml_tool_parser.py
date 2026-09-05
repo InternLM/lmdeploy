@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from lmdeploy.serve.openai.protocol import (
@@ -15,21 +16,64 @@ if TYPE_CHECKING:
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
 
-class XmlToolParser(ToolParser):
-    """Base class for XML-like tool parsers.
+@dataclass
+class XmlParseState:
+    """Syntax state shared by XML-like parser implementations."""
 
-    Subclasses only need to implement XML payload extraction.
+    phase: str = 'function'
+    func_name: str | None = None
+    arg_name: str | None = None
+
+
+@dataclass
+class XmlParseResult:
+    """One explicit syntax transition returned by a format adapter."""
+
+    next_pos: int | None
+    next_phase: str | None = None
+    func_name: str | None = None
+    arg_name: str | None = None
+    arg_delta: str = ''
+    arg_closed: bool = False
+    payload_closed: bool = False
+    should_stop: bool = False
+
+
+@dataclass
+class XmlArgState:
+    """State needed to decide whether a value can be streamed safely."""
+
+    mode: str = 'undecided'
+    pending_ws: str = ''
+    buffered_parts: list[str] = field(default_factory=list)
+
+
+@dataclass
+class XmlToolSnapshot:
+    func_name: str | None
+    args_delta: str
+    payload_closed: bool
+
+
+class XmlToolParser(ToolParser):
+    """Base class for incremental XML-like tool parsers.
+
+    Format adapters identify syntax boundaries and return ``XmlParseResult``.
+    This class owns JSON emission, schema coercion, and all stream lifecycle
+    state. Unquoted string values are emitted immediately and discarded;
+    only undecided syntax, trailing whitespace, and non-streamable values are
+    retained.
     """
 
     def __init__(self):
         super().__init__()
         self._function_param_schemas: dict[str, dict[str, dict[str, Any]]] = {}
-        self._xml_has_emitted_json_start = False
-        self._xml_json_closed = False
-        self._xml_emitted_param_names: set[str] = set()
+        self._has_emitted_json_start = False
+        self._json_closed = False
+        self._emitted_arg_names: set[str] = set()
         self._payload_parts: list[str] = []
-        self._coerced_args: dict[str, Any] = {}
-        self._in_progress_value = False
+        self._state = XmlParseState()
+        self._arg_state = XmlArgState()
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         self._function_param_schemas = self._build_function_param_schemas(request)
@@ -37,69 +81,102 @@ class XmlToolParser(ToolParser):
 
     def start_tool_call(self) -> None:
         super().start_tool_call()
-        self._reset_xml_stream_state()
+        self._reset_stream_state()
 
     def finish_tool_call(self) -> None:
         super().finish_tool_call()
-        self._reset_xml_stream_state()
+        self._reset_stream_state()
 
-    def _reset_xml_stream_state(self) -> None:
-        self._xml_has_emitted_json_start = False
-        self._xml_json_closed = False
-        self._xml_emitted_param_names.clear()
+    def _reset_stream_state(self) -> None:
+        self._has_emitted_json_start = False
+        self._json_closed = False
+        self._emitted_arg_names.clear()
         self._payload_parts.clear()
-        self._coerced_args.clear()
-        self._in_progress_value = False
-        self._reset_incremental_state()
+        self._state = XmlParseState()
+        self._arg_state = XmlArgState()
 
-    def _reset_incremental_state(self) -> None:
-        """Reset subclass-specific incremental parse state."""
+    def _consume_payload(self, payload: str, *, final: bool) -> tuple[XmlToolSnapshot, int]:
+        pos = 0
+        json_fragments: list[str] = []
 
-    def _should_buffer_value_chunk(self, added_text: str, final: bool) -> bool:
-        """Fast-path plain value fragments that cannot close an XML tag."""
-        if final or not self._in_progress_value:
-            return False
-        return not any(ch in added_text for ch in '<>/')
+        while pos < len(payload):
+            if self._state.phase == 'function':
+                result = self._consume_function(payload, pos, final)
+            elif self._state.phase == 'arg_start':
+                result = self._consume_arg_start(payload, pos)
+            elif self._state.phase == 'arg_name':
+                result = self._consume_arg_name(payload, pos)
+            elif self._state.phase == 'arg_value':
+                result = self._consume_arg_value(payload, pos)
+            else:
+                break
+
+            if result.next_pos is None:
+                break
+
+            if result.func_name is not None:
+                self._state.func_name = result.func_name
+            if result.arg_name is not None:
+                self._state.arg_name = result.arg_name
+                self._arg_state = XmlArgState()
+            if result.arg_delta:
+                self._consume_arg_delta(result.arg_delta, json_fragments)
+            if result.arg_closed:
+                self._finish_arg(json_fragments)
+                self._state.arg_name = None
+            if result.payload_closed:
+                self._payload_closed = True
+            if result.next_phase is not None:
+                self._state.phase = result.next_phase
+
+            pos = result.next_pos
+            if result.should_stop:
+                break
+
+        return XmlToolSnapshot(self._state.func_name, ''.join(json_fragments), self._payload_closed), pos
+
+    def _consume_function(self, payload: str, pos: int, final: bool) -> XmlParseResult:
+        raise NotImplementedError('XmlToolParser._consume_function has not been implemented!')
+
+    def _consume_arg_start(self, payload: str, pos: int) -> XmlParseResult:
+        raise NotImplementedError('XmlToolParser._consume_arg_start has not been implemented!')
+
+    def _consume_arg_name(self, payload: str, pos: int) -> XmlParseResult:
+        raise NotImplementedError('XmlToolParser._consume_arg_name has not been implemented!')
+
+    def _consume_arg_value(self, payload: str, pos: int) -> XmlParseResult:
+        raise NotImplementedError('XmlToolParser._consume_arg_value has not been implemented!')
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
         self._payload_parts.append(added_text)
-        if self._should_buffer_value_chunk(added_text, final):
-            return []
+        payload = ''.join(self._payload_parts)
+        snapshot, consumed = self._consume_payload(payload, final=final)
 
-        func_name, raw_args_dict, is_closed = self._extract_incremental_state(
-            ''.join(self._payload_parts),
-            final=final,
-        )
-        args_dict = self._get_coerced_args(func_name, raw_args_dict)
+        if consumed > 0:
+            left = payload[consumed:]
+            self._payload_parts.clear()
+            if left:
+                self._payload_parts.append(left)
 
         out: list[DeltaToolCall] = []
-        if func_name and not self._name_emitted:
+        if snapshot.func_name and not self._name_emitted:
             out.append(
                 DeltaToolCall(
                     id=self._active_tool_call_id,
                     index=self._active_tool_index,
                     type='function',
-                    function=DeltaFunctionCall(name=func_name),
+                    function=DeltaFunctionCall(name=snapshot.func_name),
                 ))
             self._name_emitted = True
 
-        should_close = is_closed or (final and self._close_json_on_final())
-
-        json_fragments: list[str] = []
-        if not self._xml_has_emitted_json_start and (args_dict or should_close):
+        json_fragments = [snapshot.args_delta] if snapshot.args_delta else []
+        should_close = snapshot.payload_closed or (final and self._close_json_on_final())
+        if should_close and not self._has_emitted_json_start:
             json_fragments.append('{')
-            self._xml_has_emitted_json_start = True
-
-        for key, value in args_dict.items():
-            if key in self._xml_emitted_param_names:
-                continue
-            prefix = ', ' if len(self._xml_emitted_param_names) > 0 else ''
-            json_fragments.append(f'{prefix}\"{key}\": {json.dumps(value, ensure_ascii=False)}')
-            self._xml_emitted_param_names.add(key)
-
-        if should_close and self._xml_has_emitted_json_start and not self._xml_json_closed:
+            self._has_emitted_json_start = True
+        if should_close and self._has_emitted_json_start and not self._json_closed:
             json_fragments.append('}')
-            self._xml_json_closed = True
+            self._json_closed = True
 
         if json_fragments:
             out.append(
@@ -129,6 +206,115 @@ class XmlToolParser(ToolParser):
             if param_schemas:
                 out[tool.function.name] = param_schemas
         return out
+
+    def _consume_arg_delta(self, raw: str, json_fragments: list[str]) -> None:
+        arg_name = self._state.arg_name
+        if arg_name is None:
+            return
+
+        arg_state = self._arg_state
+        if arg_state.mode == 'buffered':
+            arg_state.buffered_parts.append(raw)
+            return
+
+        if arg_state.mode == 'streaming':
+            self._stream_string_delta(raw, json_fragments)
+            return
+
+        param_schema = self._get_param_schema(self._state.func_name, arg_name)
+        schema_type = self._get_schema_type(param_schema)
+        if param_schema is not None and schema_type != 'string':
+            arg_state.mode = 'buffered'
+            arg_state.buffered_parts.append(raw)
+            return
+
+        text = arg_state.pending_ws + raw
+        arg_state.pending_ws = ''
+        stripped = text.lstrip()
+        if not stripped:
+            arg_state.pending_ws = text
+            return
+        if stripped.startswith('"'):
+            arg_state.mode = 'buffered'
+            arg_state.buffered_parts.append(stripped)
+            return
+
+        arg_state.mode = 'streaming'
+        self._stream_string_delta(stripped, json_fragments)
+
+    def _stream_string_delta(self, text: str, json_fragments: list[str]) -> None:
+        arg_state = self._arg_state
+        text = arg_state.pending_ws + text
+        stable = text.rstrip()
+        arg_state.pending_ws = text[len(stable):]
+        if not stable:
+            return
+
+        arg_name = self._state.arg_name
+        if arg_name is None:
+            return
+        if arg_name not in self._emitted_arg_names:
+            self._append_json_start(json_fragments)
+            prefix = ', ' if self._emitted_arg_names else ''
+            json_fragments.append(f'{prefix}{json.dumps(arg_name, ensure_ascii=False)}: "')
+            self._emitted_arg_names.add(arg_name)
+        json_fragments.append(json.dumps(stable, ensure_ascii=False)[1:-1])
+
+    def _finish_arg(self, json_fragments: list[str]) -> None:
+        arg_name = self._state.arg_name
+        if arg_name is None:
+            self._arg_state = XmlArgState()
+            return
+
+        if self._arg_state.mode == 'streaming':
+            json_fragments.append('"')
+        else:
+            if self._arg_state.mode == 'buffered':
+                raw_value = ''.join(self._arg_state.buffered_parts)
+            else:
+                raw_value = self._arg_state.pending_ws
+            func_name = self._state.func_name
+            schema = self._get_param_schema(func_name, arg_name)
+            value = self._coerce_arg_value(raw_value, schema)
+            self._append_completed_arg(json_fragments, arg_name, value)
+        self._arg_state = XmlArgState()
+
+    def _append_json_start(self, json_fragments: list[str]) -> None:
+        if not self._has_emitted_json_start:
+            json_fragments.append('{')
+            self._has_emitted_json_start = True
+
+    def _append_completed_arg(self, json_fragments: list[str], arg_name: str, value: Any) -> None:
+        if arg_name in self._emitted_arg_names:
+            return
+        self._append_json_start(json_fragments)
+        prefix = ', ' if self._emitted_arg_names else ''
+        key = json.dumps(arg_name, ensure_ascii=False)
+        json_fragments.append(f'{prefix}{key}: {json.dumps(value, ensure_ascii=False)}')
+        self._emitted_arg_names.add(arg_name)
+
+    def _get_param_schema(self, func_name: str | None, param_name: str) -> dict[str, Any] | None:
+        if func_name is None:
+            return None
+        param_schema = self._function_param_schemas.get(func_name, {}).get(param_name)
+        return param_schema if isinstance(param_schema, dict) else None
+
+    @staticmethod
+    def _get_schema_type(schema: dict[str, Any] | None) -> str | None:
+        return XmlToolParser._resolve_schema_type(schema) if schema is not None else None
+
+    def _get_param_schema_type(self, func_name: str | None, param_name: str) -> str | None:
+        return self._get_schema_type(self._get_param_schema(func_name, param_name))
+
+    @staticmethod
+    def _trim_partial_close_tag_suffix(payload: str, start: int, close_tag: str) -> int:
+        """Return safe value end before any partial close-tag suffix."""
+        max_len = min(len(payload) - start, len(close_tag) - 1)
+        for suffix_len in range(max_len, 0, -1):
+            suffix_start = len(payload) - suffix_len
+            if close_tag.startswith(payload[suffix_start:]):
+                return suffix_start
+        return len(payload)
 
     @staticmethod
     def _resolve_schema_type(param_schema: dict[str, Any]) -> str | None:
@@ -205,45 +391,23 @@ class XmlToolParser(ToolParser):
 
         return raw_value
 
-    def _get_coerced_args(self,
-                          func_name: str | None,
-                          raw_args_dict: dict[str, Any],
-                          *,
-                          use_cache: bool = True) -> dict[str, Any]:
+    def _coerce_arg_value(self, raw_value: Any, schema: dict[str, Any] | None) -> Any:
+        if not isinstance(raw_value, str):
+            return raw_value
+        return self._coerce_value(raw_value, self._get_schema_type(schema)) if schema is not None else raw_value
+
+    def _get_coerced_args(self, func_name: str | None, raw_args_dict: dict[str, str]) -> dict[str, Any]:
         if not func_name or not raw_args_dict:
             return raw_args_dict
         param_schemas = self._function_param_schemas.get(func_name, {})
         if not param_schemas:
             return raw_args_dict
 
-        coerced = dict(self._coerced_args) if use_cache else {}
+        coerced: dict[str, Any] = {}
         for key, value in raw_args_dict.items():
-            if use_cache and key in self._coerced_args:
-                continue
-            if not isinstance(value, str):
-                coerced_value = value
-            else:
-                schema = param_schemas.get(key)
-                if not isinstance(schema, dict):
-                    coerced_value = value
-                else:
-                    schema_type = self._resolve_schema_type(schema)
-                    coerced_value = self._coerce_value(value, schema_type)
-            if use_cache:
-                self._coerced_args[key] = coerced_value
-            coerced[key] = coerced_value
+            schema = param_schemas.get(key)
+            coerced[key] = self._coerce_arg_value(value, schema)
         return coerced
 
     def _close_json_on_final(self) -> bool:
         return True
-
-    def _extract_incremental_state(self,
-                                 payload: str,
-                                 final: bool = False) -> tuple[str | None, dict[str, Any], bool]:
-        """Parse accumulated inner tool payload and return the current
-        snapshot.
-
-        Subclasses update their incremental state from ``payload`` and return
-        ``(func_name, raw_args_dict, is_closed)`` for delta emission.
-        """
-        raise NotImplementedError

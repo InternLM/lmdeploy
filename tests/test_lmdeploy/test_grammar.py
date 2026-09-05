@@ -101,7 +101,7 @@ def test_guided_matrix(model_id, backend_name, backend_factory, schema_type):
         elif schema_type == 'regex_schema':
             response_format[schema_type] = schema
         elif schema_type == 'structural_tag':
-            response_format[schema_type] = schema
+            response_format = schema
     try:
         if enable_guide:
             gen_config = GenerationConfig(response_format=response_format)

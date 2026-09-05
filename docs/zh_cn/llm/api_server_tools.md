@@ -48,6 +48,24 @@ response = client.chat.completions.create(
 print(response)
 ```
 
+## 强制工具调用
+
+当助手必须调用至少一个已提供的函数时，请设置 `tool_choice="required"`。LMDeploy 会根据每个函数的参数 schema，将生成结果约束为模型原生的工具调用格式。
+
+```python
+response = client.chat.completions.create(
+    model=model_name,
+    messages=messages,
+    tools=tools,
+    tool_choice='required',
+)
+
+print(response.choices[0].finish_reason)       # tool_calls
+print(response.choices[0].message.tool_calls)  # 一个或多个调用
+```
+
+此模式要求 `tools` 列表非空，并通过 `--tool-call-parser` 选择兼容的工具解析器；否则服务会返回 HTTP 400。目前 `gpt-oss`、`internlm`、`intern-s1` 和 `llama3` 解析器尚不支持此模式。由于同一时间只能启用一种引导解码约束，强制工具调用约束会覆盖客户端提供的 `response_format`。工具调用之前产生的推理内容仍会通过 `reasoning_content` 返回。如果在工具调用完成前达到 token 上限，`finish_reason` 会保留为 `length`。
+
 ## 多轮调用
 
 ### InternLM

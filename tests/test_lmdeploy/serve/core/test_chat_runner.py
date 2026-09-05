@@ -95,6 +95,7 @@ class _FakeServerContext:
 
 
 class _Parser:
+    supports_required_tool_choice = False
     tool_parser_cls = object()
     tool_parser = object()
     reasoning_tokens = 2
@@ -124,10 +125,20 @@ def _request(**kwargs):
     return ChatCompletionRequest(**defaults)
 
 
+def _tools():
+    return [{
+        'type': 'function',
+        'function': {
+            'name': 'search',
+            'parameters': {
+                'type': 'object',
+            },
+        },
+    }]
+
+
 def test_runner_forwards_parser_adjusted_response_format_to_engine():
-    response_format = {
-        'type': 'json_object',
-    }
+    response_format = {'type': 'json_object'}
 
     class _AdjustingParser(_Parser):
 
@@ -190,12 +201,21 @@ def test_runner_skips_preprocess_for_raw_input_ids():
     assert context.async_engine.preprocess_kwargs['input_ids'] == [1, 2, 3]
 
 
-@pytest.mark.parametrize(('finish_reason', 'expected'), [('stop', 'parse_error'), ('length', 'parse_error')])
-def test_runner_extended_output_validation_marks_parse_error(finish_reason, expected):
-    class _InvalidRequiredParser(_Parser):
-
-        def __init__(self, request):
-            super().__init__(request)
+@pytest.mark.parametrize(
+    ('request_kwargs', 'finish_reason', 'expected'),
+    [
+        ({'return_token_ids': True}, 'stop', 'parse_error'),
+        ({'return_token_ids': True}, 'length', 'parse_error'),
+        ({'return_routed_experts': True}, 'stop', 'parse_error'),
+        ({'tool_choice': 'required', 'tools': _tools()}, 'stop', 'stop'),
+        ({'tool_choice': 'required', 'tools': _tools()}, 'length', 'length'),
+        ({'tool_choice': 'required', 'tools': _tools(), 'return_token_ids': True}, 'stop', 'parse_error'),
+        ({'tool_choice': 'required', 'tools': _tools(), 'return_token_ids': True}, 'length', 'parse_error'),
+    ],
+)
+def test_runner_terminal_validation(request_kwargs, finish_reason, expected):
+    class _InvalidParser(_Parser):
+        supports_required_tool_choice = True
 
         def validate_complete(self, text: str | None = None):
             return False
@@ -213,12 +233,12 @@ def test_runner_extended_output_validation_marks_parse_error(finish_reason, expe
             cache_block_ids=None,
         )
     ]
-    context = _FakeServerContext(_InvalidRequiredParser, outputs)
+    context = _FakeServerContext(_InvalidParser, outputs)
 
     async def _run():
         chat_runner = await ChatRunner.prepare(
             context,
-            _request(return_token_ids=True),
+            _request(**request_kwargs),
         )
         return await chat_runner.collect()
 
@@ -227,13 +247,26 @@ def test_runner_extended_output_validation_marks_parse_error(finish_reason, expe
     assert result.finish_reason == expected
 
 
+def test_runner_rejects_required_tool_choice_for_unsupported_response_parser():
+    context = _FakeServerContext(_Parser)
+
+    with pytest.raises(RequestError) as exc_info:
+        asyncio.run(ChatRunner.prepare(
+            context,
+            _request(tool_choice='required', tools=_tools()),
+        ))
+
+    assert exc_info.value.code == ErrorCode.INVALID_REQUEST
+    assert 'does not support `tool_choice="required"`' in exc_info.value.message
+
+
 def test_runner_stream_chunks_preserve_metadata():
     context = _FakeServerContext(_Parser)
 
     async def _run():
         chat_runner = await ChatRunner.prepare(
             context,
-            _request(return_token_ids=True, return_routed_experts=True),
+            _request(return_token_ids=True, return_routed_experts=True, return_logprob=True),
         )
         return [chunk async for chunk in chat_runner.stream()]
 

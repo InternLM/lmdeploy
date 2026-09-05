@@ -64,6 +64,30 @@ def test_llama3_streaming_without_close_tag():
     }
 
 
+def test_llama3_streaming_emits_arguments_before_json_payload_complete():
+    parser = _build_parser()
+
+    parser.stream_chunk('<|python_tag|>', [])
+    chunks = [
+        '{"name":"find_user_id_by_name_zip","parameters":{"first_name":"Ch',
+        'en","last_name":"Johnson","zip":77004',
+    ]
+
+    argument_fragments = []
+    for chunk in chunks:
+        for delta_msg, tool_emitted in parser.stream_chunk(chunk, []):
+            if not tool_emitted or delta_msg is None or not delta_msg.tool_calls:
+                continue
+            for call in delta_msg.tool_calls:
+                if call.function and call.function.arguments:
+                    argument_fragments.append(call.function.arguments)
+
+    assert argument_fragments
+    joined = ''.join(argument_fragments)
+    assert 'Chen' in joined
+    assert joined != '{"first_name":"Chen","last_name":"Johnson","zip":77004}'
+
+
 def test_llama3_parse_complete_without_close_tag():
     parser = _build_parser()
     text = ('<|python_tag|>{"name":"find_user_id_by_name_zip","parameters":{"first_name":"Chen",'

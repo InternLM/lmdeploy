@@ -3,17 +3,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .tool_parser import ToolParser, ToolParserManager
+from .json_tool_parser import JsonToolParser
+from .tool_parser import ToolParserManager
 
 if TYPE_CHECKING:
-    from lmdeploy.serve.openai.protocol import (
-        ChatCompletionRequest,
-        DeltaToolCall,
-        ToolCall,
-    )
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+
 
 @ToolParserManager.register_module(['internlm', 'intern-s1'])
-class Internlm2ToolParser(ToolParser):
+class Internlm2ToolParser(JsonToolParser):
     """Tool parser for InternLM JSON tool-call payloads."""
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
@@ -32,14 +30,3 @@ class Internlm2ToolParser(ToolParser):
     @classmethod
     def get_tool_close_tag(cls) -> str | None:
         return '<|action_end|>'
-
-    @classmethod
-    def get_tool_payload_format(cls) -> str:
-        return 'json'
-
-    def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
-        """Decode incremental JSON tool payload."""
-        return self._decode_tool_incremental_json(added_text=added_text, final=final)
-
-    def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
-        return self._parse_tool_call_complete_json(payload)
