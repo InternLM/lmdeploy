@@ -2,6 +2,11 @@
 
 LMDeploy 通过 Prometheus 暴露监控指标，并通过 Grafana 提供可视化界面。
 
+对于 PyTorch 后端，`lmdeploy:gpu_cache_usage_perc` 默认表示 GPU 逻辑块总占用率，其中包括为前缀复用保留的逻辑块。
+启动服务前设置 `LMDEPLOY_ENABLE_REQUEST_CACHE_USAGE_METRIC=1` 后，同一指标将仅统计仍被活跃请求引用的逻辑块。
+同一逻辑块被多个请求共享时只计算一次，仅由前缀缓存或已停止会话持有的逻辑块不会被计算。
+该模式适合跨副本路由时比较请求负载。
+
 对于 Turbomind 后端，`lmdeploy:gpu_cache_usage_perc` 表示存活的前缀缓存和检查点对象所占字节数与已配置缓存区域大小的比值。
 前缀缓存命中指标统计请求首次被调度时实际跳过的 prompt token。Turbomind 目前仅在 DP 1 时报告调度指标，
 尚不支持 DP 大于 1 时的逐 rank Turbomind 指标。

@@ -189,6 +189,82 @@ class TestScheduler:
 
         assert scheduler.schedule_metrics.cache_usage == 0.0
 
+    def test_request_only_cache_usage_disabled_skips_scan(self, cache_config, scheduler_config, seq_meta, monkeypatch):
+        monkeypatch.setattr(scheduler_module._envs, 'enable_request_cache_usage_metric', False)
+        scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+        get_request_cache_usage = Mock(return_value=0.5)
+        monkeypatch.setattr(scheduler, '_get_request_cache_usage', get_request_cache_usage)
+
+        assert scheduler.schedule_metrics.cache_usage == 0.0
+        get_request_cache_usage.assert_not_called()
+
+    def test_cache_usage_includes_prefix_only_blocks_by_default(self, cache_config, scheduler_config, seq_meta,
+                                                                block_size, num_gpu_blocks, monkeypatch):
+        monkeypatch.setattr(scheduler_module._envs, 'enable_request_cache_usage_metric', False)
+        cache_config.enable_prefix_caching = True
+        scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+        seq = scheduler.add_session(0).add_sequence(torch.arange(block_size * 2))
+
+        scheduler.schedule(is_prefill=True)
+        scheduler.end_session(seq.session_id)
+
+        assert scheduler.block_manager.get_num_free_gpu_blocks() == num_gpu_blocks - 2
+        assert scheduler.schedule_metrics.cache_usage == 2 / num_gpu_blocks
+
+    def test_cache_usage_excludes_prefix_only_blocks_in_request_mode(self, cache_config, scheduler_config, seq_meta,
+                                                                     block_size, num_gpu_blocks, monkeypatch):
+        monkeypatch.setattr(scheduler_module._envs, 'enable_request_cache_usage_metric', True)
+        cache_config.enable_prefix_caching = True
+        scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+        token_ids = torch.arange(block_size * 2)
+
+        first = scheduler.add_session(0).add_sequence(token_ids)
+        scheduler.schedule(is_prefill=True)
+        assert scheduler.schedule_metrics.cache_usage == 2 / num_gpu_blocks
+
+        scheduler.end_session(first.session_id)
+        assert scheduler.block_manager.get_num_free_gpu_blocks() == num_gpu_blocks - 2
+        assert scheduler.schedule_metrics.cache_usage == 0.0
+
+        second = scheduler.add_session(1).add_sequence(token_ids)
+        scheduler.schedule(is_prefill=True)
+        assert second.num_blocks == 2
+        assert scheduler.schedule_metrics.cache_usage == 2 / num_gpu_blocks
+
+        third = scheduler.add_session(2).add_sequence(token_ids)
+        scheduler.schedule(is_prefill=True)
+        assert third.num_blocks == 2
+        # Both requests share the same two physical blocks.
+        # Metric collection groups them from match metadata and does not need
+        # to traverse either sequence's trie cursor.
+        with monkeypatch.context() as patch:
+            patch.setattr(second.prefix_cache, 'trie_cursor', Mock(spec=[]))
+            patch.setattr(third.prefix_cache, 'trie_cursor', Mock(spec=[]))
+            assert scheduler.schedule_metrics.cache_usage == 2 / num_gpu_blocks
+
+        scheduler.end_session(second.session_id)
+        scheduler.end_session(third.session_id)
+        recomputed = scheduler.add_session(3).add_sequence(token_ids)
+        recomputed.prefix_cache.recompute_overlap.recompute_blocks = 1
+        scheduler.schedule(is_prefill=True)
+        assert recomputed.prefix_cache.recompute_overlap.trie_block_map
+        # A private recompute block replaces one trie block for this request.
+        assert scheduler.schedule_metrics.cache_usage == 2 / num_gpu_blocks
+
+    def test_request_only_cache_usage_excludes_stopped_sequences(self, cache_config, scheduler_config, seq_meta,
+                                                                 block_size, num_gpu_blocks, monkeypatch):
+        monkeypatch.setattr(scheduler_module._envs, 'enable_request_cache_usage_metric', True)
+        cache_config.enable_prefix_caching = True
+        scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+        seq = scheduler.add_session(0).add_sequence(torch.arange(block_size * 2))
+
+        scheduler.schedule(is_prefill=True)
+        scheduler.stop_session(seq.session_id)
+
+        assert seq.status == MessageStatus.STOPPED
+        assert scheduler.block_manager.get_num_free_gpu_blocks() == num_gpu_blocks - 2
+        assert scheduler.schedule_metrics.cache_usage == 0.0
+
     def test_update(self, scheduler, block_size, num_gpu_blocks):
         block_manager = scheduler.block_manager
         session_id1 = 0

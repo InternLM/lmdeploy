@@ -151,6 +151,7 @@ with set_envs():
     # logging
     log_file = os.getenv('LMDEPLOY_LOG_FILE', None)
     os.getenv('LMDEPLOY_LOG_PID', '0')
+    enable_request_cache_usage_metric = env_to_bool('LMDEPLOY_ENABLE_REQUEST_CACHE_USAGE_METRIC', False)
 
     # check env
     enable_check_env = env_to_bool('LMDEPLOY_ENABLE_CHECK_ENV', True)
