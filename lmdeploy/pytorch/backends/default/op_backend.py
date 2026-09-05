@@ -56,6 +56,9 @@ class DefaultOpsBackend(OpsBackend):
         elif layer_type == OpType.RouterNoauxTC:
             from .moe_router import DefaultRouterNoauxTCBuilder
             return DefaultRouterNoauxTCBuilder
+        elif layer_type == OpType.ConceptLMRuntimeOps:
+            from .conceptlm import DefaultConceptLMRuntimeOpsBuilder
+            return DefaultConceptLMRuntimeOpsBuilder
         else:
             raise RuntimeError(f'{layer_type} not supported.')
 

@@ -321,6 +321,8 @@ class FA3Impl(TritonAttentionImpl):
         attn_metadata: TritonAttentionMetadata,
     ) -> int:
         """Get max q seqlen."""
+        if attn_metadata.max_q_seqlen is not None:
+            return attn_metadata.max_q_seqlen
         max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
         if attn_metadata.is_decoding:
             batch_size = attn_metadata.q_seqlens.size(0)

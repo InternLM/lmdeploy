@@ -117,6 +117,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.GatedDeltaRule:
             from .gated_delta_rule import CudaGatedDeltaRuleBuilder
             return CudaGatedDeltaRuleBuilder
+        elif layer_type == OpType.ConceptLMRuntimeOps:
+            from .conceptlm import TritonConceptLMRuntimeOpsBuilder
+            return TritonConceptLMRuntimeOpsBuilder
         else:
             logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
