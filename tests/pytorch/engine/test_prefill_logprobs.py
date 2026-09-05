@@ -120,8 +120,7 @@ def test_final_scoring_prefill_uses_existing_logprob_carrier(actual_ids,
         kwargs['running'][0].status = MessageStatus.STOPPED
 
     loop.seq_strategy = SimpleNamespace(update_running=finish_running)
-    loop.scheduler = SimpleNamespace(
-        block_trie=SimpleNamespace(cache_routed_experts=lambda running: None))
+    loop.scheduler = SimpleNamespace(cache_routed_experts=lambda running: None)
     loop.config = SimpleNamespace(num_speculative_tokens=None,
                                   enable_metrics=False)
     response = SimpleNamespace(data=None,

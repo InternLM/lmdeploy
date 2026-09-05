@@ -12,6 +12,7 @@ from lmdeploy.pytorch.kv_connector.base import (
     KVConnectorOutput,
     KVConnectorResult,
     KVConnectorRole,
+    KVConnectorStepInput,
     RequestId,
 )
 
@@ -22,7 +23,6 @@ from .worker import MooncakeStoreWorker
 if TYPE_CHECKING:
     from lmdeploy.pytorch.config import CacheConfig
     from lmdeploy.pytorch.messages import SchedulerSequence
-    from lmdeploy.pytorch.paging.scheduler import SchedulerOutput
 
 
 class MooncakeStoreConnector(KVConnectorBase):
@@ -94,9 +94,9 @@ class MooncakeStoreConnector(KVConnectorBase):
 
     def build_connector_meta(
         self,
-        scheduler_output: SchedulerOutput,
+        step_input: KVConnectorStepInput,
     ) -> MooncakeStoreConnectorMetadata | None:
-        return self._require_scheduler().build_connector_meta(scheduler_output)
+        return self._require_scheduler().build_connector_meta(step_input)
 
     def on_new_request(self, request: SchedulerSequence) -> None:
         return self._require_scheduler().on_new_request(request)

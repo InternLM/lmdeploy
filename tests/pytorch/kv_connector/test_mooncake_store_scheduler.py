@@ -7,7 +7,12 @@ import pytest
 
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
-from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVConnectorResult, KVLoadResult
+from lmdeploy.pytorch.kv_connector import (
+    KVConnectorOutput,
+    KVConnectorResult,
+    KVConnectorStepInput,
+    KVLoadResult,
+)
 from lmdeploy.pytorch.kv_connector.mooncake.store import scheduler as scheduler_module
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import build_prefix_block_hashes
 from lmdeploy.pytorch.kv_connector.mooncake.store.scheduler import MooncakeStoreScheduler
@@ -45,13 +50,13 @@ def _request(
     )
 
 
-def _scheduler_output(
+def _connector_step(
     running=(),
     token_lens=(),
     block_ids=(),
     logical_block_ids=(),
 ):
-    return SimpleNamespace(
+    return KVConnectorStepInput(
         running=list(running),
         connector_token_lens=tuple(token_lens),
         connector_block_ids=tuple(block_ids),
@@ -169,13 +174,13 @@ def test_scheduler_load_failure_falls_back_until_next_request():
     assert scheduler.get_num_new_matched_tokens(request, 4) == (8, True)
     scheduler.update_state_after_alloc(request, (31, 32), 8)
 
-    metadata = scheduler.build_connector_meta(_scheduler_output())
+    metadata = scheduler.build_connector_meta(_connector_step())
     assert metadata is not None
     assert len(metadata.load_requests) == 1
     load_request = metadata.load_requests[0]
     assert load_request.request_id == request.seq_id
     assert load_request.block_ids == (31, 32)
-    assert scheduler.build_connector_meta(_scheduler_output()).load_requests == ()
+    assert scheduler.build_connector_meta(_connector_step()).load_requests == ()
 
     assert scheduler.update_connector_output(
         KVConnectorOutput(invalid_block_ids={32})) == KVConnectorResult()
@@ -187,7 +192,7 @@ def test_scheduler_load_failure_falls_back_until_next_request():
     )
 
     retry_save = scheduler.build_connector_meta(
-        _scheduler_output(
+        _connector_step(
             running=(request, ),
             token_lens=(12, ),
             block_ids=((30, 31, 32), ),
@@ -214,7 +219,7 @@ def test_scheduler_builds_incremental_save_operations_and_poll_metadata():
     request = _request(range(17), adapter_name='adapter-a')
 
     first = scheduler.build_connector_meta(
-        _scheduler_output(
+        _connector_step(
             running=(request, ),
             token_lens=(10, ),
             block_ids=((31, 32, 33, 34, 35), ),
@@ -234,12 +239,12 @@ def test_scheduler_builds_incremental_save_operations_and_poll_metadata():
 
     # The connector keeps the engine issuing no-forward polling steps while a
     # previous save is still running.
-    poll = scheduler.build_connector_meta(_scheduler_output())
+    poll = scheduler.build_connector_meta(_connector_step())
     assert poll is not None
     assert poll.save_requests == ()
 
     second = scheduler.build_connector_meta(
-        _scheduler_output(
+        _connector_step(
             running=(request, ),
             token_lens=(14, ),
             block_ids=((31, 32, 33, 34, 35), ),
@@ -254,19 +259,19 @@ def test_scheduler_builds_incremental_save_operations_and_poll_metadata():
     result = scheduler.update_connector_output(
         KVConnectorOutput(completed_save_ids={0, 999}))
     assert result.completed_save_ids == frozenset({0})
-    assert scheduler.build_connector_meta(_scheduler_output()) is not None
+    assert scheduler.build_connector_meta(_connector_step()) is not None
 
     result = scheduler.update_connector_output(
         KVConnectorOutput(completed_save_ids={1}))
     assert result.completed_save_ids == frozenset({1})
-    assert scheduler.build_connector_meta(_scheduler_output()) is None
+    assert scheduler.build_connector_meta(_connector_step()) is None
     scheduler.shutdown()
 
 
 def test_new_request_restarts_save_planning_from_first_block():
     scheduler = MooncakeStoreScheduler(_cache_config('kv_producer'))
     request = _request(range(17))
-    output = _scheduler_output(
+    output = _connector_step(
         running=(request, ),
         token_lens=(10, ),
         block_ids=((31, 32, 33, 34), ),
@@ -296,7 +301,7 @@ def test_finished_request_keeps_immutable_save_operation_until_completion():
     scheduler = MooncakeStoreScheduler(_cache_config('kv_producer'))
     request = _request(range(9))
     metadata = scheduler.build_connector_meta(
-        _scheduler_output(
+        _connector_step(
             running=(request, ),
             token_lens=(8, ),
             block_ids=((1, 2, 3), ),
@@ -305,18 +310,18 @@ def test_finished_request_keeps_immutable_save_operation_until_completion():
     save_id = metadata.save_requests[0].save_id
 
     scheduler.request_finished(request)
-    assert scheduler.build_connector_meta(_scheduler_output()) is not None
+    assert scheduler.build_connector_meta(_connector_step()) is not None
     result = scheduler.update_connector_output(
         KVConnectorOutput(completed_save_ids={save_id}))
     assert result.completed_save_ids == frozenset({save_id})
-    assert scheduler.build_connector_meta(_scheduler_output()) is None
+    assert scheduler.build_connector_meta(_connector_step()) is None
     scheduler.shutdown()
 
 
 def test_worker_drain_discards_save_ids_whose_outputs_were_dropped():
     scheduler = MooncakeStoreScheduler(_cache_config('kv_producer'))
     request = _request(range(9))
-    output = _scheduler_output(
+    output = _connector_step(
         running=(request, ),
         token_lens=(8, ),
         block_ids=((1, 2), ),
@@ -324,11 +329,11 @@ def test_worker_drain_discards_save_ids_whose_outputs_were_dropped():
     )
     metadata = scheduler.build_connector_meta(output)
     assert metadata.save_requests
-    assert scheduler.build_connector_meta(_scheduler_output()) is not None
+    assert scheduler.build_connector_meta(_connector_step()) is not None
 
     scheduler.finish_transfers_after_worker_drain()
 
-    assert scheduler.build_connector_meta(_scheduler_output()) is None
+    assert scheduler.build_connector_meta(_connector_step()) is None
     assert scheduler.build_connector_meta(output) is None
 
     next_request = _request(range(9), seq_id=18)
@@ -345,13 +350,13 @@ def test_successful_remote_load_is_not_saved_back_and_save_filters_non_text():
     scheduler.client.lookup = Mock(return_value=12)
     assert scheduler.get_num_new_matched_tokens(request, 0) == (12, True)
     scheduler.update_state_after_alloc(request, (21, 22, 23), 12)
-    scheduler.build_connector_meta(_scheduler_output())
+    scheduler.build_connector_meta(_connector_step())
     result = scheduler.update_connector_output(
         KVConnectorOutput(finished_receiving={request.seq_id}))
     assert result.load_results == (KVLoadResult(request.seq_id, True), )
 
     no_resave = scheduler.build_connector_meta(
-        _scheduler_output(
+        _connector_step(
             running=(request, ),
             token_lens=(13, ),
             block_ids=((21, 22, 23, 24, 25), ),
@@ -361,7 +366,7 @@ def test_successful_remote_load_is_not_saved_back_and_save_filters_non_text():
 
     multimodal = _request(range(17), multimodal=True)
     assert scheduler.build_connector_meta(
-        _scheduler_output(
+        _connector_step(
             running=(multimodal, ),
             token_lens=(16, ),
             block_ids=((1, 2, 3, 4), ),
@@ -377,13 +382,13 @@ def test_shorter_remote_prefix_rewinds_future_save_boundary():
 
     assert scheduler.get_num_new_matched_tokens(request, 0) == (12, True)
     scheduler.update_state_after_alloc(request, (21, 22, 23), 12)
-    scheduler.build_connector_meta(_scheduler_output())
+    scheduler.build_connector_meta(_connector_step())
     scheduler.update_connector_output(
         KVConnectorOutput(finished_receiving={request.seq_id}))
 
     assert scheduler.get_num_new_matched_tokens(request, 4) == (0, False)
     metadata = scheduler.build_connector_meta(
-        _scheduler_output(
+        _connector_step(
             running=(request, ),
             token_lens=(13, ),
             block_ids=((21, 22, 23, 24), ),

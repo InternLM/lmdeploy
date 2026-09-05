@@ -8,6 +8,7 @@ metadata, dispatches it to the executor, and updates local running state.
 """
 import logging
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.messages import SchedulerSequence
     from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
     from lmdeploy.pytorch.paging import Scheduler
+    from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import StateCheckpointLifecycle
     from lmdeploy.pytorch.strategies.base.engine import EngineStrategy
     from lmdeploy.pytorch.strategies.base.model_agent import ModelAgentStrategy
     from lmdeploy.pytorch.strategies.base.sampling import SamplingStrategy
@@ -57,32 +59,12 @@ def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     return torch.as_tensor(out, dtype=dtype)
 
 
-def _make_state_prefix_cache_restore_plan(
-        messages: list['SchedulerSequence']) -> StateCacheCopyPlan | None:
-    """Build a compact host SSM state-restore plan."""
-    src_offsets = []
-    dst_offsets = []
-    for msg in messages:
-        restore = msg.prefix_cache.restore
-        if restore.is_selected:
-            src_offsets.append(restore.slot)
-            dst_offsets.append(msg.logical_state)
-    if len(src_offsets) == 0:
+def _make_state_checkpoint_copy_plan(
+        pairs: Sequence[tuple[int, int]]) -> StateCacheCopyPlan | None:
+    """Transpose logical owner pairs into the compact engine carrier."""
+    if len(pairs) == 0:
         return None
-    return tuple(src_offsets), tuple(dst_offsets)
-
-
-def _make_state_prefix_cache_save_plan(messages: list['SchedulerSequence'],
-                                       save_state_offsets: list[int]) -> StateCacheCopyPlan | None:
-    """Build a compact host SSM state-save plan."""
-    src_offsets = []
-    dst_offsets = []
-    for msg, state_idx in zip(messages, save_state_offsets):
-        if state_idx >= 0:
-            src_offsets.append(msg.logical_state)
-            dst_offsets.append(state_idx)
-    if len(src_offsets) == 0:
-        return None
+    src_offsets, dst_offsets = zip(*pairs)
     return tuple(src_offsets), tuple(dst_offsets)
 
 
@@ -140,6 +122,11 @@ class InputsMakerConfig:
     max_batches: int
     max_prefill_token_num: int
     role: EngineRole
+    block_size: int
+    kernel_block_size: int
+    window_size: int
+    enable_prefix_caching: bool
+    prefix_cache_decode_state_interval: int
     is_ssm: bool = False
     dp: int = 1
     spec_decoding: bool = False
@@ -163,6 +150,11 @@ class InputsMakerConfig:
             max_batches=cache_config.max_batches,
             max_prefill_token_num=cache_config.max_prefill_token_num,
             role=cache_config.role,
+            block_size=cache_config.block_size,
+            kernel_block_size=cache_config.kernel_block_size,
+            window_size=cache_config.window_size,
+            enable_prefix_caching=cache_config.enable_prefix_caching,
+            prefix_cache_decode_state_interval=cache_config.prefix_cache_decode_state_interval,
             is_ssm=len(cache_config.states_shapes) > 0,
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
@@ -400,7 +392,7 @@ class _ForwardInputsTask:
 
         result = self.result
         connector_token_lens = ()
-        connector_enabled = maker.scheduler.kv_connector is not None
+        connector_enabled = maker.scheduler.has_kv_connector()
         if (connector_enabled and result.inputs is not None
                 and not result.inputs.is_decoding and not result.inputs.is_dummy):
             # A prefill writes KV through the end of its query. The connector
@@ -734,6 +726,7 @@ class InputsMakerAsync:
         self,
         executor: 'ExecutorBase',
         scheduler: 'Scheduler',
+        state_checkpoints: 'StateCheckpointLifecycle',
         adapter_manager: 'AdapterManager',
         engine_strategy: 'EngineStrategy',
         sampling_strategy: 'SamplingStrategy',
@@ -742,11 +735,11 @@ class InputsMakerAsync:
     ):
         self.executor = executor
         self.scheduler = scheduler
+        self.state_checkpoints = state_checkpoints
         self.adapter_manager = adapter_manager
         self.config = config
         self.spec_decoding = config.spec_decoding
-        self.cache_config = scheduler.cache_config
-        self.kernel_blocks_per_kv = self.cache_config.block_size // self.cache_config.kernel_block_size
+        self.kernel_blocks_per_kv = config.block_size // config.kernel_block_size
         self.kernel_block_arange = torch.arange(self.kernel_blocks_per_kv, dtype=self.torch_int_dtype)
 
         # strategies
@@ -923,7 +916,7 @@ class InputsMakerAsync:
         return block_offsets
 
     def _make_kv_prefix_cache_copy_plan(
-            self, logical_pairs: list[tuple[int, int]]) -> torch.LongTensor:
+            self, logical_pairs: Sequence[tuple[int, int]]) -> torch.LongTensor:
         """Resolve paging ids and build one host KV-block copy plan."""
         logical_ids = np.asarray(logical_pairs, dtype=np.int64).reshape(-1, 2)
         block_offsets = self.scheduler.resolve_gpu_block_offsets(logical_ids.reshape(-1))
@@ -938,38 +931,19 @@ class InputsMakerAsync:
 
     def _ssm_prefix_cache_enabled(self):
         """Check whether this input maker emits SSM checkpoint operations."""
-        return self.config.is_ssm and self.cache_config.enable_prefix_caching
+        return self.config.is_ssm and self.config.enable_prefix_caching
 
     def _prepare_prefill_cache_restore(
             self, messages: 'SeqList') -> tuple[torch.LongTensor | None, StateCacheCopyPlan | None]:
         """Acquire checkpoints and build prefill restore plans."""
-        state_restore_plan = _make_state_prefix_cache_restore_plan(messages)
+        copy_plan = self.state_checkpoints.prepare_restore_batch(messages)
+        state_restore_plan = _make_state_checkpoint_copy_plan(copy_plan.state_pairs)
         if state_restore_plan is None:
             return None, None
 
-        state_checkpoints = self.scheduler.block_trie.state_checkpoints
-        # Keep checkpoint sources alive while the prefetched forward waits to
-        # copy them into request-owned KV and runtime state.
-        state_checkpoints.pin_restores(messages)
-        if any(msg.prefix_cache.restore.is_selected and not msg.prefix_cache.restore.pinned for msg in messages):
-            raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
-
-        logical_pairs = []
-        for msg in messages:
-            restore = msg.prefix_cache.restore
-            if not restore.is_selected:
-                continue
-            checkpoint = restore.node.state_checkpoint
-            if checkpoint.frozen_block_id < 0:
-                continue
-            dst_block_idx = checkpoint.step // self.cache_config.block_size
-            if dst_block_idx >= len(msg.logical_blocks):
-                raise RuntimeError('SSM prefix-cache restore destination block is missing.')
-            logical_pairs.append((checkpoint.frozen_block_id, msg.logical_blocks[dst_block_idx]))
-
         kv_restore_plan = None
-        if logical_pairs:
-            kv_restore_plan = self._make_kv_prefix_cache_copy_plan(logical_pairs)
+        if copy_plan.kv_block_pairs:
+            kv_restore_plan = self._make_kv_prefix_cache_copy_plan(copy_plan.kv_block_pairs)
         return kv_restore_plan, state_restore_plan
 
     def _prepare_prefill_cache_save(
@@ -978,30 +952,11 @@ class InputsMakerAsync:
         save_steps: tuple[int, ...] | None,
     ) -> tuple[torch.LongTensor | None, StateCacheCopyPlan | None]:
         """Reserve checkpoints and build prefill save plans."""
-        state_checkpoints = self.scheduler.block_trie.state_checkpoints
-        if save_steps is None:
-            save_state_offsets = [state_checkpoints.reserve_save(msg) for msg in messages]
-        else:
-            save_state_offsets = [state_checkpoints.reserve_save(msg, step=step)
-                                  for msg, step in zip(messages, save_steps)]
-        state_save_plan = _make_state_prefix_cache_save_plan(messages, save_state_offsets)
-
-        logical_pairs = []
-        for msg, state_idx in zip(messages, save_state_offsets):
-            if state_idx < 0:
-                continue
-            pending_save = msg.prefix_cache.pending_save
-            checkpoint = pending_save.node.state_checkpoint
-            if checkpoint.frozen_block_id < 0:
-                continue
-            src_block_idx = pending_save.step // self.cache_config.block_size
-            if src_block_idx >= len(msg.logical_blocks):
-                raise RuntimeError('SSM prefix-cache save source block is missing.')
-            logical_pairs.append((msg.logical_blocks[src_block_idx], checkpoint.frozen_block_id))
-
+        copy_plan = self.state_checkpoints.reserve_prefill_save_batch(messages, save_steps)
+        state_save_plan = _make_state_checkpoint_copy_plan(copy_plan.state_pairs)
         kv_save_plan = None
-        if logical_pairs:
-            kv_save_plan = self._make_kv_prefix_cache_copy_plan(logical_pairs)
+        if copy_plan.kv_block_pairs:
+            kv_save_plan = self._make_kv_prefix_cache_copy_plan(copy_plan.kv_block_pairs)
         return kv_save_plan, state_save_plan
 
     def _prepare_prefill_cache_inputs(self,
@@ -1029,14 +984,12 @@ class InputsMakerAsync:
         if delta is None or len(valid_seqs) == 0 or not self._ssm_prefix_cache_enabled():
             return None
 
-        decode_state_interval = self.cache_config.prefix_cache_decode_state_interval
+        decode_state_interval = self.config.prefix_cache_decode_state_interval
         if (decode_state_interval <= 0 or self.spec_decoding or delta.max_q_seqlen != 1):
             return None
 
-        state_checkpoints = self.scheduler.block_trie.state_checkpoints
-        save_state_offsets = [state_checkpoints.reserve_decode_save(seq, decode_state_interval)
-                              for seq in valid_seqs]
-        state_save_plan = _make_state_prefix_cache_save_plan(valid_seqs, save_state_offsets)
+        copy_plan = self.state_checkpoints.reserve_decode_save_batch(valid_seqs, decode_state_interval)
+        state_save_plan = _make_state_checkpoint_copy_plan(copy_plan.state_pairs)
         if state_save_plan is None:
             return None
         return CacheCheckpointInputs(state_save_plan=state_save_plan)
@@ -1209,7 +1162,7 @@ class InputsMakerAsync:
         block_offsets = self._map_to_kernel_block_offsets(block_offsets)
 
         # sliding window
-        if self.scheduler.cache_config.window_size > 0:
+        if self.config.window_size > 0:
             num_ignored_history = torch.tensor([msg.num_ignored_history for msg in valid_seqs])
         else:
             num_ignored_history = torch.zeros(len(valid_seqs), dtype=torch.long)
@@ -1295,16 +1248,12 @@ class InputsMakerAsync:
                 if seq.sampling_param.max_new_tokens > 0:
                     self.running_seqs.append(seq)
 
-    def deactivate_evict_seqs(self):
-        """Deactivate and evict seqs."""
-        scheduler = self.scheduler
+    def preempt_invalid_decode_seqs(self):
+        """Return decode sequences rejected during prefetch to waiting."""
         to_evict_seqs = self.to_evict_seqs
         if len(to_evict_seqs) == 0:
             return
-        # deactivate seqs(running -> ready)
-        scheduler.deactivate_seqs(to_evict_seqs)
-        # ready to waiting
-        scheduler.evict_seqs(to_evict_seqs)
+        self.scheduler.preempt_seqs(to_evict_seqs)
         self.to_evict_seqs.clear()
 
     @torch.inference_mode()
@@ -1359,7 +1308,9 @@ class InputsMakerAsync:
         scheduler = self.scheduler
         return not scheduler.has_ready()
 
-    async def _send_next_inputs_impl(self, prefill: bool = None, enable_empty: bool = False):
+    async def _send_next_inputs_impl(self, enable_empty: bool = False):
+        self.scheduler.resume_completed_migrations()
+        prefill = self.do_prefill()
         forward_inputs = self._make_forward_inputs(prefill, enable_empty)
         if forward_inputs is None:
             return None, None
@@ -1376,14 +1327,12 @@ class InputsMakerAsync:
         return forward_inputs, next_running
 
     async def send_next_inputs(self):
-        prefill = self.do_prefill()
-        return await self._send_next_inputs_impl(prefill)
+        return await self._send_next_inputs_impl()
 
     async def prefetch_next_inputs(self):
-        prefill = self.do_prefill()
         # send next forward
         logger.debug('Prefetching next forward inputs.')
-        return await self._send_next_inputs_impl(prefill, True)
+        return await self._send_next_inputs_impl(enable_empty=True)
 
 
 def build_inputs_maker(engine: 'Engine'):
@@ -1392,6 +1341,7 @@ def build_inputs_maker(engine: 'Engine'):
     return InputsMakerAsync(
         executor=engine.executor,
         scheduler=engine.scheduler,
+        state_checkpoints=engine.scheduler.state_checkpoints,
         adapter_manager=engine.adapter_manager,
         engine_strategy=engine.engine_strategy,
         sampling_strategy=engine.sampling_strategy,

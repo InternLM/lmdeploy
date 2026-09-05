@@ -72,7 +72,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert checkpoint_node.state_checkpoint.pin_count == 0
         assert seq.prefix_cache.restore.node is None
 
-    def test_free_clears_unpinned_ssm_restore(self, ssm_scheduler):
+    def test_release_paging_resources_clears_unpinned_ssm_restore(self, ssm_scheduler):
         block_trie = ssm_scheduler.block_trie
         block_size = ssm_scheduler.seq_meta.block_size
         checkpoint_tokens = [1] * block_size * 2
@@ -85,7 +85,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert seq.prefix_cache.restore.node is checkpoint_node
         assert not seq.prefix_cache.restore.pinned
 
-        seq.state.free()
+        seq.state.release_paging_resources()
 
         assert not seq.prefix_cache.restore.is_selected
         assert seq.prefix_cache.restore.node is None
@@ -493,6 +493,54 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert node.state_checkpoint is None
         assert block_mgr.get_num_free_gpu_blocks() == free_blocks
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
+
+    def test_prepare_restore_batch_owns_partial_checkpoint_copy_pairs(self, ssm_scheduler):
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        checkpoint_tokens = [1] * block_size * 2 + [2]
+        checkpoint_seq, checkpoint_node, state_idx = self._add_published_ssm_checkpoint(
+            ssm_scheduler,
+            checkpoint_tokens,
+        )
+        checkpoint_seq.session.remove_sequence(checkpoint_seq)
+        seq = ssm_scheduler.add_session(100).add_sequence(checkpoint_tokens + [3])
+
+        output = ssm_scheduler.schedule(is_prefill=True)
+        copy_plan = block_trie.state_checkpoints.prepare_restore_batch([seq])
+
+        checkpoint = checkpoint_node.state_checkpoint
+        assert output.running == [seq]
+        assert seq.prefix_cache.restore.pinned
+        assert copy_plan.state_pairs == ((state_idx, seq.logical_state), )
+        assert copy_plan.kv_block_pairs == ((checkpoint.frozen_block_id, seq.logical_blocks[2]), )
+
+        block_trie.state_checkpoints.finish_forward_dispatch([seq], has_save_plan=False)
+
+        assert not seq.prefix_cache.restore.is_selected
+        assert checkpoint.pin_count == 0
+
+    def test_reserve_prefill_save_batch_owns_partial_checkpoint_copy_pairs(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        state_manager = ssm_scheduler.state_manager
+        block_size = ssm_scheduler.seq_meta.block_size
+        seq = ssm_scheduler.add_session(0).add_sequence([1] * block_size * 2 + [2])
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        state_manager.allocate(seq)
+
+        copy_plan = block_trie.state_checkpoints.reserve_prefill_save_batch([seq])
+        checkpoint = seq.prefix_cache.pending_save.node.state_checkpoint
+
+        assert copy_plan.state_pairs == ((seq.logical_state, checkpoint.slot), )
+        assert copy_plan.kv_block_pairs == ((seq.logical_blocks[2], checkpoint.frozen_block_id), )
+
+        block_trie.state_checkpoints.finish_forward_dispatch([seq], has_save_plan=True)
+
+        assert checkpoint.published
+        assert seq.prefix_cache.producer_save_pin.is_acquired
+        block_trie.state_checkpoints.unpin_saves([seq])
+        assert checkpoint.pin_count == 0
 
     def test_ssm_checkpoint_partial_tail_allocation_failure_rolls_back_state(self, ssm_cache_config,
                                                                              scheduler_config, seq_meta):

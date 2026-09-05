@@ -345,7 +345,7 @@ class Engine(EngineBase):
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_REPEAT
-            if session_id not in self.scheduler.sessions:
+            if self.scheduler.get_session(session_id) is None:
                 self.scheduler.add_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
@@ -357,8 +357,8 @@ class Engine(EngineBase):
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
-            if session_id in self.scheduler.sessions:
-                session = self.scheduler.sessions[session_id]
+            session = self.scheduler.get_session(session_id)
+            if session is not None:
                 stopped_resp_ids = set()
                 for seq in session.sequences.values():
                     if seq.status not in (MessageStatus.STOPPED, MessageStatus.TO_BE_MIGRATED):
@@ -412,10 +412,11 @@ class Engine(EngineBase):
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
-            if session_id in self.scheduler.sessions:
-                msgs = list(self.scheduler.sessions[session_id].sequences.values())
+            session = self.scheduler.get_session(session_id)
+            if session is not None:
+                msgs = list(session.sequences.values())
                 if len(msgs) > 0 and msgs[0].preserve_cache:
-                    msgs[0].state.finish()
+                    msgs[0].finish()
                 else:
                     self.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
@@ -428,7 +429,7 @@ class Engine(EngineBase):
         for req in reqs:
             req_data = req.data
             session_id = req_data['session_id']
-            if self.scheduler and session_id not in self.scheduler.sessions:
+            if self.scheduler and self.scheduler.get_session(session_id) is None:
                 self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
             valid_reqs.append(req)
@@ -481,7 +482,7 @@ class Engine(EngineBase):
         scheduler = self.scheduler
         for req in reqs:
             session_id = req.data['session_id']
-            sess = scheduler.sessions.get(session_id, None)
+            sess = scheduler.get_session(session_id)
             if sess is None:
                 self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
@@ -510,7 +511,7 @@ class Engine(EngineBase):
                     mode=UpdateTokenMode.INPUTS,
                 )
                 msg.sampling_param = sampling_param
-                msg.state.activate()
+                msg.activate()
 
             __update_max_new_tokens(msg)
             msg.resp = req.resp
@@ -576,8 +577,9 @@ class Engine(EngineBase):
     def _cancel_and_end_all_sessions(self):
         """Cancel active responses and remove all scheduler sessions."""
         num_cancelled = 0
-        session_ids = list(self.scheduler.sessions.keys())
-        for session in list(self.scheduler.sessions.values()):
+        sessions = self.scheduler.get_sessions()
+        session_ids = [session.session_id for session in sessions]
+        for session in sessions:
             for seq in list(session.sequences.values()):
                 resp: Response = getattr(seq, 'resp', None)
                 if resp is None or resp.is_done:
@@ -605,7 +607,7 @@ class Engine(EngineBase):
         # cancel all remain sessions
         self._cancel_and_end_all_sessions()
         await self.executor.sleep(level)
-        self.scheduler.finish_deferred_kv_transfers_after_worker_drain()
+        self.scheduler.finish_kv_transfers_after_worker_drain()
         if self._engine_loop is not None:
             self._engine_loop.reset_runtime_state()
         logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))
@@ -714,8 +716,9 @@ class Engine(EngineBase):
 
     def end_session(self, session_id: int):
         """End session."""
-        if session_id in self.scheduler.sessions:
-            has_multimodal = self._has_multimodal_session(self.scheduler.sessions[session_id])
+        session = self.scheduler.get_session(session_id)
+        if session is not None:
+            has_multimodal = self._has_multimodal_session(session)
             self.scheduler.end_session(session_id)
             self._maybe_trim_multimodal_session(has_multimodal)
             return True
