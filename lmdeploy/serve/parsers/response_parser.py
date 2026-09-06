@@ -193,10 +193,6 @@ class ResponseParser:
                        **kwargs) -> tuple[str, list | None, str | None]:
         raise NotImplementedError
 
-    def validate_complete(self, text: str | None = None) -> bool:
-        return True
-
-
 @dataclass
 class ProtocolProfile:
     """Protocol tags and startup mode used by :class:`ResponseParser`.
@@ -217,7 +213,6 @@ class ProtocolProfile:
     reasoning_close_tag: str | None = None
     tool_open_tag: str | None = None
     tool_close_tag: str | None = None
-    tool_payload_format: str = 'json'
     starts_in_reasoning_mode: bool = True
 
 
@@ -319,8 +314,8 @@ class BaseResponseParser(ResponseParser):
             # an engine can apply only one guided-decoding constraint.
             self.request = self.request.model_copy(update={'response_format': required_response_format})
 
-        self._accumulated_chunks: list[str] = []
         self._received_any_text = False
+        self._stream_final_received = False
 
         self.profile = self._build_profile()
         if self.reasoning_enabled:
@@ -351,6 +346,7 @@ class BaseResponseParser(ResponseParser):
             example while buffering protocol syntax or tool-call payload).
         """
         self._update_reasoning_tokens(delta_token_ids)
+        self._stream_final_received = bool(kwargs.get('final', False))
 
         # Special-case: some backends emit a leading empty delta (no text, no
         # tokens) before any actual content. Tests treat this as a visible empty
@@ -368,7 +364,6 @@ class BaseResponseParser(ResponseParser):
             return [(DeltaMessage(role='assistant', content=delta_text), False)]
 
         if delta_text:
-            self._accumulated_chunks.append(delta_text)
             self._received_any_text = True
         self._pending += delta_text
         produced_any = False
@@ -396,7 +391,10 @@ class BaseResponseParser(ResponseParser):
                 if new_calls:
                     deltas.append((DeltaMessage(role='assistant', tool_calls=new_calls), True))
                     produced_any = True
-            if not progressed:
+            # A consumed chunk normally leaves tool mode waiting for the next
+            # engine delta.  Re-entering the state machine with an empty
+            # buffer only repeats parser dispatch on every streamed token.
+            if not progressed or not self._pending:
                 break
 
         # 5. Special case: a trailing empty delta (delta_text == '') after non-empty
@@ -473,7 +471,7 @@ class BaseResponseParser(ResponseParser):
         else:
             self._mode = self.MODE_TOOL
             if self.tool_parser is not None:
-                self.tool_parser.start_tool_call()
+                self.tool_parser.begin_tool_block()
         return (prefix if prefix else None), True
 
     def _consume_reasoning(self) -> tuple[str | None, bool]:
@@ -535,64 +533,27 @@ class BaseResponseParser(ResponseParser):
         else:
             self._mode = self.MODE_TOOL
             if self.tool_parser is not None:
-                self.tool_parser.start_tool_call()
+                self.tool_parser.begin_tool_block()
         return (reasoning_chunk if reasoning_chunk else None), True
 
     def _consume_tool(self) -> tuple[list[DeltaToolCall], bool]:
-        """Consume buffered text while in tool mode.
-
-        Behavior:
-        - Treats ``self._pending`` as tool payload bytes until ``tool_close_tag``
-          is found.
-        - For non-final payload chunks, forwards text to
-          ``tool_parser.decode_tool_incremental(..., final=False)``.
-        - For the final payload chunk (before close tag), forwards text with
-          ``final=True``, then calls ``tool_parser.finish_tool_call()`` and
-          switches mode back to ``MODE_PLAIN``.
-        - This method is format-agnostic: JSON/XML/other details are handled
-          entirely by the concrete tool parser implementation.
-
-        Returns:
-            ``(tool_call_deltas, progressed)`` where ``tool_call_deltas`` is the
-            list emitted by the tool parser for this step (possibly empty), and
-            ``progressed`` indicates whether parser state/input was consumed.
-        """
+        """Delegate a tool block and drop only its consumed input prefix."""
         if self.tool_parser is None:
             raise RuntimeError('Invariant violated: MODE_TOOL requires a tool_parser.')
 
-        close_tag = self.profile.tool_close_tag
-        if not close_tag:
-            if not self._pending:
-                return [], False
-            emit = self._pending
+        calls: list[DeltaToolCall] = []
+        consumed = self.tool_parser.feed_tool_block(
+            self._pending,
+            calls,
+            final=self._stream_final_received,
+        )
+        if consumed == len(self._pending):
             self._pending = ''
-            out = self.tool_parser.decode_tool_incremental(added_text=emit, final=False)
-            if self.profile.tool_payload_format == 'json' and self.tool_parser._payload_closed:
-                out.extend(self.tool_parser.decode_tool_incremental(added_text='', final=True))
-                out = self.tool_parser.filter_tool_call_deltas(out)
-                self.tool_parser.finish_tool_call()
-                self._mode = self.MODE_PLAIN
-                return out, True
-            return self.tool_parser.filter_tool_call_deltas(out), True
-
-        idx = self._pending.find(close_tag)
-
-        if idx < 0:
-            if not self._pending:
-                return [], False
-            emit = self._pending
-            self._pending = ''
-            calls = self.tool_parser.decode_tool_incremental(added_text=emit, final=False)
-            return self.tool_parser.filter_tool_call_deltas(calls), True
-
-        # Final chunk inside tool block.
-        inner = self._pending[:idx]
-        self._pending = self._pending[idx + len(close_tag):]
-        calls = self.tool_parser.decode_tool_incremental(added_text=inner, final=True)
-        calls = self.tool_parser.filter_tool_call_deltas(calls)
-        self.tool_parser.finish_tool_call()
-        self._mode = self.MODE_PLAIN
-        return calls, True
+        elif consumed:
+            self._pending = self._pending[consumed:]
+        if self.tool_parser.block_closed:
+            self._mode = self.MODE_PLAIN
+        return calls, consumed > 0 or self.tool_parser.block_closed
 
     def _build_profile(self) -> ProtocolProfile:
         profile = ProtocolProfile(starts_in_reasoning_mode=False)
@@ -609,7 +570,6 @@ class BaseResponseParser(ResponseParser):
         if tparser is not None and self.request.tool_choice != 'none':
             profile.tool_open_tag = tparser.get_tool_open_tag()
             profile.tool_close_tag = tparser.get_tool_close_tag()
-            profile.tool_payload_format = tparser.get_tool_payload_format()
             if not profile.tool_open_tag:
                 raise RuntimeError(f'Tool parser {tparser.__class__.__name__} must provide a tool start tag')
         return profile
@@ -722,52 +682,25 @@ class BaseResponseParser(ResponseParser):
                 pos = open_idx + len(open_tag)
                 continue
 
-            # tool block
-            close_tag = self.profile.tool_close_tag
-            if close_tag:
-                close_idx = text.find(close_tag, open_idx + len(open_tag))
-                if close_idx < 0:
-                    # Unterminated tool block: keep as plain text.
-                    content_parts.append(text[open_idx:])
-                    break
-                tool_payload = text[open_idx + len(open_tag):close_idx].strip()
-            else:
-                close_idx = n
-                tool_payload = text[open_idx + len(open_tag):].strip()
-            parsed_call = self.tool_parser.parse_tool_call_complete(tool_payload) if self.tool_parser else None
-            if parsed_call and self.tool_parser is not None:
-                parsed_calls = parsed_call if isinstance(parsed_call, list) else [parsed_call]
-                tool_calls.extend(self.tool_parser.filter_tool_calls(parsed_calls))
-                pos = close_idx + len(close_tag) if close_tag else n
-            else:
-                # Tool call parsing failed — fall back to plain text.
+            if self.tool_parser is None:
                 content_parts.append(text[open_idx:])
                 break
+            call_count = len(tool_calls)
+            block_end = self.tool_parser.parse_tool_block(
+                text,
+                open_idx + len(open_tag),
+                tool_calls,
+            )
+            parsed_count = len(tool_calls)
+            if parsed_count == call_count:
+                content_parts.append(text[open_idx:block_end])
+            else:
+                tool_calls[call_count:] = self.tool_parser.filter_tool_calls(tool_calls[call_count:])
+            pos = block_end
 
         content = ''.join(content_parts)
         reasoning_content = ''.join(reasoning_parts) if reasoning_parts else None
         return content if content != '' else None, tool_calls or None, reasoning_content
-
-    def _get_accumulated_text(self) -> str:
-        return ''.join(self._accumulated_chunks)
-
-    def validate_complete(self, text: str | None = None) -> bool:
-        text = self._get_accumulated_text() if text is None else text
-
-        if self.reasoning_enabled:
-            close_tag = self.profile.reasoning_close_tag
-            close_idx = text.find(close_tag) if close_tag else -1
-            if close_idx < 0:
-                # A valid tool block can also close implicit reasoning.
-                tool_tag = self.profile.tool_open_tag if self.tool_parser is not None else None
-                tool_idx = text.find(tool_tag) if tool_tag else -1
-                if tool_idx < 0:
-                    return False
-
-        if self.tool_parser is None or self.request.tool_choice == 'none':
-            return True
-
-        return self.tool_parser.validate_complete(text)
 
     @staticmethod
     def _find_first(text: str, tags: list[str], start: int) -> tuple[int, str]:

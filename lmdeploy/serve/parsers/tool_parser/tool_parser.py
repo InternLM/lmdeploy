@@ -7,6 +7,7 @@ import shortuuid
 from mmengine import Registry
 
 from lmdeploy.serve.openai.protocol import (
+    DeltaFunctionCall,
     DeltaToolCall,
     ToolCall,
 )
@@ -55,28 +56,41 @@ def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
 
 
 class ToolParser:
-    """Base class for model-specific tool parsers."""
+    """Base class for model-specific tool-call boundary extractors.
 
-    validate_tool_names: ClassVar[bool] = False
-    # XGrammar builtin structural-tag keys for required tool calls.
+    Streaming uses two distinct completion states. ``_payload_closed`` means
+    the model-specific parser has reached the end of the inner payload; the
+    outer closing marker may still be absent at that point. ``block_closed``
+    means the complete outer block has been consumed, or the final stream chunk
+    has forced it closed, so the response parser may leave tool mode.
+    """
+
     structural_tag_model: ClassVar[str | None] = None
     reasoning_structural_tag_model: ClassVar[str | None] = None
+    # Proper close-marker prefixes that end at decoded-token boundaries.
+    # An empty tuple means the complete closing marker is one token.
+    tool_close_prefixes: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self):
-        self._tool_payload: str = ''
+        self._stream_close_tag: str | None = None
         self._active_tool_call_id: str = ''
         self._active_tool_index: int = -1
         self._name_emitted: bool = False
-        self._allowed_tool_names: set[str] = set()
-        self._stream_tool_indices: dict[int, int | None] = {}
-        self._next_stream_tool_index = 0
+        self._emitted_tool_indices: set[int] = set()
+        self._allowed_tool_names: set[str] | None = None
+        self._stream_internal_tool_index: int = -1
+        self._stream_accepted_tool_index: int = -1
+        self._stream_visible_tool_index: int = -1
+        self._stream_tool_name_seen: bool = False
+        self._pending_tool_deltas: list[DeltaToolCall] = []
+        self._next_stream_tool_index: int = 0
         self._payload_closed: bool = False
+        self.block_closed: bool = False
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request payload before rendering, if needed."""
         request = dump_tools(request)
-        if self.validate_tool_names:
-            self._allowed_tool_names = self._get_allowed_tool_names(request)
+        self._allowed_tool_names = self._get_allowed_tool_names(request)
         return request
 
     @classmethod
@@ -98,12 +112,9 @@ class ToolParser:
 
     @staticmethod
     def _get_allowed_tool_names(request: ChatCompletionRequest) -> set[str]:
-        """Return names exposed by the effective request tool list."""
-        if request.tools is None:
-            return set()
-
+        """Return function names exposed by the effective request tools."""
         names: set[str] = set()
-        for tool in request.tools:
+        for tool in request.tools or []:
             if isinstance(tool, dict):
                 function = tool.get('function', tool)
                 name = function.get('name') if isinstance(function, dict) else None
@@ -113,37 +124,11 @@ class ToolParser:
                 names.add(name)
         return names
 
-    def is_valid_tool_name(self, name: str) -> bool:
-        """Return whether a name is allowed by the effective request tools."""
-        if not self.validate_tool_names:
-            return True
-        return name in self._allowed_tool_names
-
-    def filter_tool_call_deltas(self, calls: list[DeltaToolCall]) -> list[DeltaToolCall]:
-        """Drop streamed calls whose names are absent from request tools."""
-        if not self.validate_tool_names:
-            return calls
-
-        filtered: list[DeltaToolCall] = []
-        for call in calls:
-            function = call.function
-            if function is not None and function.name and call.index not in self._stream_tool_indices:
-                # Assign accepted calls a contiguous client-visible index.
-                # Mark rejected calls as None to filter their later argument deltas.
-                if self.is_valid_tool_name(function.name):
-                    self._stream_tool_indices[call.index] = self._next_stream_tool_index
-                    self._next_stream_tool_index += 1
-                else:
-                    self._stream_tool_indices[call.index] = None
-            visible_index = self._stream_tool_indices.get(call.index)
-            if visible_index is not None:
-                call.index = visible_index
-                filtered.append(call)
-        return filtered
-
     def filter_tool_calls(self, calls: list[ToolCall]) -> list[ToolCall]:
-        """Drop complete calls whose names are absent from request tools."""
-        return [call for call in calls if self.is_valid_tool_name(call.function.name)]
+        """Keep complete calls whose names occur in the request tools."""
+        if self._allowed_tool_names is None:
+            return calls
+        return [call for call in calls if call.function.name in self._allowed_tool_names]
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
@@ -155,56 +140,183 @@ class ToolParser:
         """Return tool closing tag string, or None if unsupported."""
         raise NotImplementedError('ToolParser.get_tool_close_tag has not been implemented!')
 
-    @classmethod
-    def get_tool_payload_format(cls) -> str:
-        """Return payload format for tool call body."""
-        raise NotImplementedError('ToolParser.get_tool_payload_format has not been implemented!')
-
-    def start_tool_call(self) -> None:
-        """Mark start of a tool-call block."""
+    def begin_tool_block(self) -> None:
+        """Initialize one streamed tool block after its opening marker."""
+        self._stream_close_tag = self.get_tool_close_tag()
         self._active_tool_index += 1
         self._active_tool_call_id = f'chatcmpl-tool-{shortuuid.random()}'
         self._name_emitted = False
         self._payload_closed = False
+        self.block_closed = False
 
-    def finish_tool_call(self) -> None:
-        """Mark end of a tool-call block."""
+    def feed_tool_block(self, text: str, deltas: list[DeltaToolCall], *, final: bool) -> int:
+        """Consume a buffered prefix of an open streamed tool block.
+
+        ``text`` begins immediately after the outer opening marker and may
+        include a previously retained marker prefix, newly decoded text, a
+        complete closing marker, and trailing assistant content. Parsed tool
+        call fragments are appended to ``deltas``. The caller must retain
+        ``text[consumed:]`` and pass it back with the next chunk.
+
+        The model-specific parser first consumes its inner payload. Once that
+        payload is closed, this method consumes the configured outer closing
+        marker before closing the complete block.
+
+        Args:
+            text: Buffered text following the tool opening marker.
+            deltas: Output list to which parsed streaming deltas are appended.
+            final: Whether this is the final generated stream chunk.
+
+        Returns:
+            Number of leading characters that the caller may safely discard.
+        """
+        if self.block_closed:
+            return 0
+
+        close_tag = self._stream_close_tag
+        consumed = self._consume_stream_payload(text, deltas, final=final)
+        if self._payload_closed:
+            if close_tag is None:
+                self._close_tool_block()
+                return consumed
+
+            close_at = text.find(close_tag, consumed)
+            if close_at >= 0:
+                self._close_tool_block()
+                return close_at + len(close_tag)
+            if final:
+                self._close_tool_block()
+                return len(text)
+            if not self.tool_close_prefixes:
+                return len(text)
+            return self._stable_prefix_end(text, self.tool_close_prefixes, consumed)
+
+        if final:
+            self._close_tool_block()
+            return len(text)
+        return consumed
+
+    def _consume_stream_payload(self, text: str, deltas: list[DeltaToolCall], *, final: bool) -> int:
+        raise NotImplementedError('ToolParser._consume_stream_payload has not been implemented!')
+
+    def _close_tool_block(self) -> None:
+        self.block_closed = True
         self._active_tool_call_id = ''
-        self._name_emitted = False
-        self._payload_closed = False
+        self._pending_tool_deltas.clear()
 
-    def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
-        """Decode incremental tool payload emitted between tool tags."""
-        raise NotImplementedError('ToolParser.decode_tool_incremental has not been implemented!')
+    def _emit_delta(
+        self,
+        deltas: list[DeltaToolCall],
+        *,
+        index: int,
+        tool_call_id: str,
+        name: str | None = None,
+        arguments: str | None = None,
+    ) -> None:
+        """Append one source-order delta after request tool-name filtering."""
+        if name is None and arguments is None:
+            return
+
+        output_index = index
+        hold_until_name = False
+        if name is None and index == self._stream_accepted_tool_index:
+            output_index = self._stream_visible_tool_index
+        elif self._allowed_tool_names is not None:
+            if index != self._stream_internal_tool_index:
+                self._pending_tool_deltas.clear()
+                self._stream_internal_tool_index = index
+                self._stream_visible_tool_index = -1
+                self._stream_tool_name_seen = False
+
+            if name is not None:
+                self._stream_tool_name_seen = True
+                if name not in self._allowed_tool_names:
+                    self._pending_tool_deltas.clear()
+                    return
+                output_index = self._next_stream_tool_index
+                self._next_stream_tool_index += 1
+                self._stream_accepted_tool_index = index
+                self._stream_visible_tool_index = output_index
+            elif self._stream_tool_name_seen:
+                if self._stream_visible_tool_index < 0:
+                    return
+                output_index = self._stream_visible_tool_index
+            else:
+                hold_until_name = True
+
+        first = index not in self._emitted_tool_indices
+        if first:
+            self._emitted_tool_indices.add(index)
+        delta = DeltaToolCall(
+            id=tool_call_id if first else None,
+            index=output_index,
+            type='function' if first else None,
+            function=DeltaFunctionCall(name=name, arguments=arguments),
+        )
+        if hold_until_name:
+            self._pending_tool_deltas.append(delta)
+            return
+
+        if name is not None and self._pending_tool_deltas:
+            for pending in self._pending_tool_deltas:
+                pending.index = output_index
+            deltas.extend(self._pending_tool_deltas)
+            self._pending_tool_deltas.clear()
+        deltas.append(delta)
+
+    def parse_tool_block(self, text: str, start: int, tool_calls: list[ToolCall]) -> int:
+        """Parse one complete, non-streamed tool block.
+
+        Args:
+            text: Complete generated response containing the tool block.
+            start: Index of the first payload character after its opening
+                marker.
+            tool_calls: Output list to which parsed calls are appended.
+
+        Returns:
+            Absolute index of the first character after the consumed block. If
+            the configured closing marker is absent, returns ``len(text)``
+            without appending a call.
+        """
+        close_tag = self.get_tool_close_tag()
+        if close_tag is None:
+            end = len(text)
+        else:
+            end = text.find(close_tag, start)
+            if end < 0:
+                return len(text)
+
+        parsed = self.parse_tool_call_complete(text[start:end])
+        if isinstance(parsed, list):
+            tool_calls.extend(parsed)
+        elif parsed is not None:
+            tool_calls.append(parsed)
+        return end + (len(close_tag) if close_tag is not None else 0)
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | list[ToolCall] | None:
-        """Parse one complete tool payload into OpenAI tool call object."""
+        """Parse one complete tool payload into OpenAI tool call objects."""
         raise NotImplementedError('ToolParser.parse_tool_call_complete has not been implemented!')
 
-    def validate_complete(self, text: str) -> bool:
-        """Return whether complete response text has valid tool calls."""
-        open_tag = self.get_tool_open_tag()
-        close_tag = self.get_tool_close_tag()
+    @staticmethod
+    def _stable_prefix_end(text: str, marker_prefixes: tuple[str, ...], start: int = 0) -> int:
+        """Find the consumable prefix before a token-aligned marker suffix.
 
-        pos = 0
-        while True:
-            open_idx = text.find(open_tag, pos)
-            close_idx = text.find(close_tag, pos)
-            if open_idx < 0:
-                return close_idx < 0
+        ``marker_prefixes`` contains the proper marker prefixes that can occur
+        at real decoded-token boundaries, ordered longest first. The caller is
+        expected to have established that no complete marker is present. This
+        avoids testing every character boundary or tokenizing again in the hot
+        path.
 
-            payload_start = open_idx + len(open_tag)
-            if close_idx < payload_start:
-                return False
+        Args:
+            text: Buffered text ending in a possible marker prefix.
+            marker_prefixes: Legal token-aligned proper prefixes of the marker.
+            start: Earliest offset at which a retained suffix may begin.
 
-            payload = text[payload_start:close_idx].strip()
-            if not self._validate_tool_payload(payload):
-                return False
-
-            pos = close_idx + len(close_tag)
-            if pos >= len(text):
-                return True
-
-    def _validate_tool_payload(self, payload: str) -> bool:
-        """Return whether one complete tool payload is structurally valid."""
-        raise NotImplementedError('ToolParser._validate_tool_payload has not been implemented!')
+        Returns:
+            End offset of the stable prefix. ``text`` before this offset may be
+            consumed; text at and after it must remain buffered.
+        """
+        for prefix in marker_prefixes:
+            if text.endswith(prefix, start):
+                return len(text) - len(prefix)
+        return len(text)

@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 class Internlm2ToolParser(JsonToolParser):
     """Tool parser for InternLM JSON tool-call payloads."""
 
+    argument_field = 'parameters'
+
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         if request.tools and request.tool_choice != 'none':
             # do not skip special tokens because internlm use the special

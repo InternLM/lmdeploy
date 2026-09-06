@@ -8,6 +8,7 @@ from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 from .helpers import first_stream_delta
 
 MODEL_ID = 'Qwen/Qwen3-8B'
+PARSER_TOOLS = [{'type': 'function', 'function': {'name': 'get_weather'}}]
 
 
 class _ReasoningTokenizer:
@@ -32,6 +33,7 @@ def response_parser():
         model=MODEL_ID,
         messages=[],
         stream=True,
+        tools=PARSER_TOOLS,
         # Enable tool parsing (any value other than "none" works).
         tool_choice='auto',
         # Explicitly enable thinking mode to exercise reasoning parsing.
@@ -272,6 +274,7 @@ class TestQwenResponseParserStreaming:
                 model=MODEL_ID,
                 messages=[],
                 stream=True,
+                tools=PARSER_TOOLS,
                 tool_choice='auto',
                 chat_template_kwargs={'enable_thinking': False},
             )
@@ -317,6 +320,7 @@ class TestQwenResponseParserStreaming:
                 model=MODEL_ID,
                 messages=[],
                 stream=True,
+                tools=PARSER_TOOLS,
                 tool_choice='auto',
                 chat_template_kwargs={'enable_thinking': False},
             )
@@ -335,15 +339,17 @@ class TestQwenResponseParserStreaming:
 
     def test_decode_incremental_keeps_json_argument_buffer_bounded(self):
         parser = ToolParserManager.get('qwen3')()
-        parser.start_tool_call()
-        try:
-            parser.decode_tool_incremental('{"name":"write_file","arguments":{"content":"', final=False)
-            for _ in range(200):
-                parser.decode_tool_incremental('x' * 32, final=False)
+        parser.begin_tool_block()
+        pending = '{"name":"write_file","arguments":{"content":"'
+        calls = []
+        consumed = parser.feed_tool_block(pending, calls, final=False)
+        pending = pending[consumed:]
+        for _ in range(200):
+            pending += 'x' * 32
+            consumed = parser.feed_tool_block(pending, calls, final=False)
+            pending = pending[consumed:]
 
-            assert len(parser._payload) <= 1
-        finally:
-            parser.finish_tool_call()
+        assert pending == ''
 
     def test_stream_chunk_reasoning_without_open_tag(self, response_parser):
         """Qwen thinking mode may omit ``<think>`` and start directly with

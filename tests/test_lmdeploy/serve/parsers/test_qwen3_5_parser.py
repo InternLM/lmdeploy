@@ -7,6 +7,14 @@ from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
 
 MODEL_ID = 'Qwen/Qwen3.5-35B-A3B'
+PARSER_TOOLS = [
+    {
+        'type': 'function',
+        'function': {
+            'name': name,
+        },
+    } for name in ('get_current_temperature', 'get_current_weather')
+]
 
 
 def _build_response_parser():
@@ -18,6 +26,7 @@ def _build_response_parser():
         model=MODEL_ID,
         messages=[],
         stream=True,
+        tools=PARSER_TOOLS,
         tool_choice='auto',
         chat_template_kwargs={'enable_thinking': True},
     )
@@ -45,29 +54,47 @@ def _flatten_stream_deltas(deltas):
 
 
 def _stream_tool_arguments(parser, chunks):
-    parser.start_tool_call()
+    parser.begin_tool_block()
+    pending = ''
     argument_fragments = []
     for chunk in chunks:
-        for call in parser.decode_tool_incremental(chunk, final=False):
+        pending, calls = _feed_tool_payload(parser, pending + chunk, final=False)
+        for call in calls:
             if call.function and call.function.arguments is not None:
                 argument_fragments.append(call.function.arguments)
-    parser.finish_tool_call()
+    if not parser.block_closed:
+        _, calls = _feed_tool_payload(parser, pending + parser.get_tool_close_tag(), final=True)
+        argument_fragments.extend(
+            call.function.arguments for call in calls if call.function and call.function.arguments is not None)
     return ''.join(argument_fragments)
 
 
 def _stream_tool_arguments_by_chunk(parser, chunks):
-    parser.start_tool_call()
+    parser.begin_tool_block()
+    pending = ''
     argument_fragments = []
     per_chunk = []
     for chunk in chunks:
         chunk_fragments = []
-        for call in parser.decode_tool_incremental(chunk, final=False):
+        pending, calls = _feed_tool_payload(parser, pending + chunk, final=False)
+        for call in calls:
             if call.function and call.function.arguments is not None:
                 argument_fragments.append(call.function.arguments)
                 chunk_fragments.append(call.function.arguments)
         per_chunk.append(''.join(chunk_fragments))
-    parser.finish_tool_call()
+    if not parser.block_closed:
+        _feed_tool_payload(parser, pending + parser.get_tool_close_tag(), final=True)
     return ''.join(argument_fragments), per_chunk
+
+
+def _feed_tool_payload(parser, pending, *, final):
+    calls = []
+    while pending and not parser.block_closed:
+        consumed = parser.feed_tool_block(pending, calls, final=final)
+        if not consumed:
+            break
+        pending = pending[consumed:]
+    return pending, calls
 
 
 REFERENCE_CHUNKS = [
@@ -584,13 +611,9 @@ null
 
     def test_decode_incremental_keeps_open_value_buffer_bounded(self):
         parser = Qwen3CoderToolParser()
-        parser.start_tool_call()
-        try:
-            parser.decode_tool_incremental('<function=write_file><parameter=content>', final=False)
-            for _ in range(200):
-                parser.decode_tool_incremental('x' * 32, final=False)
+        parser.begin_tool_block()
+        pending, _ = _feed_tool_payload(parser, '<function=write_file><parameter=content>', final=False)
+        for _ in range(200):
+            pending, _ = _feed_tool_payload(parser, pending + 'x' * 32, final=False)
 
-            buffered = ''.join(parser._payload_parts)
-            assert len(buffered) <= len('</parameter>') - 1
-        finally:
-            parser.finish_tool_call()
+        assert len(pending) <= len('</parameter>') - 1

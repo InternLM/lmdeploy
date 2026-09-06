@@ -16,15 +16,6 @@ from lmdeploy.serve.utils.request_cleanup import cleanup_result_generators
 from .exceptions import ErrorCode, RequestError
 
 
-def should_validate_complete(
-    request: ChatCompletionRequest,
-    finish_reason: str | None,
-) -> bool:
-    """Whether parser validity may change this terminal finish reason."""
-    return finish_reason in ('stop', 'length') and (
-        bool(request.return_token_ids) or bool(request.return_routed_experts))
-
-
 @dataclass
 class _StreamTokenMetadata:
     """Token metadata buffered across parser steps with no visible delta."""
@@ -47,26 +38,6 @@ class _StreamTokenMetadata:
             list(token_ids or []) if keep_token_ids else None,
             list(logprobs or []) if keep_logprobs else None,
         )
-
-    def extend(self, other: _StreamTokenMetadata) -> None:
-        if self.token_ids is not None:
-            assert other.token_ids is not None
-            self.token_ids.extend(other.token_ids)
-        if self.logprobs is not None:
-            assert other.logprobs is not None
-            self.logprobs.extend(other.logprobs)
-
-    def pop_with(self, current: _StreamTokenMetadata) -> _StreamTokenMetadata:
-        merged = _StreamTokenMetadata(
-            token_ids=None if self.token_ids is None else self.token_ids + (current.token_ids or []),
-            logprobs=None if self.logprobs is None else self.logprobs + (current.logprobs or []),
-        )
-        if self.token_ids is not None:
-            self.token_ids.clear()
-        if self.logprobs is not None:
-            self.logprobs.clear()
-        return merged
-
 
 @dataclass
 class ChatRunnerOptions:
@@ -206,40 +177,50 @@ class ChatRunner:
         streaming_tools = False
         keep_logprobs = bool(self.request.logprobs or self.request.return_logprob)
         keep_token_ids = bool(self.request.return_token_ids or keep_logprobs)
-        pending_token_metadata = _StreamTokenMetadata(
-            token_ids=[] if keep_token_ids else None,
-            logprobs=[] if keep_logprobs else None,
-        )
+        keep_metadata = keep_token_ids or keep_logprobs
+        pending_token_metadata: _StreamTokenMetadata | None = None
         try:
             async for res in self.result_generator:
                 delta_text = res.response or ''
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
+                current_metadata_buffered = False
                 try:
-                    current_token_metadata = _StreamTokenMetadata.from_result(
-                        res.token_ids,
-                        res.logprobs,
-                        keep_token_ids=keep_token_ids,
-                        keep_logprobs=keep_logprobs,
-                    )
                     stream_deltas = self.response_parser.stream_chunk(
                         delta_text,
                         delta_token_ids,
                         final=res.finish_reason is not None,
                     )
                     if not stream_deltas:
-                        pending_token_metadata.extend(current_token_metadata)
+                        if keep_metadata:
+                            if pending_token_metadata is None:
+                                pending_token_metadata = _StreamTokenMetadata.from_result(
+                                    res.token_ids,
+                                    res.logprobs,
+                                    keep_token_ids=keep_token_ids,
+                                    keep_logprobs=keep_logprobs,
+                                )
+                            else:
+                                if (
+                                        keep_logprobs
+                                        and res.logprobs is not None
+                                        and len(delta_token_ids) != len(res.logprobs)):
+                                    raise ValueError('Token ids and logprobs must have the same length.')
+                                if pending_token_metadata.token_ids is not None:
+                                    pending_token_metadata.token_ids.extend(res.token_ids or [])
+                                if pending_token_metadata.logprobs is not None:
+                                    pending_token_metadata.logprobs.extend(res.logprobs or [])
+                            current_metadata_buffered = True
                         if res.finish_reason is None:
                             continue
-                        current_token_metadata = _StreamTokenMetadata(
-                            token_ids=[] if keep_token_ids else None,
-                            logprobs=[] if keep_logprobs else None,
-                        )
                         stream_deltas = [(DeltaMessage(role='assistant'), False)]
 
                     if (
-                            should_validate_complete(self.request, res.finish_reason)
-                            and not self.response_parser.validate_complete()):
-                        res.finish_reason = 'parse_error'
+                            keep_logprobs
+                            and not current_metadata_buffered
+                            and res.logprobs is not None
+                            and len(delta_token_ids) != len(res.logprobs)):
+                        raise ValueError('Token ids and logprobs must have the same length.')
+
                 except Exception as err:
                     raise RequestError(ErrorCode.INVALID_REQUEST, f'Failed to parse output: {err}') from err
 
@@ -256,14 +237,27 @@ class ChatRunner:
                             and streaming_tools):
                         finish_reason = 'tool_calls'
 
-                    stream_token_metadata = (pending_token_metadata.pop_with(current_token_metadata)
-                                             if is_last_delta else _StreamTokenMetadata(None, None))
+                    stream_token_ids: list[int] = []
+                    stream_logprobs: list[dict[int, float]] | None = None
+                    if is_last_delta:
+                        if pending_token_metadata is not None:
+                            if not current_metadata_buffered:
+                                if pending_token_metadata.token_ids is not None:
+                                    pending_token_metadata.token_ids.extend(res.token_ids or [])
+                                if pending_token_metadata.logprobs is not None:
+                                    pending_token_metadata.logprobs.extend(res.logprobs or [])
+                            stream_token_ids = pending_token_metadata.token_ids or []
+                            stream_logprobs = pending_token_metadata.logprobs
+                            pending_token_metadata = None
+                        elif keep_metadata:
+                            stream_token_ids = res.token_ids or [] if keep_token_ids else []
+                            stream_logprobs = res.logprobs if keep_logprobs else None
                     yield ChatStreamChunk(
                         delta_message=delta_message,
                         tool_emitted=tool_emitted,
                         finish_reason=finish_reason,
-                        token_ids=stream_token_metadata.token_ids or [],
-                        logprobs=stream_token_metadata.logprobs,
+                        token_ids=stream_token_ids,
+                        logprobs=stream_logprobs,
                         input_token_len=res.input_token_len,
                         generate_token_len=res.generate_token_len,
                         cached_tokens=res.cached_tokens,
@@ -277,8 +271,7 @@ class ChatRunner:
             await self.close()
 
     async def collect(self, raw_request=None) -> ChatResult:
-        """Collect, parse, validate, and clean up a non-streaming
-        generation."""
+        """Collect, parse, and clean up a non-streaming generation."""
         final_res = None
         text = ''
         final_token_ids: list[int] = []
@@ -305,12 +298,7 @@ class ChatRunner:
             raise RequestError(ErrorCode.INTERNAL_ERROR, 'No generation output from engine.')
 
         try:
-            raw_text = text
             text, tool_calls, reasoning_content = self.response_parser.parse_complete(text, final_token_ids)
-            if (
-                    should_validate_complete(self.request, final_res.finish_reason)
-                    and not self.response_parser.validate_complete(raw_text)):
-                final_res.finish_reason = 'parse_error'
             if isinstance(tool_calls, list) and len(tool_calls) and final_res.finish_reason == 'stop':
                 final_res.finish_reason = 'tool_calls'
         except Exception as err:

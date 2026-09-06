@@ -184,19 +184,6 @@ def test_required_complete_parsing_accepts_multiple_calls(configured_parser):
     assert content is None
     assert reasoning is None
     assert [call.function.name for call in tool_calls] == ['get_weather', 'get_time']
-    assert parser.validate_complete(text) is True
-
-
-def test_required_complete_validation_preserves_reasoning_tokens(configured_parser):
-    parser = configured_parser(reasoning=True)
-    text = (
-        'Need weather</think>'
-        '<tool_call>{"name":"get_weather","arguments":{"city":"Paris"}}</tool_call>'
-    )
-    parser.reasoning_tokens = 3
-
-    assert parser.validate_complete(text) is True
-    assert parser.reasoning_tokens == 3
 
 
 @pytest.mark.parametrize('stream', [False, True])
@@ -211,11 +198,9 @@ def test_required_ignores_tool_examples_in_reasoning(configured_parser, stream, 
         for chunk in chunks:
             deltas.extend(parser.stream_chunk(chunk, []))
         assert any(delta.tool_calls for delta, _ in deltas) is actual_call
-        assert parser.validate_complete() is True
     else:
         _, calls, _ = parser.parse_complete(''.join(chunks))
         assert bool(calls) is actual_call
-        assert parser.validate_complete(''.join(chunks)) is True
 
 
 def test_required_streaming_preserves_reasoning_and_split_tags(configured_parser):
@@ -225,8 +210,8 @@ def test_required_streaming_preserves_reasoning_and_split_tags(configured_parser
         'check</th',
         'ink>\n\n<tool_',
         'call>{"name":"get_weather",',
-        '"arguments":{"city":"Paris"}}</tool_',
-        'call>',
+        '"arguments":{"city":"Paris"}}',
+        '</tool_call>',
     ]
     reasoning_parts = []
     tool_deltas = []
@@ -239,46 +224,20 @@ def test_required_streaming_preserves_reasoning_and_split_tags(configured_parser
 
     assert ''.join(reasoning_parts) == 'Need to check'
     assert any(call.function and call.function.name == 'get_weather' for call in tool_deltas)
-    assert parser.validate_complete() is True
-
-
-@pytest.mark.parametrize(
-    ('text', 'expected'),
-    [
-        ('plain assistant answer', True),
-        ('<tool_call>{"name":"get_weather","arguments":{"city":</tool_call>', False),
-        ('<tool_call>{"name":"get_weather","arguments":{"city":"Paris"}}', False),
-    ],
-)
-def test_required_terminal_validation_only_checks_present_call_structure(configured_parser, text, expected):
-    parser = configured_parser()
-
-    assert parser.validate_complete(text) is expected
-
-
-@pytest.mark.parametrize('arguments', [{}, {'city': 42}])
-def test_required_terminal_validation_only_requires_parseable_call(configured_parser, arguments):
-    parser = configured_parser()
-    payload = json.dumps({'name': 'get_weather', 'arguments': arguments})
-    text = f'<tool_call>{payload}</tool_call>'
-
-    assert parser.validate_complete(text) is True
 
 
 @pytest.mark.parametrize('stream', [False, True])
 @pytest.mark.parametrize('prefix', ['', 'assistant text'])
 @pytest.mark.parametrize('stop_str', ['', '<|im_end|>', '<custom-stop>'])
-def test_required_validation_preserves_text_and_stop_output(configured_parser, stream, prefix, stop_str):
+def test_required_preserves_text_and_stop_output(configured_parser, stream, prefix, stop_str):
     parser = configured_parser(include_stop_str_in_output=bool(stop_str), return_token_ids=True)
     text = prefix + '<tool_call>{"name":"get_weather","arguments":{"city":"Paris"}}</tool_call>'
     if stream:
         deltas = parser.stream_chunk(text, [])
         deltas += parser.stream_chunk(stop_str, [0], final=True)
         content = ''.join(delta.content or '' for delta, _ in deltas)
-        assert parser.validate_complete()
     else:
         content, _, _ = parser.parse_complete(text + stop_str)
-        assert parser.validate_complete(text + stop_str)
     assert (content or '') == prefix + stop_str
 
 
@@ -338,11 +297,9 @@ def test_xml_required_format_round_trip(configured_parser, xgrammar_compiler, to
         deltas.extend(parser.stream_chunk('</tool_call>', [], final=True))
         arguments = ''.join(call.function.arguments or '' for delta, _ in deltas for call in delta.tool_calls or []
                             if call.function)
-        assert parser.validate_complete()
     else:
         _, calls, _ = parser.parse_complete(text)
         arguments = calls[0].function.arguments
-        assert parser.validate_complete(text)
     assert json.loads(arguments) == {'value': 42}
 
 
@@ -382,4 +339,3 @@ def test_deepseek_required_default_disables_reasoning_grammar(
     assert reasoning is None
     assert tool_calls is not None
     assert tool_calls[0].function.name == 'get_weather'
-    assert parser.validate_complete(completion) is True

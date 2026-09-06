@@ -20,11 +20,23 @@ def _arguments_from(calls):
     )
 
 
+def _feed(parser, pending, chunk, *, final=False):
+    text = pending + chunk
+    if final and parser.get_tool_close_tag() is not None:
+        text += parser.get_tool_close_tag()
+    calls = []
+    while text and not parser.block_closed:
+        consumed = parser.feed_tool_block(text, calls, final=final)
+        if not consumed:
+            break
+        text = text[consumed:]
+    return text, calls
+
+
 def test_qwen_parameter_markers_follow_token_aligned_boundaries():
     parser = Qwen3CoderToolParser()
-    parser.start_tool_call()
-    try:
-        chunks = [
+    parser.begin_tool_block()
+    chunks = [
             '<',
             'function',
             '=f',
@@ -40,10 +52,13 @@ def test_qwen_parameter_markers_follow_token_aligned_boundaries():
             '</',
             'function',
             '>',
-        ]
-        per_chunk = [parser.decode_tool_incremental(chunk, final=False) for chunk in chunks]
-    finally:
-        parser.finish_tool_call()
+    ]
+    pending = ''
+    per_chunk = []
+    for chunk in chunks:
+        pending, calls = _feed(parser, pending, chunk)
+        per_chunk.append(calls)
+    _feed(parser, pending, '', final=True)
 
     assert per_chunk[3][0].function.name == 'f'
     assert all(not calls for calls in per_chunk[4:8])
@@ -74,21 +89,24 @@ def test_qwen_parameter_markers_follow_token_aligned_boundaries():
 )
 def test_streamed_megabyte_string_does_not_remain_buffered(parser_cls, prefix, tail, tail_final, close_tag):
     parser = parser_cls()
-    parser.start_tool_call()
+    parser.begin_tool_block()
+    pending = ''
     fragments = []
     value_chunk = 'x' * 1024
-    try:
-        fragments.append(_arguments_from(parser.decode_tool_incremental(prefix, final=False)))
-        for _ in range(1024):
-            fragments.append(_arguments_from(parser.decode_tool_incremental(value_chunk, final=False)))
+    pending, calls = _feed(parser, pending, prefix)
+    fragments.append(_arguments_from(calls))
+    for _ in range(1024):
+        pending, calls = _feed(parser, pending, value_chunk)
+        fragments.append(_arguments_from(calls))
 
-        assert parser._arg_state.buffered_parts == []
-        assert parser._arg_state.pending_ws == ''
-        assert len(''.join(parser._payload_parts)) <= len(close_tag) - 1
+    assert parser._arg_state.buffered_parts == []
+    assert parser._arg_state.pending_prefix == ''
+    assert len(pending) <= len(close_tag) - 1
 
-        fragments.append(_arguments_from(parser.decode_tool_incremental(tail, final=tail_final)))
-    finally:
-        parser.finish_tool_call()
+    pending, calls = _feed(parser, pending, tail, final=tail_final)
+    fragments.append(_arguments_from(calls))
+    if not parser.block_closed:
+        _feed(parser, pending, '', final=True)
 
     assert json.loads(''.join(fragments)) == {'content': value_chunk * 1024}
 
@@ -123,10 +141,9 @@ def test_tool_parser_lifecycle_resets_stream_state(parser_cls, payloads):
     parser = parser_cls()
     parsed = []
     for payload in payloads:
-        parser.start_tool_call()
-        calls = parser.decode_tool_incremental(payload, final=True)
+        parser.begin_tool_block()
+        _, calls = _feed(parser, '', payload, final=True)
         parsed.append((calls[0].index, calls[0].function.name, json.loads(_arguments_from(calls))))
-        parser.finish_tool_call()
 
     assert parsed == [
         (0, 'first', {'value': 'one'}),
@@ -138,19 +155,21 @@ def test_tool_parser_lifecycle_resets_stream_state(parser_cls, payloads):
 def test_dsml_streams_parameter_header_and_string_value_immediately(parser_cls):
     parser = parser_cls()
     token = parser.dsml_token
-    parser.start_tool_call()
-    try:
-        chunks = [
+    parser.begin_tool_block()
+    chunks = [
             f'\n<{token}invoke name="search">\n',
             f'<{token}parameter name="query" string="true">',
             'DeepSeek ',
             '"streaming"',
             f'</{token}parameter>\n',
             f'</{token}invoke>\n',
-        ]
-        per_chunk = [parser.decode_tool_incremental(chunk, final=False) for chunk in chunks]
-    finally:
-        parser.finish_tool_call()
+    ]
+    pending = ''
+    per_chunk = []
+    for chunk in chunks:
+        pending, calls = _feed(parser, pending, chunk)
+        per_chunk.append(calls)
+    _feed(parser, pending, '', final=True)
 
     assert per_chunk[0][0].function.name == 'search'
     assert _arguments_from(per_chunk[1]) == '{"query": "'
@@ -167,25 +186,61 @@ def test_dsml_streams_parameter_header_and_string_value_immediately(parser_cls):
 def test_dsml_streams_non_string_json_and_multiple_invokes(parser_cls):
     parser = parser_cls()
     token = parser.dsml_token
-    payload = (
-        f'\n<{token}invoke name="rank">\n'
-        f'<{token}parameter name="limit" string="false">12</{token}parameter>\n'
-        f'<{token}parameter name="filters" string="false">{{"active":true}}</{token}parameter>\n'
-        f'</{token}invoke>\n'
-        f'<{token}invoke name="lookup">\n'
-        f'<{token}parameter name="name" string="true">Ada</{token}parameter>\n'
-        f'</{token}invoke>\n'
-    )
+    block_stem = 'function' if parser.tool_calls_block_name == 'function_calls' else 'tool'
+    # Split protocol markers only where their tokenizers can split them.
+    chunks = [
+        '\n<',
+        token,
+        'inv',
+        'oke name="rank">\n',
+        '<',
+        token,
+        'parameter name="limit" string="false">',
+        '12',
+        '</',
+        token,
+        'parameter',
+        '>\n<',
+        token,
+        'parameter name="filters" string="false">',
+        '{"active":true}',
+        '</',
+        token,
+        'parameter',
+        '>\n</',
+        token,
+        'inv',
+        'oke>\n<',
+        token,
+        'inv',
+        'oke name="lookup">\n',
+        '<',
+        token,
+        'parameter name="name" string="true">',
+        'Ada',
+        '</',
+        token,
+        'parameter',
+        '>\n</',
+        token,
+        'inv',
+        'oke>\n</',
+        token,
+        block_stem,
+        '_c',
+        'alls',
+        '>',
+    ]
 
-    parser.start_tool_call()
-    try:
-        calls = []
-        for char in payload:
-            calls.extend(parser.decode_tool_incremental(char, final=False))
-        calls.extend(parser.decode_tool_incremental('', final=True))
-    finally:
-        parser.finish_tool_call()
+    parser.begin_tool_block()
+    calls = []
+    pending = ''
+    for chunk in chunks:
+        pending, per_chunk = _feed(parser, pending, chunk)
+        calls.extend(per_chunk)
 
+    assert pending == ''
+    assert parser.block_closed
     names = [call for call in calls if call.function and call.function.name]
     assert [(call.index, call.function.name) for call in names] == [(0, 'rank'), (1, 'lookup')]
     assert names[0].id and names[1].id and names[0].id != names[1].id

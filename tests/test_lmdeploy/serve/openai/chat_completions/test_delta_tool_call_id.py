@@ -14,18 +14,30 @@ class _TestToolParser(JsonToolParser):
         return None
 
 
-def _stream_argument_fragments(chunks, *, final_on_last):
-    parser = _TestToolParser()
-    parser.start_tool_call()
+class _ParametersToolParser(_TestToolParser):
+    argument_field = 'parameters'
+
+
+def _stream_argument_fragments(chunks, *, final_on_last, parser_cls=_TestToolParser):
+    parser = parser_cls()
+    parser.begin_tool_block()
+    pending = ''
     fragments = []
     for idx, chunk in enumerate(chunks):
-        deltas = parser.decode_tool_incremental(chunk, final=final_on_last and idx == len(chunks) - 1)
+        pending += chunk
+        deltas = []
+        consumed = parser.feed_tool_block(
+            pending,
+            deltas,
+            final=final_on_last and idx == len(chunks) - 1,
+        )
+        pending = pending[consumed:]
         fragments.extend(delta.function.arguments for delta in deltas if delta.function and delta.function.arguments)
     return fragments
 
 
-def _complete_arguments(payload):
-    call = _TestToolParser().parse_tool_call_complete(payload)
+def _complete_arguments(payload, parser_cls=_TestToolParser):
+    call = parser_cls().parse_tool_call_complete(payload)
     return json.loads(call.function.arguments)
 
 
@@ -34,10 +46,14 @@ def test_decode_tool_incremental_json_id_only_on_first_chunk():
     chunk, not on subsequent argument chunks."""
 
     parser = _TestToolParser()
-    parser.start_tool_call()
+    parser.begin_tool_block()
+    pending = ''
 
     # Step 1: feed partial JSON with name
-    deltas = parser.decode_tool_incremental('{"name": "get_weather", ', final=False)
+    pending += '{"name": "get_weather", '
+    deltas = []
+    consumed = parser.feed_tool_block(pending, deltas, final=False)
+    pending = pending[consumed:]
     assert len(deltas) == 1
     name_delta = deltas[0]
     assert name_delta.function.name == 'get_weather'
@@ -45,7 +61,10 @@ def test_decode_tool_incremental_json_id_only_on_first_chunk():
     assert name_delta.id.startswith('chatcmpl-tool-')
     assert name_delta.type == 'function'
 
-    deltas = parser.decode_tool_incremental('"arguments": {"city": "NY', final=False)
+    pending += '"arguments": {"city": "NY'
+    deltas = []
+    consumed = parser.feed_tool_block(pending, deltas, final=False)
+    pending = pending[consumed:]
     assert len(deltas) == 1
     args_delta = deltas[0]
     assert args_delta.id is None
@@ -94,7 +113,7 @@ def test_decode_tool_incremental_json_streams_nested_and_escaped_arguments():
     assert json.loads(''.join(fragments)) == _complete_arguments(payload)
 
 
-def test_decode_tool_incremental_json_streams_parameters_fallback_before_payload_complete():
+def test_decode_tool_incremental_json_streams_canonical_parameters_before_payload_complete():
     payload = '{"name":"f","parameters":{"p":1}}'
     fragments = _stream_argument_fragments(
         [
@@ -102,10 +121,11 @@ def test_decode_tool_incremental_json_streams_parameters_fallback_before_payload
             '1}',
         ],
         final_on_last=False,
+        parser_cls=_ParametersToolParser,
     )
 
     assert fragments
-    assert json.loads(''.join(fragments)) == _complete_arguments(payload)
+    assert json.loads(''.join(fragments)) == _complete_arguments(payload, _ParametersToolParser)
 
 
 def test_stream_delta_tool_call_omits_null_id_and_type_in_json():

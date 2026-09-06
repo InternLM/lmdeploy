@@ -13,6 +13,7 @@ def _build_parser():
         model='intern-s1',
         messages=[],
         stream=True,
+        tools=[{'type': 'function', 'function': {'name': 'get_weather'}}],
         tool_choice='auto',
     )
     return cls(request=request)

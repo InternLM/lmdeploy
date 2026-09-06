@@ -2,18 +2,13 @@
 from __future__ import annotations
 
 import json
-import re
 
 import shortuuid
 
-from lmdeploy.deepseek_v32_encoding import dsml_token, parse_tool_calls
-from lmdeploy.serve.openai.protocol import (
-    DeltaFunctionCall,
-    DeltaToolCall,
-    FunctionCall,
-    ToolCall,
-)
+from lmdeploy.deepseek_v32_encoding import dsml_token
+from lmdeploy.serve.openai.protocol import DeltaToolCall, FunctionCall, ToolCall
 
+from .json_value_scanner import JsonValueScanner
 from .tool_parser import ToolParser, ToolParserManager
 
 TOOL_CALLS_BLOCK_NAME = 'function_calls'
@@ -24,19 +19,30 @@ class DeepSeekV32ToolParser(ToolParser):
     """Tool parser for DeepSeek-V3.2 DSML function-call blocks."""
 
     structural_tag_model = 'deepseek_v3_2'
-
     dsml_token = dsml_token
     tool_calls_block_name = TOOL_CALLS_BLOCK_NAME
-    parse_tool_calls_func = staticmethod(parse_tool_calls)
+    tool_close_prefixes = (
+        f'</{dsml_token}{TOOL_CALLS_BLOCK_NAME}',
+        f'</{dsml_token}function_c',
+        f'</{dsml_token}function',
+        f'</{dsml_token}',
+        '</',
+    )
+    _invoke_prefixes = (f'<{dsml_token}inv', f'<{dsml_token}', '<')
+    _parameter_prefixes = (f'<{dsml_token}', '<')
+    _invoke_close_prefixes = (f'</{dsml_token}invoke', f'</{dsml_token}inv', f'</{dsml_token}', '</')
+    _parameter_close_prefixes = (f'</{dsml_token}parameter', f'</{dsml_token}', '</')
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self._buffer = ''
         self._phase = 'invoke_start'
+        self._section_start_index = 0
         self._invoke_count = 0
         self._current_tool_index = -1
+        self._current_tool_id = ''
         self._current_param_is_string = False
-        self._emitted_param_names: set[str] = set()
+        self._emitted_param_count = 0
+        self._value_scanner = JsonValueScanner()
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
@@ -46,202 +52,345 @@ class DeepSeekV32ToolParser(ToolParser):
     def get_tool_close_tag(cls) -> str | None:
         return f'</{cls.dsml_token}{cls.tool_calls_block_name}>'
 
-    @classmethod
-    def get_tool_payload_format(cls) -> str:
-        return 'dsml'
+    def begin_tool_block(self) -> None:
+        super().begin_tool_block()
+        self._section_start_index = self._active_tool_index
+        self._phase = 'invoke_start'
+        self._invoke_count = 0
+        self._current_tool_index = -1
+        self._current_tool_id = ''
+        self._current_param_is_string = False
+        self._emitted_param_count = 0
+        self._value_scanner.reset()
 
-    def start_tool_call(self) -> None:
-        super().start_tool_call()
-        self._reset_stream_state()
-
-    def finish_tool_call(self) -> None:
-        if self._invoke_count > 0:
-            self._active_tool_index += self._invoke_count - 1
-        super().finish_tool_call()
-        self._reset_stream_state()
-
-    def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
-        """Emit each DSML function name and parameter fragment immediately."""
-        self._buffer += added_text
-        out: list[DeltaToolCall] = []
+    def _consume_stream_payload(self, text: str, deltas: list[DeltaToolCall], *, final: bool) -> int:
+        del final
         pos = 0
         invoke_tag = f'<{self.dsml_token}invoke'
         parameter_tag = f'<{self.dsml_token}parameter'
         invoke_close_tag = f'</{self.dsml_token}invoke>'
         parameter_close_tag = f'</{self.dsml_token}parameter>'
+        section_close_tag = self.get_tool_close_tag()
 
-        while pos < len(self._buffer):
+        while pos < len(text):
             if self._phase == 'invoke_start':
-                start = self._buffer.find(invoke_tag, pos)
-                if start < 0:
-                    pos = self._trim_partial_marker_suffix(self._buffer, pos, (invoke_tag, ))
+                while pos < len(text) and text[pos].isspace():
+                    pos += 1
+                if pos == len(text):
                     break
-                pos = start + len(invoke_tag)
-                self._phase = 'invoke_header'
+                if text.startswith(section_close_tag, pos):
+                    self._payload_closed = True
+                    break
+                if text.startswith(invoke_tag, pos):
+                    pos += len(invoke_tag)
+                    self._phase = 'invoke_header'
+                    continue
+                next_pos = self._next_marker(
+                    text,
+                    pos,
+                    (
+                        (invoke_tag, self._invoke_prefixes),
+                        (section_close_tag, self.tool_close_prefixes),
+                    ),
+                )
+                if next_pos == pos:
+                    break
+                pos = next_pos
                 continue
 
             if self._phase == 'invoke_header':
-                header_end = self._buffer.find('>\n', pos)
+                header_end = text.find('>', pos)
                 if header_end < 0:
                     break
-                header = self._buffer[pos:header_end]
-                match = re.fullmatch(r'\s*name="(.*?)"', header, flags=re.DOTALL)
-                if match is None:
-                    break
-                self._current_tool_index = self._active_tool_index + self._invoke_count
-                tool_id = (
+                name = self._attribute_value(text[pos:header_end], 'name')
+                self._current_tool_index = self._section_start_index + self._invoke_count
+                self._current_tool_id = (
                     self._active_tool_call_id
                     if self._invoke_count == 0 else f'chatcmpl-tool-{shortuuid.random()}'
                 )
-                out.append(
-                    DeltaToolCall(
-                        id=tool_id,
-                        index=self._current_tool_index,
-                        type='function',
-                        function=DeltaFunctionCall(name=match.group(1)),
-                    ))
-                self._emitted_param_names.clear()
-                pos = header_end + 2
+                self._emit_delta(
+                    deltas,
+                    index=self._current_tool_index,
+                    tool_call_id=self._current_tool_id,
+                    name=name,
+                )
+                self._emitted_param_count = 0
+                pos = header_end + 1
                 self._phase = 'parameter_or_invoke_end'
                 continue
 
             if self._phase == 'parameter_or_invoke_end':
-                parameter_start = self._buffer.find(parameter_tag, pos)
-                invoke_end = self._buffer.find(invoke_close_tag, pos)
-                if invoke_end >= 0 and (parameter_start < 0 or invoke_end < parameter_start):
-                    self._append_arguments_delta(out, '}' if self._emitted_param_names else '{}')
+                while pos < len(text) and text[pos].isspace():
+                    pos += 1
+                if pos == len(text):
+                    break
+                if text.startswith(invoke_close_tag, pos):
+                    self._emit_arguments(deltas, '}' if self._emitted_param_count else '{}')
+                    pos += len(invoke_close_tag)
                     self._invoke_count += 1
+                    self._active_tool_index = self._current_tool_index
                     self._current_tool_index = -1
-                    pos = invoke_end + len(invoke_close_tag)
                     self._phase = 'invoke_start'
                     continue
-                if parameter_start < 0:
-                    pos = self._trim_partial_marker_suffix(
-                        self._buffer,
-                        pos,
-                        (parameter_tag, invoke_close_tag),
-                    )
+                if text.startswith(parameter_tag, pos):
+                    pos += len(parameter_tag)
+                    self._phase = 'parameter_header'
+                    continue
+                next_pos = self._next_marker(
+                    text,
+                    pos,
+                    (
+                        (parameter_tag, self._parameter_prefixes),
+                        (invoke_close_tag, self._invoke_close_prefixes),
+                    ),
+                )
+                if next_pos == pos:
                     break
-                pos = parameter_start + len(parameter_tag)
-                self._phase = 'parameter_header'
+                pos = next_pos
                 continue
 
             if self._phase == 'parameter_header':
-                header_end = self._buffer.find('>', pos)
+                header_end = text.find('>', pos)
                 if header_end < 0:
                     break
-                header = self._buffer[pos:header_end]
-                match = re.fullmatch(r'\s*name="(.*?)"\s+string="(true|false)"', header, flags=re.DOTALL)
-                if match is None:
-                    break
-                param_name, string_flag = match.groups()
-                prefix = '{' if not self._emitted_param_names else ', '
-                key = json.dumps(param_name, ensure_ascii=False)
-                quote = '"' if string_flag == 'true' else ''
-                self._append_arguments_delta(out, f'{prefix}{key}: {quote}')
-                self._emitted_param_names.add(param_name)
-                self._current_param_is_string = string_flag == 'true'
+                header = text[pos:header_end]
+                param_name = self._attribute_value(header, 'name')
+                self._current_param_is_string = self._attribute_value(header, 'string') == 'true'
+                prefix = '{' if self._emitted_param_count == 0 else ', '
+                quote = '"' if self._current_param_is_string else ''
+                self._emit_arguments(
+                    deltas,
+                    f'{prefix}{json.dumps(param_name, ensure_ascii=False)}: {quote}',
+                )
+                self._emitted_param_count += 1
+                self._value_scanner.reset()
                 pos = header_end + 1
-                self._phase = 'parameter_value'
+                self._phase = 'string_value' if self._current_param_is_string else 'json_value'
                 continue
 
-            if self._phase == 'parameter_value':
-                value_end = self._buffer.find(parameter_close_tag, pos)
+            if self._phase == 'string_value':
+                value_end = text.find(parameter_close_tag, pos)
                 if value_end >= 0:
-                    value_delta = self._encode_param_delta(self._buffer[pos:value_end])
-                    if self._current_param_is_string:
-                        value_delta += '"'
-                    self._append_arguments_delta(out, value_delta)
+                    self._emit_arguments(deltas, self._escape_string(text[pos:value_end]) + '"')
                     pos = value_end + len(parameter_close_tag)
                     self._phase = 'parameter_or_invoke_end'
                     continue
-
-                raw_end = self._trim_partial_marker_suffix(self._buffer, pos, (parameter_close_tag, ))
-                if raw_end == pos:
+                stable_end = self._stable_prefix_end(text, self._parameter_close_prefixes, pos)
+                if stable_end == pos:
                     break
-                self._append_arguments_delta(out, self._encode_param_delta(self._buffer[pos:raw_end]))
-                pos = raw_end
+                self._emit_arguments(deltas, self._escape_string(text[pos:stable_end]))
+                pos = stable_end
                 break
 
-            break
+            if self._phase == 'json_value':
+                if self._value_scanner.in_string and text.find('"', pos) < 0:
+                    start = pos
+                    pos = self._value_scanner.feed(text, pos)
+                    if pos > start:
+                        self._emit_arguments(deltas, text[start:pos])
+                    break
 
-        if pos > 0:
-            self._buffer = self._buffer[pos:]
-        return out
+                marker_at = text.find(parameter_close_tag, pos)
+                scan_limit = marker_at if marker_at >= 0 else self._stable_prefix_end(
+                    text, self._parameter_close_prefixes, pos)
+                start = pos
+                pos = self._value_scanner.feed(text, pos, scan_limit)
+                if pos > start:
+                    self._emit_arguments(deltas, text[start:pos])
+                if marker_at >= 0 and pos == marker_at and self._value_scanner.finish_scalar():
+                    self._phase = 'parameter_end'
+                    continue
+                if self._value_scanner.complete:
+                    self._phase = 'parameter_end'
+                    continue
+                if marker_at >= 0:
+                    if not self._value_scanner.in_string:
+                        self._phase = 'parameter_end'
+                        continue
+                    start = pos
+                    pos = self._value_scanner.feed(text, pos)
+                    if pos > start:
+                        self._emit_arguments(deltas, text[start:pos])
+                    if self._value_scanner.complete:
+                        self._phase = 'parameter_end'
+                        continue
+                elif scan_limit < len(text) and self._value_scanner.in_string:
+                    start = pos
+                    pos = self._value_scanner.feed(text, pos)
+                    if pos > start:
+                        self._emit_arguments(deltas, text[start:pos])
+                    if self._value_scanner.complete:
+                        self._phase = 'parameter_end'
+                        continue
+                break
 
-    def _append_arguments_delta(self, out: list[DeltaToolCall], arguments: str) -> None:
-        if not arguments:
-            return
-        out.append(
-            DeltaToolCall(
-                id=None,
+            if self._phase == 'parameter_end':
+                while pos < len(text) and text[pos].isspace():
+                    pos += 1
+                if pos == len(text):
+                    break
+                if not text.startswith(parameter_close_tag, pos):
+                    next_pos = self._next_marker(
+                        text,
+                        pos,
+                        ((parameter_close_tag, self._parameter_close_prefixes), ),
+                    )
+                    if next_pos == pos:
+                        break
+                    pos = next_pos
+                    continue
+                pos += len(parameter_close_tag)
+                self._phase = 'parameter_or_invoke_end'
+                continue
+
+        return pos
+
+    def _emit_arguments(self, deltas: list[DeltaToolCall], arguments: str) -> None:
+        if arguments:
+            self._emit_delta(
+                deltas,
                 index=self._current_tool_index,
-                type=None,
-                function=DeltaFunctionCall(arguments=arguments),
-            ))
+                tool_call_id=self._current_tool_id,
+                arguments=arguments,
+            )
 
-    def _encode_param_delta(self, raw: str) -> str:
-        if not self._current_param_is_string:
-            return raw
+    @staticmethod
+    def _escape_string(raw: str) -> str:
         return json.dumps(raw, ensure_ascii=False)[1:-1]
 
     @staticmethod
-    def _trim_partial_marker_suffix(payload: str, start: int, markers: tuple[str, ...]) -> int:
-        """Keep only a suffix that can grow into one of ``markers``."""
-        keep_from = len(payload)
-        for marker in markers:
-            max_len = min(len(payload) - start, len(marker) - 1)
-            for suffix_len in range(max_len, 0, -1):
-                suffix_start = len(payload) - suffix_len
-                if marker.startswith(payload[suffix_start:]):
-                    keep_from = min(keep_from, suffix_start)
-                    break
-        return keep_from
-
-    def _reset_stream_state(self) -> None:
-        self._buffer = ''
-        self._phase = 'invoke_start'
-        self._invoke_count = 0
-        self._current_tool_index = -1
-        self._current_param_is_string = False
-        self._emitted_param_names.clear()
+    def _attribute_value(header: str, name: str) -> str:
+        prefix = f'{name}="'
+        start = header.find(prefix)
+        if start < 0:
+            return ''
+        start += len(prefix)
+        end = header.find('"', start)
+        return header[start:] if end < 0 else header[start:end]
 
     def parse_tool_call_complete(self, payload: str) -> list[ToolCall] | None:
-        payload = payload.strip()
-        if not payload:
-            return None
+        calls, _ = self._parse_complete_calls(payload, 0, section_close_tag=None)
+        return calls or None
 
-        wrapped = f'{self.get_tool_open_tag()}\n{payload}\n{self.get_tool_close_tag()}'
-        start = len(self.get_tool_open_tag()) - 1
-        try:
-            _, stop_token, raw_tool_calls = self.parse_tool_calls_func(start, wrapped)
-        except Exception:
-            return None
-        if stop_token != self.get_tool_close_tag() or not raw_tool_calls:
-            return None
+    def parse_tool_block(self, text: str, start: int, tool_calls: list[ToolCall]) -> int:
+        calls, end = self._parse_complete_calls(text, start, section_close_tag=self.get_tool_close_tag())
+        tool_calls.extend(calls)
+        return end
 
-        return [
-            ToolCall(function=FunctionCall(name=tool_call['name'], arguments=tool_call['arguments']))
-            for tool_call in raw_tool_calls
-        ]
+    def _parse_complete_calls(
+        self,
+        text: str,
+        start: int,
+        *,
+        section_close_tag: str | None,
+    ) -> tuple[list[ToolCall], int]:
+        calls: list[ToolCall] = []
+        pos = start
+        invoke_tag = f'<{self.dsml_token}invoke'
+        parameter_tag = f'<{self.dsml_token}parameter'
+        invoke_close_tag = f'</{self.dsml_token}invoke>'
+        parameter_close_tag = f'</{self.dsml_token}parameter>'
 
-    def validate_complete(self, text: str) -> bool:
-        open_tag = self.get_tool_open_tag()
-        close_tag = self.get_tool_close_tag()
+        while pos < len(text):
+            section_at = text.find(section_close_tag, pos) if section_close_tag is not None else -1
+            invoke_at = text.find(invoke_tag, pos)
+            if section_at >= 0 and (invoke_at < 0 or section_at < invoke_at):
+                return calls, section_at + len(section_close_tag)
+            if invoke_at < 0:
+                return calls, len(text)
 
-        pos = 0
-        while True:
-            open_idx = text.find(open_tag, pos)
-            close_idx = text.find(close_tag, pos)
-            if open_idx < 0:
-                return close_idx < 0
+            header_start = invoke_at + len(invoke_tag)
+            header_end = text.find('>', header_start)
+            if header_end < 0:
+                return calls, len(text)
+            name = self._attribute_value(text[header_start:header_end], 'name')
+            pos = header_end + 1
+            pairs: list[tuple[str, str]] = []
 
-            payload_start = open_idx + len(open_tag)
-            if close_idx < payload_start:
-                return False
-            if self.parse_tool_call_complete(text[payload_start:close_idx]) is None:
-                return False
+            while pos < len(text):
+                invoke_end_at = text.find(invoke_close_tag, pos)
+                parameter_at = text.find(parameter_tag, pos)
+                if invoke_end_at >= 0 and (parameter_at < 0 or invoke_end_at < parameter_at):
+                    pos = invoke_end_at + len(invoke_close_tag)
+                    break
+                if parameter_at < 0:
+                    pos = len(text)
+                    break
 
-            pos = close_idx + len(close_tag)
-            if pos >= len(text):
-                return True
+                parameter_header_start = parameter_at + len(parameter_tag)
+                parameter_header_end = text.find('>', parameter_header_start)
+                if parameter_header_end < 0:
+                    pos = len(text)
+                    break
+                header = text[parameter_header_start:parameter_header_end]
+                param_name = self._attribute_value(header, 'name')
+                is_string = self._attribute_value(header, 'string') == 'true'
+                value_start = parameter_header_end + 1
+
+                if is_string:
+                    value_end = text.find(parameter_close_tag, value_start)
+                    if value_end < 0:
+                        pos = len(text)
+                        break
+                    encoded_value = json.dumps(text[value_start:value_end], ensure_ascii=False)
+                    parameter_end_at = value_end
+                else:
+                    value_end, complete = self._scan_argument(text, value_start, parameter_close_tag)
+                    parameter_end_at = text.find(parameter_close_tag, value_end)
+                    if parameter_end_at < 0:
+                        parameter_end_at = text.find(parameter_close_tag, value_start)
+                    if parameter_end_at < 0:
+                        encoded_value = text[value_start:value_end]
+                        pairs.append((param_name, encoded_value))
+                        pos = len(text)
+                        break
+                    encoded_value = text[value_start:(value_end if complete else parameter_end_at)]
+
+                pairs.append((param_name, encoded_value))
+                pos = parameter_end_at + len(parameter_close_tag)
+
+            calls.append(ToolCall(function=FunctionCall(name=name, arguments=self._dump_raw_pairs(pairs))))
+
+        return calls, pos
+
+    @staticmethod
+    def _scan_argument(text: str, start: int, marker: str) -> tuple[int, bool]:
+        scanner = JsonValueScanner()
+        marker_at = text.find(marker, start)
+        if marker_at < 0:
+            end = scanner.feed(text, start)
+            return end, scanner.complete
+        end = scanner.feed(text, start, marker_at)
+        if scanner.complete or (end == marker_at and scanner.finish_scalar()):
+            return end, True
+        if not scanner.in_string:
+            return end, False
+        end = scanner.feed(text, end)
+        return end, scanner.complete
+
+    @staticmethod
+    def _dump_raw_pairs(pairs: list[tuple[str, str]]) -> str:
+        fields = (
+            f'{json.dumps(name, ensure_ascii=False)}: {encoded_value}'
+            for name, encoded_value in pairs
+        )
+        return '{' + ', '.join(fields) + '}'
+
+    @staticmethod
+    def _next_marker(
+        text: str,
+        pos: int,
+        markers: tuple[tuple[str, tuple[str, ...]], ...],
+    ) -> int:
+        """Return the next full marker or token-aligned partial marker."""
+        next_pos = len(text)
+        for marker, marker_prefixes in markers:
+            marker_at = text.find(marker, pos)
+            if marker_at >= 0:
+                if marker_at < next_pos:
+                    next_pos = marker_at
+            else:
+                marker_at = ToolParser._stable_prefix_end(text, marker_prefixes, pos)
+                if marker_at < next_pos:
+                    next_pos = marker_at
+        return next_pos

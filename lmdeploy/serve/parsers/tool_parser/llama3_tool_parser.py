@@ -8,6 +8,8 @@ from .tool_parser import ToolParserManager
 class Llama3JsonToolParser(JsonToolParser):
     """Tool parser for Llama3 JSON tool-call payloads."""
 
+    argument_field = 'parameters'
+
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
         return '<|python_tag|>'
@@ -15,6 +17,3 @@ class Llama3JsonToolParser(JsonToolParser):
     @classmethod
     def get_tool_close_tag(cls) -> str | None:
         return None
-
-    def validate_complete(self, text: str) -> bool:
-        return True

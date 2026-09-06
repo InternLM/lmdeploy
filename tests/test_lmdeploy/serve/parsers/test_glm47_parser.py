@@ -71,29 +71,43 @@ def _flatten_stream_deltas(deltas):
 
 
 def _stream_tool_arguments(parser, chunks):
-    parser.start_tool_call()
+    parser.begin_tool_block()
+    pending = ''
     argument_fragments = []
     for chunk, final in chunks:
-        for call in parser.decode_tool_incremental(chunk, final=final):
+        text = pending + chunk + (parser.get_tool_close_tag() if final else '')
+        pending, calls = _feed_tool_payload(parser, text, final=final)
+        for call in calls:
             if call.function and call.function.arguments is not None:
                 argument_fragments.append(call.function.arguments)
-    parser.finish_tool_call()
     return ''.join(argument_fragments)
 
 
 def _stream_tool_arguments_by_chunk(parser, chunks):
-    parser.start_tool_call()
+    parser.begin_tool_block()
+    pending = ''
     argument_fragments = []
     per_chunk = []
     for chunk, final in chunks:
         chunk_fragments = []
-        for call in parser.decode_tool_incremental(chunk, final=final):
+        text = pending + chunk + (parser.get_tool_close_tag() if final else '')
+        pending, calls = _feed_tool_payload(parser, text, final=final)
+        for call in calls:
             if call.function and call.function.arguments is not None:
                 argument_fragments.append(call.function.arguments)
                 chunk_fragments.append(call.function.arguments)
         per_chunk.append(''.join(chunk_fragments))
-    parser.finish_tool_call()
     return ''.join(argument_fragments), per_chunk
+
+
+def _feed_tool_payload(parser, pending, *, final):
+    calls = []
+    while pending and not parser.block_closed:
+        consumed = parser.feed_tool_block(pending, calls, final=final)
+        if not consumed:
+            break
+        pending = pending[consumed:]
+    return pending, calls
 
 
 REFERENCE_CHUNKS = [
@@ -265,7 +279,6 @@ class TestGlm47ResponseParserStreaming:
         assert content_seen == ''
         assert emitted_name == 'get_weather'
         assert emitted_args == '{"location": "Beijing"}'
-        assert parser.validate_complete() is True
 
     def test_stream_chunk_split_tool_start_ends_reasoning_without_close_tag(self):
         parser = _make_response_parser_with_reasoning()
@@ -281,7 +294,6 @@ class TestGlm47ResponseParserStreaming:
         assert content_seen == ''
         assert emitted_name == 'get_weather'
         assert emitted_args == '{"location": "Beijing"}'
-        assert parser.validate_complete() is True
 
     def test_stream_chunk_reasoning_effort_high_starts_in_reasoning_mode(self):
         parser = _make_response_parser_with_reasoning({'reasoning_effort': 'high'})
@@ -324,7 +336,7 @@ class TestGlm47ResponseParserStreaming:
         assert emitted_name == 'no_schema_tool'
         assert emitted_args == '{"zip": "77004", "active": "true"}'
 
-    def test_stream_chunk_rejects_unavailable_tool(self, response_parser):
+    def test_stream_chunk_drops_unavailable_tool(self, response_parser):
         text = ('<tool_call>img_gen'
                 '<arg_key>prompt</arg_key><arg_value>edit image</arg_value>'
                 '</tool_call>')
@@ -355,12 +367,12 @@ class TestGlm47ToolParserComplete:
         assert len(tool_calls) == 1
         assert tool_calls[0].function.name == 'get_weather'
         assert json.loads(tool_calls[0].function.arguments) == {'location': 'Beijing'}
-        assert parser.validate_complete(text) is True
 
-    def test_parse_complete_rejects_unavailable_tool(self, response_parser):
-        _, tool_calls, _ = response_parser.parse_complete(
+    def test_parse_complete_drops_unavailable_tool(self, response_parser):
+        content, tool_calls, _ = response_parser.parse_complete(
             '<tool_call>img_gen</tool_call>')
 
+        assert content is None
         assert tool_calls is None
 
     def test_parse_tool_call_complete_with_arguments(self):
@@ -888,13 +900,13 @@ class TestGlm47ToolParserComplete:
 
     def test_decode_incremental_keeps_open_value_buffer_bounded(self):
         parser = Glm47ToolParser()
-        parser.start_tool_call()
-        try:
-            parser.decode_tool_incremental('write_file<arg_key>content</arg_key><arg_value>', final=False)
-            for _ in range(200):
-                parser.decode_tool_incremental('x' * 32, final=False)
+        parser.begin_tool_block()
+        pending, _ = _feed_tool_payload(
+            parser,
+            'write_file<arg_key>content</arg_key><arg_value>',
+            final=False,
+        )
+        for _ in range(200):
+            pending, _ = _feed_tool_payload(parser, pending + 'x' * 32, final=False)
 
-            buffered = ''.join(parser._payload_parts)
-            assert len(buffered) <= len('</arg_value>') - 1
-        finally:
-            parser.finish_tool_call()
+        assert len(pending) <= len('</arg_value>') - 1

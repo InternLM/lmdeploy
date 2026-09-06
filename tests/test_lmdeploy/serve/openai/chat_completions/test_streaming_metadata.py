@@ -287,6 +287,21 @@ def test_unrequested_metadata_is_not_buffered_but_parser_still_receives_token_id
     assert 'logprobs' not in choice
 
 
+def test_unrequested_metadata_does_not_construct_buffer_objects(install_fake_chat_server, monkeypatch):
+    chat_stream = install_fake_chat_server([
+        {'response': '<hidden>', 'token_ids': [101]},
+        {'response': 'visible', 'token_ids': [102]},
+    ])
+
+    def fail_from_result(*args, **kwargs):
+        raise AssertionError('metadata buffering must stay on the requested-only path')
+
+    monkeypatch.setattr(_StreamTokenMetadata, 'from_result', fail_from_result)
+    payloads = chat_stream(logprobs=False, return_logprob=False, return_token_ids=False)
+
+    assert _choice(payloads[0])['delta']['content'] == 'visible'
+
+
 def test_stream_metadata_rejects_misaligned_logprobs():
     with pytest.raises(ValueError, match='same length'):
         _StreamTokenMetadata.from_result(

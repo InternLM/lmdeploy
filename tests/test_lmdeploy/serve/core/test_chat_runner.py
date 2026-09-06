@@ -109,10 +109,6 @@ class _Parser:
     def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
         return text, None, None
 
-    def validate_complete(self, text: str | None = None):
-        return True
-
-
 def _request(**kwargs):
     defaults = {
         'model': 'fake-model',
@@ -202,23 +198,23 @@ def test_runner_skips_preprocess_for_raw_input_ids():
 
 
 @pytest.mark.parametrize(
-    ('request_kwargs', 'finish_reason', 'expected'),
+    ('request_kwargs', 'finish_reason'),
     [
-        ({'return_token_ids': True}, 'stop', 'parse_error'),
-        ({'return_token_ids': True}, 'length', 'parse_error'),
-        ({'return_routed_experts': True}, 'stop', 'parse_error'),
-        ({'tool_choice': 'required', 'tools': _tools()}, 'stop', 'stop'),
-        ({'tool_choice': 'required', 'tools': _tools()}, 'length', 'length'),
-        ({'tool_choice': 'required', 'tools': _tools(), 'return_token_ids': True}, 'stop', 'parse_error'),
-        ({'tool_choice': 'required', 'tools': _tools(), 'return_token_ids': True}, 'length', 'parse_error'),
+        ({'return_token_ids': True}, 'stop'),
+        ({'return_token_ids': True}, 'length'),
+        ({'return_routed_experts': True}, 'stop'),
+        ({'tool_choice': 'required', 'tools': _tools()}, 'stop'),
+        ({'tool_choice': 'required', 'tools': _tools()}, 'length'),
+        ({'tool_choice': 'required', 'tools': _tools(), 'return_token_ids': True}, 'stop'),
+        ({'tool_choice': 'required', 'tools': _tools(), 'return_token_ids': True}, 'length'),
     ],
 )
-def test_runner_terminal_validation(request_kwargs, finish_reason, expected):
-    class _InvalidParser(_Parser):
+def test_runner_preserves_engine_finish_reason_without_terminal_validation(request_kwargs, finish_reason):
+    class _ParserWithForbiddenValidation(_Parser):
         supports_required_tool_choice = True
 
         def validate_complete(self, text: str | None = None):
-            return False
+            raise AssertionError('response parsers must not validate generated output')
 
     outputs = [
         SimpleNamespace(
@@ -233,7 +229,7 @@ def test_runner_terminal_validation(request_kwargs, finish_reason, expected):
             cache_block_ids=None,
         )
     ]
-    context = _FakeServerContext(_InvalidParser, outputs)
+    context = _FakeServerContext(_ParserWithForbiddenValidation, outputs)
 
     async def _run():
         chat_runner = await ChatRunner.prepare(
@@ -244,7 +240,7 @@ def test_runner_terminal_validation(request_kwargs, finish_reason, expected):
 
     result = asyncio.run(_run())
 
-    assert result.finish_reason == expected
+    assert result.finish_reason == finish_reason
 
 
 def test_runner_rejects_required_tool_choice_for_unsupported_response_parser():

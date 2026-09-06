@@ -160,10 +160,6 @@ class _BasicParser:
     def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
         return text, None, None
 
-    def validate_complete(self, text: str | None = None):
-        return True
-
-
 class _FakeServerContext:
     def __init__(
             self,
@@ -697,16 +693,16 @@ def test_messages_non_stream_with_reasoning_and_tool_use_blocks():
     assert data['content'][2]['input'] == {'query': 'lmdeploy'}
 
 
-def test_messages_non_stream_validate_complete_marks_parse_error():
+def test_messages_non_stream_does_not_validate_generated_tool_call():
     _IncompleteToolParser.validate_calls = 0
     _IncompleteToolParser.last_text = None
     client = _make_client(response_parser_cls=_IncompleteToolParser)
     response = _post_messages(client, tools=[SEARCH_TOOL], return_token_ids=True)
 
     assert response.status_code == 200
-    assert response.json()['stop_reason'] == 'parse_error'
-    assert _IncompleteToolParser.validate_calls == 1
-    assert _IncompleteToolParser.last_text == 'Hello world!'
+    assert response.json()['stop_reason'] == 'tool_use'
+    assert _IncompleteToolParser.validate_calls == 0
+    assert _IncompleteToolParser.last_text is None
 
 
 def test_messages_streaming_usage_matches_anthropic_event_spec():
@@ -784,7 +780,7 @@ def test_messages_streaming_with_reasoning_and_tool_use_events():
     assert '"output_ids": [102]' in body
 
 
-def test_messages_streaming_validate_complete_marks_parse_error():
+def test_messages_streaming_does_not_validate_generated_tool_call():
     _IncompleteToolParser.validate_calls = 0
     _IncompleteToolParser.last_text = None
     client = _make_client(response_parser_cls=_IncompleteToolParser)
@@ -793,8 +789,8 @@ def test_messages_streaming_validate_complete_marks_parse_error():
     message_delta = next(item for item in payloads if item['type'] == 'message_delta')
 
     assert status_code == 200
-    assert message_delta['delta']['stop_reason'] == 'parse_error'
-    assert _IncompleteToolParser.validate_calls == 1
+    assert message_delta['delta']['stop_reason'] == 'tool_use'
+    assert _IncompleteToolParser.validate_calls == 0
     assert _IncompleteToolParser.last_text is None
 
 

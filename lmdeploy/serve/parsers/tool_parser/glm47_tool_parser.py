@@ -1,37 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-import json
-import re
-
-from lmdeploy.serve.openai.protocol import (
-    FunctionCall,
-    ToolCall,
-)
+from lmdeploy.serve.openai.protocol import FunctionCall, ToolCall
 
 from .tool_parser import ToolParserManager
-from .xml_tool_parser import XmlParseResult, XmlToolParser
+from .xml_tool_parser import XmlArgState, XmlToolParser
 
 
 @ToolParserManager.register_module(['glm47'])
 class Glm47ToolParser(XmlToolParser):
-    """Tool parser for GLM-4.7 XML-like tool-call payloads.
-
-    Expected format inside ``<tool_call>...</tool_call>``:
-    ``function_name<arg_key>k</arg_key><arg_value>v</arg_value>...``
-    """
+    """Tool parser for GLM-4.7 XML-like tool-call payloads."""
 
     structural_tag_model = 'glm_4_7'
-
     arg_key_start_token = '<arg_key>'
     arg_key_end_token = '</arg_key>'
     arg_value_start_token = '<arg_value>'
     arg_value_end_token = '</arg_value>'
-    validate_tool_names = True
-    _complete_payload_pattern = re.compile(
-        r'^\s*[^\s<]+(?:\s*<arg_key>[^<]+</arg_key>\s*<arg_value>.*?</arg_value>)*\s*$',
-        re.DOTALL,
-    )
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
@@ -41,110 +25,127 @@ class Glm47ToolParser(XmlToolParser):
     def get_tool_close_tag(cls) -> str | None:
         return '</tool_call>'
 
-    @classmethod
-    def get_tool_payload_format(cls) -> str:
-        return 'xml'
-
-    def _consume_function(self, payload: str, pos: int, final: bool) -> XmlParseResult:
-        arg_key_start = payload.find('<arg_key>', pos)
+    def _consume_function(self, payload: str, pos: int, final: bool) -> int | None:
+        arg_key_start = payload.find(self.arg_key_start_token, pos)
+        block_end = payload.find(self.get_tool_close_tag(), pos)
+        if block_end >= 0 and (arg_key_start < 0 or block_end < arg_key_start):
+            if self._state.func_name is None:
+                self._state.func_name = payload[pos:block_end].strip()
+            self._state.phase = 'done'
+            self._payload_closed = True
+            return block_end
         if arg_key_start >= 0:
-            name = payload[pos:arg_key_start].strip()
-            return XmlParseResult(
-                arg_key_start,
-                next_phase='arg_start',
-                func_name=name or None,
-            )
+            if self._state.func_name is None:
+                self._state.func_name = payload[pos:arg_key_start].strip()
+            self._state.phase = 'arg_start'
+            return arg_key_start
 
-        remaining = payload[pos:]
-        if final and remaining.strip():
-            return XmlParseResult(len(payload), func_name=remaining.strip())
-        return XmlParseResult(None)
+        if final and pos < len(payload):
+            if self._state.func_name is None:
+                self._state.func_name = payload[pos:].strip()
+            return len(payload)
+        return None
 
-    def _consume_arg_start(self, payload: str, pos: int) -> XmlParseResult:
-        arg_key_start = payload.find('<arg_key>', pos)
+    def _consume_arg_start(self, payload: str, pos: int) -> int | None:
+        arg_key_start = payload.find(self.arg_key_start_token, pos)
         if arg_key_start < 0:
-            return XmlParseResult(None)
+            return None
+        self._state.phase = 'arg_name'
+        return arg_key_start + len(self.arg_key_start_token)
 
-        return XmlParseResult(arg_key_start + len('<arg_key>'), next_phase='arg_name')
-
-    def _consume_arg_name(self, payload: str, pos: int) -> XmlParseResult:
-        key_end = payload.find('</arg_key>', pos)
+    def _consume_arg_name(self, payload: str, pos: int) -> int | None:
+        key_end = payload.find(self.arg_key_end_token, pos)
         if key_end < 0:
-            return XmlParseResult(None)
-
-        value_start = payload.find('<arg_value>', key_end + len('</arg_key>'))
+            return None
+        value_start = payload.find(self.arg_value_start_token, key_end + len(self.arg_key_end_token))
         if value_start < 0:
-            return XmlParseResult(None)
+            return None
 
-        return XmlParseResult(
-            value_start + len('<arg_value>'),
-            next_phase='arg_value',
-            arg_name=payload[pos:key_end].strip(),
-        )
+        self._state.arg_name = payload[pos:key_end].strip()
+        self._arg_state = XmlArgState()
+        self._state.phase = 'arg_value'
+        return value_start + len(self.arg_value_start_token)
 
-    def _consume_arg_value(self, payload: str, pos: int) -> XmlParseResult:
-        value_end = payload.find('</arg_value>', pos)
-
+    def _consume_arg_value(self, payload: str, pos: int, json_fragments: list[str]) -> int | None:
+        value_end = payload.find(self.arg_value_end_token, pos)
         if value_end >= 0:
-            return XmlParseResult(
-                value_end + len('</arg_value>'),
-                next_phase='function',
-                arg_delta=payload[pos:value_end],
-                arg_closed=True,
-            )
+            self._consume_arg_delta(payload[pos:value_end], json_fragments)
+            self._finish_arg(json_fragments)
+            self._state.arg_name = None
+            self._state.phase = 'function'
+            return value_end + len(self.arg_value_end_token)
 
-        # Open value: keep any partial "</arg_value>" suffix buffered instead
-        # of emitting it as argument text.
-        raw_end = self._trim_partial_close_tag_suffix(payload, pos, '</arg_value>')
+        raw_end = self._trim_partial_close_tag_suffix(payload, pos, self.arg_value_end_token)
         if raw_end == pos:
-            return XmlParseResult(None)
-
-        return XmlParseResult(raw_end, arg_delta=payload[pos:raw_end], should_stop=True)
+            return None
+        self._consume_arg_delta(payload[pos:raw_end], json_fragments)
+        return raw_end
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
-        func_name, raw_args_dict = self._extract_complete_args(payload)
-        if not func_name:
+        func_name, raw_arg_pairs = self._extract_complete_args(payload)
+        if func_name is None:
             return None
-        args_dict = self._get_coerced_args(func_name, raw_args_dict)
-        return ToolCall(function=FunctionCall(name=func_name, arguments=json.dumps(args_dict, ensure_ascii=False)))
+        arg_pairs = self._get_coerced_args(func_name, raw_arg_pairs)
+        return ToolCall(function=FunctionCall(name=func_name, arguments=self._dump_argument_pairs(arg_pairs)))
 
-    def _validate_tool_payload(self, payload: str) -> bool:
-        return bool(self._complete_payload_pattern.fullmatch(payload))
+    def parse_tool_block(self, text: str, start: int, tool_calls: list[ToolCall]) -> int:
+        pos = start
+        close_tag = self.get_tool_close_tag()
+        while True:
+            arg_start = text.find(self.arg_key_start_token, pos)
+            close_at = text.find(close_tag, pos)
+            if close_at < 0:
+                return len(text)
+            if arg_start < 0 or close_at < arg_start:
+                break
 
-    def _extract_complete_args(self, payload: str) -> tuple[str | None, dict[str, str]]:
+            key_end = text.find(self.arg_key_end_token, arg_start + len(self.arg_key_start_token))
+            if key_end < 0:
+                return len(text)
+            value_start = text.find(self.arg_value_start_token, key_end + len(self.arg_key_end_token))
+            if value_start < 0:
+                return len(text)
+            value_end = text.find(self.arg_value_end_token, value_start + len(self.arg_value_start_token))
+            if value_end < 0:
+                return len(text)
+            pos = value_end + len(self.arg_value_end_token)
+
+        parsed = self.parse_tool_call_complete(text[start:close_at])
+        if parsed is not None:
+            tool_calls.append(parsed)
+        return close_at + len(close_tag)
+
+    def _extract_complete_args(self, payload: str) -> tuple[str | None, list[tuple[str, str]]]:
         payload = payload.strip()
         if not payload:
-            return None, {}
+            return None, []
 
-        args_start_idx = payload.find('<arg_key>')
+        args_start_idx = payload.find(self.arg_key_start_token)
         if args_start_idx >= 0:
             func_name = payload[:args_start_idx].strip()
             args_text = payload[args_start_idx:]
         else:
-            func_name = payload.strip()
+            func_name = payload
             args_text = ''
-        if not func_name:
-            return None, {}
 
-        args_dict: dict[str, str] = {}
+        arg_pairs: list[tuple[str, str]] = []
         search_idx = 0
         while True:
-            key_start = args_text.find('<arg_key>', search_idx)
+            key_start = args_text.find(self.arg_key_start_token, search_idx)
             if key_start < 0:
                 break
-            key_content_start = key_start + len('<arg_key>')
-            key_end = args_text.find('</arg_key>', key_content_start)
+            key_content_start = key_start + len(self.arg_key_start_token)
+            key_end = args_text.find(self.arg_key_end_token, key_content_start)
             if key_end < 0:
                 break
             key = args_text[key_content_start:key_end].strip()
-            value_start = args_text.find('<arg_value>', key_end + len('</arg_key>'))
+            value_start = args_text.find(self.arg_value_start_token, key_end + len(self.arg_key_end_token))
             if value_start < 0:
                 break
-            value_content_start = value_start + len('<arg_value>')
-            value_end = args_text.find('</arg_value>', value_content_start)
+            value_content_start = value_start + len(self.arg_value_start_token)
+            value_end = args_text.find(self.arg_value_end_token, value_content_start)
             if value_end < 0:
                 break
-            if key:
-                args_dict[key] = args_text[value_content_start:value_end]
-            search_idx = value_end + len('</arg_value>')
-        return func_name, args_dict
+            arg_pairs.append((key, args_text[value_content_start:value_end]))
+            search_idx = value_end + len(self.arg_value_end_token)
+        return func_name, arg_pairs
