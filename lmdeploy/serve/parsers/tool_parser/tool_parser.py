@@ -17,6 +17,10 @@ if TYPE_CHECKING:
 
 ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.parsers.tool_parser'])
 
+# Client-visible indices are non-negative; these values encode filtering state.
+_PENDING_INDEX = -2
+_REJECTED_INDEX = -1
+
 
 def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
     """Dump tools to a list of dicts to fit jinja chat template."""
@@ -76,14 +80,11 @@ class ToolParser:
         self._active_tool_call_id: str = ''
         self._active_tool_index: int = -1
         self._name_emitted: bool = False
-        self._emitted_tool_indices: set[int] = set()
         self._allowed_tool_names: set[str] | None = None
-        self._stream_internal_tool_index: int = -1
-        self._stream_accepted_tool_index: int = -1
-        self._stream_visible_tool_index: int = -1
-        self._stream_tool_name_seen: bool = False
-        self._pending_tool_deltas: list[DeltaToolCall] = []
-        self._next_stream_tool_index: int = 0
+        self._output_index: int = _PENDING_INDEX
+        self._next_output_index: int = 0
+        self._first_delta: bool = True
+        self._pending_deltas: list[DeltaToolCall] = []
         self._payload_closed: bool = False
         self.block_closed: bool = False
 
@@ -141,13 +142,28 @@ class ToolParser:
         raise NotImplementedError('ToolParser.get_tool_close_tag has not been implemented!')
 
     def begin_tool_block(self) -> None:
-        """Initialize one streamed tool block after its opening marker."""
+        """Initialize one streamed outer block after its opening marker.
+
+        Concrete parsers begin each logical call with ``_begin_call`` once its
+        call boundary is known.
+        """
         self._stream_close_tag = self.get_tool_close_tag()
-        self._active_tool_index += 1
-        self._active_tool_call_id = f'chatcmpl-tool-{shortuuid.random()}'
-        self._name_emitted = False
         self._payload_closed = False
         self.block_closed = False
+
+    def _begin_call(self, call_id: str | None = None) -> None:
+        """Initialize routing state for the next sequential tool call.
+
+        Args:
+            call_id: Model-provided call ID. An OpenAI-compatible ID is
+                generated when the protocol does not provide one.
+        """
+        self._active_tool_index += 1
+        self._active_tool_call_id = call_id if call_id is not None else f'chatcmpl-tool-{shortuuid.random()}'
+        self._name_emitted = False
+        self._output_index = self._active_tool_index if self._allowed_tool_names is None else _PENDING_INDEX
+        self._first_delta = True
+        self._pending_deltas.clear()
 
     def feed_tool_block(self, text: str, deltas: list[DeltaToolCall], *, final: bool) -> int:
         """Consume a buffered prefix of an open streamed tool block.
@@ -202,66 +218,65 @@ class ToolParser:
     def _close_tool_block(self) -> None:
         self.block_closed = True
         self._active_tool_call_id = ''
-        self._pending_tool_deltas.clear()
+        self._pending_deltas.clear()
 
     def _emit_delta(
         self,
         deltas: list[DeltaToolCall],
         *,
-        index: int,
-        tool_call_id: str,
         name: str | None = None,
         arguments: str | None = None,
     ) -> None:
-        """Append one source-order delta after request tool-name filtering."""
+        """Emit one fragment of the active call after tool-name filtering.
+
+        Arguments seen before the function name are buffered so accepted calls
+        retain source order. Rejected calls and their buffered arguments are
+        discarded. ``_begin_call`` must be called before the first fragment of
+        every logical tool call.
+        """
         if name is None and arguments is None:
             return
 
-        output_index = index
+        output_index = self._output_index
         hold_until_name = False
-        if name is None and index == self._stream_accepted_tool_index:
-            output_index = self._stream_visible_tool_index
-        elif self._allowed_tool_names is not None:
-            if index != self._stream_internal_tool_index:
-                self._pending_tool_deltas.clear()
-                self._stream_internal_tool_index = index
-                self._stream_visible_tool_index = -1
-                self._stream_tool_name_seen = False
-
-            if name is not None:
-                self._stream_tool_name_seen = True
-                if name not in self._allowed_tool_names:
-                    self._pending_tool_deltas.clear()
-                    return
-                output_index = self._next_stream_tool_index
-                self._next_stream_tool_index += 1
-                self._stream_accepted_tool_index = index
-                self._stream_visible_tool_index = output_index
-            elif self._stream_tool_name_seen:
-                if self._stream_visible_tool_index < 0:
-                    return
-                output_index = self._stream_visible_tool_index
-            else:
+        if output_index < 0:
+            if output_index == _REJECTED_INDEX:
+                return
+            if name is None:
+                # The placeholder is rewritten if the later name is accepted.
+                output_index = self._active_tool_index
                 hold_until_name = True
+            elif self._allowed_tool_names is None or name not in self._allowed_tool_names:
+                self._pending_deltas.clear()
+                self._output_index = _REJECTED_INDEX
+                return
+            else:
+                output_index = self._next_output_index
+                self._next_output_index += 1
+                self._output_index = output_index
 
-        first = index not in self._emitted_tool_indices
-        if first:
-            self._emitted_tool_indices.add(index)
+        if self._first_delta:
+            self._first_delta = False
+            call_id = self._active_tool_call_id
+            call_type = 'function'
+        else:
+            call_id = call_type = None
         delta = DeltaToolCall(
-            id=tool_call_id if first else None,
+            id=call_id,
             index=output_index,
-            type='function' if first else None,
+            type=call_type,
             function=DeltaFunctionCall(name=name, arguments=arguments),
         )
         if hold_until_name:
-            self._pending_tool_deltas.append(delta)
+            self._pending_deltas.append(delta)
             return
 
-        if name is not None and self._pending_tool_deltas:
-            for pending in self._pending_tool_deltas:
-                pending.index = output_index
-            deltas.extend(self._pending_tool_deltas)
-            self._pending_tool_deltas.clear()
+        if name is not None and self._pending_deltas:
+            # Flush arguments before a late name to preserve generation order.
+            for pending_delta in self._pending_deltas:
+                pending_delta.index = output_index
+            deltas.extend(self._pending_deltas)
+            self._pending_deltas.clear()
         deltas.append(delta)
 
     def parse_tool_block(self, text: str, start: int, tool_calls: list[ToolCall]) -> int:

@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import json
 
-import shortuuid
-
 from lmdeploy.deepseek_v32_encoding import dsml_token
 from lmdeploy.serve.openai.protocol import DeltaToolCall, FunctionCall, ToolCall
 
@@ -36,10 +34,6 @@ class DeepSeekV32ToolParser(ToolParser):
     def __init__(self) -> None:
         super().__init__()
         self._phase = 'invoke_start'
-        self._section_start_index = 0
-        self._invoke_count = 0
-        self._current_tool_index = -1
-        self._current_tool_id = ''
         self._current_param_is_string = False
         self._emitted_param_count = 0
         self._value_scanner = JsonValueScanner()
@@ -54,11 +48,7 @@ class DeepSeekV32ToolParser(ToolParser):
 
     def begin_tool_block(self) -> None:
         super().begin_tool_block()
-        self._section_start_index = self._active_tool_index
         self._phase = 'invoke_start'
-        self._invoke_count = 0
-        self._current_tool_index = -1
-        self._current_tool_id = ''
         self._current_param_is_string = False
         self._emitted_param_count = 0
         self._value_scanner.reset()
@@ -103,15 +93,9 @@ class DeepSeekV32ToolParser(ToolParser):
                 if header_end < 0:
                     break
                 name = self._attribute_value(text[pos:header_end], 'name')
-                self._current_tool_index = self._section_start_index + self._invoke_count
-                self._current_tool_id = (
-                    self._active_tool_call_id
-                    if self._invoke_count == 0 else f'chatcmpl-tool-{shortuuid.random()}'
-                )
+                self._begin_call()
                 self._emit_delta(
                     deltas,
-                    index=self._current_tool_index,
-                    tool_call_id=self._current_tool_id,
                     name=name,
                 )
                 self._emitted_param_count = 0
@@ -127,9 +111,6 @@ class DeepSeekV32ToolParser(ToolParser):
                 if text.startswith(invoke_close_tag, pos):
                     self._emit_arguments(deltas, '}' if self._emitted_param_count else '{}')
                     pos += len(invoke_close_tag)
-                    self._invoke_count += 1
-                    self._active_tool_index = self._current_tool_index
-                    self._current_tool_index = -1
                     self._phase = 'invoke_start'
                     continue
                 if text.startswith(parameter_tag, pos):
@@ -249,8 +230,6 @@ class DeepSeekV32ToolParser(ToolParser):
         if arguments:
             self._emit_delta(
                 deltas,
-                index=self._current_tool_index,
-                tool_call_id=self._current_tool_id,
                 arguments=arguments,
             )
 

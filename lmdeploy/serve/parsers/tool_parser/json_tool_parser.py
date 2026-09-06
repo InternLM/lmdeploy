@@ -23,6 +23,7 @@ class JsonToolParser(ToolParser):
 
     def begin_tool_block(self) -> None:
         super().begin_tool_block()
+        self._begin_call()
         self._phase = 'payload_start'
         self._json_key = None
         self._arguments_seen = False
@@ -102,8 +103,6 @@ class JsonToolParser(ToolParser):
                 if not self._name_emitted:
                     self._emit_delta(
                         deltas,
-                        index=self._active_tool_index,
-                        tool_call_id=self._active_tool_call_id,
                         name=name,
                     )
                     self._name_emitted = True
@@ -119,8 +118,6 @@ class JsonToolParser(ToolParser):
                     if self._phase == 'arguments_value' and pos > start:
                         self._emit_delta(
                             deltas,
-                            index=self._active_tool_index,
-                            tool_call_id=self._active_tool_call_id,
                             arguments=text[start:pos],
                         )
                     break
@@ -137,8 +134,6 @@ class JsonToolParser(ToolParser):
                 if self._phase == 'arguments_value' and pos > start:
                     self._emit_delta(
                         deltas,
-                        index=self._active_tool_index,
-                        tool_call_id=self._active_tool_call_id,
                         arguments=text[start:pos],
                     )
                 if self._value_scanner.complete:
@@ -157,8 +152,6 @@ class JsonToolParser(ToolParser):
                     if self._phase == 'arguments_value':
                         self._emit_delta(
                             deltas,
-                            index=self._active_tool_index,
-                            tool_call_id=self._active_tool_call_id,
                             arguments=text[start:pos],
                         )
                     continue
@@ -169,8 +162,6 @@ class JsonToolParser(ToolParser):
                     if self._phase == 'arguments_value' and pos > start:
                         self._emit_delta(
                             deltas,
-                            index=self._active_tool_index,
-                            tool_call_id=self._active_tool_call_id,
                             arguments=text[start:pos],
                         )
                     if self._value_scanner.complete:
@@ -205,8 +196,6 @@ class JsonToolParser(ToolParser):
         if not self._arguments_seen:
             self._emit_delta(
                 deltas,
-                index=self._active_tool_index,
-                tool_call_id=self._active_tool_call_id,
                 arguments='{}',
             )
         self._payload_closed = True

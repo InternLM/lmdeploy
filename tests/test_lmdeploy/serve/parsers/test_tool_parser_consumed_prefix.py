@@ -74,7 +74,20 @@ def test_json_arguments_before_name_stream_in_source_order_and_preserve_duplicat
     assert complete.function.arguments == raw_arguments
 
 
-def test_response_parser_drops_late_unknown_name_and_keeps_next_valid_call():
+@pytest.mark.parametrize(
+    'unknown_chunks',
+    [
+        (
+            '<tool_call>{"arguments":{"secret":1},',
+            '"name":"missing"}</tool_call>',
+        ),
+        (
+            '<tool_call>{"name":"missing",',
+            '"arguments":{"secret":1}}</tool_call>',
+        ),
+    ],
+)
+def test_response_parser_drops_unknown_name_and_keeps_next_valid_call(unknown_chunks):
     parser_cls = ResponseParserManager.get('default')
     old_reasoning_cls = parser_cls.reasoning_parser_cls
     old_tool_cls = parser_cls.tool_parser_cls
@@ -95,11 +108,7 @@ def test_response_parser_drops_late_unknown_name_and_keeps_next_valid_call():
 
         stream_parser = parser_cls(request)
         emitted = []
-        for chunk in (
-            '<tool_call>{"arguments":{"secret":1},',
-            '"name":"missing"}</tool_call>',
-            '<tool_call>{"name":"allowed","arguments":{"ok":1}}</tool_call>',
-        ):
+        for chunk in (*unknown_chunks, '<tool_call>{"name":"allowed","arguments":{"ok":1}}</tool_call>'):
             emitted.extend(stream_parser.stream_chunk(chunk, []))
         streamed_calls = [
             call

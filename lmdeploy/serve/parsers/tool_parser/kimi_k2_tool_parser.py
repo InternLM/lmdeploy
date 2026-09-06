@@ -26,10 +26,6 @@ class KimiK2ToolParser(ToolParser):
     def __init__(self) -> None:
         super().__init__()
         self._phase = 'call_start'
-        self._section_start_index = 0
-        self._stream_call_count = 0
-        self._current_tool_index = -1
-        self._current_tool_id = ''
         self._arguments_emitted = False
         self._value_scanner = JsonValueScanner()
 
@@ -41,10 +37,6 @@ class KimiK2ToolParser(ToolParser):
     def begin_tool_block(self) -> None:
         super().begin_tool_block()
         self._phase = 'call_start'
-        self._section_start_index = self._active_tool_index
-        self._stream_call_count = 0
-        self._current_tool_index = -1
-        self._current_tool_id = ''
         self._arguments_emitted = False
         self._value_scanner.reset()
 
@@ -83,12 +75,9 @@ class KimiK2ToolParser(ToolParser):
                 if argument_at < 0:
                     break
                 raw_id = text[pos:argument_at].strip()
-                self._current_tool_index = self._section_start_index + self._stream_call_count
-                self._current_tool_id = raw_id
+                self._begin_call(raw_id)
                 self._emit_delta(
                     deltas,
-                    index=self._current_tool_index,
-                    tool_call_id=raw_id,
                     name=self._resolve_function_name(raw_id),
                 )
                 self._arguments_emitted = False
@@ -157,9 +146,6 @@ class KimiK2ToolParser(ToolParser):
                 if not self._arguments_emitted:
                     self._emit_arguments(deltas, '{}')
                 pos += len(self.call_end)
-                self._stream_call_count += 1
-                self._active_tool_index = self._current_tool_index
-                self._current_tool_index = -1
                 self._phase = 'call_start'
                 continue
 
@@ -170,8 +156,6 @@ class KimiK2ToolParser(ToolParser):
             return
         self._emit_delta(
             deltas,
-            index=self._current_tool_index,
-            tool_call_id=self._current_tool_id,
             arguments=arguments,
         )
         self._arguments_emitted = True

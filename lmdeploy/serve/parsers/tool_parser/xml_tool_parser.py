@@ -62,6 +62,7 @@ class XmlToolParser(ToolParser):
 
     def begin_tool_block(self) -> None:
         super().begin_tool_block()
+        self._begin_call()
         self._reset_stream_state()
 
     def _reset_stream_state(self) -> None:
@@ -118,8 +119,6 @@ class XmlToolParser(ToolParser):
         if self._state.func_name is not None and not self._name_emitted:
             self._emit_delta(
                 deltas,
-                index=self._active_tool_index,
-                tool_call_id=self._active_tool_call_id,
                 name=self._state.func_name,
             )
             self._name_emitted = True
@@ -135,8 +134,6 @@ class XmlToolParser(ToolParser):
         if json_fragments:
             self._emit_delta(
                 deltas,
-                index=self._active_tool_index,
-                tool_call_id=self._active_tool_call_id,
                 arguments=''.join(json_fragments),
             )
         if final and should_close:
