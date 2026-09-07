@@ -37,6 +37,7 @@ else()
       "\$ORIGIN/../../nvidia/curand/lib")
 endif()
 
+# Use the final RPATH when building so installation can target the in-tree module itself.
 set_target_properties(_turbomind PROPERTIES
-    BUILD_RPATH "\$ORIGIN/lib"
+    BUILD_WITH_INSTALL_RPATH ON
     INSTALL_RPATH "${_INSTALL_CUDA_RPATH}")

@@ -583,7 +583,7 @@ __global__ void FindNvFp4GlobalScale_Kernel(float* global_scale, const T* x, Arr
         const int k = idx - m * K;
         absmax      = fmaxf(absmax, fabsf((float)x[stride[0] * m + stride[1] * k]));
     }
-    absmax = BlockReduce(temp).Reduce(absmax, cub::Max{});
+    absmax = BlockReduce(temp).Reduce(absmax, [](float a, float b) { return fmaxf(a, b); });
     if (threadIdx.x == 0) {
         atomicMax(reinterpret_cast<unsigned*>(global_scale), __float_as_uint(absmax));
     }

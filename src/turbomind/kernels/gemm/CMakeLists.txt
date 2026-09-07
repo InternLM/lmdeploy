@@ -171,15 +171,13 @@ add_library(gemm2_core
 target_link_libraries(gemm2_core PRIVATE parser nvidia::cutlass::cutlass CUDA::cuda_driver)
 target_compile_definitions(gemm2_core PRIVATE TM_GEMM_HAS_SM90_MIXED=${GEMM2_HAS_SM90_MIXED})
 
-# The registrar archives call back into gemm2_core, while gemm2_core needs every
-# file-scope Registrar retained. Rescan the whole group to resolve that static
-# dependency cycle without relying on consumer link order.
-set(_gemm2_link_group "gemm2_core")
-foreach(target IN LISTS GEMM2_KERNEL_TARGETS)
-    string(APPEND _gemm2_link_group ",$<LINK_LIBRARY:WHOLE_ARCHIVE,${target}>")
-endforeach()
+# Keep all registrations and place their archives before gemm2_core so the
+# kernel implementations' core symbols resolve in link order.
+list(JOIN GEMM2_KERNEL_TARGETS "," GEMM2_KERNEL_TARGET_LIST)
+set_property(TARGET gemm2_core PROPERTY INTERFACE_LINK_LIBRARIES_DIRECT
+        "$<LINK_LIBRARY:WHOLE_ARCHIVE,${GEMM2_KERNEL_TARGET_LIST}>")
 add_library(gemm2 INTERFACE)
-target_link_libraries(gemm2 INTERFACE "$<LINK_GROUP:RESCAN,${_gemm2_link_group}>")
+target_link_libraries(gemm2 INTERFACE gemm2_core)
 
 # cublasGemmGroupedBatchedEx (CUDA 12.5+): grouped batched GEMM for MoE
 if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL "12.5")
