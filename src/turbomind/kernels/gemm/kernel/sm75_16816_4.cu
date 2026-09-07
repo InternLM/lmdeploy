@@ -43,60 +43,97 @@ const Family u4_d_128{10, 190, kHalf, kHalf, 128, 8, 1, 1, true, false, supports
 const Family u4_g_128{11, 189, kHalf, kHalf, 128, 8, 1, 1, true, true, supports_u4<128, kHalf>, pack_u4<128, true>};
 const Family mxfp4{12, 190, kHalf, kHalf, 32, 8, 1, 1, true, true, supports_mxfp4, mxfp4_packer};
 
-template<int kGroupSize>
+// NVCC requires defaults on the template-template parameter.
+template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1> class K>
 void register_u4_d(Collector& c)
 {
-    // clang-format off
-        using C = Config_U4_d<kColMajor>;
-        c.add<C::Type<128, 256, 32, 1, 8, 1, D, D, 2, true, 1, kGroupSize, 128, 128>>();
-        c.add<C::Type<128, 128, 32, 1, 4, 1, D, D, 2, true, 1, kGroupSize,  64, 128>>();
-        c.add<C::Type< 96,  64, 64, 1, 2, 2, D, S, 2, true, 1, kGroupSize>>();
-        c.add<C::Type< 64, 128, 32, 1, 4, 1, D, D, 2, true, 1, kGroupSize,  32, 128>>();
-        c.add<C::Type< 64, 128, 32, 1, 4, 1, D, S, 2, true, 1, kGroupSize,  32, 128>>();
-        c.add<C::Type< 64,  64, 64, 1, 2, 2, D, S, 2, true, 1, kGroupSize>>();
-        c.add<C::Type< 48, 128, 64, 1, 4, 1, D, S, 2, true, 1, kGroupSize>>();
-        c.add<C::Type< 48,  64, 64, 1, 2, 2, D, S, 2, true, 1, kGroupSize>>();
-        c.add<C::Type< 32,  64, 64, 1, 2, 2, D, S, 2, true, 1, kGroupSize>>();
-        c.add<C::Type< 16, 128, 32, 1, 4, 1, D, S, 2, true, 1, kGroupSize>>();
-        c.add<C::Type< 16,  64, 64, 1, 2, 2, D, S, 2, true, 1, kGroupSize>>();
-    // clang-format on
+    using config::Config;
+    using config::Shape;
+
+    using _128x256x32_1x8x1 = Config<Shape<128, 256, 32>, Shape<1, 8, 1>>;
+    using _128x128x32_1x4x1 = Config<Shape<128, 128, 32>, Shape<1, 4, 1>>;
+    using _96x64x64_1x2x2 = Config<Shape<96, 64, 64>, Shape<1, 2, 2>>;
+    using _64x128x32_1x4x1 = Config<Shape<64, 128, 32>, Shape<1, 4, 1>>;
+    using _64x64x64_1x2x2 = Config<Shape<64, 64, 64>, Shape<1, 2, 2>>;
+    using _48x128x64_1x4x1 = Config<Shape<48, 128, 64>, Shape<1, 4, 1>>;
+    using _48x64x64_1x2x2 = Config<Shape<48, 64, 64>, Shape<1, 2, 2>>;
+    using _32x64x64_1x2x2 = Config<Shape<32, 64, 64>, Shape<1, 2, 2>>;
+    using _16x128x32_1x4x1 = Config<Shape<16, 128, 32>, Shape<1, 4, 1>>;
+    using _16x64x64_1x2x2 = Config<Shape<16, 64, 64>, Shape<1, 2, 2>>;
+
+    add<K<_128x256x32_1x8x1, 2, kColMajor, D, D, true, 128, 128>>(c);
+    add<K<_128x128x32_1x4x1, 2, kColMajor, D, D, true, 64, 128>>(c);
+    add<K<_96x64x64_1x2x2, 2, kColMajor, D, S, true>>(c);
+    add<K<_64x128x32_1x4x1, 2, kColMajor, D, D, true, 32, 128>>(c);
+    add<K<_64x128x32_1x4x1, 2, kColMajor, D, S, true, 32, 128>>(c);
+    add<K<_64x64x64_1x2x2, 2, kColMajor, D, S, true>>(c);
+    add<K<_48x128x64_1x4x1, 2, kColMajor, D, S, true>>(c);
+    add<K<_48x64x64_1x2x2, 2, kColMajor, D, S, true>>(c);
+    add<K<_32x64x64_1x2x2, 2, kColMajor, D, S, true>>(c);
+    add<K<_16x128x32_1x4x1, 2, kColMajor, D, S, true>>(c);
+    add<K<_16x64x64_1x2x2, 2, kColMajor, D, S, true>>(c);
 }
 
-template<int kGroupSize>
+// NVCC requires defaults on the template-template parameter.
+template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1> class K>
 void register_u4_g(Collector& c)
 {
-    // clang-format off
-        using C = Config_U4_g<kColMajor>;
-        c.add<C::Type<128, 256,  32, 2, 4, 1, D, D, 2,    0, 1, kGroupSize, 128, 128>>();
-        c.add<C::Type<128, 128,  32, 2, 2, 1, D, D, 2, true, 1, kGroupSize,  64, 128>>();
-        c.add<C::Type< 64, 128,  64, 1, 4, 1, D, S, 2, true, 1, kGroupSize,  32, 128>>();
-        c.add<C::Type< 64, 256,  32, 1, 4, 1, D, S, 2, true, 1, kGroupSize,  32, 256>>();
-        c.add<C::Type< 32,  64, 128, 1, 2, 2, D, S, 2, true, 1, kGroupSize>>();
-        c.add<C::Type< 32, 128,  64, 1, 4, 1, D, S, 2, true, 1, kGroupSize>>();
-        c.add<C::Type< 16, 128,  32, 1, 4, 1, D, S, 2, true, 1, kGroupSize>>();
-        c.add<C::Type< 16,  64,  64, 1, 2, 2, D, S, 2, true, 1, kGroupSize>>();
-    // clang-format on
+    using config::Config;
+    using config::Shape;
+
+    using _128x256x32_2x4x1 = Config<Shape<128, 256, 32>, Shape<2, 4, 1>>;
+    using _128x128x32_2x2x1 = Config<Shape<128, 128, 32>, Shape<2, 2, 1>>;
+    using _64x128x64_1x4x1 = Config<Shape<64, 128, 64>, Shape<1, 4, 1>>;
+    using _64x256x32_1x4x1 = Config<Shape<64, 256, 32>, Shape<1, 4, 1>>;
+    using _32x64x128_1x2x2 = Config<Shape<32, 64, 128>, Shape<1, 2, 2>>;
+    using _32x128x64_1x4x1 = Config<Shape<32, 128, 64>, Shape<1, 4, 1>>;
+    using _16x128x32_1x4x1 = Config<Shape<16, 128, 32>, Shape<1, 4, 1>>;
+    using _16x64x64_1x2x2 = Config<Shape<16, 64, 64>, Shape<1, 2, 2>>;
+
+    add<K<_128x256x32_2x4x1, 2, kColMajor, D, D, false, 128, 128>>(c);
+    add<K<_128x128x32_2x2x1, 2, kColMajor, D, D, true, 64, 128>>(c);
+    add<K<_64x128x64_1x4x1, 2, kColMajor, D, S, true, 32, 128>>(c);
+    add<K<_64x256x32_1x4x1, 2, kColMajor, D, S, true, 32, 256>>(c);
+    add<K<_32x64x128_1x2x2, 2, kColMajor, D, S, true>>(c);
+    add<K<_32x128x64_1x4x1, 2, kColMajor, D, S, true>>(c);
+    add<K<_16x128x32_1x4x1, 2, kColMajor, D, S, true>>(c);
+    add<K<_16x64x64_1x2x2, 2, kColMajor, D, S, true>>(c);
 }
 
+// NVCC requires defaults on the template-template parameter.
+template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1> class K>
 void register_mxfp4(Collector& c)
 {
-    // clang-format off
-        using C = Config_MXF4<kColMajor, 1>;
-        c.add<C::Type<128, 128, 32, 4, 1, 1, D, D, 2, true, 32, 1, 128, 64>>();
-        c.add<C::Type<128,  64, 32, 4, 1, 1, D, D, 2, true, 32, 1>>();
-        c.add<C::Type<128,  32, 32, 4, 1, 1, S, D, 2, true, 32, 1>>();
-        c.add<C::Type<128,  16, 32, 4, 1, 1, S, D, 2, true, 32, 1>>();
-        c.add<C::Type<128,  16, 64, 4, 1, 1, S, D, 2, true, 32, 1>>();
-        c.add<C::Type< 64,  16, 64, 4, 1, 1, S, D, 2, true, 32, 1>>();
-    // clang-format on
+    using config::Config;
+    using config::Shape;
+
+    using _128x128x32_4x1x1 = Config<Shape<128, 128, 32>, Shape<4, 1, 1>>;
+    using _128x64x32_4x1x1 = Config<Shape<128, 64, 32>, Shape<4, 1, 1>>;
+    using _128x32x32_4x1x1 = Config<Shape<128, 32, 32>, Shape<4, 1, 1>>;
+    using _128x16x32_4x1x1 = Config<Shape<128, 16, 32>, Shape<4, 1, 1>>;
+    using _128x16x64_4x1x1 = Config<Shape<128, 16, 64>, Shape<4, 1, 1>>;
+    using _64x16x64_4x1x1 = Config<Shape<64, 16, 64>, Shape<4, 1, 1>>;
+
+    add<K<_128x128x32_4x1x1, 2, kColMajor, D, D, true, 128, 64, 1>>(c);
+    add<K<_128x64x32_4x1x1, 2, kColMajor, D, D, true, -1, -1, 1>>(c);
+    add<K<_128x32x32_4x1x1, 2, kColMajor, S, D, true, -1, -1, 1>>(c);
+    add<K<_128x16x32_4x1x1, 2, kColMajor, S, D, true, -1, -1, 1>>(c);
+    add<K<_128x16x64_4x1x1, 2, kColMajor, S, D, true, -1, -1, 1>>(c);
+    add<K<_64x16x64_4x1x1, 2, kColMajor, S, D, true, -1, -1, 1>>(c);
 }
 
+using U4_D_32 = Config_U4_d<32>;
+using U4_G_32 = Config_U4_g<32>;
+using U4_D_128 = Config_U4_d<128>;
+using U4_G_128 = Config_U4_g<128>;
+using MXFP4 = Config_MXF4;
+
 Registrar reg[]{
-    {u4_d_32, [](Collector& c) { register_u4_d<32>(c); }},
-    {u4_g_32, [](Collector& c) { register_u4_g<32>(c); }},
-    {u4_d_128, [](Collector& c) { register_u4_d<128>(c); }},
-    {u4_g_128, [](Collector& c) { register_u4_g<128>(c); }},
-    {mxfp4, [](Collector& c) { register_mxfp4(c); }},
+    {u4_d_32, register_u4_d<U4_D_32::Type>},
+    {u4_g_32, register_u4_g<U4_G_32::Type>},
+    {u4_d_128, register_u4_d<U4_D_128::Type>},
+    {u4_g_128, register_u4_g<U4_G_128::Type>},
+    {mxfp4, register_mxfp4<MXFP4::Type>},
 };
 }  // namespace
 

@@ -421,46 +421,6 @@ __device__ __forceinline__ void rebase_publish_mixed_tma_descs(CUtensorMap*     
     __syncwarp();
 }
 
-template<class Tile, class = void>
-struct MixedMmaN {
-    static constexpr int value = 0;
-};
-
-template<class Tile>
-struct MixedMmaN<Tile, std::void_t<decltype(Tile::kMmaN)>> {
-    static constexpr int value = Tile::kMmaN;
-};
-
-template<class Tile, class = void>
-struct MixedSeparateMmaAtoms {
-    static constexpr bool value = false;
-};
-
-template<class Tile>
-struct MixedSeparateMmaAtoms<Tile, std::void_t<decltype(Tile::kSeparateMmaAtoms)>> {
-    static constexpr bool value = Tile::kSeparateMmaAtoms;
-};
-
-template<class Tile, class = void>
-struct MixedEpiM {
-    static constexpr int value = 0;
-};
-
-template<class Tile>
-struct MixedEpiM<Tile, std::void_t<decltype(Tile::kEpiM)>> {
-    static constexpr int value = Tile::kEpiM;
-};
-
-template<class Tile, class = void>
-struct MixedEpiPipeStages {
-    static constexpr int value = 0;
-};
-
-template<class Tile>
-struct MixedEpiPipeStages<Tile, std::void_t<decltype(Tile::kEpiPipeStages)>> {
-    static constexpr int value = Tile::kEpiPipeStages;
-};
-
 }  // namespace detail
 
 // Grouped descriptor preparation. Every mixed grouped instantiation publishes
@@ -525,40 +485,34 @@ __global__ void __launch_bounds__(32, 1) prepare_tma_descs_sm90_mixed(const __gr
     detail::rebase_publish_mixed_tma_descs<4>(out + g * kNum, smem_desc, templates, addrs, dims, strides, lane);
 }
 
-template<Order    raster_order,
-         int      multicast_a,
-         int      multicast_b,
-         bool     is_grouped_gemm_,
-         Striding kStridingA_,
-         class Tile_,
-         bool kSupportsFusedSilu_ = false,
-         class Format_            = Sm90U4Format<128>>
+template<class Format_, class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, int MulticastA, int MulticastB, int MmaN, bool SeparateMmaAtoms, int EpiM, int EpiStages_>
 struct GemmUniversalSm90Mixed {
     using Arch    = Sm90;
-    using Tile    = Tile_;
+    using Tile = typename Config_::Tile;
+    using Groups = typename Config_::Groups;
+    using RegisterConfig = typename Config_::RegisterConfig;
     using Format  = Format_;
     using Dequant = detail::Sm90MixedDequant<Format>;
 
-    static constexpr Order kRasterOrder       = raster_order;
-    static constexpr bool  is_grouped_gemm    = is_grouped_gemm_;
-    static constexpr bool  kSupportsFusedSilu = kSupportsFusedSilu_;
+    static constexpr Order kRasterOrder       = Raster;
+    static constexpr bool is_grouped_gemm = Mode != Striding::kFlat;
+    static constexpr bool  kSupportsFusedSilu = Silu;
 
-    static constexpr int kMulticastA = multicast_a;
-    static constexpr int kMulticastB = multicast_b;
+    static constexpr int kMulticastA = MulticastA;
+    static constexpr int kMulticastB = MulticastB;
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
-    static constexpr Striding kStridingA     = kStridingA_;
+    static constexpr Striding kStridingA     = Mode;
     static constexpr Striding kStridingB     = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
     static constexpr Striding kStridingC     = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
     static constexpr bool     kIndexedGather = kStridingA == Striding::kIndexed;
 
-    static_assert(is_grouped_gemm == (kStridingA != Striding::kFlat));
     static_assert(kMulticastA == 1 || kMulticastA == 2);
     static_assert(kMulticastB == 1 || kMulticastB == 2);
     static_assert(kClusterSize <= 2);
     // Public scheduler axes: M=BATCH, N=OUT.
-    static constexpr int TILE_M     = Tile::TILE_BATCH;
-    static constexpr int TILE_N     = Tile::TILE_OUT;
+    static constexpr int TILE_M     = Tile::M;
+    static constexpr int TILE_N     = Tile::N;
     static constexpr int TILE_K     = kSm90MixedTileK;
     static constexpr int kGroupSize = Format::kGroupSize;
 
@@ -573,19 +527,19 @@ struct GemmUniversalSm90Mixed {
     static constexpr int kQGroupsPerStage = kGroupSize < TILE_K ? TILE_K / kGroupSize : 1;
     static_assert(kKTilesPerQGroup * TILE_K == kQGroupsPerStage * kGroupSize);
 
-    using WGLayout      = typename Tile::WGLayout;
+    using WGLayout = cute::Layout<cute::Shape<cute::Int<Groups::M>, cute::Int<Groups::N>>>;
     using MmaElement    = std::conditional_t<Format::kDataType == kHalf, cutlass::half_t, cutlass::bfloat16_t>;
-    using Traits        = GmmaMixedTraits<TILE_N, TILE_M, Tile::Stages, WGLayout, detail::MixedMmaN<Tile>::value, MmaElement>;
+    using Traits        = GmmaMixedTraits<TILE_N, TILE_M, Stages_, WGLayout, MmaN, MmaElement>;
     using EpiElement    = typename Traits::ElementB;
     using AtomLayoutMNK = typename Traits::AtomLayoutMNK;
     using TiledMma      = typename Traits::TiledMma;
-    using MmaIssue      = detail::GmmaIssue<Traits::kMmaNSlices, detail::MixedSeparateMmaAtoms<Tile>::value, 2>;
+    using MmaIssue      = detail::GmmaIssue<Traits::kMmaNSlices, SeparateMmaAtoms, 2>;
 
     static constexpr int WARPGROUP_SIZE = 128;
     static constexpr int WARPGROUPS     = Traits::kMathWarpgroups;
     static constexpr int kMathThreads   = Traits::kMathThreads;
     static constexpr int CTA_SIZE       = Traits::kCtaThreads;
-    static constexpr int Stages         = Tile::Stages;
+    static constexpr int Stages         = Stages_;
 
     // Named-barrier IDs belong to this kernel. Gather and TMA producers are
     // mutually exclusive, so their producer coordination can share ID 8.
@@ -593,26 +547,19 @@ struct GemmUniversalSm90Mixed {
     static constexpr int kProducerBarrierId = 8;
     static_assert(kEpilogueBarrierId + WARPGROUPS <= kProducerBarrierId);
 
-    static constexpr int kProducerRegsTma     = Tile::kProducerRegsTma;
-    static constexpr int kMathRegsTma         = Tile::kMathRegsTma;
-    static constexpr int kProducerRegsIndexed = Tile::kProducerRegsIndexed;
-    static constexpr int kMathRegsIndexed     = Tile::kMathRegsIndexed;
-    static_assert(kProducerRegsTma >= 24 && kProducerRegsTma % 8 == 0);
-    static_assert(kMathRegsTma >= 24 && kMathRegsTma % 8 == 0 && kMathRegsTma <= 256);
-    static_assert(kProducerRegsIndexed >= 24 && kProducerRegsIndexed % 8 == 0);
-    static_assert(kMathRegsIndexed >= 24 && kMathRegsIndexed % 8 == 0 && kMathRegsIndexed <= 256);
-    static_assert(WARPGROUPS != 2 || kProducerRegsTma + 2 * kMathRegsTma <= 504);
-    static_assert(WARPGROUPS != 1 || kProducerRegsTma + kMathRegsTma <= 512);
-    static_assert(WARPGROUPS != 3 || kProducerRegsTma + 3 * kMathRegsTma <= 512);
-    static_assert(WARPGROUPS != 2 || kProducerRegsIndexed + 2 * kMathRegsIndexed <= 504);
-    static_assert(WARPGROUPS != 1 || kProducerRegsIndexed + kMathRegsIndexed <= 512);
-    static_assert(WARPGROUPS != 3 || kProducerRegsIndexed + 3 * kMathRegsIndexed <= 512);
+    static constexpr int kProducerRegs = RegisterConfig::Producer;
+    static constexpr int kMathRegs = RegisterConfig::Math;
+    static_assert(kProducerRegs >= 24 && kProducerRegs % 8 == 0);
+    static_assert(kMathRegs >= 24 && kMathRegs % 8 == 0 && kMathRegs <= 256);
+    static_assert(WARPGROUPS != 2 || kProducerRegs + 2 * kMathRegs <= 504);
+    static_assert(WARPGROUPS != 1 || kProducerRegs + kMathRegs <= 512);
+    static_assert(WARPGROUPS != 3 || kProducerRegs + 3 * kMathRegs <= 512);
     static constexpr int  kRestM                    = TILE_N / (64 * Traits::kAtomM);
     static constexpr bool kNeedsCrossWgSiluExchange = kSupportsFusedSilu && kRestM % 2 != 0 && Traits::kAtomM == 2 && WARPGROUPS == 2;
     static_assert(!kSupportsFusedSilu || kRestM % 2 == 0 || kNeedsCrossWgSiluExchange);
 
     using Cluster   = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
-    using Scheduler = TileScheduler<raster_order, Cluster, true, true, TILE_M, TILE_N, Stages, is_grouped_gemm>;
+    using Scheduler = TileScheduler<Raster, Cluster, true, true, TILE_M, TILE_N, Stages, is_grouped_gemm>;
 
     using MainloopPipeline = cutlass::PipelineTmaAsync<Stages>;
     using MainloopState    = typename MainloopPipeline::PipelineState;
@@ -721,7 +668,7 @@ struct GemmUniversalSm90Mixed {
     static constexpr int kEpiN           = 64 * kAtomM;
     static constexpr int kWgMLowBit      = kWgM & -kWgM;
     static constexpr int kEpiMDefault    = kWgMLowBit < 32 ? kWgMLowBit : 32;
-    static constexpr int kEpiM           = detail::MixedEpiM<Tile>::value ? detail::MixedEpiM<Tile>::value : kEpiMDefault;
+    static constexpr int kEpiM           = EpiM ? EpiM : kEpiMDefault;
     static constexpr int kEpiPlanes      = kSplitEpiM ? kAtomN : 1;
     static constexpr int kTmaStoreN      = 64;
     static constexpr int kTmaStoreM      = kEpiM <= 256 ? kEpiM : 64;
@@ -786,7 +733,7 @@ struct GemmUniversalSm90Mixed {
 
     static constexpr int GetEpiPipeStages()
     {
-        constexpr int requested = detail::MixedEpiPipeStages<Tile>::value;
+        constexpr int requested = EpiStages_;
         if constexpr (requested) {
             return requested;
         }
@@ -933,11 +880,11 @@ private:
                                         MainloopPipeline&  pipeline)
     {
         if constexpr (kIndexedGather) {
-            cutlass::arch::warpgroup_reg_dealloc<kProducerRegsIndexed>();
+            cutlass::arch::warpgroup_reg_dealloc<kProducerRegs>();
             run_producer_gather(tm_b, tm_v, param_A, sched, tensormap_buf, storage, pipeline);
         }
         else {
-            cutlass::arch::warpgroup_reg_dealloc<kProducerRegsTma>();
+            cutlass::arch::warpgroup_reg_dealloc<kProducerRegs>();
             run_producer_tma(tm_a, tm_b, tm_v, sched, tensormap_buf, storage, pipeline);
         }
     }
@@ -1249,10 +1196,10 @@ private:
                                         MainloopPipeline&  pipeline)
     {
         if constexpr (kIndexedGather) {
-            cutlass::arch::warpgroup_reg_alloc<kMathRegsIndexed>();
+            cutlass::arch::warpgroup_reg_alloc<kMathRegs>();
         }
         else {
-            cutlass::arch::warpgroup_reg_alloc<kMathRegsTma>();
+            cutlass::arch::warpgroup_reg_alloc<kMathRegs>();
         }
 
         const int mma_tid   = (int)threadIdx.x;

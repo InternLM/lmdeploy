@@ -20,18 +20,31 @@ constexpr auto e4m3_packer =
 
 const Family e4m3{2, 190, kHalf, kHalf, 128, 8, 1, 1, true, true, supports_e4m3<kHalf, 1>, e4m3_packer};
 
-Registrar reg(e4m3, [](Collector& c) {
-    if constexpr (1) {
-        // clang-format off
-        using C = Config_E4M3<kColMajor, 0>;
-        c.add<C::Type<128, 128,  16, 2, 2, 1, D, D, 2, true, 1, 128,  64, 128>>();
-        c.add<C::Type< 64, 128,  32, 1, 4, 1, D, S, 2, true, 1, 128,  32, 128>>();
-        c.add<C::Type< 32, 128,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        c.add<C::Type< 16, 128,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        c.add<C::Type<  8, 128,  64, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        // clang-format on
+// NVCC requires defaults on the template-template parameter.
+template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1> class K>
+void register_kernels(Collector& c)
+{
+    using config::Config;
+    using config::Shape;
+
+    using _128x128x16_2x2x1 = Config<Shape<128, 128, 16>, Shape<2, 2, 1>>;
+    using _64x128x32_1x4x1 = Config<Shape<64, 128, 32>, Shape<1, 4, 1>>;
+    using _32x128x32_1x4x1 = Config<Shape<32, 128, 32>, Shape<1, 4, 1>>;
+    using _16x128x32_1x4x1 = Config<Shape<16, 128, 32>, Shape<1, 4, 1>>;
+    using _8x128x64_1x4x1 = Config<Shape<8, 128, 64>, Shape<1, 4, 1>>;
+
+    {
+        add<K<_128x128x16_2x2x1, 2, kColMajor, D, D, true, 64, 128, 0>>(c);
+        add<K<_64x128x32_1x4x1, 2, kColMajor, D, S, true, 32, 128, 0>>(c);
+        add<K<_32x128x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_16x128x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_8x128x64_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
     }
-});
+}
+
+using E4M3 = Config_E4M3;
+
+Registrar reg(e4m3, register_kernels<E4M3::Type>);
 }  // namespace
 
 }  // namespace turbomind::gemm

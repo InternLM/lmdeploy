@@ -39,35 +39,30 @@
 #include "src/turbomind/kernels/gemm/gmma_fp8_sm90.h"
 #include "src/turbomind/kernels/gemm/prepare_moe_tma_descs_sm90_fp8.h"
 #include "src/turbomind/kernels/gemm/sm90_utils.h"
-#include "src/turbomind/kernels/gemm/sm90_v3_traits.h"
 
 namespace turbomind::gemm {
 
-template<Order    raster_order,
-         int      multicast_a,
-         int      multicast_b,
-         bool     is_grouped_gemm_,
-         Striding kStridingA_     = (is_grouped_gemm_ ? Striding::kIndexed : Striding::kFlat),
-         class Tile_              = Sm90V3Tile_128x192,
-         bool kSupportsFusedSilu_ = false>
+template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, int MulticastA, int MulticastB, int MaxOpN, int EpiStages_>
 struct GemmUniversalSm90_v3 {
 
     static constexpr bool kDebug = false;
 
     using Arch = Sm90;
-    using Tile = Tile_;
+    using Tile = typename Config_::Tile;
+    using Groups = typename Config_::Groups;
+    using RegisterConfig = typename Config_::RegisterConfig;
 
-    static constexpr bool kSupportsFusedSilu = kSupportsFusedSilu_;
+    static constexpr bool kSupportsFusedSilu = Silu;
 
-    static constexpr int TILE_M = Tile::TILE_M;
-    static constexpr int TILE_N = Tile::TILE_N;
-    static constexpr int TILE_K = Tile::TILE_K;
+    static constexpr int TILE_M = Tile::M;
+    static constexpr int TILE_N = Tile::N;
+    static constexpr int TILE_K = 128;
 
     // Fused SiLU pairs OP_N=128 gate/up atoms inside TILE_N=256.
-    static_assert(!kSupportsFusedSilu || (TILE_N == 256 && Tile::kMaxOpN == 128));
+    static_assert(!kSupportsFusedSilu || (TILE_N == 256 && MaxOpN == 128));
 
-    static constexpr int WG_M = Tile::WG_M;
-    static constexpr int WG_N = Tile::WG_N;
+    static constexpr int WG_M = Groups::M;
+    static constexpr int WG_N = Groups::N;
 
     static constexpr int WG_TILE_M = TILE_M / WG_M;
     static constexpr int WG_TILE_N = TILE_N / WG_N;
@@ -79,13 +74,13 @@ struct GemmUniversalSm90_v3 {
 
     static constexpr int WARPGROUPS = WG_M * WG_N;
 
-    static constexpr Order kRasterOrder = raster_order;
+    static constexpr Order kRasterOrder = Raster;
     static constexpr int   kAlgoFamily  = 1;
 
     // Each math WG owns one contiguous (M,N) tile.  The WGMMA atom is capped
-    // by kMaxOpN; any additional N atoms are CuTe rest-N fragments.
+    // by MaxOpN; any additional N atoms are CuTe rest-N fragments.
     using AtomLayoutMNK = cute::Layout<cute::Shape<cute::_1, cute::_1, cute::_1>>;
-    using Traits = GmmaFP8V3Traits<WG_TILE_M, WG_TILE_N, TILE_K, AtomLayoutMNK, Tile::kMaxOpN>;
+    using Traits = GmmaFP8V3Traits<WG_TILE_M, WG_TILE_N, TILE_K, AtomLayoutMNK, MaxOpN>;
     using TiledMma = typename Traits::TiledMma;
 
     static constexpr int OP_M = Traits::kOpM;
@@ -94,12 +89,12 @@ struct GemmUniversalSm90_v3 {
     static_assert(Traits::kRestM == 1);
     static_assert(!kSupportsFusedSilu || (OP_M == 64 && OP_N == 128 && Traits::kRestN == 2));
 
-    static constexpr int kMulticastA = multicast_a;
-    static constexpr int kMulticastB = multicast_b;
+    static constexpr int kMulticastA = MulticastA;
+    static constexpr int kMulticastB = MulticastB;
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
-    static constexpr int Stages = Tile::Stages;
+    static constexpr int Stages = Stages_;
 
     static constexpr bool kSplitK     = false;
     static constexpr int  kChunkSizeK = TILE_K;
@@ -120,16 +115,16 @@ struct GemmUniversalSm90_v3 {
 
     using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
 
-    static constexpr auto is_grouped_gemm = is_grouped_gemm_;
+    static constexpr bool is_grouped_gemm = Mode != Striding::kFlat;
 
-    static constexpr Striding kStridingA = kStridingA_;
-    static constexpr Striding kStridingB = is_grouped_gemm_ ? Striding::kBlocked : Striding::kFlat;
-    static constexpr Striding kStridingC = is_grouped_gemm_ ? Striding::kBlocked : Striding::kFlat;
+    static constexpr Striding kStridingA = Mode;
+    static constexpr Striding kStridingB = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
+    static constexpr Striding kStridingC = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
 
     // Indexed gather: A/U via cp.async; TMA only B (+ C store descs).
-    static constexpr bool kIndexedGather = (kStridingA_ == Striding::kIndexed);
+    static constexpr bool kIndexedGather = (Mode == Striding::kIndexed);
 
-    using Scheduler = TileScheduler<raster_order, Cluster, true, true, TILE_M, TILE_N, Stages, is_grouped_gemm>;
+    using Scheduler = TileScheduler<Raster, Cluster, true, true, TILE_M, TILE_N, Stages, is_grouped_gemm>;
 
     static constexpr int kMulticastU = is_grouped_gemm ? 1 : kMulticastA;
 
@@ -151,7 +146,7 @@ struct GemmUniversalSm90_v3 {
     static constexpr int kTmaTxBytes = kTmaTxBytesWeight + (kIndexedGather ? 0 : (kTmaTxBytesAct + kTmaTxBytesU));
 
     // Dense: unused. Grouped indexed: [B, C]. Grouped blocked: [A, B, U, C].
-    static constexpr int kTmaDescNum = !is_grouped_gemm_ ? 1 : (kIndexedGather ? 2 : 4);
+    static constexpr int kTmaDescNum = !is_grouped_gemm ? 1 : (kIndexedGather ? 2 : 4);
     static constexpr int kCdescIdx   = kIndexedGather ? 1 : 3;
 
     // One canonical SW128 K-major layout is shared by the TMA/cp.async
@@ -186,10 +181,10 @@ struct GemmUniversalSm90_v3 {
     static_assert(TILE_M * kGatherThreadsK % WARPGROUP_SIZE == 0);
     static_assert(cute::size(GatherTiledCopy{}) == WARPGROUP_SIZE);
 
-    // setmaxnreg: each WG ≤ 256, multiples of 8. Budgets come from Tile
-    // (TMA vs indexed). 2 math WGs pack to 504; 1 math WG packs to ≤512.
-    static constexpr int kProducerRegs = kIndexedGather ? Tile::kProducerRegsIndexed : Tile::kProducerRegsTma;
-    static constexpr int kMathRegs     = kIndexedGather ? Tile::kMathRegsIndexed : Tile::kMathRegsTma;
+    // setmaxnreg: each WG ≤ 256, multiples of 8. Config supplies the active budget.
+    // Two math WGs pack to 504; one math WG packs to ≤512.
+    static constexpr int kProducerRegs = RegisterConfig::Producer;
+    static constexpr int kMathRegs = RegisterConfig::Math;
     static_assert(kProducerRegs >= 24 && kProducerRegs % 8 == 0);
     static_assert(kMathRegs >= 24 && kMathRegs % 8 == 0 && kMathRegs <= 256);
     static_assert(WARPGROUPS == 1 || WARPGROUPS == 2);
@@ -199,7 +194,7 @@ struct GemmUniversalSm90_v3 {
     // Epilogue ring: every slot is exactly one 128-byte-wide output strip.
     // The tile trades epilogue overlap for mainloop stages under the SMEM cap.
     static constexpr int kEpiStoreBytes    = 128;
-    static constexpr int kEpiStorageStages = Tile::kEpiStorageStages;
+    static constexpr int kEpiStorageStages = EpiStages_;
     static constexpr int kEpiStageBytes    = WG_TILE_M * kEpiStoreBytes;
     static_assert(WG_TILE_M == OP_M);
 
@@ -291,11 +286,11 @@ struct GemmUniversalSm90_v3 {
                                 int                N,
                                 cudaStream_t       stream)
     {
-        if constexpr (!is_grouped_gemm_) {
+        if constexpr (!is_grouped_gemm) {
             return nullptr;
         }
         int* offsets = reinterpret_cast<int*>(out + num_groups * kTmaDescNum);
-        prepare_moe_tma_descs_sm90_fp8<kAlignmentU, kStridingA_><<<num_groups, 32, 0, stream>>>(
+        prepare_moe_tma_descs_sm90_fp8<kAlignmentU, Mode><<<num_groups, 32, 0, stream>>>(
             tm_a, tm_b, tm_u, tm_c, param_A, param_B, param_U, param_C, fuse_silu, out, offsets, M, N);
         return offsets;
     }

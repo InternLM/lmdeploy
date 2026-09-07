@@ -21,21 +21,37 @@ constexpr auto e4m3_packer =
 
 const Family e4m3{7, 190, kHalf, kHalf, 128, 8, 1, 1, true, true, supports_e4m3<kHalf, 1>, e4m3_packer};
 
-Registrar reg(e4m3, [](Collector& c) {
-    if constexpr (1) {
-        // clang-format off
-        using Cg = Config_E4M3<kColMajor, 1>;
-        c.add<Cg::Type<256, 128,  32, 8, 1, 1, D, D, 3, true, 128, 1, 128, 128>>();
-        c.add<Cg::Type<256,  64,  32, 4, 1, 1, D, D, 3, true, 128, 1, 128,  64>>();
-        c.add<Cg::Type<128, 128,  32, 4, 1, 1, D, D, 3, true, 128, 1, 128,  64>>();
-        c.add<Cg::Type<128,  96,  32, 4, 1, 1, D, D, 3, true, 128, 1>>();
-        c.add<Cg::Type<128,  64,  32, 4, 1, 1, D, D, 3, true, 128, 1>>();
-        c.add<Cg::Type<128,  32,  32, 4, 1, 1, S, D, 3, true, 128, 1>>();
-        c.add<Cg::Type<128,  16,  64, 4, 1, 1, S, D, 3, true, 128, 1>>();
-        c.add<Cg::Type<128,  16,  32, 4, 1, 1, S, D, 5, true, 128, 1>>();
-        // clang-format on
+// NVCC requires defaults on the template-template parameter.
+template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1> class K>
+void register_kernels(Collector& c)
+{
+    using config::Config;
+    using config::Shape;
+
+    using _256x128x32_8x1x1 = Config<Shape<256, 128, 32>, Shape<8, 1, 1>>;
+    using _256x64x32_4x1x1 = Config<Shape<256, 64, 32>, Shape<4, 1, 1>>;
+    using _128x128x32_4x1x1 = Config<Shape<128, 128, 32>, Shape<4, 1, 1>>;
+    using _128x96x32_4x1x1 = Config<Shape<128, 96, 32>, Shape<4, 1, 1>>;
+    using _128x64x32_4x1x1 = Config<Shape<128, 64, 32>, Shape<4, 1, 1>>;
+    using _128x32x32_4x1x1 = Config<Shape<128, 32, 32>, Shape<4, 1, 1>>;
+    using _128x16x64_4x1x1 = Config<Shape<128, 16, 64>, Shape<4, 1, 1>>;
+    using _128x16x32_4x1x1 = Config<Shape<128, 16, 32>, Shape<4, 1, 1>>;
+
+    {
+        add<K<_256x128x32_8x1x1, 3, kColMajor, D, D, true, 128, 128, 1>>(c);
+        add<K<_256x64x32_4x1x1, 3, kColMajor, D, D, true, 128, 64, 1>>(c);
+        add<K<_128x128x32_4x1x1, 3, kColMajor, D, D, true, 128, 64, 1>>(c);
+        add<K<_128x96x32_4x1x1, 3, kColMajor, D, D, true, -1, -1, 1>>(c);
+        add<K<_128x64x32_4x1x1, 3, kColMajor, D, D, true, -1, -1, 1>>(c);
+        add<K<_128x32x32_4x1x1, 3, kColMajor, S, D, true, -1, -1, 1>>(c);
+        add<K<_128x16x64_4x1x1, 3, kColMajor, S, D, true, -1, -1, 1>>(c);
+        add<K<_128x16x32_4x1x1, 5, kColMajor, S, D, true, -1, -1, 1>>(c);
     }
-});
+}
+
+using E4M3 = Config_E4M3;
+
+Registrar reg(e4m3, register_kernels<E4M3::Type>);
 }  // namespace
 
 }  // namespace turbomind::gemm

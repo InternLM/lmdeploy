@@ -172,32 +172,5 @@ struct GmmaMxFp4Fp8UnfoldedTraits: GmmaMxFp4Fp8TraitsBase<Out, Batch, Stages, WG
     static_assert(kExplicitRegs <= 255);
 };
 
-namespace detail {
-
-template<int Batch,
-         int Out,
-         int Stages,
-         class WGLayout,
-         int MmaN,
-         int ProducerRegsTma,
-         int MathRegsTma,
-         int ProducerRegsIndexed,
-         int MathRegsIndexed>
-struct MxFp4Fp8TileBase {
-    static constexpr int TILE_BATCH = Batch;
-    static constexpr int TILE_OUT = Out;
-    static constexpr int Stages_ = Stages;
-    using WGLayout_ = WGLayout;
-    static constexpr int kMmaN = MmaN;
-    static constexpr int kProducerRegsTma = ProducerRegsTma;
-    static constexpr int kMathRegsTma = MathRegsTma;
-    static constexpr int kProducerRegsIndexed = ProducerRegsIndexed;
-    static constexpr int kMathRegsIndexed = MathRegsIndexed;
-};
-
-}  // namespace detail
-
-using MxFp4Fp8Tile_64x128 =
-    detail::MxFp4Fp8TileBase<64, 128, 3, WG_1x2, 64, 40, 232, 72, 216>;
 
 }  // namespace turbomind::gemm

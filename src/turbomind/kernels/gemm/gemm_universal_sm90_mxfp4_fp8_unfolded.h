@@ -34,8 +34,12 @@ namespace turbomind::gemm {
 // plain BF16 output. Public (M,N,K) is (tokens,output,K), while WGMMA sees
 // packed weight as RS A and activation as descriptor B, hence the hardware
 // tile is (output,tokens,K).
-template<Order Raster, class Tile>
+template<class Config_, int Stages_, Order Raster, int MmaN>
 struct GemmUniversalSm90MxFp4Fp8Unfolded {
+    using Tile = typename Config_::Tile;
+    using Groups = typename Config_::Groups;
+    using RegisterConfig = typename Config_::RegisterConfig;
+    using WGLayout = cute::Layout<cute::Shape<cute::Int<Groups::M>, cute::Int<Groups::N>>>;
     using Arch = Sm90;
     using Format = Sm90MxFp4Fp8UnfoldedFormat;
     static constexpr Order kRasterOrder = Raster;
@@ -49,10 +53,10 @@ struct GemmUniversalSm90MxFp4Fp8Unfolded {
     static constexpr int kMulticastU = 1;
     static constexpr int kClusterSize = 1;
 
-    static constexpr int TILE_M = Tile::TILE_BATCH;
-    static constexpr int TILE_N = Tile::TILE_OUT;
+    static constexpr int TILE_M = Tile::M;
+    static constexpr int TILE_N = Tile::N;
     static constexpr int TILE_K = 128;
-    static constexpr int Stages = Tile::Stages_;
+    static constexpr int Stages = Stages_;
     static constexpr int kGroupSize = 32;
     static constexpr int kOutputFragmentN = 64;
     using Ta = __nv_fp8_e4m3;
@@ -65,8 +69,8 @@ struct GemmUniversalSm90MxFp4Fp8Unfolded {
     using Traits = GmmaMxFp4Fp8UnfoldedTraits<kComputeTileN,
                                       TILE_M,
                                       Stages,
-                                      typename Tile::WGLayout_,
-                                      Tile::kMmaN>;
+                                      WGLayout,
+                                      MmaN>;
     using TiledMma = typename Traits::TiledMma;
     using WgTiledMma = typename Traits::WgTiledMma;
     using ElementMmaA = typename Traits::ElementA;
@@ -89,12 +93,12 @@ struct GemmUniversalSm90MxFp4Fp8Unfolded {
     static constexpr int kEpilogueBarrierId = 1;
     static constexpr int kProducerBarrierId = 8;
     static_assert(kEpilogueBarrierId + WARPGROUPS <= kProducerBarrierId);
-    static constexpr int kProducerRegsTma = Tile::kProducerRegsTma;
-    static constexpr int kMathRegsTma = Tile::kMathRegsTma;
-    static_assert(kProducerRegsTma % 8 == 0 && kMathRegsTma % 8 == 0);
-    static_assert(kMathWarpGroups != 1 || kProducerRegsTma + kMathRegsTma <= 512);
-    static_assert(kMathWarpGroups != 2 || kProducerRegsTma + 2 * kMathRegsTma <= 504);
-    static_assert(kMathWarpGroups != 3 || kProducerRegsTma + 3 * kMathRegsTma <= 512);
+    static constexpr int kProducerRegs = RegisterConfig::Producer;
+    static constexpr int kMathRegs = RegisterConfig::Math;
+    static_assert(kProducerRegs % 8 == 0 && kMathRegs % 8 == 0);
+    static_assert(kMathWarpGroups != 1 || kProducerRegs + kMathRegs <= 512);
+    static_assert(kMathWarpGroups != 2 || kProducerRegs + 2 * kMathRegs <= 504);
+    static_assert(kMathWarpGroups != 3 || kProducerRegs + 3 * kMathRegs <= 512);
 
     using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
     using ClusterShape = cute::Shape<cute::Int<kClusterSize>, cute::_1, cute::_1>;
@@ -301,11 +305,11 @@ struct GemmUniversalSm90MxFp4Fp8Unfolded {
         }
         __syncthreads();
         if (wg_idx == kMathWarpGroups) {
-            cutlass::arch::warpgroup_reg_dealloc<kProducerRegsTma>();
+            cutlass::arch::warpgroup_reg_dealloc<kProducerRegs>();
             run_producer_tma(tm_a, tm_b, tm_v, tm_u, sched, storage, pipeline);
         }
         else {
-            cutlass::arch::warpgroup_reg_alloc<kMathRegsTma>();
+            cutlass::arch::warpgroup_reg_alloc<kMathRegs>();
             run_consumer(tm_c, sched, storage, pipeline);
         }
     }

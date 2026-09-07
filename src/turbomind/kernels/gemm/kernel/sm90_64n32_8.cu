@@ -3,12 +3,11 @@
 
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/convert.h"
+#include "src/turbomind/kernels/gemm/kernel/config.h"
 #include "src/turbomind/kernels/gemm/gemm_universal_sm90_fp8_wa.h"
 #include "src/turbomind/kernels/gemm/gemm_universal_sm90_v3.h"
 #include "src/turbomind/kernels/gemm/kernel/e4m3.h"
 #include "src/turbomind/kernels/gemm/kernel_impl_sm90.h"
-#include "src/turbomind/kernels/gemm/sm90_fp8_wa_traits.h"
-#include "src/turbomind/kernels/gemm/sm90_v3_traits.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
 #include "src/turbomind/kernels/gemm/registrar.h"
@@ -78,159 +77,215 @@ const Family w8a8{28,
                   true,
                   fp8_output_spec};
 
-// Registers one SM90 v3 (FP8 act-as-A) GMMA kernel. Grouped-ness follows striding:
-// dense (kFlat) is ungrouped, MoE (kIndexed / kBlocked) is grouped.
-template<Order raster, Striding striding, class Tile, bool silu = false, int mc_a = 1, int mc_b = 1>
-void add_v3(Collector& c)
+struct ConfigV3 {
+    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MaxOpN = 128, int EpiStages = 1>
+    using Type = KernelImplSm90<GemmUniversalSm90_v3<Config_, Stages, Raster, Mode, Silu, MulticastA, MulticastB, MaxOpN, EpiStages>>;
+};
+
+struct ConfigWA {
+    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1>
+    using Type = KernelImplSm90<GemmUniversalSm90_Fp8Wa<Config_, Stages, Raster, Mode, Silu, MulticastA, MulticastB>>;
+};
+
+// NVCC requires defaults on the template-template parameter.
+template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MaxOpN = 128, int EpiStages = 1> class K>
+void register_v3(Collector& c)
 {
-    constexpr bool grouped = striding != Striding::kFlat;
-    c.add<KernelImplSm90<GemmUniversalSm90_v3<raster, mc_a, mc_b, grouped, striding, Tile, silu>>>();
+    using config::Config;
+    using config::Registers;
+    using config::Shape;
+
+    {
+        using _128x192_2x1 = Config<Shape<128, 192>, Shape<2, 1>, Registers<40, 232>>;
+        using _128x256_2x1 = Config<Shape<128, 256>, Shape<2, 1>, Registers<40, 232>>;
+        using _64x256_1x1 = Config<Shape<64, 256>, Shape<1, 1>, Registers<40, 216>>;
+
+        // Catalog pruned per full-suite scans tmp/sm90_fp8wa_scan1 + tmp/sm90_v3_scan1
+        // (2026-07-26, H200, TP/EP 1/2/4/8, swizzle 0-3; both FP8 types exercise the same
+        // kernel pool, refs combined). `refs: N` = dispatch records (tuned selections);
+        // `// unused` entries had zero refs and are kept visible for re-enabling.
+        // --- Dense (v3 act-as-A), row raster ---
+        add<K<_128x192_2x1, 4, kRowMajor, Striding::kFlat, false, 1, 1, 192, 2>>(c);  // refs: 2319
+        add<K<_128x192_2x1, 4, kRowMajor, Striding::kFlat, false, 2, 1, 192, 2>>(c);  // refs: 1020
+        add<K<_128x192_2x1, 4, kRowMajor, Striding::kFlat, false, 1, 2, 192, 2>>(c);  // refs: 1813
+        add<K<_128x256_2x1, 4, kRowMajor, Striding::kFlat, true>>(c);  // refs: 4648
+        add<K<_128x256_2x1, 4, kRowMajor, Striding::kFlat, true, 2>>(c);  // refs: 86
+        add<K<_128x256_2x1, 4, kRowMajor, Striding::kFlat, true, 1, 2>>(c);  // refs: 1331
+        add<K<_64x256_1x1, 4, kRowMajor, Striding::kFlat, true, 1, 1, 128, 2>>(c);  // refs: 2133
+        add<K<_64x256_1x1, 4, kRowMajor, Striding::kFlat, true, 2, 1, 128, 2>>(c);  // refs: 76
+        add<K<_64x256_1x1, 4, kRowMajor, Striding::kFlat, true, 1, 2, 128, 2>>(c);  // refs: 323
+
+        // --- Dense grouped (kBlocked), col raster ---
+        add<K<_128x192_2x1, 4, kColMajor, Striding::kBlocked, false, 1, 1, 192, 2>>(c);  // refs: 1247
+        add<K<_128x192_2x1, 4, kColMajor, Striding::kBlocked, false, 2, 1, 192, 2>>(c);  // refs: 777
+        add<K<_128x192_2x1, 4, kColMajor, Striding::kBlocked, false, 1, 2, 192, 2>>(c);  // refs: 99
+
+    }
+    {
+        // --- Indexed (gate/up), col raster: N192 non-fused; N256 supports both epilogues ---
+        using _128x192_2x1 = Config<Shape<128, 192>, Shape<2, 1>, Registers<88, 208>>;
+        using _128x256_2x1 = Config<Shape<128, 256>, Shape<2, 1>, Registers<88, 208>>;
+        using _64x256_1x1 = Config<Shape<64, 256>, Shape<1, 1>, Registers<88, 216>>;
+
+        add<K<_128x192_2x1, 4, kColMajor, Striding::kIndexed, false, 1, 1, 192, 2>>(c);  // refs: 173
+        add<K<_128x192_2x1, 4, kColMajor, Striding::kIndexed, false, 2, 1, 192, 2>>(c);  // refs: 99
+        add<K<_128x192_2x1, 4, kColMajor, Striding::kIndexed, false, 1, 2, 192, 2>>(c);  // refs: 37
+        add<K<_128x256_2x1, 4, kColMajor, Striding::kIndexed, true>>(c);  // refs: 6903
+        add<K<_128x256_2x1, 4, kColMajor, Striding::kIndexed, true, 2>>(c);  // refs: 49
+        add<K<_128x256_2x1, 4, kColMajor, Striding::kIndexed, true, 1, 2>>(c);  // refs: 196
+        add<K<_64x256_1x1, 4, kColMajor, Striding::kIndexed, true, 1, 1, 128, 2>>(c);  // refs: 3824
+        add<K<_64x256_1x1, 4, kColMajor, Striding::kIndexed, true, 2, 1, 128, 2>>(c);  // refs: 67
+        add<K<_64x256_1x1, 4, kColMajor, Striding::kIndexed, true, 1, 2, 128, 2>>(c);  // refs: 16
+    }
 }
 
-// Registers one SM90 FP8 weight-as-A GMMA kernel. TILE_M < 64 dense tiles have no
-// (2,1) variant: the U multicast box (kBoxU*4/mcA) is not 128B-aligned.
-template<Order raster, Striding striding, class Tile, bool silu = false, int mc_a = 1, int mc_b = 1>
-void add_wa(Collector& c)
+// NVCC requires defaults on the template-template parameter.
+template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1> class K>
+void register_wa(Collector& c)
 {
-    constexpr bool grouped = striding != Striding::kFlat;
-    c.add<KernelImplSm90<GemmUniversalSm90_Fp8Wa<raster, mc_a, mc_b, grouped, striding, Tile, silu>>>();
+    using config::Config;
+    using config::Registers;
+    using config::Shape;
+
+    {
+        using _8x128_1x1 = Config<Shape<8, 128>, Shape<1, 1>, Registers<40, 168>>;
+        using _16x128_1x1 = Config<Shape<16, 128>, Shape<1, 1>, Registers<40, 168>>;
+        using _32x128_1x1 = Config<Shape<32, 128>, Shape<1, 1>, Registers<40, 168>>;
+        using _64x128_1x1 = Config<Shape<64, 128>, Shape<1, 1>, Registers<40, 208>>;
+        using _8x256_1x1 = Config<Shape<8, 256>, Shape<1, 1>, Registers<40, 168>>;
+        using _16x256_1x1 = Config<Shape<16, 256>, Shape<1, 1>, Registers<40, 168>>;
+        using _32x256_1x1 = Config<Shape<32, 256>, Shape<1, 1>, Registers<40, 168>>;
+        using _64x256_1x1 = Config<Shape<64, 256>, Shape<1, 1>, Registers<40, 208>>;
+
+        // --- Weight-as-A FP8, dense (kFlat), row raster ---
+        // OUT=128: plain bf16 epilogue. TILE_M<64: no (2,1) (TMA 128B alignment).
+        add<K<_8x128_1x1, 4, kRowMajor, Striding::kFlat>>(c);  // refs: 5602
+        add<K<_8x128_1x1, 4, kRowMajor, Striding::kFlat, false, 1, 2>>(c);  // refs: 266
+        add<K<_16x128_1x1, 4, kRowMajor, Striding::kFlat>>(c);  // refs: 1745
+        add<K<_16x128_1x1, 4, kRowMajor, Striding::kFlat, false, 1, 2>>(c);  // refs: 66
+        add<K<_32x128_1x1, 4, kRowMajor, Striding::kFlat>>(c);  // refs: 1516
+        add<K<_32x128_1x1, 4, kRowMajor, Striding::kFlat, false, 1, 2>>(c);  // refs: 145
+        add<K<_64x128_1x1, 4, kRowMajor, Striding::kFlat>>(c);  // refs: 1403
+        add<K<_64x128_1x1, 4, kRowMajor, Striding::kFlat, false, 2>>(c);  // refs: 46
+        add<K<_64x128_1x1, 4, kRowMajor, Striding::kFlat, false, 1, 2>>(c);  // refs: 211
+        // OUT=256: plain bf16 and fused SiLU->FP8 epilogues.
+        add<K<_8x256_1x1, 3, kRowMajor, Striding::kFlat, true>>(c);  // refs: 1556
+        add<K<_8x256_1x1, 3, kRowMajor, Striding::kFlat, true, 1, 2>>(c);  // refs: 111
+        add<K<_16x256_1x1, 3, kRowMajor, Striding::kFlat, true>>(c);  // refs: 329
+        add<K<_16x256_1x1, 3, kRowMajor, Striding::kFlat, true, 1, 2>>(c);  // refs: 25
+        add<K<_32x256_1x1, 3, kRowMajor, Striding::kFlat, true>>(c);  // refs: 221
+        // add<K<_32x256_1x1, 3, kRowMajor, Striding::kFlat, true, 1, 2>>(c);  // unused
+        add<K<_64x256_1x1, 3, kRowMajor, Striding::kFlat, true>>(c);  // refs: 13
+        // add<K<_64x256_1x1, 3, kRowMajor, Striding::kFlat, true, 2>>(c);  // unused
+        // add<K<_64x256_1x1, 3, kRowMajor, Striding::kFlat, true, 1, 2>>(c);  // unused
+
+        // --- Weight-as-A FP8, blocked, col raster ---
+        add<K<_8x128_1x1, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 37
+        // add<K<_8x128_1x1, 4, kColMajor, Striding::kBlocked, false, 2>>(c);  // unused
+        // add<K<_8x128_1x1, 4, kColMajor, Striding::kBlocked, false, 1, 2>>(c);  // unused
+        add<K<_16x128_1x1, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 36
+        // add<K<_16x128_1x1, 4, kColMajor, Striding::kBlocked, false, 2>>(c);  // unused
+        // add<K<_16x128_1x1, 4, kColMajor, Striding::kBlocked, false, 1, 2>>(c);  // unused
+        add<K<_32x128_1x1, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 63
+        // add<K<_32x128_1x1, 4, kColMajor, Striding::kBlocked, false, 2>>(c);  // unused
+        // add<K<_32x128_1x1, 4, kColMajor, Striding::kBlocked, false, 1, 2>>(c);  // unused
+        add<K<_64x128_1x1, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 10
+        // add<K<_64x128_1x1, 4, kColMajor, Striding::kBlocked, false, 2>>(c);  // unused
+        // add<K<_64x128_1x1, 4, kColMajor, Striding::kBlocked, false, 1, 2>>(c);  // unused
+        add<K<_8x256_1x1, 3, kColMajor, Striding::kBlocked>>(c);  // refs: 1377
+        add<K<_8x256_1x1, 3, kColMajor, Striding::kBlocked, false, 2>>(c);  // refs: 2
+        // add<K<_8x256_1x1, 3, kColMajor, Striding::kBlocked, false, 1, 2>>(c);  // unused
+        add<K<_16x256_1x1, 3, kColMajor, Striding::kBlocked>>(c);  // refs: 439
+        // add<K<_16x256_1x1, 3, kColMajor, Striding::kBlocked, false, 2>>(c);  // unused
+        // add<K<_16x256_1x1, 3, kColMajor, Striding::kBlocked, false, 1, 2>>(c);  // unused
+        add<K<_32x256_1x1, 3, kColMajor, Striding::kBlocked>>(c);  // refs: 87
+        // add<K<_32x256_1x1, 3, kColMajor, Striding::kBlocked, false, 2>>(c);  // unused
+        // add<K<_32x256_1x1, 3, kColMajor, Striding::kBlocked, false, 1, 2>>(c);  // unused
+        // add<K<_64x256_1x1, 3, kColMajor, Striding::kBlocked>>(c);  // unused
+        // add<K<_64x256_1x1, 3, kColMajor, Striding::kBlocked, false, 2>>(c);  // unused
+        // add<K<_64x256_1x1, 3, kColMajor, Striding::kBlocked, false, 1, 2>>(c);  // unused
+
+    }
+    {
+        // --- Weight-as-A FP8, indexed (gate/up), col raster ---
+        using _8x128_1x1 = Config<Shape<8, 128>, Shape<1, 1>, Registers<88, 168>>;
+        using _16x128_1x1 = Config<Shape<16, 128>, Shape<1, 1>, Registers<88, 168>>;
+        using _32x128_1x1 = Config<Shape<32, 128>, Shape<1, 1>, Registers<88, 168>>;
+        using _64x128_1x1 = Config<Shape<64, 128>, Shape<1, 1>, Registers<88, 208>>;
+        using _8x256_1x1 = Config<Shape<8, 256>, Shape<1, 1>, Registers<88, 168>>;
+        using _16x256_1x1 = Config<Shape<16, 256>, Shape<1, 1>, Registers<88, 168>>;
+        using _32x256_1x1 = Config<Shape<32, 256>, Shape<1, 1>, Registers<88, 168>>;
+        // using _64x256_1x1 = Config<Shape<64, 256>, Shape<1, 1>, Registers<88, 208>>;
+        using _64x256_1x2 = Config<Shape<64, 256>, Shape<1, 2>, Registers<40, 232>>;
+        using _128x128_2x1 = Config<Shape<128, 128>, Shape<2, 1>, Registers<40, 232>>;
+        using _128x256_2x1 = Config<Shape<128, 256>, Shape<2, 1>, Registers<40, 232>>;
+
+        add<K<_8x128_1x1, 4, kColMajor, Striding::kIndexed>>(c);  // refs: 570
+        // add<K<_8x128_1x1, 4, kColMajor, Striding::kIndexed, false, 2>>(c);  // unused
+        add<K<_8x128_1x1, 4, kColMajor, Striding::kIndexed, false, 1, 2>>(c);  // refs: 20
+        add<K<_16x128_1x1, 4, kColMajor, Striding::kIndexed>>(c);  // refs: 157
+        // add<K<_16x128_1x1, 4, kColMajor, Striding::kIndexed, false, 2>>(c);  // unused
+        // add<K<_16x128_1x1, 4, kColMajor, Striding::kIndexed, false, 1, 2>>(c);  // unused
+        add<K<_32x128_1x1, 4, kColMajor, Striding::kIndexed>>(c);  // refs: 96
+        // add<K<_32x128_1x1, 4, kColMajor, Striding::kIndexed, false, 2>>(c);  // unused
+        // add<K<_32x128_1x1, 4, kColMajor, Striding::kIndexed, false, 1, 2>>(c);  // unused
+        add<K<_64x128_1x1, 4, kColMajor, Striding::kIndexed>>(c);  // refs: 36
+        // add<K<_64x128_1x1, 4, kColMajor, Striding::kIndexed, false, 2>>(c);  // unused
+        // add<K<_64x128_1x1, 4, kColMajor, Striding::kIndexed, false, 1, 2>>(c);  // unused
+        // Indexed OUT=256 kernels also select the epilogue at runtime.
+        add<K<_8x256_1x1, 3, kColMajor, Striding::kIndexed, true>>(c);  // refs: 4553
+        add<K<_8x256_1x1, 3, kColMajor, Striding::kIndexed, true, 2>>(c);  // refs: 32
+        add<K<_8x256_1x1, 3, kColMajor, Striding::kIndexed, true, 1, 2>>(c);  // refs: 4
+        add<K<_16x256_1x1, 3, kColMajor, Striding::kIndexed, true>>(c);  // refs: 1253
+        add<K<_16x256_1x1, 3, kColMajor, Striding::kIndexed, true, 2>>(c);  // refs: 7
+        // add<K<_16x256_1x1, 3, kColMajor, Striding::kIndexed, true, 1, 2>>(c);  // unused
+        add<K<_32x256_1x1, 3, kColMajor, Striding::kIndexed, true>>(c);  // refs: 340
+        // add<K<_32x256_1x1, 3, kColMajor, Striding::kIndexed, true, 2>>(c);  // unused
+        // add<K<_32x256_1x1, 3, kColMajor, Striding::kIndexed, true, 1, 2>>(c);  // unused
+        // add<K<_64x256_1x1, 3, kColMajor, Striding::kIndexed, true>>(c);  // unused
+        // add<K<_64x256_1x1, 3, kColMajor, Striding::kIndexed, true, 2>>(c);  // unused
+        // add<K<_64x256_1x1, 3, kColMajor, Striding::kIndexed, true, 1, 2>>(c);  // unused
+
+        // --- 2 math WGs (per-WG BATCH=64): 128x128 plain, 128x256 fused, 64x256_n2 ---
+        add<K<_64x256_1x2, 3, kRowMajor, Striding::kFlat, true>>(c);
+        add<K<_64x256_1x2, 3, kRowMajor, Striding::kFlat, true, 2>>(c);
+        add<K<_64x256_1x2, 3, kRowMajor, Striding::kFlat, true, 1, 2>>(c);
+        add<K<_128x128_2x1, 3, kRowMajor, Striding::kFlat>>(c);
+        add<K<_128x128_2x1, 3, kRowMajor, Striding::kFlat, false, 2>>(c);
+        add<K<_128x128_2x1, 3, kRowMajor, Striding::kFlat, false, 1, 2>>(c);
+        add<K<_128x256_2x1, 3, kRowMajor, Striding::kFlat, true>>(c);
+        add<K<_128x256_2x1, 3, kRowMajor, Striding::kFlat, true, 2>>(c);
+        add<K<_128x256_2x1, 3, kRowMajor, Striding::kFlat, true, 1, 2>>(c);
+        add<K<_128x128_2x1, 3, kColMajor, Striding::kBlocked>>(c);
+        add<K<_128x128_2x1, 3, kColMajor, Striding::kBlocked, false, 2>>(c);
+        add<K<_128x128_2x1, 3, kColMajor, Striding::kBlocked, false, 1, 2>>(c);
+        add<K<_128x256_2x1, 3, kColMajor, Striding::kBlocked>>(c);
+        add<K<_128x256_2x1, 3, kColMajor, Striding::kBlocked, false, 2>>(c);
+        add<K<_128x256_2x1, 3, kColMajor, Striding::kBlocked, false, 1, 2>>(c);
+        add<K<_64x256_1x2, 3, kColMajor, Striding::kBlocked>>(c);
+        add<K<_64x256_1x2, 3, kColMajor, Striding::kBlocked, false, 2>>(c);
+        add<K<_64x256_1x2, 3, kColMajor, Striding::kBlocked, false, 1, 2>>(c);
+    }
+    {
+        using _128x128_2x1 = Config<Shape<128, 128>, Shape<2, 1>, Registers<88, 208>>;
+        using _128x256_2x1 = Config<Shape<128, 256>, Shape<2, 1>, Registers<88, 208>>;
+        using _64x256_1x2 = Config<Shape<64, 256>, Shape<1, 2>, Registers<88, 208>>;
+
+        add<K<_128x128_2x1, 3, kColMajor, Striding::kIndexed>>(c);
+        add<K<_128x128_2x1, 3, kColMajor, Striding::kIndexed, false, 2>>(c);
+        add<K<_128x128_2x1, 3, kColMajor, Striding::kIndexed, false, 1, 2>>(c);
+        add<K<_128x256_2x1, 3, kColMajor, Striding::kIndexed, true>>(c);
+        add<K<_128x256_2x1, 3, kColMajor, Striding::kIndexed, true, 2>>(c);
+        add<K<_128x256_2x1, 3, kColMajor, Striding::kIndexed, true, 1, 2>>(c);
+        add<K<_64x256_1x2, 3, kColMajor, Striding::kIndexed, true>>(c);
+        add<K<_64x256_1x2, 3, kColMajor, Striding::kIndexed, true, 2>>(c);
+        add<K<_64x256_1x2, 3, kColMajor, Striding::kIndexed, true, 1, 2>>(c);
+    }
 }
 
 Registrar reg(w8a8, [](Collector& c) {
-    // Catalog pruned per full-suite scans tmp/sm90_fp8wa_scan1 + tmp/sm90_v3_scan1
-    // (2026-07-26, H200, TP/EP 1/2/4/8, swizzle 0-3; both FP8 types exercise the same
-    // kernel pool, refs combined). `refs: N` = dispatch records (tuned selections);
-    // `// unused` entries had zero refs and are kept visible for re-enabling.
-    // --- Dense (v3 act-as-A), row raster ---
-    add_v3<kRowMajor, Striding::kFlat, Sm90V3Tile_128x192>(c);               // refs: 2319
-    add_v3<kRowMajor, Striding::kFlat, Sm90V3Tile_128x192, false, 2>(c);     // refs: 1020
-    add_v3<kRowMajor, Striding::kFlat, Sm90V3Tile_128x192, false, 1, 2>(c);  // refs: 1813
-    add_v3<kRowMajor, Striding::kFlat, Sm90V3Tile_128x256, true>(c);         // refs: 4648
-    add_v3<kRowMajor, Striding::kFlat, Sm90V3Tile_128x256, true, 2>(c);      // refs: 86
-    add_v3<kRowMajor, Striding::kFlat, Sm90V3Tile_128x256, true, 1, 2>(c);   // refs: 1331
-    add_v3<kRowMajor, Striding::kFlat, Sm90V3Tile_64x256, true>(c);          // refs: 2133
-    add_v3<kRowMajor, Striding::kFlat, Sm90V3Tile_64x256, true, 2>(c);       // refs: 76
-    add_v3<kRowMajor, Striding::kFlat, Sm90V3Tile_64x256, true, 1, 2>(c);    // refs: 323
-
-    // --- Dense grouped (kBlocked), col raster ---
-    add_v3<kColMajor, Striding::kBlocked, Sm90V3Tile_128x192>(c);               // refs: 1247
-    add_v3<kColMajor, Striding::kBlocked, Sm90V3Tile_128x192, false, 2>(c);     // refs: 777
-    add_v3<kColMajor, Striding::kBlocked, Sm90V3Tile_128x192, false, 1, 2>(c);  // refs: 99
-
-    // --- Indexed (gate/up), col raster: N192 non-fused; N256 supports both epilogues ---
-    add_v3<kColMajor, Striding::kIndexed, Sm90V3Tile_128x192>(c);               // refs: 173
-    add_v3<kColMajor, Striding::kIndexed, Sm90V3Tile_128x192, false, 2>(c);     // refs: 99
-    add_v3<kColMajor, Striding::kIndexed, Sm90V3Tile_128x192, false, 1, 2>(c);  // refs: 37
-    add_v3<kColMajor, Striding::kIndexed, Sm90V3Tile_128x256, true>(c);         // refs: 6903
-    add_v3<kColMajor, Striding::kIndexed, Sm90V3Tile_128x256, true, 2>(c);      // refs: 49
-    add_v3<kColMajor, Striding::kIndexed, Sm90V3Tile_128x256, true, 1, 2>(c);   // refs: 196
-    add_v3<kColMajor, Striding::kIndexed, Sm90V3Tile_64x256, true>(c);          // refs: 3824
-    add_v3<kColMajor, Striding::kIndexed, Sm90V3Tile_64x256, true, 2>(c);       // refs: 67
-    add_v3<kColMajor, Striding::kIndexed, Sm90V3Tile_64x256, true, 1, 2>(c);    // refs: 16
-
-    // --- Weight-as-A FP8, dense (kFlat), row raster ---
-    // OUT=128: plain bf16 epilogue. TILE_M<64: no (2,1) (TMA 128B alignment).
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_8x128>(c);                // refs: 5602
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_8x128, false, 1, 2>(c);   // refs: 266
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_16x128>(c);               // refs: 1745
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_16x128, false, 1, 2>(c);  // refs: 66
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_32x128>(c);               // refs: 1516
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_32x128, false, 1, 2>(c);  // refs: 145
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_64x128>(c);               // refs: 1403
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_64x128, false, 2>(c);     // refs: 46
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_64x128, false, 1, 2>(c);  // refs: 211
-    // OUT=256: plain bf16 and fused SiLU->FP8 epilogues.
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_8x256, true>(c);         // refs: 1556
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_8x256, true, 1, 2>(c);   // refs: 111
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_16x256, true>(c);        // refs: 329
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_16x256, true, 1, 2>(c);  // refs: 25
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_32x256, true>(c);        // refs: 221
-    // add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_32x256, true, 1, 2>(c);  // unused
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_64x256, true>(c);  // refs: 13
-    // add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_64x256, true, 2>(c);  // unused
-    // add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_64x256, true, 1, 2>(c);  // unused
-
-    // --- Weight-as-A FP8, blocked, col raster ---
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_8x128>(c);  // refs: 37
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_8x128, false, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_8x128, false, 1, 2>(c);  // unused
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_16x128>(c);  // refs: 36
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_16x128, false, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_16x128, false, 1, 2>(c);  // unused
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_32x128>(c);  // refs: 63
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_32x128, false, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_32x128, false, 1, 2>(c);  // unused
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_64x128>(c);  // refs: 10
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_64x128, false, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_64x128, false, 1, 2>(c);  // unused
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_8x256>(c);            // refs: 1377
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_8x256, false, 2>(c);  // refs: 2
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_8x256, false, 1, 2>(c);  // unused
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_16x256>(c);  // refs: 439
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_16x256, false, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_16x256, false, 1, 2>(c);  // unused
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_32x256>(c);  // refs: 87
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_32x256, false, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_32x256, false, 1, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_64x256>(c);  // unused
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_64x256, false, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_64x256, false, 1, 2>(c);  // unused
-
-    // --- Weight-as-A FP8, indexed (gate/up), col raster ---
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_8x128>(c);  // refs: 570
-    // add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_8x128, false, 2>(c);  // unused
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_8x128, false, 1, 2>(c);  // refs: 20
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_16x128>(c);              // refs: 157
-    // add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_16x128, false, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_16x128, false, 1, 2>(c);  // unused
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_32x128>(c);  // refs: 96
-    // add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_32x128, false, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_32x128, false, 1, 2>(c);  // unused
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_64x128>(c);  // refs: 36
-    // add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_64x128, false, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_64x128, false, 1, 2>(c);  // unused
-    // Indexed OUT=256 kernels also select the epilogue at runtime.
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_8x256, true>(c);        // refs: 4553
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_8x256, true, 2>(c);     // refs: 32
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_8x256, true, 1, 2>(c);  // refs: 4
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_16x256, true>(c);       // refs: 1253
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_16x256, true, 2>(c);    // refs: 7
-    // add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_16x256, true, 1, 2>(c);  // unused
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_32x256, true>(c);  // refs: 340
-    // add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_32x256, true, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_32x256, true, 1, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_64x256, true>(c);  // unused
-    // add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_64x256, true, 2>(c);  // unused
-    // add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_64x256, true, 1, 2>(c);  // unused
-
-    // --- 2 math WGs (per-WG BATCH=64): 128x128 plain, 128x256 fused, 64x256_n2 ---
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_64x256_n2, true>(c);
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_64x256_n2, true, 2>(c);
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_64x256_n2, true, 1, 2>(c);
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_128x128>(c);
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_128x128, false, 2>(c);
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_128x128, false, 1, 2>(c);
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_128x256, true>(c);
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_128x256, true, 2>(c);
-    add_wa<kRowMajor, Striding::kFlat, Sm90Fp8WaTile_128x256, true, 1, 2>(c);
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_128x128>(c);
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_128x128, false, 2>(c);
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_128x128, false, 1, 2>(c);
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_128x256>(c);
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_128x256, false, 2>(c);
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_128x256, false, 1, 2>(c);
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_64x256_n2>(c);
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_64x256_n2, false, 2>(c);
-    add_wa<kColMajor, Striding::kBlocked, Sm90Fp8WaTile_64x256_n2, false, 1, 2>(c);
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_128x128>(c);
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_128x128, false, 2>(c);
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_128x128, false, 1, 2>(c);
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_128x256, true>(c);
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_128x256, true, 2>(c);
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_128x256, true, 1, 2>(c);
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_64x256_n2, true>(c);
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_64x256_n2, true, 2>(c);
-    add_wa<kColMajor, Striding::kIndexed, Sm90Fp8WaTile_64x256_n2, true, 1, 2>(c);
+    register_v3<ConfigV3::Type>(c);
+    register_wa<ConfigWA::Type>(c);
 });
 }  // namespace
 

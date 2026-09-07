@@ -5,21 +5,14 @@
 #include "src/turbomind/kernels/gemm/gemm_universal_sm90_mixed.h"
 #include "src/turbomind/kernels/gemm/kernel_impl_sm90_mixed.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
+#include "src/turbomind/kernels/gemm/kernel/config.h"
 
 namespace turbomind::gemm::detail {
 
-template<class Format,
-         Order    raster,
-         Striding striding,
-         class Tile,
-         bool silu        = false,
-         int  multicast_a = 1,
-         int  multicast_b = 1>
-void add(Collector& c)
-{
-    constexpr bool grouped = striding != Striding::kFlat;
-    using Gemm = GemmUniversalSm90Mixed<raster, multicast_a, multicast_b, grouped, striding, Tile, silu, Format>;
-    c.add<KernelImplSm90Mixed<Gemm>>();
-}
+template<class Format>
+struct C {
+    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0>
+    using Type = KernelImplSm90Mixed<GemmUniversalSm90Mixed<Format, Config_, Stages, Raster, Mode, Silu, MulticastA, MulticastB, MmaN, SeparateMmaAtoms, EpiM, EpiStages>>;
+};
 
 }  // namespace turbomind::gemm::detail

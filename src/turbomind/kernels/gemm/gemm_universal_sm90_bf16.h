@@ -90,7 +90,6 @@
 #include "src/turbomind/kernels/gemm/gmma_issue.h"
 #include "src/turbomind/kernels/gemm/matrix_ptr.h"
 #include "src/turbomind/kernels/gemm/scheduler.cuh"
-#include "src/turbomind/kernels/gemm/sm90_bf16_traits.h"
 #include "src/turbomind/kernels/gemm/sm90_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
@@ -290,56 +289,51 @@ __global__ void __launch_bounds__(32, 1) prepare_tma_descs_sm90_bf16(const __gri
     }
 }
 
-template<Order    raster_order,
-         int      multicast_a,
-         int      multicast_b,
-         bool     is_grouped_gemm_,
-         Striding kStridingA_     = (is_grouped_gemm_ ? Striding::kIndexed : Striding::kFlat),
-         class Tile_              = Sm90Bf16Tile_128x128_1x2,
-         bool kSupportsFusedSilu_ = false,
-         int  kL2HintW_           = 0>
+template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, int MulticastA, int MulticastB, int L2HintW, int MmaN, bool SeparateMmaAtoms, int EpiM, int EpiStages_>
 struct GemmUniversalSm90_Bf16 {
 
     static constexpr bool kDebug = false;
 
-    static constexpr Order kRasterOrder = raster_order;
+    static constexpr Order kRasterOrder = Raster;
 
     // L2 eviction policy for mainloop weight loads. Instantiation axis (desc policy_b):
     // 0 = EVICT_NORMAL, 1 = EVICT_FIRST (weight panel is streamed once when the problem
     // has a single M-tile). Variants co-exist in the catalog; the tuner picks.
-    static constexpr int      kL2HintW = kL2HintW_;
+    static constexpr int      kL2HintW = L2HintW;
     static constexpr uint64_t kWeightL2Policy =
         kL2HintW ? (uint64_t)cute::TMA::CacheHintSm90::EVICT_FIRST : (uint64_t)cute::TMA::CacheHintSm90::EVICT_NORMAL;
 
     using Arch = Sm90;
-    using Tile = Tile_;
+    using Tile = typename Config_::Tile;
+    using Groups = typename Config_::Groups;
+    using RegisterConfig = typename Config_::RegisterConfig;
 
-    static constexpr bool kSupportsFusedSilu = kSupportsFusedSilu_;
+    static constexpr bool kSupportsFusedSilu = Silu;
 
     // Problem CTA tile: M = batch (act rows), N = out (weight cols), K
-    static constexpr int TILE_M = Tile::TILE_M;
-    static constexpr int TILE_N = Tile::TILE_N;
-    static constexpr int TILE_K = Tile::TILE_K;
+    static constexpr int TILE_M = Tile::M;
+    static constexpr int TILE_N = Tile::N;
+    static constexpr int TILE_K = Tile::K;
     static_assert(TILE_N % 128 == 0);
     static_assert(TILE_M >= 8 && TILE_M % 8 == 0);
     static_assert(TILE_K == 64);  // host TMA still SW128 / K-atom for this step
 
-    using WGLayout      = typename Tile::WGLayout;
+    using WGLayout = cute::Layout<cute::Shape<cute::Int<Groups::M>, cute::Int<Groups::N>>>;
     using AtomLayoutMNK = GmmaAtomLayoutMNK<WGLayout>;
 
     // Traits: OUT=N_out=TILE_N, BATCH=M_batch=TILE_M; AtomLayout reverses WGLayout MN.
-    using Traits   = GmmaBF16Traits<TILE_N, TILE_M, TILE_K, AtomLayoutMNK, Tile::kMmaN>;
+    using Traits   = GmmaBF16Traits<TILE_N, TILE_M, TILE_K, AtomLayoutMNK, MmaN>;
     using TiledMma = typename Traits::TiledMma;
-    using MmaIssue = detail::GmmaIssue<Traits::kMmaNSlices, Tile::kSeparateMmaAtoms, 2>;
+    using MmaIssue = detail::GmmaIssue<Traits::kMmaNSlices, SeparateMmaAtoms, 2>;
 
     static constexpr int WARPGROUPS = cute::size(AtomLayoutMNK{});  // math WGs (cooperative)
 
-    static constexpr int kMulticastA = multicast_a;  // act along TILE_M
-    static constexpr int kMulticastB = multicast_b;  // weight along TILE_N
+    static constexpr int kMulticastA = MulticastA;  // act along TILE_M
+    static constexpr int kMulticastB = MulticastB;  // weight along TILE_N
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
-    static constexpr int Stages = Tile::Stages;
+    static constexpr int Stages = Stages_;
 
     static constexpr int WARPGROUP_SIZE = 128;
     static constexpr int kMathGroupSize = WARPGROUP_SIZE * WARPGROUPS;
@@ -357,24 +351,24 @@ struct GemmUniversalSm90_Bf16 {
 
     using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
 
-    static constexpr auto is_grouped_gemm = is_grouped_gemm_;
+    static constexpr bool is_grouped_gemm = Mode != Striding::kFlat;
 
-    static constexpr Striding kStridingA = kStridingA_;
-    static constexpr Striding kStridingB = is_grouped_gemm_ ? Striding::kBlocked : Striding::kFlat;
-    static constexpr Striding kStridingC = is_grouped_gemm_ ? Striding::kBlocked : Striding::kFlat;
+    static constexpr Striding kStridingA = Mode;
+    static constexpr Striding kStridingB = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
+    static constexpr Striding kStridingC = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
 
-    static constexpr bool kIndexedGather = (kStridingA_ == Striding::kIndexed);
+    static constexpr bool kIndexedGather = (Mode == Striding::kIndexed);
 
-    // setmaxnreg: each WG ≤ 256, multiples of 8. Budgets from Tile (TMA vs indexed).
-    static constexpr int kProducerRegs = kIndexedGather ? Tile::kProducerRegsIndexed : Tile::kProducerRegsTma;
-    static constexpr int kMathRegs     = kIndexedGather ? Tile::kMathRegsIndexed : Tile::kMathRegsTma;
+    // setmaxnreg: each WG ≤ 256, multiples of 8. The configuration supplies the active producer/math budgets.
+    static constexpr int kProducerRegs = RegisterConfig::Producer;
+    static constexpr int kMathRegs = RegisterConfig::Math;
     static_assert(kProducerRegs >= 24 && kProducerRegs % 8 == 0);
     static_assert(kMathRegs >= 24 && kMathRegs % 8 == 0 && kMathRegs <= 256);
     static_assert(WARPGROUPS == 1 || WARPGROUPS == 2);
     static_assert(WARPGROUPS != 2 || kProducerRegs + 2 * kMathRegs <= 504);
     static_assert(WARPGROUPS != 1 || kProducerRegs + kMathRegs <= 512);
 
-    using Scheduler = TileScheduler<raster_order, Cluster, true, true, TILE_M, TILE_N, Stages, is_grouped_gemm>;
+    using Scheduler = TileScheduler<Raster, Cluster, true, true, TILE_M, TILE_N, Stages, is_grouped_gemm>;
 
     using MainloopPipeline = cutlass::PipelineTmaAsync<Stages>;
     using PipelineState    = typename MainloopPipeline::PipelineState;
@@ -416,11 +410,11 @@ struct GemmUniversalSm90_Bf16 {
     // Dense / blocked-A: expect_tx(weight+act); both via TMA complete_tx.
     // Indexed-A: expect_tx(weight only); gather gated by cpasync_barrier_arrive_noinc.
     static constexpr int kTmaTxBytes =
-        (kStridingA_ == Striding::kIndexed) ? kTmaTxBytesWeight : (kTmaTxBytesWeight + kTmaTxBytesAct);
+        (Mode == Striding::kIndexed) ? kTmaTxBytesWeight : (kTmaTxBytesWeight + kTmaTxBytesAct);
 
     // Grouped: per-expert maps in workspace (indexed [B,C]; blocked [A,B,C]).
-    static constexpr int kTmaDescNumAB = is_grouped_gemm_ ? (kStridingA_ == Striding::kBlocked ? 2 : 1) : 0;
-    static constexpr int kTmaDescNumC  = is_grouped_gemm_ ? 1 : 0;
+    static constexpr int kTmaDescNumAB = is_grouped_gemm ? (Mode == Striding::kBlocked ? 2 : 1) : 0;
+    static constexpr int kTmaDescNumC  = is_grouped_gemm ? 1 : 0;
     static constexpr int kTmaDescNum   = (kTmaDescNumAB + kTmaDescNumC) > 0 ? (kTmaDescNumAB + kTmaDescNumC) : 1;
 
     // The epilogue tile follows public GEMM (M,N) order. Its N extent covers
@@ -436,7 +430,7 @@ struct GemmUniversalSm90_Bf16 {
     static constexpr int kEpiN           = 64 * kAtomM;
     static constexpr int kWgMLowBit      = kWgM & -kWgM;
     static constexpr int kEpiMDefault    = kWgMLowBit < 32 ? kWgMLowBit : 32;
-    static constexpr int kEpiM           = Tile::kEpiM ? Tile::kEpiM : kEpiMDefault;
+    static constexpr int kEpiM           = EpiM ? EpiM : kEpiMDefault;
     static constexpr int kEpiPlanes      = kSplitEpiM ? kAtomN : 1;
     static constexpr int kTmaStoreN      = 64;
     static constexpr int kTmaStoreM      = kEpiM <= 256 ? kEpiM : 64;
@@ -503,8 +497,8 @@ struct GemmUniversalSm90_Bf16 {
     static constexpr int kSmemCapacity = 228 << 10;
     static constexpr int GetEpiPipeStages()
     {
-        if constexpr (Tile::kEpiPipeStages) {
-            return Tile::kEpiPipeStages;
+        if constexpr (EpiStages_) {
+            return EpiStages_;
         }
         else if constexpr (kEpiPasses >= 2 && sizeof(SharedStorageT<2>) <= kSmemCapacity) {
             return 2;
@@ -541,11 +535,11 @@ struct GemmUniversalSm90_Bf16 {
                                 int                N,
                                 cudaStream_t       stream)
     {
-        if constexpr (!is_grouped_gemm_) {
+        if constexpr (!is_grouped_gemm) {
             return nullptr;
         }
         int* offsets = reinterpret_cast<int*>(out + num_groups * kTmaDescNum);
-        prepare_tma_descs_sm90_bf16<kStridingA_>
+        prepare_tma_descs_sm90_bf16<Mode>
             <<<num_groups, 32, 0, stream>>>(tm_a, tm_b, tm_c, param_A, param_B, param_C, out, offsets, M, N);
         return offsets;
     }
@@ -936,7 +930,7 @@ struct GemmUniversalSm90_Bf16 {
                     cute::clear(accum);
 
                     auto run_mainloop = [&](auto const& tCrA_) {
-                        if constexpr (Traits::kMmaNSlices > 1 || Tile::kSeparateMmaAtoms) {
+                        if constexpr (Traits::kMmaNSlices > 1 || SeparateMmaAtoms) {
                             tiled_mma.accumulate_ = cute::GMMA::ScaleOut::Zero;
                             cute::warpgroup_fence_operand(accum);
                             const int k_iters = sched.k_iters_;

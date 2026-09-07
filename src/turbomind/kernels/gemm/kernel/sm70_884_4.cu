@@ -37,118 +37,167 @@ constexpr auto mxfp4_packer =
 
 const Family mxfp4{5, 190, kHalf, kHalf, 32, 8, 1, 1, true, true, supports_mxfp4, mxfp4_packer};
 
-void register_g128(Collector& c)
-{
-    if constexpr (1) {
-        // clang-format off
-        using C = Config_U4_d<kColMajor>;
-        c.add<C::Type<128, 256, 16, 2, 4, 1, D, D, 2, true, 1, 128, 128, 128>>();
-        c.add<C::Type<128, 128, 16, 2, 2, 1, D, D, 2, true, 1, 128, 64, 128>>();
-        c.add<C::Type<128, 128, 16, 2, 2, 1, D, S, 2, true, 1, 128, 64, 128>>();
-        c.add<C::Type< 96, 128, 32, 2, 2, 1, D, S, 2, true, 1, 128, 48, 128>>();
-        c.add<C::Type< 64, 128, 32, 2, 2, 1, D, D, 2, true, 1, 128, 32, 128>>();
-        c.add<C::Type< 64, 128, 32, 2, 2, 1, D, S, 2, true, 1, 128, 32, 128>>();
-        c.add<C::Type< 64, 128, 16, 1, 4, 1, D, S, 2, true, 1, 128, 32, 128>>();
-        c.add<C::Type< 64, 256, 16, 1, 4, 1, D, S, 2, true, 1, 128, 64, 128>>();
-        c.add<C::Type< 32, 128, 32, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        c.add<C::Type< 32, 256, 32, 1, 4, 1, D, S, 2, true, 1, 128, 32, 128>>();
-        c.add<C::Type< 16, 128, 32, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        c.add<C::Type< 16, 256, 32, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        c.add<C::Type<  8, 128, 64, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        c.add<C::Type<  8, 128, 32, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        c.add<C::Type<  8, 256, 64, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        // clang-format on
-    }
-
-    if constexpr (1) {
-        // clang-format off
-        using C = Config_U4_g<kColMajor>;
-        c.add<C::Type<128, 256,  16, 2, 4, 1, D, D, 2,   0 , 1, 128, 128, 128>>();
-        c.add<C::Type<128, 128,  16, 2, 2, 1, D, D, 2, true, 1, 128,  64, 128>>();
-        c.add<C::Type< 64, 128,  32, 1, 4, 1, D, S, 2, true, 1, 128,  32, 128>>();
-        c.add<C::Type< 64, 256,  16, 1, 4, 1, D, S, 2, true, 1, 128,  64, 128>>();
-        c.add<C::Type< 32, 128,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        c.add<C::Type< 32, 256,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        c.add<C::Type< 16, 256,  64, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        c.add<C::Type< 16, 256,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        c.add<C::Type< 16, 128,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        c.add<C::Type<  8, 128,  64, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        // clang-format on
-    }
-}
-
+// NVCC requires defaults on the template-template parameter.
+template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1> class K>
 void register_g32(Collector& c)
 {
-    if constexpr (1) {
-        // clang-format off
-        using C = Config_U4_d<kColMajor>;
-        c.add<C::Type<128, 256, 16, 2, 4, 1, D, D, 2, true, 1, 32, 128, 128>>();
-        c.add<C::Type<128, 128, 16, 2, 2, 1, D, D, 2, true, 1, 32, 64, 128>>();
-        c.add<C::Type<128, 128, 16, 2, 2, 1, D, S, 2, true, 1, 32, 64, 128>>();
-        c.add<C::Type< 96, 128, 32, 2, 2, 1, D, S, 2, true, 1, 32, 48, 128>>();
-        c.add<C::Type< 64, 128, 32, 2, 2, 1, D, D, 2, true, 1, 32, 32, 128>>();
-        c.add<C::Type< 64, 128, 32, 2, 2, 1, D, S, 2, true, 1, 32, 32, 128>>();
-        c.add<C::Type< 64, 128, 16, 1, 4, 1, D, S, 2, true, 1, 32, 32, 128>>();
-        c.add<C::Type< 64, 256, 16, 1, 4, 1, D, S, 2, true, 1, 32, 64, 128>>();
-        c.add<C::Type< 32, 128, 32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 32, 256, 32, 1, 4, 1, D, S, 2, true, 1, 32, 32, 128>>();
-        c.add<C::Type< 16, 128, 32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 16, 256, 32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type<  8, 128, 64, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type<  8, 128, 32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type<  8, 256, 64, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 48, 128, 32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 16, 256, 64, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 16, 128, 64, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type<  8, 256, 32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 32, 128, 64, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 64, 256, 32, 1, 4, 1, D, S, 2, true, 1, 32, 64, 128>>();
-        // clang-format on
+    using config::Config;
+    using config::Shape;
+
+    using _128x256x16_2x4x1 = Config<Shape<128, 256, 16>, Shape<2, 4, 1>>;
+    using _128x128x16_2x2x1 = Config<Shape<128, 128, 16>, Shape<2, 2, 1>>;
+    using _96x128x32_2x2x1 = Config<Shape<96, 128, 32>, Shape<2, 2, 1>>;
+    using _64x128x32_2x2x1 = Config<Shape<64, 128, 32>, Shape<2, 2, 1>>;
+    using _64x128x16_1x4x1 = Config<Shape<64, 128, 16>, Shape<1, 4, 1>>;
+    using _64x256x16_1x4x1 = Config<Shape<64, 256, 16>, Shape<1, 4, 1>>;
+    using _32x128x32_1x4x1 = Config<Shape<32, 128, 32>, Shape<1, 4, 1>>;
+    using _32x256x32_1x4x1 = Config<Shape<32, 256, 32>, Shape<1, 4, 1>>;
+    using _16x128x32_1x4x1 = Config<Shape<16, 128, 32>, Shape<1, 4, 1>>;
+    using _16x256x32_1x4x1 = Config<Shape<16, 256, 32>, Shape<1, 4, 1>>;
+    using _8x128x64_1x4x1 = Config<Shape<8, 128, 64>, Shape<1, 4, 1>>;
+    using _8x128x32_1x4x1 = Config<Shape<8, 128, 32>, Shape<1, 4, 1>>;
+    using _8x256x64_1x4x1 = Config<Shape<8, 256, 64>, Shape<1, 4, 1>>;
+    using _48x128x32_1x4x1 = Config<Shape<48, 128, 32>, Shape<1, 4, 1>>;
+    using _16x256x64_1x4x1 = Config<Shape<16, 256, 64>, Shape<1, 4, 1>>;
+    using _16x128x64_1x4x1 = Config<Shape<16, 128, 64>, Shape<1, 4, 1>>;
+    using _8x256x32_1x4x1 = Config<Shape<8, 256, 32>, Shape<1, 4, 1>>;
+    using _32x128x64_1x4x1 = Config<Shape<32, 128, 64>, Shape<1, 4, 1>>;
+    using _64x256x32_1x4x1 = Config<Shape<64, 256, 32>, Shape<1, 4, 1>>;
+    using _64x128x32_1x4x1 = Config<Shape<64, 128, 32>, Shape<1, 4, 1>>;
+    using _8x128x128_1x4x1 = Config<Shape<8, 128, 128>, Shape<1, 4, 1>>;
+    using _32x256x64_1x4x1 = Config<Shape<32, 256, 64>, Shape<1, 4, 1>>;
+
+    {
+        add<K<_128x256x16_2x4x1, 2, kColMajor, D, D, true, 128, 128>>(c);
+        add<K<_128x128x16_2x2x1, 2, kColMajor, D, D, true, 64, 128>>(c);
+        add<K<_128x128x16_2x2x1, 2, kColMajor, D, S, true, 64, 128>>(c);
+        add<K<_96x128x32_2x2x1, 2, kColMajor, D, S, true, 48, 128>>(c);
+        add<K<_64x128x32_2x2x1, 2, kColMajor, D, D, true, 32, 128>>(c);
+        add<K<_64x128x32_2x2x1, 2, kColMajor, D, S, true, 32, 128>>(c);
+        add<K<_64x128x16_1x4x1, 2, kColMajor, D, S, true, 32, 128>>(c);
+        add<K<_64x256x16_1x4x1, 2, kColMajor, D, S, true, 64, 128>>(c);
+        add<K<_32x128x32_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_32x256x32_1x4x1, 2, kColMajor, D, S, true, 32, 128>>(c);
+        add<K<_16x128x32_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_16x256x32_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_8x128x64_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_8x128x32_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_8x256x64_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_48x128x32_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_16x256x64_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_16x128x64_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_8x256x32_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_32x128x64_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_64x256x32_1x4x1, 2, kColMajor, D, S, true, 64, 128>>(c);
     }
 
-    if constexpr (1) {
-        // clang-format off
-        using C = Config_U4_g<kColMajor>;
-        c.add<C::Type<128, 256,  16, 2, 4, 1, D, D, 2,   0 , 1, 32, 128, 128>>();
-        c.add<C::Type<128, 128,  16, 2, 2, 1, D, D, 2, true, 1, 32,  64, 128>>();
-        c.add<C::Type< 64, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32,  32, 128>>();
-        c.add<C::Type< 64, 256,  16, 1, 4, 1, D, S, 2, true, 1, 32,  64, 128>>();
-        c.add<C::Type< 32, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 32, 256,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 16, 256,  64, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 16, 256,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 16, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type<  8, 128,  64, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type<  8, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type<  8, 128, 128, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 48, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 16, 128,  64, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type<  8, 256,  64, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type<  8, 256,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 32, 256,  64, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 64, 256,  32, 1, 4, 1, D, S, 2, true, 1, 32,  64, 128>>();
-        // clang-format on
+    {
+        add<K<_128x256x16_2x4x1, 2, kColMajor, D, D, false, 128, 128, 0>>(c);
+        add<K<_128x128x16_2x2x1, 2, kColMajor, D, D, true, 64, 128, 0>>(c);
+        add<K<_64x128x32_1x4x1, 2, kColMajor, D, S, true, 32, 128, 0>>(c);
+        add<K<_64x256x16_1x4x1, 2, kColMajor, D, S, true, 64, 128, 0>>(c);
+        add<K<_32x128x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_32x256x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_16x256x64_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_16x256x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_16x128x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_8x128x64_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_8x128x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_8x128x128_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_48x128x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_16x128x64_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_8x256x64_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_8x256x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_32x256x64_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_64x256x32_1x4x1, 2, kColMajor, D, S, true, 64, 128, 0>>(c);
     }
 }
 
+// NVCC requires defaults on the template-template parameter.
+template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1> class K>
+void register_g128(Collector& c)
+{
+    using config::Config;
+    using config::Shape;
+
+    using _128x256x16_2x4x1 = Config<Shape<128, 256, 16>, Shape<2, 4, 1>>;
+    using _128x128x16_2x2x1 = Config<Shape<128, 128, 16>, Shape<2, 2, 1>>;
+    using _96x128x32_2x2x1 = Config<Shape<96, 128, 32>, Shape<2, 2, 1>>;
+    using _64x128x32_2x2x1 = Config<Shape<64, 128, 32>, Shape<2, 2, 1>>;
+    using _64x128x16_1x4x1 = Config<Shape<64, 128, 16>, Shape<1, 4, 1>>;
+    using _64x256x16_1x4x1 = Config<Shape<64, 256, 16>, Shape<1, 4, 1>>;
+    using _32x128x32_1x4x1 = Config<Shape<32, 128, 32>, Shape<1, 4, 1>>;
+    using _32x256x32_1x4x1 = Config<Shape<32, 256, 32>, Shape<1, 4, 1>>;
+    using _16x128x32_1x4x1 = Config<Shape<16, 128, 32>, Shape<1, 4, 1>>;
+    using _16x256x32_1x4x1 = Config<Shape<16, 256, 32>, Shape<1, 4, 1>>;
+    using _8x128x64_1x4x1 = Config<Shape<8, 128, 64>, Shape<1, 4, 1>>;
+    using _8x128x32_1x4x1 = Config<Shape<8, 128, 32>, Shape<1, 4, 1>>;
+    using _8x256x64_1x4x1 = Config<Shape<8, 256, 64>, Shape<1, 4, 1>>;
+    using _64x128x32_1x4x1 = Config<Shape<64, 128, 32>, Shape<1, 4, 1>>;
+    using _16x256x64_1x4x1 = Config<Shape<16, 256, 64>, Shape<1, 4, 1>>;
+
+    {
+        add<K<_128x256x16_2x4x1, 2, kColMajor, D, D, true, 128, 128>>(c);
+        add<K<_128x128x16_2x2x1, 2, kColMajor, D, D, true, 64, 128>>(c);
+        add<K<_128x128x16_2x2x1, 2, kColMajor, D, S, true, 64, 128>>(c);
+        add<K<_96x128x32_2x2x1, 2, kColMajor, D, S, true, 48, 128>>(c);
+        add<K<_64x128x32_2x2x1, 2, kColMajor, D, D, true, 32, 128>>(c);
+        add<K<_64x128x32_2x2x1, 2, kColMajor, D, S, true, 32, 128>>(c);
+        add<K<_64x128x16_1x4x1, 2, kColMajor, D, S, true, 32, 128>>(c);
+        add<K<_64x256x16_1x4x1, 2, kColMajor, D, S, true, 64, 128>>(c);
+        add<K<_32x128x32_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_32x256x32_1x4x1, 2, kColMajor, D, S, true, 32, 128>>(c);
+        add<K<_16x128x32_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_16x256x32_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_8x128x64_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_8x128x32_1x4x1, 2, kColMajor, D, S, true>>(c);
+        add<K<_8x256x64_1x4x1, 2, kColMajor, D, S, true>>(c);
+    }
+
+    {
+        add<K<_128x256x16_2x4x1, 2, kColMajor, D, D, false, 128, 128, 0>>(c);
+        add<K<_128x128x16_2x2x1, 2, kColMajor, D, D, true, 64, 128, 0>>(c);
+        add<K<_64x128x32_1x4x1, 2, kColMajor, D, S, true, 32, 128, 0>>(c);
+        add<K<_64x256x16_1x4x1, 2, kColMajor, D, S, true, 64, 128, 0>>(c);
+        add<K<_32x128x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_32x256x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_16x256x64_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_16x256x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_16x128x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_8x128x64_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+    }
+}
+
+// NVCC requires defaults on the template-template parameter.
+template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1> class K>
 void register_mxfp4(Collector& c)
 {
-    if constexpr (1) {
-        // clang-format off
-        using C = Config_MXF4<kColMajor, 0>;
-        c.add<C::Type<128, 128,  16, 2, 2, 1, D, D, 2, true, 1, 32,  64, 128>>();
-        c.add<C::Type< 64, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32,  32, 128>>();
-        c.add<C::Type< 32, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type< 16, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        c.add<C::Type<  8, 128,  64, 1, 4, 1, D, S, 2, true, 1, 32>>();
-        // clang-format on
+    using config::Config;
+    using config::Shape;
+
+    using _128x128x16_2x2x1 = Config<Shape<128, 128, 16>, Shape<2, 2, 1>>;
+    using _64x128x32_1x4x1 = Config<Shape<64, 128, 32>, Shape<1, 4, 1>>;
+    using _32x128x32_1x4x1 = Config<Shape<32, 128, 32>, Shape<1, 4, 1>>;
+    using _16x128x32_1x4x1 = Config<Shape<16, 128, 32>, Shape<1, 4, 1>>;
+    using _8x128x64_1x4x1 = Config<Shape<8, 128, 64>, Shape<1, 4, 1>>;
+
+    {
+        add<K<_128x128x16_2x2x1, 2, kColMajor, D, D, true, 64, 128, 0>>(c);
+        add<K<_64x128x32_1x4x1, 2, kColMajor, D, S, true, 32, 128, 0>>(c);
+        add<K<_32x128x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_16x128x32_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_8x128x64_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
     }
 }
 
+using U4_G32 = Config_U4_d<32>;
+using U4_G128 = Config_U4_d<128>;
+using MXFP4 = Config_MXF4;
+
 Registrar reg[]{
-    {u4_g32, [](Collector& c) { register_g32(c); }},
-    {u4_g128, [](Collector& c) { register_g128(c); }},
-    {mxfp4, [](Collector& c) { register_mxfp4(c); }},
+    {u4_g32, register_g32<U4_G32::Type>},
+    {u4_g128, register_g128<U4_G128::Type>},
+    {mxfp4, register_mxfp4<MXFP4::Type>},
 };
 }  // namespace
 

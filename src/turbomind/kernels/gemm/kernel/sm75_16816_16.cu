@@ -20,23 +20,41 @@ constexpr auto f16_packer = pack_fp<Sm75, kRowMajor, HMMA_16816 | OPERAND_B | 1,
 
 const Family f16{6, 190, kHalf, kHalf, 32, 8, 1, 1, true, true, supports_fp<kHalf>, f16_packer};
 
-Registrar reg(f16, [](Collector& c) {
-    if constexpr (1) {
-        // clang-format off
-        using C = Config_F16<kColMajor, 0>;
-        c.add<C::Type<128, 256,  32, 2, 4, 1, D, D, 2,    0, 1, 1, 128, 128>>();
-        c.add<C::Type<128, 128,  32, 2, 2, 1, D, D, 2, true, 1, 1,  64, 128>>();
-        c.add<C::Type< 96,  64,  64, 2, 2, 1, D, D, 2, true, 1, 1>>();
-        c.add<C::Type< 64, 128,  64, 1, 4, 1, D, S, 2, true, 1, 1>>();
-        c.add<C::Type< 64,  64,  64, 2, 2, 1, D, S, 2, true, 1, 1>>();
-        c.add<C::Type< 64,  64, 128, 1, 2, 2, D, S, 2, true, 1, 1>>();
-        c.add<C::Type< 32,  64, 128, 1, 2, 2, D, S, 2, true, 1, 1>>();
-        c.add<C::Type< 32, 128,  64, 1, 4, 1, D, S, 2, true, 1, 1>>();
-        c.add<C::Type< 16,  64, 128, 1, 2, 2, D, S, 2, true, 1, 1>>();
-        c.add<C::Type< 16, 128,  64, 1, 4, 1, D, S, 2, true, 1, 1>>();
-        // clang-format on
+// NVCC requires defaults on the template-template parameter.
+template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1> class K>
+void register_kernels(Collector& c)
+{
+    using config::Config;
+    using config::Shape;
+
+    using _128x256x32_2x4x1 = Config<Shape<128, 256, 32>, Shape<2, 4, 1>>;
+    using _128x128x32_2x2x1 = Config<Shape<128, 128, 32>, Shape<2, 2, 1>>;
+    using _96x64x64_2x2x1 = Config<Shape<96, 64, 64>, Shape<2, 2, 1>>;
+    using _64x128x64_1x4x1 = Config<Shape<64, 128, 64>, Shape<1, 4, 1>>;
+    using _64x64x64_2x2x1 = Config<Shape<64, 64, 64>, Shape<2, 2, 1>>;
+    using _64x64x128_1x2x2 = Config<Shape<64, 64, 128>, Shape<1, 2, 2>>;
+    using _32x64x128_1x2x2 = Config<Shape<32, 64, 128>, Shape<1, 2, 2>>;
+    using _32x128x64_1x4x1 = Config<Shape<32, 128, 64>, Shape<1, 4, 1>>;
+    using _16x64x128_1x2x2 = Config<Shape<16, 64, 128>, Shape<1, 2, 2>>;
+    using _16x128x64_1x4x1 = Config<Shape<16, 128, 64>, Shape<1, 4, 1>>;
+
+    {
+        add<K<_128x256x32_2x4x1, 2, kColMajor, D, D, false, 128, 128, 0>>(c);
+        add<K<_128x128x32_2x2x1, 2, kColMajor, D, D, true, 64, 128, 0>>(c);
+        add<K<_96x64x64_2x2x1, 2, kColMajor, D, D, true, -1, -1, 0>>(c);
+        add<K<_64x128x64_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_64x64x64_2x2x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_64x64x128_1x2x2, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_32x64x128_1x2x2, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_32x128x64_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_16x64x128_1x2x2, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
+        add<K<_16x128x64_1x4x1, 2, kColMajor, D, S, true, -1, -1, 0>>(c);
     }
-});
+}
+
+using F16 = Config_F16;
+
+Registrar reg(f16, register_kernels<F16::Type>);
 }  // namespace
 
 }  // namespace turbomind::gemm

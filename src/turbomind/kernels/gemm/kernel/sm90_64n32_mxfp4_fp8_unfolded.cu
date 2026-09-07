@@ -3,6 +3,7 @@
 #include <cuda.h>
 
 #include "src/turbomind/kernels/gemm/convert.h"
+#include "src/turbomind/kernels/gemm/kernel/config.h"
 #include "src/turbomind/kernels/gemm/kernel/mxfp4.h"
 #include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
 #include "src/turbomind/models/linear_weight.h"
@@ -10,7 +11,6 @@
 #if TM_GEMM_HAS_SM90_MIXED
 
 #include "src/turbomind/kernels/gemm/gemm_universal_sm90_mxfp4_fp8_unfolded.h"
-#include "src/turbomind/kernels/gemm/kernel/sm90_64n32_mxfp4_fp8_config.h"
 #include "src/turbomind/kernels/gemm/kernel_impl_sm90_mxfp4_fp8.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
 
@@ -44,15 +44,25 @@ const Family unfolded{34,
                       supports_mxfp4,
                       pack};
 
-template<class Tile>
-void add(Collector& c)
+struct C {
+    template<class Config_, int Stages, Order Raster, int MmaN = Config_::Tile::M / Config_::Groups::M>
+    using Type = KernelImplSm90MxFp4Fp8<GemmUniversalSm90MxFp4Fp8Unfolded<Config_, Stages, Raster, MmaN>>;
+};
+
+// NVCC requires defaults on the template-template parameter.
+template<template<class Config_, int Stages, Order Raster, int MmaN = Config_::Tile::M / Config_::Groups::M> class K>
+void register_kernels(Collector& c)
 {
-    using Gemm = GemmUniversalSm90MxFp4Fp8Unfolded<kRowMajor, Tile>;
-    c.add<KernelImplSm90MxFp4Fp8<Gemm>>();
+    using config::Config;
+    using config::Registers;
+    using config::Shape;
+
+    using _64x128_1x2 = Config<Shape<64, 128>, Shape<1, 2>, Registers<40, 232>>;
+
+    add<K<_64x128_1x2, 3, kRowMajor>>(c);
 }
 
-Registrar reg(unfolded, [](Collector& c) { add<MxFp4Fp8Tile_64x128>(c); });
-
+Registrar reg(unfolded, register_kernels<C::Type>);
 }  // namespace
 }  // namespace turbomind::gemm
 

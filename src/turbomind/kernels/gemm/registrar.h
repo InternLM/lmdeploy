@@ -4,13 +4,11 @@
 
 #include <functional>
 #include <memory>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "src/turbomind/kernels/gemm/family.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
-#include "src/turbomind/kernels/gemm/kernel_impl.h"
 
 namespace turbomind::gemm {
 
@@ -18,17 +16,10 @@ class Collector {
 public:
     explicit Collector(const Family& family): family_{family} {}
 
-    // Matches Registry::Add<Config>(): Config has nested ::Kernel
     template<class T, class... Args>
     void add(Args&&... args)
     {
-        if constexpr (std::is_base_of_v<Kernel, T>) {
-            kernels_.emplace_back(std::make_unique<T>(family_, std::forward<Args>(args)...));
-        }
-        else {
-            static_assert(sizeof...(Args) == 0);
-            kernels_.emplace_back(std::make_unique<KernelImpl<typename T::Kernel>>(family_));
-        }
+        kernels_.emplace_back(std::make_unique<T>(family_, std::forward<Args>(args)...));
     }
 
     std::vector<std::unique_ptr<Kernel>> release()
@@ -37,9 +28,15 @@ public:
     }
 
 private:
-    const Family&                        family_;
+    const Family& family_;
     std::vector<std::unique_ptr<Kernel>> kernels_;
 };
+
+template<class T, class... Args>
+void add(Collector& c, Args&&... args)
+{
+    c.add<T>(std::forward<Args>(args)...);
+}
 
 using RegisterFn = std::function<void(Collector&)>;
 

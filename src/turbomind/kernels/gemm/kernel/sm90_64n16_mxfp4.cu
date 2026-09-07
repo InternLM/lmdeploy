@@ -4,6 +4,7 @@
 #include <numeric>
 
 #include "src/turbomind/kernels/gemm/convert.h"
+#include "src/turbomind/kernels/gemm/kernel/config.h"
 #include "src/turbomind/kernels/gemm/kernel/mxfp4.h"
 #include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
 #include "src/turbomind/models/linear_weight.h"
@@ -11,7 +12,6 @@
 #if TM_GEMM_HAS_SM90_MIXED
 
 #include "src/turbomind/kernels/gemm/kernel/sm90_64n16_mixed_reg.h"
-#include "src/turbomind/kernels/gemm/kernel/sm90_64n16_mxfp4_config.h"
 
 namespace turbomind::gemm {
 namespace {
@@ -33,49 +33,82 @@ void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
 const Family mxfp4{
     30, 250, kBfloat16, kBfloat16, 64, 128, 128, 1, true, true, supports_mxfp4, pack, 64, kBfloat16};
 
-using Format = Sm90MxFp4Format;
-using detail::add;
+// NVCC requires defaults on the template-template parameter.
+template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0> class K>
+void register_kernels(Collector& c)
+{
+    using config::Config;
+    using config::Registers;
+    using config::Shape;
 
-Registrar reg(mxfp4, [](Collector& c) {
-    ////////////////////////////////// flat //////////////////////////////////
-    add<Format, kColMajor, Striding::kFlat, Tile_8x128_S4_1x2, true>(c);
-    add<Format, kColMajor, Striding::kFlat, Tile_16x128_S4_1x2, true>(c);
-    add<Format, kColMajor, Striding::kFlat, Tile_32x128_S4_1x2, true>(c);
-    add<Format, kColMajor, Striding::kFlat, Tile_64x128_S4_1x2, true>(c);
-    add<Format, kColMajor, Striding::kFlat, Tile_96x128_S4_1x2, true>(c);
-    add<Format, kColMajor, Striding::kFlat, Tile_128x128_S4_1x2, true>(c);
-    add<Format, kColMajor, Striding::kFlat, Tile_192x128_S4_1x2>(c);
-    add<Format, kColMajor, Striding::kFlat, Tile_224x128_S4_1x2>(c);
-    add<Format, kColMajor, Striding::kFlat, Tile_256x128_S4_1x2>(c);
-    add<Format, kColMajor, Striding::kFlat, Tile_384x128_S3_1x2>(c);
+    {
+        using _8x128_1x2 = Config<Shape<8, 128>, Shape<1, 2>, Registers<80, 80>>;
+        using _16x128_1x2 = Config<Shape<16, 128>, Shape<1, 2>, Registers<80, 80>>;
+        using _32x128_1x2 = Config<Shape<32, 128>, Shape<1, 2>, Registers<80, 80>>;
+        using _64x128_1x2 = Config<Shape<64, 128>, Shape<1, 2>, Registers<80, 80>>;
+        using _96x128_1x2 = Config<Shape<96, 128>, Shape<1, 2>, Registers<80, 96>>;
+        using _128x128_1x2 = Config<Shape<128, 128>, Shape<1, 2>, Registers<80, 112>>;
+        using _192x128_1x2 = Config<Shape<192, 128>, Shape<1, 2>, Registers<80, 208>>;
+        using _224x128_1x2 = Config<Shape<224, 128>, Shape<1, 2>, Registers<80, 208>>;
+        using _256x128_1x2 = Config<Shape<256, 128>, Shape<1, 2>, Registers<80, 208>>;
+        using _384x128_1x2 = Config<Shape<384, 128>, Shape<1, 2>, Registers<40, 232>>;
+        using _8x128_1x1 = Config<Shape<8, 128>, Shape<1, 1>, Registers<120, 128>>;
 
-    ////////////////////////////////// blocked //////////////////////////////////
-    add<Format, kColMajor, Striding::kBlocked, Tile_8x128_S4_1x2>(c);
-    add<Format, kColMajor, Striding::kBlocked, Tile_16x128_S4_1x2>(c);
-    add<Format, kColMajor, Striding::kBlocked, Tile_32x128_S4_1x2>(c);
-    add<Format, kColMajor, Striding::kBlocked, Tile_64x128_S4_1x2>(c);
-    add<Format, kColMajor, Striding::kBlocked, Tile_96x128_S4_1x2>(c);
-    add<Format, kColMajor, Striding::kBlocked, Tile_128x128_S4_1x2>(c);
-    add<Format, kColMajor, Striding::kBlocked, Tile_192x128_S4_1x2, true>(c);
-    add<Format, kColMajor, Striding::kBlocked, Tile_224x128_S4_1x2, true>(c);
-    add<Format, kColMajor, Striding::kBlocked, Tile_256x128_S4_1x2, true>(c);
-    add<Format, kColMajor, Striding::kBlocked, Tile_384x128_S3_1x2, true>(c);
+        ////////////////////////////////// flat //////////////////////////////////
+        add<K<_8x128_1x2, 4, kColMajor, Striding::kFlat, true>>(c);
+        add<K<_16x128_1x2, 4, kColMajor, Striding::kFlat, true>>(c);
+        add<K<_32x128_1x2, 4, kColMajor, Striding::kFlat, true>>(c);
+        add<K<_64x128_1x2, 4, kColMajor, Striding::kFlat, true>>(c);
+        add<K<_96x128_1x2, 4, kColMajor, Striding::kFlat, true>>(c);
+        add<K<_128x128_1x2, 4, kColMajor, Striding::kFlat, true>>(c);
+        add<K<_192x128_1x2, 4, kColMajor, Striding::kFlat>>(c);
+        add<K<_224x128_1x2, 4, kColMajor, Striding::kFlat>>(c);
+        add<K<_256x128_1x2, 4, kColMajor, Striding::kFlat>>(c);
+        add<K<_384x128_1x2, 3, kColMajor, Striding::kFlat, false, 1, 1, 192>>(c);
 
-    ////////////////////////////////// indexed //////////////////////////////////
-    add<Format, kColMajor, Striding::kIndexed, Tile_8x128_S4_1x1, true>(c);
-    add<Format, kColMajor, Striding::kIndexed, Tile_16x128_S4_1x2, true>(c);
-    add<Format, kColMajor, Striding::kIndexed, Tile_32x128_S4_1x2, true>(c);
-    add<Format, kColMajor, Striding::kIndexed, Tile_64x128_S4_1x2, true>(c);
-    add<Format, kColMajor, Striding::kIndexed, Tile_96x128_S4_1x2, true>(c);
-    add<Format, kColMajor, Striding::kIndexed, Tile_192x128_S3_1x2, true>(c);
-    add<Format, kColMajor, Striding::kIndexed, Tile_8x256_S3_1x2, true>(c);
-    add<Format, kColMajor, Striding::kIndexed, Tile_16x256_S3_1x2, true>(c);
-    add<Format, kColMajor, Striding::kIndexed, Tile_32x256_S3_1x2, true>(c);
-    add<Format, kColMajor, Striding::kIndexed, Tile_64x256_S3_1x2, true>(c);
-    add<Format, kColMajor, Striding::kIndexed, Tile_96x256_S3_1x2, true>(c);
-    add<Format, kColMajor, Striding::kIndexed, Tile_128x256_S3_1x2, true>(c);
-});
+        ////////////////////////////////// blocked //////////////////////////////////
+        add<K<_8x128_1x2, 4, kColMajor, Striding::kBlocked>>(c);
+        add<K<_16x128_1x2, 4, kColMajor, Striding::kBlocked>>(c);
+        add<K<_32x128_1x2, 4, kColMajor, Striding::kBlocked>>(c);
+        add<K<_64x128_1x2, 4, kColMajor, Striding::kBlocked>>(c);
+        add<K<_96x128_1x2, 4, kColMajor, Striding::kBlocked>>(c);
+        add<K<_128x128_1x2, 4, kColMajor, Striding::kBlocked>>(c);
+        add<K<_192x128_1x2, 4, kColMajor, Striding::kBlocked, true>>(c);
+        add<K<_224x128_1x2, 4, kColMajor, Striding::kBlocked, true>>(c);
+        add<K<_256x128_1x2, 4, kColMajor, Striding::kBlocked, true>>(c);
+        add<K<_384x128_1x2, 3, kColMajor, Striding::kBlocked, true, 1, 1, 192>>(c);
 
+        ////////////////////////////////// indexed //////////////////////////////////
+        add<K<_8x128_1x1, 4, kColMajor, Striding::kIndexed, true>>(c);
+        add<K<_16x128_1x2, 4, kColMajor, Striding::kIndexed, true>>(c);
+        add<K<_32x128_1x2, 4, kColMajor, Striding::kIndexed, true>>(c);
+    }
+    {
+        using _64x128_1x2 = Config<Shape<64, 128>, Shape<1, 2>, Registers<120, 192>>;
+        using _96x128_1x2 = Config<Shape<96, 128>, Shape<1, 2>, Registers<120, 192>>;
+        using _192x128_1x2 = Config<Shape<192, 128>, Shape<1, 2>, Registers<120, 192>>;
+        using _8x256_1x2 = Config<Shape<8, 256>, Shape<1, 2>, Registers<80, 80>>;
+        using _16x256_1x2 = Config<Shape<16, 256>, Shape<1, 2>, Registers<80, 88>>;
+        using _32x256_1x2 = Config<Shape<32, 256>, Shape<1, 2>, Registers<120, 192>>;
+        using _64x256_1x2 = Config<Shape<64, 256>, Shape<1, 2>, Registers<120, 192>>;
+        using _96x256_1x2 = Config<Shape<96, 256>, Shape<1, 2>, Registers<120, 192>>;
+        using _128x256_1x2 = Config<Shape<128, 256>, Shape<1, 2>, Registers<120, 192>>;
+
+        add<K<_64x128_1x2, 4, kColMajor, Striding::kIndexed, true>>(c);
+        add<K<_96x128_1x2, 4, kColMajor, Striding::kIndexed, true>>(c);
+        add<K<_192x128_1x2, 3, kColMajor, Striding::kIndexed, true>>(c);
+        add<K<_8x256_1x2, 3, kColMajor, Striding::kIndexed, true>>(c);
+        add<K<_16x256_1x2, 3, kColMajor, Striding::kIndexed, true>>(c);
+        add<K<_32x256_1x2, 3, kColMajor, Striding::kIndexed, true>>(c);
+        add<K<_64x256_1x2, 3, kColMajor, Striding::kIndexed, true>>(c);
+        add<K<_96x256_1x2, 3, kColMajor, Striding::kIndexed, true>>(c);
+        add<K<_128x256_1x2, 3, kColMajor, Striding::kIndexed, true>>(c);
+    }
+}
+
+using C = detail::C<Sm90MxFp4Format>;
+
+Registrar reg(mxfp4, register_kernels<C::Type>);
 }  // namespace
 }  // namespace turbomind::gemm
 

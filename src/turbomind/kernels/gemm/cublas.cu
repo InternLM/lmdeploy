@@ -184,7 +184,7 @@ private:
 
 void add_cublas(Collector& collector, bool (*available)(int))
 {
-    collector.add<CublasKernel>(available);
+    add<CublasKernel>(collector, available);
 }
 
 #if defined(ENABLE_CUBLAS_GROUPED)
@@ -579,10 +579,10 @@ Registrar reg[]{
 }},
 #if defined(ENABLE_CUBLAS_GROUPED)
 {grouped_f16, [](Collector& c) {
-    c.add<CublasGroupedKernel>();
+    add<CublasGroupedKernel>(c);
 }},
 {grouped_bf16, [](Collector& c) {
-    c.add<CublasGroupedKernel>();
+    add<CublasGroupedKernel>(c);
 }},
 #endif
 };

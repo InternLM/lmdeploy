@@ -257,51 +257,37 @@ prepare_moe_tma_descs_sm90_mxfp4_fp8_folded(const __grid_constant__ CUtensorMap 
 // Native SM90 E4M3-K128 x MXFP4-K32 folded mainloop. Public (M,N,K) is
 // (tokens,output,K), while WGMMA sees packed weight as RS A and activation as
 // descriptor B, hence the hardware tile is (output,tokens,K).
-template<Order    Raster,
-         int      MulticastA,
-         int      MulticastB,
-         bool     Grouped,
-         Striding StridingA,
-         int      TileM,
-         int      TileN,
-         int      StageCount,
-         class    WGLayout,
-         int      MmaN,
-         int      ProducerRegsTma,
-         int      MathRegsTma,
-         int      ProducerRegsIndexed,
-         int      MathRegsIndexed,
-         int      EpilogueTileM,
-         int      EpilogueTileN,
-         int      EpilogueStages,
-         bool     SupportsFusedSilu = false>
+template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, int MulticastA, int MulticastB, int MmaN, int EpilogueStages>
 struct GemmUniversalSm90MxFp4Fp8Folded {
+    using Tile = typename Config_::Tile;
+    using Groups = typename Config_::Groups;
+    using RegisterConfig = typename Config_::RegisterConfig;
+    using WGLayout = cute::Layout<cute::Shape<cute::Int<Groups::M>, cute::Int<Groups::N>>>;
     using Arch = Sm90;
     using Format = Sm90MxFp4Fp8FoldedFormat;
     static constexpr Order kRasterOrder = Raster;
-    static constexpr bool is_grouped_gemm = Grouped;
-    static constexpr bool kSupportsFusedSilu = SupportsFusedSilu;
-    static constexpr Striding kStridingA = StridingA;
-    static constexpr Striding kStridingB = Grouped ? Striding::kBlocked : Striding::kFlat;
-    static constexpr Striding kStridingC = Grouped ? Striding::kBlocked : Striding::kFlat;
-    static constexpr bool kIndexedGather = StridingA == Striding::kIndexed;
+    static constexpr bool is_grouped_gemm = Mode != Striding::kFlat;
+    static constexpr bool kSupportsFusedSilu = Silu;
+    static constexpr Striding kStridingA = Mode;
+    static constexpr Striding kStridingB = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
+    static constexpr Striding kStridingC = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
+    static constexpr bool kIndexedGather = Mode == Striding::kIndexed;
     static constexpr int kMulticastA = MulticastA;
     static constexpr int kMulticastB = MulticastB;
-    static constexpr int kMulticastU = Grouped ? 1 : kMulticastA;
+    static constexpr int kMulticastU = is_grouped_gemm ? 1 : kMulticastA;
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
-    static_assert(Grouped == (StridingA != Striding::kFlat));
-    static_assert(!SupportsFusedSilu || !Grouped || StridingA == Striding::kIndexed,
+    static_assert(!Silu || !is_grouped_gemm || Mode == Striding::kIndexed,
                   "grouped fused SiLU requires indexed gate/up activations");
     static_assert(kMulticastA == 1 || kMulticastA == 2);
     static_assert(kMulticastB == 1 || kMulticastB == 2);
     static_assert(kClusterSize <= 2);
-    static_assert(kClusterSize == 1 || (!Grouped && StridingA == Striding::kFlat));
+    static_assert(kClusterSize == 1 || (!is_grouped_gemm && Mode == Striding::kFlat));
 
-    static constexpr int TILE_M = TileM;
-    static constexpr int TILE_N = TileN;
+    static constexpr int TILE_M = Tile::M;
+    static constexpr int TILE_N = Tile::N;
     static constexpr int TILE_K = 128;
-    static constexpr int Stages = StageCount;
+    static constexpr int Stages = Stages_;
     static constexpr int kGroupSize = 32;
     static constexpr int kOutputFragmentN = 64;
     static constexpr int kGroupScaleTableCount = 7;
@@ -342,18 +328,16 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
     static constexpr int kGatherSlots = cute::ceil_div(kGatherVectors, WARPGROUP_SIZE);
     static_assert(kGatherVec * int(sizeof(Ta)) == 16);
 
-    static constexpr int kProducerRegsTma = ProducerRegsTma;
-    static constexpr int kMathRegsTma = MathRegsTma;
-    static constexpr int kProducerRegsIndexed = ProducerRegsIndexed;
-    static constexpr int kMathRegsIndexed = MathRegsIndexed;
-    static_assert(kProducerRegsTma % 8 == 0 && kMathRegsTma % 8 == 0);
-    static_assert(kMathWarpGroups != 1 || kProducerRegsTma + kMathRegsTma <= 512);
-    static_assert(kMathWarpGroups != 2 || kProducerRegsTma + 2 * kMathRegsTma <= 504);
-    static_assert(kMathWarpGroups != 3 || kProducerRegsTma + 3 * kMathRegsTma <= 512);
+    static constexpr int kProducerRegs = RegisterConfig::Producer;
+    static constexpr int kMathRegs = RegisterConfig::Math;
+    static_assert(kProducerRegs % 8 == 0 && kMathRegs % 8 == 0);
+    static_assert(kMathWarpGroups != 1 || kProducerRegs + kMathRegs <= 512);
+    static_assert(kMathWarpGroups != 2 || kProducerRegs + 2 * kMathRegs <= 504);
+    static_assert(kMathWarpGroups != 3 || kProducerRegs + 3 * kMathRegs <= 512);
 
     using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
     using ClusterShape = cute::Shape<cute::Int<kClusterSize>, cute::_1, cute::_1>;
-    using Scheduler = TileScheduler<Raster, Cluster, true, true, TILE_M, TILE_N, Stages, Grouped>;
+    using Scheduler = TileScheduler<Raster, Cluster, true, true, TILE_M, TILE_N, Stages, is_grouped_gemm>;
     using MainloopPipeline = cutlass::PipelineTmaAsync<Stages>;
     using MainloopState = typename MainloopPipeline::PipelineState;
     using PipelineStorage = typename MainloopPipeline::SharedStorage;
@@ -379,7 +363,7 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
         (kQparamShiftValuesStage + kQparamBaseValuesStage) * sizeof(Tv);
     static constexpr int kActivationStageBytes = TILE_M * TILE_K * sizeof(Ta);
     static constexpr int kAlignmentU = 16 / sizeof(float);
-    static constexpr int kBoxU = TILE_M + (Grouped ? kAlignmentU : 0);
+    static constexpr int kBoxU = TILE_M + (is_grouped_gemm ? kAlignmentU : 0);
     static constexpr int kTmaCountM = cute::ceil_div(TILE_M / kMulticastA, 256);
     static constexpr int kTmaBoxM = TILE_M / (kMulticastA * kTmaCountM);
     static constexpr int kUStageStride = round_up<int>(kBoxU, 128);
@@ -423,8 +407,6 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
     static_assert(TILE_M % kEpiM == 0);
     static_assert(TILE_N % kEpiN == 0);
     static_assert(kWgM % kEpiM == 0);
-    static_assert(EpilogueTileM == kEpilogueTileM);
-    static_assert(EpilogueTileN == kEpilogueTileN);
     static_assert(kEpiM % kTmaStoreM == 0);
     static_assert(kTmaStoreM <= 256);
     static_assert(kEpiN % kTmaStoreN == 0);
@@ -554,7 +536,7 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
     static constexpr int kDescV = kDescB + 1;
     static constexpr int kDescU = kDescV + 1;
     static constexpr int kDescC = kIndexedGather ? kDescV + 1 : kDescU + 1;
-    static constexpr int kTmaDescNum = Grouped ? kDescC + 1 : 1;
+    static constexpr int kTmaDescNum = is_grouped_gemm ? kDescC + 1 : 1;
 
     static int* PrepareTmaDescs(const CUtensorMap& tm_a,
                                 const CUtensorMap& tm_b,
@@ -572,7 +554,7 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
                                 int                M,
                                 cudaStream_t       stream)
     {
-        if constexpr (!Grouped) {
+        if constexpr (!is_grouped_gemm) {
             return nullptr;
         }
         int* offsets = reinterpret_cast<int*>(out + num_groups * kTmaDescNum);
@@ -659,22 +641,22 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
         }
         if (wg_idx == kMathWarpGroups) {
             if constexpr (kIndexedGather) {
-                cutlass::arch::warpgroup_reg_dealloc<kProducerRegsIndexed>();
+                cutlass::arch::warpgroup_reg_dealloc<kProducerRegs>();
                 run_producer_indexed(
                     tm_b, tm_v, param_A, param_V, param_U, sched, tensormap_buf, storage, pipeline);
             }
             else {
-                cutlass::arch::warpgroup_reg_dealloc<kProducerRegsTma>();
+                cutlass::arch::warpgroup_reg_dealloc<kProducerRegs>();
                 run_producer_tma(
                     tm_a, tm_b, tm_v, tm_u, param_A, param_B, param_V, param_U, sched, tensormap_buf, storage, pipeline);
             }
         }
         else {
             if constexpr (kIndexedGather) {
-                cutlass::arch::warpgroup_reg_alloc<kMathRegsIndexed>();
+                cutlass::arch::warpgroup_reg_alloc<kMathRegs>();
             }
             else {
-                cutlass::arch::warpgroup_reg_alloc<kMathRegsTma>();
+                cutlass::arch::warpgroup_reg_alloc<kMathRegs>();
             }
             run_consumer(tm_c, param_C, param_W, fuse_silu, sched, tensormap_buf, storage, pipeline);
         }
@@ -941,7 +923,7 @@ private:
                     const CUtensorMap* Udesc = &tm_u;
                     const cute::TmaDescriptor* Bdesc = tm_b.get_tma_descriptor();
                     const cute::TmaDescriptor* Vdesc = tm_v.get_tma_descriptor();
-                    if constexpr (Grouped) {
+                    if constexpr (is_grouped_gemm) {
                         CUtensorMap* descs = tensormap_buf + tile->group_idx * kTmaDescNum;
                         Adesc = &descs[kDescA];
                         Bdesc = &descs[kDescB];
@@ -951,7 +933,7 @@ private:
                     const int out_fragment = tile->offset_n / kOutputFragmentN;
                     const int out_tile = out_fragment / kOutputFragments;
                     int group_idx = 0;
-                    if constexpr (Grouped) {
+                    if constexpr (is_grouped_gemm) {
                         group_idx = tile->group_idx;
                     }
                     const auto qparam_ptr = detail::resolve_mxfp4_folded_group_ptr(param_V, group_idx);
@@ -1259,7 +1241,7 @@ private:
                         pipeline.consumer_wait(read_state, token);
                         const int stage = read_state.index();
                         int       u_pad = 0;
-                        if constexpr (Grouped) {
+                        if constexpr (is_grouped_gemm) {
                             u_pad = tile->m0 % kAlignmentU;
                         }
                         auto packed_stage       = sPackedPipeline(cute::_, stage);
@@ -1389,7 +1371,7 @@ private:
                         const int   tma_store_warp   = mma_tid / WARP_SIZE;
                         const bool  tma_store_leader = cute::elect_one_sync();
                         const void* output_desc      = [&]() -> const CUtensorMap* {
-                            if constexpr (Grouped) {
+                            if constexpr (is_grouped_gemm) {
                                 return tensormap_buf + tile->group_idx * kTmaDescNum + kDescC;
                             }
                             else {
@@ -1543,7 +1525,7 @@ private:
                             }
                             int group_m0 = 0;
                             int row_end  = sched.gemm_shape().x;
-                            if constexpr (Grouped) {
+                            if constexpr (is_grouped_gemm) {
                                 group_m0 = tile->m0;
                                 row_end  = tile->m1;
                             }
@@ -1567,7 +1549,7 @@ private:
                             named_barrier_arrive_and_wait(kMathThreads, kEpilogueBarrierId);
                             if (threadIdx.x == 0) {
                                 const CUtensorMap* output_desc = [&]() {
-                                    if constexpr (Grouped) {
+                                    if constexpr (is_grouped_gemm) {
                                         return tensormap_buf + tile->group_idx * kTmaDescNum + kDescC;
                                     }
                                     else {
@@ -1577,7 +1559,7 @@ private:
                                 cute::SM90_TMA_STORE::copy(output_desc, smem_C, tile->offset_n / 2, tile->offset_m);
                                 cute::tma_store_arrive();
                             }
-                            if constexpr (Grouped) {
+                            if constexpr (is_grouped_gemm) {
                                 if (threadIdx.x == 0) {
                                     cute::tma_store_wait<0>();
                                 }
