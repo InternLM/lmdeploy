@@ -42,6 +42,21 @@ def _arguments(deltas):
     )
 
 
+def _final_streamed_call(parser, payload):
+    parser.begin_tool_block()
+    deltas = []
+    consumed = parser.feed_tool_block(payload, deltas, final=True)
+    name = next(
+        (
+            delta.function.name
+            for delta in deltas
+            if delta.function is not None and delta.function.name is not None
+        ),
+        None,
+    )
+    return consumed, name, _arguments(deltas)
+
+
 def test_json_arguments_before_name_stream_in_source_order_and_preserve_duplicates():
     parser = Qwen3ToolParser()
     raw_arguments = '{"a":"one","a":"two"}'
@@ -75,6 +90,164 @@ def test_json_arguments_before_name_stream_in_source_order_and_preserve_duplicat
 
 
 @pytest.mark.parametrize(
+    ('parser_cls', 'payload'),
+    [
+        (
+            Qwen3CoderToolParser,
+            '<function=f><parameter=a>partial',
+        ),
+        (
+            Glm47ToolParser,
+            'f<arg_key>a</arg_key><arg_value>partial',
+        ),
+    ],
+)
+def test_xml_complete_reuses_final_streaming_semantics_for_incomplete_argument(parser_cls, payload):
+    consumed, streamed_name, streamed_arguments = _final_streamed_call(parser_cls(), payload)
+    complete = parser_cls().parse_tool_call_complete(payload)
+
+    assert consumed == len(payload)
+    assert complete is not None
+    assert complete.function.name == streamed_name
+    assert complete.function.arguments == streamed_arguments
+
+
+def test_complete_and_streaming_drop_malformed_tool_block_without_name():
+    parser_cls = ResponseParserManager.get('default')
+    old_reasoning_cls = parser_cls.reasoning_parser_cls
+    old_tool_cls = parser_cls.tool_parser_cls
+    text = '<tool_call>{"arguments":{"x":1}}</tool_call>after'
+    request = ChatCompletionRequest(
+        model='test',
+        messages=[],
+        tools=[{'type': 'function', 'function': {'name': 'f'}}],
+        tool_choice='auto',
+    )
+    try:
+        parser_cls.reasoning_parser_cls = None
+        parser_cls.tool_parser_cls = ToolParserManager.get('qwen3')
+
+        stream_parser = parser_cls(request.model_copy(update={'stream': True}))
+        streamed = stream_parser.stream_chunk(text, [])
+        streamed_content = ''.join(message.content or '' for message, _ in streamed)
+        streamed_calls = [call for message, _ in streamed for call in message.tool_calls or []]
+
+        complete_parser = parser_cls(request.model_copy(update={'stream': False}))
+        complete_content, complete_calls, reasoning = complete_parser.parse_complete(text)
+
+        assert streamed_content == 'after'
+        assert streamed_calls == []
+        assert complete_content == streamed_content
+        assert complete_calls is None
+        assert reasoning is None
+    finally:
+        parser_cls.reasoning_parser_cls = old_reasoning_cls
+        parser_cls.tool_parser_cls = old_tool_cls
+
+
+@pytest.mark.parametrize('separator', ['\n', '\n\n'])
+@pytest.mark.parametrize(
+    ('tool_parser_name', 'first_call', 'second_call'),
+    [
+        (
+            'qwen3',
+            '<tool_call>{"name":"f","arguments":{"x":1}}</tool_call>',
+            '<tool_call>{"name":"g","arguments":{"x":2}}</tool_call>',
+        ),
+        (
+            'qwen3coder',
+            '<tool_call><function=f></function></tool_call>',
+            '<tool_call><function=g></function></tool_call>',
+        ),
+        (
+            'glm47',
+            '<tool_call>f</tool_call>',
+            '<tool_call>g</tool_call>',
+        ),
+    ],
+)
+def test_response_parser_drops_newlines_only_between_tool_blocks(
+    separator,
+    tool_parser_name,
+    first_call,
+    second_call,
+):
+    parser_cls = ResponseParserManager.get('default')
+    old_reasoning_cls = parser_cls.reasoning_parser_cls
+    old_tool_cls = parser_cls.tool_parser_cls
+    request = ChatCompletionRequest(
+        model='test',
+        messages=[],
+        tools=[
+            {'type': 'function', 'function': {'name': 'f'}},
+            {'type': 'function', 'function': {'name': 'g'}},
+        ],
+        tool_choice='auto',
+    )
+    try:
+        parser_cls.reasoning_parser_cls = None
+        parser_cls.tool_parser_cls = ToolParserManager.get(tool_parser_name)
+
+        complete_parser = parser_cls(request.model_copy(update={'stream': False}))
+        complete_content, complete_calls, reasoning = complete_parser.parse_complete(
+            first_call + separator + second_call)
+
+        stream_parser = parser_cls(request.model_copy(update={'stream': True}))
+        streamed = []
+        for chunk in (first_call, separator, second_call[:5], second_call[5:]):
+            streamed.extend(stream_parser.stream_chunk(chunk, []))
+        streamed_content = ''.join(message.content or '' for message, _ in streamed)
+        streamed_names = [
+            call.function.name
+            for message, _ in streamed
+            for call in message.tool_calls or []
+            if call.function.name is not None
+        ]
+
+        assert complete_content is None
+        assert reasoning is None
+        assert complete_calls is not None
+        assert [call.function.name for call in complete_calls] == ['f', 'g']
+        assert streamed_content == ''
+        assert streamed_names == ['f', 'g']
+    finally:
+        parser_cls.reasoning_parser_cls = old_reasoning_cls
+        parser_cls.tool_parser_cls = old_tool_cls
+
+
+@pytest.mark.parametrize('tail', ['\nafter', '\n\nafter', '\n'])
+def test_response_parser_preserves_tool_newlines_not_followed_by_another_tool(tail):
+    parser_cls = ResponseParserManager.get('default')
+    old_reasoning_cls = parser_cls.reasoning_parser_cls
+    old_tool_cls = parser_cls.tool_parser_cls
+    call = '<tool_call>{"name":"f","arguments":{}}</tool_call>'
+    request = ChatCompletionRequest(
+        model='test',
+        messages=[],
+        tools=[{'type': 'function', 'function': {'name': 'f'}}],
+        tool_choice='auto',
+    )
+    try:
+        parser_cls.reasoning_parser_cls = None
+        parser_cls.tool_parser_cls = ToolParserManager.get('qwen3')
+
+        complete_parser = parser_cls(request.model_copy(update={'stream': False}))
+        complete_content, _, _ = complete_parser.parse_complete(call + tail)
+
+        stream_parser = parser_cls(request.model_copy(update={'stream': True}))
+        streamed = stream_parser.stream_chunk(call, [])
+        streamed.extend(stream_parser.stream_chunk(tail[:1], []))
+        streamed.extend(stream_parser.stream_chunk(tail[1:], [], final=True))
+        streamed_content = ''.join(message.content or '' for message, _ in streamed)
+
+        assert complete_content == tail
+        assert streamed_content == tail
+    finally:
+        parser_cls.reasoning_parser_cls = old_reasoning_cls
+        parser_cls.tool_parser_cls = old_tool_cls
+
+
+@pytest.mark.parametrize(
     'unknown_chunks',
     [
         (
@@ -93,6 +266,7 @@ def test_response_parser_drops_unknown_name_and_keeps_next_valid_call(unknown_ch
     old_tool_cls = parser_cls.tool_parser_cls
     raw_text = (
         '<tool_call>{"arguments":{"secret":1},"name":"missing"}</tool_call>'
+        '\n'
         '<tool_call>{"name":"allowed","arguments":{"ok":1}}</tool_call>'
     )
     request = ChatCompletionRequest(
@@ -108,7 +282,7 @@ def test_response_parser_drops_unknown_name_and_keeps_next_valid_call(unknown_ch
 
         stream_parser = parser_cls(request)
         emitted = []
-        for chunk in (*unknown_chunks, '<tool_call>{"name":"allowed","arguments":{"ok":1}}</tool_call>'):
+        for chunk in (*unknown_chunks, '\n', '<tool_call>{"name":"allowed","arguments":{"ok":1}}</tool_call>'):
             emitted.extend(stream_parser.stream_chunk(chunk, []))
         streamed_calls = [
             call

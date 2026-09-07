@@ -323,6 +323,7 @@ class BaseResponseParser(ResponseParser):
         else:
             self._mode = self.MODE_PLAIN
         self._pending = ''
+        self._after_tool_block = False
 
         self._initialize_reasoning_token_counter()
 
@@ -427,6 +428,33 @@ class BaseResponseParser(ResponseParser):
             content produced in this step (or ``None``), and ``progressed``
             indicates whether parser state/input was consumed.
         """
+        if self._after_tool_block:
+            newline_end = 0
+            pending_size = len(self._pending)
+            while newline_end < pending_size and self._pending[newline_end] == '\n':
+                newline_end += 1
+
+            if newline_end:
+                tool_tag = self.profile.tool_open_tag
+                remaining = pending_size - newline_end
+                if not remaining:
+                    if not self._stream_final_received:
+                        return None, False
+                elif tool_tag is not None:
+                    if self._pending.startswith(tool_tag, newline_end):
+                        # Drop only the confirmed inter-block newlines. The
+                        # normal tag path below starts the next tool block.
+                        self._pending = self._pending[newline_end:]
+                    elif (
+                        remaining < len(tool_tag)
+                        and not self._stream_final_received
+                        and self._pending.startswith(tool_tag[:remaining], newline_end)
+                    ):
+                        # Keep both the newlines and a split tool-opening tag
+                        # until the next chunk resolves their role.
+                        return None, False
+            self._after_tool_block = False
+
         tags = [t for t in (self.profile.reasoning_open_tag, self.profile.tool_open_tag) if t]
         if not tags:
             if not self._pending:
@@ -553,6 +581,7 @@ class BaseResponseParser(ResponseParser):
             self._pending = self._pending[consumed:]
         if self.tool_parser.block_closed:
             self._mode = self.MODE_PLAIN
+            self._after_tool_block = True
         return calls, consumed > 0 or self.tool_parser.block_closed
 
     def _build_profile(self) -> ProtocolProfile:
@@ -691,12 +720,15 @@ class BaseResponseParser(ResponseParser):
                 open_idx + len(open_tag),
                 tool_calls,
             )
-            parsed_count = len(tool_calls)
-            if parsed_count == call_count:
-                content_parts.append(text[open_idx:block_end])
-            else:
+            if len(tool_calls) > call_count:
                 tool_calls[call_count:] = self.tool_parser.filter_tool_calls(tool_calls[call_count:])
             pos = block_end
+            newline_end = pos
+            while newline_end < n and text[newline_end] == '\n':
+                newline_end += 1
+            tool_open_tag = self.profile.tool_open_tag
+            if tool_open_tag is not None and newline_end > pos and text.startswith(tool_open_tag, newline_end):
+                pos = newline_end
 
         content = ''.join(content_parts)
         reasoning_content = ''.join(reasoning_parts) if reasoning_parts else None

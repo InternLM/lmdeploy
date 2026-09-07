@@ -4,14 +4,18 @@ from __future__ import annotations
 import json
 from typing import ClassVar
 
-from lmdeploy.serve.openai.protocol import DeltaToolCall, FunctionCall, ToolCall
+from lmdeploy.serve.openai.protocol import DeltaToolCall
 
 from .json_value_scanner import JsonValueScanner
 from .tool_parser import ToolParser
 
 
 class JsonToolParser(ToolParser):
-    """Incrementally extract a JSON tool-call envelope."""
+    """Incrementally extract a JSON tool-call envelope.
+
+    Subclasses supply outer protocol tags. Complete parsing is inherited from
+    :class:`ToolParser` and therefore uses this incremental state machine too.
+    """
 
     argument_field: ClassVar[str] = 'arguments'
 
@@ -22,6 +26,16 @@ class JsonToolParser(ToolParser):
         self._json_key: str | None = None
         self._arguments_seen = False
         self._value_scanner = JsonValueScanner()
+
+    @classmethod
+    def get_tool_open_tag(cls) -> str | None:
+        """Return no outer opening tag for the bare JSON base parser."""
+        return None
+
+    @classmethod
+    def get_tool_close_tag(cls) -> str | None:
+        """Return no outer closing tag for the bare JSON base parser."""
+        return None
 
     def begin_tool_block(self) -> None:
         """Begin a logical call and reset its JSON envelope state."""
@@ -220,115 +234,6 @@ class JsonToolParser(ToolParser):
             )
         self._payload_closed = True
         self._phase = 'done'
-
-    def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
-        """Parse one complete JSON envelope without an outer closing tag.
-
-        Returns ``None`` when no function name can be extracted. Argument text
-        is preserved verbatim, including duplicate argument fields.
-        """
-        parsed = self._parse_complete_envelope(payload)
-        if parsed is None:
-            return None
-        name, arguments, _ = parsed
-        return ToolCall(function=FunctionCall(name=name, arguments=arguments))
-
-    def parse_tool_block(self, text: str, start: int, tool_calls: list[ToolCall]) -> int:
-        """Parse one JSON tool block and return its absolute consumed end.
-
-        ``start`` points immediately after the outer opening marker. A parsed
-        call is appended to ``tool_calls``; malformed envelopes are skipped up
-        to the outer closing marker when one is present.
-        """
-        close_tag = self.get_tool_close_tag()
-        parsed = self._parse_complete_envelope(text[start:], close_tag=close_tag)
-        if parsed is None:
-            close_at = text.find(close_tag, start) if close_tag is not None else -1
-            return close_at + len(close_tag) if close_at >= 0 else len(text)
-
-        name, arguments, payload_end = parsed
-        tool_calls.append(ToolCall(function=FunctionCall(name=name, arguments=arguments)))
-        if close_tag is None:
-            return start + payload_end
-        close_at = text.find(close_tag, start + payload_end)
-        return close_at + len(close_tag) if close_at >= 0 else len(text)
-
-    def _parse_complete_envelope(self, payload: str, *, close_tag: str | None = None) -> tuple[str, str, int] | None:
-        """Extract source fields without validating their JSON values.
-
-        Returns the first function name, concatenated raw argument values, and
-        the consumed payload offset. Repeated argument fields remain repeated
-        in the returned text; a missing argument field becomes ``{}``.
-        """
-        pos = self._skip_ws(payload, 0)
-        if pos >= len(payload) or payload[pos] != '{':
-            return None
-        pos += 1
-        name: str | None = None
-        arguments: list[str] = []
-        arguments_seen = False
-
-        while pos < len(payload):
-            pos = self._skip_ws(payload, pos)
-            if pos == len(payload):
-                break
-            if close_tag and payload.startswith(close_tag, pos):
-                break
-            if payload[pos] == '}':
-                pos += 1
-                break
-            if payload[pos] != '"':
-                pos += 1
-                continue
-            key, key_end = self._read_string(payload, pos)
-            if key_end < 0:
-                break
-            pos = self._skip_ws(payload, key_end)
-            if pos >= len(payload) or payload[pos] != ':':
-                continue
-            value_start = self._skip_ws(payload, pos + 1)
-            if key == self.argument_field:
-                arguments_seen = True
-            if value_start >= len(payload) or (close_tag and payload.startswith(close_tag, value_start)):
-                pos = value_start
-                break
-
-            value_end = self._scan_complete_value(payload, value_start, close_tag)
-            if key == 'name' and name is None and payload[value_start] == '"':
-                value, string_end = self._read_string(payload, value_start)
-                if string_end >= 0 and string_end <= value_end:
-                    name = value
-            elif key == self.argument_field:
-                arguments.append(payload[value_start:value_end])
-
-            pos = value_end
-            if close_tag and payload.startswith(close_tag, pos):
-                break
-
-        if name is None:
-            return None
-        return name, ''.join(arguments) if arguments_seen else '{}', pos
-
-    @staticmethod
-    def _scan_complete_value(text: str, start: int, close_tag: str | None) -> int:
-        """Return the end offset of one JSON-like value.
-
-        A closing marker outside a string bounds malformed or incomplete values, while marker text inside a string
-        remains part of the value.
-        """
-        scanner = JsonValueScanner()
-        pos = start
-        while pos < len(text):
-            marker_at = text.find(close_tag, pos) if close_tag else -1
-            scan_end = marker_at if marker_at >= 0 else len(text)
-            pos = scanner.feed(text, pos, scan_end)
-            if scanner.complete or marker_at < 0:
-                return pos
-            if not scanner.in_string:
-                scanner.finish()
-                return pos
-            pos = scanner.feed(text, pos, marker_at + len(close_tag))
-        return pos
 
     @staticmethod
     def _read_string(text: str, start: int) -> tuple[str, int]:

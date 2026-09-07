@@ -6,11 +6,7 @@ from dataclasses import dataclass, field
 from json.encoder import encode_basestring
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from lmdeploy.serve.openai.protocol import (
-    DeltaToolCall,
-    FunctionCall,
-    ToolCall,
-)
+from lmdeploy.serve.openai.protocol import DeltaToolCall
 
 from .tool_parser import ToolParser
 
@@ -86,9 +82,9 @@ class XmlToolParser(ToolParser):
     ``_stable_arg_value_end`` when it can dispatch those prefixes more
     efficiently.
 
-    Complete parsing remains dialect-specific. Subclasses pass ordered raw
-    argument pairs to ``_build_tool_call`` so conversion and duplicate-key
-    preservation stay common.
+    Complete parsing is inherited from :class:`ToolParser`, which feeds the
+    full payload through this same streaming state machine and joins its
+    emitted argument fragments.
     """
 
     # Raw argument values end immediately before this dialect-specific marker.
@@ -534,34 +530,3 @@ class XmlToolParser(ToolParser):
         if not isinstance(raw_value, str):
             return raw_value
         return self._coerce_value(raw_value, self._get_schema_type(schema)) if schema is not None else raw_value
-
-    def _get_coerced_args(self, func_name: str | None, raw_arg_pairs: list[tuple[str, str]]) -> list[tuple[str, Any]]:
-        """Coerce argument pairs without changing their order or
-        multiplicity."""
-        if not func_name or not raw_arg_pairs:
-            return raw_arg_pairs
-        param_schemas = self._function_param_schemas.get(func_name, {})
-        if not param_schemas:
-            return raw_arg_pairs
-
-        coerced: list[tuple[str, Any]] = []
-        for key, value in raw_arg_pairs:
-            schema = param_schemas.get(key)
-            coerced.append((key, self._coerce_arg_value(value, schema)))
-        return coerced
-
-    def _build_tool_call(self, func_name: str, raw_arg_pairs: list[tuple[str, str]]) -> ToolCall:
-        """Build one tool call from ordered, potentially duplicate raw
-        pairs."""
-        arg_pairs = self._get_coerced_args(func_name, raw_arg_pairs)
-        return ToolCall(function=FunctionCall(name=func_name, arguments=self._dump_argument_pairs(arg_pairs)))
-
-    @staticmethod
-    def _dump_argument_pairs(arg_pairs: list[tuple[str, Any]]) -> str:
-        """Serialize ordered pairs as a JSON object while preserving duplicate
-        keys."""
-        fields = (
-            f'{json.dumps(name, ensure_ascii=False)}: {json.dumps(value, ensure_ascii=False)}'
-            for name, value in arg_pairs
-        )
-        return '{' + ', '.join(fields) + '}'

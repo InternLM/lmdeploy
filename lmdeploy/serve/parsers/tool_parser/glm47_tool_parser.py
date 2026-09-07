@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-from lmdeploy.serve.openai.protocol import ToolCall
-
 from .tool_parser import ToolParserManager
 from .xml_tool_parser import XmlToolParser
 
@@ -76,75 +74,3 @@ class Glm47ToolParser(XmlToolParser):
             return None
 
         return value_start + len(self.arg_value_start_token), payload[pos:key_end].strip()
-
-    def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
-        """Parse one complete GLM inner payload."""
-        func_name, raw_arg_pairs = self._extract_complete_args(payload)
-        if func_name is None:
-            return None
-        return self._build_tool_call(func_name, raw_arg_pairs)
-
-    def parse_tool_block(self, text: str, start: int, tool_calls: list[ToolCall]) -> int:
-        """Parse a GLM block without treating close-tag text in values as its
-        end."""
-        pos = start
-        close_tag = self.get_tool_close_tag()
-        while True:
-            arg_start = text.find(self.arg_key_start_token, pos)
-            close_at = text.find(close_tag, pos)
-            if close_at < 0:
-                return len(text)
-            if arg_start < 0 or close_at < arg_start:
-                break
-
-            key_end = text.find(self.arg_key_end_token, arg_start + len(self.arg_key_start_token))
-            if key_end < 0:
-                return len(text)
-            value_start = text.find(self.arg_value_start_token, key_end + len(self.arg_key_end_token))
-            if value_start < 0:
-                return len(text)
-            value_end = text.find(self.arg_value_end_token, value_start + len(self.arg_value_start_token))
-            if value_end < 0:
-                return len(text)
-            pos = value_end + len(self.arg_value_end_token)
-
-        parsed = self.parse_tool_call_complete(text[start:close_at])
-        if parsed is not None:
-            tool_calls.append(parsed)
-        return close_at + len(close_tag)
-
-    def _extract_complete_args(self, payload: str) -> tuple[str | None, list[tuple[str, str]]]:
-        """Extract a function name and ordered raw argument pairs."""
-        payload = payload.strip()
-        if not payload:
-            return None, []
-
-        args_start_idx = payload.find(self.arg_key_start_token)
-        if args_start_idx >= 0:
-            func_name = payload[:args_start_idx].strip()
-            args_text = payload[args_start_idx:]
-        else:
-            func_name = payload
-            args_text = ''
-
-        arg_pairs: list[tuple[str, str]] = []
-        search_idx = 0
-        while True:
-            key_start = args_text.find(self.arg_key_start_token, search_idx)
-            if key_start < 0:
-                break
-            key_content_start = key_start + len(self.arg_key_start_token)
-            key_end = args_text.find(self.arg_key_end_token, key_content_start)
-            if key_end < 0:
-                break
-            key = args_text[key_content_start:key_end].strip()
-            value_start = args_text.find(self.arg_value_start_token, key_end + len(self.arg_key_end_token))
-            if value_start < 0:
-                break
-            value_content_start = value_start + len(self.arg_value_start_token)
-            value_end = args_text.find(self.arg_value_end_token, value_content_start)
-            if value_end < 0:
-                break
-            arg_pairs.append((key, args_text[value_content_start:value_end]))
-            search_idx = value_end + len(self.arg_value_end_token)
-        return func_name, arg_pairs

@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import shortuuid
@@ -9,6 +10,7 @@ from mmengine import Registry
 from lmdeploy.serve.openai.protocol import (
     DeltaFunctionCall,
     DeltaToolCall,
+    FunctionCall,
     ToolCall,
 )
 
@@ -20,6 +22,15 @@ ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.parsers.t
 # Client-visible indices are non-negative; these values encode filtering state.
 _PENDING_INDEX = -2
 _REJECTED_INDEX = -1
+
+
+@dataclass
+class _ToolCallParts:
+    """Complete-call fields accumulated from streaming deltas."""
+
+    call_id: str | None = None
+    name: str | None = None
+    arguments: list[str] = field(default_factory=list)
 
 
 def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
@@ -280,7 +291,7 @@ class ToolParser:
         deltas.append(delta)
 
     def parse_tool_block(self, text: str, start: int, tool_calls: list[ToolCall]) -> int:
-        """Parse one complete, non-streamed tool block.
+        """Parse one complete block through the streaming consumer.
 
         Args:
             text: Complete generated response containing the tool block.
@@ -289,28 +300,46 @@ class ToolParser:
             tool_calls: Output list to which parsed calls are appended.
 
         Returns:
-            Absolute index of the first character after the consumed block. If
-            the configured closing marker is absent, returns ``len(text)``
-            without appending a call.
+            Absolute index of the first character after the prefix consumed by
+            :meth:`feed_tool_block`.
         """
-        close_tag = self.get_tool_close_tag()
-        if close_tag is None:
-            end = len(text)
-        else:
-            end = text.find(close_tag, start)
-            if end < 0:
-                return len(text)
+        self.begin_tool_block()
+        deltas: list[DeltaToolCall] = []
+        consumed = self.feed_tool_block(text[start:], deltas, final=True)
 
-        parsed = self.parse_tool_call_complete(text[start:end])
-        if isinstance(parsed, list):
-            tool_calls.extend(parsed)
-        elif parsed is not None:
-            tool_calls.append(parsed)
-        return end + (len(close_tag) if close_tag is not None else 0)
+        parts_by_index: dict[int, _ToolCallParts] = {}
+        for delta in deltas:
+            parts = parts_by_index.get(delta.index)
+            if parts is None:
+                parts = _ToolCallParts()
+                parts_by_index[delta.index] = parts
+            if delta.id is not None and parts.call_id is None:
+                parts.call_id = delta.id
+            function = delta.function
+            if function is None:
+                continue
+            if function.name is not None and parts.name is None:
+                parts.name = function.name
+            if function.arguments is not None:
+                parts.arguments.append(function.arguments)
+
+        for parts in parts_by_index.values():
+            if parts.name is None:
+                continue
+            function = FunctionCall(name=parts.name, arguments=''.join(parts.arguments))
+            if parts.call_id is None:
+                tool_calls.append(ToolCall(function=function))
+            else:
+                tool_calls.append(ToolCall(id=parts.call_id, function=function))
+        return start + consumed
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | list[ToolCall] | None:
-        """Parse one complete tool payload into OpenAI tool call objects."""
-        raise NotImplementedError('ToolParser.parse_tool_call_complete has not been implemented!')
+        """Parse a complete inner payload through the streaming consumer."""
+        tool_calls: list[ToolCall] = []
+        self.parse_tool_block(payload, 0, tool_calls)
+        if len(tool_calls) == 1:
+            return tool_calls[0]
+        return tool_calls or None
 
     @staticmethod
     def _stable_prefix_end(text: str, marker_prefixes: tuple[str, ...], start: int = 0) -> int:
