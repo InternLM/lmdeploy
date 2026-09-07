@@ -1,15 +1,22 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-from lmdeploy.serve.openai.protocol import FunctionCall, ToolCall
+from typing import Literal
+
+from lmdeploy.serve.openai.protocol import ToolCall
 
 from .tool_parser import ToolParserManager
-from .xml_tool_parser import XmlArgState, XmlToolParser
+from .xml_tool_parser import XmlToolParser
 
 
 @ToolParserManager.register_module(['qwen3coder'])
 class Qwen3CoderToolParser(XmlToolParser):
-    """Tool parser for Qwen3Coder XML tool-call payloads."""
+    """Parse Qwen function and parameter tags with the XML state machine.
+
+    ``<function=...>`` resolves ``function``; ``<parameter=...>`` and
+    ``</function>`` are handled by ``arg_start``; the remainder of the
+    parameter opener resolves ``arg_name``.
+    """
 
     structural_tag_model = 'qwen_3_coder'
     reasoning_structural_tag_model = 'qwen_3_5'
@@ -19,15 +26,10 @@ class Qwen3CoderToolParser(XmlToolParser):
     func_suffix = '</function>'
     param_prefix = '<parameter='
     param_suffix = '</parameter>'
-
-    # Qwen tokenizers emit ``</parameter>`` as the three complete token
-    # pieces ``</``, ``parameter``, and ``>``.  These are therefore the only
-    # incomplete suffixes that can occur at an incremental decode boundary.
+    arg_value_close_tag = param_suffix
     _param_close_start = '</'
     _param_close_without_end = '</parameter'
-
-    def _close_json_on_final(self) -> bool:
-        return False
+    arg_value_close_prefixes = (_param_close_without_end, _param_close_start)
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
@@ -37,8 +39,13 @@ class Qwen3CoderToolParser(XmlToolParser):
     def get_tool_close_tag(cls) -> str | None:
         return '</tool_call>'
 
-    def _consume_function(self, payload: str, pos: int, final: bool) -> int | None:
-        del final
+    def _consume_function(
+        self,
+        payload: str,
+        pos: int,
+        final: bool,
+    ) -> tuple[int, str, Literal['arg_start', 'done']] | None:
+        """Consume a complete ``<function=name>`` opener from ``function``."""
         start = payload.find(self.func_prefix, pos)
         if start < 0:
             return None
@@ -47,60 +54,40 @@ class Qwen3CoderToolParser(XmlToolParser):
         if name_end < 0:
             return None
 
-        self._state.func_name = payload[name_start:name_end].strip()
-        self._state.phase = 'arg_start'
-        return name_end + 1
+        return name_end + 1, payload[name_start:name_end].strip(), 'arg_start'
 
-    def _consume_arg_start(self, payload: str, pos: int) -> int | None:
+    def _consume_arg_start(self, payload: str, pos: int) -> tuple[int, Literal['arg_name', 'done']] | None:
+        """Enter ``arg_name`` or finish at the inner function close tag."""
         param_start = payload.find(self.param_prefix, pos)
         func_end = payload.find(self.func_suffix, pos)
         if func_end >= 0 and (param_start < 0 or func_end < param_start):
-            self._state.phase = 'done'
-            self._payload_closed = True
-            return func_end + len(self.func_suffix)
+            return func_end + len(self.func_suffix), 'done'
         if param_start < 0:
             return None
 
-        self._state.phase = 'arg_name'
-        return param_start + len(self.param_prefix)
+        return param_start + len(self.param_prefix), 'arg_name'
 
-    def _consume_arg_name(self, payload: str, pos: int) -> int | None:
+    def _consume_arg_name(self, payload: str, pos: int) -> tuple[int, str] | None:
+        """Read the parameter name and return the raw-value start."""
         name_end = payload.find('>', pos)
         if name_end < 0:
             return None
 
-        self._state.arg_name = payload[pos:name_end].strip()
-        self._arg_state = XmlArgState()
-        self._state.phase = 'arg_value'
-        return name_end + 1
+        return name_end + 1, payload[pos:name_end].strip()
 
-    def _consume_arg_value(self, payload: str, pos: int, json_fragments: list[str]) -> int | None:
-        value_end = payload.find(self.param_suffix, pos)
-        if value_end >= 0:
-            self._consume_arg_delta(payload[pos:value_end], json_fragments)
-            self._finish_arg(json_fragments)
-            self._state.arg_name = None
-            self._state.phase = 'arg_start'
-            return value_end + len(self.param_suffix)
-
-        raw_end = self._trim_partial_param_close_suffix(payload, pos)
-        if raw_end == pos:
-            return None
-        self._consume_arg_delta(payload[pos:raw_end], json_fragments)
-        return raw_end
-
-    @classmethod
-    def _trim_partial_param_close_suffix(cls, payload: str, start: int) -> int:
-        """Return the value end at a Qwen token-aligned decode boundary."""
+    def _stable_arg_value_end(self, payload: str, start: int) -> int:
+        """Dispatch Qwen's two partial markers by their final character."""
         end = len(payload)
         if end <= start:
             return end
 
         last = payload[-1]
-        if last == '/' and payload.endswith(cls._param_close_start, start):
-            return end - len(cls._param_close_start)
-        if last == 'r' and payload.endswith(cls._param_close_without_end, start):
-            return end - len(cls._param_close_without_end)
+        if last == '/' and payload.endswith(self._param_close_start, start):
+            # '/' means the last character of "</"
+            return end - len(self._param_close_start)
+        if last == 'r' and payload.endswith(self._param_close_without_end, start):
+            # 'r' means the last character of "</parameter"
+            return end - len(self._param_close_without_end)
         return end
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
@@ -108,8 +95,7 @@ class Qwen3CoderToolParser(XmlToolParser):
         if parsed is None:
             return None
         func_name, raw_arg_pairs, _ = parsed
-        arg_pairs = self._get_coerced_args(func_name, raw_arg_pairs)
-        return ToolCall(function=FunctionCall(name=func_name, arguments=self._dump_argument_pairs(arg_pairs)))
+        return self._build_tool_call(func_name, raw_arg_pairs)
 
     def parse_tool_block(self, text: str, start: int, tool_calls: list[ToolCall]) -> int:
         parsed = self._parse_complete_payload(text[start:], require_eof=False)
@@ -119,9 +105,7 @@ class Qwen3CoderToolParser(XmlToolParser):
             return close_at + len(close_tag) if close_at >= 0 else len(text)
 
         func_name, raw_arg_pairs, payload_end = parsed
-        arg_pairs = self._get_coerced_args(func_name, raw_arg_pairs)
-        tool_calls.append(
-            ToolCall(function=FunctionCall(name=func_name, arguments=self._dump_argument_pairs(arg_pairs))))
+        tool_calls.append(self._build_tool_call(func_name, raw_arg_pairs))
         close_at = text.find(close_tag, start + payload_end)
         return close_at + len(close_tag) if close_at >= 0 else len(text)
 

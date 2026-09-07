@@ -76,7 +76,7 @@ class ToolParser:
     tool_close_prefixes: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self):
-        self._stream_close_tag: str | None = None
+        self._close_tag: str | None = None
         self._active_tool_call_id: str = ''
         self._active_tool_index: int = -1
         self._name_emitted: bool = False
@@ -147,7 +147,7 @@ class ToolParser:
         Concrete parsers begin each logical call with ``_begin_call`` once its
         call boundary is known.
         """
-        self._stream_close_tag = self.get_tool_close_tag()
+        self._close_tag = self.get_tool_close_tag()
         self._payload_closed = False
         self.block_closed = False
 
@@ -189,7 +189,7 @@ class ToolParser:
         if self.block_closed:
             return 0
 
-        close_tag = self._stream_close_tag
+        close_tag = self._close_tag
         consumed = self._consume_stream_payload(text, deltas, final=final)
         if self._payload_closed:
             if close_tag is None:

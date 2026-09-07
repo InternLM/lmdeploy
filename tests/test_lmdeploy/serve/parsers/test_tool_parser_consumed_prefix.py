@@ -271,6 +271,29 @@ def test_glm_preserves_raw_string_whitespace_and_duplicate_parameters():
     assert complete.function.arguments == expected
 
 
+@pytest.mark.parametrize(
+    ('parser_cls', 'payload'),
+    [
+        (
+            Qwen3CoderToolParser,
+            '<function=f><parameter=a>one</parameter><parameter=b>two</parameter></function>',
+        ),
+        (
+            Glm47ToolParser,
+            'f<arg_key>a</arg_key><arg_value>one</arg_value>'
+            '<arg_key>b</arg_key><arg_value>two</arg_value>',
+        ),
+    ],
+)
+def test_xml_consumes_multiple_arguments_and_outer_close_in_one_chunk(parser_cls, payload):
+    parser = parser_cls()
+    pending, deltas, _ = _feed_chunks(parser, [payload + '</tool_call>tail'])
+
+    assert pending == 'tail'
+    assert parser.block_closed
+    assert _arguments(deltas) == '{"a": "one", "b": "two"}'
+
+
 def test_xml_outer_close_text_inside_parameter_value_is_not_a_block_boundary():
     payload = (
         'f<arg_key>a</arg_key>'

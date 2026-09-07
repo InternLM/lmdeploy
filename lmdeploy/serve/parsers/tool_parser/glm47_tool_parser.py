@@ -1,59 +1,73 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-from lmdeploy.serve.openai.protocol import FunctionCall, ToolCall
+from typing import Literal
+
+from lmdeploy.serve.openai.protocol import ToolCall
 
 from .tool_parser import ToolParserManager
-from .xml_tool_parser import XmlArgState, XmlToolParser
+from .xml_tool_parser import XmlToolParser
 
 
 @ToolParserManager.register_module(['glm47'])
 class Glm47ToolParser(XmlToolParser):
-    """Tool parser for GLM-4.7 XML-like tool-call payloads."""
+    """Parse GLM-4.7 mixed text and tags with the XML state machine.
+
+    Leading plain text before the first ``<arg_key>`` or outer close resolves
+    ``function``. After arguments begin, ``arg_start`` distinguishes the next
+    key from ``</tool_call>``; the key close and value opener are consumed while
+    resolving ``arg_name``.
+    """
 
     structural_tag_model = 'glm_4_7'
     arg_key_start_token = '<arg_key>'
     arg_key_end_token = '</arg_key>'
     arg_value_start_token = '<arg_value>'
     arg_value_end_token = '</arg_value>'
+    arg_value_close_tag = arg_value_end_token
+    # The complete closing marker is one token in supported GLM tokenizers.
+    arg_value_close_prefixes = ()
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
+        """Return the outer GLM tool-call opening tag."""
         return '<tool_call>'
 
     @classmethod
     def get_tool_close_tag(cls) -> str | None:
+        """Return the outer GLM tool-call closing tag."""
         return '</tool_call>'
 
-    def _consume_function(self, payload: str, pos: int, final: bool) -> int | None:
+    def _consume_function(
+        self,
+        payload: str,
+        pos: int,
+        final: bool,
+    ) -> tuple[int, str, Literal['arg_start', 'done']] | None:
+        """Resolve the leading plain-text function name once."""
         arg_key_start = payload.find(self.arg_key_start_token, pos)
         block_end = payload.find(self.get_tool_close_tag(), pos)
         if block_end >= 0 and (arg_key_start < 0 or block_end < arg_key_start):
-            if self._state.func_name is None:
-                self._state.func_name = payload[pos:block_end].strip()
-            self._state.phase = 'done'
-            self._payload_closed = True
-            return block_end
+            return block_end, payload[pos:block_end].strip(), 'done'
         if arg_key_start >= 0:
-            if self._state.func_name is None:
-                self._state.func_name = payload[pos:arg_key_start].strip()
-            self._state.phase = 'arg_start'
-            return arg_key_start
+            return arg_key_start, payload[pos:arg_key_start].strip(), 'arg_start'
 
         if final and pos < len(payload):
-            if self._state.func_name is None:
-                self._state.func_name = payload[pos:].strip()
-            return len(payload)
+            return len(payload), payload[pos:].strip(), 'done'
         return None
 
-    def _consume_arg_start(self, payload: str, pos: int) -> int | None:
+    def _consume_arg_start(self, payload: str, pos: int) -> tuple[int, Literal['arg_name', 'done']] | None:
+        """Enter ``arg_name`` or stop before the outer closing tag."""
         arg_key_start = payload.find(self.arg_key_start_token, pos)
+        block_end = payload.find(self.get_tool_close_tag(), pos)
+        if block_end >= 0 and (arg_key_start < 0 or block_end < arg_key_start):
+            return block_end, 'done'
         if arg_key_start < 0:
             return None
-        self._state.phase = 'arg_name'
-        return arg_key_start + len(self.arg_key_start_token)
+        return arg_key_start + len(self.arg_key_start_token), 'arg_name'
 
-    def _consume_arg_name(self, payload: str, pos: int) -> int | None:
+    def _consume_arg_name(self, payload: str, pos: int) -> tuple[int, str] | None:
+        """Read the argument key and return the raw-value start."""
         key_end = payload.find(self.arg_key_end_token, pos)
         if key_end < 0:
             return None
@@ -61,34 +75,18 @@ class Glm47ToolParser(XmlToolParser):
         if value_start < 0:
             return None
 
-        self._state.arg_name = payload[pos:key_end].strip()
-        self._arg_state = XmlArgState()
-        self._state.phase = 'arg_value'
-        return value_start + len(self.arg_value_start_token)
-
-    def _consume_arg_value(self, payload: str, pos: int, json_fragments: list[str]) -> int | None:
-        value_end = payload.find(self.arg_value_end_token, pos)
-        if value_end >= 0:
-            self._consume_arg_delta(payload[pos:value_end], json_fragments)
-            self._finish_arg(json_fragments)
-            self._state.arg_name = None
-            self._state.phase = 'function'
-            return value_end + len(self.arg_value_end_token)
-
-        raw_end = self._trim_partial_close_tag_suffix(payload, pos, self.arg_value_end_token)
-        if raw_end == pos:
-            return None
-        self._consume_arg_delta(payload[pos:raw_end], json_fragments)
-        return raw_end
+        return value_start + len(self.arg_value_start_token), payload[pos:key_end].strip()
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
+        """Parse one complete GLM inner payload."""
         func_name, raw_arg_pairs = self._extract_complete_args(payload)
         if func_name is None:
             return None
-        arg_pairs = self._get_coerced_args(func_name, raw_arg_pairs)
-        return ToolCall(function=FunctionCall(name=func_name, arguments=self._dump_argument_pairs(arg_pairs)))
+        return self._build_tool_call(func_name, raw_arg_pairs)
 
     def parse_tool_block(self, text: str, start: int, tool_calls: list[ToolCall]) -> int:
+        """Parse a GLM block without treating close-tag text in values as its
+        end."""
         pos = start
         close_tag = self.get_tool_close_tag()
         while True:
@@ -116,6 +114,7 @@ class Glm47ToolParser(XmlToolParser):
         return close_at + len(close_tag)
 
     def _extract_complete_args(self, payload: str) -> tuple[str | None, list[tuple[str, str]]]:
+        """Extract a function name and ordered raw argument pairs."""
         payload = payload.strip()
         if not payload:
             return None, []

@@ -100,7 +100,6 @@ def test_streamed_megabyte_string_does_not_remain_buffered(parser_cls, prefix, t
         fragments.append(_arguments_from(calls))
 
     assert parser._arg_state.buffered_parts == []
-    assert parser._arg_state.pending_prefix == ''
     assert len(pending) <= len(close_tag) - 1
 
     pending, calls = _feed(parser, pending, tail, final=tail_final)
@@ -149,6 +148,31 @@ def test_tool_parser_lifecycle_resets_stream_state(parser_cls, payloads):
         (0, 'first', {'value': 'one'}),
         (1, 'second', {'value': 'two'}),
     ]
+
+
+@pytest.mark.parametrize(
+    ('parser_cls', 'payload'),
+    [
+        (
+            Qwen3CoderToolParser,
+            '<function=f><parameter=a>one</parameter>',
+        ),
+        (
+            Glm47ToolParser,
+            'f<arg_key>a</arg_key><arg_value>one</arg_value>',
+        ),
+    ],
+)
+def test_xml_final_closes_arguments_without_payload_terminator(parser_cls, payload):
+    parser = parser_cls()
+    parser.begin_tool_block()
+    calls = []
+
+    consumed = parser.feed_tool_block(payload, calls, final=True)
+
+    assert consumed == len(payload)
+    assert parser.block_closed
+    assert _arguments_from(calls) == '{"a": "one"}'
 
 
 @pytest.mark.parametrize('parser_cls', [DeepSeekV32ToolParser, DeepSeekV4ToolParser])

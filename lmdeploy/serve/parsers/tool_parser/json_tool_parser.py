@@ -14,7 +14,9 @@ class JsonToolParser(ToolParser):
     """Incrementally extract a JSON tool-call envelope."""
 
     argument_field: ClassVar[str] = 'arguments'
+
     def __init__(self) -> None:
+        """Initialize the JSON envelope state machine."""
         super().__init__()
         self._phase = 'payload_start'
         self._json_key: str | None = None
@@ -22,6 +24,7 @@ class JsonToolParser(ToolParser):
         self._value_scanner = JsonValueScanner()
 
     def begin_tool_block(self) -> None:
+        """Begin a logical call and reset its JSON envelope state."""
         super().begin_tool_block()
         self._begin_call()
         self._phase = 'payload_start'
@@ -30,6 +33,22 @@ class JsonToolParser(ToolParser):
         self._value_scanner.reset()
 
     def _consume_stream_payload(self, text: str, deltas: list[DeltaToolCall], *, final: bool) -> int:
+        """Consume the stable prefix of an incremental JSON envelope.
+
+        The configured argument field is emitted verbatim as its value becomes
+        available. Other fields are scanned only to locate the next envelope
+        field. The value scanner carries incomplete value state across calls;
+        incomplete envelope syntax and possible closing-marker suffixes remain
+        in the input buffer.
+
+        Args:
+            text: Buffered payload text after the outer opening marker.
+            deltas: Destination for parsed function-name and argument deltas.
+            final: Whether no more generated text will follow.
+
+        Returns:
+            Number of leading characters that may be discarded from ``text``.
+        """
         pos = 0
         size = len(text)
         close_tag = self.get_tool_close_tag()
@@ -193,6 +212,7 @@ class JsonToolParser(ToolParser):
         return pos
 
     def _finish_envelope(self, deltas: list[DeltaToolCall]) -> None:
+        """Mark the envelope complete and emit default empty arguments."""
         if not self._arguments_seen:
             self._emit_delta(
                 deltas,
@@ -202,6 +222,11 @@ class JsonToolParser(ToolParser):
         self._phase = 'done'
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
+        """Parse one complete JSON envelope without an outer closing tag.
+
+        Returns ``None`` when no function name can be extracted. Argument text
+        is preserved verbatim, including duplicate argument fields.
+        """
         parsed = self._parse_complete_envelope(payload)
         if parsed is None:
             return None
@@ -209,6 +234,12 @@ class JsonToolParser(ToolParser):
         return ToolCall(function=FunctionCall(name=name, arguments=arguments))
 
     def parse_tool_block(self, text: str, start: int, tool_calls: list[ToolCall]) -> int:
+        """Parse one JSON tool block and return its absolute consumed end.
+
+        ``start`` points immediately after the outer opening marker. A parsed
+        call is appended to ``tool_calls``; malformed envelopes are skipped up
+        to the outer closing marker when one is present.
+        """
         close_tag = self.get_tool_close_tag()
         parsed = self._parse_complete_envelope(text[start:], close_tag=close_tag)
         if parsed is None:
@@ -223,7 +254,12 @@ class JsonToolParser(ToolParser):
         return close_at + len(close_tag) if close_at >= 0 else len(text)
 
     def _parse_complete_envelope(self, payload: str, *, close_tag: str | None = None) -> tuple[str, str, int] | None:
-        """Extract source fields without validating their JSON values."""
+        """Extract source fields without validating their JSON values.
+
+        Returns the first function name, concatenated raw argument values, and
+        the consumed payload offset. Repeated argument fields remain repeated
+        in the returned text; a missing argument field becomes ``{}``.
+        """
         pos = self._skip_ws(payload, 0)
         if pos >= len(payload) or payload[pos] != '{':
             return None
@@ -275,6 +311,11 @@ class JsonToolParser(ToolParser):
 
     @staticmethod
     def _scan_complete_value(text: str, start: int, close_tag: str | None) -> int:
+        """Return the end offset of one JSON-like value.
+
+        A closing marker outside a string bounds malformed or incomplete values, while marker text inside a string
+        remains part of the value.
+        """
         scanner = JsonValueScanner()
         pos = start
         while pos < len(text):
@@ -291,6 +332,11 @@ class JsonToolParser(ToolParser):
 
     @staticmethod
     def _read_string(text: str, start: int) -> tuple[str, int]:
+        """Decode a quoted JSON string and return its value and end offset.
+
+        A completed but malformed string falls back to its raw inner text.
+        ``('', -1)`` indicates that the closing quote is not buffered yet.
+        """
         escaped = False
         pos = start + 1
         while pos < len(text):
@@ -311,6 +357,8 @@ class JsonToolParser(ToolParser):
 
     @staticmethod
     def _skip_ws(text: str, pos: int) -> int:
+        """Return the first position at or after ``pos`` that is not JSON
+        whitespace."""
         while pos < len(text) and text[pos] in ' \t\r\n':
             pos += 1
         return pos
