@@ -229,8 +229,7 @@ class GenerationConfig:
         if tokenizer_eos_token_id is not None:
             stop_token_ids.add(tokenizer_eos_token_id)
 
-        # add eos_token_id from model's generation_config.json file if there
-        # is any.
+        # add eos_token_id from the model's generation config, if any.
         eos_token_id = generation_config.get('eos_token_id')
         if eos_token_id is not None:
             if isinstance(eos_token_id, int):
