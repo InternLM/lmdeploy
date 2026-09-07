@@ -164,13 +164,17 @@ class StaticW8A8Linear(W8A8Linear):
             raise ValueError('ModelSlim static W8A8 uses quant_bias and does not support a floating-point bias.')
         if self.is_tp:
             in_features, out_features = self._get_io_features(in_features, out_features, colwise)
-        impl_builder = get_backend().get_layer_impl_builder(OpType.LinearW8A8)
         self.quant_dtype = quant_dtype
-        self.impl = impl_builder.build(in_features,
-                                       out_features,
-                                       False,
-                                       dtype=self.dtype,
-                                       quant_dtype=quant_dtype)
+        self.impl = get_backend().build_op(
+            LinearW8A8BuildSpec(
+                in_features=in_features,
+                out_features=out_features,
+                bias=False,
+                output_dtype=self.dtype,
+                quant_dtype=quant_dtype,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
         self.register_parameter(
             'weight', torch.nn.Parameter(torch.empty((out_features, in_features), dtype=quant_dtype, device=device),
