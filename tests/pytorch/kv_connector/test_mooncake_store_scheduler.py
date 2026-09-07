@@ -120,6 +120,22 @@ def test_scheduler_extends_hashes_and_reports_pending_miss_and_hit(monkeypatch):
     scheduler.shutdown()
 
 
+def test_scheduler_reuses_positive_lookup_until_allocation():
+    scheduler = MooncakeStoreScheduler(_cache_config())
+    request = _request(range(17))
+    scheduler.client.lookup = Mock(return_value=12)
+
+    assert scheduler.get_num_new_matched_tokens(request, 0) == (12, True)
+    # Paging can reject capacity without binding destination blocks. A retry
+    # must reuse the retained positive result instead of repeating remote I/O.
+    assert scheduler.get_num_new_matched_tokens(request, 0) == (12, True)
+    scheduler.client.lookup.assert_called_once()
+
+    scheduler.update_state_after_alloc(request, (21, 22, 23), 12)
+    assert request.seq_id not in scheduler._lookup_plans
+    scheduler.shutdown()
+
+
 @pytest.mark.parametrize(
     ('role', 'multimodal', 'embeddings'),
     [

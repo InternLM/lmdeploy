@@ -36,9 +36,6 @@ class KVConnectorStepInput:
     """Paging snapshot offered to a connector for one engine step."""
 
     running: list['SchedulerSequence'] = field(default_factory=list)
-    swap_in_map: dict[int, int] = field(default_factory=dict)
-    swap_out_map: dict[int, int] = field(default_factory=dict)
-    copy_map: dict[int, int] = field(default_factory=dict)
     connector_token_lens: tuple[int, ...] = ()
     connector_block_ids: tuple[tuple[int, ...], ...] = ()
     connector_logical_block_ids: tuple[tuple[int, ...], ...] = ()

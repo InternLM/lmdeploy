@@ -420,8 +420,6 @@ class Scheduler:
     def build_connector_meta(
         self,
         running: SeqList,
-        swap_in_map: MapType | None = None,
-        swap_out_map: MapType | None = None,
         connector_token_lens: tuple[int, ...] = (),
     ):
         """Build and lease one connector payload after work selection.
@@ -450,9 +448,6 @@ class Scheduler:
             block_ids = ()
         step_input = KVConnectorStepInput(
             running=running,
-            swap_in_map=swap_in_map or {},
-            swap_out_map=swap_out_map or {},
-            copy_map={},
             connector_token_lens=connector_token_lens,
             connector_block_ids=block_ids,
             connector_logical_block_ids=logical_block_ids,

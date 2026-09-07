@@ -403,9 +403,7 @@ class _ForwardInputsTask:
         # needs executor steps to submit work and poll asynchronous completion.
         result.kv_connector_metadata = self.scheduler.build_connector_meta(
             result.running,
-            result.swap_in_map,
-            result.swap_out_map,
-            connector_token_lens,
+            connector_token_lens=connector_token_lens,
         )
         if result.is_empty():
             return None

@@ -202,8 +202,6 @@ class _FakeScheduler:
     def build_connector_meta(
         self,
         running,
-        swap_in_map=None,
-        swap_out_map=None,
         connector_token_lens=(),
     ):
         self.connector_meta_calls.append(tuple(connector_token_lens))
