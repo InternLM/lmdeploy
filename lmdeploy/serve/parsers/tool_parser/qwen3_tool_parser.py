@@ -4,9 +4,9 @@ from .json_tool_parser import JsonToolParser
 from .tool_parser import ToolParserManager
 
 
-@ToolParserManager.register_module(['qwen', 'qwen3'])
+@ToolParserManager.register_module(['qwen', 'qwen2d5', 'qwen3'])
 class Qwen3ToolParser(JsonToolParser):
-    """Tool parser for Qwen3 JSON tool-call payloads."""
+    """Tool parser for Qwen2.5 and Qwen3 JSON tool-call payloads."""
 
     structural_tag_model = 'qwen_3'
 
