@@ -115,6 +115,10 @@ class BaseLinear(LinearBase):
         weight, bias = self.impl.update_weights(self.weight, self.bias)
         self.register_all_parameters(weight, bias)
 
+    def get_unquantized_weight(self, out_dtype: torch.dtype) -> torch.Tensor:
+        """Return the local unquantized weight."""
+        return self.impl.get_unquantized_weight(self.weight).to(out_dtype)
+
     def _forward_default(self, x, all_reduce, tp_sizes):
         """Default forward implement."""
         if self.tp_mode == TPMode.DP_TP:

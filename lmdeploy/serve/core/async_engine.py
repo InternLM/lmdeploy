@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 import torch
 
+from lmdeploy._guided_decoding import ensure_response_format_compilable
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (
@@ -516,6 +517,8 @@ class AsyncEngine:
             if (messages is not None) ^ (input_ids is None):
                 raise RequestError(ErrorCode.INVALID_REQUEST,
                                    'You must specify exactly one of messages or input_ids.')
+            if gen_config is not None and gen_config.response_format is not None:
+                ensure_response_format_compilable(gen_config.response_format)
             if isinstance(session_id, Session):
                 session = session_id
             elif isinstance(session_id, int):
