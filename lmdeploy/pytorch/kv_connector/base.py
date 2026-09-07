@@ -242,6 +242,10 @@ class KVConnectorBase(ABC):
         """Return rank-local terminal transfer progress since the last poll."""
         return KVConnectorOutput()
 
+    def set_weights_generation(self, weights_generation: int) -> None:
+        """Rotate connector identity after an online weights update."""
+        return None
+
     def shutdown(self) -> None:
         """Drain asynchronous work and release connector resources."""
         return None

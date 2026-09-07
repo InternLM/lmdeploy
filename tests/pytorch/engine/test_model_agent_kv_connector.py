@@ -28,7 +28,15 @@ def _cache_config(transfer_config=None):
 
 
 def _enabled_config(connector='MooncakeStoreConnector'):
-    return _cache_config(KVTransferConfig(kv_connector=connector, kv_role='kv_both'))
+    return _cache_config(
+        KVTransferConfig(
+            kv_connector=connector,
+            kv_role='kv_both',
+            kv_connector_extra_config={
+                'cache_prefix': 'test-tenant',
+                'weights_version': 'test-weights-v1',
+            },
+        ))
 
 
 def test_factory_disabled_does_not_import_mooncake(monkeypatch):
@@ -87,13 +95,104 @@ def _bare_model_agent():
     agent = BaseModelAgent.__new__(BaseModelAgent)
     agent.all_context = nullcontext
     agent.cache_config = _enabled_config()
-    agent.model_config = SimpleNamespace(num_replicate_key_value_heads=4)
+    agent.model_config = SimpleNamespace(
+        dtype='torch.float16',
+        mla_kv_cache_dtype=None,
+        num_replicate_key_value_heads=4,
+    )
+    agent._weights_generation = 0
     agent.rank = 7
     agent.cache_stream = object()
     agent.block_cache_plan = object()
     agent.dist_config = SimpleNamespace(attn_tp=8)
     agent.memdecode_agent = None
     return agent
+
+
+def test_weights_update_rotates_mooncake_namespace():
+    agent = _bare_model_agent()
+    connector = SimpleNamespace(set_weights_generation_calls=[])
+    connector.set_weights_generation = connector.set_weights_generation_calls.append
+    agent.kv_connector = connector
+
+    agent._advance_kv_connector_weights_generation()
+
+    extra_config = agent.cache_config.kv_transfer_config.kv_connector_extra_config
+    assert agent._weights_generation == 1
+    assert extra_config['weights_generation'] == 1
+    assert '"model_dtype":"torch.float16"' in extra_config['kv_cache_format']
+    assert connector.set_weights_generation_calls == [1]
+
+
+def test_finished_serialized_weight_update_rotates_mooncake_namespace(monkeypatch):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    events = []
+    agent = _bare_model_agent()
+    model = SimpleNamespace(
+        load_weights=lambda weights: None,
+        named_modules=lambda: (),
+    )
+    agent.dist_ctx = SimpleNamespace(tp_group=SimpleNamespace(rank=0))
+    agent.patched_model = SimpleNamespace(get_model=lambda: model)
+    agent.spec_agent = SimpleNamespace(
+        get_model=lambda: None,
+        is_enabled=lambda: False,
+        method=None,
+    )
+    agent._update_params_ipc_event = None
+    agent._update_params_ipc_tensor = None
+    agent._advance_kv_connector_weights_generation = lambda: events.append('rotate')
+    monkeypatch.setattr(agent_module.pybase64, 'b64decode', lambda value: b'')
+    monkeypatch.setattr(agent_module.ForkingPickler, 'loads', lambda value: [])
+    monkeypatch.setattr(agent_module.torch.cuda, 'synchronize', lambda: None)
+    monkeypatch.setattr(agent_module.torch.cuda, 'empty_cache', lambda: None)
+    request = SimpleNamespace(
+        serialized_named_tensors='payload',
+        load_format='default',
+        finished=True,
+    )
+
+    agent.update_params(request)
+
+    assert events == ['rotate']
+
+
+def test_finished_distributed_weight_update_rotates_mooncake_namespace(monkeypatch):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    events = []
+    agent = _bare_model_agent()
+    model = SimpleNamespace(
+        load_weights=lambda weights: None,
+        named_modules=lambda: (),
+    )
+    agent._model_update_group = {'test-group': object()}
+    agent.patched_model = SimpleNamespace(get_model=lambda: model)
+    agent.spec_agent = SimpleNamespace(
+        get_model=lambda: None,
+        is_enabled=lambda: False,
+        method=None,
+    )
+    agent.reset_graph_runner = lambda: events.append('reset-graph')
+    agent._advance_kv_connector_weights_generation = lambda: events.append('rotate')
+    monkeypatch.setattr(agent_module.torch.cuda, 'current_device', lambda: 0)
+    monkeypatch.setattr(agent_module.torch.cuda, 'synchronize', lambda: None)
+    monkeypatch.setattr(agent_module.torch.cuda, 'empty_cache', lambda: None)
+    request = SimpleNamespace(
+        group_name='test-group',
+        names=[],
+        dtypes=[],
+        shapes=[],
+        load_format='default',
+        finished=True,
+    )
+
+    success, message = agent.update_weights_from_distributed(request)
+
+    assert success
+    assert message == 'Succeeded to update parameter online.'
+    assert events == ['reset-graph', 'rotate']
 
 
 def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeypatch):

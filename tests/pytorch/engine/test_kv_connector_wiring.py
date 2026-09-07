@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -7,7 +8,10 @@ from lmdeploy.messages import KVTransferConfig, PytorchEngineConfig
 from lmdeploy.pytorch.config import CacheConfig, DistConfig
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
 from lmdeploy.pytorch.engine.engine import Engine
-from lmdeploy.pytorch.kv_connector import prepare_kv_connector_config
+from lmdeploy.pytorch.kv_connector import (
+    prepare_kv_connector_config,
+    prepare_kv_connector_model_identity,
+)
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 
 
@@ -26,6 +30,10 @@ def _make_mooncake_cache_config(role='kv_both'):
         KVTransferConfig(
             kv_connector='MooncakeStoreConnector',
             kv_role=role,
+            kv_connector_extra_config={
+                'cache_prefix': 'test-tenant',
+                'weights_version': 'test-weights',
+            },
         ))
 
 
@@ -58,6 +66,8 @@ def test_prepare_mooncake_namespace_and_async_constraints():
     extra_config = cache_config.kv_transfer_config.kv_connector_extra_config
     assert extra_config['model_name'] == 'glm-5.2'
     assert extra_config['lookup_async'] is True
+    assert extra_config['cache_prefix'] == 'test-tenant'
+    assert extra_config['weights_version'] == 'test-weights'
 
     invalid = _make_mooncake_cache_config()
     invalid.kv_transfer_config.kv_connector_extra_config['lookup_async'] = False
@@ -124,7 +134,63 @@ def test_prepare_producer_does_not_create_lookup_endpoint():
     prepare_kv_connector_config(cache_config)
 
     extra_config = cache_config.kv_transfer_config.kv_connector_extra_config
-    assert extra_config == {'lookup_async': False}
+    assert extra_config == {
+        'cache_prefix': 'test-tenant',
+        'lookup_async': False,
+        'weights_version': 'test-weights',
+    }
+
+
+@pytest.mark.parametrize(
+    ('extra_config', 'model_revision', 'match'),
+    [
+        ({'weights_version': 'v1'}, None, 'cache_prefix'),
+        ({'cache_prefix': 'tenant-a'}, None, 'weights_version'),
+    ],
+)
+def test_prepare_mooncake_requires_explicit_namespace_identity(
+    extra_config,
+    model_revision,
+    match,
+):
+    cache_config = _make_mooncake_cache_config()
+    cache_config.kv_transfer_config.kv_connector_extra_config = extra_config
+
+    with pytest.raises(ValueError, match=match):
+        prepare_kv_connector_config(
+            cache_config,
+            model_revision=model_revision,
+        )
+
+
+def test_prepare_mooncake_uses_model_revision_as_weights_version():
+    cache_config = _make_mooncake_cache_config()
+    extra_config = cache_config.kv_transfer_config.kv_connector_extra_config
+    extra_config.pop('weights_version')
+
+    prepare_kv_connector_config(cache_config, model_revision='revision-abc')
+
+    assert extra_config['weights_version'] == 'revision-abc'
+
+
+def test_prepare_mooncake_binds_resolved_kv_format_and_generation():
+    cache_config = _make_mooncake_cache_config()
+    model_config = SimpleNamespace(
+        dtype='torch.bfloat16',
+        mla_kv_cache_dtype=None,
+    )
+
+    prepare_kv_connector_model_identity(
+        cache_config,
+        model_config,
+        weights_generation=3,
+    )
+
+    extra_config = cache_config.kv_transfer_config.kv_connector_extra_config
+    assert extra_config['weights_generation'] == 3
+    assert extra_config['kv_cache_format'] == (
+        '{"device_type":"cuda","mla_kv_cache_dtype":"None",'
+        '"model_dtype":"torch.bfloat16","quant_policy":0}')
 
 
 def test_engine_rejects_effective_mp_backend_before_executor_build(
@@ -183,6 +249,10 @@ def test_runtime_lookup_path_does_not_mutate_reused_engine_config():
         kv_transfer_config=KVTransferConfig(
             kv_connector='MooncakeStoreConnector',
             kv_role='kv_both',
+            kv_connector_extra_config={
+                'cache_prefix': 'test-tenant',
+                'weights_version': 'test-weights',
+            },
         ),
     )
     first = ConfigBuilder.build_cache_config(engine_config)
@@ -194,7 +264,10 @@ def test_runtime_lookup_path_does_not_mutate_reused_engine_config():
     first_path = first.kv_transfer_config.kv_connector_extra_config['lookup_rpc_path']
     second_path = second.kv_transfer_config.kv_connector_extra_config['lookup_rpc_path']
     assert first_path != second_path
-    assert engine_config.kv_transfer_config.kv_connector_extra_config == {}
+    assert engine_config.kv_transfer_config.kv_connector_extra_config == {
+        'cache_prefix': 'test-tenant',
+        'weights_version': 'test-weights',
+    }
 
 
 @pytest.mark.parametrize(

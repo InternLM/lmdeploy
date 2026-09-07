@@ -106,10 +106,13 @@ class MooncakeStoreWorker:
         extra_config = kv_transfer_config.kv_connector_extra_config
         self.key_metadata = MooncakeStoreKeyMetadata(
             model_name=extra_config.get('model_name', 'unnamed-model'),
-            cache_prefix=extra_config.get('cache_prefix', ''),
+            cache_prefix=extra_config.get('cache_prefix'),
+            kv_cache_format=extra_config.get('kv_cache_format'),
+            weights_version=extra_config.get('weights_version'),
             tp_size=tp_size,
             block_size=cache_config.block_size,
             kv_head_replica_num=kv_head_replica_num,
+            weights_generation=extra_config.get('weights_generation', 0),
         )
 
         config_path = extra_config.get('mooncake_config_path')
@@ -121,6 +124,22 @@ class MooncakeStoreWorker:
 
     def _rank_fields(self) -> tuple[int, int, int]:
         return self.global_rank, self.tp_rank, self.tp_size
+
+    def set_weights_generation(self, weights_generation: int) -> None:
+        """Rotate subsequent lookups and transfers to a new weights
+        namespace."""
+        current_generation = self.key_metadata.weights_generation
+        if weights_generation == current_generation:
+            return
+        if weights_generation < current_generation:
+            raise ValueError(
+                f'weights_generation cannot move backwards from '
+                f'{current_generation} to {weights_generation}')
+        key_metadata = self.key_metadata.with_weights_generation(weights_generation)
+        for transfer_thread in (self.kv_recv_thread, self.kv_send_thread):
+            if transfer_thread is not None:
+                transfer_thread.key_metadata = key_metadata
+        self.key_metadata = key_metadata
 
     def _start_lookup_server(self) -> None:
         if (self.kv_role in ('kv_consumer', 'kv_both')

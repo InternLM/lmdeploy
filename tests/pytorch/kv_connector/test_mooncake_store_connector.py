@@ -53,7 +53,13 @@ def cache_config(tmp_path, monkeypatch):
         kv_transfer_config=KVTransferConfig(
             kv_connector='MooncakeStoreConnector',
             kv_role='kv_both',
-            kv_connector_extra_config={'mooncake_config_path': str(config_path)},
+            kv_connector_extra_config={
+                'cache_prefix': 'test-tenant',
+                'kv_cache_format': 'dtype=float16;quant=none',
+                'mooncake_config_path': str(config_path),
+                'weights_generation': 0,
+                'weights_version': 'test-weights-v1',
+            },
         ),
     )
 
@@ -212,6 +218,7 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
     worker.register_kv_caches = MagicMock(return_value=None)
     worker.start_load_kv = MagicMock(return_value=None)
     worker.start_save_kv = MagicMock(return_value=None)
+    worker.set_weights_generation = MagicMock(return_value=None)
     output = KVConnectorOutput(completed_save_ids={1}, finished_receiving={2})
     worker.get_finished = MagicMock(return_value=output)
     worker.shutdown = MagicMock(return_value=None)
@@ -226,6 +233,8 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
     worker.start_save_kv.assert_called_once_with(metadata)
     assert connector.get_finished() is output
     worker.get_finished.assert_called_once_with()
+    assert connector.set_weights_generation(2) is None
+    worker.set_weights_generation.assert_called_once_with(2)
 
     assert connector.shutdown() is None
     worker.shutdown.assert_called_once_with()
