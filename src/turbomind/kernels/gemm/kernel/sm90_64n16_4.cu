@@ -4,7 +4,7 @@
 #include <numeric>
 
 #include "src/turbomind/kernels/gemm/convert.h"
-#include "src/turbomind/kernels/gemm/kernel/config.h"
+#include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/kernel/u4.h"
 #include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
@@ -17,6 +17,9 @@
 
 namespace turbomind::gemm {
 namespace {
+using config::Shape;
+using namespace config::geometry;
+
 template<int GroupSize, DataType Dtype>
 void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
 {
@@ -58,76 +61,47 @@ const Family bf16{29, 250, kBfloat16, kBfloat16, 64, 128, 128, 1, true, true, su
 const Family f16{35, 250, kHalf, kHalf, 64, 128, 128, 1, true, true, supports_u4<32, kHalf>, pack<32, kHalf>, 64, kHalf};
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0> class K>
+template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0> class K>
 void register_kernels(Collector& c)
 {
-    using config::Config;
-    using config::Registers;
-    using config::Shape;
+    ////////////////////////////////// flat //////////////////////////////////
+    add<K<_8x128_1x2<80, 80>, 4, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_16x128_1x2<80, 80>, 4, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_32x128_1x2<80, 80>, 4, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_64x128_1x2<80, 80>, 4, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_96x128_1x2<80, 96>, 4, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_128x128_1x2<80, 112>, 4, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_192x128_1x2<80, 208>, 4, kRowMajor, Striding::kFlat>>(c);
+    add<K<_224x128_1x2<80, 208>, 4, kRowMajor, Striding::kFlat>>(c);
+    add<K<_256x128_1x2<80, 208>, 4, kRowMajor, Striding::kFlat>>(c);
+    add<K<_384x128_1x2<40, 232>, 3, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 192>>(c);
 
-    {
-        using _8x128_1x2 = Config<Shape<8, 128>, Shape<1, 2>, Registers<80, 80>>;
-        using _16x128_1x2 = Config<Shape<16, 128>, Shape<1, 2>, Registers<80, 80>>;
-        using _32x128_1x2 = Config<Shape<32, 128>, Shape<1, 2>, Registers<80, 80>>;
-        using _64x128_1x2 = Config<Shape<64, 128>, Shape<1, 2>, Registers<80, 80>>;
-        using _96x128_1x2 = Config<Shape<96, 128>, Shape<1, 2>, Registers<80, 96>>;
-        using _128x128_1x2 = Config<Shape<128, 128>, Shape<1, 2>, Registers<80, 112>>;
-        using _192x128_1x2 = Config<Shape<192, 128>, Shape<1, 2>, Registers<80, 208>>;
-        using _224x128_1x2 = Config<Shape<224, 128>, Shape<1, 2>, Registers<80, 208>>;
-        using _256x128_1x2 = Config<Shape<256, 128>, Shape<1, 2>, Registers<80, 208>>;
-        using _384x128_1x2 = Config<Shape<384, 128>, Shape<1, 2>, Registers<40, 232>>;
-        using _8x128_1x1 = Config<Shape<8, 128>, Shape<1, 1>, Registers<120, 128>>;
+    ////////////////////////////////// blocked //////////////////////////////////
+    add<K<_8x128_1x2<80, 80>, 4, kRowMajor, Striding::kBlocked>>(c);
+    add<K<_16x128_1x2<80, 80>, 4, kRowMajor, Striding::kBlocked>>(c);
+    add<K<_32x128_1x2<80, 80>, 4, kRowMajor, Striding::kBlocked>>(c);
+    add<K<_64x128_1x2<80, 80>, 4, kRowMajor, Striding::kBlocked>>(c);
+    add<K<_96x128_1x2<80, 96>, 4, kRowMajor, Striding::kBlocked>>(c);
+    add<K<_128x128_1x2<80, 112>, 4, kRowMajor, Striding::kBlocked>>(c);
+    add<K<_192x128_1x2<80, 208>, 4, kRowMajor, Striding::kBlocked, true>>(c);
+    add<K<_224x128_1x2<80, 208>, 4, kRowMajor, Striding::kBlocked, true>>(c);
+    add<K<_256x128_1x2<80, 208>, 4, kRowMajor, Striding::kBlocked, true>>(c);
+    add<K<_384x128_1x2<40, 232>, 3, kRowMajor, Striding::kBlocked, true, Shape<1, 1>, 192>>(c);
 
-        ////////////////////////////////// flat //////////////////////////////////
-        add<K<_8x128_1x2, 4, kRowMajor, Striding::kFlat, true>>(c);
-        add<K<_16x128_1x2, 4, kRowMajor, Striding::kFlat, true>>(c);
-        add<K<_32x128_1x2, 4, kRowMajor, Striding::kFlat, true>>(c);
-        add<K<_64x128_1x2, 4, kRowMajor, Striding::kFlat, true>>(c);
-        add<K<_96x128_1x2, 4, kRowMajor, Striding::kFlat, true>>(c);
-        add<K<_128x128_1x2, 4, kRowMajor, Striding::kFlat, true>>(c);
-        add<K<_192x128_1x2, 4, kRowMajor, Striding::kFlat>>(c);
-        add<K<_224x128_1x2, 4, kRowMajor, Striding::kFlat>>(c);
-        add<K<_256x128_1x2, 4, kRowMajor, Striding::kFlat>>(c);
-        add<K<_384x128_1x2, 3, kRowMajor, Striding::kFlat, false, 1, 1, 192>>(c);
+    ////////////////////////////////// indexed //////////////////////////////////
+    add<K<_8x128_1x1<120, 128>, 4, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_16x128_1x2<80, 80>, 4, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_32x128_1x2<80, 80>, 4, kRowMajor, Striding::kIndexed, true>>(c);
 
-        ////////////////////////////////// blocked //////////////////////////////////
-        add<K<_8x128_1x2, 4, kRowMajor, Striding::kBlocked>>(c);
-        add<K<_16x128_1x2, 4, kRowMajor, Striding::kBlocked>>(c);
-        add<K<_32x128_1x2, 4, kRowMajor, Striding::kBlocked>>(c);
-        add<K<_64x128_1x2, 4, kRowMajor, Striding::kBlocked>>(c);
-        add<K<_96x128_1x2, 4, kRowMajor, Striding::kBlocked>>(c);
-        add<K<_128x128_1x2, 4, kRowMajor, Striding::kBlocked>>(c);
-        add<K<_192x128_1x2, 4, kRowMajor, Striding::kBlocked, true>>(c);
-        add<K<_224x128_1x2, 4, kRowMajor, Striding::kBlocked, true>>(c);
-        add<K<_256x128_1x2, 4, kRowMajor, Striding::kBlocked, true>>(c);
-        add<K<_384x128_1x2, 3, kRowMajor, Striding::kBlocked, true, 1, 1, 192>>(c);
-
-        ////////////////////////////////// indexed //////////////////////////////////
-        add<K<_8x128_1x1, 4, kRowMajor, Striding::kIndexed, true>>(c);
-        add<K<_16x128_1x2, 4, kRowMajor, Striding::kIndexed, true>>(c);
-        add<K<_32x128_1x2, 4, kRowMajor, Striding::kIndexed, true>>(c);
-    }
-    {
-        using _64x128_1x2 = Config<Shape<64, 128>, Shape<1, 2>, Registers<120, 192>>;
-        using _96x128_1x2 = Config<Shape<96, 128>, Shape<1, 2>, Registers<120, 192>>;
-        using _192x128_1x2 = Config<Shape<192, 128>, Shape<1, 2>, Registers<120, 192>>;
-        using _8x256_1x2 = Config<Shape<8, 256>, Shape<1, 2>, Registers<80, 80>>;
-        using _16x256_1x2 = Config<Shape<16, 256>, Shape<1, 2>, Registers<80, 88>>;
-        using _32x256_1x2 = Config<Shape<32, 256>, Shape<1, 2>, Registers<120, 192>>;
-        using _64x256_1x2 = Config<Shape<64, 256>, Shape<1, 2>, Registers<120, 192>>;
-        using _96x256_1x2 = Config<Shape<96, 256>, Shape<1, 2>, Registers<120, 192>>;
-        using _128x256_1x2 = Config<Shape<128, 256>, Shape<1, 2>, Registers<120, 192>>;
-
-        add<K<_64x128_1x2, 4, kRowMajor, Striding::kIndexed, true>>(c);
-        add<K<_96x128_1x2, 4, kRowMajor, Striding::kIndexed, true>>(c);
-        add<K<_192x128_1x2, 3, kRowMajor, Striding::kIndexed, true>>(c);
-        add<K<_8x256_1x2, 3, kRowMajor, Striding::kIndexed, true>>(c);
-        add<K<_16x256_1x2, 3, kRowMajor, Striding::kIndexed, true>>(c);
-        add<K<_32x256_1x2, 3, kRowMajor, Striding::kIndexed, true>>(c);
-        add<K<_64x256_1x2, 3, kRowMajor, Striding::kIndexed, true>>(c);
-        add<K<_96x256_1x2, 3, kRowMajor, Striding::kIndexed, true>>(c);
-        add<K<_128x256_1x2, 3, kRowMajor, Striding::kIndexed, true>>(c);
-    }
+    add<K<_64x128_1x2<120, 192>, 4, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_96x128_1x2<120, 192>, 4, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_192x128_1x2<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_8x256_1x2<80, 80>, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_16x256_1x2<80, 88>, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_32x256_1x2<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_64x256_1x2<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_96x256_1x2<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_128x256_1x2<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);
 }
 
 using BF16 = detail::C<Sm90U4Format<32, kBfloat16>>;

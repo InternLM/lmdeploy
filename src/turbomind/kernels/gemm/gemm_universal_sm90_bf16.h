@@ -289,7 +289,7 @@ __global__ void __launch_bounds__(32, 1) prepare_tma_descs_sm90_bf16(const __gri
     }
 }
 
-template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, int MulticastA, int MulticastB, int L2HintW, int MmaN, bool SeparateMmaAtoms, int EpiM, int EpiStages_>
+template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, class ClusterShape_, int L2HintW, int MmaN, bool SeparateMmaAtoms, int EpiM, int EpiStages_>
 struct GemmUniversalSm90_Bf16 {
 
     static constexpr bool kDebug = false;
@@ -328,8 +328,8 @@ struct GemmUniversalSm90_Bf16 {
 
     static constexpr int WARPGROUPS = cute::size(AtomLayoutMNK{});  // math WGs (cooperative)
 
-    static constexpr int kMulticastA = MulticastA;  // act along TILE_M
-    static constexpr int kMulticastB = MulticastB;  // weight along TILE_N
+    static constexpr int kMulticastA = ClusterShape_::N;  // act along TILE_M
+    static constexpr int kMulticastB = ClusterShape_::M;  // weight along TILE_N
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
@@ -349,7 +349,7 @@ struct GemmUniversalSm90_Bf16 {
     using Tb = nv_bfloat16;  // API B = weights
     using Tc = nv_bfloat16;
 
-    using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
+    using Cluster = arch::Cluster<ClusterShape_::M, ClusterShape_::N, kRowMajor>;
 
     static constexpr bool is_grouped_gemm = Mode != Striding::kFlat;
 

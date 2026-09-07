@@ -3,7 +3,7 @@
 #include <cuda.h>
 
 #include "src/turbomind/kernels/gemm/convert.h"
-#include "src/turbomind/kernels/gemm/kernel/config.h"
+#include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/kernel/mxfp4.h"
 #include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
 #include "src/turbomind/models/linear_weight.h"
@@ -16,6 +16,8 @@
 
 namespace turbomind::gemm {
 namespace {
+using namespace config::geometry;
+
 void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
 {
     ApplyWeightBridge(linear, bridge, stream);
@@ -53,13 +55,7 @@ struct C {
 template<template<class Config_, int Stages, Order Raster, int MmaN = Config_::Tile::M / Config_::Groups::M> class K>
 void register_kernels(Collector& c)
 {
-    using config::Config;
-    using config::Registers;
-    using config::Shape;
-
-    using _64x128_1x2 = Config<Shape<64, 128>, Shape<1, 2>, Registers<40, 232>>;
-
-    add<K<_64x128_1x2, 3, kRowMajor>>(c);
+    add<K<_64x128_1x2<40, 232>, 3, kRowMajor>>(c);
 }
 
 Registrar reg(unfolded, register_kernels<C::Type>);

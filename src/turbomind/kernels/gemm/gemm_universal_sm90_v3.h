@@ -42,7 +42,7 @@
 
 namespace turbomind::gemm {
 
-template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, int MulticastA, int MulticastB, int MaxOpN, int EpiStages_>
+template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, class ClusterShape_, int MaxOpN, int EpiStages_>
 struct GemmUniversalSm90_v3 {
 
     static constexpr bool kDebug = false;
@@ -89,8 +89,8 @@ struct GemmUniversalSm90_v3 {
     static_assert(Traits::kRestM == 1);
     static_assert(!kSupportsFusedSilu || (OP_M == 64 && OP_N == 128 && Traits::kRestN == 2));
 
-    static constexpr int kMulticastA = MulticastA;
-    static constexpr int kMulticastB = MulticastB;
+    static constexpr int kMulticastA = ClusterShape_::N;
+    static constexpr int kMulticastB = ClusterShape_::M;
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
@@ -113,7 +113,7 @@ struct GemmUniversalSm90_v3 {
     using Tv = float;
     using Tw = float;  // dynamic output group scales (fused path)
 
-    using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
+    using Cluster = arch::Cluster<ClusterShape_::M, ClusterShape_::N, kRowMajor>;
 
     static constexpr bool is_grouped_gemm = Mode != Striding::kFlat;
 

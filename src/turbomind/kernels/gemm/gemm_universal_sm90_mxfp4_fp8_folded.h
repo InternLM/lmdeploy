@@ -257,7 +257,7 @@ prepare_moe_tma_descs_sm90_mxfp4_fp8_folded(const __grid_constant__ CUtensorMap 
 // Native SM90 E4M3-K128 x MXFP4-K32 folded mainloop. Public (M,N,K) is
 // (tokens,output,K), while WGMMA sees packed weight as RS A and activation as
 // descriptor B, hence the hardware tile is (output,tokens,K).
-template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, int MulticastA, int MulticastB, int MmaN, int EpilogueStages>
+template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, class ClusterShape_, int MmaN, int EpilogueStages>
 struct GemmUniversalSm90MxFp4Fp8Folded {
     using Tile = typename Config_::Tile;
     using Groups = typename Config_::Groups;
@@ -272,8 +272,8 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
     static constexpr Striding kStridingB = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
     static constexpr Striding kStridingC = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
     static constexpr bool kIndexedGather = Mode == Striding::kIndexed;
-    static constexpr int kMulticastA = MulticastA;
-    static constexpr int kMulticastB = MulticastB;
+    static constexpr int kMulticastA = ClusterShape_::N;
+    static constexpr int kMulticastB = ClusterShape_::M;
     static constexpr int kMulticastU = is_grouped_gemm ? 1 : kMulticastA;
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
@@ -335,7 +335,7 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
     static_assert(kMathWarpGroups != 2 || kProducerRegs + 2 * kMathRegs <= 504);
     static_assert(kMathWarpGroups != 3 || kProducerRegs + 3 * kMathRegs <= 512);
 
-    using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
+    using Cluster = arch::Cluster<ClusterShape_::M, ClusterShape_::N, kRowMajor>;
     using ClusterShape = cute::Shape<cute::Int<kClusterSize>, cute::_1, cute::_1>;
     using Scheduler = TileScheduler<Raster, Cluster, true, true, TILE_M, TILE_N, Stages, is_grouped_gemm>;
     using MainloopPipeline = cutlass::PipelineTmaAsync<Stages>;

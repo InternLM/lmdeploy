@@ -485,7 +485,7 @@ __global__ void __launch_bounds__(32, 1) prepare_tma_descs_sm90_mixed(const __gr
     detail::rebase_publish_mixed_tma_descs<4>(out + g * kNum, smem_desc, templates, addrs, dims, strides, lane);
 }
 
-template<class Format_, class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, int MulticastA, int MulticastB, int MmaN, bool SeparateMmaAtoms, int EpiM, int EpiStages_>
+template<class Format_, class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, class ClusterShape_, int MmaN, bool SeparateMmaAtoms, int EpiM, int EpiStages_>
 struct GemmUniversalSm90Mixed {
     using Arch    = Sm90;
     using Tile = typename Config_::Tile;
@@ -498,8 +498,8 @@ struct GemmUniversalSm90Mixed {
     static constexpr bool is_grouped_gemm = Mode != Striding::kFlat;
     static constexpr bool  kSupportsFusedSilu = Silu;
 
-    static constexpr int kMulticastA = MulticastA;
-    static constexpr int kMulticastB = MulticastB;
+    static constexpr int kMulticastA = ClusterShape_::N;
+    static constexpr int kMulticastB = ClusterShape_::M;
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
     static constexpr Striding kStridingA     = Mode;
@@ -558,7 +558,7 @@ struct GemmUniversalSm90Mixed {
     static constexpr bool kNeedsCrossWgSiluExchange = kSupportsFusedSilu && kRestM % 2 != 0 && Traits::kAtomM == 2 && WARPGROUPS == 2;
     static_assert(!kSupportsFusedSilu || kRestM % 2 == 0 || kNeedsCrossWgSiluExchange);
 
-    using Cluster   = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
+    using Cluster   = arch::Cluster<ClusterShape_::M, ClusterShape_::N, kRowMajor>;
     using Scheduler = TileScheduler<Raster, Cluster, true, true, TILE_M, TILE_N, Stages, is_grouped_gemm>;
 
     using MainloopPipeline = cutlass::PipelineTmaAsync<Stages>;
