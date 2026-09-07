@@ -124,7 +124,10 @@ class AwqLinearW4A16Builder(LinearW4A16Builder):
                 impl_cls = TurbomindAwqLinearW4A16Impl
             elif provider == 'turbomind':
                 from lmdeploy import turbomind
-                raise RuntimeError(f'TurboMind W4A16 linear was requested but is unavailable or incompatible: {reason}.') from turbomind._import_error
+
+                raise RuntimeError(
+                    f'TurboMind W4A16 linear was requested but is unavailable or incompatible: {reason}.'
+                ) from turbomind._import_error
             else:
                 impl_cls = AwqLinearW4A16Impl
         else:

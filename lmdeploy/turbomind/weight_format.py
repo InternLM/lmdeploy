@@ -503,7 +503,9 @@ class WeightFormatResolver:
         self._formats = formats
         self._suffixes = frozenset(s for f in formats for s in f.suffix_map)
 
-    def resolve(self, pfx, *, index: int | None = None, optional: bool = False) -> tuple[WeightFormat, dict[str, Tensor]] | None:
+    def resolve(
+        self, pfx, *, index: int | None = None, optional: bool = False
+    ) -> tuple[WeightFormat, dict[str, Tensor]] | None:
         """Resolve the selected format and its raw checkpoint tensors."""
         read = pfx.get if index is not None else pfx.pop
         available = {s: read(s, sep='', index=index) for s in self._suffixes if pfx.has(s, sep='')}

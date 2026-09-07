@@ -25,7 +25,8 @@ class TurbomindAwqLinearW4A16Impl(LinearW4A16Impl):
         if weight is None:
             self._linear = None
             return
-        # Forward is asynchronous and may use any engine stream. Release the prepared weight only after all device work completes.
+        # Forward is asynchronous and may use any engine stream. Release the
+        # prepared weight only after all device work completes.
         torch.cuda.synchronize()
         weight.close()
         self._linear = None
@@ -40,20 +41,32 @@ class TurbomindAwqLinearW4A16Impl(LinearW4A16Impl):
         except Exception:
             pass
 
-    def update_weights(self, qweight: torch.Tensor, scales: torch.Tensor, qzeros: torch.Tensor, bias: torch.Tensor | None = None):
+    def update_weights(
+        self, qweight: torch.Tensor, scales: torch.Tensor, qzeros: torch.Tensor, bias: torch.Tensor | None = None
+    ):
         self._release()
 
         linear = get_linear()
         plan = linear.get_weight_plan(weight_format=AWQFormat(block_in=self.group_size), dtype=scales.dtype)
         weight = linear.prepare_weight(qweight, plan=plan, scales=scales, zeros=qzeros)
-        # Weight preparation is asynchronous on the loading stream, while the engine executes on another stream. Publish only after packing completes.
+        # Weight preparation is asynchronous on the loading stream, while the
+        # engine executes on another stream. Publish only after packing completes.
         torch.cuda.current_stream().synchronize()
 
         self._linear = linear
         self._weight = weight
         return qweight, scales, qzeros, bias
 
-    def forward(self, x, qweight: torch.Tensor, scales: torch.Tensor, qzeros: torch.Tensor, bias: torch.Tensor | None = None, all_reduce: bool = False, group: torch.distributed.ProcessGroup | None = None):
+    def forward(
+        self,
+        x,
+        qweight: torch.Tensor,
+        scales: torch.Tensor,
+        qzeros: torch.Tensor,
+        bias: torch.Tensor | None = None,
+        all_reduce: bool = False,
+        group: torch.distributed.ProcessGroup | None = None,
+    ):
         linear = self._linear
         weight = self._weight
 

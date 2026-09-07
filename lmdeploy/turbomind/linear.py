@@ -1,7 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Torch-facing TurboMind linear API.
 
-Use ``Linear.get_weight_plan()`` followed by ``prepare_weight()`` or ``fuse_weight()`` to create a reusable ``Weight``, then obtain an ``ExecPlan`` with ``get_exec_plan()`` or ``tune()`` and execute with ``Linear`` or ``forward_moe()``. Execution uses the current Torch CUDA stream and allocates outputs from the plan when destinations are omitted.
+Use ``Linear.get_weight_plan()`` followed by ``prepare_weight()`` or
+``fuse_weight()`` to create a reusable ``Weight``, then obtain an ``ExecPlan``
+with ``get_exec_plan()`` or ``tune()`` and execute with ``Linear`` or
+``forward_moe()``. Execution uses the current Torch CUDA stream and allocates
+outputs from the plan when destinations are omitted.
 """
 
 from __future__ import annotations
@@ -24,7 +28,14 @@ if TYPE_CHECKING:
 __all__ = ['ExecPlan', 'Linear', 'Weight', 'WeightPlan', 'get_linear']
 
 
-_TORCH_TO_TM_NAME = {torch.uint8: 'TYPE_UINT8', torch.int32: 'TYPE_INT32', torch.float16: 'TYPE_FP16', torch.bfloat16: 'TYPE_BF16', torch.float32: 'TYPE_FP32', torch.float8_e4m3fn: 'TYPE_FP8_E4M3'}
+_TORCH_TO_TM_NAME = {
+    torch.uint8: 'TYPE_UINT8',
+    torch.int32: 'TYPE_INT32',
+    torch.float16: 'TYPE_FP16',
+    torch.bfloat16: 'TYPE_BF16',
+    torch.float32: 'TYPE_FP32',
+    torch.float8_e4m3fn: 'TYPE_FP8_E4M3',
+}
 
 
 def _to_tm_dtype(dtype):
@@ -58,7 +69,9 @@ class ExecPlan:
     def output(self) -> torch.Tensor:
         """Return a meta tensor describing the required output."""
         spec = self._impl
-        return torch.empty_strided(spec.output_shape, spec.output_stride, dtype=_to_torch_dtype(spec.output_dtype), device='meta')
+        return torch.empty_strided(
+            spec.output_shape, spec.output_stride, dtype=_to_torch_dtype(spec.output_dtype), device='meta'
+        )
 
     @property
     def output_scales(self) -> torch.Tensor | None:
@@ -66,7 +79,12 @@ class ExecPlan:
         spec = self._impl
         if spec.output_scales_dtype == _tm.DataType.TYPE_INVALID:
             return None
-        return torch.empty_strided(spec.output_scales_shape, spec.output_scales_stride, dtype=_to_torch_dtype(spec.output_scales_dtype), device='meta')
+        return torch.empty_strided(
+            spec.output_scales_shape,
+            spec.output_scales_stride,
+            dtype=_to_torch_dtype(spec.output_scales_dtype),
+            device='meta',
+        )
 
 
 class Weight:
@@ -133,7 +151,16 @@ class Linear:
             self._impl = None
         self._context = None
 
-    def get_weight_plan(self, *, weight_format: WeightFormat, dtype: torch.dtype, input_dtype: torch.dtype | None = None, output_dtype: torch.dtype | None = None, grouped: bool = False, fusion_type: Literal['silu'] | None = None) -> WeightPlan:
+    def get_weight_plan(
+        self,
+        *,
+        weight_format: WeightFormat,
+        dtype: torch.dtype,
+        input_dtype: torch.dtype | None = None,
+        output_dtype: torch.dtype | None = None,
+        grouped: bool = False,
+        fusion_type: Literal['silu'] | None = None,
+    ) -> WeightPlan:
         """Select a weight family and expose its source-shape constraints."""
         weight_format = copy.copy(weight_format)
         data_format = weight_format.make_data_format()
@@ -146,7 +173,10 @@ class Linear:
 
         impl = self._impl.get_weight_plan(query)
         if impl is None:
-            raise NotImplementedError(f'no GEMM family accepts format={data_format}, dtype={dtype}, input_dtype={input_dtype}, output_dtype={output_dtype}, grouped={grouped}')
+            raise NotImplementedError(
+                f'no GEMM family accepts format={data_format}, dtype={dtype}, '
+                f'input_dtype={input_dtype}, output_dtype={output_dtype}, grouped={grouped}'
+            )
 
         minimum, alignment = impl.shape_constraints
         min_k, min_n = minimum
@@ -207,7 +237,9 @@ class Linear:
             tensor = item.tensor
             logical_shape = (list(tensor.shape) if item.alloc_shape is None else list(item.alloc_shape))
             logical_dtype = (_to_tm_dtype(tensor.dtype) if item.alloc_dtype is None else item.alloc_dtype)
-            self._copy_param(impl, kind, tensor, logical_shape=logical_shape, logical_dtype=logical_dtype, stream=stream)
+            self._copy_param(
+                impl, kind, tensor, logical_shape=logical_shape, logical_dtype=logical_dtype, stream=stream
+            )
 
         impl.prepare()
 
@@ -222,7 +254,16 @@ class Linear:
         experts = []
         try:
             for params in normalized_experts:
-                experts.append(self._prepare_one(params, weight_format=weight_format, plan=plan, dtype=dtype, stored_output_dim=stored_output_dim, stream=stream))
+                experts.append(
+                    self._prepare_one(
+                        params,
+                        weight_format=weight_format,
+                        plan=plan,
+                        dtype=dtype,
+                        stored_output_dim=stored_output_dim,
+                        stream=stream,
+                    )
+                )
 
             impl = _tm.LinkLinearExperts([expert._impl for expert in experts])
             handle = Weight()
@@ -234,7 +275,14 @@ class Linear:
                 expert.close()
             raise
 
-    def prepare_weight(self, weight: torch.Tensor | Sequence[torch.Tensor], *, plan: WeightPlan, scales: torch.Tensor | Sequence[torch.Tensor] | None = None, zeros: torch.Tensor | Sequence[torch.Tensor] | None = None) -> Weight:
+    def prepare_weight(
+        self,
+        weight: torch.Tensor | Sequence[torch.Tensor],
+        *,
+        plan: WeightPlan,
+        scales: torch.Tensor | Sequence[torch.Tensor] | None = None,
+        zeros: torch.Tensor | Sequence[torch.Tensor] | None = None,
+    ) -> Weight:
         """Normalize and pack a dense weight or sequence of expert weights."""
         weight_format = plan._weight_format
         dtype = plan._dtype
@@ -243,15 +291,32 @@ class Linear:
         if not plan._grouped:
             with self._activate() as stream:
                 normalized = self._normalize_params(weight_format, weight, scales, zeros)
-                return self._prepare_one(normalized, weight_format=weight_format, plan=impl_plan, dtype=dtype, stored_output_dim=normalized['weight'].shape[1], stream=stream)
+                return self._prepare_one(
+                    normalized,
+                    weight_format=weight_format,
+                    plan=impl_plan,
+                    dtype=dtype,
+                    stored_output_dim=normalized['weight'].shape[1],
+                    stream=stream,
+                )
 
         weights = list(weight)
         expert_scales = [None] * len(weights) if scales is None else list(scales)
         expert_zeros = [None] * len(weights) if zeros is None else list(zeros)
 
         with self._activate() as stream:
-            normalized_experts = [self._normalize_params(weight_format, expert_weight, expert_scale, expert_zero) for expert_weight, expert_scale, expert_zero in zip(weights, expert_scales, expert_zeros)]
-            return self._prepare_grouped(normalized_experts, weight_format=weight_format, plan=impl_plan, dtype=dtype, stored_output_dim=normalized_experts[0]['weight'].shape[1], stream=stream)
+            normalized_experts = [
+                self._normalize_params(weight_format, expert_weight, expert_scale, expert_zero)
+                for expert_weight, expert_scale, expert_zero in zip(weights, expert_scales, expert_zeros)
+            ]
+            return self._prepare_grouped(
+                normalized_experts,
+                weight_format=weight_format,
+                plan=impl_plan,
+                dtype=dtype,
+                stored_output_dim=normalized_experts[0]['weight'].shape[1],
+                stream=stream,
+            )
 
     def _interleave_gate_up(self, gate, up, groups):
         """Interleave gate and up components in the selected family block
@@ -260,7 +325,14 @@ class Linear:
         up_groups = up.unflatten(-1, (groups, -1))
         return torch.stack((gate_groups, up_groups), dim=-2).flatten(-3, -1).contiguous()
 
-    def fuse_weight(self, weight: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]], *, plan: WeightPlan, scales: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None, zeros: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None) -> Weight:
+    def fuse_weight(
+        self,
+        weight: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]],
+        *,
+        plan: WeightPlan,
+        scales: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None,
+        zeros: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None,
+    ) -> Weight:
         """Normalize, interleave, and pack gate/up weights for fused SiLU
         execution."""
         weight_format = plan._weight_format
@@ -294,7 +366,9 @@ class Linear:
 
         with self._activate() as stream:
             normalized_pairs = []
-            for gate_weight, up_weight, gate_scale, up_scale, gate_zero, up_zero in zip(gate_weights, up_weights, gate_scales, up_scales, gate_zeros, up_zeros):
+            for gate_weight, up_weight, gate_scale, up_scale, gate_zero, up_zero in zip(
+                gate_weights, up_weights, gate_scales, up_scales, gate_zeros, up_zeros
+            ):
                 gate = self._normalize_params(weight_format, gate_weight, gate_scale, gate_zero)
                 up = self._normalize_params(weight_format, up_weight, up_scale, up_zero)
                 normalized_pairs.append((gate, up))
@@ -312,44 +386,125 @@ class Linear:
 
             stored_output_dim = projection_n * 2
             if plan._grouped:
-                return self._prepare_grouped(combined_experts, weight_format=weight_format, plan=impl_plan, dtype=dtype, stored_output_dim=stored_output_dim, stream=stream)
-            return self._prepare_one(combined_experts[0], weight_format=weight_format, plan=impl_plan, dtype=dtype, stored_output_dim=stored_output_dim, stream=stream)
+                return self._prepare_grouped(
+                    combined_experts,
+                    weight_format=weight_format,
+                    plan=impl_plan,
+                    dtype=dtype,
+                    stored_output_dim=stored_output_dim,
+                    stream=stream,
+                )
+            return self._prepare_one(
+                combined_experts[0],
+                weight_format=weight_format,
+                plan=impl_plan,
+                dtype=dtype,
+                stored_output_dim=stored_output_dim,
+                stream=stream,
+            )
 
-    def get_exec_plan(self, x: torch.Tensor, weight: Weight, *, offsets: torch.Tensor | None = None, indices: torch.Tensor | None = None) -> ExecPlan:
+    def get_exec_plan(
+        self,
+        x: torch.Tensor,
+        weight: Weight,
+        *,
+        offsets: torch.Tensor | None = None,
+        indices: torch.Tensor | None = None,
+    ) -> ExecPlan:
         """Select an immutable execution plan for an input and prepared
         weight."""
         tm = _tm
-        impl = self._impl.get_exec_plan(weight._impl, tm.from_dlpack(x), None if indices is None else tm.from_dlpack(indices), None if offsets is None else tm.from_dlpack(offsets))
+        impl = self._impl.get_exec_plan(
+            weight._impl,
+            tm.from_dlpack(x),
+            None if indices is None else tm.from_dlpack(indices),
+            None if offsets is None else tm.from_dlpack(offsets),
+        )
         if impl is None:
             raise NotImplementedError('no GEMM kernel accepts the execution problem')
         exec_plan = ExecPlan()
         exec_plan._impl = impl
         return exec_plan
 
-    def _allocate_output(self, spec, out: torch.Tensor | None, out_scales: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def _allocate_output(
+        self, spec, out: torch.Tensor | None, out_scales: torch.Tensor | None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Allocate any omitted output tensors according to an execution
         plan."""
         if out is None:
-            out = torch.empty_strided(spec.output_shape, spec.output_stride, dtype=_to_torch_dtype(spec.output_dtype), device=self.device)
+            out = torch.empty_strided(
+                spec.output_shape, spec.output_stride, dtype=_to_torch_dtype(spec.output_dtype), device=self.device
+            )
         if out_scales is None and spec.output_scales_dtype != _tm.DataType.TYPE_INVALID:
-            out_scales = torch.empty_strided(spec.output_scales_shape, spec.output_scales_stride, dtype=_to_torch_dtype(spec.output_scales_dtype), device=self.device)
+            out_scales = torch.empty_strided(
+                spec.output_scales_shape,
+                spec.output_scales_stride,
+                dtype=_to_torch_dtype(spec.output_scales_dtype),
+                device=self.device,
+            )
         return out, out_scales
 
-    def __call__(self, x: torch.Tensor, weight: Weight, *, exec_plan: ExecPlan, out: torch.Tensor | None = None, input_scales: torch.Tensor | None = None, out_scales: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def __call__(
+        self,
+        x: torch.Tensor,
+        weight: Weight,
+        *,
+        exec_plan: ExecPlan,
+        out: torch.Tensor | None = None,
+        input_scales: torch.Tensor | None = None,
+        out_scales: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Execute a dense linear operation with an explicit execution plan."""
         with self._activate():
             out, out_scales = self._allocate_output(exec_plan._impl, out, out_scales)
-            self._impl.forward_dense(exec_plan._impl, _tm.from_dlpack(x), weight._impl, _tm.from_dlpack(out), None if input_scales is None else _tm.from_dlpack(input_scales), None if out_scales is None else _tm.from_dlpack(out_scales))
+            self._impl.forward_dense(
+                exec_plan._impl,
+                _tm.from_dlpack(x),
+                weight._impl,
+                _tm.from_dlpack(out),
+                None if input_scales is None else _tm.from_dlpack(input_scales),
+                None if out_scales is None else _tm.from_dlpack(out_scales),
+            )
         return out, out_scales
 
-    def forward_moe(self, x: torch.Tensor, weight: Weight, *, exec_plan: ExecPlan, offsets: torch.Tensor, out: torch.Tensor | None = None, indices: torch.Tensor | None = None, input_scales: torch.Tensor | None = None, out_scales: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward_moe(
+        self,
+        x: torch.Tensor,
+        weight: Weight,
+        *,
+        exec_plan: ExecPlan,
+        offsets: torch.Tensor,
+        out: torch.Tensor | None = None,
+        indices: torch.Tensor | None = None,
+        input_scales: torch.Tensor | None = None,
+        out_scales: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Execute a grouped linear operation with optional indexed input."""
         with self._activate():
             out, out_scales = self._allocate_output(exec_plan._impl, out, out_scales)
-            self._impl.forward_moe(exec_plan._impl, _tm.from_dlpack(x), weight._impl, None if indices is None else _tm.from_dlpack(indices), _tm.from_dlpack(offsets), _tm.from_dlpack(out), None if input_scales is None else _tm.from_dlpack(input_scales), None if out_scales is None else _tm.from_dlpack(out_scales))
+            self._impl.forward_moe(
+                exec_plan._impl,
+                _tm.from_dlpack(x),
+                weight._impl,
+                None if indices is None else _tm.from_dlpack(indices),
+                _tm.from_dlpack(offsets),
+                _tm.from_dlpack(out),
+                None if input_scales is None else _tm.from_dlpack(input_scales),
+                None if out_scales is None else _tm.from_dlpack(out_scales),
+            )
         return out, out_scales
 
-    def tune(self, x: torch.Tensor, weight: Weight, *, offsets: torch.Tensor | None = None, indices: torch.Tensor | None = None, out: torch.Tensor | None = None, input_scales: torch.Tensor | None = None, out_scales: torch.Tensor | None = None) -> tuple[ExecPlan, torch.Tensor, torch.Tensor | None]:
+    def tune(
+        self,
+        x: torch.Tensor,
+        weight: Weight,
+        *,
+        offsets: torch.Tensor | None = None,
+        indices: torch.Tensor | None = None,
+        out: torch.Tensor | None = None,
+        input_scales: torch.Tensor | None = None,
+        out_scales: torch.Tensor | None = None,
+    ) -> tuple[ExecPlan, torch.Tensor, torch.Tensor | None]:
         """Measure feasible kernels and return the selected execution plan and
         outputs."""
         tm = _tm
@@ -360,7 +515,15 @@ class Linear:
         with self._activate():
             output_spec = self._impl._get_output_spec(weight._impl, input_impl, indices_impl)
             out, out_scales = self._allocate_output(output_spec, out, out_scales)
-            impl = self._impl.tune(input_impl, weight._impl, indices_impl, offsets_impl, tm.from_dlpack(out), input_scales_impl, None if out_scales is None else tm.from_dlpack(out_scales))
+            impl = self._impl.tune(
+                input_impl,
+                weight._impl,
+                indices_impl,
+                offsets_impl,
+                tm.from_dlpack(out),
+                input_scales_impl,
+                None if out_scales is None else tm.from_dlpack(out_scales),
+            )
         if impl is None:
             raise NotImplementedError('no GEMM kernel accepts the execution problem')
         exec_plan = ExecPlan()

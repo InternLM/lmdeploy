@@ -10,7 +10,7 @@ except (ImportError, OSError) as error:
     _tm = None
     _import_error = error
 else:
-    from .turbomind import TurboMind
+    from .turbomind import TurboMind as TurboMind
 
 
 def is_available() -> bool:
