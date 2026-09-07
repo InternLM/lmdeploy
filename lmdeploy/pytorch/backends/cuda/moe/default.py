@@ -6,7 +6,7 @@ import torch
 
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
-from lmdeploy.pytorch.backends.moe import FusedMoEBuilder, FusedMoEImpl
+from lmdeploy.pytorch.backends.moe import FusedMoEBuildSpec, FusedMoEImpl
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda import fused_moe
 from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _renormalize
@@ -333,7 +333,7 @@ class FusedMoELowLatency:
         return self.experts(recv_hidden_states, up_weight, down_weight, masked_m, expected_m)
 
 
-def build_deepep_moe(
+def _build_deepep_moe(
     low_latency_mode: bool,
     ep_size: int,
     ep_group: dist.ProcessGroup,
@@ -442,42 +442,34 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         return _renormalize(topk_weights, self.renormalize)
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
-        deepep_moe = build_deepep_moe(low_latency_mode,
-                                      self.ep_size,
-                                      self.ep_group,
-                                      self.num_experts,
-                                      self.hidden_dim,
-                                      self.top_k,
-                                      layer_idx=self.layer_idx,
-                                      out_dtype=self.out_dtype,
-                                      num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank)
+        deepep_moe = _build_deepep_moe(low_latency_mode,
+                                       self.ep_size,
+                                       self.ep_group,
+                                       self.num_experts,
+                                       self.hidden_dim,
+                                       self.top_k,
+                                       layer_idx=self.layer_idx,
+                                       out_dtype=self.out_dtype,
+                                       num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank)
         return deepep_moe
 
 
-class TritonFusedMoEBuilder(FusedMoEBuilder):
-    """Triton fused moe builder."""
-
-    @staticmethod
-    def build(
-        top_k: int,
-        num_experts: int,
-        renormalize: bool = False,
-        hidden_dim: int = 1,
-        ep_size: int = 1,
-        ep_group: dist.ProcessGroup = None,
-        layer_idx: int = 0,
-        out_dtype: torch.dtype = torch.bfloat16,
-        num_max_dispatch_tokens_per_rank: int = 128,
-    ):
-        """Build from mlp."""
-        if ep_size > 1:
-            return FusedMoEEPImpl(ep_size=ep_size,
-                                  ep_group=ep_group,
-                                  top_k=top_k,
-                                  num_experts=num_experts,
-                                  hidden_dim=hidden_dim,
-                                  renormalize=renormalize,
-                                  layer_idx=layer_idx,
-                                  out_dtype=out_dtype,
-                                  num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank)
-        return TritonFusedMoEImpl(top_k=top_k, num_experts=num_experts, renormalize=renormalize)
+def _build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
+    """Build a CUDA fused MoE implementation."""
+    if spec.ep_size > 1:
+        return FusedMoEEPImpl(
+            ep_size=spec.ep_size,
+            ep_group=spec.ep_group,
+            top_k=spec.top_k,
+            num_experts=spec.num_experts,
+            hidden_dim=spec.hidden_dim,
+            renormalize=spec.renormalize,
+            layer_idx=spec.layer_idx,
+            out_dtype=spec.output_dtype,
+            num_max_dispatch_tokens_per_rank=spec.num_max_dispatch_tokens_per_rank,
+        )
+    return TritonFusedMoEImpl(
+        top_k=spec.top_k,
+        num_experts=spec.num_experts,
+        renormalize=spec.renormalize,
+    )

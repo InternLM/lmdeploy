@@ -11,7 +11,7 @@ from lmdeploy.pytorch.kernels.cuda.moe.route_single_group import (
 )
 
 from ..default.moe_router import DefaultRouterNoauxTCImpl
-from ..moe_router import RouterGemmBuilder, RouterGemmImpl, RouterNoauxTCBuilder, RouterNoauxTCImpl
+from ..moe_router import RouterGemmImpl
 
 
 @functools.cache
@@ -41,15 +41,6 @@ class CudaRouterGemmImpl(RouterGemmImpl):
         if self.out_dtype is not None:
             output = output.to(self.out_dtype)
         return output
-
-
-class CudaRouterGemmBuilder(RouterGemmBuilder):
-    """CUDA router GEMM builder."""
-
-    @staticmethod
-    def build(out_dtype: torch.dtype | None = None):
-        """Build the CUDA router GEMM implementation."""
-        return CudaRouterGemmImpl(out_dtype=out_dtype)
 
 
 def is_power_of_two(n):
@@ -151,28 +142,3 @@ class TritonRouterNoauxTCImpl(DefaultRouterNoauxTCImpl):
             )
         else:
             return super().forward(logits, bias)
-
-
-class TritonRouterNoauxTCBuilder(RouterNoauxTCBuilder):
-
-    @staticmethod
-    def build(
-        scoring_func: str,
-        top_k: int,
-        n_group: int,
-        topk_group: int,
-        n_routed_experts: int,
-        routed_scaling_factor: float,
-        renormalize: bool = True,
-        router_n_groups: int = -1,
-    ) -> RouterNoauxTCImpl:
-        return TritonRouterNoauxTCImpl(
-            scoring_func=scoring_func,
-            top_k=top_k,
-            n_group=n_group,
-            topk_group=topk_group,
-            n_routed_experts=n_routed_experts,
-            routed_scaling_factor=routed_scaling_factor,
-            renormalize=renormalize,
-            router_n_groups=router_n_groups,
-        )
