@@ -141,7 +141,7 @@ REFERENCE_CHUNKS = [
     ('>', [{'tool_emitted': True, 'type': None, 'name': None, 'arguments': '}'}]),
     ('\n', []),
     ('</tool_call>', []),
-    ('', [{'content': '', 'tool_emitted': False}]),
+    ('', []),
 ]
 
 
@@ -158,6 +158,13 @@ class TestQwen3_5ResponseParserStreaming:
                 _flatten_stream_deltas(response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=[])))
             expected.extend(expected_events)
         assert actual == expected
+
+    def test_stream_chunk_ignores_trailing_empty_delta(self):
+        response_parser = _build_response_parser()
+
+        response_parser.stream_chunk(delta_text='answer', delta_token_ids=[1])
+
+        assert response_parser.stream_chunk(delta_text='', delta_token_ids=[]) == []
 
     def test_stream_chunk_emits_parameter_value_before_parameter_close(self):
         response_parser = _build_response_parser()

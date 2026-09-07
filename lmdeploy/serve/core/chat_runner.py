@@ -17,29 +17,6 @@ from .exceptions import ErrorCode, RequestError
 
 
 @dataclass
-class _StreamTokenMetadata:
-    """Token metadata buffered across parser steps with no visible delta."""
-
-    token_ids: list[int] | None
-    logprobs: list[dict[int, float]] | None
-
-    @classmethod
-    def from_result(
-        cls,
-        token_ids: list[int] | None,
-        logprobs: list[dict[int, float]] | None,
-        *,
-        keep_token_ids: bool,
-        keep_logprobs: bool,
-    ) -> _StreamTokenMetadata:
-        if keep_logprobs and logprobs is not None and len(token_ids or []) != len(logprobs):
-            raise ValueError('Token ids and logprobs must have the same length.')
-        return cls(
-            list(token_ids or []) if keep_token_ids else None,
-            list(logprobs or []) if keep_logprobs else None,
-        )
-
-@dataclass
 class ChatRunnerOptions:
     """Endpoint-specific runtime knobs for the shared chat runner."""
 
@@ -66,7 +43,6 @@ class ChatStreamChunk:
     cache_block_ids: list[int] | None = None
     reasoning_tokens: int | None = None
     is_last_delta: bool = True
-    remote_token_ids: list[int] | None = None
 
 
 @dataclass
@@ -175,15 +151,15 @@ class ChatRunner:
         """Yield parser-normalized streaming chunks and clean up the
         session."""
         streaming_tools = False
-        keep_logprobs = bool(self.request.logprobs or self.request.return_logprob)
-        keep_token_ids = bool(self.request.return_token_ids or keep_logprobs)
-        keep_metadata = keep_token_ids or keep_logprobs
-        pending_token_metadata: _StreamTokenMetadata | None = None
+        return_token_metadata = bool(
+            self.request.return_token_ids
+            or self.request.logprobs
+            or self.request.return_logprob
+        )
         try:
             async for res in self.result_generator:
                 delta_text = res.response or ''
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
-                current_metadata_buffered = False
                 try:
                     stream_deltas = self.response_parser.stream_chunk(
                         delta_text,
@@ -191,35 +167,16 @@ class ChatRunner:
                         final=res.finish_reason is not None,
                     )
                     if not stream_deltas:
-                        if keep_metadata:
-                            if pending_token_metadata is None:
-                                pending_token_metadata = _StreamTokenMetadata.from_result(
-                                    res.token_ids,
-                                    res.logprobs,
-                                    keep_token_ids=keep_token_ids,
-                                    keep_logprobs=keep_logprobs,
-                                )
-                            else:
-                                if (
-                                        keep_logprobs
-                                        and res.logprobs is not None
-                                        and len(delta_token_ids) != len(res.logprobs)):
-                                    raise ValueError('Token ids and logprobs must have the same length.')
-                                if pending_token_metadata.token_ids is not None:
-                                    pending_token_metadata.token_ids.extend(res.token_ids or [])
-                                if pending_token_metadata.logprobs is not None:
-                                    pending_token_metadata.logprobs.extend(res.logprobs or [])
-                            current_metadata_buffered = True
-                        if res.finish_reason is None:
+                        # With no visible parser output, emit only when this
+                        # engine result still carries transport-level data.
+                        has_token_metadata = return_token_metadata and bool(delta_token_ids)
+                        if (
+                            res.finish_reason is None
+                            and not has_token_metadata
+                            and res.cache_block_ids is None
+                        ):
                             continue
-                        stream_deltas = [(DeltaMessage(role='assistant'), False)]
-
-                    if (
-                            keep_logprobs
-                            and not current_metadata_buffered
-                            and res.logprobs is not None
-                            and len(delta_token_ids) != len(res.logprobs)):
-                        raise ValueError('Token ids and logprobs must have the same length.')
+                        stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
 
                 except Exception as err:
                     raise RequestError(ErrorCode.INVALID_REQUEST, f'Failed to parse output: {err}') from err
@@ -237,33 +194,17 @@ class ChatRunner:
                             and streaming_tools):
                         finish_reason = 'tool_calls'
 
-                    stream_token_ids: list[int] = []
-                    stream_logprobs: list[dict[int, float]] | None = None
-                    if is_last_delta:
-                        if pending_token_metadata is not None:
-                            if not current_metadata_buffered:
-                                if pending_token_metadata.token_ids is not None:
-                                    pending_token_metadata.token_ids.extend(res.token_ids or [])
-                                if pending_token_metadata.logprobs is not None:
-                                    pending_token_metadata.logprobs.extend(res.logprobs or [])
-                            stream_token_ids = pending_token_metadata.token_ids or []
-                            stream_logprobs = pending_token_metadata.logprobs
-                            pending_token_metadata = None
-                        elif keep_metadata:
-                            stream_token_ids = res.token_ids or [] if keep_token_ids else []
-                            stream_logprobs = res.logprobs if keep_logprobs else None
                     yield ChatStreamChunk(
                         delta_message=delta_message,
                         tool_emitted=tool_emitted,
                         finish_reason=finish_reason,
-                        token_ids=stream_token_ids,
-                        logprobs=stream_logprobs,
+                        token_ids=delta_token_ids if is_last_delta else [],
+                        logprobs=res.logprobs if is_last_delta else None,
                         input_token_len=res.input_token_len,
                         generate_token_len=res.generate_token_len,
                         cached_tokens=res.cached_tokens,
                         routed_experts=res.routed_experts if finish_reason is not None else None,
                         cache_block_ids=res.cache_block_ids,
-                        remote_token_ids=delta_token_ids,
                         reasoning_tokens=self.response_parser.reasoning_tokens,
                         is_last_delta=is_last_delta,
                     )

@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from lmdeploy.serve.core.chat_runner import _StreamTokenMetadata
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
 
 
@@ -171,7 +170,7 @@ def _choice(payload):
     return payload['choices'][0]
 
 
-def test_empty_parser_result_with_token_metadata_waits_for_visible_delta(install_fake_chat_server):
+def test_empty_parser_result_emits_requested_token_metadata_immediately(install_fake_chat_server):
     chat_stream = install_fake_chat_server([
         {
             'response': '<empty>',
@@ -193,15 +192,21 @@ def test_empty_parser_result_with_token_metadata_waits_for_visible_delta(install
 
     payloads = chat_stream()
 
-    assert len(payloads) == 1
-    choice = _choice(payloads[0])
-    assert choice['delta']['content'] == 'visible'
-    assert choice['output_ids'] == [101, 102]
-    assert choice['output_token_logprobs'] == [[-0.1, 101], [-0.2, 102]]
-    assert [item['token'] for item in choice['logprobs']['content']] == ['tok101', 'tok102']
+    assert len(payloads) == 2
+    first_choice = _choice(payloads[0])
+    assert first_choice['delta']['content'] == ''
+    assert first_choice['output_ids'] == [101]
+    assert first_choice['output_token_logprobs'] == [[-0.1, 101]]
+    assert [item['token'] for item in first_choice['logprobs']['content']] == ['tok101']
+
+    second_choice = _choice(payloads[1])
+    assert second_choice['delta']['content'] == 'visible'
+    assert second_choice['output_ids'] == [102]
+    assert second_choice['output_token_logprobs'] == [[-0.2, 102]]
+    assert [item['token'] for item in second_choice['logprobs']['content']] == ['tok102']
 
 
-def test_suppressed_parser_result_carries_aligned_metadata_to_next_delta(install_fake_chat_server):
+def test_empty_parser_result_keeps_token_ids_and_logprobs_aligned(install_fake_chat_server):
     chat_stream = install_fake_chat_server([
         {
             'response': '<hidden>',
@@ -225,15 +230,21 @@ def test_suppressed_parser_result_carries_aligned_metadata_to_next_delta(install
 
     payloads = chat_stream()
 
-    assert len(payloads) == 1
-    choice = _choice(payloads[0])
-    assert choice['delta']['content'] == 'visible'
-    assert choice['output_ids'] == [101, 102, 103]
-    assert choice['output_token_logprobs'] == [[-0.1, 101], [-0.2, 102], [-0.3, 103]]
-    assert [item['token'] for item in choice['logprobs']['content']] == ['tok101', 'tok102', 'tok103']
+    assert len(payloads) == 2
+    first_choice = _choice(payloads[0])
+    assert first_choice['delta']['content'] == ''
+    assert first_choice['output_ids'] == [101, 102]
+    assert first_choice['output_token_logprobs'] == [[-0.1, 101], [-0.2, 102]]
+    assert [item['token'] for item in first_choice['logprobs']['content']] == ['tok101', 'tok102']
+
+    second_choice = _choice(payloads[1])
+    assert second_choice['delta']['content'] == 'visible'
+    assert second_choice['output_ids'] == [103]
+    assert second_choice['output_token_logprobs'] == [[-0.3, 103]]
+    assert [item['token'] for item in second_choice['logprobs']['content']] == ['tok103']
 
 
-def test_terminal_empty_parser_result_emits_finish_reason_without_empty_content(install_fake_chat_server):
+def test_terminal_empty_parser_result_emits_finish_reason(install_fake_chat_server):
     chat_stream = install_fake_chat_server([
         {
             'response': '<empty>',
@@ -249,14 +260,14 @@ def test_terminal_empty_parser_result_emits_finish_reason_without_empty_content(
 
     assert len(payloads) == 1
     choice = _choice(payloads[0])
-    assert choice['delta'] == {'role': 'assistant'}
+    assert choice['delta'] == {'content': '', 'role': 'assistant'}
     assert choice['finish_reason'] == 'stop'
     assert choice['output_ids'] == [101]
     assert choice['output_token_logprobs'] == [[-0.1, 101]]
     assert [item['token'] for item in choice['logprobs']['content']] == ['tok101']
 
 
-def test_unrequested_metadata_is_not_buffered_but_parser_still_receives_token_ids(install_fake_chat_server):
+def test_empty_parser_result_without_requested_metadata_is_skipped(install_fake_chat_server):
     chat_stream = install_fake_chat_server([
         {
             'response': '<hidden>',
@@ -287,43 +298,19 @@ def test_unrequested_metadata_is_not_buffered_but_parser_still_receives_token_id
     assert 'logprobs' not in choice
 
 
-def test_unrequested_metadata_does_not_construct_buffer_objects(install_fake_chat_server, monkeypatch):
-    chat_stream = install_fake_chat_server([
-        {'response': '<hidden>', 'token_ids': [101]},
-        {'response': 'visible', 'token_ids': [102]},
-    ])
-
-    def fail_from_result(*args, **kwargs):
-        raise AssertionError('metadata buffering must stay on the requested-only path')
-
-    monkeypatch.setattr(_StreamTokenMetadata, 'from_result', fail_from_result)
-    payloads = chat_stream(logprobs=False, return_logprob=False, return_token_ids=False)
-
-    assert _choice(payloads[0])['delta']['content'] == 'visible'
-
-
-def test_stream_metadata_rejects_misaligned_logprobs():
-    with pytest.raises(ValueError, match='same length'):
-        _StreamTokenMetadata.from_result(
-            [101, 102],
-            [{
-                101: -0.1,
-            }],
-            keep_token_ids=True,
-            keep_logprobs=True,
-        )
-
-
-@pytest.mark.parametrize('response, finish_reason', [('visible', None), ('<empty>', 'stop')])
-def test_cache_remote_token_ids_exclude_buffered_metadata(install_fake_chat_server, response, finish_reason):
+@pytest.mark.parametrize(
+    ('response', 'finish_reason'),
+    [('visible', None), ('<empty>', None), ('<empty>', 'stop')],
+)
+def test_cache_remote_token_ids_use_current_engine_result(install_fake_chat_server, response, finish_reason):
     chat_stream = install_fake_chat_server([
         {'response': '<hidden>', 'token_ids': [101]},
         {'response': response, 'token_ids': [102], 'finish_reason': finish_reason, 'cache_block_ids': [7]},
     ])
 
-    payloads = chat_stream(logprobs=False, return_logprob=False)
+    payloads = chat_stream(logprobs=False, return_logprob=False, return_token_ids=False)
 
     assert len(payloads) == 1
-    assert _choice(payloads[0])['output_ids'] == [101, 102]
+    assert 'output_ids' not in _choice(payloads[0])
     assert payloads[0]['cache_block_ids'] == [7]
     assert payloads[0]['remote_token_ids'] == [102]

@@ -359,7 +359,6 @@ class BaseResponseParser(ResponseParser):
         if delta_text:
             self._received_any_text = True
         self._pending += delta_text
-        produced_any = False
         deltas: list[tuple[DeltaMessage, bool]] = []
 
         while True:
@@ -368,7 +367,6 @@ class BaseResponseParser(ResponseParser):
                 emitted, progressed = self._consume_plain()
                 if emitted:
                     deltas.append((DeltaMessage(role='assistant', content=emitted), False))
-                    produced_any = True
             elif self._mode == self.MODE_REASONING:
                 emitted, progressed = self._consume_reasoning()
                 if emitted:
@@ -376,30 +374,17 @@ class BaseResponseParser(ResponseParser):
                         deltas.append((DeltaMessage(role='assistant', content=emitted), False))
                     else:
                         deltas.append((DeltaMessage(role='assistant', reasoning_content=emitted), False))
-                    produced_any = True
             if self._mode == self.MODE_TOOL:
                 # self._consume_plain() might change the mode to MODE_TOOL
                 # so we need to check the mode again
                 new_calls, progressed = self._consume_tool()
                 if new_calls:
                     deltas.append((DeltaMessage(role='assistant', tool_calls=new_calls), True))
-                    produced_any = True
             # A consumed chunk normally leaves tool mode waiting for the next
             # engine delta.  Re-entering the state machine with an empty
             # buffer only repeats parser dispatch on every streamed token.
             if not progressed or not self._pending:
                 break
-
-        # 5. Special case: a trailing empty delta (delta_text == '') after non-empty
-        # output should be surfaced as an explicit empty content delta so that
-        # streaming clients see the final "no-op" chunk (some backends do this).
-        if (
-            delta_text == ''
-            and not produced_any
-            and self._received_any_text
-            and not deltas
-        ):
-            deltas.append((DeltaMessage(role='assistant', content=''), False))
         return deltas
 
     def _consume_plain(self) -> tuple[str | None, bool]:

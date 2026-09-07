@@ -97,12 +97,12 @@ TOOL_CALL_0 = [
 
 REFERENCE_CHUNKS_0 = REASONING_0 + [
     ('\n\n', True, None, '\n\n', False, None, None, None)] + TOOL_CALL_0 + [
-    ('', True, None, '', False, None, None, None),
+    ('', False, None, None, False, None, None, None),
 ]
 
 REFERENCE_CHUNKS_1 = REASONING_1 + [
     ('\n\n', True, None, '\n\n', False, None, None, None)] + TOOL_CALL_0 + [
-    ('', True, None, '', False, None, None, None),
+    ('', False, None, None, False, None, None, None),
 ]
 
 REFERENCE_CHUNKS_2 = [
@@ -136,7 +136,7 @@ REFERENCE_CHUNKS_2 = [
     ('celsius', False, None, None, False, None, None, None),
     ('"}}\n', False, None, None, False, None, None, None),
     ('</tool_call>', True, None, None, True, None, '{"location": "北京", "unit": "celsius"}', None),
-    ('', True, None, '', False, None, None, None),
+    ('', False, None, None, False, None, None, None),
 ]
 
 

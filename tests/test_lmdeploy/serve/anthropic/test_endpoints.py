@@ -930,8 +930,8 @@ def test_stream_messages_response_closes_text_before_resuming_tool_delta():
         for item in payloads[:resumed_tool_delta_index])
 
 
-def test_stream_messages_response_interns2preview_inter_tool_whitespace_uses_text_block():
-    """Keep InternS2Preview's inter-tool newline off open tool-use blocks."""
+def test_stream_messages_response_interns2preview_ignores_inter_tool_newline():
+    """Ignore InternS2Preview's newline between consecutive tool blocks."""
 
     class _InternS2PreviewResponseParser(BaseResponseParser):
         reasoning_parser_cls = None
@@ -998,14 +998,11 @@ def test_stream_messages_response_interns2preview_inter_tool_whitespace_uses_tex
         ('content_block_start', 1),
         ('content_block_delta', 1),
         ('content_block_stop', 1),
-        ('content_block_start', 2),
-        ('content_block_delta', 2),
-        ('content_block_stop', 2),
     ]
     assert [
         item['content_block']['type'] for item in block_events
         if item['type'] == 'content_block_start'
-    ] == ['tool_use', 'text', 'tool_use']
+    ] == ['tool_use', 'tool_use']
     assert [
         item['delta'] for item in block_events
         if item['type'] == 'content_block_delta'
@@ -1013,10 +1010,6 @@ def test_stream_messages_response_interns2preview_inter_tool_whitespace_uses_tex
         {
             'type': 'input_json_delta',
             'partial_json': '{"city": "Paris"}',
-        },
-        {
-            'type': 'text_delta',
-            'text': '\n',
         },
         {
             'type': 'input_json_delta',
