@@ -1,11 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from torch import Tensor, nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.attention import AttentionMetadata
+from lmdeploy.pytorch.backends.nsa import NSAIndexFP8BuildSpec
 from lmdeploy.pytorch.consts import DSA_INDEXER_K_CACHE_NAME
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheBinding, BlockCacheRequestContext
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
 class IndexerTopKFP8(nn.Module):
@@ -14,14 +16,15 @@ class IndexerTopKFP8(nn.Module):
                  fill: int = -1,
                  allow_short_prefill_scoring_skip: bool = False):
         super().__init__()
-        backend = get_backend()
-        index_builder = backend.get_layer_impl_builder(OpType.NSAIndexFP8)
-        self.index_impl = index_builder.build(
-            topk,
-            softmax_scale,
-            block_size,
-            fill,
-            allow_short_prefill_scoring_skip=allow_short_prefill_scoring_skip,
+        self.index_impl = get_backend().build_op(
+            NSAIndexFP8BuildSpec(
+                top_k=topk,
+                softmax_scale=softmax_scale,
+                block_size=block_size,
+                fill=fill,
+                allow_short_prefill_scoring_skip=allow_short_prefill_scoring_skip,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
         )
         self.head_dim = head_dim
         self._block_cache_binding: BlockCacheBinding | None = None

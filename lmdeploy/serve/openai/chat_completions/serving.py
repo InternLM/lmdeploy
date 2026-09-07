@@ -100,10 +100,11 @@ def register(router: APIRouter, server_context) -> None:
           list of functions for which the model can generate JSON inputs.
         - **tool_choice** (str | object): Controls which (if any) tool is called by
           the model. `none` means the model will not call any tool and instead
-          generates a message. Specifying a particular tool via
+          generates a message. `auto` lets the model choose whether to call a
+          tool, while `required` constrains generation to at least one valid
+          call. Specifying a particular tool via
           ``{"type": "function", "function": {"name": "my_function"}}``
-          forces the model to call that tool. `auto` or `required` will put all
-          the tools informationto the model.
+          forces the model to call that tool.
 
         Additional arguments supported by LMDeploy:
 

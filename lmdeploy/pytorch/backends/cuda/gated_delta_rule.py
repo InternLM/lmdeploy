@@ -12,9 +12,7 @@ from lmdeploy.utils import get_logger
 
 from ..gated_delta_rule import (
     GatedDeltaMeta,
-    GatedDeltaMetaBuilder,
     GatedDeltaMetaImpl,
-    GatedDeltaRuleBuilder,
     GatedDeltaRuleImpl,
 )
 from .step_metadata import CudaStepMetaUpdater, register_piecewise_graph_impl, register_step_metadata_impl
@@ -513,17 +511,3 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             cache_seqlens=cache_seqlens,
             transpose_state_layout=transpose_state_layout,
         )
-
-
-class CudaGatedDeltaRuleBuilder(GatedDeltaRuleBuilder):
-
-    @staticmethod
-    def build() -> GatedDeltaRuleImpl:
-        return CudaGatedDeltaRuleImpl()
-
-
-class CudaGatedDeltaMetaBuilder(GatedDeltaMetaBuilder):
-
-    @staticmethod
-    def build() -> GatedDeltaMetaImpl:
-        return CudaGatedDeltaMetaImpl()

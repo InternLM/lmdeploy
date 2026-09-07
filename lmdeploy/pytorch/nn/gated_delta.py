@@ -7,9 +7,15 @@ import torch
 from torch import nn
 from torch.profiler import record_function
 
-from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaMeta
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.causal_conv1d import CausalConv1dBuildSpec
+from lmdeploy.pytorch.backends.gated_delta_rule import (
+    GatedDeltaMeta,
+    GatedDeltaMetaBuildSpec,
+    GatedDeltaRuleBuildSpec,
+)
 from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 from lmdeploy.utils import get_logger
 
@@ -34,9 +40,10 @@ class GatedDeltaMetaBuilder:
     """Build shared gated-delta metadata through the selected backend."""
 
     def __init__(self) -> None:
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.GatedDeltaMeta)
-        self.impl = builder.build()
+        self.impl = get_backend().build_op(
+            GatedDeltaMetaBuildSpec(),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     def __call__(
         self,
@@ -51,9 +58,10 @@ class GatedDeltaMetaBuilder:
 class CausalConv1dFunc:
 
     def __init__(self, activation: str = 'silu'):
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.CausalConv1d)
-        self.impl = builder.build()
+        self.impl = get_backend().build_op(
+            CausalConv1dBuildSpec(),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
         self.activation = activation
 
     @record_function('causal_conv1d')
@@ -71,9 +79,10 @@ class CausalConv1dFunc:
 class GatedDelta:
 
     def __init__(self, use_qk_l2norm_in_kernel: bool = True):
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.GatedDeltaRule)
-        self.impl = builder.build()
+        self.impl = get_backend().build_op(
+            GatedDeltaRuleBuildSpec(),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
         self.use_qk_l2norm_in_kernel = use_qk_l2norm_in_kernel
 
     def __call__(

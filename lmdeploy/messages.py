@@ -152,6 +152,23 @@ class GenerationConfig:
                     "regex_schema": "call me [A-Za-z]{1,10}"
                 }
 
+            or, an XGrammar structural tag:
+
+            .. code-block:: json
+
+                {
+                    "type": "structural_tag",
+                    "format": {
+                        "type": "tag",
+                        "begin": "<answer>",
+                        "content": {
+                            "type": "regex",
+                            "pattern": "[0-9]{1,3}"
+                        },
+                        "end": "</answer>"
+                    }
+                }
+
         logits_processors: Custom logit processors.
         repetition_ngram_size: The size of n-grams to consider for repetition early stop.
             Must be non-negative; values below 0 are treated as 0.

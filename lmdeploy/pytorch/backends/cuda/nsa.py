@@ -33,8 +33,7 @@ from lmdeploy.pytorch.kernels.cuda.step_metadata.fill_dsa_indexer_metadata impor
 from lmdeploy.utils import get_logger
 
 from ..nsa import (
-    BaseNSAIndexFP8,
-    BaseNSAIndexFP8Builder,
+    NSAIndexFP8Impl,
     NSAIndexMeta,
     build_nsa_index_meta,
     should_skip_nsa_indexer,
@@ -333,7 +332,7 @@ class DSAIndexerMetaBuilder(
         return meta
 
 
-class TritonNSAIndexFP8(BaseNSAIndexFP8):
+class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
 
     def __init__(self, topk: int, softmax_scale: float, block_size: int,
                  fill: int,
@@ -694,18 +693,3 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
             meta = self.get_step_metadata(attn_metadata)
         return self._forward_indexer_fused(q, k, weights, norm_weight, norm_bias, cos, sin, indexer_k_cache, norm_eps,
                                            head_gate_scale, rope_interleaved, meta)
-
-
-class TritonNSAIndexFP8Builder(BaseNSAIndexFP8Builder):
-
-    @staticmethod
-    def build(topk: int, softmax_scale: float, block_size: int = 128,
-              fill: int = -1,
-              allow_short_prefill_scoring_skip: bool = False) -> BaseNSAIndexFP8:
-        return TritonNSAIndexFP8(
-            topk,
-            softmax_scale=softmax_scale,
-            block_size=block_size,
-            fill=fill,
-            allow_short_prefill_scoring_skip=allow_short_prefill_scoring_skip,
-        )

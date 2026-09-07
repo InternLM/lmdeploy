@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import torch
 
+from .base import BuildSpec
 from .gated_delta_rule import GatedDeltaMeta
 
 
@@ -49,11 +51,6 @@ class CausalConv1dImpl(ABC):
         raise NotImplementedError
 
 
-class CausalConv1dBuilder(ABC):
-    """CausalConv1d implementation builder."""
-
-    @staticmethod
-    @abstractmethod
-    def build():
-        """build."""
-        raise NotImplementedError
+@dataclass(frozen=True)
+class CausalConv1dBuildSpec(BuildSpec[CausalConv1dImpl]):
+    """Request construction of a causal-convolution operator."""

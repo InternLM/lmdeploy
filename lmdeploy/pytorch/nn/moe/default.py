@@ -5,7 +5,8 @@ from collections.abc import Callable
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.moe import FusedMoEBuildSpec
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
@@ -145,17 +146,20 @@ class FusedMoE(FusedMoEBase):
         # create implementation
         dist_ctx = get_dist_manager().current_context()
         self.ep_size, rank = get_ep_world_rank()
-        impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoE)
-        deep_ep_max_tokens_per_rank = get_build_model_context().deep_ep_max_tokens_per_rank
-        self.impl = impl_builder.build(
-            top_k,
-            num_experts,
-            renormalize,
-            hidden_dim=hidden_dim,
-            ep_size=self.ep_size,
-            ep_group=dist_ctx.ep_gpu_group,
-            layer_idx=layer_idx,
-            num_max_dispatch_tokens_per_rank=deep_ep_max_tokens_per_rank,
+        build_ctx = get_build_model_context()
+        self.impl = get_backend().build_op(
+            FusedMoEBuildSpec(
+                top_k=top_k,
+                num_experts=num_experts,
+                renormalize=renormalize,
+                hidden_dim=hidden_dim,
+                ep_size=self.ep_size,
+                ep_group=dist_ctx.ep_gpu_group,
+                layer_idx=layer_idx,
+                output_dtype=torch.bfloat16,
+                num_max_dispatch_tokens_per_rank=build_ctx.deep_ep_max_tokens_per_rank,
+            ),
+            enable_deterministic=build_ctx.enable_deterministic,
         )
 
         # create weights

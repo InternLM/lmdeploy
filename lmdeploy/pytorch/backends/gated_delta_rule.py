@@ -1,11 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any
 
 import torch
 import torch.nn.functional as F
 
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+
+from .base import BuildSpec
 
 
 class GatedDeltaMeta:
@@ -70,15 +73,9 @@ class GatedDeltaMetaImpl(ABC):
         """Build metadata for one model forward."""
         raise NotImplementedError
 
-
-class GatedDeltaMetaBuilder(ABC):
-    """Gated-delta metadata implementation builder."""
-
-    @staticmethod
-    @abstractmethod
-    def build() -> GatedDeltaMetaImpl:
-        """Build the selected implementation."""
-        raise NotImplementedError
+@dataclass(frozen=True)
+class GatedDeltaMetaBuildSpec(BuildSpec[GatedDeltaMetaImpl]):
+    """Request construction of a gated-delta metadata operator."""
 
 
 class GatedDeltaRuleImpl(ABC):
@@ -281,11 +278,6 @@ class GatedDeltaRuleImpl(ABC):
         raise NotImplementedError
 
 
-class GatedDeltaRuleBuilder(ABC):
-    """Gated Delta Rule implementation builder."""
-
-    @staticmethod
-    @abstractmethod
-    def build() -> GatedDeltaRuleImpl:
-        """build."""
-        raise NotImplementedError
+@dataclass(frozen=True)
+class GatedDeltaRuleBuildSpec(BuildSpec[GatedDeltaRuleImpl]):
+    """Request construction of a gated-delta-rule operator."""

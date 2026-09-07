@@ -136,6 +136,7 @@ class BackendConfig:
     eager_mode: bool = True
     device_type: str = 'cuda'
     piecewise_cudagraph_max_tokens: int | None = None
+    enable_deterministic: bool = False
 
 
 @dataclass
