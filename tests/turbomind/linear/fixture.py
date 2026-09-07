@@ -215,13 +215,22 @@ class LinearFixture:
         case = self.case
         grouped = case.expert_num > 0
         weight_format = self._weight_format()
+        input_dtype = self._torch_dtype(case.input_type)
         plan = self.linear.get_weight_plan(
             weight_format=weight_format,
             dtype=self._torch_dtype(),
-            input_dtype=self._torch_dtype(case.input_type),
+            input_dtype=input_dtype,
             grouped=grouped,
             fusion_type='silu' if case.fuse_silu else None,
         )
+        # The planner treats input_dtype as a preference and can select a fallback.
+        if (
+            case.input_type != case.data_type
+            and plan._impl.family.input_format.dtype != _to_tm_dtype(input_dtype)
+        ):
+            raise NotImplementedError(
+                f'selected GEMM family does not accept prequantized {case.input_type} input'
+            )
         self.weight_plan = plan
 
         if not grouped:
