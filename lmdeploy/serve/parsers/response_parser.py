@@ -15,7 +15,7 @@ from lmdeploy.utils import get_logger
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
-    from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall, ToolCall
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
 
     from .reasoning_parser import ReasoningParser
     from .tool_parser import ToolParser
@@ -480,6 +480,10 @@ class BaseResponseParser(ResponseParser):
         if earliest_idx < 0:
             if not self._pending:
                 return None, False
+            if self._stream_final_received:
+                out = self._pending
+                self._pending = ''
+                return out, True
             keep = self._longest_open_tag_prefix_suffix(self._pending, tags)
             if keep > 0:
                 if keep >= len(self._pending):
@@ -543,6 +547,10 @@ class BaseResponseParser(ResponseParser):
         if idx < 0:
             if not self._pending:
                 return None, False
+            if self._stream_final_received:
+                out = self._pending
+                self._pending = ''
+                return out, True
             keep = self._longest_open_tag_prefix_suffix(self._pending, boundary_tags)
             if keep > 0:
                 if keep >= len(self._pending):
@@ -639,7 +647,7 @@ class BaseResponseParser(ResponseParser):
         token_ids: list[int] | None = None,
         **kwargs,
     ) -> tuple[str, list | None, str | None]:
-        """Parse the final non-streaming text output.
+        """Parse a complete response through the streaming state machine.
 
         Args:
             text: Full generated output text.
@@ -655,95 +663,22 @@ class BaseResponseParser(ResponseParser):
             self._counting_reasoning_tokens = (self.profile.starts_in_reasoning_mode
                                                 and self.reasoning_parser is not None
                                                 and self.enable_thinking is not False)
-            self._update_reasoning_tokens(token_ids or [])
-
+        messages = self.stream_chunk(text, token_ids or [], final=True)
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
-        tool_calls: list[ToolCall] = []
-        pos = 0
-        mode = self.MODE_REASONING if self.reasoning_enabled else self.MODE_PLAIN
-        n = len(text)
-        plain_open_tags = [
-            t for t in (self.profile.reasoning_open_tag, self.profile.tool_open_tag) if t
-        ]
-
-        while pos < n:
-            if mode == self.MODE_REASONING:
-                open_tag = self.profile.reasoning_open_tag
-                if open_tag and text.startswith(open_tag, pos):
-                    pos += len(open_tag)
-                    continue
-                close_tag = self.profile.reasoning_close_tag
-                # Match streaming: tool-open can implicitly end reasoning.
-                tool_tag = self.profile.tool_open_tag if self.tool_parser is not None else None
-                boundary_tags = [tag for tag in (close_tag, tool_tag) if tag]
-                boundary_idx, boundary_tag = self._find_first(text, boundary_tags, pos)
-                if boundary_idx < 0:
-                    piece = text[pos:]
-                    if self.enable_thinking is False:
-                        content_parts.append(piece)
-                    else:
-                        reasoning_parts.append(piece)
-                    break
-                piece = text[pos:boundary_idx]
-                if piece:
-                    if self.enable_thinking is False:
-                        content_parts.append(piece)
-                    else:
-                        reasoning_parts.append(piece)
-                if boundary_tag == close_tag:
-                    pos = boundary_idx + len(close_tag)
-                else:
-                    pos = boundary_idx
-                mode = self.MODE_PLAIN
-                continue
-
-            open_idx, open_tag = self._find_first(text, plain_open_tags, pos)
-            if open_idx < 0:
-                content_parts.append(text[pos:])
-                break
-
-            if open_idx > pos:
-                content_parts.append(text[pos:open_idx])
-
-            if open_tag == self.profile.reasoning_open_tag:
-                mode = self.MODE_REASONING
-                pos = open_idx + len(open_tag)
-                continue
-
-            if self.tool_parser is None:
-                content_parts.append(text[open_idx:])
-                break
-            call_count = len(tool_calls)
-            block_end = self.tool_parser.parse_tool_block(
-                text,
-                open_idx + len(open_tag),
-                tool_calls,
-            )
-            if len(tool_calls) > call_count:
-                tool_calls[call_count:] = self.tool_parser.filter_tool_calls(tool_calls[call_count:])
-            pos = block_end
-            newline_end = pos
-            while newline_end < n and text[newline_end] == '\n':
-                newline_end += 1
-            tool_open_tag = self.profile.tool_open_tag
-            if tool_open_tag is not None and newline_end > pos and text.startswith(tool_open_tag, newline_end):
-                pos = newline_end
+        tool_deltas: list[DeltaToolCall] = []
+        for message, _ in messages:
+            if message.content:
+                content_parts.append(message.content)
+            if message.reasoning_content:
+                reasoning_parts.append(message.reasoning_content)
+            if message.tool_calls:
+                tool_deltas.extend(message.tool_calls)
 
         content = ''.join(content_parts)
         reasoning_content = ''.join(reasoning_parts) if reasoning_parts else None
+        tool_calls = self.tool_parser.build_tool_calls(tool_deltas) if self.tool_parser is not None else []
         return content if content != '' else None, tool_calls or None, reasoning_content
-
-    @staticmethod
-    def _find_first(text: str, tags: list[str], start: int) -> tuple[int, str]:
-        best_idx = -1
-        best_tag = ''
-        for tag in tags:
-            idx = text.find(tag, start)
-            if idx >= 0 and (best_idx < 0 or idx < best_idx):
-                best_idx = idx
-                best_tag = tag
-        return best_idx, best_tag
 
     @staticmethod
     def _longest_open_tag_prefix_suffix(text: str, tags: list[str]) -> int:

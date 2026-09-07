@@ -307,6 +307,18 @@ class ToolParser:
         deltas: list[DeltaToolCall] = []
         consumed = self.feed_tool_block(text[start:], deltas, final=True)
 
+        tool_calls.extend(self.build_tool_calls(deltas))
+        return start + consumed
+
+    @staticmethod
+    def build_tool_calls(deltas: list[DeltaToolCall]) -> list[ToolCall]:
+        """Build complete calls by grouping ordered deltas by output index.
+
+        The first ID and name are retained, while every argument fragment is joined in emission order. An index without
+        an emitted name does not produce a complete call.
+        """
+        tool_calls: list[ToolCall] = []
+
         parts_by_index: dict[int, _ToolCallParts] = {}
         for delta in deltas:
             parts = parts_by_index.get(delta.index)
@@ -331,7 +343,7 @@ class ToolParser:
                 tool_calls.append(ToolCall(function=function))
             else:
                 tool_calls.append(ToolCall(id=parts.call_id, function=function))
-        return start + consumed
+        return tool_calls
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | list[ToolCall] | None:
         """Parse a complete inner payload through the streaming consumer."""

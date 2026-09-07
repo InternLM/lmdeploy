@@ -215,7 +215,7 @@ def test_response_parser_drops_newlines_only_between_tool_blocks(
         parser_cls.tool_parser_cls = old_tool_cls
 
 
-@pytest.mark.parametrize('tail', ['\nafter', '\n\nafter', '\n'])
+@pytest.mark.parametrize('tail', ['\nafter', '\n\nafter', '\n', '\n<tool'])
 def test_response_parser_preserves_tool_newlines_not_followed_by_another_tool(tail):
     parser_cls = ResponseParserManager.get('default')
     old_reasoning_cls = parser_cls.reasoning_parser_cls
