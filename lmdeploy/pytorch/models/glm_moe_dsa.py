@@ -270,17 +270,6 @@ class GlmMoeDsaAttention(DeepseekV32Attention):
 class GlmMoeDsaDecoderLayer(DeepseekV32DecoderLayer):
     attention_cls = GlmMoeDsaAttention
 
-    def __init__(self,
-                 config: Any,
-                 layer_idx: int,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None,
-                 prefix: str = ''):
-        super().__init__(config, layer_idx, dtype=dtype, device=device, prefix=prefix)
-        if dtype is not None:
-            self.input_layernorm.to(dtype=dtype)
-            self.post_attention_layernorm.to(dtype=dtype)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -317,8 +306,6 @@ class GlmMoeDsaModel(DeepseekV32Model):
 
     def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__(config, dtype=dtype, device=device)
-        if dtype is not None:
-            self.norm.to(dtype=dtype)
         self.topk_indices_buffer = DSATopKIndicesBuffer(config.index_topk)
 
     def forward(
