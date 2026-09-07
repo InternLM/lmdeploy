@@ -9,7 +9,7 @@ from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheGeometry, Bloc
 from lmdeploy.pytorch.kernels.dlinfer import fill_kv_cache, lightning_indexer
 from lmdeploy.utils import get_logger
 
-from ..nsa import BaseNSAIndexFP8, BaseNSAIndexFP8Builder, NSAIndexMeta
+from ..nsa import NSAIndexFP8BuildSpec, NSAIndexFP8Impl, NSAIndexMeta
 
 logger = get_logger('lmdeploy')
 
@@ -21,7 +21,7 @@ class DlinferNSAIndexMeta(NSAIndexMeta):
     kv_start_indices: Tensor | None = None
 
 
-class DlinferNSAIndexBF16(BaseNSAIndexFP8):
+class DlinferNSAIndexBF16(NSAIndexFP8Impl):
     """Ascend BF16 implementation of the NSA indexer interface."""
 
     def __init__(self, topk: int, softmax_scale: float, block_size: int,
@@ -162,16 +162,9 @@ class DlinferNSAIndexBF16(BaseNSAIndexFP8):
             'DSA indexer fused preprocessing is not supported on Ascend.')
 
 
-class DlinferNSAIndexBF16Builder(BaseNSAIndexFP8Builder):
-
-    @staticmethod
-    def build(
-        topk: int,
-        softmax_scale: float,
-        block_size: int = 128,
-        fill: int = -1,
-        allow_short_prefill_scoring_skip: bool = False,
-    ) -> BaseNSAIndexFP8:
-        logger.warning('Ascend backend does not support FP8 indexer; '
-                       'falling back to BF16 indexer.')
-        return DlinferNSAIndexBF16(topk, softmax_scale, block_size, fill)
+def _build_nsa_index_fp8(spec: NSAIndexFP8BuildSpec) -> NSAIndexFP8Impl:
+    """Build the Ascend BF16 fallback for the NSA indexer."""
+    logger.warning('Ascend backend does not support FP8 indexer; '
+                   'falling back to BF16 indexer.')
+    return DlinferNSAIndexBF16(spec.top_k, spec.softmax_scale,
+                               spec.block_size, spec.fill)
