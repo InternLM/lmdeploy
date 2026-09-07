@@ -274,6 +274,71 @@ def test_schedule_migration_matches_current_sequence():
     assert seq.status == MessageStatus.MIGRATION_READY
 
 
+def test_schedule_migration_rolls_back_match_when_capacity_fails(monkeypatch):
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    block_size = 16
+    seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=block_size,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=4,
+                               enable_prefix_caching=True)
+    scheduler_config = SchedulerConfig(max_batches=1,
+                                       max_session_len=128,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+    token_ids = [1] * (block_size * 2)
+    cached = scheduler.add_session(0).add_sequence(token_ids)
+    scheduler.block_manager.allocate(cached)
+    scheduler.block_trie.allocate(cached)
+    cached_block = int(cached.logical_blocks.get_real_blocks()[0])
+    cached.session.remove_sequence(cached)
+
+    migration_request = MigrationRequest(protocol=MigrationProtocol.RDMA,
+                                         remote_engine_id='prefill-0',
+                                         remote_session_id=7,
+                                         remote_token_id=8,
+                                         remote_block_ids=[1, 2])
+    seq = scheduler.add_session(100).add_sequence(token_ids, migration_request=migration_request)
+    stats_before = scheduler.block_trie.stats.snapshot()
+    ref_count_before = int(scheduler.block_trie.allocator.get_ref_count(cached_block))
+    try_make_capacity = scheduler.eviction_helper.try_make_capacity_for
+    matched_steps = []
+
+    def reject_capacity(actual_seq, *_):
+        matched_steps.append(actual_seq.num_history_ids)
+        return False
+
+    monkeypatch.setattr(scheduler.eviction_helper, 'try_make_capacity_for', reject_capacity)
+
+    output = scheduler.schedule_migration()
+
+    assert output == []
+    assert matched_steps == [block_size]
+    assert seq.status == MessageStatus.MIGRATION_WAITING
+    assert seq.num_history_ids == 0
+    assert seq.num_blocks == 0
+    assert seq.prefix_cache.trie_cursor is None
+    assert seq.prefix_cache.match_start_step == -1
+    assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
+    assert scheduler.block_trie.stats == stats_before
+    assert int(scheduler.block_trie.allocator.get_ref_count(cached_block)) == ref_count_before
+
+    monkeypatch.setattr(scheduler.eviction_helper, 'try_make_capacity_for', try_make_capacity)
+    output = scheduler.schedule_migration()
+
+    assert output == [seq]
+    assert seq.status == MessageStatus.MIGRATION_READY
+    assert seq.num_history_ids == block_size
+    assert seq.num_blocks == 2
+    assert seq.cached_tokens == block_size
+    assert scheduler.block_trie.stats.num_query_tokens == len(token_ids)
+    assert scheduler.block_trie.stats.num_hit_tokens == block_size
+    assert int(scheduler.block_trie.allocator.get_ref_count(cached_block)) == ref_count_before + 1
+
+
 def _make_scheduler_for_decode_growth(num_gpu_blocks: int = 2):
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 4

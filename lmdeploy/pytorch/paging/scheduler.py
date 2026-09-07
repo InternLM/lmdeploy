@@ -21,7 +21,11 @@ from .block_trie import BlockTrie
 from .eviction_helper import build_eviction_helper
 from .kv_load_coordinator import KVLoadCoordinator
 from .kv_save_coordinator import KVSaveCoordinator
-from .prefill_scheduler import _PrefillScheduler, _PrefillTurnPolicy
+from .prefill_scheduler import (
+    _PrefillScheduler,
+    _PrefillTurnPolicy,
+    _TentativePrefixMatch,
+)
 from .seq_states import SequenceLifecycle
 from .state_manager import build_state_manager
 
@@ -260,7 +264,16 @@ class Scheduler:
         max_batches = self.scheduler_config.max_batches - self.num_ready() - self.num_running()
         while migration_waiting and len(migration_ready) < max_batches:
             seq = migration_waiting.pop(0)
-            self.block_trie.match(seq)
+            prefix_match = None
+            if self.block_trie.enabled:
+                prefix_match = _TentativePrefixMatch(
+                    seq,
+                    self.block_trie,
+                    self.block_manager,
+                    is_ssm=self.is_ssm,
+                    preserve_existing_state=False,
+                )
+                prefix_match.match()
             evictable = list(
                 chain(
                     reversed(self.hanging),
@@ -271,11 +284,15 @@ class Scheduler:
                 evictable,
                 0,
             ):
+                if prefix_match is not None:
+                    prefix_match.rollback('migration capacity admission failed')
                 break
 
             # allocate session memory
             self.block_manager.allocate(seq)
             self.block_trie.finalize_match(seq)
+            if prefix_match is not None:
+                prefix_match.commit()
             seq.state.activate()
             migration_ready.append(seq)
 
