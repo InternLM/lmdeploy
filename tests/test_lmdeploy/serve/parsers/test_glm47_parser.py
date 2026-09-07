@@ -7,6 +7,8 @@ from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import Glm47ToolParser, ToolParserManager
 
+from .helpers import final_tool_call
+
 MODEL_ID = 'zai-org/GLM-4.7'
 GLM52_MODEL_ID = 'zai-org/GLM-5.2-FP8'
 PARSER_TOOLS = [
@@ -375,14 +377,14 @@ class TestGlm47ToolParserComplete:
         assert content is None
         assert tool_calls is None
 
-    def test_parse_tool_call_complete_with_arguments(self):
+    def test_final_tool_payload_with_arguments(self):
         parser = Glm47ToolParser()
         payload = (
             'get_weather'
             '<arg_key>location</arg_key><arg_value>Beijing</arg_value>'
             '<arg_key>unit</arg_key><arg_value>celsius</arg_value>'
         )
-        tool_call = parser.parse_tool_call_complete(payload)
+        tool_call = final_tool_call(parser, payload)
         assert tool_call is not None
         assert tool_call.function.name == 'get_weather'
         assert json.loads(tool_call.function.arguments) == {
@@ -390,14 +392,14 @@ class TestGlm47ToolParserComplete:
             'unit': 'celsius',
         }
 
-    def test_parse_tool_call_complete_without_arguments(self):
+    def test_final_tool_payload_without_arguments(self):
         parser = Glm47ToolParser()
-        tool_call = parser.parse_tool_call_complete('get_time')
+        tool_call = final_tool_call(parser, 'get_time')
         assert tool_call is not None
         assert tool_call.function.name == 'get_time'
         assert json.loads(tool_call.function.arguments) == {}
 
-    def test_parse_tool_call_complete_coerces_types_by_schema(self):
+    def test_final_tool_payload_coerces_types_by_schema(self):
         parser = Glm47ToolParser()
         request = ChatCompletionRequest(
             model=MODEL_ID,
@@ -447,7 +449,7 @@ class TestGlm47ToolParserComplete:
             '<arg_key>scores</arg_key><arg_value>[98,87]</arg_value>'
             '<arg_key>misc</arg_key><arg_value>null</arg_value>'
         )
-        tool_call = parser.parse_tool_call_complete(payload)
+        tool_call = final_tool_call(parser, payload)
         assert tool_call is not None
         assert tool_call.function.name == 'typed_tool'
         assert json.loads(tool_call.function.arguments) == {
@@ -462,7 +464,7 @@ class TestGlm47ToolParserComplete:
             'misc': None,
         }
 
-    def test_parse_tool_call_complete_keeps_string_without_schema(self):
+    def test_final_tool_payload_keeps_string_without_schema(self):
         parser = Glm47ToolParser()
         payload = (
             'no_schema_tool'
@@ -470,7 +472,7 @@ class TestGlm47ToolParserComplete:
             '<arg_key>active</arg_key><arg_value>true</arg_value>'
             '<arg_key>meta</arg_key><arg_value>{"city":"Houston"}</arg_value>'
         )
-        tool_call = parser.parse_tool_call_complete(payload)
+        tool_call = final_tool_call(parser, payload)
         assert tool_call is not None
         assert tool_call.function.name == 'no_schema_tool'
         assert json.loads(tool_call.function.arguments) == {
@@ -514,7 +516,7 @@ class TestGlm47ToolParserComplete:
                 ('', True),
             ],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -552,7 +554,7 @@ class TestGlm47ToolParserComplete:
                 ('', True),
             ],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -591,7 +593,7 @@ class TestGlm47ToolParserComplete:
                 ('', True),
             ],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert per_chunk[1] == ''
         assert per_chunk[2] == ''
@@ -675,7 +677,7 @@ class TestGlm47ToolParserComplete:
                 ('', True),
             ],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert per_chunk[2] == ''
         assert per_chunk[3] == ''
@@ -717,7 +719,7 @@ class TestGlm47ToolParserComplete:
                 ('', True),
             ],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -757,7 +759,7 @@ class TestGlm47ToolParserComplete:
                 ('', True),
             ],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -797,7 +799,7 @@ class TestGlm47ToolParserComplete:
                 ('', True),
             ],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert per_chunk[2] == ''
         assert per_chunk[3] == ''
@@ -820,7 +822,7 @@ class TestGlm47ToolParserComplete:
                 ('', True),
             ],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -838,7 +840,7 @@ class TestGlm47ToolParserComplete:
                 ('', True),
             ],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -856,7 +858,7 @@ class TestGlm47ToolParserComplete:
                 ('', True),
             ],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -874,7 +876,7 @@ class TestGlm47ToolParserComplete:
                 ('', True),
             ],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -893,7 +895,7 @@ class TestGlm47ToolParserComplete:
                 ('', True),
             ],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments

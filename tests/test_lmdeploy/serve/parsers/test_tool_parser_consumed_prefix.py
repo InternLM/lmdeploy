@@ -17,6 +17,8 @@ from lmdeploy.serve.parsers.tool_parser import (
     ToolParserManager,
 )
 
+from .helpers import final_tool_calls
+
 
 def _feed_chunks(parser, chunks):
     parser.begin_tool_block()
@@ -83,9 +85,8 @@ def test_json_arguments_before_name_stream_in_source_order_and_preserve_duplicat
     assert name_delta.id is None
     assert name_delta.function.name == 'f'
 
-    complete = Qwen3ToolParser().parse_tool_call_complete(
-        '{"arguments":' + raw_arguments + ',"name":"f"}')
-    assert complete is not None
+    complete = final_tool_calls(
+        Qwen3ToolParser(), '{"arguments":' + raw_arguments + ',"name":"f"}')[0]
     assert complete.function.arguments == raw_arguments
 
 
@@ -104,10 +105,9 @@ def test_json_arguments_before_name_stream_in_source_order_and_preserve_duplicat
 )
 def test_xml_complete_reuses_final_streaming_semantics_for_incomplete_argument(parser_cls, payload):
     consumed, streamed_name, streamed_arguments = _final_streamed_call(parser_cls(), payload)
-    complete = parser_cls().parse_tool_call_complete(payload)
+    complete = final_tool_calls(parser_cls(), payload)[0]
 
     assert consumed == len(payload)
-    assert complete is not None
     assert complete.function.name == streamed_name
     assert complete.function.arguments == streamed_arguments
 
@@ -325,8 +325,7 @@ def test_json_streams_duplicate_envelope_values_without_validating_them(
     assert parser.block_closed
     assert _arguments(deltas) == expected_arguments
     assert next(delta.function.name for delta in deltas if delta.function.name is not None) == expected_name
-    complete = Qwen3ToolParser().parse_tool_call_complete(payload)
-    assert complete is not None
+    complete = final_tool_calls(Qwen3ToolParser(), payload)[0]
     assert complete.function.name == expected_name
     assert complete.function.arguments == expected_arguments
 
@@ -387,12 +386,12 @@ def test_json_keeps_protocol_marker_inside_argument_string():
     assert parser.block_closed
     assert _arguments(deltas) == raw_arguments
 
-    complete_calls = []
-    complete_end = Qwen3ToolParser().parse_tool_block(
-        '{"name":"f","arguments":' + raw_arguments + '}</tool_call>tail',
-        0,
-        complete_calls,
-    )
+    complete_parser = Qwen3ToolParser()
+    complete_parser.begin_tool_block()
+    complete_deltas = []
+    complete_text = '{"name":"f","arguments":' + raw_arguments + '}</tool_call>tail'
+    complete_end = complete_parser.feed_tool_block(complete_text, complete_deltas, final=True)
+    complete_calls = complete_parser.build_tool_calls(complete_deltas)
     assert complete_end == len('{"name":"f","arguments":' + raw_arguments + '}</tool_call>')
     assert complete_calls[0].function.arguments == raw_arguments
 
@@ -401,10 +400,10 @@ def test_each_json_protocol_ignores_the_other_argument_field():
     arguments_payload = '{"name":"f","arguments":{"x":1}}'
     parameters_payload = '{"name":"f","parameters":{"x":1}}'
 
-    assert Qwen3ToolParser().parse_tool_call_complete(arguments_payload) is not None
-    assert Qwen3ToolParser().parse_tool_call_complete(parameters_payload).function.arguments == '{}'
-    assert Internlm2ToolParser().parse_tool_call_complete(arguments_payload).function.arguments == '{}'
-    assert Internlm2ToolParser().parse_tool_call_complete(parameters_payload) is not None
+    assert final_tool_calls(Qwen3ToolParser(), arguments_payload)
+    assert final_tool_calls(Qwen3ToolParser(), parameters_payload)[0].function.arguments == '{}'
+    assert final_tool_calls(Internlm2ToolParser(), arguments_payload)[0].function.arguments == '{}'
+    assert final_tool_calls(Internlm2ToolParser(), parameters_payload)
 
 
 def test_qwen_xml_preserves_duplicate_parameters_and_only_protocol_newlines():
@@ -423,8 +422,7 @@ def test_qwen_xml_preserves_duplicate_parameters_and_only_protocol_newlines():
 
     assert pending == 'tail'
     assert _arguments(deltas) == expected
-    complete = Qwen3CoderToolParser().parse_tool_call_complete(payload)
-    assert complete is not None
+    complete = final_tool_calls(Qwen3CoderToolParser(), payload)[0]
     assert complete.function.arguments == expected
 
 
@@ -440,8 +438,7 @@ def test_glm_preserves_raw_string_whitespace_and_duplicate_parameters():
 
     assert pending == 'tail'
     assert _arguments(deltas) == expected
-    complete = Glm47ToolParser().parse_tool_call_complete(payload)
-    assert complete is not None
+    complete = final_tool_calls(Glm47ToolParser(), payload)[0]
     assert complete.function.arguments == expected
 
 
@@ -497,9 +494,38 @@ def test_dsml_preserves_duplicate_parameters_in_complete_and_streaming_paths():
 
     assert pending == 'tail'
     assert _arguments(deltas) == expected
-    complete = DeepSeekV32ToolParser().parse_tool_call_complete(payload)
-    assert complete is not None
+    complete = final_tool_calls(DeepSeekV32ToolParser(), payload)
     assert complete[0].function.arguments == expected
+
+
+def test_multi_call_complete_adapter_preserves_call_order():
+    kimi = KimiK2ToolParser()
+    kimi_payload = (
+        f'{kimi.call_begin}functions.f:0{kimi.argument_begin}{{}}{kimi.call_end}'
+        f'{kimi.call_begin}functions.g:1{kimi.argument_begin}{{}}{kimi.call_end}'
+    )
+    dsml = DeepSeekV32ToolParser()
+    token = dsml.dsml_token
+    dsml_payload = (
+        f'<{token}invoke name="f"></{token}invoke>'
+        f'<{token}invoke name="g"></{token}invoke>'
+    )
+
+    for parser, payload in ((kimi, kimi_payload), (dsml, dsml_payload)):
+        calls = final_tool_calls(parser, payload)
+        assert [call.function.name for call in calls] == ['f', 'g']
+        assert [call.function.arguments for call in calls] == ['{}', '{}']
+
+
+def test_dsml_complete_emits_incomplete_string_argument():
+    parser = DeepSeekV32ToolParser()
+    token = parser.dsml_token
+    payload = f'<{token}invoke name="f"><{token}parameter name="a" string="true">partial'
+
+    call = final_tool_calls(parser, payload)[0]
+
+    assert call.function.name == 'f'
+    assert call.function.arguments == '{"a": "partial'
 
 
 def test_kimi_streams_arguments_without_accumulating_payload_and_handles_atomic_markers():
@@ -520,6 +546,8 @@ def test_kimi_streams_arguments_without_accumulating_payload_and_handles_atomic_
     assert _arguments(deltas) == raw_arguments
     assert not hasattr(parser, '_tool_payload')
     assert max_pending <= len(parser.argument_begin) + len('functions.f:0')
+    complete = final_tool_calls(KimiK2ToolParser(), ''.join(chunks[:-1]))
+    assert complete[0].function.arguments == raw_arguments
 
 
 def test_final_missing_tool_close_does_not_delay_emitted_results():

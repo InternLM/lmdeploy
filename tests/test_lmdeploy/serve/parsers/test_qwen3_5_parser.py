@@ -6,6 +6,8 @@ from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
 
+from .helpers import final_tool_call
+
 MODEL_ID = 'Qwen/Qwen3.5-35B-A3B'
 PARSER_TOOLS = [
     {
@@ -211,7 +213,7 @@ San Francisco, CA
         assert json.loads(tool_calls[0].function.arguments) == {'location': 'Boston, MA'}
         assert json.loads(tool_calls[1].function.arguments) == {'location': 'San Francisco, CA'}
 
-    def test_parse_tool_call_complete_treats_params_as_strings(self):
+    def test_final_tool_payload_treats_params_as_strings(self):
         parser = Qwen3CoderToolParser()
         payload = """
 <function=find_user_id_by_name_zip>
@@ -227,7 +229,7 @@ Johnson
 </function>
 """.strip()
 
-        tool_call = parser.parse_tool_call_complete(payload)
+        tool_call = final_tool_call(parser, payload)
 
         assert tool_call is not None
         assert tool_call.function.name == 'find_user_id_by_name_zip'
@@ -237,7 +239,7 @@ Johnson
             'zip': '77004',
         }
 
-    def test_parse_tool_call_complete_coerces_types_by_schema(self):
+    def test_final_tool_payload_coerces_types_by_schema(self):
         parser = Qwen3CoderToolParser()
         request = ChatCompletionRequest(
             model=MODEL_ID,
@@ -304,7 +306,7 @@ null
 </function>
 """.strip()
 
-        tool_call = parser.parse_tool_call_complete(payload)
+        tool_call = final_tool_call(parser, payload)
 
         assert tool_call is not None
         assert tool_call.function.name == 'typed_tool'
@@ -328,7 +330,7 @@ null
             parser,
             ['<function=find_user>', '<parameter=name>', '"Chen"', '</parameter>', '</function>'],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -361,7 +363,7 @@ null
             parser,
             ['<function=typed_tool>', '<parameter=name>  a', 'bc  </parameter></function>'],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -394,7 +396,7 @@ null
             parser,
             ['<function=typed_tool>', '<parameter=age>', '12', '</parameter></function>'],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert per_chunk[1] == ''
         assert per_chunk[2] == ''
@@ -449,7 +451,7 @@ null
             parser,
             ['<function=find_user>', '<parameter=name>', '"A\\', 'nB"', '</parameter></function>'],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert per_chunk[2] == ''
         assert per_chunk[3] == ''
@@ -464,7 +466,7 @@ null
             parser,
             ['<function=find_user>', '<parameter=name>', '"A\\', '"B"', '</parameter></function>'],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -497,7 +499,7 @@ null
             parser,
             ['<function=typed_tool>', '<parameter=age>', 'abc', '</parameter>', '</function>'],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -530,7 +532,7 @@ null
             parser,
             ['<function=typed_tool>', '<parameter=age>', '2', 'a', '</parameter></function>'],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert per_chunk[2] == ''
         assert per_chunk[3] == ''
@@ -552,7 +554,7 @@ null
                 '</parameter></function>',
             ],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -565,7 +567,7 @@ null
             parser,
             ['<function=f>', '<parameter=a>San ', 'Francisco</parameter></function>'],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -578,7 +580,7 @@ null
             parser,
             ['<function=f>', '<parameter=a>A\n', 'B</parameter></function>'],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -591,7 +593,7 @@ null
             parser,
             ['<function=f>', '<parameter=a>A"', 'B</parameter></function>'],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
@@ -604,7 +606,7 @@ null
             parser,
             ['<function=f>', '<parameter=a>foo ', '<parameter=bar> baz', '</parameter></function>'],
         )
-        complete_tool_call = parser.parse_tool_call_complete(payload)
+        complete_tool_call = final_tool_call(parser, payload)
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments

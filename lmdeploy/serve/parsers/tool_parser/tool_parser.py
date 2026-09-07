@@ -136,12 +136,6 @@ class ToolParser:
                 names.add(name)
         return names
 
-    def filter_tool_calls(self, calls: list[ToolCall]) -> list[ToolCall]:
-        """Keep complete calls whose names occur in the request tools."""
-        if self._allowed_tool_names is None:
-            return calls
-        return [call for call in calls if call.function.name in self._allowed_tool_names]
-
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
         """Return tool opening tag string, or None if unsupported."""
@@ -290,26 +284,6 @@ class ToolParser:
             self._pending_deltas.clear()
         deltas.append(delta)
 
-    def parse_tool_block(self, text: str, start: int, tool_calls: list[ToolCall]) -> int:
-        """Parse one complete block through the streaming consumer.
-
-        Args:
-            text: Complete generated response containing the tool block.
-            start: Index of the first payload character after its opening
-                marker.
-            tool_calls: Output list to which parsed calls are appended.
-
-        Returns:
-            Absolute index of the first character after the prefix consumed by
-            :meth:`feed_tool_block`.
-        """
-        self.begin_tool_block()
-        deltas: list[DeltaToolCall] = []
-        consumed = self.feed_tool_block(text[start:], deltas, final=True)
-
-        tool_calls.extend(self.build_tool_calls(deltas))
-        return start + consumed
-
     @staticmethod
     def build_tool_calls(deltas: list[DeltaToolCall]) -> list[ToolCall]:
         """Build complete calls by grouping ordered deltas by output index.
@@ -344,14 +318,6 @@ class ToolParser:
             else:
                 tool_calls.append(ToolCall(id=parts.call_id, function=function))
         return tool_calls
-
-    def parse_tool_call_complete(self, payload: str) -> ToolCall | list[ToolCall] | None:
-        """Parse a complete inner payload through the streaming consumer."""
-        tool_calls: list[ToolCall] = []
-        self.parse_tool_block(payload, 0, tool_calls)
-        if len(tool_calls) == 1:
-            return tool_calls[0]
-        return tool_calls or None
 
     @staticmethod
     def _stable_prefix_end(text: str, marker_prefixes: tuple[str, ...], start: int = 0) -> int:

@@ -4,24 +4,29 @@
 import pytest
 
 
-def test_parse_tool_call_complete_json_preserves_arguments():
-    """parse_tool_call_complete preserves argument bytes."""
+def _final_tool_call(parser, payload):
+    parser.begin_tool_block()
+    deltas = []
+    parser.feed_tool_block(payload, deltas, final=True)
+    return parser.build_tool_calls(deltas)[0]
+
+
+def test_final_json_payload_preserves_arguments():
+    """Final JSON parsing preserves argument bytes."""
     from lmdeploy.serve.parsers.tool_parser.json_tool_parser import JsonToolParser
 
     payload = '{"name": "get_weather", "arguments": {"city": "NYC" }  }'
-    result = JsonToolParser().parse_tool_call_complete(payload)
+    result = _final_tool_call(JsonToolParser(), payload)
     assert result is not None
     assert result.function.name == 'get_weather'
     assert result.function.arguments == '{"city": "NYC" }'
 
 
-def test_parse_tool_call_complete_json_preserves_incomplete_arguments():
+def test_final_json_payload_preserves_incomplete_arguments():
     """Complete parsing leaves argument validity to the caller."""
     from lmdeploy.serve.parsers.tool_parser.json_tool_parser import JsonToolParser
 
-    result = JsonToolParser().parse_tool_call_complete(
-        '{"name": "get_weather", "arguments": {"city":'
-    )
+    result = _final_tool_call(JsonToolParser(), '{"name": "get_weather", "arguments": {"city":')
     assert result is not None
     assert result.function.name == 'get_weather'
     assert result.function.arguments == '{"city":'

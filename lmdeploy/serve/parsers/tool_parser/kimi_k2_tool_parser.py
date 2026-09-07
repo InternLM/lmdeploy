@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from lmdeploy.serve.openai.protocol import DeltaToolCall, FunctionCall, ToolCall
+from lmdeploy.serve.openai.protocol import DeltaToolCall
 
 from .json_value_scanner import JsonValueScanner
 from .tool_parser import ToolParser, ToolParserManager
@@ -14,7 +14,10 @@ if TYPE_CHECKING:
 
 @ToolParserManager.register_module(['kimi_k2', 'kimi-k2'])
 class KimiK2ToolParser(ToolParser):
-    """Tool parser for the Kimi K2 tool-call section protocol."""
+    """Incrementally parse the Kimi K2 tool-call section protocol.
+
+    Complete responses use this same consumer through the response parser.
+    """
 
     structural_tag_model = 'kimi'
     section_begin = '<|tool_calls_section_begin|>'
@@ -159,88 +162,6 @@ class KimiK2ToolParser(ToolParser):
             arguments=arguments,
         )
         self._arguments_emitted = True
-
-    def parse_tool_call_complete(self, payload: str) -> list[ToolCall] | None:
-        calls, _ = self._parse_complete_calls(payload, 0, section_close_tag=None)
-        return calls or None
-
-    def parse_tool_block(self, text: str, start: int, tool_calls: list[ToolCall]) -> int:
-        calls, end = self._parse_complete_calls(text, start, section_close_tag=self.get_tool_close_tag())
-        tool_calls.extend(calls)
-        return end
-
-    def _parse_complete_calls(
-        self,
-        text: str,
-        start: int,
-        *,
-        section_close_tag: str | None,
-    ) -> tuple[list[ToolCall], int]:
-        calls: list[ToolCall] = []
-        pos = start
-        while pos < len(text):
-            section_at = text.find(section_close_tag, pos) if section_close_tag is not None else -1
-            call_at = text.find(self.call_begin, pos)
-            if section_at >= 0 and (call_at < 0 or section_at < call_at):
-                return calls, section_at + len(section_close_tag)
-            if call_at < 0:
-                return calls, len(text)
-
-            id_start = call_at + len(self.call_begin)
-            argument_at = text.find(self.argument_begin, id_start)
-            nested_call = text.find(self.call_begin, id_start)
-            if argument_at < 0:
-                return calls, len(text)
-            if nested_call >= 0 and nested_call < argument_at:
-                pos = nested_call
-                continue
-
-            raw_id = text[id_start:argument_at].strip()
-            args_start = argument_at + len(self.argument_begin)
-            if text.startswith(self.call_end, args_start):
-                arguments = '{}'
-                call_end_at = args_start
-            else:
-                args_end, complete = self._scan_argument(text, args_start, self.call_end)
-                call_end_at = text.find(self.call_end, args_end)
-                if call_end_at < 0:
-                    call_end_at = text.find(self.call_end, args_start)
-                if call_end_at < 0:
-                    arguments = text[args_start:args_end] or '{}'
-                    calls.append(self._make_tool_call(raw_id, arguments))
-                    return calls, len(text)
-                arguments = text[args_start:(args_end if complete else call_end_at)] or '{}'
-
-            calls.append(self._make_tool_call(raw_id, arguments))
-            pos = call_end_at + len(self.call_end)
-
-        return calls, pos
-
-    @staticmethod
-    def _scan_argument(text: str, start: int, marker: str) -> tuple[int, bool]:
-        scanner = JsonValueScanner()
-        marker_at = text.find(marker, start)
-        if marker_at < 0:
-            end = scanner.feed(text, start)
-            return end, scanner.complete
-
-        end = scanner.feed(text, start, marker_at)
-        if scanner.complete or (end == marker_at and scanner.finish_scalar()):
-            return end, True
-        if not scanner.in_string:
-            return end, False
-        end = scanner.feed(text, end)
-        return end, scanner.complete
-
-    @staticmethod
-    def _make_tool_call(raw_id: str, arguments: str) -> ToolCall:
-        return ToolCall(
-            id=raw_id,
-            function=FunctionCall(
-                name=KimiK2ToolParser._resolve_function_name(raw_id),
-                arguments=arguments,
-            ),
-        )
 
     @staticmethod
     def _resolve_function_name(raw_id: str) -> str:

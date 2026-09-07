@@ -37,7 +37,11 @@ def _stream_argument_fragments(chunks, *, final_on_last, parser_cls=_TestToolPar
 
 
 def _complete_arguments(payload, parser_cls=_TestToolParser):
-    call = parser_cls().parse_tool_call_complete(payload)
+    parser = parser_cls()
+    parser.begin_tool_block()
+    deltas = []
+    parser.feed_tool_block(payload, deltas, final=True)
+    call = parser.build_tool_calls(deltas)[0]
     return json.loads(call.function.arguments)
 
 

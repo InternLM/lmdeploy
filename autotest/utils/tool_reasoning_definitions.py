@@ -1296,7 +1296,7 @@ def assert_parser_drop_decoded_only(
         tools=tools,
         reasoning_parser_name=None,
     )
-    open_tag = parser.profile.tool_open_tag
+    open_tag = parser.tool_parser.get_tool_open_tag()
     if not open_tag or open_tag not in decoded_str:
         return
     assert_raw_decode_validate_complete(

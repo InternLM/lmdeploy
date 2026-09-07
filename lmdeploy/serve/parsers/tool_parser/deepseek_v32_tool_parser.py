@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 from lmdeploy.deepseek_v32_encoding import dsml_token
-from lmdeploy.serve.openai.protocol import DeltaToolCall, FunctionCall, ToolCall
+from lmdeploy.serve.openai.protocol import DeltaToolCall
 
 from .json_value_scanner import JsonValueScanner
 from .tool_parser import ToolParser, ToolParserManager
@@ -14,7 +14,10 @@ TOOL_CALLS_BLOCK_NAME = 'function_calls'
 
 @ToolParserManager.register_module(['deepseek-v32', 'deepseek-v3.2'])
 class DeepSeekV32ToolParser(ToolParser):
-    """Tool parser for DeepSeek-V3.2 DSML function-call blocks."""
+    """Incrementally parse DeepSeek-V3.2 DSML function-call blocks.
+
+    Complete responses use this same consumer through the response parser.
+    """
 
     structural_tag_model = 'deepseek_v3_2'
     dsml_token = dsml_token
@@ -246,114 +249,6 @@ class DeepSeekV32ToolParser(ToolParser):
         start += len(prefix)
         end = header.find('"', start)
         return header[start:] if end < 0 else header[start:end]
-
-    def parse_tool_call_complete(self, payload: str) -> list[ToolCall] | None:
-        calls, _ = self._parse_complete_calls(payload, 0, section_close_tag=None)
-        return calls or None
-
-    def parse_tool_block(self, text: str, start: int, tool_calls: list[ToolCall]) -> int:
-        calls, end = self._parse_complete_calls(text, start, section_close_tag=self.get_tool_close_tag())
-        tool_calls.extend(calls)
-        return end
-
-    def _parse_complete_calls(
-        self,
-        text: str,
-        start: int,
-        *,
-        section_close_tag: str | None,
-    ) -> tuple[list[ToolCall], int]:
-        calls: list[ToolCall] = []
-        pos = start
-        invoke_tag = f'<{self.dsml_token}invoke'
-        parameter_tag = f'<{self.dsml_token}parameter'
-        invoke_close_tag = f'</{self.dsml_token}invoke>'
-        parameter_close_tag = f'</{self.dsml_token}parameter>'
-
-        while pos < len(text):
-            section_at = text.find(section_close_tag, pos) if section_close_tag is not None else -1
-            invoke_at = text.find(invoke_tag, pos)
-            if section_at >= 0 and (invoke_at < 0 or section_at < invoke_at):
-                return calls, section_at + len(section_close_tag)
-            if invoke_at < 0:
-                return calls, len(text)
-
-            header_start = invoke_at + len(invoke_tag)
-            header_end = text.find('>', header_start)
-            if header_end < 0:
-                return calls, len(text)
-            name = self._attribute_value(text[header_start:header_end], 'name')
-            pos = header_end + 1
-            pairs: list[tuple[str, str]] = []
-
-            while pos < len(text):
-                invoke_end_at = text.find(invoke_close_tag, pos)
-                parameter_at = text.find(parameter_tag, pos)
-                if invoke_end_at >= 0 and (parameter_at < 0 or invoke_end_at < parameter_at):
-                    pos = invoke_end_at + len(invoke_close_tag)
-                    break
-                if parameter_at < 0:
-                    pos = len(text)
-                    break
-
-                parameter_header_start = parameter_at + len(parameter_tag)
-                parameter_header_end = text.find('>', parameter_header_start)
-                if parameter_header_end < 0:
-                    pos = len(text)
-                    break
-                header = text[parameter_header_start:parameter_header_end]
-                param_name = self._attribute_value(header, 'name')
-                is_string = self._attribute_value(header, 'string') == 'true'
-                value_start = parameter_header_end + 1
-
-                if is_string:
-                    value_end = text.find(parameter_close_tag, value_start)
-                    if value_end < 0:
-                        pos = len(text)
-                        break
-                    encoded_value = json.dumps(text[value_start:value_end], ensure_ascii=False)
-                    parameter_end_at = value_end
-                else:
-                    value_end, complete = self._scan_argument(text, value_start, parameter_close_tag)
-                    parameter_end_at = text.find(parameter_close_tag, value_end)
-                    if parameter_end_at < 0:
-                        parameter_end_at = text.find(parameter_close_tag, value_start)
-                    if parameter_end_at < 0:
-                        encoded_value = text[value_start:value_end]
-                        pairs.append((param_name, encoded_value))
-                        pos = len(text)
-                        break
-                    encoded_value = text[value_start:(value_end if complete else parameter_end_at)]
-
-                pairs.append((param_name, encoded_value))
-                pos = parameter_end_at + len(parameter_close_tag)
-
-            calls.append(ToolCall(function=FunctionCall(name=name, arguments=self._dump_raw_pairs(pairs))))
-
-        return calls, pos
-
-    @staticmethod
-    def _scan_argument(text: str, start: int, marker: str) -> tuple[int, bool]:
-        scanner = JsonValueScanner()
-        marker_at = text.find(marker, start)
-        if marker_at < 0:
-            end = scanner.feed(text, start)
-            return end, scanner.complete
-        end = scanner.feed(text, start, marker_at)
-        if scanner.complete or (end == marker_at and scanner.finish_scalar()):
-            return end, True
-        if not scanner.in_string:
-            return end, False
-        end = scanner.feed(text, end)
-        return end, scanner.complete
-
-    @staticmethod
-    def _dump_raw_pairs(pairs: list[tuple[str, str]]) -> str:
-        fields = (
-            f'{json.dumps(name, ensure_ascii=False)}: {encoded_value}'
-            for name, encoded_value in pairs
-        )
-        return '{' + ', '.join(fields) + '}'
 
     @staticmethod
     def _next_marker(

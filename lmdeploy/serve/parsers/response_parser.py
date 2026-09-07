@@ -1,10 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Unified profile-driven streaming parser for reasoning/content/tool calls."""
+"""Unified streaming parser for reasoning/content/tool calls."""
 from __future__ import annotations
 
 import json
 from abc import abstractmethod
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from mmengine import Registry
@@ -193,28 +192,6 @@ class ResponseParser:
                        **kwargs) -> tuple[str, list | None, str | None]:
         raise NotImplementedError
 
-@dataclass
-class ProtocolProfile:
-    """Protocol tags and startup mode used by :class:`ResponseParser`.
-
-    ``starts_in_reasoning_mode`` decides the initial parse mode before any tags are seen.
-    In ResponseParser, it controls whether the parser treats the beginning of generation as:
-    - reasoning (MODE_REASONING) -> text goes to reasoning_content, or
-    - plain (MODE_PLAIN) -> text goes to normal content.
-    Practically:
-    - If parser has reasoning support, ``enable_thinking`` is not False, and
-    ``starts_in_reasoning_mode=True``, first chunks are parsed as reasoning until ``</think>``.
-    - Otherwise it starts in plain mode and only enters reasoning when it sees ``<think>``.
-    It is only a profile default and can be customized by concrete reasoning
-    parsers (for example DeepSeek-V3).
-    """
-
-    reasoning_open_tag: str | None = None
-    reasoning_close_tag: str | None = None
-    tool_open_tag: str | None = None
-    tool_close_tag: str | None = None
-    starts_in_reasoning_mode: bool = True
-
 
 @ResponseParserManager.register_module('default')
 class BaseResponseParser(ResponseParser):
@@ -317,7 +294,22 @@ class BaseResponseParser(ResponseParser):
         self._received_any_text = False
         self._stream_final_received = False
 
-        self.profile = self._build_profile()
+        self._reasoning_open_tag: str | None = None
+        self._reasoning_close_tag: str | None = None
+        if self.reasoning_parser is not None:
+            self._reasoning_open_tag = self.reasoning_parser.get_reasoning_open_tag()
+            self._reasoning_close_tag = self.reasoning_parser.get_reasoning_close_tag()
+            if not self._reasoning_close_tag:
+                name = self.reasoning_parser.__class__.__name__
+                raise RuntimeError(f'Reasoning parser {name} must provide a reasoning end tag')
+
+        self._tool_open_tag: str | None = None
+        if self.tool_parser is not None and self.request.tool_choice != 'none':
+            self._tool_open_tag = self.tool_parser.get_tool_open_tag()
+            if not self._tool_open_tag:
+                name = self.tool_parser.__class__.__name__
+                raise RuntimeError(f'Tool parser {name} must provide a tool start tag')
+
         if self.reasoning_enabled:
             self._mode = self.MODE_REASONING
         else:
@@ -435,7 +427,7 @@ class BaseResponseParser(ResponseParser):
                 newline_end += 1
 
             if newline_end:
-                tool_tag = self.profile.tool_open_tag
+                tool_tag = self._tool_open_tag
                 remaining = pending_size - newline_end
                 if not remaining:
                     if not self._stream_final_received:
@@ -455,7 +447,7 @@ class BaseResponseParser(ResponseParser):
                         return None, False
             self._after_tool_block = False
 
-        tags = [t for t in (self.profile.reasoning_open_tag, self.profile.tool_open_tag) if t]
+        tags = [t for t in (self._reasoning_open_tag, self._tool_open_tag) if t]
         if not tags:
             if not self._pending:
                 return None, False
@@ -498,7 +490,7 @@ class BaseResponseParser(ResponseParser):
         # Emit content before protocol open tag.
         prefix = self._pending[:earliest_idx]
         self._pending = self._pending[earliest_idx + len(earliest_tag):]
-        if earliest_tag == self.profile.reasoning_open_tag:
+        if earliest_tag == self._reasoning_open_tag:
             self._mode = self.MODE_REASONING
         else:
             self._mode = self.MODE_TOOL
@@ -522,18 +514,18 @@ class BaseResponseParser(ResponseParser):
             indicates whether parser state/input was consumed.
         """
 
-        open_tag = self.profile.reasoning_open_tag
+        open_tag = self._reasoning_open_tag
         # Drop explicit open tag if model emits it.
         if open_tag and self._pending.startswith(open_tag):
             self._pending = self._pending[len(open_tag):]
             return None, True
 
-        close_tag = self.profile.reasoning_close_tag
+        close_tag = self._reasoning_close_tag
         if not close_tag:
             raise RuntimeError('Invariant violated: MODE_REASONING requires a reasoning_close_tag.')
 
         # GLM-style outputs may start a tool call directly from reasoning.
-        tool_tag = self.profile.tool_open_tag if self.tool_parser is not None else None
+        tool_tag = self._tool_open_tag if self.tool_parser is not None else None
         boundary_tags = [tag for tag in (close_tag, tool_tag) if tag]
 
         idx = -1
@@ -592,25 +584,6 @@ class BaseResponseParser(ResponseParser):
             self._after_tool_block = True
         return calls, consumed > 0 or self.tool_parser.block_closed
 
-    def _build_profile(self) -> ProtocolProfile:
-        profile = ProtocolProfile(starts_in_reasoning_mode=False)
-        rparser = self.reasoning_parser
-        tparser = self.tool_parser
-
-        if rparser is not None:
-            profile.reasoning_open_tag = rparser.get_reasoning_open_tag()
-            profile.reasoning_close_tag = rparser.get_reasoning_close_tag()
-            profile.starts_in_reasoning_mode = bool(rparser.starts_in_reasoning_mode())
-            if not profile.reasoning_close_tag:
-                raise RuntimeError(f'Reasoning parser {rparser.__class__.__name__} must provide a reasoning end tag')
-
-        if tparser is not None and self.request.tool_choice != 'none':
-            profile.tool_open_tag = tparser.get_tool_open_tag()
-            profile.tool_close_tag = tparser.get_tool_close_tag()
-            if not profile.tool_open_tag:
-                raise RuntimeError(f'Tool parser {tparser.__class__.__name__} must provide a tool start tag')
-        return profile
-
     def _initialize_reasoning_token_counter(self) -> None:
         """Initialize token-based reasoning usage accounting."""
         self.reasoning_tokens = None
@@ -624,9 +597,9 @@ class BaseResponseParser(ResponseParser):
 
         self.reasoning_tokens = 0
         vocab = tokenizer.get_vocab()
-        if self.profile.reasoning_open_tag:
-            self._reasoning_start_token_id = vocab[self.profile.reasoning_open_tag]
-        self._reasoning_end_token_id = vocab[self.profile.reasoning_close_tag]
+        if self._reasoning_open_tag:
+            self._reasoning_start_token_id = vocab[self._reasoning_open_tag]
+        self._reasoning_end_token_id = vocab[self._reasoning_close_tag]
 
     def _update_reasoning_tokens(self, token_ids: list[int]) -> None:
         """Count tokens inside the logical reasoning-tag interval."""
@@ -660,9 +633,7 @@ class BaseResponseParser(ResponseParser):
         """
         if self.reasoning_tokens is not None:
             self.reasoning_tokens = 0
-            self._counting_reasoning_tokens = (self.profile.starts_in_reasoning_mode
-                                                and self.reasoning_parser is not None
-                                                and self.enable_thinking is not False)
+            self._counting_reasoning_tokens = self.reasoning_enabled
         messages = self.stream_chunk(text, token_ids or [], final=True)
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
