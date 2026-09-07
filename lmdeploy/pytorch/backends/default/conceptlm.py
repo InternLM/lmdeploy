@@ -11,7 +11,6 @@ from ..conceptlm import (
     ConceptDecodeMetadata,
     ConceptDecoderInput,
     ConceptForwardContext,
-    ConceptLMRuntimeOpsBuilder,
     ConceptLMRuntimeOpsImpl,
     ConceptPrefillMetadata,
     ConceptRuntimeCaches,
@@ -936,12 +935,3 @@ class DefaultConceptLMRuntimeOpsImpl(ConceptLMRuntimeOpsImpl):
                 continue
             last_final_state_cache[state_id].copy_(predicted_vectors[batch_idx].to(last_final_state_cache.dtype))
             last_raw_state_cache[state_id].copy_(raw_states[batch_idx].to(last_raw_state_cache.dtype))
-
-
-class DefaultConceptLMRuntimeOpsBuilder(ConceptLMRuntimeOpsBuilder):
-    """Torch fallback ConceptLM runtime operation builder."""
-
-    @staticmethod
-    def build(config) -> ConceptLMRuntimeOpsImpl:
-        """Build layer implementation."""
-        return DefaultConceptLMRuntimeOpsImpl(config)

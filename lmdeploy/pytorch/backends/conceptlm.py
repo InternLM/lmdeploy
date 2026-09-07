@@ -7,6 +7,8 @@ import torch
 from torch import Tensor
 from transformers.configuration_utils import PretrainedConfig
 
+from .base import BuildSpec
+
 
 @dataclass
 class ConceptChunkInput:
@@ -154,11 +156,8 @@ class ConceptLMRuntimeOpsImpl(ABC):
         raise NotImplementedError('Not implemented.')
 
 
-class ConceptLMRuntimeOpsBuilder(ABC):
-    """ConceptLM runtime operation builder."""
+@dataclass(frozen=True)
+class ConceptLMRuntimeOpsBuildSpec(BuildSpec[ConceptLMRuntimeOpsImpl]):
+    """Immutable requirements for constructing ConceptLM runtime ops."""
 
-    @staticmethod
-    @abstractmethod
-    def build(config: PretrainedConfig) -> ConceptLMRuntimeOpsImpl:
-        """Build layer implementation."""
-        raise NotImplementedError('Not implemented.')
+    config: PretrainedConfig

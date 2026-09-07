@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import partial_json_parser
 import shortuuid
@@ -17,18 +17,56 @@ from lmdeploy.serve.openai.protocol import (
     ToolCall,
 )
 
-from ..response_parser import BaseResponseParser
-
 if TYPE_CHECKING:
-    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool
 
 ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.parsers.tool_parser'])
+
+
+def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
+    """Dump tools to a list of dicts to fit jinja chat template."""
+    from lmdeploy.serve.openai.protocol import AllowedToolChoice
+
+    if isinstance(request.tool_choice, AllowedToolChoice):
+        allowed_names: set[str] = set()
+        allowed_functions: list[dict] = []
+        for t in request.tool_choice.allowed_tools.tools:
+            func = t.get('function', {})
+            if isinstance(func, dict) and 'name' in func:
+                allowed_names.add(func['name'])
+                allowed_functions.append(func)
+
+        if not request.tools:
+            return request.model_copy(update={'tools': allowed_functions or None})
+
+        request_tool_names = {item.function.name for item in request.tools}
+        missing = sorted(allowed_names - request_tool_names)
+        if missing:
+            raise ValueError(f'Allowed tool(s) not found in request.tools: {missing}')
+
+        tools = [item.function.model_dump() for item in request.tools if item.function.name in allowed_names]
+        return request.model_copy(update={'tools': tools})
+
+    if not request.tools:
+        return request.model_copy(update={'tools': None})
+
+    if not isinstance(request.tool_choice, str):
+        tools = [
+            item.function.model_dump() for item in request.tools
+            if item.function.name == request.tool_choice.function.name
+        ]
+    else:
+        tools = [item.function.model_dump() for item in request.tools]
+    return request.model_copy(update={'tools': tools})
 
 
 class ToolParser:
     """Base class for model-specific tool parsers."""
 
     validate_tool_names: ClassVar[bool] = False
+    # XGrammar builtin structural-tag keys for required tool calls.
+    structural_tag_model: ClassVar[str | None] = None
+    reasoning_structural_tag_model: ClassVar[str | None] = None
 
     def __init__(self):
         self._tool_payload: str = ''
@@ -42,10 +80,27 @@ class ToolParser:
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request payload before rendering, if needed."""
-        request = BaseResponseParser.dump_tools(request)
+        request = dump_tools(request)
         if self.validate_tool_names:
             self._allowed_tool_names = self._get_allowed_tool_names(request)
         return request
+
+    @classmethod
+    def build_required_response_format(cls, tools: list[Tool], *, reasoning: bool) -> dict[str, Any]:
+        """Build the XGrammar structural-tag format for required tool calls."""
+        structural_tag_model = cls.structural_tag_model
+        if reasoning and cls.reasoning_structural_tag_model is not None:
+            structural_tag_model = cls.reasoning_structural_tag_model
+        if structural_tag_model is None:
+            raise ValueError(f'Tool parser {cls.__name__!r} does not support `tool_choice="required"`.')
+        import xgrammar as xgr
+
+        return xgr.get_model_structural_tag(
+            structural_tag_model,
+            [tool.model_dump(mode='json') for tool in tools],
+            tool_choice='required',
+            reasoning=reasoning,
+        ).model_dump(mode='json')
 
     @staticmethod
     def _get_allowed_tool_names(request: ChatCompletionRequest) -> set[str]:

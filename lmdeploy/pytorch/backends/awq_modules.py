@@ -1,7 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import torch
+
+from .base import BuildSpec
 
 
 class LinearW4A16Impl(ABC):
@@ -26,16 +29,13 @@ class LinearW4A16Impl(ABC):
         raise NotImplementedError
 
 
-class LinearW4A16Builder(ABC):
-    """W4a16 linear implementation builder."""
+@dataclass(frozen=True)
+class LinearW4A16BuildSpec(BuildSpec[LinearW4A16Impl]):
+    """Immutable requirements for constructing a W4A16 linear operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(in_features: int,
-              out_features: int,
-              w_bit: int,
-              group_size: int,
-              bias: bool = False,
-              dtype: torch.dtype = None):
-        """build."""
-        raise NotImplementedError
+    in_features: int
+    out_features: int
+    w_bit: int
+    group_size: int
+    bias: bool
+    output_dtype: torch.dtype | None

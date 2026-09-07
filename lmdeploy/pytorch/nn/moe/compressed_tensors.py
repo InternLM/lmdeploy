@@ -12,7 +12,8 @@ from itertools import product
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.moe import FusedMoEW4A16BuildSpec
 from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
@@ -342,23 +343,23 @@ class FusedMoEW4A16(FusedMoEBase):
         super().__init__(tp=self.tp,
                          tp_mode=self.tp_mode,
                          do_renormalize=renormalize)
-        impl_builder = get_backend().get_layer_impl_builder(
-            OpType.FusedMoEW4A16)
         deep_ep_max_tokens_per_rank = (
             get_build_model_context().deep_ep_max_tokens_per_rank)
-        self.impl = impl_builder.build(
-            top_k=top_k,
-            num_experts=num_experts,
-            hidden_dim=hidden_dim,
-            ep_size=self.ep,
-            ep_group=dist_ctx.ep_gpu_group,
-            renormalize=renormalize,
-            num_bits=num_bits,
-            group_size=group_size,
-            out_dtype=dtype,
-            num_max_dispatch_tokens_per_rank=
-            deep_ep_max_tokens_per_rank,
-            layer_idx=layer_idx,
+        self.impl = get_backend().build_op(
+            FusedMoEW4A16BuildSpec(
+                top_k=top_k,
+                num_experts=num_experts,
+                hidden_dim=hidden_dim,
+                ep_size=self.ep,
+                ep_group=dist_ctx.ep_gpu_group,
+                renormalize=renormalize,
+                num_bits=num_bits,
+                group_size=group_size,
+                output_dtype=dtype,
+                num_max_dispatch_tokens_per_rank=deep_ep_max_tokens_per_rank,
+                layer_idx=layer_idx,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
         global_ffn_dim = ffn_dim

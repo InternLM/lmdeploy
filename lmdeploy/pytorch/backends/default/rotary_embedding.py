@@ -9,10 +9,9 @@ from torch import nn
 
 from ..rotary_embedding import (
     FopeParameters,
-    Llama3Parameters,
     LongRoPEScalingParameters,
     RopeType,
-    RotaryEmbeddingBuilder,
+    RotaryEmbeddingBuildSpec,
     RotaryEmbeddingImpl,
     YarnParameters,
 )
@@ -376,45 +375,35 @@ class FopeRotaryEmbeddingImpl(RotaryEmbeddingImpl):
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
-class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
-    """Rotary embedding builder."""
-
-    @staticmethod
-    def build(
-        dim: int,
-        max_position_embeddings: int = 2048,
-        base: int = 10000,
-        scaling_factor: float = 1.0,
-        yarn_params: YarnParameters = None,
-        longrope_params: LongRoPEScalingParameters = None,
-        llama3_params: Llama3Parameters = None,
-        fope_params: FopeParameters = None,
-        emb_type: RopeType = RopeType.Default,
-    ):
-        """build."""
-        if emb_type in (RopeType.Default, RopeType.LinearScaling):
-            return RotaryEmbeddingImpl(dim, base, scaling_factor)
-        elif emb_type == RopeType.DynamicNTKScaling:
-            return LlamaDynamicNTKScalingRotaryEmbedding(dim, base, scaling_factor, max_position_embeddings)
-        elif emb_type == RopeType.Llama3:
-            return Llama3RotaryEmbeddingImpl(dim, base, scaling_factor, llama3_params.low_freq_factor,
-                                             llama3_params.high_freq_factor,
-                                             llama3_params.original_max_position_embeddings)
-        elif emb_type == RopeType.Yarn:
-            return YarnRotaryEmbeddingImpl(dim, base, scaling_factor, max_position_embeddings, yarn_params=yarn_params)
-        elif emb_type == RopeType.LongRoPEScaling:
-            return LongRoPEScalingRotaryEmbeddingImpl(
-                dim,
-                base,
-                max_position_embeddings=max_position_embeddings,
-                longrope_params=longrope_params,
-            )
-        elif emb_type == RopeType.Fope:
-            return FopeRotaryEmbeddingImpl(
-                dim,
-                max_position_embeddings=max_position_embeddings,
-                scaling_factor=scaling_factor,
-                params=fope_params,
-            )
-        else:
-            raise NotImplementedError(f'Unsupported embedding type: {emb_type}')
+def _build_rotary_embedding(spec: RotaryEmbeddingBuildSpec) -> RotaryEmbeddingImpl:
+    """Build the selected default rotary-embedding implementation."""
+    if spec.emb_type in (RopeType.Default, RopeType.LinearScaling):
+        return RotaryEmbeddingImpl(spec.dim, spec.base, spec.scaling_factor)
+    if spec.emb_type == RopeType.DynamicNTKScaling:
+        return LlamaDynamicNTKScalingRotaryEmbedding(spec.dim, spec.base, spec.scaling_factor,
+                                                      spec.max_position_embeddings)
+    if spec.emb_type == RopeType.Llama3:
+        params = spec.llama3_params
+        return Llama3RotaryEmbeddingImpl(spec.dim, spec.base, spec.scaling_factor, params.low_freq_factor,
+                                         params.high_freq_factor, params.original_max_position_embeddings)
+    if spec.emb_type == RopeType.Yarn:
+        return YarnRotaryEmbeddingImpl(spec.dim,
+                                       spec.base,
+                                       spec.scaling_factor,
+                                       spec.max_position_embeddings,
+                                       yarn_params=spec.yarn_params)
+    if spec.emb_type == RopeType.LongRoPEScaling:
+        return LongRoPEScalingRotaryEmbeddingImpl(
+            spec.dim,
+            spec.base,
+            max_position_embeddings=spec.max_position_embeddings,
+            longrope_params=spec.longrope_params,
+        )
+    if spec.emb_type == RopeType.Fope:
+        return FopeRotaryEmbeddingImpl(
+            spec.dim,
+            max_position_embeddings=spec.max_position_embeddings,
+            scaling_factor=spec.scaling_factor,
+            params=spec.fope_params,
+        )
+    raise NotImplementedError(f'Unsupported embedding type: {spec.emb_type}')

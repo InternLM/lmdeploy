@@ -4,11 +4,12 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.conceptlm import (
     ConceptChunkInput,
     ConceptDecoderInput,
     ConceptForwardContext,
+    ConceptLMRuntimeOpsBuildSpec,
     ConceptRuntimeCaches,
 )
 
@@ -22,9 +23,7 @@ class ConceptLMRuntimeOps(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.ConceptLMRuntimeOps)
-        self.impl = builder.build(config)
+        self.impl = get_backend().build_op(ConceptLMRuntimeOpsBuildSpec(config))
 
     def flatten_decode_position_ids(self, position_ids: Tensor, batch_size: int, device: torch.device) -> Tensor:
         """Normalize decode position ids to one absolute position per batch

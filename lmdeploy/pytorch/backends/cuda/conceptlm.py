@@ -10,7 +10,6 @@ from lmdeploy.pytorch.kernels.cuda.conceptlm import (
     prefill_state_cache_update,
 )
 
-from ..conceptlm import ConceptLMRuntimeOpsBuilder, ConceptLMRuntimeOpsImpl
 from ..default.conceptlm import DefaultConceptLMRuntimeOpsImpl
 
 
@@ -153,12 +152,3 @@ class TritonConceptLMRuntimeOpsImpl(DefaultConceptLMRuntimeOpsImpl):
             state_ids,
             update_mask,
         )
-
-
-class TritonConceptLMRuntimeOpsBuilder(ConceptLMRuntimeOpsBuilder):
-    """Triton ConceptLM runtime operation builder."""
-
-    @staticmethod
-    def build(config) -> ConceptLMRuntimeOpsImpl:
-        """Build layer implementation."""
-        return TritonConceptLMRuntimeOpsImpl(config)
