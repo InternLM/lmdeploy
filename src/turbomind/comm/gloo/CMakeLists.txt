@@ -8,13 +8,21 @@ FetchContent_Declare(
   GIT_TAG c7b7b022c124d9643957d9bd55f57ac59fce8fa2 # pytorch-v2.8.0-rc4
 )
 
-# some settings of gloo,
-set(GLOO_INSTALL OFF CACHE BOOL "" FORCE)
-set(GLOO_STATIC_OR_SHARED STATIC CACHE STRING "" FORCE)
-set(USE_NCCL OFF)
-set(BUILD_TEST OFF)
-set(USE_IBVERBS OFF)
-FetchContent_MakeAvailable(gloo)
+# Keep Gloo's build settings local so TurboMind's wrappers inherit C++20.
+block(SCOPE_FOR VARIABLES PROPAGATE gloo_SOURCE_DIR gloo_BINARY_DIR)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    set(CMAKE_CXX_EXTENSIONS ON)
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+
+    set(GLOO_INSTALL OFF CACHE BOOL "" FORCE)
+    set(GLOO_STATIC_OR_SHARED STATIC CACHE STRING "" FORCE)
+    set(USE_NCCL OFF)
+    set(BUILD_TEST OFF)
+    set(USE_IBVERBS OFF)
+    FetchContent_MakeAvailable(gloo)
+endblock()
 
 # gloo build doesn't add include directories as a target property...
 target_include_directories(gloo PUBLIC
