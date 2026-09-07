@@ -979,6 +979,25 @@ class SchedulerSequence:
         self._num_images = len(new_embeddings)
         self.history_embeddings.append(new_embeddings)
 
+        # Token ids do not identify the values supplied through ``input_embeddings``.
+        # Record a content hash alongside each span before it can enter the prefix-cache
+        # trie; otherwise two requests with identical placeholder ids can reuse KV that was
+        # computed from a different image/embedding tensor.  Keep this metadata in the same
+        # span index as other multimodal identities so block and sparse-checkpoint matching
+        # use one exact comparison path.
+        cache_config = getattr(getattr(self.session, 'scheduler', None), 'cache_config', None)
+        if cache_config is not None and cache_config.enable_prefix_caching:
+            for embedding in new_embeddings:
+                content_hash = make_multimodal_content_hash(embedding.embeddings, None)
+                self.prefix_cache.multimodal_spans.append(
+                    MultimodalSpan(
+                        start=embedding.start,
+                        end=embedding.end,
+                        modality='input_embedding',
+                        content_hash=content_hash,
+                    )
+                )
+
     def _update_multimodals(self, multimodals: MultiModalInputs):
         """Update input multimodals."""
         if multimodals is None:
