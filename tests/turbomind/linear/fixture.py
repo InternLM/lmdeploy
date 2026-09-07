@@ -196,7 +196,7 @@ class LinearFixture:
                     src=tm.from_dlpack(source),
                     group_size=case.group_size,
                 )
-                return raw_weight, raw_scales, None, original, dequant.t()
+                return raw_weight, raw_scales, raw_zeros, original, dequant.t()
 
             raw_blocks = torch.empty((output_dim, case.input_dim // 32, 16), dtype=torch.uint8, device=self.device)
             quant = tm.from_dlpack(raw_blocks).reinterpret(tm.DataType.TYPE_FP4_E2M1, [output_dim, case.input_dim])
