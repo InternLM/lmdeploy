@@ -43,6 +43,18 @@ def _is_tool_choice_auto(tool_choice):
     return tool_choice.type == 'auto'
 
 
+def _is_tool_choice_any(tool_choice):
+    if tool_choice is None:
+        return False
+    if isinstance(tool_choice, str):
+        return tool_choice == 'any'
+    return tool_choice.type == 'any'
+
+
+def _is_tool_choice_tool(tool_choice):
+    return tool_choice is not None and not isinstance(tool_choice, str) and tool_choice.type == 'tool'
+
+
 def _validate_extended_outputs(request: MessagesRequest, server_context):
     engine_config = server_context.get_engine_config()
     logprobs_mode = engine_config.logprobs_mode
@@ -146,6 +158,23 @@ def register(router: APIRouter, server_context) -> None:
                 return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
 
         parser_cls = server_context.response_parser_cls
+        if _is_tool_choice_any(request.tool_choice) and not request.tools:
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                '`tool_choice={"type":"any"}` requires at least one tool.')
+
+        if _is_tool_choice_tool(request.tool_choice):
+            tool_name = request.tool_choice.name
+            if not request.tools:
+                return create_error_response(
+                    HTTPStatus.BAD_REQUEST,
+                    '`tool_choice={"type":"tool"}` requires at least one tool.')
+            tool_names = {tool.name for tool in request.tools}
+            if tool_name not in tool_names:
+                return create_error_response(
+                    HTTPStatus.BAD_REQUEST,
+                    f"Tool choice 'tool' not found in `tools`: {tool_name!r}.")
+
         if request.tools and parser_cls.tool_parser_cls is None:
             return create_error_response(
                 HTTPStatus.BAD_REQUEST,

@@ -380,8 +380,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
       the model. `none` means the model will not call any tool and instead
       generates a message. Specifying a particular tool via
       ``{"type": "function", "function": {"name": "my_function"}}``
-      forces the model to call that tool. `auto` or `required` will put all
-      the tools informationto the model.
+      forces the model to call that tool. `auto` lets the model choose whether
+      to call a tool, while `required` requires at least one supplied tool.
 
     Additional arguments supported by LMDeploy:
 
@@ -469,6 +469,16 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 
     parser_cls = VariableInterface.response_parser_cls
+    if request.tool_choice == 'required' and not request.tools:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            '`tool_choice="required"` requires at least one tool.')
+    if (request.tool_choice == 'required'
+            and (parser_cls is None or not parser_cls.supports_required_tool_choice)):
+        parser_name = parser_cls.__name__ if parser_cls is not None else 'None'
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'Response parser {parser_name!r} does not support `tool_choice="required"`.')
     if request.tool_choice != 'none' and request.tools:
         if parser_cls is None or parser_cls.tool_parser_cls is None:
             return create_error_response(
@@ -477,7 +487,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     random_seed = request.seed if request.seed is not None else None
 
-    parser_cls = VariableInterface.response_parser_cls
     try:
         response_parser = parser_cls(request)
     except ValueError as e:

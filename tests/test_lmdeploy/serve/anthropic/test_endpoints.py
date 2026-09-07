@@ -294,6 +294,42 @@ def test_messages_return_routed_experts_requires_engine_flag():
     assert 'enable-return-routed-experts' in response.json()['error']['message']
 
 
+def test_messages_tools_require_tool_parser():
+    response = _post_messages(_make_client(), tools=[SEARCH_TOOL])
+
+    assert response.status_code == 400
+    assert '--tool-call-parser' in response.json()['error']['message']
+
+
+@pytest.mark.parametrize('tool_choice', ['any', {'type': 'any'}])
+def test_messages_any_tool_choice_requires_tools(tool_choice):
+    response = _post_messages(
+        _make_client(response_parser_cls=_ToolAndReasoningParser),
+        tool_choice=tool_choice,
+    )
+
+    assert response.status_code == 400
+    assert 'requires at least one tool' in response.json()['error']['message']
+
+
+@pytest.mark.parametrize(
+    ('tools', 'tool_choice', 'error_fragment'),
+    [
+        (None, {'type': 'tool', 'name': 'search'}, 'requires at least one tool'),
+        ([SEARCH_TOOL], {'type': 'tool', 'name': 'missing'}, "not found in `tools`: 'missing'"),
+    ],
+)
+def test_messages_named_tool_choice_validation(tools, tool_choice, error_fragment):
+    response = _post_messages(
+        _make_client(response_parser_cls=_ToolAndReasoningParser),
+        tools=tools,
+        tool_choice=tool_choice,
+    )
+
+    assert response.status_code == 400
+    assert error_fragment in response.json()['error']['message']
+
+
 def test_messages_beta_accepts_system_role_message():
     context = _FakeServerContext()
     client = _make_client(server_context=context)
