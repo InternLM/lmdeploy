@@ -18,6 +18,12 @@ class DlinferLinearImpl(LinearImpl):
             weight = weight.data.t().contiguous()
         return weight, bias
 
+    def get_unquantized_weight(self, weight: torch.Tensor):
+        """Return weight in ``[out_features, in_features]`` layout."""
+        if os.getenv('DLINFER_LINEAR_USE_NN_LAYOUT', '0') == '1':
+            weight = weight.t()
+        return weight
+
     def forward(self,
                 x,
                 weight: torch.Tensor,
