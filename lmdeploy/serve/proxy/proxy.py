@@ -440,7 +440,7 @@ class NodeManager:
         """To create a background task.
 
         Args:
-            node_url (str): the node url.
+            url (str): the node url.
             start (int): the start time point. time.time()
         """
         background_tasks = BackgroundTasks()

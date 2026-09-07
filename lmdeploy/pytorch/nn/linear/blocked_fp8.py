@@ -147,6 +147,20 @@ class BlockedF8Linear(LinearBase):
         weight, weight_scale_inv, bias = self.impl.update_weights(self.weight, self.weight_scale_inv, self.bias)
         self.register_all_parameters(weight, weight_scale_inv, bias)
 
+    def get_unquantized_weight(self, out_dtype: torch.dtype) -> torch.Tensor:
+        """Return the local dequantized weight."""
+        out_features, in_features = self.weight.shape
+        scale_rows, scale_cols = self.weight_scale_inv.shape
+        aligned_shape = (scale_rows * self.block_size, scale_cols * self.block_size)
+        weight = self.weight
+        if weight.shape != aligned_shape:
+            weight = weight.new_zeros(aligned_shape)
+            weight[:out_features, :in_features].copy_(self.weight)
+        weight = weight.reshape(scale_rows, self.block_size, scale_cols, self.block_size)
+        scale = self.weight_scale_inv[:, None, :, None]
+        weight = (weight.to(scale.dtype) * scale).to(out_dtype).reshape(aligned_shape)
+        return weight[:out_features, :in_features]
+
     def _forward_default(self, x, all_reduce, tp_sizes):
         """Default forward implement."""
         if self.tp_mode == TPMode.DP_TP:
