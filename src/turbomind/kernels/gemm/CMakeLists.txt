@@ -80,7 +80,8 @@ function(configure_gemm2_kernel_target target)
     target_compile_options(${target} PRIVATE
             $<$<COMPILE_LANGUAGE:CUDA>:
                     -Xptxas=-v
-                    --generate-line-info>
+                    --generate-line-info
+                    --threads 16>
     )
     target_link_libraries(${target} PRIVATE parser nvidia::cutlass::cutlass CUDA::cuda_driver)
 endfunction()
@@ -88,9 +89,6 @@ endfunction()
 # cublas.cu registers for every arch.
 add_library(gemm2_kernels STATIC cublas.cu)
 configure_gemm2_kernel_target(gemm2_kernels)
-target_compile_options(gemm2_kernels PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:--threads 16>
-)
 
 set(GEMM2_KERNEL_TARGETS gemm2_kernels)
 
@@ -99,9 +97,6 @@ if(GEMM2_SM70_ARCHS)
     set_property(TARGET gemm2_kernels_sm70 PROPERTY
             CUDA_ARCHITECTURES "${GEMM2_SM70_ARCHS}")
     configure_gemm2_kernel_target(gemm2_kernels_sm70)
-    target_compile_options(gemm2_kernels_sm70 PRIVATE
-            $<$<COMPILE_LANGUAGE:CUDA>:--threads 64>
-    )
     list(APPEND GEMM2_KERNEL_TARGETS gemm2_kernels_sm70)
 endif()
 
@@ -110,9 +105,6 @@ if(GEMM2_SM75_ARCHS)
     set_property(TARGET gemm2_kernels_sm75 PROPERTY
             CUDA_ARCHITECTURES "${GEMM2_SM75_ARCHS}")
     configure_gemm2_kernel_target(gemm2_kernels_sm75)
-    target_compile_options(gemm2_kernels_sm75 PRIVATE
-            $<$<COMPILE_LANGUAGE:CUDA>:--threads 64>
-    )
     list(APPEND GEMM2_KERNEL_TARGETS gemm2_kernels_sm75)
 endif()
 
@@ -121,9 +113,6 @@ if(GEMM2_SM80_ARCHS)
     set_property(TARGET gemm2_kernels_sm80 PROPERTY
             CUDA_ARCHITECTURES "${GEMM2_SM80_ARCHS}")
     configure_gemm2_kernel_target(gemm2_kernels_sm80)
-    target_compile_options(gemm2_kernels_sm80 PRIVATE
-            $<$<COMPILE_LANGUAGE:CUDA>:--threads 64>
-    )
     list(APPEND GEMM2_KERNEL_TARGETS gemm2_kernels_sm80)
 endif()
 
@@ -139,9 +128,7 @@ if(GEMM2_SM90_ARCHS)
     )
     configure_gemm2_kernel_target(gemm2_sm90)
     target_compile_options(gemm2_sm90 PRIVATE
-            $<$<COMPILE_LANGUAGE:CUDA>:
-                    -Xptxas=-Werror
-                    --threads 64>
+            $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-Werror>
     )
     list(APPEND GEMM2_KERNEL_TARGETS gemm2_sm90)
 endif()
