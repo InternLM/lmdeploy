@@ -11,6 +11,8 @@ from .tool_parser import ToolParserManager
 class DeepSeekV4ToolParser(DeepSeekV32ToolParser):
     """Tool parser for DeepSeek-V4 DSML tool-call blocks."""
 
+    structural_tag_model = 'deepseek_v4'
+
     dsml_token = dsml_token
     tool_calls_block_name = tool_calls_block_name
     parse_tool_calls_func = staticmethod(parse_tool_calls)

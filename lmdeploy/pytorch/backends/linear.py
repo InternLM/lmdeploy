@@ -12,6 +12,10 @@ class LinearImpl(ABC):
         """Update weights."""
         return weight, bias
 
+    def get_unquantized_weight(self, weight: torch.Tensor):
+        """Return weight in ``[out_features, in_features]`` layout."""
+        return weight
+
     @abstractmethod
     def forward(self,
                 x,
