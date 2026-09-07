@@ -15,6 +15,7 @@ from .. import _tm
 from ..builders import (
     AttentionBuilder,
     Builder,
+    Context,
     LayerNormBuilder,
     ModuleListBuilder,
     ModuleListConfig,
@@ -118,15 +119,6 @@ class _BaseQwen2VisionModel(VisionModel):
     def _vision_fullatt_block_indexes(self, cfg):
         return []
 
-    def _torch_dtype(self):
-        if self._resolver.data_type == _tm.DataType.TYPE_FP16:
-            return torch.float16
-        if self._resolver.data_type == _tm.DataType.TYPE_BF16:
-            return torch.bfloat16
-        if self._resolver.data_type == _tm.DataType.TYPE_FP32:
-            return torch.float32
-        return None
-
     @staticmethod
     def _grid_thw(grid_thw) -> tuple[int, int, int]:
         if isinstance(grid_thw, torch.Tensor):
@@ -163,7 +155,7 @@ class _BaseQwen2VisionModel(VisionModel):
                 raise ValueError(f'Qwen2 TurboMind native vision only supports image inputs, got {modality!r}')
 
             data = to_tm_tensor(
-                input_mm['pixel_values'], dtype=self._torch_dtype())
+                input_mm['pixel_values'], dtype=self._ctx.dtype)
             grid_thw = self._grid_thw(input_mm['image_grid_thw'])
             token_begin, token_end = self._token_range(input_mm)
             fingerprint = _resolve_fingerprint(input_mm, grid_thw)
@@ -184,7 +176,7 @@ class _BaseQwen2VisionModel(VisionModel):
 
     def _make_vision_root_cfg(self):
         cfg = _tm.QwenVitConfig()
-        cfg.data_type = self._resolver.data_type
+        cfg.data_type = self._ctx.data_type
         cfg.hidden_dim = self._vis_hidden
         cfg.out_hidden_dim = self._vis_out_hidden
         cfg.depth = self._vis_depth
@@ -205,10 +197,10 @@ class _BaseQwen2VisionModel(VisionModel):
 
     def _build_vision_model(self, pfx):
         cfg = self._make_vision_root_cfg()
-        root = self._restore_dtype(VisionModelBuilder(
+        root = VisionModelBuilder(
             cfg, self._ctx,
             root_handles=self._root_handles,
-            tp=self._model_tp))
+            tp=self._model_tp)
 
         root._add_linear('patch_embed', self._patch_embed(pfx + 'patch_embed.proj'))
         root.blocks = self.vit_blocks(pfx + 'blocks')
@@ -220,7 +212,8 @@ class _BaseQwen2VisionModel(VisionModel):
     def _patch_embed(self, pfx):
         weight = pfx.pop('weight')
         weight = weight.reshape(weight.shape[0], -1).t().contiguous()
-        return Linear(tensors={'weight': weight}, weight_format=TrivialFormat())
+        return Linear(tensors={'weight': weight},
+                      weight_format=TrivialFormat(weight_dtype=self._ctx.data_type))
 
     def vit_blocks(self, pfx):
         blocks = ModuleListBuilder(ModuleListConfig(), self._ctx)
@@ -231,13 +224,13 @@ class _BaseQwen2VisionModel(VisionModel):
     def vit_block(self, pfx):
         inter_size = self._padded_inter_size()
         cfg = _tm.QwenVitBlockConfig()
-        cfg.data_type = self._resolver.data_type
+        cfg.data_type = self._ctx.data_type
         cfg.hidden_dim = self._vis_hidden
         cfg.head_num = self._vis_heads
         cfg.intermediate_size = inter_size
         cfg.norm_eps = self._vis_norm_eps
 
-        b = self._restore_dtype(Builder(cfg, self._ctx))
+        b = Builder(cfg, self._ctx)
         b.tp = self._model_tp
         b.norm1 = self._vision_norm(pfx + 'norm1', dim=self._vis_hidden)
         b.norm2 = self._vision_norm(pfx + 'norm2', dim=self._vis_hidden)
@@ -270,7 +263,7 @@ class _BaseQwen2VisionModel(VisionModel):
         real_hd = self._vis_hidden // self._vis_heads
         padded_hd = _padded_vit_head_dim(real_hd)
         cfg = _tm.AttentionConfig()
-        cfg.data_type = self._resolver.data_type
+        cfg.data_type = self._ctx.data_type
         cfg.hidden_dim = self._vis_hidden
         cfg.head_dim = padded_hd
         cfg.head_num = self._vis_heads
@@ -287,8 +280,8 @@ class _BaseQwen2VisionModel(VisionModel):
         H = cfg.head_num
 
         q, k, v = split_packed_qkv(self._linear(pfx + 'qkv'))
-        q = reorder_rotary_emb(q, real_hd, real_hd, resolver=self._resolver)
-        k = reorder_rotary_emb(k, real_hd, real_hd, resolver=self._resolver)
+        q = reorder_rotary_emb(q, real_hd, real_hd, dtype=self._ctx.dtype)
+        k = reorder_rotary_emb(k, real_hd, real_hd, dtype=self._ctx.dtype)
         proj = self._linear(pfx + 'proj')
 
         q, k, v, proj = pad_attn_head_dim(
@@ -302,7 +295,7 @@ class _BaseQwen2VisionModel(VisionModel):
         )
 
         attn_tp = self._model_tp if self._vis_heads % self._model_tp.size == 0 else ParallelGroup(1, None)
-        m = self._restore_dtype(AttentionBuilder(cfg, self._ctx, tp=attn_tp))
+        m = AttentionBuilder(cfg, self._ctx, tp=attn_tp)
         m.add_qkv_proj(q, k, v)
         m.add_o_proj(proj)
         return m.build()
@@ -314,17 +307,17 @@ class _BaseQwen2VisionModel(VisionModel):
         weight = pfx.pop('weight')
         bias = pfx.pop('bias') if pfx.has('bias') else None
         cfg = make_layer_norm_config(dim=dim,
-                                     data_type=self._resolver.data_type,
+                                     data_type=self._ctx.data_type,
                                      norm_eps=self._vis_norm_eps)
-        m = self._restore_dtype(LayerNormBuilder(cfg, self._ctx))
+        m = LayerNormBuilder(cfg, self._ctx)
         m.set_weight(weight, bias=bias)
         return m.build()
 
     def _rms_norm(self, pfx, *, dim: int):
         weight = pfx.pop('weight')
         cfg = make_norm_config(dim=dim, norm_eps=self._vis_norm_eps)
-        cfg.data_type = self._resolver.data_type
-        m = self._restore_dtype(NormBuilder(cfg, self._ctx))
+        cfg.data_type = self._ctx.data_type
+        m = NormBuilder(cfg, self._ctx)
         m.set_weight(weight)
         return m.build()
 
@@ -397,6 +390,7 @@ class Qwen2VLModel:
     _vision = True
 
     def __init__(self, cfg, *, resolver, vision_resolver=None,
+                 vision_data_type=None,
                  language_model_only: bool = False):
         text_cfg = getattr(cfg, 'text_config', cfg)
         if text_cfg is None:
@@ -410,11 +404,13 @@ class Qwen2VLModel:
         vision_cfg = getattr(cfg, 'vision_config', None)
         if language_model_only or vision_cfg is None:
             self.vision_model = None
+            self._vision_data_type = None
         else:
             vision_cls = _VISION_MODEL_CLS.get(self._arch)
             if vision_cls is None:
                 raise ValueError(f'Unsupported Qwen2-VL architecture: {self._arch!r}')
-            self.vision_model = vision_cls(vision_cfg, resolver=vision_resolver or resolver)
+            self.vision_model = vision_cls(vision_cfg, resolver=vision_resolver)
+            self._vision_data_type = vision_data_type
 
     def bind_runtime(self, *, ctx, root_handles,
                      attn_tp, mlp_tp, ep, model_tp):
@@ -427,8 +423,13 @@ class Qwen2VLModel:
             model_tp=model_tp,
         )
         if self.vision_model is not None:
+            vision_ctx = Context(
+                ctx.devices,
+                ctx.gemm,
+                data_type=self._vision_data_type,
+                gemm_input_dtype=ctx.gemm_input_dtype)
             self.vision_model.bind_runtime(
-                ctx=ctx,
+                ctx=vision_ctx,
                 root_handles=root_handles,
                 model_tp=model_tp,
             )

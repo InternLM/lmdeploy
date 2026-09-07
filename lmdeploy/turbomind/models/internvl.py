@@ -16,6 +16,7 @@ from .. import _tm
 from ..builders import (
     AttentionBuilder,
     Builder,
+    Context,
     LayerNormBuilder,
     ModuleListBuilder,
     ModuleListConfig,
@@ -192,8 +193,8 @@ class InternVitVisionModel(VisionModel):
         vision_pfx = pfx + 'model.vision_tower'
         projector_pfx = pfx + 'model.multi_modal_projector'
         cfg = self._make_root_cfg()
-        root = self._restore_dtype(VisionModelBuilder(
-            cfg, self._ctx, root_handles=self._root_handles, tp=self._model_tp))
+        root = VisionModelBuilder(
+            cfg, self._ctx, root_handles=self._root_handles, tp=self._model_tp)
 
         emb_pfx = vision_pfx + 'embeddings'
         root._add_tensor('cls_token', (emb_pfx + 'cls_token').pop())
@@ -210,7 +211,7 @@ class InternVitVisionModel(VisionModel):
 
     def _make_root_cfg(self):
         cfg = _tm.InternVitConfig()
-        cfg.data_type = self._resolver.data_type
+        cfg.data_type = self._ctx.data_type
         cfg.hidden_dim = self._hidden
         cfg.depth = self._depth
         cfg.patch_in_dim = self._patch_in_dim
@@ -226,7 +227,7 @@ class InternVitVisionModel(VisionModel):
 
     def _make_block_cfg(self):
         cfg = _tm.InternVitBlockConfig()
-        cfg.data_type = self._resolver.data_type
+        cfg.data_type = self._ctx.data_type
         cfg.hidden_dim = self._hidden
         cfg.head_num = self._heads
         cfg.intermediate_size = self._inter
@@ -235,7 +236,7 @@ class InternVitVisionModel(VisionModel):
 
     def _make_attn_cfg(self):
         cfg = _tm.AttentionConfig()
-        cfg.data_type = self._resolver.data_type
+        cfg.data_type = self._ctx.data_type
         cfg.hidden_dim = self._hidden
         cfg.head_dim = self._head_dim
         cfg.head_num = self._heads
@@ -251,7 +252,7 @@ class InternVitVisionModel(VisionModel):
         return blocks.build()
 
     def vit_block(self, pfx):
-        b = self._restore_dtype(Builder(self._make_block_cfg(), self._ctx))
+        b = Builder(self._make_block_cfg(), self._ctx)
         b.tp = self._model_tp
 
         b.norm1 = self._vision_norm(pfx + 'layernorm_before')
@@ -271,7 +272,7 @@ class InternVitVisionModel(VisionModel):
 
         cfg = self._make_attn_cfg()
         attn_tp = self._model_tp if self._heads % self._model_tp.size == 0 else ParallelGroup(1, None)
-        m = self._restore_dtype(AttentionBuilder(cfg, self._ctx, tp=attn_tp))
+        m = AttentionBuilder(cfg, self._ctx, tp=attn_tp)
         m.add_qkv_proj(q, k, v)
         m.add_o_proj(o)
         if self._use_qk_norm and (pfx + 'q_norm').has('weight') and (pfx + 'k_norm').has('weight'):
@@ -285,7 +286,8 @@ class InternVitVisionModel(VisionModel):
         tensors = {'weight': weight}
         if pfx.has('bias'):
             tensors['bias'] = pfx.pop('bias')
-        return Linear(tensors=tensors, weight_format=TrivialFormat())
+        return Linear(tensors=tensors,
+                      weight_format=TrivialFormat(weight_dtype=self._ctx.data_type))
 
     def _vision_norm(self, pfx):
         if self._norm_type == _tm.NormType.LAYER_NORM:
@@ -304,8 +306,8 @@ class InternVitVisionModel(VisionModel):
                 f'{pfx}.weight dim={dim} is not divisible by tp={tp_size}')
             dim //= tp_size
         cfg = make_norm_config(dim=dim, norm_eps=self._norm_eps)
-        cfg.data_type = self._resolver.data_type
-        m = self._restore_dtype(NormBuilder(cfg, self._ctx))
+        cfg.data_type = self._ctx.data_type
+        m = NormBuilder(cfg, self._ctx)
         if tp_size > 1:
             m.tp = tp
             m._add_tensor('weight', weight, SplitSide.OUTPUT)
@@ -316,8 +318,8 @@ class InternVitVisionModel(VisionModel):
     def _layer_norm(self, pfx, *, dim: int, norm_eps: float):
         weight = pfx.pop('weight')
         bias = pfx.pop('bias') if pfx.has('bias') else None
-        cfg = make_layer_norm_config(dim=dim, data_type=self._resolver.data_type, norm_eps=norm_eps)
-        m = self._restore_dtype(LayerNormBuilder(cfg, self._ctx))
+        cfg = make_layer_norm_config(dim=dim, data_type=self._ctx.data_type, norm_eps=norm_eps)
+        m = LayerNormBuilder(cfg, self._ctx)
         m.set_weight(weight, bias=bias)
         return m.build()
 
@@ -363,7 +365,7 @@ class LegacyInternVitVisionModel(InternVitVisionModel):
 
         cfg = self._make_attn_cfg()
         attn_tp = self._model_tp if self._heads % self._model_tp.size == 0 else ParallelGroup(1, None)
-        m = self._restore_dtype(AttentionBuilder(cfg, self._ctx, tp=attn_tp))
+        m = AttentionBuilder(cfg, self._ctx, tp=attn_tp)
         m.add_qkv_proj(q, k, v)
         m.add_o_proj(o)
         if self._use_qk_norm and (pfx + 'q_norm').has('weight') and (pfx + 'k_norm').has('weight'):
@@ -380,7 +382,8 @@ class InternVLModel:
     _vision = True
 
     def __init__(self, cfg: PretrainedConfig, *, resolver,
-                 vision_resolver=None, language_model_only: bool = False):
+                 vision_resolver=None, vision_data_type=None,
+                 language_model_only: bool = False):
         llm_cfg = _cfg_get(cfg, 'llm_config')
         if llm_cfg is None:
             llm_cfg = _cfg_get(cfg, 'text_config')
@@ -414,15 +417,17 @@ class InternVLModel:
         vision_cfg = cfg.vision_config if hasattr(cfg, 'vision_config') else None
         if language_model_only or vision_cfg is None:
             self.vision_model = None
+            self._vision_data_type = None
         else:
+            self._vision_data_type = vision_data_type
             if arch == 'InternVLChatModel':
                 _validate_legacy_internvl_chat(cfg)
                 self.vision_model = LegacyInternVitVisionModel(vision_cfg,
-                                                               resolver=vision_resolver or resolver,
+                                                               resolver=vision_resolver,
                                                                parent_cfg=cfg)
             elif arch in ('InternS1ForConditionalGeneration', 'InternVLForConditionalGeneration'):
                 self.vision_model = InternVitVisionModel(vision_cfg,
-                                                         resolver=vision_resolver or resolver,
+                                                         resolver=vision_resolver,
                                                          parent_cfg=cfg)
             else:
                 raise ValueError(f'InternVL TurboMind vision architecture {arch!r} is not supported.')
@@ -438,8 +443,13 @@ class InternVLModel:
             model_tp=model_tp,
         )
         if self.vision_model is not None:
+            vision_ctx = Context(
+                ctx.devices,
+                ctx.gemm,
+                data_type=self._vision_data_type,
+                gemm_input_dtype=ctx.gemm_input_dtype)
             self.vision_model.bind_runtime(
-                ctx=ctx,
+                ctx=vision_ctx,
                 root_handles=root_handles,
                 model_tp=model_tp,
             )

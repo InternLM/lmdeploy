@@ -449,7 +449,7 @@ class Qwen3_5VisionModel(VisionModel):
 
     def _make_vision_root_cfg(self):
         cfg = _tm.QwenVitConfig()
-        cfg.data_type = self._resolver.data_type
+        cfg.data_type = self._ctx.data_type
         cfg.hidden_dim = self._vis_hidden
         cfg.out_hidden_dim = self._vis_out_hidden
         cfg.depth = self._vis_depth
@@ -489,7 +489,7 @@ class Qwen3_5VisionModel(VisionModel):
 
     def vit_block(self, pfx):
         cfg = _tm.QwenVitBlockConfig()
-        cfg.data_type = self._resolver.data_type
+        cfg.data_type = self._ctx.data_type
         cfg.hidden_dim = self._vis_hidden
         cfg.head_num = self._vis_heads
         cfg.intermediate_size = self._vis_inter
@@ -555,8 +555,7 @@ class Qwen3_5VisionModel(VisionModel):
         )
 
         attn_tp = self._model_tp if self._vis_heads % self._model_tp.size == 0 else ParallelGroup(1, None)
-        m = self._restore_dtype(
-            AttentionBuilder(cfg, self._ctx, tp=attn_tp))
+        m = AttentionBuilder(cfg, self._ctx, tp=attn_tp)
         m.add_qkv_proj(q, k, v)
         m.add_o_proj(proj)
         return m.build()
@@ -598,10 +597,6 @@ class Qwen3_5Model:
             self.vision_model = None
             self._vision_data_type = None
         else:
-            if vision_resolver is None or vision_data_type is None:
-                raise TypeError(
-                    'vision_resolver and vision_data_type are required '
-                    'when the vision model is enabled')
             self.vision_model = Qwen3_5VisionModel(
                 vision_cfg, resolver=vision_resolver)
             self._vision_data_type = vision_data_type
