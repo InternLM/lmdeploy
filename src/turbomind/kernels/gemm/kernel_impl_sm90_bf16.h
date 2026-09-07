@@ -111,8 +111,8 @@ public:
         desc_.cta_tile            = {TILE_M, TILE_N, TILE_K};
         desc_.mma_tile            = {1, 1, 1};
         desc_.atom_layout         = {cute::size<0>(typename Gemm::AtomLayoutMNK{}),
-                                     cute::size<1>(typename Gemm::AtomLayoutMNK{}),
-                                     cute::size<2>(typename Gemm::AtomLayoutMNK{})};
+                             cute::size<1>(typename Gemm::AtomLayoutMNK{}),
+                             cute::size<2>(typename Gemm::AtomLayoutMNK{})};
         desc_.supported_epilogues = Gemm::kSupportsFusedSilu ? Epilogue::kGatedSilu : Epilogue::kNone;
 
         info_.chunk_size_k = Gemm::TILE_K;

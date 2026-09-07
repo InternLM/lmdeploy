@@ -230,8 +230,8 @@ struct Gemm::Impl {
         if (verbose_) {
             for (const auto& spec : specs) {
                 std::cout << "[tune] " << to_string(ctx.desc()) << " " << spec.kernel->name()
-                          << " swizzle=" << spec.swizzle << " splits=" << spec.splits
-                          << " measured=" << spec.measured << "\n";
+                          << " swizzle=" << spec.swizzle << " splits=" << spec.splits << " measured=" << spec.measured
+                          << "\n";
             }
         }
 
@@ -280,9 +280,9 @@ Gemm::~Gemm() = default;
 std::optional<WeightPlan> Gemm::GetWeightPlan(const WeightQuery& query) const
 {
     const Family* selected{};
-    WeightBridge        selected_bridge{};
-    bool                selected_preferred{};
-    bool                ambiguous{};
+    WeightBridge  selected_bridge{};
+    bool          selected_preferred{};
+    bool          ambiguous{};
 
     for (const Family* family : impl_->registry_.families()) {
         auto bridge = family->supports(query.weight_format, query.data_type, query.output_dtype, query.grouped);
@@ -358,8 +358,8 @@ std::optional<ExecPlan> Gemm::Tune(const Arguments& args)
 
     const auto launch = [&](LaunchSpec spec, cudaStream_t stream) { return impl_->Launch(spec, args, stream); };
 
-    std::optional<LaunchSpec> selected = impl_->Measure(
-        context, args.workspace.barriers_size, args.workspace.partials_size, launch, args.stream);
+    std::optional<LaunchSpec> selected =
+        impl_->Measure(context, args.workspace.barriers_size, args.workspace.partials_size, launch, args.stream);
     if (!selected) {
         return std::nullopt;
     }

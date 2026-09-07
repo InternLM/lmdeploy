@@ -33,18 +33,8 @@ void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
     linear.weight_format = DataFormat{kFloat4_e2m1, {Sm90MxFp4Fp8UnfoldedFormat::kGroupSize, 1}, kUint8};
 }
 
-const Family unfolded{34,
-                      250,
-                      DataFormat{kFloat8_e4m3, {128, 1}, kFloat},
-                      kBfloat16,
-                      128,
-                      64,
-                      256,
-                      1,
-                      true,
-                      false,
-                      supports_mxfp4,
-                      pack};
+const Family unfolded{
+    34, 250, DataFormat{kFloat8_e4m3, {128, 1}, kFloat}, kBfloat16, 128, 64, 256, 1, true, false, supports_mxfp4, pack};
 
 struct C {
     template<class Config_, int Stages, Order Raster, int MmaN = Config_::Tile::M / Config_::Groups::M>

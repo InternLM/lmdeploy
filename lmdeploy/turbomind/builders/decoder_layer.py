@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .. import _tm
-
 from ._base import Builder
 
 DecoderLayerConfig = _tm.DecoderLayerConfig

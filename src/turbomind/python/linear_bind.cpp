@@ -81,8 +81,7 @@ void bind_linear(py::module_& m)
         .value("kGelu", ActivationType::kGelu);
 
     py::class_<gemm::Family>(m, "Family")
-        .def_property_readonly(
-            "input_format", &gemm::Family::input_format, py::return_value_policy::reference_internal)
+        .def_property_readonly("input_format", &gemm::Family::input_format, py::return_value_policy::reference_internal)
         .def_property_readonly("align_k", &gemm::Family::align_k)
         .def_property_readonly("align_n", &gemm::Family::align_n)
         .def_property_readonly("min_k", &gemm::Family::min_k)
@@ -102,10 +101,12 @@ void bind_linear(py::module_& m)
 
     py::class_<gemm::WeightPlan>(m, "WeightPlan")
         .def_property_readonly("family", &gemm::WeightPlan::family, py::return_value_policy::reference_internal)
-        .def_property_readonly("shape_constraints", [](const gemm::WeightPlan& plan) {
-            const auto values = plan.shape_constraints();
-            return py::make_tuple(py::make_tuple(values[0], values[1]), py::make_tuple(values[2], values[3]));
-        })
+        .def_property_readonly("shape_constraints",
+                               [](const gemm::WeightPlan& plan) {
+                                   const auto values = plan.shape_constraints();
+                                   return py::make_tuple(py::make_tuple(values[0], values[1]),
+                                                         py::make_tuple(values[2], values[3]));
+                               })
         .def("gate_up", &gemm::WeightPlan::gate_up, py::arg("act_type"), py::arg("projection_n"))
         .def(
             "pack",
@@ -119,17 +120,24 @@ void bind_linear(py::module_& m)
         .def_property_readonly("output_shape", [](const gemm::OutputSpec& spec) { return spec.layout.shape(); })
         .def_property_readonly("output_stride", [](const gemm::OutputSpec& spec) { return spec.layout.stride(); })
         .def_readonly("output_dtype", &gemm::OutputSpec::dtype)
-        .def_property_readonly("output_scales_shape", [](const gemm::OutputSpec& spec) { return spec.scales_layout.shape(); })
-        .def_property_readonly("output_scales_stride", [](const gemm::OutputSpec& spec) { return spec.scales_layout.stride(); })
+        .def_property_readonly("output_scales_shape",
+                               [](const gemm::OutputSpec& spec) { return spec.scales_layout.shape(); })
+        .def_property_readonly("output_scales_stride",
+                               [](const gemm::OutputSpec& spec) { return spec.scales_layout.stride(); })
         .def_readonly("output_scales_dtype", &gemm::OutputSpec::scales_dtype);
 
     py::class_<gemm::ExecPlan>(m, "GemmExecPlan")
-        .def_property_readonly("output_shape", [](const gemm::ExecPlan& plan) { return plan.output_spec().layout.shape(); })
-        .def_property_readonly("output_stride", [](const gemm::ExecPlan& plan) { return plan.output_spec().layout.stride(); })
+        .def_property_readonly("output_shape",
+                               [](const gemm::ExecPlan& plan) { return plan.output_spec().layout.shape(); })
+        .def_property_readonly("output_stride",
+                               [](const gemm::ExecPlan& plan) { return plan.output_spec().layout.stride(); })
         .def_property_readonly("output_dtype", [](const gemm::ExecPlan& plan) { return plan.output_spec().dtype; })
-        .def_property_readonly("output_scales_shape", [](const gemm::ExecPlan& plan) { return plan.output_spec().scales_layout.shape(); })
-        .def_property_readonly("output_scales_stride", [](const gemm::ExecPlan& plan) { return plan.output_spec().scales_layout.stride(); })
-        .def_property_readonly("output_scales_dtype", [](const gemm::ExecPlan& plan) { return plan.output_spec().scales_dtype; });
+        .def_property_readonly("output_scales_shape",
+                               [](const gemm::ExecPlan& plan) { return plan.output_spec().scales_layout.shape(); })
+        .def_property_readonly("output_scales_stride",
+                               [](const gemm::ExecPlan& plan) { return plan.output_spec().scales_layout.stride(); })
+        .def_property_readonly("output_scales_dtype",
+                               [](const gemm::ExecPlan& plan) { return plan.output_spec().scales_dtype; });
 
     py::class_<gemm::Gemm>(m, "Gemm")
         .def(py::init<>())
@@ -153,11 +161,19 @@ void bind_linear(py::module_& m)
 
     py::class_<LlamaLinear, std::shared_ptr<LlamaLinear>>(m, "LlamaLinear")
         .def(py::init<>())
-        .def("get_weight_plan", [](LlamaLinear& self, const gemm::WeightQuery& query) { return self.gemm().GetWeightPlan(query); }, py::arg("query"))
+        .def(
+            "get_weight_plan",
+            [](LlamaLinear& self, const gemm::WeightQuery& query) { return self.gemm().GetWeightPlan(query); },
+            py::arg("query"))
         .def(
             "get_exec_plan",
-            [](LlamaLinear& self, const LinearWeight& weight, std::shared_ptr<core::Tensor> input, std::shared_ptr<core::Tensor> indices, std::shared_ptr<core::Tensor> offsets) {
-                return self.GetExecPlan(TensorFromShared(input, "input"), weight, IntBufferOrEmpty(indices), IntBufferOrEmpty(offsets));
+            [](LlamaLinear&                  self,
+               const LinearWeight&           weight,
+               std::shared_ptr<core::Tensor> input,
+               std::shared_ptr<core::Tensor> indices,
+               std::shared_ptr<core::Tensor> offsets) {
+                return self.GetExecPlan(
+                    TensorFromShared(input, "input"), weight, IntBufferOrEmpty(indices), IntBufferOrEmpty(offsets));
             },
             py::arg("weight"),
             py::arg("input"),
@@ -165,7 +181,10 @@ void bind_linear(py::module_& m)
             py::arg("offsets") = py::none())
         .def(
             "_get_output_spec",
-            [](const LlamaLinear& self, const LinearWeight& weight, std::shared_ptr<core::Tensor> input, std::shared_ptr<core::Tensor> indices) {
+            [](const LlamaLinear&            self,
+               const LinearWeight&           weight,
+               std::shared_ptr<core::Tensor> input,
+               std::shared_ptr<core::Tensor> indices) {
                 return self.GetOutputSpec(TensorFromShared(input, "input"), weight, IntBufferOrEmpty(indices));
             },
             py::arg("weight"),
@@ -173,11 +192,17 @@ void bind_linear(py::module_& m)
             py::arg("indices") = py::none())
         .def(
             "forward_dense",
-            [](LlamaLinear& self, const gemm::ExecPlan& plan, std::shared_ptr<core::Tensor> input, LinearWeight& weight, std::shared_ptr<core::Tensor> output, std::shared_ptr<core::Tensor> input_scales, std::shared_ptr<core::Tensor> output_scales) {
-                core::Tensor in = TensorFromShared(input, "input");
-                core::Tensor out = TensorFromShared(output, "output");
-                core::Tensor in_s = TensorOrEmpty(input_scales);
-                core::Tensor out_s = TensorOrEmpty(output_scales);
+            [](LlamaLinear&                  self,
+               const gemm::ExecPlan&         plan,
+               std::shared_ptr<core::Tensor> input,
+               LinearWeight&                 weight,
+               std::shared_ptr<core::Tensor> output,
+               std::shared_ptr<core::Tensor> input_scales,
+               std::shared_ptr<core::Tensor> output_scales) {
+                core::Tensor           in    = TensorFromShared(input, "input");
+                core::Tensor           out   = TensorFromShared(output, "output");
+                core::Tensor           in_s  = TensorOrEmpty(input_scales);
+                core::Tensor           out_s = TensorOrEmpty(output_scales);
                 py::gil_scoped_release release;
                 self.Forward(plan, in, in_s, weight, {}, {}, out, out_s);
             },
@@ -185,17 +210,25 @@ void bind_linear(py::module_& m)
             py::arg("input"),
             py::arg("weight"),
             py::arg("output"),
-            py::arg("input_scales") = py::none(),
+            py::arg("input_scales")  = py::none(),
             py::arg("output_scales") = py::none())
         .def(
             "forward_moe",
-            [](LlamaLinear& self, const gemm::ExecPlan& plan, std::shared_ptr<core::Tensor> input, LinearWeight& weight, std::shared_ptr<core::Tensor> indices, std::shared_ptr<core::Tensor> offsets, std::shared_ptr<core::Tensor> output, std::shared_ptr<core::Tensor> input_scales, std::shared_ptr<core::Tensor> output_scales) {
-                core::Tensor in = TensorFromShared(input, "input");
-                core::Tensor out = TensorFromShared(output, "output");
-                core::Tensor in_s = TensorOrEmpty(input_scales);
-                core::Tensor out_s = TensorOrEmpty(output_scales);
-                Buffer_<int> index_buffer = IntBufferOrEmpty(indices);
-                Buffer_<int> offset_buffer = IntBufferOrEmpty(offsets);
+            [](LlamaLinear&                  self,
+               const gemm::ExecPlan&         plan,
+               std::shared_ptr<core::Tensor> input,
+               LinearWeight&                 weight,
+               std::shared_ptr<core::Tensor> indices,
+               std::shared_ptr<core::Tensor> offsets,
+               std::shared_ptr<core::Tensor> output,
+               std::shared_ptr<core::Tensor> input_scales,
+               std::shared_ptr<core::Tensor> output_scales) {
+                core::Tensor           in            = TensorFromShared(input, "input");
+                core::Tensor           out           = TensorFromShared(output, "output");
+                core::Tensor           in_s          = TensorOrEmpty(input_scales);
+                core::Tensor           out_s         = TensorOrEmpty(output_scales);
+                Buffer_<int>           index_buffer  = IntBufferOrEmpty(indices);
+                Buffer_<int>           offset_buffer = IntBufferOrEmpty(offsets);
                 py::gil_scoped_release release;
                 self.Forward(plan, in, in_s, weight, index_buffer, offset_buffer, out, out_s);
             },
@@ -205,17 +238,24 @@ void bind_linear(py::module_& m)
             py::arg("indices") = py::none(),
             py::arg("offsets"),
             py::arg("output"),
-            py::arg("input_scales") = py::none(),
+            py::arg("input_scales")  = py::none(),
             py::arg("output_scales") = py::none())
         .def(
             "tune",
-            [](LlamaLinear& self, std::shared_ptr<core::Tensor> input, LinearWeight& weight, std::shared_ptr<core::Tensor> indices, std::shared_ptr<core::Tensor> offsets, std::shared_ptr<core::Tensor> output, std::shared_ptr<core::Tensor> input_scales, std::shared_ptr<core::Tensor> output_scales) {
-                core::Tensor in = TensorFromShared(input, "input");
-                core::Tensor out = TensorFromShared(output, "output");
-                core::Tensor in_s = TensorOrEmpty(input_scales);
-                core::Tensor out_s = TensorOrEmpty(output_scales);
-                Buffer_<int> index_buffer = IntBufferOrEmpty(indices);
-                Buffer_<int> offset_buffer = IntBufferOrEmpty(offsets);
+            [](LlamaLinear&                  self,
+               std::shared_ptr<core::Tensor> input,
+               LinearWeight&                 weight,
+               std::shared_ptr<core::Tensor> indices,
+               std::shared_ptr<core::Tensor> offsets,
+               std::shared_ptr<core::Tensor> output,
+               std::shared_ptr<core::Tensor> input_scales,
+               std::shared_ptr<core::Tensor> output_scales) {
+                core::Tensor           in            = TensorFromShared(input, "input");
+                core::Tensor           out           = TensorFromShared(output, "output");
+                core::Tensor           in_s          = TensorOrEmpty(input_scales);
+                core::Tensor           out_s         = TensorOrEmpty(output_scales);
+                Buffer_<int>           index_buffer  = IntBufferOrEmpty(indices);
+                Buffer_<int>           offset_buffer = IntBufferOrEmpty(offsets);
                 py::gil_scoped_release release;
                 return self.Tune(in, in_s, weight, index_buffer, offset_buffer, out, out_s);
             },
@@ -224,7 +264,7 @@ void bind_linear(py::module_& m)
             py::arg("indices") = py::none(),
             py::arg("offsets") = py::none(),
             py::arg("output"),
-            py::arg("input_scales") = py::none(),
+            py::arg("input_scales")  = py::none(),
             py::arg("output_scales") = py::none())
         .def(
             "import_records",
@@ -343,11 +383,14 @@ void bind_linear(py::module_& m)
         py::arg("rbits") = py::none(),
         py::arg("group_size"));
 
-    m.def("LinkLinearExperts", [](const std::vector<LinearWeight*>& experts) {
-        auto destination = std::make_unique<LinearWeight>();
-        LinkLinearExperts(experts, *destination);
-        return destination;
-    }, py::arg("experts"));
+    m.def(
+        "LinkLinearExperts",
+        [](const std::vector<LinearWeight*>& experts) {
+            auto destination = std::make_unique<LinearWeight>();
+            LinkLinearExperts(experts, *destination);
+            return destination;
+        },
+        py::arg("experts"));
 
     // --- MoE dispatch / combine ---
 

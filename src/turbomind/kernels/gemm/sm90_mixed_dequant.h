@@ -51,8 +51,7 @@ __device__ __forceinline__ E2m1Bf16ByteTable make_e2m1_bf16_byte_table(int expon
 // are cross-packed so each BF16x2 pair needs at most one mask and shift.
 template<int Pair>
 __device__ __forceinline__ void
-e2m1_prmt_bf16x4(
-    uint32_t packed, const E2m1Bf16ByteTable& table, uint32_t& first, uint32_t& second)
+e2m1_prmt_bf16x4(uint32_t packed, const E2m1Bf16ByteTable& table, uint32_t& first, uint32_t& second)
 {
     static_assert(Pair == 0 || Pair == 1);
     const uint32_t selector = (packed >> (16 * Pair)) & 0x7777u;
@@ -69,8 +68,7 @@ e2m1_prmt_bf16x4(
     }
 }
 
-__device__ __forceinline__ void
-e2m1_prmt_unpack_scaled(uint32_t packed, uint16_t exponent_pair, nv_bfloat16* out)
+__device__ __forceinline__ void e2m1_prmt_unpack_scaled(uint32_t packed, uint16_t exponent_pair, nv_bfloat16* out)
 {
     auto* h = reinterpret_cast<uint32_t*>(out);
     {

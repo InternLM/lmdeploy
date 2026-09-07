@@ -41,7 +41,16 @@ constexpr auto mxfp4_packer =
 const Family mxfp4{5, 190, kHalf, kHalf, 32, 8, 1, 1, true, true, supports_mxfp4, mxfp4_packer};
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1> class K>
+template<template<class Config_,
+                  int   Stages,
+                  Order Raster,
+                  class PolicyA,
+                  class PolicyB,
+                  bool SplitK,
+                  int  EpiM      = -1,
+                  int  EpiN      = -1,
+                  int  GroupAxis = -1>
+         class K>
 void register_g32(Collector& c)
 {
     {
@@ -91,7 +100,16 @@ void register_g32(Collector& c)
 }
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1> class K>
+template<template<class Config_,
+                  int   Stages,
+                  Order Raster,
+                  class PolicyA,
+                  class PolicyB,
+                  bool SplitK,
+                  int  EpiM      = -1,
+                  int  EpiN      = -1,
+                  int  GroupAxis = -1>
+         class K>
 void register_g128(Collector& c)
 {
     {
@@ -127,7 +145,16 @@ void register_g128(Collector& c)
 }
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1> class K>
+template<template<class Config_,
+                  int   Stages,
+                  Order Raster,
+                  class PolicyA,
+                  class PolicyB,
+                  bool SplitK,
+                  int  EpiM      = -1,
+                  int  EpiN      = -1,
+                  int  GroupAxis = -1>
+         class K>
 void register_mxfp4(Collector& c)
 {
     {
@@ -139,9 +166,9 @@ void register_mxfp4(Collector& c)
     }
 }
 
-using U4_G32 = Config_U4_d<32>;
+using U4_G32  = Config_U4_d<32>;
 using U4_G128 = Config_U4_d<128>;
-using MXFP4 = Config_MXF4;
+using MXFP4   = Config_MXF4;
 
 Registrar reg[]{
     {u4_g32, register_g32<U4_G32::Type>},

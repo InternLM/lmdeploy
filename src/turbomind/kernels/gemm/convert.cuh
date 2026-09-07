@@ -9,6 +9,10 @@
 
 #include "src/turbomind/kernels/attention/quantization.h"
 
+#include "src/turbomind/kernels/gemm/arch/operand_simt.h"
+#include "src/turbomind/kernels/gemm/arch/operand_sm70_s884.h"
+#include "src/turbomind/kernels/gemm/arch/operand_sm80_s16816.h"
+#include "src/turbomind/kernels/gemm/convert.h"
 #include "src/turbomind/kernels/gemm/cp_async.h"
 #include "src/turbomind/kernels/gemm/format.h"
 #include "src/turbomind/kernels/gemm/iterator_sm70.h"
@@ -17,10 +21,6 @@
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
-#include "src/turbomind/kernels/gemm/arch/operand_simt.h"
-#include "src/turbomind/kernels/gemm/arch/operand_sm70_s884.h"
-#include "src/turbomind/kernels/gemm/arch/operand_sm80_s16816.h"
-#include "src/turbomind/kernels/gemm/convert.h"
 
 template<class T>
 __device__ void print_type(T)
@@ -303,11 +303,8 @@ struct LayoutConverterImpl: public LayoutConverter {
         pack  = mma_tag | op_tag | pack_num;
     }
 
-    int Convert(const void*         S,
-                const MatrixLayout& Sdesc_,
-                void*               D,
-                MatrixLayout&       Ddesc,
-                cudaStream_t        stream) const override
+    int
+    Convert(const void* S, const MatrixLayout& Sdesc_, void* D, MatrixLayout& Ddesc, cudaStream_t stream) const override
     {
         const bool   trans = op_tag == OPERAND_B || op_tag == OPERAND_V;
         MatrixLayout Sdesc = trans ? transpose(Sdesc_) : Sdesc_;
@@ -318,7 +315,7 @@ struct LayoutConverterImpl: public LayoutConverter {
         Convert_v2_Impl<Config<Operand, Dtype, pack_num>>(S, Sdesc, D, Ddesc, stream);
 
         constexpr Pack kPack = mma_tag | op_tag | pack_num;
-        Ddesc.ld = mk2cs<order_>(Packing_v2<kPack, order_>::apply({Sdesc.rows, Sdesc.cols})).x;
+        Ddesc.ld             = mk2cs<order_>(Packing_v2<kPack, order_>::apply({Sdesc.rows, Sdesc.cols})).x;
         return 0;
     }
 };
@@ -326,9 +323,9 @@ struct LayoutConverterImpl: public LayoutConverter {
 template<class Arch, Order order, uint32_t pack, class Stype, class Dtype>
 const LayoutConverter& GetImpl()
 {
-    constexpr auto mma      = get_mma_tag(pack);
-    constexpr auto operand  = get_operand_tag(pack);
-    constexpr auto pack_num = get_pack_num(pack);
+    constexpr auto                                                                      mma     = get_mma_tag(pack);
+    constexpr auto                                                                      operand = get_operand_tag(pack);
+    constexpr auto                                                                      pack_num = get_pack_num(pack);
     static const LayoutConverterImpl<Arch, order, mma, operand, pack_num, Stype, Dtype> impl;
     return impl;
 }

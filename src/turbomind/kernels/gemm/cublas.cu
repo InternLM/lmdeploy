@@ -285,13 +285,9 @@ public:
         Tensor      dispatched_A;
         const void* input = A;
         if (Adesc.idxs) {
-            Tensor source{const_cast<void*>(A),
-                          {{Adesc.rows, Adesc.cols}, {Adesc.ld, 1}},
-                          Adesc.type,
-                          kDEVICE};
+            Tensor source{const_cast<void*>(A), {{Adesc.rows, Adesc.cols}, {Adesc.ld, 1}}, Adesc.type, kDEVICE};
             dispatched_A = Tensor{{Adesc.rows, Adesc.cols}, Adesc.type, kDEVICE};
-            invokeMoeDispatch(
-                dispatched_A, source, Adesc.idxs, Adesc.rows, Adesc.offsets + group_count, stream);
+            invokeMoeDispatch(dispatched_A, source, Adesc.idxs, Adesc.rows, Adesc.offsets + group_count, stream);
             input = dispatched_A.raw_data();
         }
 
@@ -539,51 +535,42 @@ void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t)
 {
     TM_CHECK(!bridge);
     TM_CHECK_EQ(linear.weight.dtype(), Dtype);
-    linear.k_desc = MatrixLayout{Dtype,
-                                 kRowMajor,
-                                 linear.input_dim,
-                                 linear.output_dim,
-                                 linear.output_dim,
-                                 0,
-                                 0,
-                                 nullptr,
-                                 nullptr};
+    linear.k_desc =
+        MatrixLayout{Dtype, kRowMajor, linear.input_dim, linear.output_dim, linear.output_dim, 0, 0, nullptr, nullptr};
     linear.q_desc = {};
 }
 
-const Family dense_f16{100, 90, kHalf, kHalf, 1, 1, 1, 1,
-                       false, false, supports<kHalf, false>, pack<kHalf, false>};
-const Family dense_bf16{101, 100, kBfloat16, kBfloat16, 1, 1, 1, 1,
-                        false, false, supports<kBfloat16, false>, pack<kBfloat16, false>};
-const Family grouped_f16{102, 90, kHalf, kHalf, 1, 1, 1, 1,
-                         false, true, supports<kHalf, true>, pack<kHalf, true>, 0, {}, false};
-const Family grouped_bf16{103, 100, kBfloat16, kBfloat16, 1, 1, 1, 1,
-                          false, true, supports<kBfloat16, true>, pack<kBfloat16, true>, 0, {}, false};
-const Family f16_f32{104, 90, kHalf, kFloat, 1, 1, 1, 1,
-                     false, false, supports<kHalf, false>, pack<kHalf, false>};
-const Family bf16_f32{105, 100, kBfloat16, kFloat, 1, 1, 1, 1,
-                      false, false, supports<kBfloat16, false>, pack<kBfloat16, false>};
+const Family dense_f16{100, 90, kHalf, kHalf, 1, 1, 1, 1, false, false, supports<kHalf, false>, pack<kHalf, false>};
+const Family dense_bf16{
+    101, 100, kBfloat16, kBfloat16, 1, 1, 1, 1, false, false, supports<kBfloat16, false>, pack<kBfloat16, false>};
+const Family grouped_f16{
+    102, 90, kHalf, kHalf, 1, 1, 1, 1, false, true, supports<kHalf, true>, pack<kHalf, true>, 0, {}, false};
+const Family grouped_bf16{103,
+                          100,
+                          kBfloat16,
+                          kBfloat16,
+                          1,
+                          1,
+                          1,
+                          1,
+                          false,
+                          true,
+                          supports<kBfloat16, true>,
+                          pack<kBfloat16, true>,
+                          0,
+                          {},
+                          false};
+const Family f16_f32{104, 90, kHalf, kFloat, 1, 1, 1, 1, false, false, supports<kHalf, false>, pack<kHalf, false>};
+const Family bf16_f32{
+    105, 100, kBfloat16, kFloat, 1, 1, 1, 1, false, false, supports<kBfloat16, false>, pack<kBfloat16, false>};
 
-Registrar reg[]{
-{dense_f16, [](Collector& c) {
-    add_cublas(c);
-}},
-{dense_bf16, [](Collector& c) {
-    add_cublas(c, bf16_available);
-}},
-{f16_f32, [](Collector& c) {
-    add_cublas(c);
-}},
-{bf16_f32, [](Collector& c) {
-    add_cublas(c, bf16_available);
-}},
+Registrar reg[]
+{
+    {dense_f16, [](Collector& c) { add_cublas(c); }}, {dense_bf16, [](Collector& c) { add_cublas(c, bf16_available); }},
+        {f16_f32, [](Collector& c) { add_cublas(c); }}, {bf16_f32, [](Collector& c) { add_cublas(c, bf16_available); }},
 #if defined(ENABLE_CUBLAS_GROUPED)
-{grouped_f16, [](Collector& c) {
-    add<CublasGroupedKernel>(c);
-}},
-{grouped_bf16, [](Collector& c) {
-    add<CublasGroupedKernel>(c);
-}},
+        {grouped_f16, [](Collector& c) { add<CublasGroupedKernel>(c); }},
+        {grouped_bf16, [](Collector& c) { add<CublasGroupedKernel>(c); }},
 #endif
 };
 }  // namespace

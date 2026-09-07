@@ -3,8 +3,8 @@
 #include <cuda.h>
 
 #include "src/turbomind/kernels/gemm/convert.h"
-#include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/kernel/e4m3.h"
+#include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
 #include "src/turbomind/models/linear_weight.h"
 
@@ -75,7 +75,17 @@ const Family e4m3{32,
                   kBfloat16};
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0> class K>
+template<template<class Config_,
+                  int      Stages,
+                  Order    Raster,
+                  Striding Mode,
+                  bool     Silu         = false,
+                  class ClusterShape    = Shape<1, 1>,
+                  int  MmaN             = 0,
+                  bool SeparateMmaAtoms = false,
+                  int  EpiM             = 0,
+                  int  EpiStages        = 0>
+         class K>
 void register_kernels(Collector& c)
 {
     ////////////////////////////////// flat //////////////////////////////////

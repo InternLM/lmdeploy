@@ -28,7 +28,7 @@ public:
     }
 
 private:
-    const Family& family_;
+    const Family&                        family_;
     std::vector<std::unique_ptr<Kernel>> kernels_;
 };
 

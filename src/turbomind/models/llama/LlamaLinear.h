@@ -51,9 +51,10 @@ public:
                  Ref<Tensor>           output,
                  Ref<Tensor>           output_scales);
 
-    gemm::OutputSpec GetOutputSpec(const Tensor& input, const LinearWeight& weight, const Buffer_<int>& indices = {}) const;
+    gemm::OutputSpec
+    GetOutputSpec(const Tensor& input, const LinearWeight& weight, const Buffer_<int>& indices = {}) const;
 
-    std::optional<gemm::ExecPlan> GetExecPlan(const Tensor& input,
+    std::optional<gemm::ExecPlan> GetExecPlan(const Tensor&       input,
                                               const LinearWeight& weight,
                                               const Buffer_<int>& indices = {},
                                               const Buffer_<int>& offsets = {});

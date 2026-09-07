@@ -7,9 +7,9 @@
 #include "src/turbomind/kernels/gemm/arch/operand_sm80_s16816.h"
 #include "src/turbomind/kernels/gemm/epilogue.h"
 #include "src/turbomind/kernels/gemm/gemm_universal.h"
+#include "src/turbomind/kernels/gemm/iterator_sm70.h"
 #include "src/turbomind/kernels/gemm/kernel/config.h"
 #include "src/turbomind/kernels/gemm/kernel_impl.h"
-#include "src/turbomind/kernels/gemm/iterator_sm70.h"
 #include "src/turbomind/kernels/gemm/mainloop_sm70.h"
 #include "src/turbomind/kernels/gemm/scheduler_sm70.cuh"
 #include "src/turbomind/kernels/gemm/thread_group_map.h"
@@ -32,7 +32,7 @@ template<Order mma_iter_order,
          class V,
          Order order_C,
          class Tc,
-         int   group_axis>
+         int group_axis>
 struct Sm75_s16816 {
 
     static_assert(A::SmemCopyAtom::K == B::SmemCopyAtom::K);
@@ -47,9 +47,18 @@ struct Sm75_s16816 {
     static constexpr auto MODE_B = group_axis == 1 ? Striding::kIndexed : MODE_;
     static constexpr auto MODE_C = MODE_;
 
-    template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int GroupSizeU = 1, int GroupSizeV = 1, int EpiM = -1, int EpiN = -1>
+    template<class Config_,
+             int   Stages,
+             Order Raster,
+             class PolicyA,
+             class PolicyB,
+             bool SplitK,
+             int  GroupSizeU = 1,
+             int  GroupSizeV = 1,
+             int  EpiM       = -1,
+             int  EpiN       = -1>
     struct Type {
-        using Tile = typename Config_::Tile;
+        using Tile   = typename Config_::Tile;
         using Groups = typename Config_::Groups;
 
         static constexpr int CTA_M = Tile::M;
@@ -101,29 +110,117 @@ struct Sm75_s16816 {
 
 template<int GroupSize>
 struct Config_U4_d {
-    template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1>
-    using Type = typename Sm75_s16816<kColMajor, Operand_A<half, kRowMajor>, Transform_Default, VoidOperand, Operand_B_Pack<uint4_t, kColMajor, 2>, Transform_HMMA_16816<1, 0>, Operand_UV_Pack<uint32_t, true>, kRowMajor, half, -1>::template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 1, GroupSize, EpiM, EpiN>::Kernel;
+    template<class Config_,
+             int   Stages,
+             Order Raster,
+             class PolicyA,
+             class PolicyB,
+             bool SplitK,
+             int  EpiM = -1,
+             int  EpiN = -1>
+    using Type = typename Sm75_s16816<
+        kColMajor,
+        Operand_A<half, kRowMajor>,
+        Transform_Default,
+        VoidOperand,
+        Operand_B_Pack<uint4_t, kColMajor, 2>,
+        Transform_HMMA_16816<1, 0>,
+        Operand_UV_Pack<uint32_t, true>,
+        kRowMajor,
+        half,
+        -1>::template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 1, GroupSize, EpiM, EpiN>::Kernel;
 };
 
 template<int GroupSize>
 struct Config_U4_g {
-    template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1>
-    using Type = typename Sm75_s16816<kColMajor, Operand_A<half, kRowMajor>, Transform_Default, VoidOperand, Operand_B_Pack<uint4_t, kRowMajor, 2>, Transform_HMMA_16816<1, 0>, Operand_UV_Pack<uint32_t, true>, kRowMajor, half, 0>::template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 1, GroupSize, EpiM, EpiN>::Kernel;
+    template<class Config_,
+             int   Stages,
+             Order Raster,
+             class PolicyA,
+             class PolicyB,
+             bool SplitK,
+             int  EpiM = -1,
+             int  EpiN = -1>
+    using Type = typename Sm75_s16816<
+        kColMajor,
+        Operand_A<half, kRowMajor>,
+        Transform_Default,
+        VoidOperand,
+        Operand_B_Pack<uint4_t, kRowMajor, 2>,
+        Transform_HMMA_16816<1, 0>,
+        Operand_UV_Pack<uint32_t, true>,
+        kRowMajor,
+        half,
+        0>::template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 1, GroupSize, EpiM, EpiN>::Kernel;
 };
 
 struct Config_MXF4 {
-    template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1>
-    using Type = typename Sm75_s16816<kColMajor, Operand_A_Pack<fp4_e2m1_t, kColMajor, 1>, Transform_HMMA_16816<0, 1>, Operand_UV_Pack<uint8_t, false>, Operand_B<half_t, kRowMajor>, Transform_Default, VoidOperand, kColMajor, half_t, GroupAxis>::template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 32, 1, EpiM, EpiN>::Kernel;
+    template<class Config_,
+             int   Stages,
+             Order Raster,
+             class PolicyA,
+             class PolicyB,
+             bool SplitK,
+             int  EpiM      = -1,
+             int  EpiN      = -1,
+             int  GroupAxis = -1>
+    using Type = typename Sm75_s16816<
+        kColMajor,
+        Operand_A_Pack<fp4_e2m1_t, kColMajor, 1>,
+        Transform_HMMA_16816<0, 1>,
+        Operand_UV_Pack<uint8_t, false>,
+        Operand_B<half_t, kRowMajor>,
+        Transform_Default,
+        VoidOperand,
+        kColMajor,
+        half_t,
+        GroupAxis>::template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 32, 1, EpiM, EpiN>::Kernel;
 };
 
 struct Config_E4M3 {
-    template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1>
-    using Type = typename Sm75_s16816<kColMajor, Operand_A_Pack<fp8_e4m3_t, kColMajor, 1>, Transform_HMMA_16816<0, 1>, Operand_UV_Pack<uint16_t, false>, Operand_B<half_t, kRowMajor>, Transform_Default, VoidOperand, kColMajor, half_t, GroupAxis>::template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 128, 1, EpiM, EpiN>::Kernel;
+    template<class Config_,
+             int   Stages,
+             Order Raster,
+             class PolicyA,
+             class PolicyB,
+             bool SplitK,
+             int  EpiM      = -1,
+             int  EpiN      = -1,
+             int  GroupAxis = -1>
+    using Type = typename Sm75_s16816<
+        kColMajor,
+        Operand_A_Pack<fp8_e4m3_t, kColMajor, 1>,
+        Transform_HMMA_16816<0, 1>,
+        Operand_UV_Pack<uint16_t, false>,
+        Operand_B<half_t, kRowMajor>,
+        Transform_Default,
+        VoidOperand,
+        kColMajor,
+        half_t,
+        GroupAxis>::template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 128, 1, EpiM, EpiN>::Kernel;
 };
 
 struct Config_F16 {
-    template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1>
-    using Type = typename Sm75_s16816<kColMajor, Operand_A<half, kRowMajor>, Transform_Default, VoidOperand, Operand_B_Pack<half, kRowMajor, 1>, Transform_Default, VoidOperand, kRowMajor, half, GroupAxis>::template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 1, 1, EpiM, EpiN>::Kernel;
+    template<class Config_,
+             int   Stages,
+             Order Raster,
+             class PolicyA,
+             class PolicyB,
+             bool SplitK,
+             int  EpiM      = -1,
+             int  EpiN      = -1,
+             int  GroupAxis = -1>
+    using Type = typename Sm75_s16816<
+        kColMajor,
+        Operand_A<half, kRowMajor>,
+        Transform_Default,
+        VoidOperand,
+        Operand_B_Pack<half, kRowMajor, 1>,
+        Transform_Default,
+        VoidOperand,
+        kRowMajor,
+        half,
+        GroupAxis>::template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 1, 1, EpiM, EpiN>::Kernel;
 };
 
 }  // namespace sm75_s16816

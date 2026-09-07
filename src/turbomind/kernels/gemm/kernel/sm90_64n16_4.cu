@@ -45,23 +45,46 @@ void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
     linear.scales        = std::move(packed_q);
     linear.zeros         = {};
     linear.q_desc        = transpose(MatrixLayout{kUint8,
-                                                  kColMajor,
-                                                  linear.output_dim,
-                                                  linear.input_dim / GroupSize,
-                                                  linear.output_dim / kSm90MixedFragmentN
-                                                      * kSm90U4QparamValuesFragment,
-                                                  kSm90MixedQParamPack,
-                                                  0,
-                                                  nullptr,
-                                                  nullptr});
+                                           kColMajor,
+                                           linear.output_dim,
+                                           linear.input_dim / GroupSize,
+                                           linear.output_dim / kSm90MixedFragmentN * kSm90U4QparamValuesFragment,
+                                           kSm90MixedQParamPack,
+                                           0,
+                                           nullptr,
+                                           nullptr});
     linear.weight_format = DataFormat{kUint4, {GroupSize, 1}, Dtype, kUint4};
 }
 
-const Family bf16{29, 250, kBfloat16, kBfloat16, 64, 128, 128, 1, true, true, supports_u4<32, kBfloat16>, pack<32, kBfloat16>, 64, kBfloat16};
-const Family f16{35, 250, kHalf, kHalf, 64, 128, 128, 1, true, true, supports_u4<32, kHalf>, pack<32, kHalf>, 64, kHalf};
+const Family bf16{29,
+                  250,
+                  kBfloat16,
+                  kBfloat16,
+                  64,
+                  128,
+                  128,
+                  1,
+                  true,
+                  true,
+                  supports_u4<32, kBfloat16>,
+                  pack<32, kBfloat16>,
+                  64,
+                  kBfloat16};
+const Family f16{
+    35, 250, kHalf, kHalf, 64, 128, 128, 1, true, true, supports_u4<32, kHalf>, pack<32, kHalf>, 64, kHalf};
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0> class K>
+template<template<class Config_,
+                  int      Stages,
+                  Order    Raster,
+                  Striding Mode,
+                  bool     Silu         = false,
+                  class ClusterShape    = Shape<1, 1>,
+                  int  MmaN             = 0,
+                  bool SeparateMmaAtoms = false,
+                  int  EpiM             = 0,
+                  int  EpiStages        = 0>
+         class K>
 void register_kernels(Collector& c)
 {
     ////////////////////////////////// flat //////////////////////////////////

@@ -46,44 +46,32 @@ struct FoldedEpiStsmAtoms<4> {
 };
 
 template<int Multicast, int BoxM, int BoxK, class Element>
-__device__ __forceinline__ void load_mxfp4_folded_tma(const cute::TmaDescriptor* desc,
-                                                      uint64_t*                  barrier,
-                                                      Element*                   smem,
-                                                      int                        coord_k,
-                                                      int                        coord_m,
-                                                      uint16_t                   multicast_mask,
-                                                      uint64_t cache_hint =
-                                                          uint64_t(cute::TMA::CacheHintSm90::EVICT_NORMAL))
+__device__ __forceinline__ void
+load_mxfp4_folded_tma(const cute::TmaDescriptor* desc,
+                      uint64_t*                  barrier,
+                      Element*                   smem,
+                      int                        coord_k,
+                      int                        coord_m,
+                      uint16_t                   multicast_mask,
+                      uint64_t                   cache_hint = uint64_t(cute::TMA::CacheHintSm90::EVICT_NORMAL))
 {
     constexpr int kNumBits = BoxM * BoxK * int(cute::sizeof_bits_v<Element>);
     constexpr int kNumVals = BoxM * BoxK;
-    using Aux = cute::AuxTmaParams<cute::Stride<cute::_1, cute::_1>,
-                                   cute::Layout<cute::Shape<cute::_1>>,
-                                   cute::Swizzle<0, 4, 3>>;
-    auto gmem = cute::make_tensor(
-        cute::make_inttuple_iter(coord_k, coord_m), cute::Layout<cute::Int<kNumVals>>{});
-    auto dst = cute::make_tensor(
-        cute::make_smem_ptr(smem), cute::Layout<cute::Int<kNumVals>>{});
+    using Aux              = cute::
+        AuxTmaParams<cute::Stride<cute::_1, cute::_1>, cute::Layout<cute::Shape<cute::_1>>, cute::Swizzle<0, 4, 3>>;
+    auto gmem = cute::make_tensor(cute::make_inttuple_iter(coord_k, coord_m), cute::Layout<cute::Int<kNumVals>>{});
+    auto dst  = cute::make_tensor(cute::make_smem_ptr(smem), cute::Layout<cute::Int<kNumVals>>{});
     if constexpr (Multicast > 1) {
-        using Traits = cute::Copy_Traits<
-            cute::SM90_TMA_LOAD_MULTICAST, cute::Int<kNumBits>, Aux>;
-        using Atom = cute::Copy_Atom<Traits, Element>;
+        using Traits = cute::Copy_Traits<cute::SM90_TMA_LOAD_MULTICAST, cute::Int<kNumBits>, Aux>;
+        using Atom   = cute::Copy_Atom<Traits, Element>;
         Atom atom{Traits{cute::TmaDescriptor{}, Aux{}}};
-        cute::copy(
-            atom.with(desc,
-                      *barrier,
-                      multicast_mask,
-                      cute::TMA::CacheHintSm90(cache_hint)),
-            gmem,
-            dst);
+        cute::copy(atom.with(desc, *barrier, multicast_mask, cute::TMA::CacheHintSm90(cache_hint)), gmem, dst);
     }
     else {
         using Traits = cute::Copy_Traits<cute::SM90_TMA_LOAD, cute::Int<kNumBits>, Aux>;
-        using Atom = cute::Copy_Atom<Traits, Element>;
+        using Atom   = cute::Copy_Atom<Traits, Element>;
         Atom atom{Traits{cute::TmaDescriptor{}, Aux{}}};
-        cute::copy(atom.with(desc, *barrier, 0, cute::TMA::CacheHintSm90(cache_hint)),
-                   gmem,
-                   dst);
+        cute::copy(atom.with(desc, *barrier, 0, cute::TMA::CacheHintSm90(cache_hint)), gmem, dst);
     }
 }
 
@@ -106,12 +94,8 @@ __device__ __forceinline__ void copy_mxfp4_folded_tma_desc(CUtensorMap* dst, con
     }
 }
 
-__device__ __forceinline__ void replace_mxfp4_folded_tma_addr_dim(
-    CUtensorMap* desc,
-    void* global_addr,
-    int dim_idx,
-    int dim,
-    uint64_t stride_bytes)
+__device__ __forceinline__ void
+replace_mxfp4_folded_tma_addr_dim(CUtensorMap* desc, void* global_addr, int dim_idx, int dim, uint64_t stride_bytes)
 {
     const uint32_t smem_addr = cast_smem_ptr_to_uint(desc);
     asm volatile("tensormap.replace.tile.global_address.shared::cta.b1024.b64 [%0], %1;"
@@ -144,15 +128,14 @@ __device__ __forceinline__ void publish_mxfp4_folded_tma_desc(CUtensorMap* dst, 
 }
 
 template<int N>
-__device__ __forceinline__ void
-rebase_publish_mxfp4_folded_tma_descs(CUtensorMap*                 dst,
-                                      CUtensorMap*                 smem,
-                                      Array<const CUtensorMap*, N> templates,
-                                      Array<void*, N>              addrs,
-                                      Array<int, N>                dims,
-                                      Array<int, N>                dim_idxs,
-                                      Array<uint64_t, N>           strides,
-                                      int                          lane)
+__device__ __forceinline__ void rebase_publish_mxfp4_folded_tma_descs(CUtensorMap*                 dst,
+                                                                      CUtensorMap*                 smem,
+                                                                      Array<const CUtensorMap*, N> templates,
+                                                                      Array<void*, N>              addrs,
+                                                                      Array<int, N>                dims,
+                                                                      Array<int, N>                dim_idxs,
+                                                                      Array<uint64_t, N>           strides,
+                                                                      int                          lane)
 {
     CUTE_UNROLL
     for (int i = 0; i < N; ++i) {
@@ -162,8 +145,7 @@ rebase_publish_mxfp4_folded_tma_descs(CUtensorMap*                 dst,
     if (lane == 0) {
         CUTE_UNROLL
         for (int i = 0; i < N; ++i) {
-            replace_mxfp4_folded_tma_addr_dim(
-                &smem[i], addrs[i], dim_idxs[i], dims[i], strides[i]);
+            replace_mxfp4_folded_tma_addr_dim(&smem[i], addrs[i], dim_idxs[i], dims[i], strides[i]);
         }
     }
     __syncwarp();
@@ -178,27 +160,27 @@ rebase_publish_mxfp4_folded_tma_descs(CUtensorMap*                 dst,
 
 template<int kAlignmentU, Striding kStridingA>
 __global__ void __launch_bounds__(32, 1)
-prepare_moe_tma_descs_sm90_mxfp4_fp8_folded(const __grid_constant__ CUtensorMap tm_a,
-                                     const __grid_constant__ CUtensorMap tm_b,
-                                     const __grid_constant__ CUtensorMap tm_v_shift,
-                                     const __grid_constant__ CUtensorMap tm_u,
-                                     const __grid_constant__ CUtensorMap tm_c,
-                                     MatrixParam                         param_A,
-                                     MatrixParam                         param_B,
-                                     MatrixParam                         param_V,
-                                     MatrixParam                         param_U,
-                                     MatrixParam                         param_C,
-                                     bool                                fuse_silu,
-                                     CUtensorMap*                        out,
-                                     int*                                offsets,
-                                     int                                 M_total)
+    prepare_moe_tma_descs_sm90_mxfp4_fp8_folded(const __grid_constant__ CUtensorMap tm_a,
+                                                const __grid_constant__ CUtensorMap tm_b,
+                                                const __grid_constant__ CUtensorMap tm_v_shift,
+                                                const __grid_constant__ CUtensorMap tm_u,
+                                                const __grid_constant__ CUtensorMap tm_c,
+                                                MatrixParam                         param_A,
+                                                MatrixParam                         param_B,
+                                                MatrixParam                         param_V,
+                                                MatrixParam                         param_U,
+                                                MatrixParam                         param_C,
+                                                bool                                fuse_silu,
+                                                CUtensorMap*                        out,
+                                                int*                                offsets,
+                                                int                                 M_total)
 {
     static_assert(kStridingA == Striding::kBlocked || kStridingA == Striding::kIndexed);
-    const int g = int(blockIdx.x);
-    const int lane = int(threadIdx.x) & 31;
-    const int m0 = param_A.offsets ? __ldg(param_A.offsets + g) : 0;
-    const int m1 = param_A.offsets ? __ldg(param_A.offsets + g + 1) : M_total;
-    const int M = m1 - m0;
+    const int g      = int(blockIdx.x);
+    const int lane   = int(threadIdx.x) & 31;
+    const int m0     = param_A.offsets ? __ldg(param_A.offsets + g) : 0;
+    const int m1     = param_A.offsets ? __ldg(param_A.offsets + g + 1) : M_total;
+    const int M      = m1 - m0;
     const int M_desc = M > 0 ? M : 1;
     if (lane == 0) {
         offsets[g] = m0;
@@ -212,43 +194,41 @@ prepare_moe_tma_descs_sm90_mxfp4_fp8_folded(const __grid_constant__ CUtensorMap 
     if constexpr (kStridingA == Striding::kBlocked) {
         constexpr int kNum = 5;
         __shared__ __align__(128) CUtensorMap smem[kNum];
-        const auto a = resolve<__nv_fp8_e4m3, Striding::kBlocked>(param_A, g);
-        const int beg_u = m0 / kAlignmentU * kAlignmentU;
-        const int end_u = round_up(m1, kAlignmentU);
-        const auto c_bf16 = resolve<nv_bfloat16, Striding::kBlocked>(param_C, g);
-        const auto c_fp8 = resolve<__nv_fp8_e4m3, Striding::kBlocked>(param_C, g);
-        Array<const CUtensorMap*, kNum> templates{&tm_a, &tm_b, &tm_v_shift, &tm_u, &tm_c};
-        Array<void*, kNum> addrs{a.ptr.ptr,
+        const auto                            a      = resolve<__nv_fp8_e4m3, Striding::kBlocked>(param_A, g);
+        const int                             beg_u  = m0 / kAlignmentU * kAlignmentU;
+        const int                             end_u  = round_up(m1, kAlignmentU);
+        const auto                            c_bf16 = resolve<nv_bfloat16, Striding::kBlocked>(param_C, g);
+        const auto                            c_fp8  = resolve<__nv_fp8_e4m3, Striding::kBlocked>(param_C, g);
+        Array<const CUtensorMap*, kNum>       templates{&tm_a, &tm_b, &tm_v_shift, &tm_u, &tm_c};
+        Array<void*, kNum>                    addrs{a.ptr.ptr,
                                  b.ptr,
                                  v.ptr,
                                  static_cast<float*>(param_U.ptr) + beg_u,
                                  fuse_silu ? c_fp8.ptr.ptr : c_bf16.ptr.ptr};
-        Array<int, kNum> dims{M_desc, -1, -1, end_u - beg_u, M_desc};
-        Array<int, kNum> dim_idxs{1, 1, 1, 0, 1};
-        Array<uint64_t, kNum> strides{
-            uint64_t(a.ptr.stride) * sizeof(__nv_fp8_e4m3),
-            0,
-            0,
-            0,
-            uint64_t(fuse_silu ? c_fp8.ptr.stride : c_bf16.ptr.stride)
-                * (fuse_silu ? sizeof(__nv_fp8_e4m3) : sizeof(nv_bfloat16))};
+        Array<int, kNum>                      dims{M_desc, -1, -1, end_u - beg_u, M_desc};
+        Array<int, kNum>                      dim_idxs{1, 1, 1, 0, 1};
+        Array<uint64_t, kNum>                 strides{uint64_t(a.ptr.stride) * sizeof(__nv_fp8_e4m3),
+                                      0,
+                                      0,
+                                      0,
+                                      uint64_t(fuse_silu ? c_fp8.ptr.stride : c_bf16.ptr.stride)
+                                          * (fuse_silu ? sizeof(__nv_fp8_e4m3) : sizeof(nv_bfloat16))};
         detail::rebase_publish_mxfp4_folded_tma_descs<kNum>(
             out + g * kNum, smem, templates, addrs, dims, dim_idxs, strides, lane);
     }
     else {
         constexpr int kNum = 3;
         __shared__ __align__(128) CUtensorMap smem[kNum];
-        const auto c_bf16 = resolve<nv_bfloat16, Striding::kBlocked>(param_C, g);
-        const auto c_fp8 = resolve<__nv_fp8_e4m3, Striding::kBlocked>(param_C, g);
-        Array<const CUtensorMap*, kNum> templates{&tm_b, &tm_v_shift, &tm_c};
-        Array<void*, kNum> addrs{b.ptr, v.ptr, fuse_silu ? c_fp8.ptr.ptr : c_bf16.ptr.ptr};
-        Array<int, kNum> dims{-1, -1, M_desc};
-        Array<int, kNum> dim_idxs{1, 1, 1};
-        Array<uint64_t, kNum> strides{
-            0,
-            0,
-            uint64_t(fuse_silu ? c_fp8.ptr.stride : c_bf16.ptr.stride)
-                * (fuse_silu ? sizeof(__nv_fp8_e4m3) : sizeof(nv_bfloat16))};
+        const auto                            c_bf16 = resolve<nv_bfloat16, Striding::kBlocked>(param_C, g);
+        const auto                            c_fp8  = resolve<__nv_fp8_e4m3, Striding::kBlocked>(param_C, g);
+        Array<const CUtensorMap*, kNum>       templates{&tm_b, &tm_v_shift, &tm_c};
+        Array<void*, kNum>                    addrs{b.ptr, v.ptr, fuse_silu ? c_fp8.ptr.ptr : c_bf16.ptr.ptr};
+        Array<int, kNum>                      dims{-1, -1, M_desc};
+        Array<int, kNum>                      dim_idxs{1, 1, 1};
+        Array<uint64_t, kNum>                 strides{0,
+                                      0,
+                                      uint64_t(fuse_silu ? c_fp8.ptr.stride : c_bf16.ptr.stride)
+                                          * (fuse_silu ? sizeof(__nv_fp8_e4m3) : sizeof(nv_bfloat16))};
         detail::rebase_publish_mxfp4_folded_tma_descs<kNum>(
             out + g * kNum, smem, templates, addrs, dims, dim_idxs, strides, lane);
     }
@@ -257,25 +237,32 @@ prepare_moe_tma_descs_sm90_mxfp4_fp8_folded(const __grid_constant__ CUtensorMap 
 // Native SM90 E4M3-K128 x MXFP4-K32 folded mainloop. Public (M,N,K) is
 // (tokens,output,K), while WGMMA sees packed weight as RS A and activation as
 // descriptor B, hence the hardware tile is (output,tokens,K).
-template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, class ClusterShape_, int MmaN, int EpilogueStages>
+template<class Config_,
+         int      Stages_,
+         Order    Raster,
+         Striding Mode,
+         bool     Silu,
+         class ClusterShape_,
+         int MmaN,
+         int EpilogueStages>
 struct GemmUniversalSm90MxFp4Fp8Folded {
-    using Tile = typename Config_::Tile;
-    using Groups = typename Config_::Groups;
-    using RegisterConfig = typename Config_::RegisterConfig;
-    using WGLayout = cute::Layout<cute::Shape<cute::Int<Groups::M>, cute::Int<Groups::N>>>;
-    using Arch = Sm90;
-    using Format = Sm90MxFp4Fp8FoldedFormat;
-    static constexpr Order kRasterOrder = Raster;
-    static constexpr bool is_grouped_gemm = Mode != Striding::kFlat;
-    static constexpr bool kSupportsFusedSilu = Silu;
-    static constexpr Striding kStridingA = Mode;
-    static constexpr Striding kStridingB = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
-    static constexpr Striding kStridingC = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
-    static constexpr bool kIndexedGather = Mode == Striding::kIndexed;
-    static constexpr int kMulticastA = ClusterShape_::N;
-    static constexpr int kMulticastB = ClusterShape_::M;
-    static constexpr int kMulticastU = is_grouped_gemm ? 1 : kMulticastA;
-    static constexpr int kClusterSize = kMulticastA * kMulticastB;
+    using Tile                                = typename Config_::Tile;
+    using Groups                              = typename Config_::Groups;
+    using RegisterConfig                      = typename Config_::RegisterConfig;
+    using WGLayout                            = cute::Layout<cute::Shape<cute::Int<Groups::M>, cute::Int<Groups::N>>>;
+    using Arch                                = Sm90;
+    using Format                              = Sm90MxFp4Fp8FoldedFormat;
+    static constexpr Order    kRasterOrder    = Raster;
+    static constexpr bool     is_grouped_gemm = Mode != Striding::kFlat;
+    static constexpr bool     kSupportsFusedSilu = Silu;
+    static constexpr Striding kStridingA         = Mode;
+    static constexpr Striding kStridingB         = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
+    static constexpr Striding kStridingC         = is_grouped_gemm ? Striding::kBlocked : Striding::kFlat;
+    static constexpr bool     kIndexedGather     = Mode == Striding::kIndexed;
+    static constexpr int      kMulticastA        = ClusterShape_::N;
+    static constexpr int      kMulticastB        = ClusterShape_::M;
+    static constexpr int      kMulticastU        = is_grouped_gemm ? 1 : kMulticastA;
+    static constexpr int      kClusterSize       = kMulticastA * kMulticastB;
 
     static_assert(!Silu || !is_grouped_gemm || Mode == Striding::kIndexed,
                   "grouped fused SiLU requires indexed gate/up activations");
@@ -284,95 +271,90 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
     static_assert(kClusterSize <= 2);
     static_assert(kClusterSize == 1 || (!is_grouped_gemm && Mode == Striding::kFlat));
 
-    static constexpr int TILE_M = Tile::M;
-    static constexpr int TILE_N = Tile::N;
-    static constexpr int TILE_K = 128;
-    static constexpr int Stages = Stages_;
-    static constexpr int kGroupSize = 32;
-    static constexpr int kOutputFragmentN = 64;
+    static constexpr int TILE_M                = Tile::M;
+    static constexpr int TILE_N                = Tile::N;
+    static constexpr int TILE_K                = 128;
+    static constexpr int Stages                = Stages_;
+    static constexpr int kGroupSize            = 32;
+    static constexpr int kOutputFragmentN      = 64;
     static constexpr int kGroupScaleTableCount = 7;
-    using Ta = __nv_fp8_e4m3;
-    using Tb = fp4_e2m1_t;
-    using Tv = uint8_t;
-    using Tc = nv_bfloat16;
-    using Tu = float;
+    using Ta                                   = __nv_fp8_e4m3;
+    using Tb                                   = fp4_e2m1_t;
+    using Tv                                   = uint8_t;
+    using Tc                                   = nv_bfloat16;
+    using Tu                                   = float;
 
     static constexpr int kComputeTileN = kSupportsFusedSilu ? TILE_N / 2 : TILE_N;
-    using Traits = GmmaMxFp4Fp8FoldedTraits<kComputeTileN, TILE_M, Stages, WGLayout, MmaN>;
-    using TiledMma = typename Traits::TiledMma;
-    using WgTiledMma = typename Traits::WgTiledMma;
-    using ElementMmaA = typename Traits::ElementA;
-    using AtomLayoutMNK = typename Traits::AtomLayoutMNK;
-    static constexpr int kAtomM = Traits::kAtomM;
-    static constexpr int kAtomN = Traits::kAtomN;
-    static constexpr int kRestM = Traits::kRestM;
-    static constexpr int kRestN = Traits::kRestN;
-    static_assert(kRestN >= 1 && kRestN <= 8,
-                  "registered WG1x2 tiles use at most eight residual-N atoms");
-    static constexpr int kOpM = Traits::kOpM;
-    static constexpr int kOpN = Traits::kOpN;
-    static constexpr int kOpK = Traits::kOpK;
+    using Traits                       = GmmaMxFp4Fp8FoldedTraits<kComputeTileN, TILE_M, Stages, WGLayout, MmaN>;
+    using TiledMma                     = typename Traits::TiledMma;
+    using WgTiledMma                   = typename Traits::WgTiledMma;
+    using ElementMmaA                  = typename Traits::ElementA;
+    using AtomLayoutMNK                = typename Traits::AtomLayoutMNK;
+    static constexpr int kAtomM        = Traits::kAtomM;
+    static constexpr int kAtomN        = Traits::kAtomN;
+    static constexpr int kRestM        = Traits::kRestM;
+    static constexpr int kRestN        = Traits::kRestN;
+    static_assert(kRestN >= 1 && kRestN <= 8, "registered WG1x2 tiles use at most eight residual-N atoms");
+    static constexpr int kOpM            = Traits::kOpM;
+    static constexpr int kOpN            = Traits::kOpN;
+    static constexpr int kOpK            = Traits::kOpK;
     static constexpr int kMathWarpGroups = Traits::kMathWarpgroups;
     static_assert(kMathWarpGroups == 2, "SM90 MXFP4 x FP8 kernels use two math warpgroups");
-    static constexpr int WARPGROUPS = kMathWarpGroups;
-    static constexpr int WARPGROUP_SIZE = 128;
-    static constexpr int kMathThreads = WARPGROUP_SIZE * kMathWarpGroups;
-    static constexpr int CTA_SIZE = kMathThreads + WARPGROUP_SIZE;
+    static constexpr int WARPGROUPS         = kMathWarpGroups;
+    static constexpr int WARPGROUP_SIZE     = 128;
+    static constexpr int kMathThreads       = WARPGROUP_SIZE * kMathWarpGroups;
+    static constexpr int CTA_SIZE           = kMathThreads + WARPGROUP_SIZE;
     static constexpr int kEpilogueBarrierId = 1;
     static constexpr int kProducerBarrierId = 8;
     static_assert(kEpilogueBarrierId + WARPGROUPS <= kProducerBarrierId);
-    using GatherCopyAtom = cute::Copy_Atom<cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<uint4>, Ta>;
-    static constexpr int kGatherVec = GatherCopyAtom::NumValSrc;
+    using GatherCopyAtom                 = cute::Copy_Atom<cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<uint4>, Ta>;
+    static constexpr int kGatherVec      = GatherCopyAtom::NumValSrc;
     static constexpr int kGatherThreadsK = TILE_K / kGatherVec;
-    static constexpr int kGatherVectors = TILE_M * kGatherThreadsK;
-    static constexpr int kGatherSlots = cute::ceil_div(kGatherVectors, WARPGROUP_SIZE);
+    static constexpr int kGatherVectors  = TILE_M * kGatherThreadsK;
+    static constexpr int kGatherSlots    = cute::ceil_div(kGatherVectors, WARPGROUP_SIZE);
     static_assert(kGatherVec * int(sizeof(Ta)) == 16);
 
     static constexpr int kProducerRegs = RegisterConfig::Producer;
-    static constexpr int kMathRegs = RegisterConfig::Math;
+    static constexpr int kMathRegs     = RegisterConfig::Math;
     static_assert(kProducerRegs % 8 == 0 && kMathRegs % 8 == 0);
     static_assert(kMathWarpGroups != 1 || kProducerRegs + kMathRegs <= 512);
     static_assert(kMathWarpGroups != 2 || kProducerRegs + 2 * kMathRegs <= 504);
     static_assert(kMathWarpGroups != 3 || kProducerRegs + 3 * kMathRegs <= 512);
 
-    using Cluster = arch::Cluster<ClusterShape_::M, ClusterShape_::N, kRowMajor>;
-    using ClusterShape = cute::Shape<cute::Int<kClusterSize>, cute::_1, cute::_1>;
-    using Scheduler = TileScheduler<Raster, Cluster, true, true, TILE_M, TILE_N, Stages, is_grouped_gemm>;
+    using Cluster          = arch::Cluster<ClusterShape_::M, ClusterShape_::N, kRowMajor>;
+    using ClusterShape     = cute::Shape<cute::Int<kClusterSize>, cute::_1, cute::_1>;
+    using Scheduler        = TileScheduler<Raster, Cluster, true, true, TILE_M, TILE_N, Stages, is_grouped_gemm>;
     using MainloopPipeline = cutlass::PipelineTmaAsync<Stages>;
-    using MainloopState = typename MainloopPipeline::PipelineState;
-    using PipelineStorage = typename MainloopPipeline::SharedStorage;
+    using MainloopState    = typename MainloopPipeline::PipelineState;
+    using PipelineStorage  = typename MainloopPipeline::SharedStorage;
 
-    using PackedRecordLayout = decltype(Traits::packed_layout_a_mk());
+    using PackedRecordLayout                      = decltype(Traits::packed_layout_a_mk());
     static constexpr int kPackedElementsPerRecord = cute::cosize_v<PackedRecordLayout>;
     static constexpr int kPackedInnerWords =
-        kPackedElementsPerRecord * cute::sizeof_bits_v<cute::uint4_t>
-        / cute::sizeof_bits_v<uint32_t>;
-    static constexpr int kPackedTmaInnerWords = 256;
-    static constexpr int kPackedTmaParts = kPackedInnerWords / kPackedTmaInnerWords;
-    static constexpr int kOutputFragments = TILE_N / kOutputFragmentN;
-    static constexpr int kK32FragmentsPerStage = Traits::kKBlocksPerStage;
-    static constexpr int kQparamShiftValuesPerFragment = kOutputFragmentN * kK32FragmentsPerStage;
-    static constexpr int kQparamBaseValuesPerFragment = 16;
-    static constexpr int kPackedWordsStage =
-        kPackedInnerWords * kOutputFragments * kK32FragmentsPerStage;
-    static constexpr int kPackedWeightStageBytes = kPackedWordsStage * sizeof(uint32_t);
-    static constexpr int kQparamShiftValuesStage = kQparamShiftValuesPerFragment * kOutputFragments;
-    static constexpr int kQparamBaseValuesStage = kQparamBaseValuesPerFragment * kOutputFragments;
-    static constexpr int kQparamShiftStageBytes = kQparamShiftValuesStage * sizeof(Tv);
-    static constexpr int kMxScaleStageBytes =
-        (kQparamShiftValuesStage + kQparamBaseValuesStage) * sizeof(Tv);
-    static constexpr int kActivationStageBytes = TILE_M * TILE_K * sizeof(Ta);
-    static constexpr int kAlignmentU = 16 / sizeof(float);
-    static constexpr int kBoxU = TILE_M + (is_grouped_gemm ? kAlignmentU : 0);
-    static constexpr int kTmaCountM = cute::ceil_div(TILE_M / kMulticastA, 256);
-    static constexpr int kTmaBoxM = TILE_M / (kMulticastA * kTmaCountM);
-    static constexpr int kUStageStride = round_up<int>(kBoxU, 128);
-    static constexpr int kActivationScaleStageBytes = kBoxU * sizeof(float);
-    static constexpr bool kFusedTileShape = TILE_N == 256 && kAtomN == 1 && kRestN == 1
-                                            && (kAtomM == 1 || kAtomM == 2);
-    static constexpr int kFusedOutputN = TILE_N / 2;
-    static constexpr int kFusedScratchElems = kSupportsFusedSilu ? 4 * kMathWarpGroups * TILE_M : 1;
-    static constexpr int kSiluExchangeElems = kSupportsFusedSilu ? kFusedOutputN * TILE_M : 1;
+        kPackedElementsPerRecord * cute::sizeof_bits_v<cute::uint4_t> / cute::sizeof_bits_v<uint32_t>;
+    static constexpr int  kPackedTmaInnerWords          = 256;
+    static constexpr int  kPackedTmaParts               = kPackedInnerWords / kPackedTmaInnerWords;
+    static constexpr int  kOutputFragments              = TILE_N / kOutputFragmentN;
+    static constexpr int  kK32FragmentsPerStage         = Traits::kKBlocksPerStage;
+    static constexpr int  kQparamShiftValuesPerFragment = kOutputFragmentN * kK32FragmentsPerStage;
+    static constexpr int  kQparamBaseValuesPerFragment  = 16;
+    static constexpr int  kPackedWordsStage             = kPackedInnerWords * kOutputFragments * kK32FragmentsPerStage;
+    static constexpr int  kPackedWeightStageBytes       = kPackedWordsStage * sizeof(uint32_t);
+    static constexpr int  kQparamShiftValuesStage       = kQparamShiftValuesPerFragment * kOutputFragments;
+    static constexpr int  kQparamBaseValuesStage        = kQparamBaseValuesPerFragment * kOutputFragments;
+    static constexpr int  kQparamShiftStageBytes        = kQparamShiftValuesStage * sizeof(Tv);
+    static constexpr int  kMxScaleStageBytes         = (kQparamShiftValuesStage + kQparamBaseValuesStage) * sizeof(Tv);
+    static constexpr int  kActivationStageBytes      = TILE_M * TILE_K * sizeof(Ta);
+    static constexpr int  kAlignmentU                = 16 / sizeof(float);
+    static constexpr int  kBoxU                      = TILE_M + (is_grouped_gemm ? kAlignmentU : 0);
+    static constexpr int  kTmaCountM                 = cute::ceil_div(TILE_M / kMulticastA, 256);
+    static constexpr int  kTmaBoxM                   = TILE_M / (kMulticastA * kTmaCountM);
+    static constexpr int  kUStageStride              = round_up<int>(kBoxU, 128);
+    static constexpr int  kActivationScaleStageBytes = kBoxU * sizeof(float);
+    static constexpr bool kFusedTileShape = TILE_N == 256 && kAtomN == 1 && kRestN == 1 && (kAtomM == 1 || kAtomM == 2);
+    static constexpr int  kFusedOutputN   = TILE_N / 2;
+    static constexpr int  kFusedScratchElems = kSupportsFusedSilu ? 4 * kMathWarpGroups * TILE_M : 1;
+    static constexpr int  kSiluExchangeElems = kSupportsFusedSilu ? kFusedOutputN * TILE_M : 1;
     static_assert(!kSupportsFusedSilu || kFusedTileShape);
     static_assert(!kSupportsFusedSilu || kRestM == 2 / kAtomM);
     static_assert(kPackedElementsPerRecord == kOutputFragmentN * kOpK);
@@ -433,109 +415,96 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
     using CopyAtomC = typename detail::FoldedEpiStsmAtoms<(kCValsPerThread >= 8) ? 8 : 4>::CopyAtomC;
     using CopyOpR2S = typename detail::FoldedEpiStsmAtoms<(kCValsPerThread >= 8) ? 8 : 4>::CopyOpR2S;
 
-    using PackedCtaTile = cute::Shape<cute::Int<kPackedTmaInnerWords>,
+    using PackedCtaTile    = cute::Shape<cute::Int<kPackedTmaInnerWords>,
                                       cute::Int<kPackedTmaParts * kOutputFragments>,
                                       cute::Int<kK32FragmentsPerStage>>;
     using PackedSmemLayout = decltype(cute::make_layout(PackedCtaTile{}));
-    using PackedPipelineLayout = cute::Layout<
-        cute::Shape<cute::Int<cute::cosize_v<PackedSmemLayout>>, cute::Int<Stages>>>;
-    using QparamShiftCtaTile = cute::Shape<cute::Int<kQparamShiftValuesPerFragment>,
-                                           cute::Int<kOutputFragments>,
-                                           cute::_1>;
+    using PackedPipelineLayout =
+        cute::Layout<cute::Shape<cute::Int<cute::cosize_v<PackedSmemLayout>>, cute::Int<Stages>>>;
+    using QparamShiftCtaTile =
+        cute::Shape<cute::Int<kQparamShiftValuesPerFragment>, cute::Int<kOutputFragments>, cute::_1>;
     using QparamShiftSmemLayout = decltype(cute::make_layout(QparamShiftCtaTile{}));
-    using QparamShiftPipelineLayout = cute::Layout<
-        cute::Shape<cute::Int<cute::cosize_v<QparamShiftSmemLayout>>, cute::Int<Stages>>>;
-    using QparamBaseCtaTile = cute::Shape<cute::Int<kQparamBaseValuesPerFragment>,
-                                          cute::Int<kOutputFragments>,
-                                          cute::_1>;
+    using QparamShiftPipelineLayout =
+        cute::Layout<cute::Shape<cute::Int<cute::cosize_v<QparamShiftSmemLayout>>, cute::Int<Stages>>>;
+    using QparamBaseCtaTile =
+        cute::Shape<cute::Int<kQparamBaseValuesPerFragment>, cute::Int<kOutputFragments>, cute::_1>;
     using QparamBaseSmemLayout = decltype(cute::make_layout(QparamBaseCtaTile{}));
-    using QparamBasePipelineLayout = cute::Layout<
-        cute::Shape<cute::Int<cute::cosize_v<QparamBaseSmemLayout>>, cute::Int<Stages>>>;
-    using SmemLayoutB = typename Traits::SmemLayoutB;
+    using QparamBasePipelineLayout =
+        cute::Layout<cute::Shape<cute::Int<cute::cosize_v<QparamBaseSmemLayout>>, cute::Int<Stages>>>;
+    using SmemLayoutB   = typename Traits::SmemLayoutB;
     using TmaActivation = CUtensorMap;
 
     static auto MakeTmaPacked(void* ptr, int n, int k)
     {
         const int out_fragments = n / kOutputFragmentN;
         const int k32_fragments = k / kOpK;
-        auto layout = cute::make_layout(
-            cute::make_shape(
-                cute::Int<kPackedTmaInnerWords>{},
-                out_fragments * kPackedTmaParts,
-                k32_fragments),
-            cute::make_stride(cute::_1{},
-                              cute::Int<kPackedTmaInnerWords>{},
-                              int64_t{kPackedInnerWords} * out_fragments));
-        auto gmem = cute::make_tensor(cute::make_gmem_ptr(reinterpret_cast<uint32_t*>(ptr)), layout);
-        using CopyOp = std::conditional_t<kMulticastB == 1,
-                                          cute::SM90_TMA_LOAD,
-                                          cute::SM90_TMA_LOAD_MULTICAST>;
-        return cute::make_tma_copy(
-            CopyOp{}, gmem, PackedSmemLayout{}, PackedCtaTile{}, cute::Int<kMulticastB>{});
+        auto      layout        = cute::make_layout(
+            cute::make_shape(cute::Int<kPackedTmaInnerWords>{}, out_fragments * kPackedTmaParts, k32_fragments),
+            cute::make_stride(
+                cute::_1{}, cute::Int<kPackedTmaInnerWords>{}, int64_t{kPackedInnerWords} * out_fragments));
+        auto gmem    = cute::make_tensor(cute::make_gmem_ptr(reinterpret_cast<uint32_t*>(ptr)), layout);
+        using CopyOp = std::conditional_t<kMulticastB == 1, cute::SM90_TMA_LOAD, cute::SM90_TMA_LOAD_MULTICAST>;
+        return cute::make_tma_copy(CopyOp{}, gmem, PackedSmemLayout{}, PackedCtaTile{}, cute::Int<kMulticastB>{});
     }
     using TmaPacked = decltype(MakeTmaPacked(nullptr, TILE_N, TILE_K));
 
     static auto MakeTmaQparamShift(void* ptr, int n, int k)
     {
         const int out_fragments = n / kOutputFragmentN;
-        const int k128_groups = k / TILE_K;
-        auto layout = cute::make_layout(
-            cute::make_shape(cute::Int<kQparamShiftValuesPerFragment>{}, out_fragments, k128_groups),
-            cute::make_stride(cute::_1{},
-                              cute::Int<kQparamShiftValuesPerFragment>{},
-                              int64_t{kQparamShiftValuesPerFragment} * out_fragments));
-        auto gmem = cute::make_tensor(cute::make_gmem_ptr(reinterpret_cast<Tv*>(ptr)), layout);
-        using CopyOp = std::conditional_t<kMulticastB == 1,
-                                          cute::SM90_TMA_LOAD,
-                                          cute::SM90_TMA_LOAD_MULTICAST>;
+        const int k128_groups   = k / TILE_K;
+        auto      layout =
+            cute::make_layout(cute::make_shape(cute::Int<kQparamShiftValuesPerFragment>{}, out_fragments, k128_groups),
+                              cute::make_stride(cute::_1{},
+                                                cute::Int<kQparamShiftValuesPerFragment>{},
+                                                int64_t{kQparamShiftValuesPerFragment} * out_fragments));
+        auto gmem    = cute::make_tensor(cute::make_gmem_ptr(reinterpret_cast<Tv*>(ptr)), layout);
+        using CopyOp = std::conditional_t<kMulticastB == 1, cute::SM90_TMA_LOAD, cute::SM90_TMA_LOAD_MULTICAST>;
         return cute::make_tma_copy(
             CopyOp{}, gmem, QparamShiftSmemLayout{}, QparamShiftCtaTile{}, cute::Int<kMulticastB>{});
     }
     using TmaQparamShift = decltype(MakeTmaQparamShift(nullptr, TILE_N, TILE_K));
-    using TmaQparam = TmaQparamShift;
+    using TmaQparam      = TmaQparamShift;
 
     static TmaQparam MakeTmaQparam(void* ptr, int n, int k)
     {
         return MakeTmaQparamShift(ptr, n, k);
     }
-    static_assert(cute::size(typename TmaPacked::Traits::SrcLayout{})
-                  == kPackedWeightStageBytes * 8);
-    static_assert(cute::size(typename TmaQparamShift::Traits::SrcLayout{})
-                  == kQparamShiftValuesStage * sizeof(Tv) * 8);
+    static_assert(cute::size(typename TmaPacked::Traits::SrcLayout{}) == kPackedWeightStageBytes * 8);
+    static_assert(cute::size(typename TmaQparamShift::Traits::SrcLayout{}) == kQparamShiftValuesStage * sizeof(Tv) * 8);
 
     struct alignas(1024) SharedStorage {
-        cute::array_aligned<uint32_t, kPackedWordsStage * Stages, 128> A;
-        cute::array_aligned<Ta, cute::cosize_v<SmemLayoutB>, 128> B;
+        cute::array_aligned<uint32_t, kPackedWordsStage * Stages, 128>                      A;
+        cute::array_aligned<Ta, cute::cosize_v<SmemLayoutB>, 128>                           B;
         cute::array_aligned<Tc, kSupportsFusedSilu ? 1 : cute::cosize_v<SmemLayoutD>, 1024> D;
         cute::array_aligned<Tv, kQparamShiftValuesStage * Stages, 128>                      V;
         cute::array_aligned<Tv, kQparamBaseValuesStage * Stages, 128>                       W;
         cute::array_aligned<float, kUStageStride * Stages, 128>                             U;
         cute::array_aligned<detail::E2m1E4m3ScaleTable, kGroupScaleTableCount, 8>           group_scale_tables;
-        cute::array_aligned<float, kFusedScratchElems, 128>  fused_amax_scratch;
-        cute::array_aligned<float, kSiluExchangeElems, 1024> silu_exchange;
-        PipelineStorage                                      pipeline;
-        typename Scheduler::Storage                          sched;
+        cute::array_aligned<float, kFusedScratchElems, 128>                                 fused_amax_scratch;
+        cute::array_aligned<float, kSiluExchangeElems, 1024>                                silu_exchange;
+        PipelineStorage                                                                     pipeline;
+        typename Scheduler::Storage                                                         sched;
         StridedPtr                                                                          gather_A;
         const int*                                                                          gather_idxs;
         int                                                                                 gather_alive;
         int                                                                                 gather_k_iters;
         int                                                                                 gather_M_group;
-        int gather_offset_m;
-        int gather_group_idx;
-        int gather_out_fragment;
+        int                                                                                 gather_offset_m;
+        int                                                                                 gather_group_idx;
+        int                                                                                 gather_out_fragment;
     };
-    static constexpr int kOutputOffset = round_up<int>(sizeof(SharedStorage), 1024);
+    static constexpr int kOutputOffset     = round_up<int>(sizeof(SharedStorage), 1024);
     static constexpr int kFp8EpilogueBytes = TILE_M * kFusedOutputN * sizeof(__nv_fp8_e4m3);
-    static constexpr int kEpilogueBytes = kSupportsFusedSilu ? kFp8EpilogueBytes : 0;
-    static constexpr int kSmemSize = kOutputOffset + kEpilogueBytes;
+    static constexpr int kEpilogueBytes    = kSupportsFusedSilu ? kFp8EpilogueBytes : 0;
+    static constexpr int kSmemSize         = kOutputOffset + kEpilogueBytes;
     static_assert(cute::cosize_v<SmemLayoutB> == Stages * TILE_M * TILE_K);
     static_assert(kSmemSize <= (228 << 10));
 
-    static constexpr int kDescA = 0;
-    static constexpr int kDescB = kIndexedGather ? 0 : 1;
-    static constexpr int kDescV = kDescB + 1;
-    static constexpr int kDescU = kDescV + 1;
-    static constexpr int kDescC = kIndexedGather ? kDescV + 1 : kDescU + 1;
+    static constexpr int kDescA      = 0;
+    static constexpr int kDescB      = kIndexedGather ? 0 : 1;
+    static constexpr int kDescV      = kDescB + 1;
+    static constexpr int kDescU      = kDescV + 1;
+    static constexpr int kDescC      = kIndexedGather ? kDescV + 1 : kDescU + 1;
     static constexpr int kTmaDescNum = is_grouped_gemm ? kDescC + 1 : 1;
 
     static int* PrepareTmaDescs(const CUtensorMap& tm_a,
@@ -558,40 +527,38 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
             return nullptr;
         }
         int* offsets = reinterpret_cast<int*>(out + num_groups * kTmaDescNum);
-        prepare_moe_tma_descs_sm90_mxfp4_fp8_folded<kAlignmentU, kStridingA>
-            <<<num_groups, 32, 0, stream>>>(
-                tm_a,
-                tm_b,
-                tm_v_shift,
-                tm_u,
-                tm_c,
-                param_A,
-                param_B,
-                param_V,
-                param_U,
-                param_C,
-                fuse_silu,
-                out,
-                offsets,
-                M);
+        prepare_moe_tma_descs_sm90_mxfp4_fp8_folded<kAlignmentU, kStridingA><<<num_groups, 32, 0, stream>>>(tm_a,
+                                                                                                            tm_b,
+                                                                                                            tm_v_shift,
+                                                                                                            tm_u,
+                                                                                                            tm_c,
+                                                                                                            param_A,
+                                                                                                            param_B,
+                                                                                                            param_V,
+                                                                                                            param_U,
+                                                                                                            param_C,
+                                                                                                            fuse_silu,
+                                                                                                            out,
+                                                                                                            offsets,
+                                                                                                            M);
         return offsets;
     }
 
     __device__ void operator()(const TmaActivation& tm_a,
-                               const TmaPacked& tm_b,
-                               const TmaQparam& tm_v,
-                               const CUtensorMap& tm_u,
-                               const CUtensorMap& tm_c,
-                               const MatrixParam& param_A,
-                               const MatrixParam& param_B,
-                               const MatrixParam& param_V,
-                               const MatrixParam& param_U,
-                               const MatrixParam& param_C,
-                               const MatrixParam& param_W,
-                               bool fuse_silu,
-                               Scheduler sched,
-                               CUtensorMap* tensormap_buf,
-                               char* smem_buf)
+                               const TmaPacked&     tm_b,
+                               const TmaQparam&     tm_v,
+                               const CUtensorMap&   tm_u,
+                               const CUtensorMap&   tm_c,
+                               const MatrixParam&   param_A,
+                               const MatrixParam&   param_B,
+                               const MatrixParam&   param_V,
+                               const MatrixParam&   param_U,
+                               const MatrixParam&   param_C,
+                               const MatrixParam&   param_W,
+                               bool                 fuse_silu,
+                               Scheduler            sched,
+                               CUtensorMap*         tensormap_buf,
+                               char*                smem_buf)
     {
         if constexpr (kSupportsFusedSilu) {
             assert(fuse_silu);
@@ -600,14 +567,13 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
             assert(!fuse_silu);
         }
         (void)param_W;
-        SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
-        const int wg_idx = cutlass::canonical_warp_group_idx();
-        const int warp_in_wg = cutlass::canonical_warp_idx_sync() % 4;
-        const int lane = threadIdx.x % 32;
-        auto* group_scale_tables = storage.group_scale_tables.data();
+        SharedStorage& storage            = *reinterpret_cast<SharedStorage*>(smem_buf);
+        const int      wg_idx             = cutlass::canonical_warp_group_idx();
+        const int      warp_in_wg         = cutlass::canonical_warp_idx_sync() % 4;
+        const int      lane               = threadIdx.x % 32;
+        auto*          group_scale_tables = storage.group_scale_tables.data();
         if (threadIdx.x < kGroupScaleTableCount) {
-            group_scale_tables[threadIdx.x] =
-                detail::make_e2m1_e4m3_scale_table(threadIdx.x);
+            group_scale_tables[threadIdx.x] = detail::make_e2m1_e4m3_scale_table(threadIdx.x);
         }
         if (threadIdx.x == 0) {
             sched.init_dyanmic(storage.sched, kClusterSize * (kMathWarpGroups * 4 + 1));
@@ -616,17 +582,17 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
         params.transaction_bytes = kIndexedGather ? kPackedWeightStageBytes + kQparamShiftStageBytes :
                                                     kPackedWeightStageBytes + kQparamShiftStageBytes
                                                         + kActivationStageBytes + kActivationScaleStageBytes;
-        params.num_consumers = kMathThreads;
-        params.num_producers = kIndexedGather ? 1 + WARPGROUP_SIZE : 2;
+        params.num_consumers     = kMathThreads;
+        params.num_producers     = kIndexedGather ? 1 + WARPGROUP_SIZE : 2;
         params.initializing_warp = 0;
         if (wg_idx == kMathWarpGroups) {
-            params.role = kIndexedGather ? MainloopPipeline::ThreadCategory::Producer :
-                                           (warp_in_wg == 0 ? MainloopPipeline::ThreadCategory::Producer :
-                                                              MainloopPipeline::ThreadCategory::NonParticipant);
+            params.role      = kIndexedGather ? MainloopPipeline::ThreadCategory::Producer :
+                                                (warp_in_wg == 0 ? MainloopPipeline::ThreadCategory::Producer :
+                                                                   MainloopPipeline::ThreadCategory::NonParticipant);
             params.is_leader = warp_in_wg == 0 && lane == 0;
         }
         else {
-            params.role = MainloopPipeline::ThreadCategory::Consumer;
+            params.role      = MainloopPipeline::ThreadCategory::Consumer;
             params.is_leader = 0;
         }
         MainloopPipeline pipeline(storage.pipeline, params, ClusterShape{});
@@ -642,13 +608,22 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
         if (wg_idx == kMathWarpGroups) {
             if constexpr (kIndexedGather) {
                 cutlass::arch::warpgroup_reg_dealloc<kProducerRegs>();
-                run_producer_indexed(
-                    tm_b, tm_v, param_A, param_V, param_U, sched, tensormap_buf, storage, pipeline);
+                run_producer_indexed(tm_b, tm_v, param_A, param_V, param_U, sched, tensormap_buf, storage, pipeline);
             }
             else {
                 cutlass::arch::warpgroup_reg_dealloc<kProducerRegs>();
-                run_producer_tma(
-                    tm_a, tm_b, tm_v, tm_u, param_A, param_B, param_V, param_U, sched, tensormap_buf, storage, pipeline);
+                run_producer_tma(tm_a,
+                                 tm_b,
+                                 tm_v,
+                                 tm_u,
+                                 param_A,
+                                 param_B,
+                                 param_V,
+                                 param_U,
+                                 sched,
+                                 tensormap_buf,
+                                 storage,
+                                 pipeline);
             }
         }
         else {
@@ -663,28 +638,28 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
     }
 
 private:
-    __device__ static void run_producer_indexed(const TmaPacked& tm_b,
-                                                const TmaQparam& tm_v,
+    __device__ static void run_producer_indexed(const TmaPacked&   tm_b,
+                                                const TmaQparam&   tm_v,
                                                 const MatrixParam& param_A,
                                                 const MatrixParam& param_V,
                                                 const MatrixParam& param_U,
-                                                Scheduler sched,
-                                                CUtensorMap* tensormap_buf,
-                                                SharedStorage& storage,
-                                                MainloopPipeline& pipeline)
+                                                Scheduler          sched,
+                                                CUtensorMap*       tensormap_buf,
+                                                SharedStorage&     storage,
+                                                MainloopPipeline&  pipeline)
     {
         static_assert(kIndexedGather);
-        const int warp_in_wg = cutlass::canonical_warp_idx_sync() % 4;
-        const int lane = int(threadIdx.x) % WARP_SIZE;
-        const int prod_tid = int(threadIdx.x) - kMathThreads;
-        const bool cta_0 = cute::block_id_in_cluster().x == 0;
-        MainloopState write_state = cutlass::make_producer_start_state<MainloopPipeline>();
-        auto sched_state = sched.init_consumer(storage.sched);
-        auto producer_sched_state = sched.init_producer(storage.sched);
-        const bool elected = warp_in_wg == 0 ? cute::elect_one_sync() : false;
-        const int k_iters = sched.k_iters_;
-        const int out_fragments = sched.gemm_shape().y / kOutputFragmentN;
-        const int out_tiles = (out_fragments + kOutputFragments - 1) / kOutputFragments;
+        const int     warp_in_wg           = cutlass::canonical_warp_idx_sync() % 4;
+        const int     lane                 = int(threadIdx.x) % WARP_SIZE;
+        const int     prod_tid             = int(threadIdx.x) - kMathThreads;
+        const bool    cta_0                = cute::block_id_in_cluster().x == 0;
+        MainloopState write_state          = cutlass::make_producer_start_state<MainloopPipeline>();
+        auto          sched_state          = sched.init_consumer(storage.sched);
+        auto          producer_sched_state = sched.init_producer(storage.sched);
+        const bool    elected              = warp_in_wg == 0 ? cute::elect_one_sync() : false;
+        const int     k_iters              = sched.k_iters_;
+        const int     out_fragments        = sched.gemm_shape().y / kOutputFragmentN;
+        const int     out_tiles            = (out_fragments + kOutputFragments - 1) / kOutputFragments;
 
         typename Scheduler::Tile* tile;
         while (true) {
@@ -695,21 +670,21 @@ private:
                 const bool alive = sched_state.acquire(tile);
                 if (lane == 0) {
                     MatrixData a{{param_A.ptr, param_A.stride}, param_A.idxs};
-                    storage.gather_alive = alive ? 1 : 0;
-                    storage.gather_k_iters = 0;
-                    storage.gather_M_group = 0;
-                    storage.gather_offset_m = 0;
-                    storage.gather_group_idx = 0;
+                    storage.gather_alive        = alive ? 1 : 0;
+                    storage.gather_k_iters      = 0;
+                    storage.gather_M_group      = 0;
+                    storage.gather_offset_m     = 0;
+                    storage.gather_group_idx    = 0;
                     storage.gather_out_fragment = 0;
                     if (alive && tile->is_valid_cluster) {
-                        a = resolve<Ta, Striding::kIndexed>(param_A, tile->group_idx);
-                        storage.gather_k_iters = k_iters;
-                        storage.gather_M_group = tile->m1 - tile->m0;
-                        storage.gather_offset_m = tile->offset_m;
-                        storage.gather_group_idx = tile->group_idx;
+                        a                           = resolve<Ta, Striding::kIndexed>(param_A, tile->group_idx);
+                        storage.gather_k_iters      = k_iters;
+                        storage.gather_M_group      = tile->m1 - tile->m0;
+                        storage.gather_offset_m     = tile->offset_m;
+                        storage.gather_group_idx    = tile->group_idx;
                         storage.gather_out_fragment = tile->offset_n / kOutputFragmentN;
                     }
-                    storage.gather_A = a.ptr;
+                    storage.gather_A    = a.ptr;
                     storage.gather_idxs = a.idxs;
                 }
                 __syncwarp();
@@ -720,122 +695,116 @@ private:
                 break;
             }
 
-            const int tile_k_iters = storage.gather_k_iters;
-            const int out_fragment = storage.gather_out_fragment;
-            const int group_idx = storage.gather_group_idx;
-            const int packed_m0 = storage.gather_offset_m;
-            const int row_count = storage.gather_M_group - packed_m0;
-            const Ta* act_gmem = static_cast<const Ta*>(storage.gather_A.ptr);
-            const int ldA = storage.gather_A.stride;
-            const int* idxs = storage.gather_idxs;
-            const int group_m0 = sched.offsets_ ? __ldg(sched.offsets_ + group_idx) : 0;
-            const int u_pad = group_m0 % kAlignmentU;
-            const int activation_scale_ld = param_U.stride;
-            const auto qparam_ptr = detail::resolve_mxfp4_folded_group_ptr(param_V, group_idx);
-            const Tv* base_gmem = static_cast<const Tv*>(qparam_ptr.ptr)
-                                  + size_t(out_fragments) * tile_k_iters
-                                        * kQparamShiftValuesPerFragment;
+            const int  tile_k_iters        = storage.gather_k_iters;
+            const int  out_fragment        = storage.gather_out_fragment;
+            const int  group_idx           = storage.gather_group_idx;
+            const int  packed_m0           = storage.gather_offset_m;
+            const int  row_count           = storage.gather_M_group - packed_m0;
+            const Ta*  act_gmem            = static_cast<const Ta*>(storage.gather_A.ptr);
+            const int  ldA                 = storage.gather_A.stride;
+            const int* idxs                = storage.gather_idxs;
+            const int  group_m0            = sched.offsets_ ? __ldg(sched.offsets_ + group_idx) : 0;
+            const int  u_pad               = group_m0 % kAlignmentU;
+            const int  activation_scale_ld = param_U.stride;
+            const auto qparam_ptr          = detail::resolve_mxfp4_folded_group_ptr(param_V, group_idx);
+            const Tv*  base_gmem           = static_cast<const Tv*>(qparam_ptr.ptr)
+                                  + size_t(out_fragments) * tile_k_iters * kQparamShiftValuesPerFragment;
 
-            auto gAct = cute::make_tensor(
-                cute::make_gmem_ptr(act_gmem),
-                cute::make_shape(sched.gemm_shape().x, tile_k_iters * TILE_K),
-                cute::make_stride(ldA, cute::_1{}));
-            auto gScale = cute::make_tensor(
-                cute::make_gmem_ptr(static_cast<const float*>(param_U.ptr)),
-                cute::make_shape(sched.gemm_shape().x, tile_k_iters),
-                cute::make_stride(cute::_1{}, activation_scale_ld));
-            auto sPackedPipeline = cute::make_tensor(
-                cute::make_smem_ptr(storage.A.data()), PackedPipelineLayout{});
-            auto sQparamShiftPipeline = cute::make_tensor(
-                cute::make_smem_ptr(storage.V.data()), QparamShiftPipelineLayout{});
-            auto sQparamBasePipeline = cute::make_tensor(
-                cute::make_smem_ptr(storage.W.data()), QparamBasePipelineLayout{});
-            auto sActivation = cute::make_tensor(
-                cute::make_smem_ptr(storage.B.data()), SmemLayoutB{});
-            auto sScale = cute::make_tensor(
-                cute::make_smem_ptr(storage.U.data()),
-                cute::make_layout(cute::Shape<cute::Int<kUStageStride>, cute::Int<Stages>>{}));
+            auto gAct            = cute::make_tensor(cute::make_gmem_ptr(act_gmem),
+                                          cute::make_shape(sched.gemm_shape().x, tile_k_iters * TILE_K),
+                                          cute::make_stride(ldA, cute::_1{}));
+            auto gScale          = cute::make_tensor(cute::make_gmem_ptr(static_cast<const float*>(param_U.ptr)),
+                                            cute::make_shape(sched.gemm_shape().x, tile_k_iters),
+                                            cute::make_stride(cute::_1{}, activation_scale_ld));
+            auto sPackedPipeline = cute::make_tensor(cute::make_smem_ptr(storage.A.data()), PackedPipelineLayout{});
+            auto sQparamShiftPipeline =
+                cute::make_tensor(cute::make_smem_ptr(storage.V.data()), QparamShiftPipelineLayout{});
+            auto sQparamBasePipeline =
+                cute::make_tensor(cute::make_smem_ptr(storage.W.data()), QparamBasePipelineLayout{});
+            auto sActivation = cute::make_tensor(cute::make_smem_ptr(storage.B.data()), SmemLayoutB{});
+            auto sScale =
+                cute::make_tensor(cute::make_smem_ptr(storage.U.data()),
+                                  cute::make_layout(cute::Shape<cute::Int<kUStageStride>, cute::Int<Stages>>{}));
 
             constexpr int kLoadPasses = kSupportsFusedSilu ? 2 : 1;
             CUTE_UNROLL
             for (int load_pass = 0; load_pass < kLoadPasses; ++load_pass) {
-            for (int k_tile = 0; k_tile < tile_k_iters; ++k_tile) {
-                pipeline.producer_acquire(write_state);
-                auto* bar = pipeline.producer_get_barrier(write_state);
-                const int stage = write_state.index();
-                if (warp_in_wg == 0 && elected) {
-                    const cute::TmaDescriptor* Bdesc = tensormap_buf + group_idx * kTmaDescNum + kDescB;
-                    const cute::TmaDescriptor* Vdesc = tensormap_buf + group_idx * kTmaDescNum + kDescV;
-                    auto packed_gmem = tm_b.get_tma_tensor(
-                        cute::make_shape(cute::Int<kPackedTmaInnerWords>{},
-                                         out_fragments * kPackedTmaParts,
-                                         k_iters * kK32FragmentsPerStage));
-                    auto packed_tiles = cute::flat_divide(packed_gmem, PackedCtaTile{});
-                    auto packed_cta = tm_b.get_slice(0);
-                    auto packed_part = packed_cta.partition_S(packed_tiles);
-                    auto packed_src = cute::group_modes<1, cute::rank(packed_part)>(packed_part);
-                    auto packed_stage = sPackedPipeline(cute::_, stage);
-                    auto packed_smem = cute::make_tensor(packed_stage.data(), PackedSmemLayout{});
-                    auto packed_dst_part = packed_cta.partition_D(packed_smem);
-                    auto packed_dst = cute::group_modes<1, cute::rank(packed_dst_part)>(packed_dst_part);
-                    cute::copy(tm_b.with(Bdesc, *bar, 0, cute::TMA::CacheHintSm90::EVICT_NORMAL),
-                               packed_src(cute::_, out_fragment / kOutputFragments + out_tiles * k_tile),
-                               packed_dst(cute::_, 0));
+                for (int k_tile = 0; k_tile < tile_k_iters; ++k_tile) {
+                    pipeline.producer_acquire(write_state);
+                    auto*     bar   = pipeline.producer_get_barrier(write_state);
+                    const int stage = write_state.index();
+                    if (warp_in_wg == 0 && elected) {
+                        const cute::TmaDescriptor* Bdesc = tensormap_buf + group_idx * kTmaDescNum + kDescB;
+                        const cute::TmaDescriptor* Vdesc = tensormap_buf + group_idx * kTmaDescNum + kDescV;
+                        auto packed_gmem     = tm_b.get_tma_tensor(cute::make_shape(cute::Int<kPackedTmaInnerWords>{},
+                                                                                out_fragments * kPackedTmaParts,
+                                                                                k_iters * kK32FragmentsPerStage));
+                        auto packed_tiles    = cute::flat_divide(packed_gmem, PackedCtaTile{});
+                        auto packed_cta      = tm_b.get_slice(0);
+                        auto packed_part     = packed_cta.partition_S(packed_tiles);
+                        auto packed_src      = cute::group_modes<1, cute::rank(packed_part)>(packed_part);
+                        auto packed_stage    = sPackedPipeline(cute::_, stage);
+                        auto packed_smem     = cute::make_tensor(packed_stage.data(), PackedSmemLayout{});
+                        auto packed_dst_part = packed_cta.partition_D(packed_smem);
+                        auto packed_dst      = cute::group_modes<1, cute::rank(packed_dst_part)>(packed_dst_part);
+                        cute::copy(tm_b.with(Bdesc, *bar, 0, cute::TMA::CacheHintSm90::EVICT_NORMAL),
+                                   packed_src(cute::_, out_fragment / kOutputFragments + out_tiles * k_tile),
+                                   packed_dst(cute::_, 0));
 
-                    auto shift_gmem = tm_v.get_tma_tensor(
-                        cute::make_shape(cute::Int<kQparamShiftValuesPerFragment>{}, out_fragments, k_iters));
-                    auto shift_tiles = cute::flat_divide(shift_gmem, QparamShiftCtaTile{});
-                    auto shift_cta = tm_v.get_slice(0);
-                    auto shift_part = shift_cta.partition_S(shift_tiles);
-                    auto shift_src = cute::group_modes<1, cute::rank(shift_part)>(shift_part);
-                    auto shift_stage = sQparamShiftPipeline(cute::_, stage);
-                    auto shift_smem = cute::make_tensor(shift_stage.data(), QparamShiftSmemLayout{});
-                    auto shift_dst_part = shift_cta.partition_D(shift_smem);
-                    auto shift_dst = cute::group_modes<1, cute::rank(shift_dst_part)>(shift_dst_part);
-                    cute::copy(tm_v.with(Vdesc, *bar, 0, cute::TMA::CacheHintSm90::EVICT_LAST),
-                               shift_src(cute::_, out_fragment / kOutputFragments + out_tiles * k_tile),
-                               shift_dst(cute::_, 0));
+                        auto shift_gmem = tm_v.get_tma_tensor(
+                            cute::make_shape(cute::Int<kQparamShiftValuesPerFragment>{}, out_fragments, k_iters));
+                        auto shift_tiles    = cute::flat_divide(shift_gmem, QparamShiftCtaTile{});
+                        auto shift_cta      = tm_v.get_slice(0);
+                        auto shift_part     = shift_cta.partition_S(shift_tiles);
+                        auto shift_src      = cute::group_modes<1, cute::rank(shift_part)>(shift_part);
+                        auto shift_stage    = sQparamShiftPipeline(cute::_, stage);
+                        auto shift_smem     = cute::make_tensor(shift_stage.data(), QparamShiftSmemLayout{});
+                        auto shift_dst_part = shift_cta.partition_D(shift_smem);
+                        auto shift_dst      = cute::group_modes<1, cute::rank(shift_dst_part)>(shift_dst_part);
+                        cute::copy(tm_v.with(Vdesc, *bar, 0, cute::TMA::CacheHintSm90::EVICT_LAST),
+                                   shift_src(cute::_, out_fragment / kOutputFragments + out_tiles * k_tile),
+                                   shift_dst(cute::_, 0));
 
-                    auto base_stage = sQparamBasePipeline(cute::_, stage);
+                        auto base_stage = sQparamBasePipeline(cute::_, stage);
+                        CUTE_UNROLL
+                        for (int fragment = 0; fragment < kOutputFragments; ++fragment) {
+                            const int  global_fragment = out_fragment + fragment;
+                            const bool pred            = global_fragment < out_fragments;
+                            const Tv*  src =
+                                base_gmem
+                                + size_t(k_tile * out_fragments + global_fragment) * kQparamBaseValuesPerFragment;
+                            Tv* dst = &base_stage(fragment * kQparamBaseValuesPerFragment);
+                            cute::SM80_CP_ASYNC_CACHEALWAYS_ZFILL<uint4>::copy(
+                                *reinterpret_cast<const uint4*>(src), *reinterpret_cast<uint4*>(dst), pred);
+                        }
+                    }
+
+                    auto sB_stage = sActivation(cute::_, cute::_, stage);
                     CUTE_UNROLL
-                    for (int fragment = 0; fragment < kOutputFragments; ++fragment) {
-                        const int global_fragment = out_fragment + fragment;
-                        const bool pred = global_fragment < out_fragments;
-                        const Tv* src = base_gmem
-                                        + size_t(k_tile * out_fragments + global_fragment)
-                                              * kQparamBaseValuesPerFragment;
-                        Tv* dst = &base_stage(fragment * kQparamBaseValuesPerFragment);
-                        cute::SM80_CP_ASYNC_CACHEALWAYS_ZFILL<uint4>::copy(
+                    for (int slot = 0; slot < kGatherSlots; ++slot) {
+                        const int  vector_idx    = prod_tid + slot * WARPGROUP_SIZE;
+                        const bool slot_valid    = vector_idx < kGatherVectors;
+                        const int  tile_m        = slot_valid ? vector_idx / kGatherThreadsK : 0;
+                        const int  tile_k_offset = slot_valid ? vector_idx % kGatherThreadsK * kGatherVec : 0;
+                        const int  packed_row    = packed_m0 + tile_m;
+                        const bool pred          = slot_valid && tile_m < row_count;
+                        const int  source_row    = (idxs && pred) ? __ldg(idxs + packed_row) : packed_row;
+                        const Ta*  src           = &gAct(source_row, k_tile * TILE_K + tile_k_offset);
+                        Ta*        dst           = &sB_stage(tile_m, tile_k_offset);
+                        cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<uint4>::copy(
                             *reinterpret_cast<const uint4*>(src), *reinterpret_cast<uint4*>(dst), pred);
+                        if (slot_valid && tile_k_offset == 0) {
+                            const float* scale_src = &gScale(source_row, k_tile);
+                            float*       scale_dst = &sScale(u_pad + tile_m, stage);
+                            cute::SM80_CP_ASYNC_CACHEALWAYS_ZFILL<uint32_t>::copy(
+                                *reinterpret_cast<const uint32_t*>(scale_src),
+                                *reinterpret_cast<uint32_t*>(scale_dst),
+                                pred);
+                        }
                     }
+                    cutlass::arch::cpasync_barrier_arrive_noinc(bar);
+                    ++write_state;
                 }
-
-                auto sB_stage = sActivation(cute::_, cute::_, stage);
-                CUTE_UNROLL
-                for (int slot = 0; slot < kGatherSlots; ++slot) {
-                    const int vector_idx = prod_tid + slot * WARPGROUP_SIZE;
-                    const bool slot_valid = vector_idx < kGatherVectors;
-                    const int tile_m = slot_valid ? vector_idx / kGatherThreadsK : 0;
-                    const int tile_k_offset = slot_valid ? vector_idx % kGatherThreadsK * kGatherVec : 0;
-                    const int packed_row = packed_m0 + tile_m;
-                    const bool pred = slot_valid && tile_m < row_count;
-                    const int source_row = (idxs && pred) ? __ldg(idxs + packed_row) : packed_row;
-                    const Ta* src = &gAct(source_row, k_tile * TILE_K + tile_k_offset);
-                    Ta* dst = &sB_stage(tile_m, tile_k_offset);
-                    cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<uint4>::copy(
-                        *reinterpret_cast<const uint4*>(src), *reinterpret_cast<uint4*>(dst), pred);
-                    if (slot_valid && tile_k_offset == 0) {
-                        const float* scale_src = &gScale(source_row, k_tile);
-                        float* scale_dst = &sScale(u_pad + tile_m, stage);
-                        cute::SM80_CP_ASYNC_CACHEALWAYS_ZFILL<uint32_t>::copy(
-                            *reinterpret_cast<const uint32_t*>(scale_src),
-                            *reinterpret_cast<uint32_t*>(scale_dst),
-                            pred);
-                    }
-                }
-                cutlass::arch::cpasync_barrier_arrive_noinc(bar);
-                ++write_state;
-            }
             }
             if (warp_in_wg == 0) {
                 sched_state.release();
@@ -854,37 +823,35 @@ private:
     }
 
     __device__ static void run_producer_tma(const TmaActivation& tm_a,
-                                        const TmaPacked& tm_b,
-                                        const TmaQparam& tm_v,
-                                        const CUtensorMap& tm_u,
-                                        const MatrixParam& param_A,
-                                        const MatrixParam& param_B,
-                                        const MatrixParam& param_V,
-                                        const MatrixParam& param_U,
-                                        Scheduler sched,
-                                        CUtensorMap* tensormap_buf,
-                                        SharedStorage& storage,
-                                        MainloopPipeline& pipeline)
+                                            const TmaPacked&     tm_b,
+                                            const TmaQparam&     tm_v,
+                                            const CUtensorMap&   tm_u,
+                                            const MatrixParam&   param_A,
+                                            const MatrixParam&   param_B,
+                                            const MatrixParam&   param_V,
+                                            const MatrixParam&   param_U,
+                                            Scheduler            sched,
+                                            CUtensorMap*         tensormap_buf,
+                                            SharedStorage&       storage,
+                                            MainloopPipeline&    pipeline)
     {
-        const int warp_in_wg = cutlass::canonical_warp_idx_sync() % 4;
-        const bool cta_0 = cute::block_id_in_cluster().x == 0;
-        Cluster cluster(cute::block_id_in_cluster().x);
-        const int mc_offset_m = cluster.cta_n() * (TILE_M / kMulticastA);
-        const uint16_t mask_A = cluster.mask_m();
-        const uint16_t mask_B = cluster.mask_n();
+        const int      warp_in_wg = cutlass::canonical_warp_idx_sync() % 4;
+        const bool     cta_0      = cute::block_id_in_cluster().x == 0;
+        Cluster        cluster(cute::block_id_in_cluster().x);
+        const int      mc_offset_m = cluster.cta_n() * (TILE_M / kMulticastA);
+        const uint16_t mask_A      = cluster.mask_m();
+        const uint16_t mask_B      = cluster.mask_n();
         if (warp_in_wg == 0) {
-            MainloopState write_state = cutlass::make_producer_start_state<MainloopPipeline>();
-            auto sched_state = sched.init_consumer(storage.sched);
-            const bool elected = cute::elect_one_sync();
-            const int k_iters = sched.k_iters_;
-            const int out_fragments = sched.gemm_shape().y / kOutputFragmentN;
-            const int out_tiles = (out_fragments + kOutputFragments - 1) / kOutputFragments;
-            auto packed_gmem = tm_b.get_tma_tensor(
-                cute::make_shape(cute::Int<kPackedTmaInnerWords>{},
-                                 out_fragments * kPackedTmaParts,
-                                 k_iters * kK32FragmentsPerStage));
-            auto packed_tiles = cute::flat_divide(packed_gmem, PackedCtaTile{});
-            auto packed_cta = [&] {
+            MainloopState write_state   = cutlass::make_producer_start_state<MainloopPipeline>();
+            auto          sched_state   = sched.init_consumer(storage.sched);
+            const bool    elected       = cute::elect_one_sync();
+            const int     k_iters       = sched.k_iters_;
+            const int     out_fragments = sched.gemm_shape().y / kOutputFragmentN;
+            const int     out_tiles     = (out_fragments + kOutputFragments - 1) / kOutputFragments;
+            auto          packed_gmem   = tm_b.get_tma_tensor(cute::make_shape(
+                cute::Int<kPackedTmaInnerWords>{}, out_fragments * kPackedTmaParts, k_iters * kK32FragmentsPerStage));
+            auto          packed_tiles  = cute::flat_divide(packed_gmem, PackedCtaTile{});
+            auto          packed_cta    = [&] {
                 if constexpr (kMulticastB == 1) {
                     return tm_b.get_slice(cute::Int<0>{});
                 }
@@ -893,11 +860,11 @@ private:
                 }
             }();
             auto packed_part = packed_cta.partition_S(packed_tiles);
-            auto packed_src = cute::group_modes<1, cute::rank(packed_part)>(packed_part);
-            auto shift_gmem = tm_v.get_tma_tensor(
+            auto packed_src  = cute::group_modes<1, cute::rank(packed_part)>(packed_part);
+            auto shift_gmem  = tm_v.get_tma_tensor(
                 cute::make_shape(cute::Int<kQparamShiftValuesPerFragment>{}, out_fragments, k_iters));
             auto shift_tiles = cute::flat_divide(shift_gmem, QparamShiftCtaTile{});
-            auto shift_cta = [&] {
+            auto shift_cta   = [&] {
                 if constexpr (kMulticastB == 1) {
                     return tm_v.get_slice(cute::Int<0>{});
                 }
@@ -905,117 +872,112 @@ private:
                     return tm_v.get_slice(cluster.cta_m());
                 }
             }();
-            auto shift_part = shift_cta.partition_S(shift_tiles);
-            auto shift_src = cute::group_modes<1, cute::rank(shift_part)>(shift_part);
-            auto sPackedPipeline = cute::make_tensor(
-                cute::make_smem_ptr(storage.A.data()), PackedPipelineLayout{});
-            auto sQparamShiftPipeline = cute::make_tensor(
-                cute::make_smem_ptr(storage.V.data()), QparamShiftPipelineLayout{});
-            auto sQparamBasePipeline = cute::make_tensor(
-                cute::make_smem_ptr(storage.W.data()), QparamBasePipelineLayout{});
-            auto sScale = cute::make_tensor(
-                cute::make_smem_ptr(storage.U.data()),
-                cute::make_layout(cute::Shape<cute::Int<kUStageStride>, cute::Int<Stages>>{}));
+            auto shift_part      = shift_cta.partition_S(shift_tiles);
+            auto shift_src       = cute::group_modes<1, cute::rank(shift_part)>(shift_part);
+            auto sPackedPipeline = cute::make_tensor(cute::make_smem_ptr(storage.A.data()), PackedPipelineLayout{});
+            auto sQparamShiftPipeline =
+                cute::make_tensor(cute::make_smem_ptr(storage.V.data()), QparamShiftPipelineLayout{});
+            auto sQparamBasePipeline =
+                cute::make_tensor(cute::make_smem_ptr(storage.W.data()), QparamBasePipelineLayout{});
+            auto sScale =
+                cute::make_tensor(cute::make_smem_ptr(storage.U.data()),
+                                  cute::make_layout(cute::Shape<cute::Int<kUStageStride>, cute::Int<Stages>>{}));
             typename Scheduler::Tile* tile;
             while (sched_state.acquire(tile)) {
                 if (tile->is_valid_cluster && elected) {
                     const cute::TmaDescriptor* Adesc = &tm_a;
-                    const CUtensorMap* Udesc = &tm_u;
+                    const CUtensorMap*         Udesc = &tm_u;
                     const cute::TmaDescriptor* Bdesc = tm_b.get_tma_descriptor();
                     const cute::TmaDescriptor* Vdesc = tm_v.get_tma_descriptor();
                     if constexpr (is_grouped_gemm) {
                         CUtensorMap* descs = tensormap_buf + tile->group_idx * kTmaDescNum;
-                        Adesc = &descs[kDescA];
-                        Bdesc = &descs[kDescB];
-                        Vdesc = &descs[kDescV];
-                        Udesc = &descs[kDescU];
+                        Adesc              = &descs[kDescA];
+                        Bdesc              = &descs[kDescB];
+                        Vdesc              = &descs[kDescV];
+                        Udesc              = &descs[kDescU];
                     }
                     const int out_fragment = tile->offset_n / kOutputFragmentN;
-                    const int out_tile = out_fragment / kOutputFragments;
-                    int group_idx = 0;
+                    const int out_tile     = out_fragment / kOutputFragments;
+                    int       group_idx    = 0;
                     if constexpr (is_grouped_gemm) {
                         group_idx = tile->group_idx;
                     }
                     const auto qparam_ptr = detail::resolve_mxfp4_folded_group_ptr(param_V, group_idx);
-                    const Tv* base_gmem = static_cast<const Tv*>(qparam_ptr.ptr)
-                                          + size_t(out_fragments) * k_iters
-                                                * kQparamShiftValuesPerFragment;
+                    const Tv*  base_gmem  = static_cast<const Tv*>(qparam_ptr.ptr)
+                                          + size_t(out_fragments) * k_iters * kQparamShiftValuesPerFragment;
                     constexpr int kLoadPasses = kSupportsFusedSilu ? 2 : 1;
                     CUTE_UNROLL
                     for (int load_pass = 0; load_pass < kLoadPasses; ++load_pass) {
-                    GmemIteratorSm90<kMulticastU> gmem_U{
-                        Udesc, {tile->offset_m + mc_offset_m, 0}, {0, 1}};
-                    for (int k_tile = 0; k_tile < k_iters; ++k_tile) {
-                        pipeline.producer_acquire(write_state);
-                        auto* bar = pipeline.producer_get_barrier(write_state);
-                        const int stage = write_state.index();
-                        auto packed_stage = sPackedPipeline(cute::_, stage);
-                        auto packed_smem = cute::make_tensor(packed_stage.data(), PackedSmemLayout{});
-                        auto packed_dst_part = packed_cta.partition_D(packed_smem);
-                        auto packed_dst = cute::group_modes<1, cute::rank(packed_dst_part)>(packed_dst_part);
-                        if constexpr (kMulticastB == 1) {
-                            cute::copy(tm_b.with(Bdesc, *bar, 0, cute::TMA::CacheHintSm90::EVICT_NORMAL),
-                                       packed_src(cute::_, out_tile + out_tiles * k_tile),
-                                       packed_dst(cute::_, 0));
+                        GmemIteratorSm90<kMulticastU> gmem_U{Udesc, {tile->offset_m + mc_offset_m, 0}, {0, 1}};
+                        for (int k_tile = 0; k_tile < k_iters; ++k_tile) {
+                            pipeline.producer_acquire(write_state);
+                            auto*     bar             = pipeline.producer_get_barrier(write_state);
+                            const int stage           = write_state.index();
+                            auto      packed_stage    = sPackedPipeline(cute::_, stage);
+                            auto      packed_smem     = cute::make_tensor(packed_stage.data(), PackedSmemLayout{});
+                            auto      packed_dst_part = packed_cta.partition_D(packed_smem);
+                            auto      packed_dst = cute::group_modes<1, cute::rank(packed_dst_part)>(packed_dst_part);
+                            if constexpr (kMulticastB == 1) {
+                                cute::copy(tm_b.with(Bdesc, *bar, 0, cute::TMA::CacheHintSm90::EVICT_NORMAL),
+                                           packed_src(cute::_, out_tile + out_tiles * k_tile),
+                                           packed_dst(cute::_, 0));
+                            }
+                            else {
+                                cute::copy(tm_b.with(Bdesc, *bar, mask_B, cute::TMA::CacheHintSm90::EVICT_NORMAL),
+                                           packed_src(cute::_, out_tile + out_tiles * k_tile),
+                                           packed_dst(cute::_, 0));
+                            }
+                            auto shift_stage    = sQparamShiftPipeline(cute::_, stage);
+                            auto shift_smem     = cute::make_tensor(shift_stage.data(), QparamShiftSmemLayout{});
+                            auto shift_dst_part = shift_cta.partition_D(shift_smem);
+                            auto shift_dst      = cute::group_modes<1, cute::rank(shift_dst_part)>(shift_dst_part);
+                            if constexpr (kMulticastB == 1) {
+                                cute::copy(tm_v.with(Vdesc, *bar, 0, cute::TMA::CacheHintSm90::EVICT_LAST),
+                                           shift_src(cute::_, out_tile + out_tiles * k_tile),
+                                           shift_dst(cute::_, 0));
+                            }
+                            else {
+                                cute::copy(tm_v.with(Vdesc, *bar, mask_B, cute::TMA::CacheHintSm90::EVICT_LAST),
+                                           shift_src(cute::_, out_tile + out_tiles * k_tile),
+                                           shift_dst(cute::_, 0));
+                            }
+                            auto base_stage = sQparamBasePipeline(cute::_, stage);
+                            CUTE_UNROLL
+                            for (int fragment = 0; fragment < kOutputFragments; ++fragment) {
+                                const int  global_fragment = out_fragment + fragment;
+                                const bool pred            = global_fragment < out_fragments;
+                                const Tv*  src =
+                                    base_gmem
+                                    + size_t(k_tile * out_fragments + global_fragment) * kQparamBaseValuesPerFragment;
+                                Tv* dst = &base_stage(fragment * kQparamBaseValuesPerFragment);
+                                cute::SM80_CP_ASYNC_CACHEALWAYS_ZFILL<uint4>::copy(
+                                    *reinterpret_cast<const uint4*>(src), *reinterpret_cast<uint4*>(dst), pred);
+                            }
+                            cutlass::arch::cpasync_barrier_arrive_noinc(bar);
+                            CUTE_UNROLL
+                            for (int tma_m = 0; tma_m < kTmaCountM; ++tma_m) {
+                                detail::load_mxfp4_folded_tma<kMulticastA, kTmaBoxM, TILE_K>(
+                                    Adesc,
+                                    bar,
+                                    storage.B.data() + stage * TILE_M * TILE_K
+                                        + (mc_offset_m + tma_m * kTmaBoxM) * TILE_K,
+                                    k_tile * TILE_K,
+                                    tile->offset_m + mc_offset_m + tma_m * kTmaBoxM,
+                                    mask_A);
+                            }
+                            if constexpr (kMulticastU == 1) {
+                                gmem_U.Step(bar, &sScale(cute::Int<0>{}, stage), 0);
+                            }
+                            else {
+                                gmem_U.Step(bar, &sScale(mc_offset_m, stage), mask_A);
+                            }
+                            ++write_state;
                         }
-                        else {
-                            cute::copy(tm_b.with(Bdesc, *bar, mask_B, cute::TMA::CacheHintSm90::EVICT_NORMAL),
-                                       packed_src(cute::_, out_tile + out_tiles * k_tile),
-                                       packed_dst(cute::_, 0));
-                        }
-                        auto shift_stage = sQparamShiftPipeline(cute::_, stage);
-                        auto shift_smem = cute::make_tensor(shift_stage.data(), QparamShiftSmemLayout{});
-                        auto shift_dst_part = shift_cta.partition_D(shift_smem);
-                        auto shift_dst = cute::group_modes<1, cute::rank(shift_dst_part)>(shift_dst_part);
-                        if constexpr (kMulticastB == 1) {
-                            cute::copy(tm_v.with(Vdesc, *bar, 0, cute::TMA::CacheHintSm90::EVICT_LAST),
-                                       shift_src(cute::_, out_tile + out_tiles * k_tile),
-                                       shift_dst(cute::_, 0));
-                        }
-                        else {
-                            cute::copy(tm_v.with(Vdesc, *bar, mask_B, cute::TMA::CacheHintSm90::EVICT_LAST),
-                                       shift_src(cute::_, out_tile + out_tiles * k_tile),
-                                       shift_dst(cute::_, 0));
-                        }
-                        auto base_stage = sQparamBasePipeline(cute::_, stage);
-                        CUTE_UNROLL
-                        for (int fragment = 0; fragment < kOutputFragments; ++fragment) {
-                            const int global_fragment = out_fragment + fragment;
-                            const bool pred = global_fragment < out_fragments;
-                            const Tv* src = base_gmem
-                                            + size_t(k_tile * out_fragments + global_fragment)
-                                                  * kQparamBaseValuesPerFragment;
-                            Tv* dst = &base_stage(fragment * kQparamBaseValuesPerFragment);
-                            cute::SM80_CP_ASYNC_CACHEALWAYS_ZFILL<uint4>::copy(
-                                *reinterpret_cast<const uint4*>(src), *reinterpret_cast<uint4*>(dst), pred);
-                        }
-                        cutlass::arch::cpasync_barrier_arrive_noinc(bar);
-                        CUTE_UNROLL
-                        for (int tma_m = 0; tma_m < kTmaCountM; ++tma_m) {
-                            detail::load_mxfp4_folded_tma<kMulticastA, kTmaBoxM, TILE_K>(
-                                Adesc,
-                                bar,
-                                storage.B.data()
-                                    + stage * TILE_M * TILE_K
-                                    + (mc_offset_m + tma_m * kTmaBoxM) * TILE_K,
-                                k_tile * TILE_K,
-                                tile->offset_m + mc_offset_m + tma_m * kTmaBoxM,
-                                mask_A);
-                        }
-                        if constexpr (kMulticastU == 1) {
-                            gmem_U.Step(bar, &sScale(cute::Int<0>{}, stage), 0);
-                        }
-                        else {
-                            gmem_U.Step(bar, &sScale(mc_offset_m, stage), mask_A);
-                        }
-                        ++write_state;
-                    }
                     }
                 }
                 if constexpr (Scheduler::is_dynamic) {
                     if (cta_0) {
-                        named_barrier_arrive_unaligned(WARP_SIZE * 2,
-                                                        kProducerBarrierId);
+                        named_barrier_arrive_unaligned(WARP_SIZE * 2, kProducerBarrierId);
                     }
                 }
                 sched_state.release();
@@ -1065,7 +1027,7 @@ private:
 
         auto epi_synchronize = [&] {
             constexpr int kWarpsPerWg = WARPGROUP_SIZE / WARP_SIZE;
-            const int barrier_id = kEpilogueBarrierId + tma_store_warp / kWarpsPerWg;
+            const int     barrier_id  = kEpilogueBarrierId + tma_store_warp / kWarpsPerWg;
             named_barrier_arrive_and_wait(WARPGROUP_SIZE, barrier_id);
         };
         auto epi_pass_layout = cute::make_layout(cute::make_shape(cute::Int<kEpiStripsM>{}, cute::Int<kEpiStripsN>{}),
@@ -1078,7 +1040,7 @@ private:
         auto r2s_value_layout =
             cute::make_layout(cute::make_shape(cute::size(tRS_rD_frg), cute::Int<kMmaTileM / kEpiM>{}));
         constexpr int kTmaStoreWarpsPerWg = WARPGROUP_SIZE / WARP_SIZE;
-        const int     store_wg             = tma_store_warp / kTmaStoreWarpsPerWg;
+        const int     store_wg            = tma_store_warp / kTmaStoreWarpsPerWg;
 
         CUTE_UNROLL
         for (int epi_m = 0; epi_m < kEpiStripsM; ++epi_m) {
@@ -1122,8 +1084,8 @@ private:
                     auto store_tile_layout =
                         cute::make_layout(cute::make_shape(cute::Int<kTmaStoreCountN>{}, cute::Int<kEpiPlanes>{}));
                     const int warp_in_store_wg = tma_store_warp % kTmaStoreWarpsPerWg;
-                    const int first_warp = epi_pass * kTmaStoreCountM % kTmaStoreWarpsPerWg;
-                    const int tma_m      = (warp_in_store_wg + kTmaStoreWarpsPerWg - first_warp) % kTmaStoreWarpsPerWg;
+                    const int first_warp       = epi_pass * kTmaStoreCountM % kTmaStoreWarpsPerWg;
+                    const int tma_m = (warp_in_store_wg + kTmaStoreWarpsPerWg - first_warp) % kTmaStoreWarpsPerWg;
                     if (tma_m < kTmaStoreCountM) {
                         const auto store_tile_coord = store_tile_layout.get_flat_coord(store_wg);
                         const int  tma_n            = cute::get<0>(store_tile_coord);
@@ -1347,9 +1309,8 @@ private:
                                             for (int v0 = 0; v0 < kCValue0; ++v0) {
                                                 const auto value_coord = cute::make_coord(v0, v1, v2);
                                                 const auto c_coord     = cute::make_coord(value_coord);
-                                                dst(c_coord) = fmaf(src(c_coord),
-                                                                   activation_atom[v0 + kCValue0 * v2],
-                                                                   dst(c_coord));
+                                                dst(c_coord)           = fmaf(
+                                                    src(c_coord), activation_atom[v0 + kCValue0 * v2], dst(c_coord));
                                             }
                                         }
                                     }

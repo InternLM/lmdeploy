@@ -60,9 +60,9 @@ public:
 
     // --- three DataFormats fully describe the GEMM ---
     const gemm::Family* family{};
-    DataFormat weight_format{};  // from cfg.format
-    DataFormat input_format{};   // derived in ctor
-    DataFormat output_format{};  // derived in ctor
+    DataFormat          weight_format{};  // from cfg.format
+    DataFormat          input_format{};   // derived in ctor
+    DataFormat          output_format{};  // derived in ctor
 
     DataType input_dtype() const
     {
@@ -95,8 +95,8 @@ public:
     TM_MODULE_DECLARE(LinearWeight, LINEAR_WEIGHT_CHILDREN, LINEAR_WEIGHT_PARAMS)
 
 private:
-    bool                          has_bias_ = false;
-    bool                          prepared_ = false;
+    bool                            has_bias_ = false;
+    bool                            prepared_ = false;
     std::optional<gemm::WeightPlan> plan_;
 };
 

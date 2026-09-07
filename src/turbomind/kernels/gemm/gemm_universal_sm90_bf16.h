@@ -241,9 +241,9 @@ __global__ void __launch_bounds__(32, 1) prepare_tma_descs_sm90_bf16(const __gri
     using Tb = nv_bfloat16;
     using Tc = nv_bfloat16;
 
-    const int m0 = param_A.offsets ? __ldg(param_A.offsets + g) : 0;
-    const int m1 = param_A.offsets ? __ldg(param_A.offsets + g + 1) : M_total;
-    const int M  = m1 - m0;
+    const int m0     = param_A.offsets ? __ldg(param_A.offsets + g) : 0;
+    const int m1     = param_A.offsets ? __ldg(param_A.offsets + g + 1) : M_total;
+    const int M      = m1 - m0;
     const int M_desc = M > 0 ? M : 1;
 
     CUtensorMap* gmem_out = out + g * kNum;
@@ -289,7 +289,17 @@ __global__ void __launch_bounds__(32, 1) prepare_tma_descs_sm90_bf16(const __gri
     }
 }
 
-template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, class ClusterShape_, int L2HintW, int MmaN, bool SeparateMmaAtoms, int EpiM, int EpiStages_>
+template<class Config_,
+         int      Stages_,
+         Order    Raster,
+         Striding Mode,
+         bool     Silu,
+         class ClusterShape_,
+         int  L2HintW,
+         int  MmaN,
+         bool SeparateMmaAtoms,
+         int  EpiM,
+         int  EpiStages_>
 struct GemmUniversalSm90_Bf16 {
 
     static constexpr bool kDebug = false;
@@ -303,9 +313,9 @@ struct GemmUniversalSm90_Bf16 {
     static constexpr uint64_t kWeightL2Policy =
         kL2HintW ? (uint64_t)cute::TMA::CacheHintSm90::EVICT_FIRST : (uint64_t)cute::TMA::CacheHintSm90::EVICT_NORMAL;
 
-    using Arch = Sm90;
-    using Tile = typename Config_::Tile;
-    using Groups = typename Config_::Groups;
+    using Arch           = Sm90;
+    using Tile           = typename Config_::Tile;
+    using Groups         = typename Config_::Groups;
     using RegisterConfig = typename Config_::RegisterConfig;
 
     static constexpr bool kSupportsFusedSilu = Silu;
@@ -318,7 +328,7 @@ struct GemmUniversalSm90_Bf16 {
     static_assert(TILE_M >= 8 && TILE_M % 8 == 0);
     static_assert(TILE_K == 64);  // host TMA still SW128 / K-atom for this step
 
-    using WGLayout = cute::Layout<cute::Shape<cute::Int<Groups::M>, cute::Int<Groups::N>>>;
+    using WGLayout      = cute::Layout<cute::Shape<cute::Int<Groups::M>, cute::Int<Groups::N>>>;
     using AtomLayoutMNK = GmmaAtomLayoutMNK<WGLayout>;
 
     // Traits: OUT=N_out=TILE_N, BATCH=M_batch=TILE_M; AtomLayout reverses WGLayout MN.
@@ -361,7 +371,7 @@ struct GemmUniversalSm90_Bf16 {
 
     // setmaxnreg: each WG ≤ 256, multiples of 8. The configuration supplies the active producer/math budgets.
     static constexpr int kProducerRegs = RegisterConfig::Producer;
-    static constexpr int kMathRegs = RegisterConfig::Math;
+    static constexpr int kMathRegs     = RegisterConfig::Math;
     static_assert(kProducerRegs >= 24 && kProducerRegs % 8 == 0);
     static_assert(kMathRegs >= 24 && kMathRegs % 8 == 0 && kMathRegs <= 256);
     static_assert(WARPGROUPS == 1 || WARPGROUPS == 2);
@@ -391,11 +401,12 @@ struct GemmUniversalSm90_Bf16 {
     static constexpr int kGatherVec      = 16 / (int)sizeof(Ta);
     static constexpr int kGatherThreadsK = TILE_K / kGatherVec;
     static constexpr int kGatherThreadsM = WARPGROUP_SIZE / kGatherThreadsK;
-    using GatherCopyAtom = cute::Copy_Atom<cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<uint4>, Ta>;
-    using GatherTiledCopy = decltype(cute::make_tiled_copy(GatherCopyAtom{},
-                                                           cute::Layout<cute::Shape<cute::Int<kGatherThreadsM>, cute::Int<kGatherThreadsK>>,
-                                                                        cute::Stride<cute::Int<kGatherThreadsK>, cute::_1>>{},
-                                                           cute::Layout<cute::Shape<cute::_1, cute::Int<kGatherVec>>>{}));
+    using GatherCopyAtom                 = cute::Copy_Atom<cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<uint4>, Ta>;
+    using GatherTiledCopy =
+        decltype(cute::make_tiled_copy(GatherCopyAtom{},
+                                       cute::Layout<cute::Shape<cute::Int<kGatherThreadsM>, cute::Int<kGatherThreadsK>>,
+                                                    cute::Stride<cute::Int<kGatherThreadsK>, cute::_1>>{},
+                                       cute::Layout<cute::Shape<cute::_1, cute::Int<kGatherVec>>>{}));
     static_assert(kGatherVec * (int)sizeof(Ta) == 16);
     static_assert(kGatherThreadsM * kGatherThreadsK == WARPGROUP_SIZE);
     static_assert(cute::size(GatherTiledCopy{}) == WARPGROUP_SIZE);
@@ -420,27 +431,28 @@ struct GemmUniversalSm90_Bf16 {
     // The epilogue tile follows public GEMM (M,N) order. Its N extent covers
     // 64 columns per output-split WG; its M extent must cover the STSM-owned
     // tile or an M-unsplit STSM can write beyond the shared-memory buffer.
-    static constexpr int kAtomM          = Traits::kAtomM;
-    static constexpr int kAtomN          = Traits::kAtomN;
-    static constexpr int kRestM                    = TILE_N / (64 * kAtomM);
-    static constexpr bool kNeedsCrossWgSiluExchange = kSupportsFusedSilu && kRestM % 2 != 0 && kAtomM == 2 && WARPGROUPS == 2;
+    static constexpr int  kAtomM = Traits::kAtomM;
+    static constexpr int  kAtomN = Traits::kAtomN;
+    static constexpr int  kRestM = TILE_N / (64 * kAtomM);
+    static constexpr bool kNeedsCrossWgSiluExchange =
+        kSupportsFusedSilu && kRestM % 2 != 0 && kAtomM == 2 && WARPGROUPS == 2;
     static constexpr bool kUsesContiguousFusedMapping = kSupportsFusedSilu && kAtomM == 2 && !kNeedsCrossWgSiluExchange;
-    static constexpr bool kSplitEpiM      = kAtomN == 2;
-    static constexpr int kWgM            = TILE_M / kAtomN;
-    static constexpr int kEpiN           = 64 * kAtomM;
-    static constexpr int kWgMLowBit      = kWgM & -kWgM;
-    static constexpr int kEpiMDefault    = kWgMLowBit < 32 ? kWgMLowBit : 32;
-    static constexpr int kEpiM           = EpiM ? EpiM : kEpiMDefault;
-    static constexpr int kEpiPlanes      = kSplitEpiM ? kAtomN : 1;
-    static constexpr int kTmaStoreN      = 64;
-    static constexpr int kTmaStoreM      = kEpiM <= 256 ? kEpiM : 64;
-    static constexpr int kTmaStoreCountM = kEpiM / kTmaStoreM;
-    static constexpr int kSwizzleC       = 128;
-    static constexpr int kEpiThreads     = kSplitEpiM ? WARPGROUP_SIZE : kMathGroupSize;
-    static constexpr int kFragmentSize   = (kEpiM * kEpiN) / kEpiThreads;
-    static constexpr int kEpiStripsM     = kWgM / kEpiM;
-    static constexpr int kEpiStripsN     = TILE_N / kEpiN;
-    static constexpr int kEpiPasses      = kEpiStripsM * kEpiStripsN;
+    static constexpr bool kSplitEpiM                  = kAtomN == 2;
+    static constexpr int  kWgM                        = TILE_M / kAtomN;
+    static constexpr int  kEpiN                       = 64 * kAtomM;
+    static constexpr int  kWgMLowBit                  = kWgM & -kWgM;
+    static constexpr int  kEpiMDefault                = kWgMLowBit < 32 ? kWgMLowBit : 32;
+    static constexpr int  kEpiM                       = EpiM ? EpiM : kEpiMDefault;
+    static constexpr int  kEpiPlanes                  = kSplitEpiM ? kAtomN : 1;
+    static constexpr int  kTmaStoreN                  = 64;
+    static constexpr int  kTmaStoreM                  = kEpiM <= 256 ? kEpiM : 64;
+    static constexpr int  kTmaStoreCountM             = kEpiM / kTmaStoreM;
+    static constexpr int  kSwizzleC                   = 128;
+    static constexpr int  kEpiThreads                 = kSplitEpiM ? WARPGROUP_SIZE : kMathGroupSize;
+    static constexpr int  kFragmentSize               = (kEpiM * kEpiN) / kEpiThreads;
+    static constexpr int  kEpiStripsM                 = kWgM / kEpiM;
+    static constexpr int  kEpiStripsN                 = TILE_N / kEpiN;
+    static constexpr int  kEpiPasses                  = kEpiStripsM * kEpiStripsN;
     static_assert(TILE_N % kEpiN == 0);
     static_assert(!kSupportsFusedSilu || kRestM % 2 == 0 || kNeedsCrossWgSiluExchange);
     static_assert(TILE_M % kEpiM == 0);
@@ -449,8 +461,10 @@ struct GemmUniversalSm90_Bf16 {
     static_assert(kTmaStoreM <= 256);
     static_assert(kEpiN % kTmaStoreN == 0);
     static_assert(kFragmentSize >= 1);
-    static_assert(!kNeedsCrossWgSiluExchange || (kAtomM == 2 && kAtomN == 1 && kEpiPlanes == 1 && kTmaStoreCountM == 1));
-    using CrossWgSiluLayout = cute::Layout<cute::Shape<cute::Int<kEpiM>, cute::Int<kTmaStoreN>>, cute::Stride<cute::Int<kTmaStoreN>, cute::_1>>;
+    static_assert(!kNeedsCrossWgSiluExchange
+                  || (kAtomM == 2 && kAtomN == 1 && kEpiPlanes == 1 && kTmaStoreCountM == 1));
+    using CrossWgSiluLayout = cute::Layout<cute::Shape<cute::Int<kEpiM>, cute::Int<kTmaStoreN>>,
+                                           cute::Stride<cute::Int<kTmaStoreN>, cute::_1>>;
 
     using SmemLayoutAtomD = decltype(
         gmma_ss_smem_selector<cute::GMMA::Major::MN, cutlass::bfloat16_t, cute::Int<kEpiN>, cute::Int<kEpiM>>());
@@ -459,7 +473,8 @@ struct GemmUniversalSm90_Bf16 {
                                      cute::make_shape(cute::Int<kEpiN>{}, cute::Int<kEpiM>{}, cute::_1{}),
                                      cute::Step<cute::_2, cute::_1, cute::_3>{}));
     static constexpr int kEpiStageElems = cute::cosize_v<SmemLayoutDPlane> * kEpiPlanes;
-    static_assert(!kNeedsCrossWgSiluExchange || cute::cosize_v<CrossWgSiluLayout> * (int)sizeof(float) == kEpiStageElems * (int)sizeof(Tc));
+    static_assert(!kNeedsCrossWgSiluExchange
+                  || cute::cosize_v<CrossWgSiluLayout> * (int)sizeof(float) == kEpiStageElems * (int)sizeof(Tc));
 
     // Retile atom (CUTLASS builder always uses STSM_N for C_atom); R2S is STSM_T (M-major).
     // Atom size = per-WG accumulator vals/thread: WG_1x2 tiles split GMMA-M, so per-WG
@@ -481,17 +496,17 @@ struct GemmUniversalSm90_Bf16 {
     struct SharedStorageT {
         cute::array_aligned<typename Traits::ElementA, cute::cosize_v<SmemLayoutA>> A;
         cute::array_aligned<typename Traits::ElementB, cute::cosize_v<SmemLayoutB>> B;
-        cute::array_aligned<Tc, kEpiStageElems * EpiPipeStages, 1024> D;
-        PipelineStorage                                                  pipeline;
-        typename Scheduler::Storage                                      sched;
-        StridedPtr                                                       gather_A;
-        const int*                                                       gather_idxs;
-        int                                                              gather_alive;
-        int                                                              gather_k_iters;
-        int                                                              gather_M_group;
-        int                                                              gather_offset_m;
-        volatile int                                                     gather_group_idx;
-        volatile int                                                     gather_offset_n;
+        cute::array_aligned<Tc, kEpiStageElems * EpiPipeStages, 1024>               D;
+        PipelineStorage                                                             pipeline;
+        typename Scheduler::Storage                                                 sched;
+        StridedPtr                                                                  gather_A;
+        const int*                                                                  gather_idxs;
+        int                                                                         gather_alive;
+        int                                                                         gather_k_iters;
+        int                                                                         gather_M_group;
+        int                                                                         gather_offset_m;
+        volatile int                                                                gather_group_idx;
+        volatile int                                                                gather_offset_n;
     };
 
     static constexpr int kSmemCapacity = 228 << 10;
@@ -510,13 +525,15 @@ struct GemmUniversalSm90_Bf16 {
     static constexpr int kEpiPipeStages = GetEpiPipeStages();
     static_assert(1 <= kEpiPipeStages && kEpiPipeStages <= kEpiPasses);
     static constexpr int kEpiSmemSlices = kEpiPlanes * kEpiPipeStages;
-    using SmemLayoutD = decltype(cute::tile_to_shape(SmemLayoutAtomD{},
-                                                     cute::make_shape(cute::Int<kEpiN>{}, cute::Int<kEpiM>{}, cute::Int<kEpiSmemSlices>{}),
-                                                     cute::Step<cute::_2, cute::_1, cute::_3>{}));
-    using EpiStageLayout = cute::Layout<cute::Shape<cute::Int<kEpiPlanes>, cute::Int<kEpiPipeStages>>, cute::Stride<cute::_1, cute::Int<kEpiPlanes>>>;
+    using SmemLayoutD                   = decltype(
+        cute::tile_to_shape(SmemLayoutAtomD{},
+                            cute::make_shape(cute::Int<kEpiN>{}, cute::Int<kEpiM>{}, cute::Int<kEpiSmemSlices>{}),
+                            cute::Step<cute::_2, cute::_1, cute::_3>{}));
+    using EpiStageLayout = cute::Layout<cute::Shape<cute::Int<kEpiPlanes>, cute::Int<kEpiPipeStages>>,
+                                        cute::Stride<cute::_1, cute::Int<kEpiPlanes>>>;
     static_assert(cute::cosize_v<SmemLayoutD> == kEpiStageElems * kEpiPipeStages);
 
-    using SharedStorage = SharedStorageT<kEpiPipeStages>;
+    using SharedStorage            = SharedStorageT<kEpiPipeStages>;
     static constexpr int kSmemSize = (int)sizeof(SharedStorage);
     static_assert(kSmemSize <= kSmemCapacity);
 
@@ -617,22 +634,22 @@ struct GemmUniversalSm90_Bf16 {
             const bool cta_0      = cute::block_id_in_cluster().x == 0;
 
             if constexpr (kStridingA == Striding::kIndexed) {
-                Cluster cluster(cute::block_id_in_cluster().x);
-                const int mc_offset_n = cluster.cta_m() * (TILE_N / kMulticastB);
-                auto* smem_act    = storage.B.data();
-                auto* smem_weight = storage.A.data() + mc_offset_n * TILE_K;
+                Cluster                           cluster(cute::block_id_in_cluster().x);
+                const int                         mc_offset_n = cluster.cta_m() * (TILE_N / kMulticastB);
+                auto*                             smem_act    = storage.B.data();
+                auto*                             smem_weight = storage.A.data() + mc_offset_n * TILE_K;
                 PipelineState                     write_state = cutlass::make_producer_start_state<MainloopPipeline>();
                 typename Scheduler::ConsumerState sched_state = sched.init_consumer(storage.sched);
                 typename Scheduler::ProducerState prod_state  = sched.init_producer(storage.sched);
-                int                               elected        = 0;
-                const int                         lane_id        = threadIdx.x % WARP_SIZE;
-                const int                         prod_tid       = threadIdx.x - WARPGROUPS * WARPGROUP_SIZE;
+                int                               elected     = 0;
+                const int                         lane_id     = threadIdx.x % WARP_SIZE;
+                const int                         prod_tid    = threadIdx.x - WARPGROUPS * WARPGROUP_SIZE;
                 if (warp_in_wg == 0) {
                     elected = cute::elect_one_sync();
                 }
-                const int K = sched.gemm_shape().z;
-                constexpr int kGatherVectors = TILE_M * kGatherThreadsK;
-                constexpr int kGatherSlots   = (kGatherVectors + WARPGROUP_SIZE - 1) / WARPGROUP_SIZE;
+                const int                 K              = sched.gemm_shape().z;
+                constexpr int             kGatherVectors = TILE_M * kGatherThreadsK;
+                constexpr int             kGatherSlots   = (kGatherVectors + WARPGROUP_SIZE - 1) / WARPGROUP_SIZE;
                 typename Scheduler::Tile* tile;
                 while (true) {
                     if (warp_in_wg == 0) {
@@ -649,7 +666,7 @@ struct GemmUniversalSm90_Bf16 {
                             storage.gather_group_idx = 0;
                             storage.gather_offset_n  = 0;
                             if (alive && tile->is_valid_cluster) {
-                                a = resolve<Ta, kStridingA>(param_A, tile->group_idx);
+                                a                        = resolve<Ta, kStridingA>(param_A, tile->group_idx);
                                 storage.gather_k_iters   = sched.k_iters_;
                                 storage.gather_M_group   = is_grouped_gemm ? tile->m1 - tile->m0 : sched.gemm_shape().x;
                                 storage.gather_offset_m  = tile->offset_m;
@@ -665,30 +682,30 @@ struct GemmUniversalSm90_Bf16 {
                     if (storage.gather_alive == 0) {
                         break;
                     }
-                    const int tile_k_iters = storage.gather_k_iters;
-                    const int group_idx    = storage.gather_group_idx;
-                    const int packed_m0    = storage.gather_offset_m;
-                    const int row_count    = storage.gather_M_group - storage.gather_offset_m;
-                    const Ta* act_gmem     = static_cast<const Ta*>(storage.gather_A.ptr);
-                    const int ldA          = storage.gather_A.stride;
-                    const int* idxs        = storage.gather_idxs;
-                    const CUtensorMap* Bdesc = &tm_b;
+                    const int          tile_k_iters = storage.gather_k_iters;
+                    const int          group_idx    = storage.gather_group_idx;
+                    const int          packed_m0    = storage.gather_offset_m;
+                    const int          row_count    = storage.gather_M_group - storage.gather_offset_m;
+                    const Ta*          act_gmem     = static_cast<const Ta*>(storage.gather_A.ptr);
+                    const int          ldA          = storage.gather_A.stride;
+                    const int*         idxs         = storage.gather_idxs;
+                    const CUtensorMap* Bdesc        = &tm_b;
                     if constexpr (is_grouped_gemm) {
                         Bdesc = tensormap_buf + group_idx * kTmaDescNum;
                     }
-                    const int coord_n = storage.gather_offset_n + mc_offset_n;
-                    const uint16_t mask_B = cluster.mask_n();
+                    const int      coord_n = storage.gather_offset_n + mc_offset_n;
+                    const uint16_t mask_B  = cluster.mask_n();
 
-                    const Ta* gather_src[kGatherSlots];
+                    const Ta*                  gather_src[kGatherSlots];
                     typename Traits::ElementB* gather_dst[kGatherSlots];
-                    int  gather_tile_k[kGatherSlots];
-                    bool gather_pred[kGatherSlots];
-                    bool gather_slot_valid[kGatherSlots];
+                    int                        gather_tile_k[kGatherSlots];
+                    bool                       gather_pred[kGatherSlots];
+                    bool                       gather_slot_valid[kGatherSlots];
                     if constexpr (TILE_M >= kGatherThreadsM && TILE_M % kGatherThreadsM == 0) {
                         static_assert(kGatherVectors % WARPGROUP_SIZE == 0);
-                        auto gather_thr = GatherTiledCopy{}.get_slice(prod_tid);
+                        auto gather_thr      = GatherTiledCopy{}.get_slice(prod_tid);
                         auto smem_act_tensor = cute::make_tensor(cute::make_smem_ptr(storage.B.data()), SmemLayoutB{});
-                        auto gather_smem = gather_thr.partition_D(smem_act_tensor);
+                        auto gather_smem     = gather_thr.partition_D(smem_act_tensor);
                         auto identity = cute::make_identity_tensor(cute::Shape<cute::Int<TILE_M>, cute::Int<TILE_K>>{});
                         auto gather_coord = gather_thr.partition_D(identity);
                         static_assert(cute::size<0>(gather_coord) == kGatherVec);
@@ -696,12 +713,12 @@ struct GemmUniversalSm90_Bf16 {
                         static_assert(cute::size<2>(gather_coord) == 1);
                         PRAGMA_UNROLL
                         for (int slot = 0; slot < kGatherSlots; ++slot) {
-                            const auto tile_coord = gather_coord(0, slot, 0);
-                            const int tile_m      = cute::get<0>(tile_coord);
-                            const int tile_k      = cute::get<1>(tile_coord);
-                            const int packed_row  = packed_m0 + tile_m;
-                            const bool row_valid  = tile_m < row_count;
-                            const int source_row  = (idxs && row_valid) ? __ldg(idxs + packed_row) : packed_row;
+                            const auto tile_coord   = gather_coord(0, slot, 0);
+                            const int  tile_m       = cute::get<0>(tile_coord);
+                            const int  tile_k       = cute::get<1>(tile_coord);
+                            const int  packed_row   = packed_m0 + tile_m;
+                            const bool row_valid    = tile_m < row_count;
+                            const int  source_row   = (idxs && row_valid) ? __ldg(idxs + packed_row) : packed_row;
                             gather_src[slot]        = act_gmem + (int64_t)source_row * ldA + tile_k;
                             gather_dst[slot]        = &gather_smem(0, slot, 0, 0);
                             gather_tile_k[slot]     = tile_k;
@@ -710,16 +727,17 @@ struct GemmUniversalSm90_Bf16 {
                         }
                     }
                     else {
-                        auto smem_act_tensor = cute::make_tensor(cute::make_smem_ptr(storage.B.data()), SmemLayoutB_2D{});
+                        auto smem_act_tensor =
+                            cute::make_tensor(cute::make_smem_ptr(storage.B.data()), SmemLayoutB_2D{});
                         PRAGMA_UNROLL
                         for (int slot = 0; slot < kGatherSlots; ++slot) {
-                            const int vector_idx = prod_tid + slot * WARPGROUP_SIZE;
-                            const bool slot_valid = vector_idx < kGatherVectors;
-                            const int tile_m = slot_valid ? vector_idx / kGatherThreadsK : 0;
-                            const int tile_k = slot_valid ? (vector_idx % kGatherThreadsK) * kGatherVec : 0;
-                            const int packed_row = packed_m0 + tile_m;
-                            const bool row_valid = slot_valid && tile_m < row_count;
-                            const int source_row = (idxs && row_valid) ? __ldg(idxs + packed_row) : packed_row;
+                            const int  vector_idx   = prod_tid + slot * WARPGROUP_SIZE;
+                            const bool slot_valid   = vector_idx < kGatherVectors;
+                            const int  tile_m       = slot_valid ? vector_idx / kGatherThreadsK : 0;
+                            const int  tile_k       = slot_valid ? (vector_idx % kGatherThreadsK) * kGatherVec : 0;
+                            const int  packed_row   = packed_m0 + tile_m;
+                            const bool row_valid    = slot_valid && tile_m < row_count;
+                            const int  source_row   = (idxs && row_valid) ? __ldg(idxs + packed_row) : packed_row;
                             gather_src[slot]        = act_gmem + (int64_t)source_row * ldA + tile_k;
                             gather_dst[slot]        = &smem_act_tensor(tile_m, tile_k);
                             gather_tile_k[slot]     = tile_k;
@@ -730,10 +748,17 @@ struct GemmUniversalSm90_Bf16 {
 
                     for (int k_tile = 0; k_tile < tile_k_iters; ++k_tile) {
                         pipeline.producer_acquire(write_state);
-                        auto* bar = pipeline.producer_get_barrier(write_state);
+                        auto*     bar   = pipeline.producer_get_barrier(write_state);
                         const int stage = write_state.index();
                         if (warp_in_wg == 0 && elected) {
-                            detail::tma_load_with_barrier<kMulticastB, TILE_N / kMulticastB, TILE_K>(Bdesc, bar, smem_weight + stage * TILE_N * TILE_K, k_tile * TILE_K, coord_n, mask_B, kWeightL2Policy);
+                            detail::tma_load_with_barrier<kMulticastB, TILE_N / kMulticastB, TILE_K>(
+                                Bdesc,
+                                bar,
+                                smem_weight + stage * TILE_N * TILE_K,
+                                k_tile * TILE_K,
+                                coord_n,
+                                mask_B,
+                                kWeightL2Policy);
                         }
                         PRAGMA_UNROLL
                         for (int slot = 0; slot < kGatherSlots; ++slot) {
@@ -742,9 +767,12 @@ struct GemmUniversalSm90_Bf16 {
                                     continue;
                                 }
                             }
-                            auto* dst = gather_dst[slot] + stage * TILE_M * TILE_K;
+                            auto*      dst  = gather_dst[slot] + stage * TILE_M * TILE_K;
                             const bool pred = gather_pred[slot] && k_tile * TILE_K + gather_tile_k[slot] < K;
-                            cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<uint4>::copy(*reinterpret_cast<const uint4*>(gather_src[slot]), *reinterpret_cast<uint4*>(dst), pred);
+                            cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<uint4>::copy(
+                                *reinterpret_cast<const uint4*>(gather_src[slot]),
+                                *reinterpret_cast<uint4*>(dst),
+                                pred);
                             gather_src[slot] += TILE_K;
                         }
                         cutlass::arch::cpasync_barrier_arrive_noinc(bar);
@@ -893,10 +921,12 @@ struct GemmUniversalSm90_Bf16 {
 
             CUTE_STATIC_ASSERT_V(cute::size<1>(tCrA) == cute::Int<kRestM>{});
             // Native segment = rest_m * kAtomM + wg_m. Fused segment = wg_m * kRestM + rest_m.
-            const int wg_m = cutlass::canonical_warp_group_idx() % kAtomM;
-            auto a_segment_stride = cute::stride<1>(tCrA.layout()) / cute::Int<kAtomM>{};
-            auto contiguous_a_layout = cute::make_layout(cute::shape(tCrA), cute::replace<1>(cute::stride(tCrA), a_segment_stride));
-            auto tCrA_contiguous = cute::make_tensor(tCrA.data() + wg_m * (kRestM - 1) * a_segment_stride, contiguous_a_layout);
+            const int wg_m             = cutlass::canonical_warp_group_idx() % kAtomM;
+            auto      a_segment_stride = cute::stride<1>(tCrA.layout()) / cute::Int<kAtomM>{};
+            auto      contiguous_a_layout =
+                cute::make_layout(cute::shape(tCrA), cute::replace<1>(cute::stride(tCrA), a_segment_stride));
+            auto tCrA_contiguous =
+                cute::make_tensor(tCrA.data() + wg_m * (kRestM - 1) * a_segment_stride, contiguous_a_layout);
 
             PipelineState pipe_state{};
             PipelineState pipe_release = pipe_state;
@@ -914,10 +944,11 @@ struct GemmUniversalSm90_Bf16 {
             CopyAtomC copy_atom_c{};
             using EpiTiledMma = std::conditional_t<kSplitEpiM, typename Traits::WgTiledMma, TiledMma>;
             EpiTiledMma epi_tiled_mma;
-            auto tiled_copy_C_atom = cute::make_tiled_copy_C_atom(copy_atom_c, epi_tiled_mma);
-            auto tiled_r2s = cute::make_tiled_copy_S(cute::Copy_Atom<CopyOpR2S, cutlass::bfloat16_t>{}, tiled_copy_C_atom);
-            auto thr_r2s = tiled_r2s.get_slice(kSplitEpiM ? local_tid : mma_tid);
-            auto         tRS_rD_layout = cute::make_layout(cute::take<0, 3>(cute::shape(thr_r2s.partition_S(sD))));
+            auto        tiled_copy_C_atom = cute::make_tiled_copy_C_atom(copy_atom_c, epi_tiled_mma);
+            auto        tiled_r2s =
+                cute::make_tiled_copy_S(cute::Copy_Atom<CopyOpR2S, cutlass::bfloat16_t>{}, tiled_copy_C_atom);
+            auto       thr_r2s          = tiled_r2s.get_slice(kSplitEpiM ? local_tid : mma_tid);
+            auto       tRS_rD_layout    = cute::make_layout(cute::take<0, 3>(cute::shape(thr_r2s.partition_S(sD))));
             const int  tma_store_warp   = mma_tid / WARP_SIZE;
             const bool tma_store_leader = cute::elect_one_sync();
             int        epi_store_count  = 0;
@@ -941,7 +972,10 @@ struct GemmUniversalSm90_Bf16 {
                                 ++pipe_state;
                                 CUTE_UNROLL
                                 for (int k_block = 0; k_block < cute::size<2>(tCrA_); ++k_block) {
-                                    MmaIssue::run(tiled_mma, tCrA_(cute::_, cute::_, k_block, read), tCrB(cute::_, cute::_, k_block, read), accum);
+                                    MmaIssue::run(tiled_mma,
+                                                  tCrA_(cute::_, cute::_, k_block, read),
+                                                  tCrB(cute::_, cute::_, k_block, read),
+                                                  accum);
                                     if (k_block == 1 && k_tile > 0) {
                                         pipeline.consumer_release(pipe_release);
                                         ++pipe_release;
@@ -965,7 +999,10 @@ struct GemmUniversalSm90_Bf16 {
                                 tiled_mma.accumulate_ = cute::GMMA::ScaleOut::Zero;
                                 CUTE_UNROLL
                                 for (int k_block = 0; k_block < cute::size<2>(tCrA_); ++k_block) {
-                                    cute::gemm(tiled_mma, tCrA_(cute::_, cute::_, k_block, read), tCrB(cute::_, cute::_, k_block, read), accum);
+                                    cute::gemm(tiled_mma,
+                                               tCrA_(cute::_, cute::_, k_block, read),
+                                               tCrB(cute::_, cute::_, k_block, read),
+                                               accum);
                                     tiled_mma.accumulate_ = cute::GMMA::ScaleOut::One;
                                 }
                                 cute::warpgroup_commit_batch();
@@ -980,7 +1017,10 @@ struct GemmUniversalSm90_Bf16 {
                                 const int read = pipe_state.index();
                                 cute::warpgroup_fence_operand(accum);
                                 cute::warpgroup_arrive();
-                                cute::gemm(tiled_mma, tCrA_(cute::_, cute::_, cute::_, read), tCrB(cute::_, cute::_, cute::_, read), accum);
+                                cute::gemm(tiled_mma,
+                                           tCrA_(cute::_, cute::_, cute::_, read),
+                                           tCrB(cute::_, cute::_, cute::_, read),
+                                           accum);
                                 cute::warpgroup_commit_batch();
                                 cute::warpgroup_wait<K_PIPE_MMAS>();
                                 cute::warpgroup_fence_operand(accum);
@@ -1017,8 +1057,10 @@ struct GemmUniversalSm90_Bf16 {
                     cute::Tensor tRS_rAcc_frg = cute::recast<cutlass::Array<float, kFragmentSize>>(tRS_rAcc);
                     cute::Tensor tRS_rD_frg = cute::recast<cutlass::Array<cutlass::bfloat16_t, kFragmentSize>>(tRS_rD);
 
-                    constexpr int kMmaTileN = cute::size<0>(typename Traits::TileShape{}) / cute::size<1>(decltype(tRS_rAcc){});
-                    constexpr int kMmaTileM = (kSplitEpiM ? kWgM : cute::size<1>(typename Traits::TileShape{})) / cute::size<2>(decltype(tRS_rAcc){});
+                    constexpr int kMmaTileN =
+                        cute::size<0>(typename Traits::TileShape{}) / cute::size<1>(decltype(tRS_rAcc){});
+                    constexpr int kMmaTileM = (kSplitEpiM ? kWgM : cute::size<1>(typename Traits::TileShape{}))
+                                              / cute::size<2>(decltype(tRS_rAcc){});
                     constexpr int kTmaStoreCountN = kEpiN / kTmaStoreN;
                     (void)kMmaTileN;
 
@@ -1026,10 +1068,11 @@ struct GemmUniversalSm90_Bf16 {
                         constexpr bool kFuseSilu = decltype(fused_silu)::value;
                         static_assert(!kFuseSilu || kSupportsFusedSilu);
                         constexpr bool kCrossWgSilu = kFuseSilu && kNeedsCrossWgSiluExchange;
-                        constexpr int kStoreN    = kFuseSilu ? TILE_N / 2 : TILE_N;
-                        constexpr int kEpiCountN = kCrossWgSilu ? 1 : kStoreN / kEpiN;
+                        constexpr int  kStoreN      = kFuseSilu ? TILE_N / 2 : TILE_N;
+                        constexpr int  kEpiCountN   = kCrossWgSilu ? 1 : kStoreN / kEpiN;
                         static_assert(kCrossWgSilu || kStoreN % kEpiN == 0);
-                        static_assert(!kCrossWgSilu || (kAtomM == 2 && kAtomN == 1 && kEpiN == 2 * kTmaStoreN && kEpiPlanes == 1));
+                        static_assert(!kCrossWgSilu
+                                      || (kAtomM == 2 && kAtomN == 1 && kEpiN == 2 * kTmaStoreN && kEpiPlanes == 1));
 
                         auto epi_synchronize = [&] {
                             if constexpr (kCrossWgSilu) {
@@ -1037,40 +1080,51 @@ struct GemmUniversalSm90_Bf16 {
                             }
                             else {
                                 constexpr int kWarpsPerWg = WARPGROUP_SIZE / WARP_SIZE;
-                                const int barrier_id = kEpilogueBarrierId + tma_store_warp / kWarpsPerWg;
+                                const int     barrier_id  = kEpilogueBarrierId + tma_store_warp / kWarpsPerWg;
                                 named_barrier_arrive_and_wait(WARPGROUP_SIZE, barrier_id);
                             }
                         };
 
-                        auto epi_pass_layout = cute::make_layout(cute::make_shape(cute::Int<kEpiStripsM>{}, cute::Int<kEpiCountN>{}), cute::make_stride(cute::Int<kEpiCountN>{}, cute::_1{}));
-                        auto store_offset_m_layout = cute::make_layout(cute::make_shape(cute::Int<kEpiPlanes>{}, cute::Int<kEpiStripsM>{}, cute::Int<kTmaStoreCountM>{}), cute::make_stride(cute::Int<kWgM>{}, cute::Int<kEpiM>{}, cute::Int<kTmaStoreM>{}));
-                        auto cEpiNM     = cute::make_identity_tensor(cute::make_shape(cute::Int<kEpiN>{}, cute::Int<kEpiM>{}));
+                        auto epi_pass_layout =
+                            cute::make_layout(cute::make_shape(cute::Int<kEpiStripsM>{}, cute::Int<kEpiCountN>{}),
+                                              cute::make_stride(cute::Int<kEpiCountN>{}, cute::_1{}));
+                        auto store_offset_m_layout = cute::make_layout(
+                            cute::make_shape(
+                                cute::Int<kEpiPlanes>{}, cute::Int<kEpiStripsM>{}, cute::Int<kTmaStoreCountM>{}),
+                            cute::make_stride(cute::Int<kWgM>{}, cute::Int<kEpiM>{}, cute::Int<kTmaStoreM>{}));
+                        auto cEpiNM =
+                            cute::make_identity_tensor(cute::make_shape(cute::Int<kEpiN>{}, cute::Int<kEpiM>{}));
                         auto tRS_cEpiNM = thr_r2s.partition_S(cEpiNM);
-                        auto r2s_coord_layout = cute::make_layout(cute::make_shape(cute::Int<kFragmentSize>{}, cute::size(tRS_rD_frg)));
-                        auto r2s_value_layout = cute::make_layout(cute::make_shape(cute::size(tRS_rD_frg), cute::Int<kMmaTileM / kEpiM>{}));
+                        auto r2s_coord_layout =
+                            cute::make_layout(cute::make_shape(cute::Int<kFragmentSize>{}, cute::size(tRS_rD_frg)));
+                        auto r2s_value_layout =
+                            cute::make_layout(cute::make_shape(cute::size(tRS_rD_frg), cute::Int<kMmaTileM / kEpiM>{}));
                         constexpr int kTmaStoreWarpsPerWg = WARPGROUP_SIZE / WARP_SIZE;
-                        const int store_wg = tma_store_warp / kTmaStoreWarpsPerWg;
+                        const int     store_wg            = tma_store_warp / kTmaStoreWarpsPerWg;
 
                         CUTE_UNROLL
                         for (int epi_m = 0; epi_m < kEpiStripsM; ++epi_m) {
                             CUTE_UNROLL
                             for (int epi_n = 0; epi_n < kEpiCountN; ++epi_n) {
-                                const int epi_pass = epi_pass_layout(epi_m, epi_n);
-                                const int epi_stage = epi_store_count % kEpiPipeStages;
-                                const int mma_n = kFuseSilu && !kCrossWgSilu ? 2 * epi_n : epi_n;
-                                const int mma_m = (epi_m * kEpiM) / kMmaTileM;
-                                const int epi_m_in_mma = epi_m % (kMmaTileM / kEpiM);
-                                const int r2s_v = r2s_value_layout(0, epi_m_in_mma);
+                                const int epi_pass       = epi_pass_layout(epi_m, epi_n);
+                                const int epi_stage      = epi_store_count % kEpiPipeStages;
+                                const int mma_n          = kFuseSilu && !kCrossWgSilu ? 2 * epi_n : epi_n;
+                                const int mma_m          = (epi_m * kEpiM) / kMmaTileM;
+                                const int epi_m_in_mma   = epi_m % (kMmaTileM / kEpiM);
+                                const int r2s_v          = r2s_value_layout(0, epi_m_in_mma);
                                 const int epi_smem_slice = EpiStageLayout{}(kSplitEpiM ? store_wg : 0, epi_stage);
-                                auto sD_epi = sD(cute::_, cute::_, epi_smem_slice);
-                                auto tRS_sD = thr_r2s.partition_D(sD_epi);
+                                auto      sD_epi         = sD(cute::_, cute::_, epi_smem_slice);
+                                auto      tRS_sD         = thr_r2s.partition_D(sD_epi);
 
                                 if constexpr (kCrossWgSilu) {
                                     if (tma_store_leader) {
                                         cute::tma_store_wait<kEpiPipeStages - 1>();
                                     }
                                     epi_synchronize();
-                                    auto silu_exchange = cute::make_tensor(reinterpret_cast<float*>(storage.D.data() + epi_smem_slice * cute::cosize_v<SmemLayoutDPlane>), CrossWgSiluLayout{});
+                                    auto silu_exchange = cute::make_tensor(
+                                        reinterpret_cast<float*>(storage.D.data()
+                                                                 + epi_smem_slice * cute::cosize_v<SmemLayoutDPlane>),
+                                        CrossWgSiluLayout{});
                                     if (store_wg == 1) {
                                         CUTE_UNROLL
                                         for (int epi_v = 0; epi_v < cute::size(tRS_rD_frg); ++epi_v) {
@@ -1078,8 +1132,8 @@ struct GemmUniversalSm90_Bf16 {
                                             CUTE_UNROLL
                                             for (int j = 0; j < kFragmentSize; ++j) {
                                                 const auto coord_nm = tRS_cEpiNM(r2s_coord_layout(j, epi_v));
-                                                const int n = cute::get<0>(coord_nm) - kTmaStoreN;
-                                                const int m = cute::get<1>(coord_nm);
+                                                const int  n        = cute::get<0>(coord_nm) - kTmaStoreN;
+                                                const int  m        = cute::get<1>(coord_nm);
                                                 silu_exchange(m, n) = up[j];
                                             }
                                         }
@@ -1093,7 +1147,7 @@ struct GemmUniversalSm90_Bf16 {
                                         cutlass::Array<cutlass::bfloat16_t, kFragmentSize> dst;
                                         if constexpr (kFuseSilu) {
                                             auto gate = tRS_rAcc_frg(cute::_, mma_n, mma_m)(r2s_v + epi_v);
-                                            auto up = tRS_rAcc_frg(cute::_, mma_n + 1, mma_m)(r2s_v + epi_v);
+                                            auto up   = tRS_rAcc_frg(cute::_, mma_n + 1, mma_m)(r2s_v + epi_v);
                                             CUTE_UNROLL
                                             for (int j = 0; j < kFragmentSize; ++j) {
                                                 dst[j] = cutlass::bfloat16_t(detail::silu_mul(gate[j], up[j]));
@@ -1110,7 +1164,10 @@ struct GemmUniversalSm90_Bf16 {
                                     }
                                 }
                                 else if (store_wg == 0) {
-                                    auto silu_exchange = cute::make_tensor(reinterpret_cast<float*>(storage.D.data() + epi_smem_slice * cute::cosize_v<SmemLayoutDPlane>), CrossWgSiluLayout{});
+                                    auto silu_exchange = cute::make_tensor(
+                                        reinterpret_cast<float*>(storage.D.data()
+                                                                 + epi_smem_slice * cute::cosize_v<SmemLayoutDPlane>),
+                                        CrossWgSiluLayout{});
                                     CUTE_UNROLL
                                     for (int epi_v = 0; epi_v < cute::size(tRS_rD_frg); ++epi_v) {
                                         cutlass::Array<cutlass::bfloat16_t, kFragmentSize> dst;
@@ -1118,9 +1175,10 @@ struct GemmUniversalSm90_Bf16 {
                                         CUTE_UNROLL
                                         for (int j = 0; j < kFragmentSize; ++j) {
                                             const auto coord_nm = tRS_cEpiNM(r2s_coord_layout(j, epi_v));
-                                            const int n = cute::get<0>(coord_nm);
-                                            const int m = cute::get<1>(coord_nm);
-                                            dst[j] = cutlass::bfloat16_t(detail::silu_mul(gate[j], silu_exchange(m, n)));
+                                            const int  n        = cute::get<0>(coord_nm);
+                                            const int  m        = cute::get<1>(coord_nm);
+                                            dst[j] =
+                                                cutlass::bfloat16_t(detail::silu_mul(gate[j], silu_exchange(m, n)));
                                         }
                                         tRS_rD_frg(epi_v) = dst;
                                     }
@@ -1150,27 +1208,41 @@ struct GemmUniversalSm90_Bf16 {
                                         if (tma_store_warp == epi_pass % kTmaStoreWarps) {
                                             const int store_m = tile->offset_m + store_offset_m_layout(0, epi_m, 0);
                                             const int store_n = tile->offset_n / 2;
-                                            auto sD_tma = cute::local_tile(sD(cute::_, cute::_, EpiStageLayout{}(0, epi_stage)), cute::make_shape(cute::Int<kTmaStoreN>{}, cute::Int<kTmaStoreM>{}), cute::make_coord(0, 0));
-                                            cute::SM90_TMA_STORE::copy(Cdesc, cute::raw_pointer_cast(sD_tma.data()), store_n, store_m);
+                                            auto      sD_tma  = cute::local_tile(
+                                                sD(cute::_, cute::_, EpiStageLayout{}(0, epi_stage)),
+                                                cute::make_shape(cute::Int<kTmaStoreN>{}, cute::Int<kTmaStoreM>{}),
+                                                cute::make_coord(0, 0));
+                                            cute::SM90_TMA_STORE::copy(
+                                                Cdesc, cute::raw_pointer_cast(sD_tma.data()), store_n, store_m);
                                         }
                                     }
                                     else {
-                                        constexpr int kStoreTmaCountN = kTmaStoreCountN;
-                                        auto store_offset_n_layout = cute::make_layout(cute::make_shape(cute::Int<kEpiCountN>{}, cute::Int<kStoreTmaCountN>{}), cute::make_stride(cute::Int<kEpiN>{}, cute::Int<kTmaStoreN>{}));
+                                        constexpr int kStoreTmaCountN       = kTmaStoreCountN;
+                                        auto          store_offset_n_layout = cute::make_layout(
+                                            cute::make_shape(cute::Int<kEpiCountN>{}, cute::Int<kStoreTmaCountN>{}),
+                                            cute::make_stride(cute::Int<kEpiN>{}, cute::Int<kTmaStoreN>{}));
                                         static_assert(kEpiPlanes * kStoreTmaCountN == WARPGROUPS);
                                         static_assert(kTmaStoreCountM <= kTmaStoreWarpsPerWg);
-                                        auto store_tile_layout = cute::make_layout(cute::make_shape(cute::Int<kStoreTmaCountN>{}, cute::Int<kEpiPlanes>{}));
+                                        auto store_tile_layout = cute::make_layout(
+                                            cute::make_shape(cute::Int<kStoreTmaCountN>{}, cute::Int<kEpiPlanes>{}));
                                         const int warp_in_wg = tma_store_warp % kTmaStoreWarpsPerWg;
                                         const int first_warp = (epi_pass * kTmaStoreCountM) % kTmaStoreWarpsPerWg;
-                                        const int tma_m = (warp_in_wg + kTmaStoreWarpsPerWg - first_warp) % kTmaStoreWarpsPerWg;
+                                        const int tma_m =
+                                            (warp_in_wg + kTmaStoreWarpsPerWg - first_warp) % kTmaStoreWarpsPerWg;
                                         if (tma_m < kTmaStoreCountM) {
                                             const auto store_tile_coord = store_tile_layout.get_flat_coord(store_wg);
-                                            const int tma_n = cute::get<0>(store_tile_coord);
-                                            const int epi_plane = cute::get<1>(store_tile_coord);
-                                            const int store_m = tile->offset_m + store_offset_m_layout(epi_plane, epi_m, tma_m);
-                                            const int store_n = (kFuseSilu ? tile->offset_n / 2 : tile->offset_n) + store_offset_n_layout(epi_n, tma_n);
-                                            auto sD_tma = cute::local_tile(sD(cute::_, cute::_, EpiStageLayout{}(epi_plane, epi_stage)), cute::make_shape(cute::Int<kTmaStoreN>{}, cute::Int<kTmaStoreM>{}), cute::make_coord(tma_n, tma_m));
-                                            cute::SM90_TMA_STORE::copy(Cdesc, cute::raw_pointer_cast(sD_tma.data()), store_n, store_m);
+                                            const int  tma_n            = cute::get<0>(store_tile_coord);
+                                            const int  epi_plane        = cute::get<1>(store_tile_coord);
+                                            const int  store_m =
+                                                tile->offset_m + store_offset_m_layout(epi_plane, epi_m, tma_m);
+                                            const int store_n = (kFuseSilu ? tile->offset_n / 2 : tile->offset_n)
+                                                                + store_offset_n_layout(epi_n, tma_n);
+                                            auto sD_tma = cute::local_tile(
+                                                sD(cute::_, cute::_, EpiStageLayout{}(epi_plane, epi_stage)),
+                                                cute::make_shape(cute::Int<kTmaStoreN>{}, cute::Int<kTmaStoreM>{}),
+                                                cute::make_coord(tma_n, tma_m));
+                                            cute::SM90_TMA_STORE::copy(
+                                                Cdesc, cute::raw_pointer_cast(sD_tma.data()), store_n, store_m);
                                         }
                                     }
                                     cute::tma_store_arrive();

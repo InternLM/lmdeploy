@@ -37,16 +37,10 @@ int WeightPackEnv();
 
 void ApplyWeightBridge(LinearWeight&, const WeightBridge&, cudaStream_t);
 void PackWeight(LinearWeight&, const LayoutConverter&, cudaStream_t);
-void PackWeight(LinearWeight&,
-                Pack,
-                void (*)(uint32_t*, const uint16_t*, int, int, cudaStream_t),
-                cudaStream_t);
+void PackWeight(LinearWeight&, Pack, void (*)(uint32_t*, const uint16_t*, int, int, cudaStream_t), cudaStream_t);
 void PackQParams(LinearWeight&, const LayoutConverter&, QuantDesc, cudaStream_t);
-void PackQParams(LinearWeight&,
-                 QuantDesc,
-                 Pack,
-                 void (*)(uint8_t*, const uint8_t*, int, int, cudaStream_t),
-                 cudaStream_t);
+void PackQParams(
+    LinearWeight&, QuantDesc, Pack, void (*)(uint8_t*, const uint8_t*, int, int, cudaStream_t), cudaStream_t);
 
 // Free with `cudaFree`
 void* MakeStridedPtrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream);

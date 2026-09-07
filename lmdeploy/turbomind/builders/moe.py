@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from .. import _tm
-
 from ._base import Builder, ParallelGroup, SplitSide
 
 # ---------------------------------------------------------------------------

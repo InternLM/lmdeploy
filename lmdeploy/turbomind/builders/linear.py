@@ -54,10 +54,10 @@ class Linear:
 def _build_linear(fmt: WeightFormat, available: dict[str, Tensor]) -> Linear:
     """Normalize resolved checkpoint tensors into a build-time Linear."""
     tensors = {kind: fmt.normalize(available[s], kind) for s, kind in fmt.suffix_map.items() if s in available}
-    if fmt.zeros_dtype != _tm.DataType.TYPE_INVALID and "zeros" not in tensors:
-        tensors["zeros"] = fmt.synthesize_zeros(tensors["scales"])
-    if "zeros" in tensors:
-        tensors["zeros"] = tensors["zeros"].to(tensors["scales"].dtype)
+    if fmt.zeros_dtype != _tm.DataType.TYPE_INVALID and 'zeros' not in tensors:
+        tensors['zeros'] = fmt.synthesize_zeros(tensors['scales'])
+    if 'zeros' in tensors:
+        tensors['zeros'] = tensors['zeros'].to(tensors['scales'].dtype)
     return Linear(tensors=tensors, weight_format=fmt)
 
 
@@ -90,8 +90,8 @@ def _dequant_linear(linear: Linear, *, dtype: torch.dtype) -> Linear:
     ``NotImplementedError`` — calling ``_dequant_linear`` on one of those is a
     broken-fusion-group configuration, and the raise names it at the call site.
     """
-    from ._base import _torch_dtype_to_cpp
     from ..weight_format import TrivialFormat
+    from ._base import _torch_dtype_to_cpp
 
     fmt = linear.weight_format
     new_tensors = {

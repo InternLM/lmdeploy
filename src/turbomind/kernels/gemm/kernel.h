@@ -120,8 +120,8 @@ protected:
     std::string GetName() const;
 
     const Family& family_;
-    KernelDesc          desc_;
-    KernelInfo          info_;
+    KernelDesc    desc_;
+    KernelInfo    info_;
 };
 
 struct ClusteringParam {

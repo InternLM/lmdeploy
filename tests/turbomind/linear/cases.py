@@ -448,8 +448,7 @@ def is_supported(type_spec: TypeSpec, shape: ShapeSpec) -> bool:
 def supports_fuse_silu(type_spec: TypeSpec, shape: ShapeSpec) -> bool:
     """FP8/BF16/U4 SM90 gate_up can optionally use block-pack + kGatedSilu.
 
-    FP16/BF16-input kernels pair 64-wide gate/up blocks. Only native FP8xFP8 uses
-    128-wide pairs.
+    FP16/BF16-input kernels pair 64-wide gate/up blocks. Only native FP8xFP8 uses 128-wide pairs.
     """
     if not shape.name.endswith('_gate_up'):
         return False

@@ -128,27 +128,27 @@ struct LlamaLinear::Impl {
         return weight.family->output_spec(core::Layout{std::move(output_shape)}, weight.epilogue);
     }
 
-    Gemm::Arguments GetArguments(Tensor& A,
-                                 Tensor& U,
-                                 const OutputSpec& output_spec,
-                                 const Tensor& input,
-                                 const Tensor& input_scales,
+    Gemm::Arguments GetArguments(Tensor&             A,
+                                 Tensor&             U,
+                                 const OutputSpec&   output_spec,
+                                 const Tensor&       input,
+                                 const Tensor&       input_scales,
                                  const LinearWeight& weight,
                                  const Buffer_<int>& indices,
                                  const Buffer_<int>& offsets,
-                                 Tensor& output,
-                                 Tensor& output_scales)
+                                 Tensor&             output,
+                                 Tensor&             output_scales)
     {
-        Tensor in = input.view({-1, input.shape(-1)});
+        Tensor       in = input.view({-1, input.shape(-1)});
         MatrixLayout desc_A;
         MatrixLayout desc_U;
         std::tie(A, desc_A, U, desc_U) = GetOperandA(weight, in, input_scales, indices, offsets);
-        auto&& [B, desc_B, V, desc_V] = GetOperandB(weight);
+        auto&& [B, desc_B, V, desc_V]  = GetOperandB(weight);
 
         const Tensor& global_scale = weight.global_scale;
         MatrixLayout  global_scale_desc{};
         if (global_scale) {
-            global_scale_desc = {global_scale.dtype(), kRowMajor, 1, 1, weight.k_desc.ld == 0 ? 0 : 1};
+            global_scale_desc     = {global_scale.dtype(), kRowMajor, 1, 1, weight.k_desc.ld == 0 ? 0 : 1};
             global_scale_desc.num = weight.k_desc.num;
         }
 
@@ -209,19 +209,20 @@ struct LlamaLinear::Impl {
         return args;
     }
 
-    void Forward(const ExecPlan& plan,
-                 const Tensor& input,
-                 const Tensor& input_scales,
+    void Forward(const ExecPlan&     plan,
+                 const Tensor&       input,
+                 const Tensor&       input_scales,
                  const LinearWeight& weight,
                  const Buffer_<int>& indices,
                  const Buffer_<int>& offsets,
-                 Tensor& output,
-                 Tensor& output_scales)
+                 Tensor&             output,
+                 Tensor&             output_scales)
     {
         TM_FUNCTION_SCOPE();
-        Tensor A;
-        Tensor U;
-        Gemm::Arguments args = GetArguments(A, U, plan.output_spec(), input, input_scales, weight, indices, offsets, output, output_scales);
+        Tensor          A;
+        Tensor          U;
+        Gemm::Arguments args = GetArguments(
+            A, U, plan.output_spec(), input, input_scales, weight, indices, offsets, output, output_scales);
         const int ec = gemm_.Run(plan, args);
         if (ec) {
             TM_LOG_ERROR("{}: {}", __PRETTY_FUNCTION__, ec);
@@ -270,16 +271,18 @@ void LlamaLinear::Forward(const Tensor&       input,
                           Ref<Tensor>         output_scales)
 {
     TM_FUNCTION_SCOPE();
-    OutputSpec output_spec = impl_->GetOutputSpec(input, weight, indices);
-    Tensor A;
-    Tensor U;
-    Gemm::Arguments args = impl_->GetArguments(A, U, output_spec, input, input_scales, weight, indices, offsets, output.get(), output_scales.get());
+    OutputSpec      output_spec = impl_->GetOutputSpec(input, weight, indices);
+    Tensor          A;
+    Tensor          U;
+    Gemm::Arguments args = impl_->GetArguments(
+        A, U, output_spec, input, input_scales, weight, indices, offsets, output.get(), output_scales.get());
 
-    auto exec_plan = impl_->dispatch_policy_ & DispatchPolicy::kMeasure ? impl_->gemm_.Tune(args) : impl_->gemm_.GetExecPlan(args);
+    auto exec_plan =
+        impl_->dispatch_policy_ & DispatchPolicy::kMeasure ? impl_->gemm_.Tune(args) : impl_->gemm_.GetExecPlan(args);
 
     TM_CHECK(exec_plan);
     exec_plan->output_spec_ = std::move(output_spec);
-    const int ec = impl_->gemm_.Run(*exec_plan, args);
+    const int ec            = impl_->gemm_.Run(*exec_plan, args);
     if (ec) {
         TM_LOG_ERROR("{}: {}", __PRETTY_FUNCTION__, ec);
     }
@@ -294,24 +297,25 @@ void LlamaLinear::Forward(const Tensor&       input,
     Forward(input, input_scales, weight, {}, {}, output, output_scales);
 }
 
-void LlamaLinear::Forward(const ExecPlan& plan,
-                          const Tensor& input,
-                          const Tensor& input_scales,
+void LlamaLinear::Forward(const ExecPlan&     plan,
+                          const Tensor&       input,
+                          const Tensor&       input_scales,
                           const LinearWeight& weight,
                           const Buffer_<int>& indices,
                           const Buffer_<int>& offsets,
-                          Ref<Tensor> output,
-                          Ref<Tensor> output_scales)
+                          Ref<Tensor>         output,
+                          Ref<Tensor>         output_scales)
 {
     impl_->Forward(plan, input, input_scales, weight, indices, offsets, output.get(), output_scales.get());
 }
 
-OutputSpec LlamaLinear::GetOutputSpec(const Tensor& input, const LinearWeight& weight, const Buffer_<int>& indices) const
+OutputSpec
+LlamaLinear::GetOutputSpec(const Tensor& input, const LinearWeight& weight, const Buffer_<int>& indices) const
 {
     return impl_->GetOutputSpec(input, weight, indices);
 }
 
-std::optional<ExecPlan> LlamaLinear::GetExecPlan(const Tensor& input,
+std::optional<ExecPlan> LlamaLinear::GetExecPlan(const Tensor&       input,
                                                  const LinearWeight& weight,
                                                  const Buffer_<int>& indices,
                                                  const Buffer_<int>& offsets)
@@ -326,7 +330,8 @@ std::optional<ExecPlan> LlamaLinear::GetExecPlan(const Tensor& input,
     MatrixLayout desc_U{};
     MatrixLayout desc_B = weight.k_desc;
     MatrixLayout desc_V = weight.q_desc;
-    MatrixLayout desc_D{output_spec.dtype, kRowMajor, m, weight.output_dim, static_cast<int>(output_spec.layout.stride(-2))};
+    MatrixLayout desc_D{
+        output_spec.dtype, kRowMajor, m, weight.output_dim, static_cast<int>(output_spec.layout.stride(-2))};
 
     if (offsets) {
         desc_A.num = desc_U.num = desc_D.num = desc_B.num;
@@ -338,12 +343,12 @@ std::optional<ExecPlan> LlamaLinear::GetExecPlan(const Tensor& input,
 
     Gemm::Arguments args{};
     args.operation = impl_->GetOperation(weight);
-    args.Adesc = desc_A;
-    args.Udesc = desc_U;
-    args.Bdesc = desc_B;
-    args.Vdesc = desc_V;
-    args.Cdesc = desc_D;
-    args.Ddesc = desc_D;
+    args.Adesc     = desc_A;
+    args.Udesc     = desc_U;
+    args.Bdesc     = desc_B;
+    args.Vdesc     = desc_V;
+    args.Cdesc     = desc_D;
+    args.Ddesc     = desc_D;
     args.workspace = impl_->workspace_;
 
     auto plan = impl_->gemm_.GetExecPlan(args);
@@ -353,20 +358,21 @@ std::optional<ExecPlan> LlamaLinear::GetExecPlan(const Tensor& input,
     return plan;
 }
 
-std::optional<ExecPlan> LlamaLinear::Tune(const Tensor& input,
-                                          const Tensor& input_scales,
+std::optional<ExecPlan> LlamaLinear::Tune(const Tensor&       input,
+                                          const Tensor&       input_scales,
                                           const LinearWeight& weight,
                                           const Buffer_<int>& indices,
                                           const Buffer_<int>& offsets,
-                                          Ref<Tensor> output,
-                                          Ref<Tensor> output_scales)
+                                          Ref<Tensor>         output,
+                                          Ref<Tensor>         output_scales)
 {
-    OutputSpec output_spec = impl_->GetOutputSpec(input, weight, indices);
-    Tensor A;
-    Tensor U;
-    Gemm::Arguments args = impl_->GetArguments(A, U, output_spec, input, input_scales, weight, indices, offsets, output.get(), output_scales.get());
+    OutputSpec      output_spec = impl_->GetOutputSpec(input, weight, indices);
+    Tensor          A;
+    Tensor          U;
+    Gemm::Arguments args = impl_->GetArguments(
+        A, U, output_spec, input, input_scales, weight, indices, offsets, output.get(), output_scales.get());
     args.operation.dispatch = DispatchPolicy::kMeasure;
-    auto exec_plan = impl_->gemm_.Tune(args);
+    auto exec_plan          = impl_->gemm_.Tune(args);
     if (!exec_plan) {
         return std::nullopt;
     }

@@ -13,8 +13,8 @@ import math
 import torch
 
 from .. import _tm
-from .linear import Linear, pad_input_groups, pad_output_groups, transform_output_dim
 from ._base import Builder, ParallelGroup, SplitSide
+from .linear import Linear, pad_input_groups, pad_output_groups, transform_output_dim
 
 __all__ = [
     'FfnBuilder',

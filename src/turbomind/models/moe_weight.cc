@@ -88,7 +88,7 @@ void LinkLinearExperts(const std::vector<LinearWeight*>& experts, LinearWeight& 
 
     e0.copy_metadata_to(destination);
 
-    const int n = experts.size();
+    const int n            = experts.size();
     destination.k_desc.num = destination.q_desc.num = n;
 
     if (e0.bias) {
@@ -116,9 +116,10 @@ void LinkLinearExperts(const std::vector<LinearWeight*>& experts, LinearWeight& 
         }
     }
 
-    auto stream = core::Context::stream();
+    auto stream           = core::Context::stream();
     auto make_strided_ptr = [stream](const auto& ptrs) {
-        return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream.handle()), [stream](void* p) { TM_CUDA_CHECK(cudaFreeAsync(p, stream.handle())); }};
+        return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream.handle()),
+                                     [stream](void* p) { TM_CUDA_CHECK(cudaFreeAsync(p, stream.handle())); }};
     };
     destination.weight = Tensor{make_strided_ptr(weights), {n}, destination.weight_format.dtype, kDEVICE};
     if (e0.scales) {

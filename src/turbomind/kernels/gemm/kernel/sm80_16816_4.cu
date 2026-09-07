@@ -48,31 +48,40 @@ const Family u4_g_128{19, 189, kHalf, kHalf, 128, 8, 1, 1, true, true, supports_
 const Family mxfp4{20, 200, kBfloat16, kBfloat16, 32, 8, 1, 1, true, true, supports_mxfp4, mxfp4_packer};
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, bool FusePrefetch = true> class K>
+template<template<class Config_,
+                  int   Stages,
+                  Order Raster,
+                  class PolicyA,
+                  class PolicyB,
+                  bool SplitK,
+                  int  EpiM         = -1,
+                  int  EpiN         = -1,
+                  bool FusePrefetch = true>
+         class K>
 void register_u4_d(Collector& c)
 {
     // add<K<_128x256x64_1x8x1, 3, kColMajor, D, S, true>>(c); // 0/0
-    add<K<_128x256x32_1x8x1, 3, kColMajor, D, D, true, 128, 128>>(c); // 30/3
-    add<K<_128x256x32_1x8x1, 4, kColMajor, D, D, true, 128, 128>>(c); // --/20
-    add<K<_128x128x32_1x4x1, 3, kColMajor, D, D, true, 64, 128>>(c);  // --/13
-    add<K<_128x128x32_1x4x1, 4, kColMajor, D, S, true, 64, 128>>(c);  // 21/13
-    add<K<_128x128x64_1x4x2, 3, kColMajor, D, S, true, 64, 128>>(c);  // 6/6
+    add<K<_128x256x32_1x8x1, 3, kColMajor, D, D, true, 128, 128>>(c);  // 30/3
+    add<K<_128x256x32_1x8x1, 4, kColMajor, D, D, true, 128, 128>>(c);  // --/20
+    add<K<_128x128x32_1x4x1, 3, kColMajor, D, D, true, 64, 128>>(c);   // --/13
+    add<K<_128x128x32_1x4x1, 4, kColMajor, D, S, true, 64, 128>>(c);   // 21/13
+    add<K<_128x128x64_1x4x2, 3, kColMajor, D, S, true, 64, 128>>(c);   // 6/6
 
-    add<K<_96x256x32_1x8x1, 4, kColMajor, D, D, true>>(c);  // --/3
-    add<K<_96x256x32_1x8x1, 3, kColMajor, D, S, true>>(c);  // 13/13
-    add<K<_96x128x32_1x4x1, 4, kColMajor, D, S, true>>(c);  // 14/10
+    add<K<_96x256x32_1x8x1, 4, kColMajor, D, D, true>>(c);   // --/3
+    add<K<_96x256x32_1x8x1, 3, kColMajor, D, S, true>>(c);   // 13/13
+    add<K<_96x128x32_1x4x1, 4, kColMajor, D, S, true>>(c);   // 14/10
     add<K<_96x128x128_1x4x2, 3, kColMajor, D, S, true>>(c);  // 2/2
 
-    add<K<_64x256x32_1x4x1, 3, kColMajor, D, D, true, 64, 128>>(c); // --/21
-    add<K<_64x256x32_1x4x1, 4, kColMajor, D, S, true, 64, 128>>(c); // 27/13
-    add<K<_64x128x32_1x4x1, 4, kColMajor, D, S, true>>(c);  // 8/5
-    add<K<_64x128x64_1x4x1, 3, kColMajor, D, S, true>>(c);  // 7/5
-    add<K<_64x128x128_1x4x2, 3, kColMajor, D, S, true>>(c);  // 6/7
+    add<K<_64x256x32_1x4x1, 3, kColMajor, D, D, true, 64, 128>>(c);  // --/21
+    add<K<_64x256x32_1x4x1, 4, kColMajor, D, S, true, 64, 128>>(c);  // 27/13
+    add<K<_64x128x32_1x4x1, 4, kColMajor, D, S, true>>(c);           // 8/5
+    add<K<_64x128x64_1x4x1, 3, kColMajor, D, S, true>>(c);           // 7/5
+    add<K<_64x128x128_1x4x2, 3, kColMajor, D, S, true>>(c);          // 6/7
     add<K<_64x64x64_1x2x2, 6, kColMajor, D, S, true>>(c);
 
-    add<K<_48x256x64_1x4x1, 3, kColMajor, D, S, true, 48, 128>>(c); // 1/1
-    add<K<_48x128x64_1x4x1, 4, kColMajor, D, S, true>>(c);  // 1/1
-    add<K<_48x128x128_1x4x2, 3, kColMajor, D, S, true>>(c);  // 4/4
+    add<K<_48x256x64_1x4x1, 3, kColMajor, D, S, true, 48, 128>>(c);  // 1/1
+    add<K<_48x128x64_1x4x1, 4, kColMajor, D, S, true>>(c);           // 1/1
+    add<K<_48x128x128_1x4x2, 3, kColMajor, D, S, true>>(c);          // 4/4
     add<K<_48x64x128_1x2x2, 4, kColMajor, D, S, true>>(c);
 
     add<K<_32x256x64_1x4x1, 3, kColMajor, D, S, true>>(c);
@@ -89,24 +98,44 @@ void register_u4_d(Collector& c)
 }
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, bool FusePrefetch = true> class K>
+template<template<class Config_,
+                  int   Stages,
+                  Order Raster,
+                  class PolicyA,
+                  class PolicyB,
+                  bool SplitK,
+                  int  EpiM         = -1,
+                  int  EpiN         = -1,
+                  bool FusePrefetch = true>
+         class K>
 void register_u4_g(Collector& c)
 {
     add<K<_128x256x32_2x4x1, 3, kColMajor, D, D, false>>(c);  // 10 + 5 + 4 + 10 + 10, 37
-    add<K<_128x128x32_1x4x1, 3, kColMajor, D, D, true>>(c);  // 1 + 6 + 4 + 4 + 2, 3
-    add<K<_64x128x64_1x4x1, 3, kColMajor, D, S, true>>(c);  // 7 + 4 + 6 + 2 + 4, 26
-    add<K<_64x256x32_1x4x1, 3, kColMajor, D, S, true>>(c);  // 18
-    add<K<_32x64x128_1x2x2, 3, kColMajor, D, S, true>>(c);  // 2
-    add<K<_32x128x64_1x4x1, 5, kColMajor, D, S, true>>(c);  // 1 + 2 + 2 + 2 + 2, 2
-    add<K<_32x256x64_1x4x1, 3, kColMajor, D, S, true>>(c);  // 9
-    add<K<_16x256x64_1x4x1, 3, kColMajor, D, S, true>>(c);  // 22
-    add<K<_16x256x32_1x4x1, 3, kColMajor, D, S, true>>(c);  // 8
-    add<K<_16x128x64_1x4x1, 3, kColMajor, D, S, true>>(c);  // 1 + 13 + 9 + 13 + 7, 7
-    add<K<_16x64x128_1x2x2, 3, kColMajor, D, S, true>>(c);  // 12 + 2 + 6 + 2 + 8, 42
+    add<K<_128x128x32_1x4x1, 3, kColMajor, D, D, true>>(c);   // 1 + 6 + 4 + 4 + 2, 3
+    add<K<_64x128x64_1x4x1, 3, kColMajor, D, S, true>>(c);    // 7 + 4 + 6 + 2 + 4, 26
+    add<K<_64x256x32_1x4x1, 3, kColMajor, D, S, true>>(c);    // 18
+    add<K<_32x64x128_1x2x2, 3, kColMajor, D, S, true>>(c);    // 2
+    add<K<_32x128x64_1x4x1, 5, kColMajor, D, S, true>>(c);    // 1 + 2 + 2 + 2 + 2, 2
+    add<K<_32x256x64_1x4x1, 3, kColMajor, D, S, true>>(c);    // 9
+    add<K<_16x256x64_1x4x1, 3, kColMajor, D, S, true>>(c);    // 22
+    add<K<_16x256x32_1x4x1, 3, kColMajor, D, S, true>>(c);    // 8
+    add<K<_16x128x64_1x4x1, 3, kColMajor, D, S, true>>(c);    // 1 + 13 + 9 + 13 + 7, 7
+    add<K<_16x64x128_1x2x2, 3, kColMajor, D, S, true>>(c);    // 12 + 2 + 6 + 2 + 8, 42
 }
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, bool FusePrefetch = true, int GroupAxis = 1, int OperandN = 16> class K>
+template<template<class Config_,
+                  int   Stages,
+                  Order Raster,
+                  class PolicyA,
+                  class PolicyB,
+                  bool SplitK,
+                  int  EpiM         = -1,
+                  int  EpiN         = -1,
+                  bool FusePrefetch = true,
+                  int  GroupAxis    = 1,
+                  int  OperandN     = 16>
+         class K>
 void register_mxfp4(Collector& c)
 {
     // add<K<_256x128x32_8x1x1, 3, kColMajor, D, D, true, 128, 128, true, -1>>(c);
@@ -127,11 +156,11 @@ void register_mxfp4(Collector& c)
     add<K<_64x8x64_4x1x1, 5, kColMajor, S, D, true, -1, -1, true, 1, 8>>(c);
 }
 
-using U4_D_32 = Config_U4_d<Sm80, half, 32>;
-using U4_G_32 = Config_U4_g<Sm80, half, 32>;
+using U4_D_32  = Config_U4_d<Sm80, half, 32>;
+using U4_G_32  = Config_U4_g<Sm80, half, 32>;
 using U4_D_128 = Config_U4_d<Sm80, half, 128>;
 using U4_G_128 = Config_U4_g<Sm80, half, 128>;
-using MXFP4 = Config_MXF4<Sm80, bfloat16_t>;
+using MXFP4    = Config_MXF4<Sm80, bfloat16_t>;
 
 Registrar reg[]{
     {u4_d_32, register_u4_d<U4_D_32::Type>},

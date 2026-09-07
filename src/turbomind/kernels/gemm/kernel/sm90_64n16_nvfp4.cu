@@ -44,7 +44,17 @@ void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
 const Family nvfp4{31, 250, kBfloat16, kBfloat16, 64, 128, 128, 1, true, true, supports, pack, 64, kBfloat16};
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0> class K>
+template<template<class Config_,
+                  int      Stages,
+                  Order    Raster,
+                  Striding Mode,
+                  bool     Silu         = false,
+                  class ClusterShape    = Shape<1, 1>,
+                  int  MmaN             = 0,
+                  bool SeparateMmaAtoms = false,
+                  int  EpiM             = 0,
+                  int  EpiStages        = 0>
+         class K>
 void register_kernels(Collector& c)
 {
     ////////////////////////////////// flat //////////////////////////////////

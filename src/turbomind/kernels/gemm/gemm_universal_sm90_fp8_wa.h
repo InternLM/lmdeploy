@@ -56,9 +56,9 @@ struct GemmUniversalSm90_Fp8Wa {
 
     static constexpr bool kDebug = false;
 
-    using Arch = Sm90;
-    using Tile = typename Config_::Tile;
-    using Groups = typename Config_::Groups;
+    using Arch           = Sm90;
+    using Tile           = typename Config_::Tile;
+    using Groups         = typename Config_::Groups;
     using RegisterConfig = typename Config_::RegisterConfig;
 
     static constexpr bool kSupportsFusedSilu = Silu;
@@ -87,12 +87,12 @@ struct GemmUniversalSm90_Fp8Wa {
     // TiledMma WG-local preserves the gate/up split for WG_N=2 and avoids a
     // full cooperative temporary fragment before applying block scales.
     using AtomLayoutMNK = cute::Layout<cute::Shape<cute::_1, cute::_1, cute::_1>>;
-    using Traits   = GmmaFP8WaTraits<WG_TILE_N, WG_TILE_M, TILE_K, AtomLayoutMNK>;
-    using TiledMma = typename Traits::TiledMma;
+    using Traits        = GmmaFP8WaTraits<WG_TILE_N, WG_TILE_M, TILE_K, AtomLayoutMNK>;
+    using TiledMma      = typename Traits::TiledMma;
 
-    static constexpr int OP_M   = Traits::kOpM;
-    static constexpr int OP_N   = Traits::kOpN;
-    static constexpr int OP_K   = Traits::kOpK;
+    static constexpr int OP_M = Traits::kOpM;
+    static constexpr int OP_N = Traits::kOpN;
+    static constexpr int OP_K = Traits::kOpK;
     static_assert(WG_TILE_M == OP_N);
 
     // Fused SiLU: [g128|u128] along OUT. WG_N == 1 pairs GMMA-M atoms i with i+2 in
@@ -115,8 +115,7 @@ struct GemmUniversalSm90_Fp8Wa {
 
     static constexpr int CTA_SIZE = WARPGROUP_SIZE * (WARPGROUPS + 1);
 
-    static_assert(!kSupportsFusedSilu || WG_N != 2
-                  || (WG_M == 1 && WG_TILE_N / OP_M == 2 && OP_N == WG_TILE_M));
+    static_assert(!kSupportsFusedSilu || WG_N != 2 || (WG_M == 1 && WG_TILE_N / OP_M == 2 && OP_N == WG_TILE_M));
     static_assert(!kSupportsFusedSilu || WG_N != 2
                   || (OP_M / WG_N == 32 && (OP_M / WG_N) * TILE_M % WARPGROUP_SIZE == 0
                       && ((OP_M / WG_N) * TILE_M / WARPGROUP_SIZE) % 4 == 0));
@@ -169,31 +168,29 @@ struct GemmUniversalSm90_Fp8Wa {
 
     // One canonical SMEM layout is shared by the TMA/cp.async producers and
     // the CuTe GMMA descriptor fragments.  Indexed gather uses its 2D B view.
-    using SmemLayoutA = decltype(cute::tile_to_shape(typename Traits::SmemLayoutAtomA{},
-                                                     cute::make_shape(cute::Int<TILE_N>{},
-                                                                      cute::Int<TILE_K>{},
-                                                                      cute::Int<Stages>{}),
-                                                     cute::Step<cute::_1, cute::_2, cute::_3>{}));
-    using SmemLayoutB = decltype(cute::tile_to_shape(typename Traits::SmemLayoutAtomB{},
-                                                     cute::make_shape(cute::Int<TILE_M>{},
-                                                                      cute::Int<TILE_K>{},
-                                                                      cute::Int<Stages>{}),
-                                                     cute::Step<cute::_1, cute::_2, cute::_3>{}));
+    using SmemLayoutA =
+        decltype(cute::tile_to_shape(typename Traits::SmemLayoutAtomA{},
+                                     cute::make_shape(cute::Int<TILE_N>{}, cute::Int<TILE_K>{}, cute::Int<Stages>{}),
+                                     cute::Step<cute::_1, cute::_2, cute::_3>{}));
+    using SmemLayoutB =
+        decltype(cute::tile_to_shape(typename Traits::SmemLayoutAtomB{},
+                                     cute::make_shape(cute::Int<TILE_M>{}, cute::Int<TILE_K>{}, cute::Int<Stages>{}),
+                                     cute::Step<cute::_1, cute::_2, cute::_3>{}));
     using SmemLayoutB_2D = decltype(cute::tile_to_shape(typename Traits::SmemLayoutAtomB{},
                                                         cute::make_shape(cute::Int<TILE_M>{}, cute::Int<TILE_K>{}),
                                                         cute::Step<cute::_1, cute::_2>{}));
 
-    static constexpr int  kGatherVec       = 16 / (int)sizeof(Ta);
-    static constexpr int  kGatherThreadsK  = TILE_K / kGatherVec;
-    static constexpr int  kGatherThreadsM  = WARPGROUP_SIZE / kGatherThreadsK;
-    static constexpr bool kUseTiledGather  = TILE_M >= kGatherThreadsM && TILE_M % kGatherThreadsM == 0;
-    static constexpr int  kGatherSlots     = cute::ceil_div(TILE_M * kGatherThreadsK, WARPGROUP_SIZE);
-    using GatherCopyAtom = cute::Copy_Atom<cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<uint4>, Ta>;
-    using GatherTiledCopy = decltype(cute::make_tiled_copy(
-        GatherCopyAtom{},
-        cute::Layout<cute::Shape<cute::Int<kGatherThreadsM>, cute::Int<kGatherThreadsK>>,
-                     cute::Stride<cute::Int<kGatherThreadsK>, cute::_1>>{},
-        cute::Layout<cute::Shape<cute::_1, cute::Int<kGatherVec>>>{}));
+    static constexpr int  kGatherVec      = 16 / (int)sizeof(Ta);
+    static constexpr int  kGatherThreadsK = TILE_K / kGatherVec;
+    static constexpr int  kGatherThreadsM = WARPGROUP_SIZE / kGatherThreadsK;
+    static constexpr bool kUseTiledGather = TILE_M >= kGatherThreadsM && TILE_M % kGatherThreadsM == 0;
+    static constexpr int  kGatherSlots    = cute::ceil_div(TILE_M * kGatherThreadsK, WARPGROUP_SIZE);
+    using GatherCopyAtom                  = cute::Copy_Atom<cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<uint4>, Ta>;
+    using GatherTiledCopy =
+        decltype(cute::make_tiled_copy(GatherCopyAtom{},
+                                       cute::Layout<cute::Shape<cute::Int<kGatherThreadsM>, cute::Int<kGatherThreadsK>>,
+                                                    cute::Stride<cute::Int<kGatherThreadsK>, cute::_1>>{},
+                                       cute::Layout<cute::Shape<cute::_1, cute::Int<kGatherVec>>>{}));
     static_assert(kGatherVec * (int)sizeof(Ta) == 16);
     static_assert(kGatherThreadsM * kGatherThreadsK == WARPGROUP_SIZE);
     static_assert(cute::size(GatherTiledCopy{}) == WARPGROUP_SIZE);
@@ -202,7 +199,7 @@ struct GemmUniversalSm90_Fp8Wa {
     // setmaxnreg: each WG ≤ 256, multiples of 8. Config supplies the active budget.
     // Two math WGs pack to 504; one math WG packs to ≤512.
     static constexpr int kProducerRegs = RegisterConfig::Producer;
-    static constexpr int kMathRegs = RegisterConfig::Math;
+    static constexpr int kMathRegs     = RegisterConfig::Math;
     static_assert(kProducerRegs >= 24 && kProducerRegs % 8 == 0);
     static_assert(kMathRegs >= 24 && kMathRegs % 8 == 0 && kMathRegs <= 256);
     static_assert(WARPGROUPS == 1 || WARPGROUPS == 2);
@@ -217,8 +214,7 @@ struct GemmUniversalSm90_Fp8Wa {
         // Fused amax reduce: per math WG, [warp][t0][scale_i], scale_i < OP_N/4 ≤ 64
         __align__(128) float fused_amax_scratch[WARPGROUPS][4 * 4 * 64];
         // Bounded gate/up exchange for WG_N=2 fused SiLU.
-        static constexpr int kSiluStageElems =
-            (kSupportsFusedSilu && WG_N == 2) ? 2 * OP_M * WG_TILE_M : 1;
+        static constexpr int kSiluStageElems = (kSupportsFusedSilu && WG_N == 2) ? 2 * OP_M * WG_TILE_M : 1;
         __align__(1024) float silu_stage[kSiluStageElems];
         __align__(128) Tu U[Stages][round_up<int>(kBoxU, 128)];  // at least 128 byte alignment
         __align__(128) Tv V[Stages][2];
@@ -348,7 +344,7 @@ struct GemmUniversalSm90_Fp8Wa {
             }
             else {
                 pp.role      = warp_in_wg == 0 ? MainloopPipeline::ThreadCategory::Producer :
-                                                MainloopPipeline::ThreadCategory::NonParticipant;
+                                                 MainloopPipeline::ThreadCategory::NonParticipant;
                 pp.is_leader = warp_in_wg == 0 && lane_id == 0;
             }
         }
@@ -373,8 +369,8 @@ struct GemmUniversalSm90_Fp8Wa {
 
             cutlass::arch::NamedBarrier producers_bar(WARP_SIZE * 2, 7);
 
-            const int  warp_id    = cutlass::canonical_warp_idx_sync();
-            const bool cta_0      = cute::block_id_in_cluster().x == 0;
+            const int  warp_id = cutlass::canonical_warp_idx_sync();
+            const bool cta_0   = cute::block_id_in_cluster().x == 0;
 
             if constexpr (kIndexedGather) {
                 // Full producer WG gather. Scheduler folded onto warp0.
@@ -502,12 +498,11 @@ struct GemmUniversalSm90_Fp8Wa {
                     const int u_pad = m0 % kAlignmentU;
 
                     if constexpr (kUseTiledGather) {
-                        auto gather_thr = GatherTiledCopy{}.get_slice(prod_tid);
-                        auto gather_smem =
-                            cute::make_tensor(cute::make_smem_ptr(storage.B.data()), SmemLayoutB_2D{});
+                        auto gather_thr  = GatherTiledCopy{}.get_slice(prod_tid);
+                        auto gather_smem = cute::make_tensor(cute::make_smem_ptr(storage.B.data()), SmemLayoutB_2D{});
                         auto gather_dst_part = gather_thr.partition_D(gather_smem);
-                        auto gather_identity = cute::make_identity_tensor(
-                            cute::Shape<cute::Int<TILE_M>, cute::Int<TILE_K>>{});
+                        auto gather_identity =
+                            cute::make_identity_tensor(cute::Shape<cute::Int<TILE_M>, cute::Int<TILE_K>>{});
                         auto gather_coord = gather_thr.partition_D(gather_identity);
                         static_assert(cute::size<0>(gather_coord) == kGatherVec);
                         static_assert(cute::size<1>(gather_coord) == kGatherSlots);
@@ -532,13 +527,13 @@ struct GemmUniversalSm90_Fp8Wa {
                         // fallback instead of forcing an underfilled 128-thread TV map.
                         PRAGMA_UNROLL
                         for (int slot = 0; slot < kGatherSlots; ++slot) {
-                            const int  i      = prod_tid + slot * WARPGROUP_SIZE;
-                            const bool in_vec = i < nvec;
-                            const int  m      = in_vec ? i / kGatherThreadsK : 0;
-                            const int  kk     = in_vec ? (i % kGatherThreadsK) * kGatherVec : 0;
-                            const int  packed = m0 + offset_m + m;
-                            const bool row_ok = in_vec && (offset_m + m) < M_group;
-                            const int  token  = (idxs && row_ok) ? __ldg(idxs + packed) : packed;
+                            const int  i            = prod_tid + slot * WARPGROUP_SIZE;
+                            const bool in_vec       = i < nvec;
+                            const int  m            = in_vec ? i / kGatherThreadsK : 0;
+                            const int  kk           = in_vec ? (i % kGatherThreadsK) * kGatherVec : 0;
+                            const int  packed       = m0 + offset_m + m;
+                            const bool row_ok       = in_vec && (offset_m + m) < M_group;
+                            const int  token        = (idxs && row_ok) ? __ldg(idxs + packed) : packed;
                             gather_m[slot]          = m;
                             gather_k[slot]          = kk;
                             gather_pred[slot]       = row_ok;
@@ -588,15 +583,14 @@ struct GemmUniversalSm90_Fp8Wa {
                                     }
                                 }
                                 const bool pred = gather_pred[slot] && (coord_k + gather_k[slot]) < K;
-                                Ta* dst;
+                                Ta*        dst;
                                 if constexpr (kUseTiledGather) {
                                     dst = gather_dst[slot] + pipe * TILE_M * TILE_K;
                                 }
                                 else {
-                                    auto sB = cute::make_tensor(
-                                        cute::make_smem_ptr(smem_act + pipe * TILE_M * TILE_K),
-                                        SmemLayoutB_2D{});
-                                    dst = &sB(gather_m[slot], gather_k[slot]);
+                                    auto sB = cute::make_tensor(cute::make_smem_ptr(smem_act + pipe * TILE_M * TILE_K),
+                                                                SmemLayoutB_2D{});
+                                    dst     = &sB(gather_m[slot], gather_k[slot]);
                                 }
                                 cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<uint4>::copy(
                                     *reinterpret_cast<const uint4*>(gather_src[slot]),
@@ -783,14 +777,14 @@ struct GemmUniversalSm90_Fp8Wa {
             // WG to preserve the established gate/up ownership.
             auto sA_full = cute::make_tensor(cute::make_smem_ptr(smem_weight.data()), SmemLayoutA{});
             auto sB_full = cute::make_tensor(cute::make_smem_ptr(smem_act.data()), SmemLayoutB{});
-            auto sA = cute::local_tile(
-                sA_full,
-                cute::make_shape(cute::Int<WG_TILE_N>{}, cute::Int<TILE_K>{}, cute::Int<Stages>{}),
-                cute::make_coord(wg_idx_n, 0, 0));
-            auto sB = cute::local_tile(
-                sB_full,
-                cute::make_shape(cute::Int<WG_TILE_M>{}, cute::Int<TILE_K>{}, cute::Int<Stages>{}),
-                cute::make_coord(wg_idx_m, 0, 0));
+            auto sA =
+                cute::local_tile(sA_full,
+                                 cute::make_shape(cute::Int<WG_TILE_N>{}, cute::Int<TILE_K>{}, cute::Int<Stages>{}),
+                                 cute::make_coord(wg_idx_n, 0, 0));
+            auto sB =
+                cute::local_tile(sB_full,
+                                 cute::make_shape(cute::Int<WG_TILE_M>{}, cute::Int<TILE_K>{}, cute::Int<Stages>{}),
+                                 cute::make_coord(wg_idx_m, 0, 0));
 
             TiledMma tiled_mma;
             auto     thr_mma = tiled_mma.get_thread_slice(threadIdx.x % WARPGROUP_SIZE);
@@ -849,8 +843,8 @@ struct GemmUniversalSm90_Fp8Wa {
             while (tile->alive) {
 
                 if (tile->is_valid_cta) {
-                    auto accum_C = cute::partition_fragment_C(
-                        tiled_mma, cute::take<0, 2>(typename Traits::TileShape{}));
+                    auto accum_C =
+                        cute::partition_fragment_C(tiled_mma, cute::take<0, 2>(typename Traits::TileShape{}));
                     auto frag_C0 = cute::make_fragment_like(accum_C(cute::_, cute::Int<0>{}, cute::Int<0>{}));
                     auto frag_C1 = cute::make_fragment_like(frag_C0);
                     cute::clear(accum_C);
@@ -872,9 +866,9 @@ struct GemmUniversalSm90_Fp8Wa {
                     if constexpr (is_grouped_gemm) {
                         u_pad = tile->m0 % kAlignmentU;
                     }
-                    const int            batch0 = wg_idx_m * WG_TILE_M;
-                    float act_scales[Traits::kActScalesPerThread];
-                    auto                 Load_A = [&] {
+                    const int batch0 = wg_idx_m * WG_TILE_M;
+                    float     act_scales[Traits::kActScalesPerThread];
+                    auto      Load_A = [&] {
                         const int pipe = pipe_state.index();
                         // n = 2*t0 + 8*v2; t0 = lane%4
                         const int lane_n0 = 2 * (lane_id % 4);
@@ -887,22 +881,21 @@ struct GemmUniversalSm90_Fp8Wa {
                     };
 
                     auto gmma = [&] {
-                        const int read = pipe_state.index();
+                        const int read       = pipe_state.index();
                         auto      tCrA_stage = tCrA(cute::_, cute::_, cute::_, read);
                         auto      tCrB_stage = tCrB(cute::_, cute::_, cute::_, read);
-                        auto issue = [&](auto m, auto& frag_C) {
+                        auto      issue      = [&](auto m, auto& frag_C) {
                             cute::warpgroup_fence_operand(frag_C);
                             tiled_mma.accumulate_ = cute::GMMA::ScaleOut::Zero;
                             cute::warpgroup_arrive();
-                            cute::for_each(
-                                cute::make_seq<cute::size<2>(typename decltype(tCrA)::layout_type{})>{},
-                                [&](auto k) {
-                                    cute::gemm(tiled_mma,
-                                               tCrA_stage(cute::_, m, k),
-                                               tCrB_stage(cute::_, cute::Int<0>{}, k),
-                                               frag_C);
-                                    tiled_mma.accumulate_ = cute::GMMA::ScaleOut::One;
-                                });
+                            cute::for_each(cute::make_seq<cute::size<2>(typename decltype(tCrA)::layout_type{})>{},
+                                           [&](auto k) {
+                                               cute::gemm(tiled_mma,
+                                                          tCrA_stage(cute::_, m, k),
+                                                          tCrB_stage(cute::_, cute::Int<0>{}, k),
+                                                          frag_C);
+                                               tiled_mma.accumulate_ = cute::GMMA::ScaleOut::One;
+                                           });
                             cute::warpgroup_commit_batch();
                         };
                         auto scale = [&](auto m, auto& frag_C) {
@@ -1057,7 +1050,7 @@ struct GemmUniversalSm90_Fp8Wa {
                                     const int lane_n0 = 2 * (lane_id % 4);
                                     PRAGMA_UNROLL
                                     for (int c = 0; c < OP_N; c += 8) {
-                                        const int n0                         = batch0 + lane_n0 + c;
+                                        const int n0                          = batch0 + lane_n0 + c;
                                         smem_C[n0 * kStoreOut + m0]           = OutputT(C(c / 2 + 0));
                                         smem_C[(n0 + 1) * kStoreOut + m0]     = OutputT(C(c / 2 + 1));
                                         smem_C[n0 * kStoreOut + m0 + 8]       = OutputT(C(c / 2 + 2));
@@ -1187,15 +1180,15 @@ struct GemmUniversalSm90_Fp8Wa {
                             // 256xBATCH accumulator tile.  Each WG computes 32 outputs per
                             // pass; the two pass-local fragments stay in registers so amax
                             // still spans the complete 128-wide quantization group.
-                            constexpr float kQmax          = 448.f;
-                            constexpr int   kPasses        = 2;
-                            constexpr int   kWgFusedPass   = OP_M / WG_N;
-                            constexpr int   kItemsPass     = kWgFusedPass * TILE_M / WARPGROUP_SIZE;
-                            constexpr int   kItems         = kPasses * kItemsPass;
-                            float* stage = storage.silu_stage;  // [gate/up][OUT64][BATCH]
-                            float  vals[kItems];
-                            float  amax = 1e-8f;
-                            const int base = thread_idx * kItemsPass;
+                            constexpr float kQmax        = 448.f;
+                            constexpr int   kPasses      = 2;
+                            constexpr int   kWgFusedPass = OP_M / WG_N;
+                            constexpr int   kItemsPass   = kWgFusedPass * TILE_M / WARPGROUP_SIZE;
+                            constexpr int   kItems       = kPasses * kItemsPass;
+                            float*          stage        = storage.silu_stage;  // [gate/up][OUT64][BATCH]
+                            float           vals[kItems];
+                            float           amax = 1e-8f;
+                            const int       base = thread_idx * kItemsPass;
 
                             PRAGMA_UNROLL
                             for (int pass = 0; pass < kPasses; ++pass) {
@@ -1204,25 +1197,25 @@ struct GemmUniversalSm90_Fp8Wa {
                                 const int lane_n0 = 2 * (lane_id % 4);
                                 PRAGMA_UNROLL
                                 for (int c = 0; c < OP_N; c += 8) {
-                                    const int n0 = lane_n0 + c;
-                                    const int plane_offset = wg_idx_n * OP_M * TILE_M;
-                                    stage[plane_offset + m0 * TILE_M + n0] = C(c / 2 + 0);
-                                    stage[plane_offset + m0 * TILE_M + n0 + 1] = C(c / 2 + 1);
-                                    stage[plane_offset + (m0 + 8) * TILE_M + n0] = C(c / 2 + 2);
+                                    const int n0                                     = lane_n0 + c;
+                                    const int plane_offset                           = wg_idx_n * OP_M * TILE_M;
+                                    stage[plane_offset + m0 * TILE_M + n0]           = C(c / 2 + 0);
+                                    stage[plane_offset + m0 * TILE_M + n0 + 1]       = C(c / 2 + 1);
+                                    stage[plane_offset + (m0 + 8) * TILE_M + n0]     = C(c / 2 + 2);
                                     stage[plane_offset + (m0 + 8) * TILE_M + n0 + 1] = C(c / 2 + 3);
                                 }
                                 epi_synchronize();
 
                                 PRAGMA_UNROLL
                                 for (int i = 0; i < kItemsPass; ++i) {
-                                    const int   idx = base + i;
-                                    const int   row = idx / kWgFusedPass;
-                                    const int   of  = wg_idx_n * kWgFusedPass + idx % kWgFusedPass;
-                                    const float g   = stage[of * TILE_M + row];
-                                    const float u   = stage[(OP_M + of) * TILE_M + row];
-                                    const float v   = fdividef(g, 1.f + expf(-g)) * u;
+                                    const int   idx             = base + i;
+                                    const int   row             = idx / kWgFusedPass;
+                                    const int   of              = wg_idx_n * kWgFusedPass + idx % kWgFusedPass;
+                                    const float g               = stage[of * TILE_M + row];
+                                    const float u               = stage[(OP_M + of) * TILE_M + row];
+                                    const float v               = fdividef(g, 1.f + expf(-g)) * u;
                                     vals[pass * kItemsPass + i] = v;
-                                    amax = fmaxf(amax, fabsf(v));
+                                    amax                        = fmaxf(amax, fabsf(v));
                                 }
                                 // All reads must retire before the next atom overwrites the
                                 // bounded exchange tile.
@@ -1244,10 +1237,9 @@ struct GemmUniversalSm90_Fp8Wa {
                             for (int pass = 0; pass < kPasses; ++pass) {
                                 PRAGMA_UNROLL
                                 for (int i = 0; i < kItemsPass; i += 4) {
-                                    const int idx = base + i;
-                                    const int r   = idx / kWgFusedPass;
-                                    const int c   = pass * OP_M + wg_idx_n * kWgFusedPass
-                                                  + idx % kWgFusedPass;
+                                    const int         idx = base + i;
+                                    const int         r   = idx / kWgFusedPass;
+                                    const int         c   = pass * OP_M + wg_idx_n * kWgFusedPass + idx % kWgFusedPass;
                                     Array<OutputT, 4> q;
                                     PRAGMA_UNROLL
                                     for (int j = 0; j < 4; ++j) {
@@ -1304,8 +1296,8 @@ struct GemmUniversalSm90_Fp8Wa {
                                         // This halves the shared-store instruction count
                                         // for one SHFL and two PRMTs per four FP8 values.
                                         if (((lane_id / 4) & 1) == 0) {
-                                            const int      n0   = batch0 + lane_n0 + c;
-                                            const uint32_t lohi = __byte_perm(own, peer, 0x5140);
+                                            const int      n0    = batch0 + lane_n0 + c;
+                                            const uint32_t lohi  = __byte_perm(own, peer, 0x5140);
                                             const uint32_t lohi8 = __byte_perm(own, peer, 0x7362);
                                             *reinterpret_cast<uint16_t*>(smem_C + n0 * kStoreOut + m0) =
                                                 static_cast<uint16_t>(lohi);
@@ -1325,9 +1317,9 @@ struct GemmUniversalSm90_Fp8Wa {
                         cute::tma_store_fence();
                         epi_synchronize();
 
-                        const int offset_m = tile->offset_m;
-                        const int offset_n = tile->offset_n;
-                        const void* Cdesc = &tm_c;
+                        const int   offset_m = tile->offset_m;
+                        const int   offset_n = tile->offset_n;
+                        const void* Cdesc    = &tm_c;
 
                         // One full-tile store after all math WGs publish their packed
                         // row-major output.

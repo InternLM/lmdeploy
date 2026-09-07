@@ -47,7 +47,15 @@ const Family u4_g_128{11, 189, kHalf, kHalf, 128, 8, 1, 1, true, true, supports_
 const Family mxfp4{12, 190, kHalf, kHalf, 32, 8, 1, 1, true, true, supports_mxfp4, mxfp4_packer};
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1> class K>
+template<template<class Config_,
+                  int   Stages,
+                  Order Raster,
+                  class PolicyA,
+                  class PolicyB,
+                  bool SplitK,
+                  int  EpiM = -1,
+                  int  EpiN = -1>
+         class K>
 void register_u4_d(Collector& c)
 {
     add<K<_128x256x32_1x8x1, 2, kColMajor, D, D, true, 128, 128>>(c);
@@ -64,7 +72,15 @@ void register_u4_d(Collector& c)
 }
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1> class K>
+template<template<class Config_,
+                  int   Stages,
+                  Order Raster,
+                  class PolicyA,
+                  class PolicyB,
+                  bool SplitK,
+                  int  EpiM = -1,
+                  int  EpiN = -1>
+         class K>
 void register_u4_g(Collector& c)
 {
     add<K<_128x256x32_2x4x1, 2, kColMajor, D, D, false, 128, 128>>(c);
@@ -78,7 +94,16 @@ void register_u4_g(Collector& c)
 }
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1> class K>
+template<template<class Config_,
+                  int   Stages,
+                  Order Raster,
+                  class PolicyA,
+                  class PolicyB,
+                  bool SplitK,
+                  int  EpiM      = -1,
+                  int  EpiN      = -1,
+                  int  GroupAxis = -1>
+         class K>
 void register_mxfp4(Collector& c)
 {
     add<K<_128x128x32_4x1x1, 2, kColMajor, D, D, true, 128, 64, 1>>(c);
@@ -89,11 +114,11 @@ void register_mxfp4(Collector& c)
     add<K<_64x16x64_4x1x1, 2, kColMajor, S, D, true, -1, -1, 1>>(c);
 }
 
-using U4_D_32 = Config_U4_d<32>;
-using U4_G_32 = Config_U4_g<32>;
+using U4_D_32  = Config_U4_d<32>;
+using U4_G_32  = Config_U4_g<32>;
 using U4_D_128 = Config_U4_d<128>;
 using U4_G_128 = Config_U4_g<128>;
-using MXFP4 = Config_MXF4;
+using MXFP4    = Config_MXF4;
 
 Registrar reg[]{
     {u4_d_32, register_u4_d<U4_D_32::Type>},

@@ -3,8 +3,8 @@
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/arch/config_sm75_s16816.h"
 #include "src/turbomind/kernels/gemm/convert.cuh"
-#include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/kernel/floating_point.h"
+#include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/models/linear_weight.h"
@@ -24,7 +24,16 @@ constexpr auto f16_packer = pack_fp<Sm75, kRowMajor, HMMA_16816 | OPERAND_B | 1,
 const Family f16{6, 190, kHalf, kHalf, 32, 8, 1, 1, true, true, supports_fp<kHalf>, f16_packer};
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, int GroupAxis = -1> class K>
+template<template<class Config_,
+                  int   Stages,
+                  Order Raster,
+                  class PolicyA,
+                  class PolicyB,
+                  bool SplitK,
+                  int  EpiM      = -1,
+                  int  EpiN      = -1,
+                  int  GroupAxis = -1>
+         class K>
 void register_kernels(Collector& c)
 {
     {

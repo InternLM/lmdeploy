@@ -8,7 +8,6 @@ hf_constants.HF_HUB_CACHE = '/mnt_cfs/huggingface_hub/hub'
 from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.vl import load_image
 
-
 model_id = 'Qwen/Qwen3.5-35B-A3B-FP8'
 image_url = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'
 prompt = (

@@ -4,8 +4,8 @@
 #include <cuda.h>
 
 #include "src/turbomind/kernels/gemm/convert.h"
-#include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/kernel/e4m3.h"
+#include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/kernel/mxfp4.h"
 #include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
 #include "src/turbomind/models/linear_weight.h"
@@ -63,14 +63,14 @@ void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
     TM_CUDA_CHECK(cudaFreeAsync(stats, stream));
     linear.scales        = std::move(packed_q);
     linear.q_desc        = transpose(MatrixLayout{kUint8,
-                                                  kColMajor,
-                                                  linear.output_dim,
-                                                  linear.input_dim / Sm90MxFp4Fp8FoldedFormat::kGroupSize,
-                                                  linear.output_dim,
-                                                  Sm90MxFp4Fp8FoldedFormat::kQparamPack,
-                                                  0,
-                                                  nullptr,
-                                                  nullptr});
+                                           kColMajor,
+                                           linear.output_dim,
+                                           linear.input_dim / Sm90MxFp4Fp8FoldedFormat::kGroupSize,
+                                           linear.output_dim,
+                                           Sm90MxFp4Fp8FoldedFormat::kQparamPack,
+                                           0,
+                                           nullptr,
+                                           nullptr});
     linear.weight_format = DataFormat{kFloat4_e2m1, {Sm90MxFp4Fp8FoldedFormat::kGroupSize, 1}, kUint8};
 }
 
@@ -92,12 +92,28 @@ const Family folded{33,
                     fp8_output_spec};
 
 struct C {
-    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>, int MmaN = Config_::Tile::M / Config_::Groups::M, int EpiStages = 2>
-    using Type = KernelImplSm90MxFp4Fp8<GemmUniversalSm90MxFp4Fp8Folded<Config_, Stages, Raster, Mode, Silu, ClusterShape, MmaN, EpiStages>>;
+    template<class Config_,
+             int      Stages,
+             Order    Raster,
+             Striding Mode,
+             bool     Silu      = false,
+             class ClusterShape = Shape<1, 1>,
+             int MmaN           = Config_::Tile::M / Config_::Groups::M,
+             int EpiStages      = 2>
+    using Type = KernelImplSm90MxFp4Fp8<
+        GemmUniversalSm90MxFp4Fp8Folded<Config_, Stages, Raster, Mode, Silu, ClusterShape, MmaN, EpiStages>>;
 };
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>, int MmaN = Config_::Tile::M / Config_::Groups::M, int EpiStages = 2> class K>
+template<template<class Config_,
+                  int      Stages,
+                  Order    Raster,
+                  Striding Mode,
+                  bool     Silu      = false,
+                  class ClusterShape = Shape<1, 1>,
+                  int MmaN           = Config_::Tile::M / Config_::Groups::M,
+                  int EpiStages      = 2>
+         class K>
 void register_kernels(Collector& c)
 {
     add<K<_8x128_1x2<40, 232>, 4, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 8, 1>>(c);

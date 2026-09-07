@@ -31,8 +31,9 @@ inline OutputSpec fp8_output_spec(core::Layout layout, const DataFormat& format,
     const int           output_dim = spec.layout.shape(-1);
     const core::ssize_t rows       = spec.layout.size() / output_dim;
 
-    spec.scales_layout = core::Layout{{cdiv(output_dim, kGroupSize), rows}, {round_up(rows, static_cast<core::ssize_t>(kRowAlignment)), 1}};
-    spec.scales_dtype = kFloat;
+    spec.scales_layout = core::Layout{{cdiv(output_dim, kGroupSize), rows},
+                                      {round_up(rows, static_cast<core::ssize_t>(kRowAlignment)), 1}};
+    spec.scales_dtype  = kFloat;
     return spec;
 }
 
@@ -79,10 +80,8 @@ void pack_e4m3(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t st
 {
     ApplyWeightBridge(linear, bridge, stream);
     PackWeight(linear, GetImpl<Arch, WeightOrder, WeightPack, uint16_t, uint8_t>(), stream);
-    PackQParams(linear,
-                GetImpl<Arch, QParamOrder, QParamPack, uint16_t, uint16_t>(),
-                QuantDesc{QuantType::kK, 128},
-                stream);
+    PackQParams(
+        linear, GetImpl<Arch, QParamOrder, QParamPack, uint16_t, uint16_t>(), QuantDesc{QuantType::kK, 128}, stream);
     linear.weight_format = DataFormat{kFloat8_e4m3, {128, 1}, ScaleDtype};
 }
 

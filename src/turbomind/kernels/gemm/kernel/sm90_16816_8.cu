@@ -3,8 +3,8 @@
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/arch/config_sm80_s16816.h"
 #include "src/turbomind/kernels/gemm/convert.cuh"
-#include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/kernel/e4m3.h"
+#include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/models/linear_weight.h"
@@ -22,11 +22,21 @@ using namespace config::geometry;
 constexpr auto e4m3_packer =
     pack_e4m3<Arch<80>, kColMajor, HMMA_16816 | OPERAND_A | 1, kColMajor, HMMA_16816 | OPERAND_U | 1, kBfloat16>;
 
-const Family e4m3{
-    21, 200, kBfloat16, kBfloat16, 128, 8, 1, 1, true, true, supports_e4m3<kBfloat16, 1>, e4m3_packer};
+const Family e4m3{21, 200, kBfloat16, kBfloat16, 128, 8, 1, 1, true, true, supports_e4m3<kBfloat16, 1>, e4m3_packer};
 
 // NVCC requires defaults on the template-template parameter.
-template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, bool FusePrefetch = true, int GroupAxis = 1, int OperandN = 16> class K>
+template<template<class Config_,
+                  int   Stages,
+                  Order Raster,
+                  class PolicyA,
+                  class PolicyB,
+                  bool SplitK,
+                  int  EpiM         = -1,
+                  int  EpiN         = -1,
+                  bool FusePrefetch = true,
+                  int  GroupAxis    = 1,
+                  int  OperandN     = 16>
+         class K>
 void register_kernels(Collector& c)
 {
     {

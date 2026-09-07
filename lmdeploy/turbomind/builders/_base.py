@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import enum
-import math
 
 import torch
 
@@ -20,8 +19,8 @@ class SplitSide(enum.Enum):
     INPUT  -- row-parallel:    split along the input dimension  (axis  0)
     """
 
-    OUTPUT = "output"
-    INPUT = "input"
+    OUTPUT = 'output'
+    INPUT = 'input'
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +49,7 @@ _SPLIT_SIDE_TO_DIM: dict[SplitSide, int] = {SplitSide.OUTPUT: -1, SplitSide.INPU
 
 def _act_type_id(act_str: str) -> int:
     """Convert activation_type string to C++ ActivationType enum value."""
-    return {"silu": 0, "gpt-oss": 1}.get(act_str, 0)
+    return {'silu': 0, 'gpt-oss': 1}.get(act_str, 0)
 
 
 def _torch_dtype_to_cpp(dtype: torch.dtype):
@@ -124,7 +123,7 @@ class BuiltModule:
     to the underlying list so callers can ``zip(BuiltModule, contexts)`` etc.
     """
 
-    __slots__ = ("handles",)
+    __slots__ = ('handles',)
 
     def __init__(self, handles):
         self.handles = handles
@@ -214,7 +213,7 @@ class Builder:
         self._active_mask = ctx.active_mask
         self.tp = ParallelGroup(1, None)  # default: no TP
         self.config = config
-        if hasattr(self.config, "data_type"):
+        if hasattr(self.config, 'data_type'):
             self.config.data_type = ctx.data_type
         self._pending_tensors = {}
         self._pending_children = {}
@@ -268,7 +267,7 @@ class Builder:
         with self._ctx.devices[0]:
             plan = self._ctx.gemm.get_weight_plan(query)
         if plan is None:
-            raise RuntimeError("no GEMM kernel family for this component")
+            raise RuntimeError('no GEMM kernel family for this component')
         return plan
 
     def _add_linear(self, name: str, linear: Linear, split_side: SplitSide | None = None, plan=None):
@@ -280,7 +279,7 @@ class Builder:
         """
         assert not self._built, f"{type(self).__name__} is built; commit '{name}' rejected"
 
-        w = linear.tensors.get("weight")
+        w = linear.tensors.get('weight')
         if w is None:
             return
 
@@ -321,13 +320,13 @@ class Builder:
         lin_cfg.output_dim = out_dim
         lin_cfg.data_type = compute_dtype or _tm.DataType.TYPE_INVALID
         lin_cfg.format = linear.weight_format.make_data_format()
-        lin_cfg.has_bias = "bias" in linear.tensors
+        lin_cfg.has_bias = 'bias' in linear.tensors
 
         packed = {k: fmt.pack(t, k) for k, t in linear.tensors.items()}
         tensors = {k: p.tensor for k, p in packed.items()}
 
         kind_split_dims = {
-            kind: None if (kind == "bias" and split_side == SplitSide.INPUT) else split_dim for kind in tensors
+            kind: None if (kind == 'bias' and split_side == SplitSide.INPUT) else split_dim for kind in tensors
         }
 
         if tp > 1 and split_dim is not None:
@@ -358,7 +357,7 @@ class Builder:
                     if alloc_shape is not None and split_dim is not None and tp > 1:
                         alloc_shape = list(alloc_shape)
                         alloc_shape[split_dim] //= tp
-                    if alloc_dtype is None and kind == "weight":
+                    if alloc_dtype is None and kind == 'weight':
                         alloc_dtype = self.config.data_type
 
                     _copy_shard_to_param(mod, kind, shard, alloc_shape=alloc_shape, alloc_dtype=alloc_dtype)
@@ -432,7 +431,7 @@ class Builder:
 
     def _cfg_for_rank(self, gpu_idx: int):
         """Clone config and set tp_rank if tp > 1."""
-        if self.tp.size > 1 and hasattr(self.config, "tp_rank"):
+        if self.tp.size > 1 and hasattr(self.config, 'tp_rank'):
             cfg = self.config.clone()
             cfg.tp_rank = self.tp.ranks[gpu_idx]
             return cfg

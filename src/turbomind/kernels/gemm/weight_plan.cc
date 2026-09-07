@@ -6,10 +6,10 @@ namespace turbomind::gemm {
 
 int WeightPlan::gate_up(ActivationType act_type, int projection_n)
 {
-    epilogue_      = Epilogue::kNone;
-    output_format_ = family_->output_format(Epilogue::kNone);
-    Epilogue epilogue = Epilogue::kNone;
-    const int block = family_->gate_up(act_type, epilogue);
+    epilogue_          = Epilogue::kNone;
+    output_format_     = family_->output_format(Epilogue::kNone);
+    Epilogue  epilogue = Epilogue::kNone;
+    const int block    = family_->gate_up(act_type, epilogue);
     if (!block || projection_n % block) {
         return 0;
     }

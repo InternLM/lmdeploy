@@ -68,10 +68,11 @@ struct GmmaMixedTraits {
     static constexpr int kMmaN = MmaN_ ? MmaN_ : TILE_BATCH / kAtomN;
     static_assert(TILE_BATCH % (kAtomN * kMmaN) == 0);
     static constexpr int kMmaNSlices = TILE_BATCH / (kAtomN * kMmaN);
-    using WgTileShape = cute::Shape<cute::Int<TILE_OUT / kAtomM>, cute::Int<kMmaN>, cute::Int<TILE_K>>;
+    using WgTileShape                = cute::Shape<cute::Int<TILE_OUT / kAtomM>, cute::Int<kMmaN>, cute::Int<TILE_K>>;
     using MmaAtom  = decltype(cute::GMMA::rs_op_selector<ElementA, ElementB, ElementC, WgTileShape, MajorA, MajorB>());
     using TiledMma = decltype(cute::make_tiled_mma(MmaAtom{}, AtomLayoutMNK{}));
-    using WgTiledMma = decltype(cute::make_tiled_mma(MmaAtom{}, cute::Layout<cute::Shape<cute::_1, cute::_1, cute::_1>>{}));
+    using WgTiledMma =
+        decltype(cute::make_tiled_mma(MmaAtom{}, cute::Layout<cute::Shape<cute::_1, cute::_1, cute::_1>>{}));
 
     // Candidate atoms must consume the exact same per-thread operand-A
     // fragment as the immutable pack reference. WGLayout only changes

@@ -11,8 +11,8 @@ from .builders.linear import _build_linear
 if TYPE_CHECKING:
     from transformers import PretrainedConfig
 
-    from .checkpoint import Prefix
     from .builders.linear import Linear
+    from .checkpoint import Prefix
 
 
 class TextModel(ABC):

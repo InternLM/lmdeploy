@@ -40,26 +40,11 @@ static std::optional<GemmDesc> get_gemm_desc(const Operation&    operation,
         return {};
     }
 
-    GemmDesc desc{operation.family,
-                  arch,
-                  Adesc.type,
-                  Bdesc.type,
-                  Ddesc.type,
-                  Adesc.order,
-                  Bdesc.order,
-                  Ddesc.order,
-                  get_mode(Adesc),
-                  get_mode(Bdesc),
-                  get_mode(Ddesc),
-                  Adesc.pack,
-                  Bdesc.pack,
-                  Udesc.pack,
-                  Vdesc.pack,
-                  operation.quant_a,
-                  operation.quant_b,
-                  operation.epilogue,
-                  operation.batch_dim,
-                  -1};
+    GemmDesc desc{
+        operation.family,    arch,        Adesc.type,      Bdesc.type,        Ddesc.type,        Adesc.order,
+        Bdesc.order,         Ddesc.order, get_mode(Adesc), get_mode(Bdesc),   get_mode(Ddesc),   Adesc.pack,
+        Bdesc.pack,          Udesc.pack,  Vdesc.pack,      operation.quant_a, operation.quant_b, operation.epilogue,
+        operation.batch_dim, -1};
 
     desc.m   = m0;
     desc.n   = n0;

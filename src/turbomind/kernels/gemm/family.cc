@@ -104,7 +104,7 @@ void Family::ConvertInput(Tensor& A,
                           const LinearWeight&,
                           const Tensor& input,
                           const Tensor& input_scales,
-                          cudaStream_t stream) const
+                          cudaStream_t  stream) const
 {
     if (!input_format_.is_quantized()) {
         TM_CHECK_EQ(input.dtype(), input_format_.dtype);

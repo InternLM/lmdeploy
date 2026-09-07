@@ -123,9 +123,9 @@ public:
            bool          grouped,
            std::optional<WeightBridge> (*supports)(const DataFormat&, bool),
            void (*pack)(LinearWeight&, const WeightBridge&, cudaStream_t),
-           int        gate_up_block       = 0,
-           DataFormat fused_output        = {},
-           bool       is_graph_compatible = true,
+           int        gate_up_block                                             = 0,
+           DataFormat fused_output                                              = {},
+           bool       is_graph_compatible                                       = true,
            OutputSpec (*output_spec)(core::Layout, const DataFormat&, Epilogue) = plain_output_spec);
 
 private:

@@ -24,9 +24,9 @@
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/multimodal_input.h"
 #include "src/turbomind/kernels/copy/copy.h"
-#include "src/turbomind/kernels/norm/norm.h"
 #include "src/turbomind/kernels/gemm/convert.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
+#include "src/turbomind/kernels/norm/norm.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
@@ -267,12 +267,12 @@ ft::DataType getDataType(DLDataType data_type)
 
 std::shared_ptr<Tensor> FromDLPack(const py::object& object)
 {
-    py::capsule capsule = object.attr("__dlpack__")();
-    auto* managed = static_cast<DLManagedTensor*>(PyCapsule_GetPointer(capsule.ptr(), kDlTensorCapsuleName));
-    auto& dl_tensor = managed->dl_tensor;
+    py::capsule capsule   = object.attr("__dlpack__")();
+    auto*       managed   = static_cast<DLManagedTensor*>(PyCapsule_GetPointer(capsule.ptr(), kDlTensorCapsuleName));
+    auto&       dl_tensor = managed->dl_tensor;
 
     const ft::core::Device device{getMemoryType(dl_tensor.device), dl_tensor.device.device_id};
-    const auto dtype = getDataType(dl_tensor.dtype);
+    const auto             dtype = getDataType(dl_tensor.dtype);
     assert(dl_tensor.ndim > 0);
     std::vector<ft::core::ssize_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
     for (const auto extent : shape) {
@@ -294,7 +294,7 @@ std::shared_ptr<Tensor> FromDLPack(const py::object& object)
     }
 
     ft::core::Layout layout{std::move(shape), std::move(stride)};
-    auto* data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
+    auto*            data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
 
     capsule.set_name("used_dltensor");
     std::shared_ptr<void> owner{data, [managed](void*) {
@@ -651,7 +651,11 @@ PYBIND11_MODULE(_turbomind, m)
             "copy_from",
             [](Tensor& self, const py::object& object, std::uintptr_t stream_ptr) {
                 auto src = FromDLPack(object);
-                TM_CUDA_CHECK(cudaMemcpyAsync(self.raw_data(), src->raw_data(), self.byte_size(), cudaMemcpyDefault, reinterpret_cast<cudaStream_t>(stream_ptr)));
+                TM_CUDA_CHECK(cudaMemcpyAsync(self.raw_data(),
+                                              src->raw_data(),
+                                              self.byte_size(),
+                                              cudaMemcpyDefault,
+                                              reinterpret_cast<cudaStream_t>(stream_ptr)));
             },
             "tensor"_a,
             "stream_ptr"_a)
@@ -806,10 +810,15 @@ PYBIND11_MODULE(_turbomind, m)
             [](const PyContextGuard& g) { return reinterpret_cast<std::uintptr_t>(g.stream.handle()); },
             "Underlying cudaStream_t as an integer (for torch.cuda.ExternalStream).");
 
-    m.def("create_device_context", [](std::uintptr_t stream_ptr) {
-        auto stream = ft::core::Stream::borrow(reinterpret_cast<cudaStream_t>(stream_ptr));
-        return std::make_unique<PyContextGuard>(stream, ft::core::Allocator{ft::kCPU}, ft::core::Allocator{stream, true});
-    }, "stream_ptr"_a, "Create a ContextGuard over a caller-owned CUDA stream and the device default memory pool. The caller retains stream ownership.");
+    m.def(
+        "create_device_context",
+        [](std::uintptr_t stream_ptr) {
+            auto stream = ft::core::Stream::borrow(reinterpret_cast<cudaStream_t>(stream_ptr));
+            return std::make_unique<PyContextGuard>(
+                stream, ft::core::Allocator{ft::kCPU}, ft::core::Allocator{stream, true});
+        },
+        "stream_ptr"_a,
+        "Create a ContextGuard over a caller-owned CUDA stream and the device default memory pool. The caller retains stream ownership.");
 
     // Param — lightweight handle to a Module parameter slot
     py::class_<ft::core::Param>(m, "Param")

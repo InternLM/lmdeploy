@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import torch
 
-from .linear import Linear
 from ._base import Builder, ParallelGroup, SplitSide
+from .linear import Linear
 
 # ---------------------------------------------------------------------------
 # MLA fold+pad pipeline (standalone functions)

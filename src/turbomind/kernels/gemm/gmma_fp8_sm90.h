@@ -40,17 +40,15 @@ struct GmmaFP8V3Traits {
 
     static constexpr int kMmaN = MmaN_ ? MmaN_ : TILE_N / kAtomN;
     static_assert(TILE_N % (kAtomN * kMmaN) == 0, "TILE_N vs WGMMA N");
-    using WgTileShape =
-        cute::Shape<cute::Int<TILE_M / kAtomM>, cute::Int<kMmaN>, cute::Int<TILE_K>>;
+    using WgTileShape = cute::Shape<cute::Int<TILE_M / kAtomM>, cute::Int<kMmaN>, cute::Int<TILE_K>>;
 
-    using MmaAtom =
-        decltype(cute::GMMA::ss_op_selector<ElementA, ElementB, ElementC, WgTileShape, MajorA, MajorB>());
+    using MmaAtom  = decltype(cute::GMMA::ss_op_selector<ElementA, ElementB, ElementC, WgTileShape, MajorA, MajorB>());
     using TiledMma = decltype(cute::make_tiled_mma(MmaAtom{}, AtomLayoutMNK{}));
 
     static constexpr typename cute::MMA_Traits<MmaAtom>::Shape_MNK OpShape{};
-    static constexpr int kOpM = cute::get<0>(OpShape);
-    static constexpr int kOpN = cute::get<1>(OpShape);
-    static constexpr int kOpK = cute::get<2>(OpShape);
+    static constexpr int                                           kOpM = cute::get<0>(OpShape);
+    static constexpr int                                           kOpN = cute::get<1>(OpShape);
+    static constexpr int                                           kOpK = cute::get<2>(OpShape);
 
     static constexpr int kRestM   = TILE_M / (kAtomM * kOpM);
     static constexpr int kRestN   = TILE_N / (kAtomN * kOpN);
@@ -60,10 +58,8 @@ struct GmmaFP8V3Traits {
     static_assert(cute::tile_size<0>(TiledMma{}) == kAtomM * kOpM);
     static_assert(cute::tile_size<1>(TiledMma{}) == kAtomN * kOpN);
 
-    using SmemLayoutAtomA =
-        decltype(gmma_ss_smem_selector<MajorA, ElementA, cute::Int<TILE_M>, cute::Int<TILE_K>>());
-    using SmemLayoutAtomB =
-        decltype(gmma_ss_smem_selector<MajorB, ElementB, cute::Int<TILE_N>, cute::Int<TILE_K>>());
+    using SmemLayoutAtomA = decltype(gmma_ss_smem_selector<MajorA, ElementA, cute::Int<TILE_M>, cute::Int<TILE_K>>());
+    using SmemLayoutAtomB = decltype(gmma_ss_smem_selector<MajorB, ElementB, cute::Int<TILE_N>, cute::Int<TILE_K>>());
 };
 
 /*
@@ -120,20 +116,18 @@ struct GmmaFP8WaTraits {
 
     // Atom N comes from the per-WG BATCH extent (not weight OUT) — the same
     // operand-axis reversal as GmmaBF16Traits.
-    using WgTileShape =
-        cute::Shape<cute::Int<TILE_OUT / kAtomM>, cute::Int<TILE_BATCH / kAtomN>, cute::Int<TILE_K>>;
+    using WgTileShape = cute::Shape<cute::Int<TILE_OUT / kAtomM>, cute::Int<TILE_BATCH / kAtomN>, cute::Int<TILE_K>>;
 
-    using MmaAtom =
-        decltype(cute::GMMA::ss_op_selector<ElementA, ElementB, ElementC, WgTileShape, MajorA, MajorB>());
+    using MmaAtom  = decltype(cute::GMMA::ss_op_selector<ElementA, ElementB, ElementC, WgTileShape, MajorA, MajorB>());
     using TiledMma = decltype(cute::make_tiled_mma(MmaAtom{}, AtomLayoutMNK{}));
 
     static constexpr typename cute::MMA_Traits<MmaAtom>::Shape_MNK OpShape{};
-    static constexpr int kOpM = cute::get<0>(OpShape);
-    static constexpr int kOpN = cute::get<1>(OpShape);
-    static constexpr int kOpK = cute::get<2>(OpShape);
+    static constexpr int                                           kOpM = cute::get<0>(OpShape);
+    static constexpr int                                           kOpN = cute::get<1>(OpShape);
+    static constexpr int                                           kOpK = cute::get<2>(OpShape);
 
-    static constexpr int kRestM = TILE_OUT / (kAtomM * kOpM);
-    static constexpr int kRestN = TILE_BATCH / (kAtomN * kOpN);
+    static constexpr int kRestM   = TILE_OUT / (kAtomM * kOpM);
+    static constexpr int kRestN   = TILE_BATCH / (kAtomN * kOpN);
     static constexpr int kKBlocks = TILE_K / kOpK;
     static_assert(kOpM == 64 && kOpK == 32);
     static_assert(kRestM >= 1 && kRestN >= 1 && kKBlocks >= 1);
@@ -142,7 +136,7 @@ struct GmmaFP8WaTraits {
 
     // Weight scales are 128-wide along GMMA-M (OUT).  Dense activation
     // scales follow the two GMMA-N columns owned by each thread per stripe.
-    static constexpr int kOuterM = std::gcd(TILE_OUT / kAtomM, 128);
+    static constexpr int kOuterM             = std::gcd(TILE_OUT / kAtomM, 128);
     static constexpr int kActScalesPerThread = kOpN / 4;
 
     using SmemLayoutAtomA = decltype(gmma_ss_smem_selector<MajorA, ElementA, cute::Int<TILE_OUT>, cute::Int<TILE_K>>());

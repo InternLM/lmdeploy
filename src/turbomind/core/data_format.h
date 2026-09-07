@@ -44,10 +44,7 @@ struct DataFormat {
                std::vector<int> block_sizes,
                DataType         scales_dtype = kNull,
                DataType         zeros_dtype  = kNull):
-        dtype{dtype},
-        block_sizes{std::move(block_sizes)},
-        scales{scales_dtype},
-        zeros{zeros_dtype}
+        dtype{dtype}, block_sizes{std::move(block_sizes)}, scales{scales_dtype}, zeros{zeros_dtype}
     {
     }
 

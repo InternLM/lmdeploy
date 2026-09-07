@@ -49,7 +49,8 @@ class WeightPlan:
 
 
 class ExecPlan:
-    """Selected kernel and output allocation contract for one execution problem."""
+    """Selected kernel and output allocation contract for one execution
+    problem."""
 
     __slots__ = ('_impl',)
 
@@ -89,7 +90,8 @@ class Weight:
 
 
 class Linear:
-    """Plan, prepare, tune, and execute TurboMind linear operations from Torch."""
+    """Plan, prepare, tune, and execute TurboMind linear operations from
+    Torch."""
 
     __slots__ = ('device', '_impl', '_context', '__weakref__')
 
@@ -114,7 +116,8 @@ class Linear:
 
     @contextmanager
     def _activate(self):
-        """Activate the cached native context for the current Torch CUDA stream."""
+        """Activate the cached native context for the current Torch CUDA
+        stream."""
         with torch.cuda.device(self.device):
             stream = torch.cuda.current_stream(self.device)
             context = self._context
@@ -166,7 +169,8 @@ class Linear:
         return result
 
     def _normalize_params(self, weight_format, weight, scales, zeros):
-        """Normalize source weight components into TurboMind logical layouts."""
+        """Normalize source weight components into TurboMind logical
+        layouts."""
         raw = {'weight': weight, 'scales': scales, 'zeros': zeros}
         raw = {kind: tensor for kind, tensor in raw.items() if tensor is not None}
         normalized = {kind: weight_format.normalize(tensor, kind).contiguous() for kind, tensor in raw.items()}
@@ -177,12 +181,14 @@ class Linear:
         return normalized
 
     def _copy_param(self, impl, name, src, *, logical_shape, logical_dtype, stream):
-        """Allocate a native parameter and copy its source bytes on the active stream."""
+        """Allocate a native parameter and copy its source bytes on the active
+        stream."""
         dst = impl.param(name).alloc(logical_shape, logical_dtype)
         dst.copy_from(src, stream.cuda_stream)
 
     def _prepare_one(self, normalized, *, weight_format, plan, dtype, stored_output_dim, stream):
-        """Allocate and pack one normalized weight with a selected native plan."""
+        """Allocate and pack one normalized weight with a selected native
+        plan."""
         source_weight = normalized['weight']
         input_dim = source_weight.shape[0]
 
@@ -211,7 +217,8 @@ class Linear:
         return handle
 
     def _prepare_grouped(self, normalized_experts, *, weight_format, plan, dtype, stored_output_dim, stream):
-        """Prepare expert weights and link them into one grouped weight handle."""
+        """Prepare expert weights and link them into one grouped weight
+        handle."""
         experts = []
         try:
             for params in normalized_experts:
@@ -247,13 +254,15 @@ class Linear:
             return self._prepare_grouped(normalized_experts, weight_format=weight_format, plan=impl_plan, dtype=dtype, stored_output_dim=normalized_experts[0]['weight'].shape[1], stream=stream)
 
     def _interleave_gate_up(self, gate, up, groups):
-        """Interleave gate and up components in the selected family block layout."""
+        """Interleave gate and up components in the selected family block
+        layout."""
         gate_groups = gate.unflatten(-1, (groups, -1))
         up_groups = up.unflatten(-1, (groups, -1))
         return torch.stack((gate_groups, up_groups), dim=-2).flatten(-3, -1).contiguous()
 
     def fuse_weight(self, weight: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]], *, plan: WeightPlan, scales: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None, zeros: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None) -> Weight:
-        """Normalize, interleave, and pack gate/up weights for fused SiLU execution."""
+        """Normalize, interleave, and pack gate/up weights for fused SiLU
+        execution."""
         weight_format = plan._weight_format
         dtype = plan._dtype
         impl_plan = plan._impl
@@ -307,7 +316,8 @@ class Linear:
             return self._prepare_one(combined_experts[0], weight_format=weight_format, plan=impl_plan, dtype=dtype, stored_output_dim=stored_output_dim, stream=stream)
 
     def get_exec_plan(self, x: torch.Tensor, weight: Weight, *, offsets: torch.Tensor | None = None, indices: torch.Tensor | None = None) -> ExecPlan:
-        """Select an immutable execution plan for an input and prepared weight."""
+        """Select an immutable execution plan for an input and prepared
+        weight."""
         tm = _tm
         impl = self._impl.get_exec_plan(weight._impl, tm.from_dlpack(x), None if indices is None else tm.from_dlpack(indices), None if offsets is None else tm.from_dlpack(offsets))
         if impl is None:
@@ -317,7 +327,8 @@ class Linear:
         return exec_plan
 
     def _allocate_output(self, spec, out: torch.Tensor | None, out_scales: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Allocate any omitted output tensors according to an execution plan."""
+        """Allocate any omitted output tensors according to an execution
+        plan."""
         if out is None:
             out = torch.empty_strided(spec.output_shape, spec.output_stride, dtype=_to_torch_dtype(spec.output_dtype), device=self.device)
         if out_scales is None and spec.output_scales_dtype != _tm.DataType.TYPE_INVALID:
@@ -339,7 +350,8 @@ class Linear:
         return out, out_scales
 
     def tune(self, x: torch.Tensor, weight: Weight, *, offsets: torch.Tensor | None = None, indices: torch.Tensor | None = None, out: torch.Tensor | None = None, input_scales: torch.Tensor | None = None, out_scales: torch.Tensor | None = None) -> tuple[ExecPlan, torch.Tensor, torch.Tensor | None]:
-        """Measure feasible kernels and return the selected execution plan and outputs."""
+        """Measure feasible kernels and return the selected execution plan and
+        outputs."""
         tm = _tm
         input_impl = tm.from_dlpack(x)
         indices_impl = None if indices is None else tm.from_dlpack(indices)

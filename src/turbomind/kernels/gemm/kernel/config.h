@@ -23,7 +23,7 @@ struct Shape<M_, N_, K_> {
 template<int Producer_, int Math_>
 struct Registers {
     static constexpr int Producer = Producer_;
-    static constexpr int Math = Math_;
+    static constexpr int Math     = Math_;
 };
 
 template<class... Parts>
@@ -31,7 +31,7 @@ struct Config;
 
 template<class Tile_, class Groups_>
 struct Config<Tile_, Groups_> {
-    using Tile = Tile_;
+    using Tile   = Tile_;
     using Groups = Groups_;
 };
 

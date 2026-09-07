@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from .linear import round_up_output_groups
 from ._base import _CPP_TO_TORCH, Builder, BuiltModule, ParallelGroup, SplitSide
+from .linear import round_up_output_groups
 
 
 class TextModelBuilder(Builder):

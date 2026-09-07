@@ -548,12 +548,12 @@ struct NvFp4Quantizer {
         const float global_scale = *global_scale_;
         const float block_scale  = absmax / (traits::max_normal * global_scale);
 #if TURBOMIND_ARCH_HAS_FP8
-        scale                       = Scale{block_scale};
-        const float scale_e4m3      = static_cast<float>(scale);
+        scale                  = Scale{block_scale};
+        const float scale_e4m3 = static_cast<float>(scale);
 #else
-        scale.__x                    = __nv_cvt_float_to_fp8(block_scale, __NV_SATFINITE, __NV_E4M3);
-        const auto  scale_half_raw   = __nv_cvt_fp8_to_halfraw(scale.__x, __NV_E4M3);
-        const float scale_e4m3       = __half2float(reinterpret_cast<const __half&>(scale_half_raw));
+        scale.__x                  = __nv_cvt_float_to_fp8(block_scale, __NV_SATFINITE, __NV_E4M3);
+        const auto  scale_half_raw = __nv_cvt_fp8_to_halfraw(scale.__x, __NV_E4M3);
+        const float scale_e4m3     = __half2float(reinterpret_cast<const __half&>(scale_half_raw));
 #endif
         const float effective_scale = scale_e4m3 * global_scale;
 

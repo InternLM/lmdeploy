@@ -71,34 +71,28 @@ struct Sm90MixedDequant<Sm90NvFp4Format> {
 
     template<int RestM, int AtomM, int TileOut>
     __device__ static void
-    load(Registers<RestM>& regs,
-         const uint8_t*    q,
-         int               segment_base,
-         int               segment_stride,
-         int               group,
-         int               local_tid)
+    load(Registers<RestM>& regs, const uint8_t* q, int segment_base, int segment_stride, int group, int local_tid)
     {
         static_assert(TileOut == RestM * AtomM * 64);
         const int pair = local_tid / 4;
 
         CUTE_UNROLL
         for (int rest_m = 0; rest_m < RestM; ++rest_m) {
-            const int   segment  = segment_base + rest_m * segment_stride;
-            const auto* fragment = q + group * TileOut + segment * kSm90MixedFragmentN;
+            const int   segment     = segment_base + rest_m * segment_stride;
+            const auto* fragment    = q + group * TileOut + segment * kSm90MixedFragmentN;
             regs.scale_pair[rest_m] = reinterpret_cast<const uint16_t*>(fragment)[pair];
         }
     }
 
     template<int RestM>
-    __device__ static void
-    dequant(const uint32_t*      packed,
-            const Registers<RestM>& regs,
-            int                  rest_m,
-            int /*local_tid*/,
-            const SharedStorage& storage,
-            nv_bfloat16*         out)
+    __device__ static void dequant(const uint32_t*         packed,
+                                   const Registers<RestM>& regs,
+                                   int                     rest_m,
+                                   int /*local_tid*/,
+                                   const SharedStorage& storage,
+                                   nv_bfloat16*         out)
     {
-        const uint16_t scales = regs.scale_pair[rest_m];
+        const uint16_t scales   = regs.scale_pair[rest_m];
         const auto     table_lo = storage.tables[static_cast<uint8_t>(scales)];
         const auto     table_hi = storage.tables[static_cast<uint8_t>(scales >> 8)];
         auto*          h        = reinterpret_cast<uint32_t*>(out);

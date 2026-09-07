@@ -8,8 +8,8 @@
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/desc.h"
-#include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/family.h"
+#include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 
@@ -204,9 +204,8 @@ public:
         desc_ = kernel.desc();
         info_ = kernel.info();
 
-        desc_.transpose = !desc_.transpose;
-        desc_.supported_epilogues = static_cast<Epilogue>((int)desc_.supported_epilogues
-                                                          & ~(int)Epilogue::kGatedSilu);
+        desc_.transpose           = !desc_.transpose;
+        desc_.supported_epilogues = static_cast<Epilogue>((int)desc_.supported_epilogues & ~(int)Epilogue::kGatedSilu);
     }
 
     int Launch(const Operation&    operation,

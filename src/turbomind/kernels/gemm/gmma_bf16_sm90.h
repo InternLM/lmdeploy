@@ -15,8 +15,8 @@ using WG_2x1 = cute::Layout<cute::Shape<cute::_2, cute::_1>>;
 // Weight-as-A WGMMA uses (GMMA-M, GMMA-N) = (tile N, tile M), so reverse
 // those modes only at the TiledMma boundary.
 template<class WGLayout>
-using GmmaAtomLayoutMNK = decltype(cute::make_layout(
-    cute::make_shape(cute::size<1>(WGLayout{}), cute::size<0>(WGLayout{}), cute::_1{})));
+using GmmaAtomLayoutMNK =
+    decltype(cute::make_layout(cute::make_shape(cute::size<1>(WGLayout{}), cute::size<0>(WGLayout{}), cute::_1{})));
 
 // Identical to cutlass::gemm::collective::detail::ss_smem_selector
 // (sm90_common.inl:273-319). Including that .inl from TurboMind headers is
@@ -105,11 +105,12 @@ struct GmmaBF16Traits {
     static constexpr int kMmaN = MmaN_ ? MmaN_ : TILE_BATCH / kAtomN;
     static_assert(TILE_BATCH % (kAtomN * kMmaN) == 0, "TILE_BATCH vs WGMMA N");
     static constexpr int kMmaNSlices = TILE_BATCH / (kAtomN * kMmaN);
-    using WgTileShape = cute::Shape<cute::Int<TILE_OUT / kAtomM>, cute::Int<kMmaN>, cute::Int<TILE_K>>;
+    using WgTileShape                = cute::Shape<cute::Int<TILE_OUT / kAtomM>, cute::Int<kMmaN>, cute::Int<TILE_K>>;
 
-    using MmaAtom = decltype(cute::GMMA::ss_op_selector<ElementA, ElementB, ElementC, WgTileShape, MajorA, MajorB>());
+    using MmaAtom  = decltype(cute::GMMA::ss_op_selector<ElementA, ElementB, ElementC, WgTileShape, MajorA, MajorB>());
     using TiledMma = decltype(cute::make_tiled_mma(MmaAtom{}, AtomLayoutMNK{}));
-    using WgTiledMma = decltype(cute::make_tiled_mma(MmaAtom{}, cute::Layout<cute::Shape<cute::_1, cute::_1, cute::_1>>{}));
+    using WgTiledMma =
+        decltype(cute::make_tiled_mma(MmaAtom{}, cute::Layout<cute::Shape<cute::_1, cute::_1, cute::_1>>{}));
     static_assert(cute::tile_size<1>(TiledMma{}) == kAtomN * kMmaN);
 
     // One SoT SMEM atom for TMA + GMMA (MMA.md §6). OUT×K and BATCH×K, K-major.

@@ -23,36 +23,30 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_unfolded_weight_kerne
 {
     using namespace cute;
 
-    using PackTraits = GmmaMxFp4Fp8TraitsBase<64, 128, 1, WG_1x1, 128>;
-    using TiledMma = typename PackTraits::TiledMma;
+    using PackTraits         = GmmaMxFp4Fp8TraitsBase<64, 128, 1, WG_1x1, 128>;
+    using TiledMma           = typename PackTraits::TiledMma;
     constexpr int kFragmentM = PackTraits::kOpM;
     constexpr int kFragmentK = PackTraits::kOpK;
 
     const int out_fragments = output_dim / kFragmentM;
-    const int k_fragments = input_dim / kFragmentK;
-    auto gSrc = make_tensor(
-        make_gmem_ptr(src),
-        make_shape(output_dim, input_dim),
-        make_stride(input_dim, Int<1>{}));
+    const int k_fragments   = input_dim / kFragmentK;
+    auto gSrc = make_tensor(make_gmem_ptr(src), make_shape(output_dim, input_dim), make_stride(input_dim, Int<1>{}));
 
     TiledMma tiled_mma;
-    auto packed_layout = PackTraits::packed_layout_a_mk();
-    auto gDst = make_tensor(
-        make_gmem_ptr(recast_ptr<cute::uint4_t>(dst)),
-        make_layout(packed_layout,
-                    make_layout(total_records, cosize(packed_layout))));
-    auto thr_mma = tiled_mma.get_thread_slice(threadIdx.x);
+    auto     packed_layout = PackTraits::packed_layout_a_mk();
+    auto     gDst          = make_tensor(make_gmem_ptr(recast_ptr<cute::uint4_t>(dst)),
+                            make_layout(packed_layout, make_layout(total_records, cosize(packed_layout))));
+    auto     thr_mma       = tiled_mma.get_thread_slice(threadIdx.x);
 
     for (int record = int(blockIdx.x); record < total_records; record += int(gridDim.x)) {
         auto record_coord = idx2crd(record, make_shape(out_fragments, k_fragments));
-        auto gSrcRecord = local_tile(
-            gSrc, make_tile(Int<kFragmentM>{}, Int<kFragmentK>{}), record_coord);
-        auto gDstSlice = gDst(_, record);
-        auto gDstRecord = make_tensor(gDstSlice.data(), packed_layout);
-        auto tAgSrc = thr_mma.partition_A(gSrcRecord);
-        auto tAgDst = thr_mma.partition_A(gDstRecord);
-        auto tArSrc = make_fragment_like<uint16_t>(tAgSrc);
-        auto tArDst = make_fragment_like<cute::uint4_t>(tAgDst);
+        auto gSrcRecord   = local_tile(gSrc, make_tile(Int<kFragmentM>{}, Int<kFragmentK>{}), record_coord);
+        auto gDstSlice    = gDst(_, record);
+        auto gDstRecord   = make_tensor(gDstSlice.data(), packed_layout);
+        auto tAgSrc       = thr_mma.partition_A(gSrcRecord);
+        auto tAgDst       = thr_mma.partition_A(gDstRecord);
+        auto tArSrc       = make_fragment_like<uint16_t>(tAgSrc);
+        auto tArDst       = make_fragment_like<cute::uint4_t>(tAgDst);
         copy(tAgSrc, tArSrc);
 
         static_assert(size(tArSrc) == size(tArDst));
@@ -74,28 +68,24 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_weight_kernel(
 {
     using namespace cute;
 
-    using PackTraits = GmmaMxFp4Fp8TraitsBase<64, 128, 1, WG_1x1, 128>;
-    using TiledMma = typename PackTraits::TiledMma;
-    constexpr int kFragmentM = PackTraits::kOpM;
-    constexpr int kFragmentK = PackTraits::kOpK;
-    constexpr int kWordsPerLane = 2;
+    using PackTraits              = GmmaMxFp4Fp8TraitsBase<64, 128, 1, WG_1x1, 128>;
+    using TiledMma                = typename PackTraits::TiledMma;
+    constexpr int kFragmentM      = PackTraits::kOpM;
+    constexpr int kFragmentK      = PackTraits::kOpK;
+    constexpr int kWordsPerLane   = 2;
     constexpr int kWordsPerRecord = 128 * kWordsPerLane;
 
     const int out_fragments = output_dim / kFragmentM;
-    const int k_fragments = input_dim / kFragmentK;
-    auto gSrc = make_tensor(
-        make_gmem_ptr(src),
-        make_shape(output_dim, input_dim),
-        make_stride(input_dim, Int<1>{}));
+    const int k_fragments   = input_dim / kFragmentK;
+    auto gSrc = make_tensor(make_gmem_ptr(src), make_shape(output_dim, input_dim), make_stride(input_dim, Int<1>{}));
 
     TiledMma tiled_mma;
-    auto thr_mma = tiled_mma.get_thread_slice(threadIdx.x);
+    auto     thr_mma = tiled_mma.get_thread_slice(threadIdx.x);
     for (int record = int(blockIdx.x); record < total_records; record += int(gridDim.x)) {
         auto record_coord = idx2crd(record, make_shape(out_fragments, k_fragments));
-        auto gSrcRecord = local_tile(
-            gSrc, make_tile(Int<kFragmentM>{}, Int<kFragmentK>{}), record_coord);
-        auto tAgSrc = thr_mma.partition_A(gSrcRecord);
-        auto tArSrc = make_fragment_like<uint16_t>(tAgSrc);
+        auto gSrcRecord   = local_tile(gSrc, make_tile(Int<kFragmentM>{}, Int<kFragmentK>{}), record_coord);
+        auto tAgSrc       = thr_mma.partition_A(gSrcRecord);
+        auto tArSrc       = make_fragment_like<uint16_t>(tAgSrc);
         copy(tAgSrc, tArSrc);
         static_assert(size(tArSrc) == Int<16>{});
 
@@ -115,18 +105,14 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_weight_kernel(
 }
 
 __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_qparams_kernel(
-    uint8_t* dst,
-    const uint8_t* src,
-    int output_dim,
-    int total_records,
-    Sm90MxFp4Fp8FoldedPackStats* stats)
+    uint8_t* dst, const uint8_t* src, int output_dim, int total_records, Sm90MxFp4Fp8FoldedPackStats* stats)
 {
     using namespace cute;
 
-    using PackTraits = GmmaMxFp4Fp8FoldedTraits<64, 128, 1, WG_1x1, 128>;
-    using TiledMma   = typename PackTraits::TiledMma;
-    constexpr int kFragmentM = PackTraits::kOpM;
-    constexpr int kFragmentK = PackTraits::kOpK;
+    using PackTraits               = GmmaMxFp4Fp8FoldedTraits<64, 128, 1, WG_1x1, 128>;
+    using TiledMma                 = typename PackTraits::TiledMma;
+    constexpr int kFragmentM       = PackTraits::kOpM;
+    constexpr int kFragmentK       = PackTraits::kOpK;
     constexpr int kGroupsPerRecord = PackTraits::kKBlocksPerStage;
     constexpr int kShiftValues     = kFragmentM * kGroupsPerRecord;
     constexpr int kRecordValues    = Sm90MxFp4Fp8FoldedFormat::kQparamValuesFragment;
@@ -141,35 +127,32 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_qparams_kernel
     __shared__ int record_emin;
     __shared__ int record_emax;
     __shared__ int record_finite;
-    const int out_fragments = output_dim / kFragmentM;
-    const int k128_groups = total_records / out_fragments;
+    const int      out_fragments = output_dim / kFragmentM;
+    const int      k128_groups   = total_records / out_fragments;
 
-    auto gSrc = make_tensor(make_gmem_ptr(src),
-                            make_shape(output_dim, k128_groups * kGroupsPerRecord),
-                            make_stride(Int<1>{}, output_dim));
-    auto gShift = make_tensor(make_gmem_ptr(dst),
-                              make_layout(make_shape(Int<kShiftValues>{}, total_records)));
-    auto gBase = make_tensor(make_gmem_ptr(dst + size_t(total_records) * kShiftValues),
+    auto gSrc = make_tensor(
+        make_gmem_ptr(src), make_shape(output_dim, k128_groups * kGroupsPerRecord), make_stride(Int<1>{}, output_dim));
+    auto gShift = make_tensor(make_gmem_ptr(dst), make_layout(make_shape(Int<kShiftValues>{}, total_records)));
+    auto gBase  = make_tensor(make_gmem_ptr(dst + size_t(total_records) * kShiftValues),
                              make_layout(make_shape(Int<16>{}, total_records)));
 
     TiledMma tiled_mma;
-    auto     thr_mma = tiled_mma.get_thread_slice(threadIdx.x);
+    auto     thr_mma  = tiled_mma.get_thread_slice(threadIdx.x);
     auto     identity = make_identity_tensor(Shape<Int<kFragmentM>, Int<kFragmentK>>{});
-    auto     tAcA = thr_mma.partition_A(identity);
+    auto     tAcA     = thr_mma.partition_A(identity);
     auto     tAcAScan = coalesce(tAcA);
 
     for (int record = static_cast<int>(blockIdx.x); record < total_records; record += static_cast<int>(gridDim.x)) {
         if (threadIdx.x == 0) {
             tile_foldable = 1;
-            record_emin = 254;
-            record_emax = 0;
+            record_emin   = 254;
+            record_emax   = 0;
             record_finite = 1;
         }
         __syncthreads();
 
         auto record_coord = idx2crd(record, make_shape(out_fragments, k128_groups));
-        auto gSrcRecord = local_tile(
-            gSrc, make_tile(Int<kFragmentM>{}, Int<kGroupsPerRecord>{}), record_coord);
+        auto gSrcRecord   = local_tile(gSrc, make_tile(Int<kFragmentM>{}, Int<kGroupsPerRecord>{}), record_coord);
         CUTE_UNROLL
         for (int value = 0; value < size(tAcAScan); ++value) {
             auto mk = tAcAScan(value);
@@ -201,26 +184,23 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_qparams_kernel
         // exact order consumed by local_tid / 4 in the mainloop.
         const int local_tid = threadIdx.x;
         if (local_tid % 4 == 0) {
-            const int pair = local_tid / 4;
-            const int row_lo = get<0>(tAcA(
-                make_coord(Int<0>{}, Int<0>{}, Int<0>{}), Int<0>{}, Int<0>{}));
-            const int row_hi = get<0>(tAcA(
-                make_coord(Int<0>{}, Int<1>{}, Int<0>{}), Int<0>{}, Int<0>{}));
+            const int pair      = local_tid / 4;
+            const int row_lo    = get<0>(tAcA(make_coord(Int<0>{}, Int<0>{}, Int<0>{}), Int<0>{}, Int<0>{}));
+            const int row_hi    = get<0>(tAcA(make_coord(Int<0>{}, Int<1>{}, Int<0>{}), Int<0>{}, Int<0>{}));
             const int base_code = record_emin;
             CUTE_UNROLL
             for (int group = 0; group < kGroupsPerRecord; ++group) {
                 const uint8_t exponent_lo = gSrcRecord(row_lo, group);
                 const uint8_t exponent_hi = gSrcRecord(row_hi, group);
-                const int shift_lo = exponent_lo == 0xff ? 0 : static_cast<int>(exponent_lo) - base_code;
-                const int shift_hi = exponent_hi == 0xff ? 0 : static_cast<int>(exponent_hi) - base_code;
+                const int     shift_lo    = exponent_lo == 0xff ? 0 : static_cast<int>(exponent_lo) - base_code;
+                const int     shift_hi    = exponent_hi == 0xff ? 0 : static_cast<int>(exponent_hi) - base_code;
                 // Store ready-to-add E4M3 exponent-field deltas. Packing them
                 // together makes the mainloop scale fetch one aligned 16-bit
                 // load for both WGMMA-owned rows.
-                const uint16_t scale_pair = static_cast<uint16_t>(shift_lo << 3)
-                                            | static_cast<uint16_t>(shift_hi << 11);
-                auto* scale_dst = reinterpret_cast<uint16_t*>(
-                    &gShift(group * kFragmentM + 2 * pair, record));
-                *scale_dst = scale_pair;
+                const uint16_t scale_pair =
+                    static_cast<uint16_t>(shift_lo << 3) | static_cast<uint16_t>(shift_hi << 11);
+                auto* scale_dst = reinterpret_cast<uint16_t*>(&gShift(group * kFragmentM + 2 * pair, record));
+                *scale_dst      = scale_pair;
             }
         }
         __syncthreads();
@@ -228,8 +208,7 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_qparams_kernel
         if (threadIdx.x == 0) {
             const int base_exponent = record_emin - 127;
             assert(!record_finite || (-127 <= base_exponent && base_exponent <= 127));
-            gBase(0, record) = record_finite ? static_cast<uint8_t>(static_cast<int8_t>(base_exponent))
-                                             : uint8_t{0x80};
+            gBase(0, record) = record_finite ? static_cast<uint8_t>(static_cast<int8_t>(base_exponent)) : uint8_t{0x80};
             if (stats) {
                 atomicAdd(&stats->total_records, 1ull);
                 if (tile_foldable) {
@@ -241,18 +220,17 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_qparams_kernel
     }
 }
 
-__global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_unfolded_qparams_kernel(
-    uint8_t* dst,
-    const uint8_t* src,
-    int output_dim,
-    int total_records)
+__global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_unfolded_qparams_kernel(uint8_t*       dst,
+                                                                                   const uint8_t* src,
+                                                                                   int            output_dim,
+                                                                                   int            total_records)
 {
     using namespace cute;
 
-    using PackTraits = GmmaMxFp4Fp8UnfoldedTraits<64, 128, 1, WG_1x1, 128>;
-    using TiledMma   = typename PackTraits::TiledMma;
-    constexpr int kFragmentM = PackTraits::kOpM;
-    constexpr int kFragmentK = PackTraits::kOpK;
+    using PackTraits               = GmmaMxFp4Fp8UnfoldedTraits<64, 128, 1, WG_1x1, 128>;
+    using TiledMma                 = typename PackTraits::TiledMma;
+    constexpr int kFragmentM       = PackTraits::kOpM;
+    constexpr int kFragmentK       = PackTraits::kOpK;
     constexpr int kGroupsPerRecord = PackTraits::kKBlocksPerStage;
     constexpr int kQparamGroups    = PackTraits::kKBlocksPerStage;
 
@@ -263,23 +241,21 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_unfolded_qparams_kern
     const int out_fragments = output_dim / kFragmentM;
     const int k128_groups   = total_records / out_fragments;
 
-    auto gSrc = make_tensor(make_gmem_ptr(src),
-                            make_shape(output_dim, k128_groups * kGroupsPerRecord),
-                            make_stride(Int<1>{}, output_dim));
-    auto gDst = make_tensor(make_gmem_ptr(dst),
-                            make_layout(make_shape(Int<kFragmentM>{}, Int<kQparamGroups>{}, total_records),
-                                        make_stride(Int<kQparamGroups>{}, Int<1>{},
-                                                    Int<kFragmentM * kQparamGroups>{})));
+    auto gSrc = make_tensor(
+        make_gmem_ptr(src), make_shape(output_dim, k128_groups * kGroupsPerRecord), make_stride(Int<1>{}, output_dim));
+    auto gDst =
+        make_tensor(make_gmem_ptr(dst),
+                    make_layout(make_shape(Int<kFragmentM>{}, Int<kQparamGroups>{}, total_records),
+                                make_stride(Int<kQparamGroups>{}, Int<1>{}, Int<kFragmentM * kQparamGroups>{})));
 
     TiledMma tiled_mma;
-    auto     thr_mma = tiled_mma.get_thread_slice(threadIdx.x);
+    auto     thr_mma  = tiled_mma.get_thread_slice(threadIdx.x);
     auto     identity = make_identity_tensor(Shape<Int<kFragmentM>, Int<kFragmentK>>{});
-    auto     tAcA = coalesce(thr_mma.partition_A(identity));
+    auto     tAcA     = coalesce(thr_mma.partition_A(identity));
 
     for (int record = static_cast<int>(blockIdx.x); record < total_records; record += static_cast<int>(gridDim.x)) {
         auto record_coord = idx2crd(record, make_shape(out_fragments, k128_groups));
-        auto gSrcRecord = local_tile(
-            gSrc, make_tile(Int<kFragmentM>{}, Int<kQparamGroups>{}), record_coord);
+        auto gSrcRecord   = local_tile(gSrc, make_tile(Int<kFragmentM>{}, Int<kQparamGroups>{}), record_coord);
         CUTE_UNROLL
         for (int value = 0; value < size(tAcA); ++value) {
             auto mk = tAcA(value);
@@ -296,11 +272,8 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_unfolded_qparams_kern
 }
 
 template<bool ReorderMxFp4>
-__global__ __launch_bounds__(256) void pack_sm90_u4_weight_kernel(uint32_t*       dst,
-                                                                  const uint16_t* src,
-                                                                  int             output_dim,
-                                                                  int             input_dim,
-                                                                  int             total_tiles)
+__global__ __launch_bounds__(256) void pack_sm90_u4_weight_kernel(
+    uint32_t* dst, const uint16_t* src, int output_dim, int input_dim, int total_tiles)
 {
     using namespace cute;
 
@@ -330,11 +303,11 @@ __global__ __launch_bounds__(256) void pack_sm90_u4_weight_kernel(uint32_t*     
         auto     thr_mma = tiled_mma.get_thread_slice(threadIdx.x);
         auto     tArA    = thr_mma.make_fragment_A(thr_mma.partition_A(gA));
 
-        auto tiled_copy = make_tiled_copy_A(Copy_Atom<AutoVectorizingCopy, bfloat16_t>{}, tiled_mma);
-        auto thr_copy   = tiled_copy.get_thread_slice(threadIdx.x);
-        auto tAgA       = thr_copy.partition_S(gA);
-        auto tArA_copy  = thr_copy.retile_D(tArA);
-        const int warpgroup = threadIdx.x / 128;
+        auto      tiled_copy = make_tiled_copy_A(Copy_Atom<AutoVectorizingCopy, bfloat16_t>{}, tiled_mma);
+        auto      thr_copy   = tiled_copy.get_thread_slice(threadIdx.x);
+        auto      tAgA       = thr_copy.partition_S(gA);
+        auto      tArA_copy  = thr_copy.retile_D(tArA);
+        const int warpgroup  = threadIdx.x / 128;
         const int fragment_n = tile_n * (kSm90MixedTileN / kSm90MixedFragmentN) + warpgroup;
 
         static_assert(rank(tArA) == Int<3>{});
@@ -379,8 +352,8 @@ __global__ __launch_bounds__(256) void pack_sm90_u4_weight_kernel(uint32_t*     
                 }
 
                 const int     fragment_k = tile_k * (kSm90MixedTileK / kSm90MixedFragmentK) + kb;
-                const int64_t dst_idx     = ((int64_t)fragment_k * fragments_n + fragment_n) * 128 + lane;
-                dst[dst_idx]              = packed;
+                const int64_t dst_idx    = ((int64_t)fragment_k * fragments_n + fragment_n) * 128 + lane;
+                dst[dst_idx]             = packed;
             }
         }
     }
@@ -460,16 +433,15 @@ __global__ __launch_bounds__(256) void pack_sm90_fp8_e4m3_weight_kernel(
 
             const int     fragment_n = tile_n * (kSm90MixedTileN / kSm90MixedFragmentN) + warpgroup;
             const int     fragment_k = tile_k * (kSm90MixedTileK / kSm90MixedFragmentK) + kb;
-            const int64_t dst_idx     = ((int64_t)fragment_k * fragments_n + fragment_n) * 256 + lane * 2;
-            dst[dst_idx]          = packed[0];
-            dst[dst_idx + 1]      = packed[1];
+            const int64_t dst_idx    = ((int64_t)fragment_k * fragments_n + fragment_n) * 256 + lane * 2;
+            dst[dst_idx]             = packed[0];
+            dst[dst_idx + 1]         = packed[1];
         }
     }
 }
 
 template<int Offset, class D, class S>
-__global__ __launch_bounds__(256) void
-pack_sm90_qparams_kernel(D* dst, const S* src, int output_dim, int total_tiles)
+__global__ __launch_bounds__(256) void pack_sm90_qparams_kernel(D* dst, const S* src, int output_dim, int total_tiles)
 {
     using namespace cute;
 
@@ -490,13 +462,13 @@ pack_sm90_qparams_kernel(D* dst, const S* src, int output_dim, int total_tiles)
         auto     tAcA     = thr_mma.partition_A(identity);
         static_assert(size(tAcA) == Int<8>{});
 
-        const int local_tid = threadIdx.x % 128;
-        const int warpgroup = threadIdx.x / 128;
+        const int local_tid  = threadIdx.x % 128;
+        const int warpgroup  = threadIdx.x / 128;
         const int fragment_n = tile_n * (kSm90MixedTileN / kSm90MixedFragmentN) + warpgroup;
         if (fragment_n < fragments_n && local_tid % 4 == 0) {
-            const int pair      = local_tid / 4;
-            const int m_lo      = get<0>(tAcA(0));
-            const int m_hi      = get<0>(tAcA(2));
+            const int pair = local_tid / 4;
+            const int m_lo = get<0>(tAcA(0));
+            const int m_hi = get<0>(tAcA(2));
 
             const S* tile_src = src + (int64_t)group * output_dim + tile_n * kSm90MixedTileN;
             D*       fragment = dst + ((int64_t)group * fragments_n + fragment_n) * kSm90MixedFragmentN;
@@ -508,7 +480,8 @@ pack_sm90_qparams_kernel(D* dst, const S* src, int output_dim, int total_tiles)
 }
 
 template<class T>
-__global__ __launch_bounds__(256) void pack_sm90_u4_qparams_kernel(uint8_t* dst, const T* scales, const T* zeros, int output_dim, int total_tiles)
+__global__ __launch_bounds__(256) void pack_sm90_u4_qparams_kernel(
+    uint8_t* dst, const T* scales, const T* zeros, int output_dim, int total_tiles)
 {
     static_assert(std::is_same_v<T, half_t> || std::is_same_v<T, bfloat16_t>);
     using namespace cute;
@@ -539,12 +512,12 @@ __global__ __launch_bounds__(256) void pack_sm90_u4_qparams_kernel(uint8_t* dst,
             const int m_hi = get<0>(tAcA(2));
 
             const auto* tile_scales = scales + (int64_t)group * output_dim + tile_n * kSm90MixedTileN;
-            const auto* tile_zeros =
-                zeros ? zeros + (int64_t)group * output_dim + tile_n * kSm90MixedTileN : nullptr;
-            auto* fragment =
-                dst + ((int64_t)group * fragments_n + fragment_n) * kSm90U4QparamValuesFragment;
+            const auto* tile_zeros  = zeros ? zeros + (int64_t)group * output_dim + tile_n * kSm90MixedTileN : nullptr;
+            auto*       fragment    = dst + ((int64_t)group * fragments_n + fragment_n) * kSm90U4QparamValuesFragment;
 
-            reinterpret_cast<uint32_t*>(fragment)[pair] = uint32_t(reinterpret_cast<const uint16_t&>(tile_scales[m_lo])) | (uint32_t(reinterpret_cast<const uint16_t&>(tile_scales[m_hi])) << 16);
+            reinterpret_cast<uint32_t*>(fragment)[pair] =
+                uint32_t(reinterpret_cast<const uint16_t&>(tile_scales[m_lo]))
+                | (uint32_t(reinterpret_cast<const uint16_t&>(tile_scales[m_hi])) << 16);
 
             uint8_t zero_lo = 0;
             uint8_t zero_hi = 0;
@@ -568,31 +541,31 @@ __global__ __launch_bounds__(256) void pack_sm90_u4_qparams_kernel(uint8_t* dst,
             if (local_tid % 16 == 0) {
                 // Store the four low zeros followed by the four high zeros so
                 // a four-bit lane shift aligns both with the LOP3 nibble mask.
-                const uint32_t zero_word = (zero_0 & 0x0fu) | ((zero_1 & 0x0fu) << 4)
-                                           | ((zero_2 & 0x0fu) << 8) | ((zero_3 & 0x0fu) << 12)
-                                           | ((zero_0 & 0xf0u) << 12) | ((zero_1 & 0xf0u) << 16)
-                                           | ((zero_2 & 0xf0u) << 20) | ((zero_3 & 0xf0u) << 24);
+                const uint32_t zero_word = (zero_0 & 0x0fu) | ((zero_1 & 0x0fu) << 4) | ((zero_2 & 0x0fu) << 8)
+                                           | ((zero_3 & 0x0fu) << 12) | ((zero_0 & 0xf0u) << 12)
+                                           | ((zero_1 & 0xf0u) << 16) | ((zero_2 & 0xf0u) << 20)
+                                           | ((zero_3 & 0xf0u) << 24);
                 reinterpret_cast<uint32_t*>(fragment + kSm90MixedFragmentN * sizeof(uint16_t))[pair / 4] = zero_word;
             }
         }
     }
 }
 
-__global__ void pack_sm90_fp8_e4m3_scales_kernel(
-    bfloat16_t* dst, const float* src, int group_count, int output_pack_count)
+__global__ void
+pack_sm90_fp8_e4m3_scales_kernel(bfloat16_t* dst, const float* src, int group_count, int output_pack_count)
 {
     const int idx = (int)blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < group_count * output_pack_count) {
-        const int group       = idx / output_pack_count;
-        const int output_pack = idx % output_pack_count;
-        const bfloat16_t scale = __float2bfloat16_rn(src[idx]);
+        const int        group       = idx / output_pack_count;
+        const int        output_pack = idx % output_pack_count;
+        const bfloat16_t scale       = __float2bfloat16_rn(src[idx]);
 #pragma unroll
         for (int half = 0; half < 2; ++half) {
 #pragma unroll
             for (int i = 0; i < Sm90Fp8E4M3Format::kQparamValuesFragment; ++i) {
                 const int fragment = output_pack * 2 + half;
-                dst[((int64_t)group * output_pack_count * 2 + fragment)
-                    * Sm90Fp8E4M3Format::kQparamValuesFragment + i] = scale;
+                dst[((int64_t)group * output_pack_count * 2 + fragment) * Sm90Fp8E4M3Format::kQparamValuesFragment
+                    + i]           = scale;
             }
         }
     }
@@ -661,7 +634,8 @@ void PackSm90QParams(D* dst, const S* src, int output_dim, int group_count, cuda
 }
 
 template<class T>
-void PackSm90U4QParams(uint8_t* dst, const T* scales, const T* zeros, int output_dim, int group_count, cudaStream_t stream)
+void PackSm90U4QParams(
+    uint8_t* dst, const T* scales, const T* zeros, int output_dim, int group_count, cudaStream_t stream)
 {
     TM_CHECK_NOTNULL(dst);
     TM_CHECK_NOTNULL(scales);
@@ -703,7 +677,7 @@ void PackSm90MxFp4Fp8FoldedQParams(uint8_t*                     dst,
     TM_CHECK_EQ(group_count % 4, 0);
 
     const int total_records = (group_count / 4) * (output_dim / 64);
-    const int grid = std::min(total_records, 65535);
+    const int grid          = std::min(total_records, 65535);
     pack_sm90_mxfp4_fp8_folded_qparams_kernel<<<grid, 128, 0, stream>>>(
         dst, src, output_dim, total_records, device_stats);
     TM_CUDA_CHECK(cudaGetLastError());
@@ -720,9 +694,8 @@ void PackSm90MxFp4Fp8UnfoldedQParams(
     TM_CHECK_EQ(group_count % 4, 0);
 
     const int total_records = (group_count / 4) * (output_dim / 64);
-    const int grid = std::min(total_records, 65535);
-    pack_sm90_mxfp4_fp8_unfolded_qparams_kernel<<<grid, 128, 0, stream>>>(
-        dst, src, output_dim, total_records);
+    const int grid          = std::min(total_records, 65535);
+    pack_sm90_mxfp4_fp8_unfolded_qparams_kernel<<<grid, 128, 0, stream>>>(dst, src, output_dim, total_records);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -737,9 +710,8 @@ void PackSm90MxFp4Fp8FoldedWeight(
     TM_CHECK_EQ(input_dim % 128, 0);
 
     const int total_records = (input_dim / 32) * (output_dim / 64);
-    const int grid = std::min(total_records, 65535);
-    pack_sm90_mxfp4_fp8_folded_weight_kernel<<<grid, 128, 0, stream>>>(
-        dst, src, output_dim, input_dim, total_records);
+    const int grid          = std::min(total_records, 65535);
+    pack_sm90_mxfp4_fp8_folded_weight_kernel<<<grid, 128, 0, stream>>>(dst, src, output_dim, input_dim, total_records);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -754,7 +726,7 @@ void PackSm90MxFp4Fp8UnfoldedWeight(
     TM_CHECK_EQ(input_dim % 128, 0);
 
     const int total_records = (input_dim / 32) * (output_dim / 64);
-    const int grid = std::min(total_records, 65535);
+    const int grid          = std::min(total_records, 65535);
     pack_sm90_mxfp4_fp8_unfolded_weight_kernel<<<grid, 128, 0, stream>>>(
         dst, src, output_dim, input_dim, total_records);
     TM_CUDA_CHECK(cudaGetLastError());
@@ -769,7 +741,7 @@ void PackSm90Fp8E4M3Scales(
     TM_CHECK_GT(output_pack_count, 0);
 
     constexpr int block = 256;
-    const int count = group_count * output_pack_count;
+    const int     count = group_count * output_pack_count;
     pack_sm90_fp8_e4m3_scales_kernel<<<(count + block - 1) / block, block, 0, stream>>>(
         dst, src, group_count, output_pack_count);
     TM_CUDA_CHECK(cudaGetLastError());
