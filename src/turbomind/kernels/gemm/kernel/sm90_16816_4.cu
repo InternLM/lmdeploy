@@ -3,6 +3,7 @@
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/arch/config_sm80_s16816.h"
 #include "src/turbomind/kernels/gemm/convert.cuh"
+#include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/kernel/mxfp4.h"
 #include "src/turbomind/kernels/gemm/kernel/u4.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
@@ -18,6 +19,8 @@ using S = cache_policy::Stream;
 using D = cache_policy::Default;
 
 namespace {
+using namespace config::geometry;
+
 template<int GroupSize, bool Grouped>
 void pack_u4(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
 {
@@ -48,33 +51,6 @@ const Family mxfp4{26, 200, kBfloat16, kBfloat16, 32, 8, 1, 1, true, true, suppo
 template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, bool FusePrefetch = true> class K>
 void register_u4_d(Collector& c)
 {
-    using config::Config;
-    using config::Shape;
-
-    using _128x256x64_1x8x1 = Config<Shape<128, 256, 64>, Shape<1, 8, 1>>;
-    using _128x256x32_1x8x1 = Config<Shape<128, 256, 32>, Shape<1, 8, 1>>;
-    using _128x128x32_1x4x1 = Config<Shape<128, 128, 32>, Shape<1, 4, 1>>;
-    using _128x128x64_1x4x2 = Config<Shape<128, 128, 64>, Shape<1, 4, 2>>;
-    using _96x256x32_1x8x1 = Config<Shape<96, 256, 32>, Shape<1, 8, 1>>;
-    using _96x128x32_1x4x1 = Config<Shape<96, 128, 32>, Shape<1, 4, 1>>;
-    using _96x128x128_1x4x2 = Config<Shape<96, 128, 128>, Shape<1, 4, 2>>;
-    using _64x256x32_1x4x1 = Config<Shape<64, 256, 32>, Shape<1, 4, 1>>;
-    using _64x128x32_1x4x1 = Config<Shape<64, 128, 32>, Shape<1, 4, 1>>;
-    using _64x128x64_1x4x1 = Config<Shape<64, 128, 64>, Shape<1, 4, 1>>;
-    using _64x128x128_1x4x2 = Config<Shape<64, 128, 128>, Shape<1, 4, 2>>;
-    using _64x64x64_1x2x2 = Config<Shape<64, 64, 64>, Shape<1, 2, 2>>;
-    using _48x256x64_1x4x1 = Config<Shape<48, 256, 64>, Shape<1, 4, 1>>;
-    using _48x128x64_1x4x1 = Config<Shape<48, 128, 64>, Shape<1, 4, 1>>;
-    using _48x128x128_1x4x2 = Config<Shape<48, 128, 128>, Shape<1, 4, 2>>;
-    using _48x64x128_1x2x2 = Config<Shape<48, 64, 128>, Shape<1, 2, 2>>;
-    using _32x256x64_1x4x1 = Config<Shape<32, 256, 64>, Shape<1, 4, 1>>;
-    using _32x128x64_1x4x1 = Config<Shape<32, 128, 64>, Shape<1, 4, 1>>;
-    using _32x128x128_1x4x2 = Config<Shape<32, 128, 128>, Shape<1, 4, 2>>;
-    using _32x64x128_1x2x2 = Config<Shape<32, 64, 128>, Shape<1, 2, 2>>;
-    using _16x128x64_1x4x1 = Config<Shape<16, 128, 64>, Shape<1, 4, 1>>;
-    using _16x128x128_1x4x2 = Config<Shape<16, 128, 128>, Shape<1, 4, 2>>;
-    using _16x64x128_1x2x2 = Config<Shape<16, 64, 128>, Shape<1, 2, 2>>;
-
     add<K<_128x256x64_1x8x1, 3, kColMajor, D, D, true>>(c);
     add<K<_128x256x32_1x8x1, 3, kColMajor, D, D, true, 128, 128>>(c);
     add<K<_128x256x32_1x8x1, 4, kColMajor, D, D, true, 128, 128>>(c);
@@ -116,21 +92,6 @@ void register_u4_d(Collector& c)
 template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, bool FusePrefetch = true> class K>
 void register_u4_g(Collector& c)
 {
-    using config::Config;
-    using config::Shape;
-
-    using _128x256x32_2x4x1 = Config<Shape<128, 256, 32>, Shape<2, 4, 1>>;
-    using _128x128x32_1x4x1 = Config<Shape<128, 128, 32>, Shape<1, 4, 1>>;
-    using _64x128x64_1x4x1 = Config<Shape<64, 128, 64>, Shape<1, 4, 1>>;
-    using _64x256x32_1x4x1 = Config<Shape<64, 256, 32>, Shape<1, 4, 1>>;
-    using _32x64x128_1x2x2 = Config<Shape<32, 64, 128>, Shape<1, 2, 2>>;
-    using _32x128x64_1x4x1 = Config<Shape<32, 128, 64>, Shape<1, 4, 1>>;
-    using _32x256x64_1x4x1 = Config<Shape<32, 256, 64>, Shape<1, 4, 1>>;
-    using _16x256x64_1x4x1 = Config<Shape<16, 256, 64>, Shape<1, 4, 1>>;
-    using _16x256x32_1x4x1 = Config<Shape<16, 256, 32>, Shape<1, 4, 1>>;
-    using _16x128x64_1x4x1 = Config<Shape<16, 128, 64>, Shape<1, 4, 1>>;
-    using _16x64x128_1x2x2 = Config<Shape<16, 64, 128>, Shape<1, 2, 2>>;
-
     add<K<_128x256x32_2x4x1, 3, kColMajor, D, D, false>>(c);
     add<K<_128x128x32_1x4x1, 3, kColMajor, D, D, true>>(c);
     add<K<_64x128x64_1x4x1, 3, kColMajor, D, D, true>>(c);
@@ -148,23 +109,6 @@ void register_u4_g(Collector& c)
 template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, bool FusePrefetch = true, int GroupAxis = 1, int OperandN = 16> class K>
 void register_mxfp4(Collector& c)
 {
-    using config::Config;
-    using config::Shape;
-
-    using _256x128x32_8x1x1 = Config<Shape<256, 128, 32>, Shape<8, 1, 1>>;
-    using _256x64x32_4x1x1 = Config<Shape<256, 64, 32>, Shape<4, 1, 1>>;
-    using _256x32x32_4x1x1 = Config<Shape<256, 32, 32>, Shape<4, 1, 1>>;
-    using _128x128x32_4x1x1 = Config<Shape<128, 128, 32>, Shape<4, 1, 1>>;
-    using _128x96x32_4x1x1 = Config<Shape<128, 96, 32>, Shape<4, 1, 1>>;
-    using _128x64x32_4x1x1 = Config<Shape<128, 64, 32>, Shape<4, 1, 1>>;
-    using _128x32x32_4x1x1 = Config<Shape<128, 32, 32>, Shape<4, 1, 1>>;
-    using _128x16x32_4x1x1 = Config<Shape<128, 16, 32>, Shape<4, 1, 1>>;
-    using _128x16x64_4x1x1 = Config<Shape<128, 16, 64>, Shape<4, 1, 1>>;
-    using _256x8x32_4x1x1 = Config<Shape<256, 8, 32>, Shape<4, 1, 1>>;
-    using _128x8x32_4x1x1 = Config<Shape<128, 8, 32>, Shape<4, 1, 1>>;
-    using _128x8x64_4x1x1 = Config<Shape<128, 8, 64>, Shape<4, 1, 1>>;
-    using _64x8x64_4x1x1 = Config<Shape<64, 8, 64>, Shape<4, 1, 1>>;
-
     // add<K<_256x128x32_8x1x1, 3, kColMajor, D, D, true, 128, 128, true, -1>>(c);
 
     add<K<_256x128x32_8x1x1, 3, kColMajor, D, D, true, 128, 128>>(c);
