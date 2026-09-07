@@ -1,5 +1,7 @@
 # HF model id: Qwen/Qwen3.5-35B-A3B-FP8
 
+# A100 has no native FP8; FP8 weights are cast to bf16 via dtype: bfloat16.
+# That conversion is supported on turbomind only, not pytorch.
 a100:
 - model_type:
   - chat
@@ -12,9 +14,6 @@ a100:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - benchmark
   - evaluate
@@ -23,23 +22,6 @@ a100:
   - longtext_evaluate
   - mllm_evaluate
   interface:
-    pytorch:
-    - suites:
-      - base
-      - logprob
-      - experts
-      - toolcall
-      - reasoning
-      extra:
-        logprobs-mode: raw_logprobs
-        enable-return-routed-experts: true
-        tool-call-parser: qwen3coder
-        reasoning-parser: default
-    - suites:
-      - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
-        enable-return-routed-experts: true
     turbomind:
     - suites:
       - base
@@ -54,34 +36,6 @@ a100:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
-- model_type:
-  - chat
-  - vl
-  engine_config:
-    tp: 2
-    extra:
-      dtype: bfloat16
-      speculative-algorithm: qwen3_5_mtp
-      speculative-num-draft-tokens: 4
-      max-batch-size: 256
-  backends:
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - benchmark
-  - evaluate
-  - func
-  - longtext_benchmark
-  - longtext_evaluate
-  - mllm_evaluate
   gen_config:
     temperature: 1.0
     top-k: 20
