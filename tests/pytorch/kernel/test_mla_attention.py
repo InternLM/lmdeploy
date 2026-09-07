@@ -5,8 +5,8 @@ from unittest.mock import Mock
 import pytest
 import torch
 
+from lmdeploy.pytorch.backends.attention import PagedAttentionBuildSpec
 from lmdeploy.pytorch.backends.cuda import attention as attention_module
-from lmdeploy.pytorch.backends.cuda.attention import TritonAttentionBuilder
 from lmdeploy.pytorch.backends.cuda.attention import mla as mla_module
 from lmdeploy.pytorch.backends.cuda.attention import sparse_mla as sparse_mla_module
 from lmdeploy.pytorch.backends.cuda.attention.sparse_mla import (
@@ -20,7 +20,7 @@ def _disable_dynamic_compile(monkeypatch):
     monkeypatch.setattr(sparse_mla_module, '_try_dynamic_compile', lambda func, *args, **kwargs: func)
 
 
-def test_flash_mla_builder_selects_sparse_impl(monkeypatch):
+def test_flash_mla_build_spec_selects_sparse_impl(monkeypatch):
     dense_output = object()
     sparse_output = object()
     dense_impl = Mock(return_value=dense_output)
@@ -29,10 +29,25 @@ def test_flash_mla_builder_selects_sparse_impl(monkeypatch):
     monkeypatch.setattr(attention_module, 'use_fa3', True)
     monkeypatch.setattr(mla_module, 'FlashMLAImpl', dense_impl)
     monkeypatch.setattr(sparse_mla_module, 'FlashMLASparseImpl', sparse_impl)
-    kwargs = dict(num_heads=64, head_size=576, num_kv_heads=1, use_flash_mla=True)
+    spec_kwargs = dict(
+        num_heads=64,
+        head_dim=576,
+        scale=None,
+        num_kv_heads=1,
+        v_head_dim=576,
+        alibi=False,
+        sliding_window=None,
+        logit_softcapping=0.0,
+        causal=True,
+        use_flash_mla=True,
+        learnable_sink=False,
+        block_sparse_size=1,
+    )
 
-    assert TritonAttentionBuilder.build(**kwargs) is dense_output
-    assert TritonAttentionBuilder.build(**kwargs, mla_index_topk=2048) is sparse_output
+    assert CudaOpsBackend.build_op(
+        PagedAttentionBuildSpec(mla_index_topk=None, **spec_kwargs)) is dense_output
+    assert CudaOpsBackend.build_op(
+        PagedAttentionBuildSpec(mla_index_topk=2048, **spec_kwargs)) is sparse_output
     assert sparse_impl.call_args.kwargs['use_fa3'] is True
 
 
