@@ -60,28 +60,8 @@ void register_kernels(Collector& c)
 {
     add_cublas(c, Sm90::is_compatible);
 
-    // Catalog pruned per full-suite scan tmp/sm90_bf16_scan5; refs refreshed per
-    // tmp/sm90_bf16_scan8 (2026-07-26, H200, TP/EP 1/2/4/8, swizzle 0-3). `refs: N` =
-    // dispatch records (tuned selections) the kernel accumulated across the scan;
-    // `// unused` entries had zero refs and are kept visible for re-enabling.
-    // Only cluster (1,1) was ever selected; (2,1) / (1,2) variants were dropped entirely.
 
-    // --- Dense (kFlat), row raster ---
-    // Legacy N128 tiles never selected. The new 384x128 WG_1x2 kernel is the
-    // measured large dense winner; the other validated candidates remain visible.
-    // add<K<_8x128x64_1x2<24, 80>, 4, kRowMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_16x128x64_1x2<24, 80>, 4, kRowMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_32x128x64_1x2<24, 80>, 4, kRowMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_64x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_96x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_128x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_192x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_224x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_256x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_320x128x64_1x2<40, 232>, 3, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 0, 160>>(c);  // validated, slower
-    add<K<_384x128x64_1x2<40, 232>, 3, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 0, 192>>(c);
-    // add<K<_320x128x64_2x1<40, 232>, 3, kRowMajor, Striding::kFlat>>(c);  // validated, slower
-    // add<K<_384x128x64_2x1<24, 240>, 3, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 0, 0, true, 64>>(c);  // validated, slower
+
     add<K<_8x256x64_1x2<24, 80>, 3, kRowMajor, Striding::kFlat, true>>(c);  // refs: 274
     add<K<_8x256x64_1x1<24, 80>, 3, kRowMajor, Striding::kFlat, true>>(c);  // refs: 1267
     add<K<_16x256x64_2x1<24, 80>, 3, kRowMajor, Striding::kFlat, true>>(c);  // refs: 21
@@ -91,39 +71,21 @@ void register_kernels(Collector& c)
     add<K<_128x256x64_2x1<120, 192>, 3, kRowMajor, Striding::kFlat, true>>(c);  // refs: 1160
     add<K<_160x256x64_1x2<40, 232>, 3, kRowMajor, Striding::kFlat, true>>(c);
     add<K<_192x256x64_1x2<40, 232>, 3, kRowMajor, Striding::kFlat, true, Shape<1, 1>, 0, 0, false, 192>>(c);
+    add<K<_384x128x64_1x2<40, 232>, 3, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 0, 192>>(c);
 
-    // --- Dense (kFlat), col raster: never selected ---
-    // add<K<_8x128x64_1x2<24, 80>, 4, kColMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_16x128x64_1x2<24, 80>, 4, kColMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_32x128x64_1x2<24, 80>, 4, kColMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_64x128x64_1x2<120, 192>, 4, kColMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_96x128x64_1x2<120, 192>, 4, kColMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_128x128x64_1x2<120, 192>, 4, kColMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_192x128x64_1x2<120, 192>, 4, kColMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_224x128x64_1x2<120, 192>, 4, kColMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_256x128x64_1x2<120, 192>, 4, kColMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_8x256x64_1x2<24, 80>, 3, kColMajor, Striding::kFlat, true>>(c);  // unused
-    // add<K<_8x256x64_1x1<24, 80>, 3, kColMajor, Striding::kFlat, true>>(c);  // unused
-    // add<K<_16x256x64_2x1<24, 80>, 3, kColMajor, Striding::kFlat, true>>(c);  // unused
-    // add<K<_32x256x64_2x1<120, 192>, 3, kColMajor, Striding::kFlat, true>>(c);  // unused
-    // add<K<_64x256x64_2x1<120, 192>, 3, kColMajor, Striding::kFlat, true>>(c);  // unused
-    // add<K<_96x256x64_2x1<120, 192>, 3, kColMajor, Striding::kFlat, true>>(c);  // unused
-    // add<K<_128x256x64_2x1<120, 192>, 3, kColMajor, Striding::kFlat, true>>(c);  // unused
 
-    // --- Dense N128 WG_2x1 (either raster): never selected ---
-    // add<K<_64x128x64_2x1<120, 192>, 4, kRowMajor, Striding::kFlat>>(c);  // unused
-    // add<K<_128x128x64_2x1<120, 192>, 4, kRowMajor, Striding::kFlat>>(c);  // unused
 
-    // --- MoE gate_up (kIndexed), col raster ---
+    add<K<_8x128x64_1x2<24, 80>, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 2637
+    add<K<_16x128x64_1x2<24, 80>, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 1419
+    add<K<_32x128x64_1x2<24, 80>, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 1375
+    add<K<_96x128x64_1x2<120, 192>, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 740
+    add<K<_192x256x64_1x2<40, 232>, 3, kColMajor, Striding::kBlocked, false, Shape<1, 1>, 0, 0, false, 192>>(c);
+
 
     add<K<_8x128x64_1x2<40, 80>, 4, kColMajor, Striding::kIndexed>>(c);  // refs: 1436
-    // add<K<_16x128x64_1x2<40, 80>, 4, kColMajor, Striding::kIndexed>>(c);  // unused
-    // add<K<_32x128x64_1x2<48, 80>, 4, kColMajor, Striding::kIndexed>>(c);  // unused
     add<K<_64x128x64_1x2<120, 192>, 4, kColMajor, Striding::kIndexed>>(c);  // refs: 846
     add<K<_96x128x64_1x2<120, 192>, 4, kColMajor, Striding::kIndexed>>(c);  // refs: 183
     add<K<_128x128x64_1x2<120, 192>, 4, kColMajor, Striding::kIndexed>>(c);  // refs: 665
-    // add<K<_192x128x64_1x2<104, 200>, 4, kColMajor, Striding::kIndexed>>(c);  // unused
-    // add<K<_224x128x64_1x2<120, 192>, 4, kColMajor, Striding::kIndexed>>(c);  // unused
     add<K<_256x128x64_1x2<128, 184>, 4, kColMajor, Striding::kIndexed>>(c);  // refs: 2207
     add<K<_8x256x64_1x2<40, 80>, 3, kColMajor, Striding::kIndexed, true>>(c);  // refs: 399
     add<K<_8x256x64_1x1<40, 80>, 3, kColMajor, Striding::kIndexed, true>>(c);  // refs: 1362
@@ -134,101 +96,12 @@ void register_kernels(Collector& c)
     add<K<_128x256x64_2x1<120, 192>, 3, kColMajor, Striding::kIndexed, true>>(c);  // refs: 2420
     add<K<_160x256x64_1x2<104, 200>, 3, kColMajor, Striding::kIndexed, true>>(c);
 
-    // --- MoE gate_up (kIndexed), row raster ---
-    // add<K<_8x128x64_1x2<40, 80>, 4, kRowMajor, Striding::kIndexed>>(c);  // unused
-    // add<K<_16x128x64_1x2<40, 80>, 4, kRowMajor, Striding::kIndexed>>(c);  // unused
-    // add<K<_32x128x64_1x2<48, 80>, 4, kRowMajor, Striding::kIndexed>>(c);  // unused
-    // add<K<_64x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kIndexed>>(c);  // unused
-    // add<K<_96x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kIndexed>>(c);  // unused
-    // add<K<_128x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kIndexed>>(c);  // unused
-    // add<K<_192x128x64_1x2<104, 200>, 4, kRowMajor, Striding::kIndexed>>(c);  // unused
-    // add<K<_224x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kIndexed>>(c);  // unused
     add<K<_256x128x64_1x2<128, 184>, 4, kRowMajor, Striding::kIndexed>>(c);  // refs: 1200
-    // add<K<_8x256x64_1x2<40, 80>, 3, kRowMajor, Striding::kIndexed, true>>(c);  // unused
-    // add<K<_8x256x64_1x1<40, 80>, 3, kRowMajor, Striding::kIndexed, true>>(c);  // unused
-    // add<K<_16x256x64_2x1<40, 80>, 3, kRowMajor, Striding::kIndexed, true>>(c);  // unused
-    // add<K<_32x256x64_2x1<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);  // unused
-    // add<K<_64x256x64_2x1<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);  // unused
-    // add<K<_96x256x64_2x1<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);  // unused
-    // add<K<_128x256x64_2x1<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);  // unused
 
-    // --- MoE gate_up N128 WG_2x1 / N256 WG_1x2 (either raster): never selected ---
-    // add<K<_64x128x64_2x1<120, 192>, 4, kColMajor, Striding::kIndexed>>(c);  // unused
-    // add<K<_128x128x64_2x1<120, 192>, 4, kColMajor, Striding::kIndexed>>(c);  // unused
-    // add<K<_64x256x64_1x2<120, 192>, 3, kColMajor, Striding::kIndexed>>(c);  // unused
-    // add<K<_128x256x64_1x2<120, 192>, 3, kColMajor, Striding::kIndexed>>(c);  // unused
 
-    // --- MoE down: reuse kIndexed except for 192x256, whose gather path cannot
-    // reserve enough math registers without C7512 or spills. ---
-    add<K<_192x256x64_1x2<40, 232>, 3, kColMajor, Striding::kBlocked, false, Shape<1, 1>, 0, 0, false, 192>>(c);
-#if 0
-    // Dedicated kBlocked kernels.
 
-    add<K<_8x128x64_1x2<24, 80>, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 2637
-    add<K<_16x128x64_1x2<24, 80>, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 1419
-    add<K<_32x128x64_1x2<24, 80>, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 1375
-    // add<K<_64x128x64_1x2<120, 192>, 4, kColMajor, Striding::kBlocked>>(c);  // unused
-    add<K<_96x128x64_1x2<120, 192>, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 740
-    // add<K<_128x128x64_1x2<120, 192>, 4, kColMajor, Striding::kBlocked>>(c);  // unused
-    // add<K<_192x128x64_1x2<120, 192>, 4, kColMajor, Striding::kBlocked>>(c);  // unused
-    // add<K<_224x128x64_1x2<120, 192>, 4, kColMajor, Striding::kBlocked>>(c);  // unused
-    // add<K<_256x128x64_1x2<120, 192>, 4, kColMajor, Striding::kBlocked>>(c);  // unused
 
-    // --- MoE down (kBlocked), row raster: never selected ---
-    // add<K<_8x128x64_1x2<24, 80>, 4, kRowMajor, Striding::kBlocked>>(c);  // unused
-    // add<K<_16x128x64_1x2<24, 80>, 4, kRowMajor, Striding::kBlocked>>(c);  // unused
-    // add<K<_32x128x64_1x2<24, 80>, 4, kRowMajor, Striding::kBlocked>>(c);  // unused
-    // add<K<_96x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kBlocked>>(c);  // unused
-    // add<K<_192x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kBlocked>>(c);  // unused
-    // add<K<_224x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kBlocked>>(c);  // unused
-    // add<K<_256x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kBlocked>>(c);  // unused
-
-    // --- MoE down N128 WG_2x1 (either raster): never selected ---
-    // add<K<_64x128x64_2x1<120, 192>, 4, kColMajor, Striding::kBlocked>>(c);  // unused
-    // add<K<_128x128x64_2x1<120, 192>, 4, kColMajor, Striding::kBlocked>>(c);  // unused
-#endif
-
-    // --- Weight L2 evict-first hint (l2_hint_w=1, desc policy_b=1), 1-CTA tiles only ---
-    // On the 2-CTA small tiles (8/16/32x128, 16x256) the hint measured 5-9% worse on H200.
-    // Only indexed 256x128 was selected; everything else pruned per the scan.
-    // Dense L2 candidates retain their TMA register budgets.
-
-    // add<K<_64x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_96x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_128x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_192x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_224x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_256x128x64_1x2<120, 192>, 4, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_32x256x64_2x1<120, 192>, 3, kRowMajor, Striding::kFlat, true, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_64x256x64_2x1<120, 192>, 3, kRowMajor, Striding::kFlat, true, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_96x256x64_2x1<120, 192>, 3, kRowMajor, Striding::kFlat, true, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_128x256x64_2x1<120, 192>, 3, kRowMajor, Striding::kFlat, true, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_64x128x64_1x2<120, 192>, 4, kColMajor, Striding::kFlat, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_96x128x64_1x2<120, 192>, 4, kColMajor, Striding::kFlat, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_128x128x64_1x2<120, 192>, 4, kColMajor, Striding::kFlat, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_192x128x64_1x2<120, 192>, 4, kColMajor, Striding::kFlat, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_224x128x64_1x2<120, 192>, 4, kColMajor, Striding::kFlat, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_256x128x64_1x2<120, 192>, 4, kColMajor, Striding::kFlat, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_32x256x64_2x1<120, 192>, 3, kColMajor, Striding::kFlat, true, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_64x256x64_2x1<120, 192>, 3, kColMajor, Striding::kFlat, true, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_96x256x64_2x1<120, 192>, 3, kColMajor, Striding::kFlat, true, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_128x256x64_2x1<120, 192>, 3, kColMajor, Striding::kFlat, true, Shape<1, 1>, 1>>(c);  // unused
-
-    // add<K<_64x128x64_1x2<120, 192>, 4, kColMajor, Striding::kIndexed, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_96x128x64_1x2<120, 192>, 4, kColMajor, Striding::kIndexed, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_128x128x64_1x2<120, 192>, 4, kColMajor, Striding::kIndexed, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_192x128x64_1x2<104, 200>, 4, kColMajor, Striding::kIndexed, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_224x128x64_1x2<120, 192>, 4, kColMajor, Striding::kIndexed, false, Shape<1, 1>, 1>>(c);  // unused
     add<K<_256x128x64_1x2<128, 184>, 4, kColMajor, Striding::kIndexed, false, Shape<1, 1>, 1>>(c);  // refs: 1543
-    // add<K<_32x256x64_2x1<120, 192>, 3, kColMajor, Striding::kIndexed, true, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_64x256x64_2x1<120, 192>, 3, kColMajor, Striding::kIndexed, true, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_96x256x64_2x1<120, 192>, 3, kColMajor, Striding::kIndexed, true, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_128x256x64_2x1<120, 192>, 3, kColMajor, Striding::kIndexed, true, Shape<1, 1>, 1>>(c);  // unused
-
-    // add<K<_96x128x64_1x2<120, 192>, 4, kColMajor, Striding::kBlocked, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_192x128x64_1x2<120, 192>, 4, kColMajor, Striding::kBlocked, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_224x128x64_1x2<120, 192>, 4, kColMajor, Striding::kBlocked, false, Shape<1, 1>, 1>>(c);  // unused
-    // add<K<_256x128x64_1x2<120, 192>, 4, kColMajor, Striding::kBlocked, false, Shape<1, 1>, 1>>(c);  // unused
 }
 
 Registrar reg(bf16, register_kernels<C::Type>);

@@ -148,64 +148,33 @@ void register_wa(Collector& c)
     add<K<_16x256_1x1<40, 168>, 3, kRowMajor, Striding::kFlat, true>>(c);  // refs: 329
     add<K<_16x256_1x1<40, 168>, 3, kRowMajor, Striding::kFlat, true, Shape<2, 1>>>(c);  // refs: 25
     add<K<_32x256_1x1<40, 168>, 3, kRowMajor, Striding::kFlat, true>>(c);  // refs: 221
-    // add<K<_32x256_1x1<40, 168>, 3, kRowMajor, Striding::kFlat, true, Shape<2, 1>>>(c);  // unused
     add<K<_64x256_1x1<40, 208>, 3, kRowMajor, Striding::kFlat, true>>(c);  // refs: 13
-    // add<K<_64x256_1x1<40, 208>, 3, kRowMajor, Striding::kFlat, true, Shape<1, 2>>>(c);  // unused
-    // add<K<_64x256_1x1<40, 208>, 3, kRowMajor, Striding::kFlat, true, Shape<2, 1>>>(c);  // unused
 
     // --- Weight-as-A FP8, blocked, col raster ---
     add<K<_8x128_1x1<40, 168>, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 37
-    // add<K<_8x128_1x1<40, 168>, 4, kColMajor, Striding::kBlocked, false, Shape<1, 2>>>(c);  // unused
-    // add<K<_8x128_1x1<40, 168>, 4, kColMajor, Striding::kBlocked, false, Shape<2, 1>>>(c);  // unused
     add<K<_16x128_1x1<40, 168>, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 36
-    // add<K<_16x128_1x1<40, 168>, 4, kColMajor, Striding::kBlocked, false, Shape<1, 2>>>(c);  // unused
-    // add<K<_16x128_1x1<40, 168>, 4, kColMajor, Striding::kBlocked, false, Shape<2, 1>>>(c);  // unused
     add<K<_32x128_1x1<40, 168>, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 63
-    // add<K<_32x128_1x1<40, 168>, 4, kColMajor, Striding::kBlocked, false, Shape<1, 2>>>(c);  // unused
-    // add<K<_32x128_1x1<40, 168>, 4, kColMajor, Striding::kBlocked, false, Shape<2, 1>>>(c);  // unused
     add<K<_64x128_1x1<40, 208>, 4, kColMajor, Striding::kBlocked>>(c);  // refs: 10
-    // add<K<_64x128_1x1<40, 208>, 4, kColMajor, Striding::kBlocked, false, Shape<1, 2>>>(c);  // unused
-    // add<K<_64x128_1x1<40, 208>, 4, kColMajor, Striding::kBlocked, false, Shape<2, 1>>>(c);  // unused
     add<K<_8x256_1x1<40, 168>, 3, kColMajor, Striding::kBlocked>>(c);  // refs: 1377
     add<K<_8x256_1x1<40, 168>, 3, kColMajor, Striding::kBlocked, false, Shape<1, 2>>>(c);  // refs: 2
-    // add<K<_8x256_1x1<40, 168>, 3, kColMajor, Striding::kBlocked, false, Shape<2, 1>>>(c);  // unused
     add<K<_16x256_1x1<40, 168>, 3, kColMajor, Striding::kBlocked>>(c);  // refs: 439
-    // add<K<_16x256_1x1<40, 168>, 3, kColMajor, Striding::kBlocked, false, Shape<1, 2>>>(c);  // unused
-    // add<K<_16x256_1x1<40, 168>, 3, kColMajor, Striding::kBlocked, false, Shape<2, 1>>>(c);  // unused
     add<K<_32x256_1x1<40, 168>, 3, kColMajor, Striding::kBlocked>>(c);  // refs: 87
-    // add<K<_32x256_1x1<40, 168>, 3, kColMajor, Striding::kBlocked, false, Shape<1, 2>>>(c);  // unused
-    // add<K<_32x256_1x1<40, 168>, 3, kColMajor, Striding::kBlocked, false, Shape<2, 1>>>(c);  // unused
-    // add<K<_64x256_1x1<40, 208>, 3, kColMajor, Striding::kBlocked>>(c);  // unused
-    // add<K<_64x256_1x1<40, 208>, 3, kColMajor, Striding::kBlocked, false, Shape<1, 2>>>(c);  // unused
-    // add<K<_64x256_1x1<40, 208>, 3, kColMajor, Striding::kBlocked, false, Shape<2, 1>>>(c);  // unused
+
 
     // --- Weight-as-A FP8, indexed (gate/up), col raster ---
 
     add<K<_8x128_1x1<88, 168>, 4, kColMajor, Striding::kIndexed>>(c);  // refs: 570
-    // add<K<_8x128_1x1<88, 168>, 4, kColMajor, Striding::kIndexed, false, Shape<1, 2>>>(c);  // unused
     add<K<_8x128_1x1<88, 168>, 4, kColMajor, Striding::kIndexed, false, Shape<2, 1>>>(c);  // refs: 20
     add<K<_16x128_1x1<88, 168>, 4, kColMajor, Striding::kIndexed>>(c);  // refs: 157
-    // add<K<_16x128_1x1<88, 168>, 4, kColMajor, Striding::kIndexed, false, Shape<1, 2>>>(c);  // unused
-    // add<K<_16x128_1x1<88, 168>, 4, kColMajor, Striding::kIndexed, false, Shape<2, 1>>>(c);  // unused
     add<K<_32x128_1x1<88, 168>, 4, kColMajor, Striding::kIndexed>>(c);  // refs: 96
-    // add<K<_32x128_1x1<88, 168>, 4, kColMajor, Striding::kIndexed, false, Shape<1, 2>>>(c);  // unused
-    // add<K<_32x128_1x1<88, 168>, 4, kColMajor, Striding::kIndexed, false, Shape<2, 1>>>(c);  // unused
     add<K<_64x128_1x1<88, 208>, 4, kColMajor, Striding::kIndexed>>(c);  // refs: 36
-    // add<K<_64x128_1x1<88, 208>, 4, kColMajor, Striding::kIndexed, false, Shape<1, 2>>>(c);  // unused
-    // add<K<_64x128_1x1<88, 208>, 4, kColMajor, Striding::kIndexed, false, Shape<2, 1>>>(c);  // unused
     // Indexed OUT=256 kernels also select the epilogue at runtime.
     add<K<_8x256_1x1<88, 168>, 3, kColMajor, Striding::kIndexed, true>>(c);  // refs: 4553
     add<K<_8x256_1x1<88, 168>, 3, kColMajor, Striding::kIndexed, true, Shape<1, 2>>>(c);  // refs: 32
     add<K<_8x256_1x1<88, 168>, 3, kColMajor, Striding::kIndexed, true, Shape<2, 1>>>(c);  // refs: 4
     add<K<_16x256_1x1<88, 168>, 3, kColMajor, Striding::kIndexed, true>>(c);  // refs: 1253
     add<K<_16x256_1x1<88, 168>, 3, kColMajor, Striding::kIndexed, true, Shape<1, 2>>>(c);  // refs: 7
-    // add<K<_16x256_1x1<88, 168>, 3, kColMajor, Striding::kIndexed, true, Shape<2, 1>>>(c);  // unused
     add<K<_32x256_1x1<88, 168>, 3, kColMajor, Striding::kIndexed, true>>(c);  // refs: 340
-    // add<K<_32x256_1x1<88, 168>, 3, kColMajor, Striding::kIndexed, true, Shape<1, 2>>>(c);  // unused
-    // add<K<_32x256_1x1<88, 168>, 3, kColMajor, Striding::kIndexed, true, Shape<2, 1>>>(c);  // unused
-    // add<K<_64x256_1x1<88, 208>, 3, kColMajor, Striding::kIndexed, true>>(c);  // unused
-    // add<K<_64x256_1x1<88, 208>, 3, kColMajor, Striding::kIndexed, true, Shape<1, 2>>>(c);  // unused
-    // add<K<_64x256_1x1<88, 208>, 3, kColMajor, Striding::kIndexed, true, Shape<2, 1>>>(c);  // unused
 
     // --- 2 math WGs (per-WG BATCH=64): 128x128 plain, 128x256 fused, 64x256_n2 ---
     add<K<_64x256_1x2<40, 232>, 3, kRowMajor, Striding::kFlat, true>>(c);
