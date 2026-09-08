@@ -21,7 +21,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE turbomind xgrammar)
 
 pybind11_add_module(_xgrammar xgrammar_bind.cpp)
 target_link_libraries(_xgrammar PRIVATE core xgrammar)
-target_compile_features(_xgrammar PRIVATE cxx_std_14)
 
 if (CALL_FROM_SETUP_PY)
   string(REPLACE "." ";" _ver ${CMAKE_CUDA_COMPILER_VERSION})

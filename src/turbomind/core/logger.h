@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <string>
+#include <utility>
 
 #include "src/turbomind/core/check.h"
 
@@ -34,11 +35,39 @@ public:
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
 
+    void Log(Level level, const std::string& message)
+    {
+        if (level_ <= level) {
+            Enqueue(level, nullptr, 0, message);
+        }
+    }
+
+    void Log(Level level, std::string&& message)
+    {
+        if (level_ <= level) {
+            Enqueue(level, nullptr, 0, std::move(message));
+        }
+    }
+
     template<typename... Args>
     void Log(Level level, fmt::format_string<Args...> fmt_str, Args&&... args)
     {
         if (level_ <= level) {
             Enqueue(level, nullptr, 0, fmt::format(fmt_str, std::forward<Args>(args)...));
+        }
+    }
+
+    void Log(Level level, SourceLocation loc, const std::string& message)
+    {
+        if (level_ <= level) {
+            Enqueue(level, loc.file, loc.line, message);
+        }
+    }
+
+    void Log(Level level, SourceLocation loc, std::string&& message)
+    {
+        if (level_ <= level) {
+            Enqueue(level, loc.file, loc.line, std::move(message));
         }
     }
 

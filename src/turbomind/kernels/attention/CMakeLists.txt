@@ -42,5 +42,6 @@ if (BUILD_TEST)
         --generate-line-info -O3 -use_fast_math --expt-relaxed-constexpr)
     target_link_libraries(test_quant PRIVATE
         nvidia::cutlass::cutlass
+        ${CMAKE_DL_LIBS}
     )
 endif ()
