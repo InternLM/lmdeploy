@@ -189,11 +189,11 @@ class CUDAGraphRunner(GraphRunner):
             attn_metadata.block_offsets = attn_metadata.block_offsets.to(torch.int32)
         return kwargs
 
-    def _should_use_full_graph(self, context: StepContext, **kwargs) -> bool:
+    def _should_use_full_graph(self, step_context: StepContext, model_inputs: dict[str, Any]) -> bool:
         """Return whether the existing full CUDA graph path owns this call."""
-        return context.global_is_decoding() and self.enable_graph(**kwargs)
+        return step_context.global_is_decoding() and self.enable_graph(**model_inputs)
 
-    def _get_piecewise_graph_descriptor(self, context: StepContext, **kwargs):
+    def _get_piecewise_graph_descriptor(self, step_context: StepContext, model_inputs: dict[str, Any]):
         """Return a descriptor without changing runtime state.
 
         Pure decode steps are owned by the full graph (or eager), so the
@@ -206,9 +206,9 @@ class CUDAGraphRunner(GraphRunner):
         between piecewise and eager safely.
         """
         manager = self._piecewise_graph_manager
-        if manager is None or context.global_is_decoding():
+        if manager is None or step_context.global_is_decoding():
             return None
-        return manager.get_piecewise_graph_descriptor(context, kwargs)
+        return manager.get_piecewise_graph_descriptor(step_context, model_inputs)
 
     def get_prefill_warmup_token_sizes(self) -> list[int]:
         """Return extra single-batch token sizes needed by this runner."""
@@ -263,13 +263,13 @@ class CUDAGraphRunner(GraphRunner):
     def __call__(self, **kwargs):
         """Run one model forward through the selected execution path."""
         kwargs = self._prepare_inputs(**kwargs)
-        context = self.ctx_mgr.current_context()
-        _update_deepep_mode(context)
+        step_context = self.ctx_mgr.current_context()
+        _update_deepep_mode(step_context)
 
-        if self._should_use_full_graph(context, **kwargs):
+        if self._should_use_full_graph(step_context, kwargs):
             return self._forward_full_graph(**kwargs)
 
-        descriptor = self._get_piecewise_graph_descriptor(context, **kwargs)
+        descriptor = self._get_piecewise_graph_descriptor(step_context, kwargs)
         if descriptor is not None:
             manager = self._piecewise_graph_manager
             if manager.has_plan(descriptor):
