@@ -80,8 +80,7 @@ function(configure_gemm2_kernel_target target)
     target_compile_options(${target} PRIVATE
             $<$<COMPILE_LANGUAGE:CUDA>:
                     -Xptxas=-v
-                    --generate-line-info
-                    --threads 16>
+                    --generate-line-info>
     )
     target_link_libraries(${target} PRIVATE parser nvidia::cutlass::cutlass CUDA::cuda_driver)
 endfunction()
@@ -176,7 +175,7 @@ target_compile_options(gemm2_core PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:
                 -Xptxas=-v
                 --generate-line-info
-                --threads 16>
+                --threads=${NVCC_THREADS}>
 )
 set_target_properties(gemm2_core PROPERTIES
         OUTPUT_NAME gemm2
