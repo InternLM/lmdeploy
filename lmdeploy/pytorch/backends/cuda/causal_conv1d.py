@@ -52,6 +52,24 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
             cache_seqlens=cache_seqlens,
         )
 
+    def chunk_conv_states(
+        self,
+        x: torch.Tensor,
+        conv_kernel_size: int,
+        cu_seqlens: torch.Tensor | None = None,
+        chunk_size: int = 64,
+        chunk_indices: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Extract the conv state at every chunk boundary."""
+        from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import chunk_conv_states
+        return chunk_conv_states(
+            x,
+            conv_kernel_size,
+            cu_seqlens=cu_seqlens,
+            chunk_size=chunk_size,
+            chunk_indices=chunk_indices,
+        )
+
 
 class CausalConv1dDaoImpl(CausalConv1dTilelangImpl):
 

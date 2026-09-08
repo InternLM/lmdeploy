@@ -569,7 +569,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         key = key.unflatten(-1, (-1, self.head_k_dim))
         value = value.unflatten(-1, (-1, self.head_v_dim))
 
-        core_attn_out, recurrent_state = self.gated_delta(
+        core_attn_out, recurrent_state, _chunk_states = self.gated_delta(
             query,
             key,
             value,

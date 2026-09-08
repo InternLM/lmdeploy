@@ -17,33 +17,6 @@ from .utils import has_tilelang
 logger = get_logger('lmdeploy')
 
 
-def prepare_chunked_gated_delta_rule(cu_seqlens_q: torch.Tensor) -> None:
-    """Populate FLA's chunk-index cache for the current sequence lengths."""
-    try:
-        from fla.ops.utils import prepare_chunk_indices
-    except ImportError:
-        logger.warning(
-            'Failed to import fla.ops.utils.prepare_chunk_indices for gated delta rule. '
-            'Please make sure the version of fla is installed, up to date and compatible with lmdeploy.'
-        )
-        return
-
-    # prepare_chunk_indices forces a stream synchronization. Retaining CPU
-    # cumulative lengths is a separate follow-up optimization.
-    try:
-        chunk_size = 64
-        try:
-            prepare_chunk_indices(cu_seqlens_q, chunk_size, cu_seqlens_cpu=None)
-        except TypeError:
-            prepare_chunk_indices(cu_seqlens_q, chunk_size)
-    except Exception as exc:
-        logger.exception(
-            'Unexpected error while preparing chunk indices for gated delta rule. '
-            'Please make sure the version of fla is up to date and compatible with lmdeploy.'
-        )
-        raise RuntimeError('Failed to prepare chunk indices for gated delta rule; see logs for details.') from exc
-
-
 @dataclass(frozen=True)
 class GatedDeltaStepMetaUpdater(CudaStepMetaUpdater):
     """Prepare step-local state owned by the selected CUDA gated-delta op."""
@@ -55,9 +28,14 @@ class GatedDeltaStepMetaUpdater(CudaStepMetaUpdater):
     def key(self) -> Hashable:
         return type(self)
 
-    def update(self, step_context, sequence_metadata) -> None:
-        if not step_context.is_decoding:
-            prepare_chunked_gated_delta_rule(sequence_metadata.cu_seqlens_q)
+    def update(self, step_context, sequence_metadata, attn_metadata) -> None:
+        if step_context.is_decoding:
+            return
+        from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import prepare_chunk_indices, prepare_chunk_offsets
+        chunk_size = 64
+        cu_seqlens_q = sequence_metadata.cu_seqlens_q
+        attn_metadata.gated_delta_chunk_indices = prepare_chunk_indices(cu_seqlens_q, chunk_size)
+        attn_metadata.gated_delta_chunk_offsets = prepare_chunk_offsets(cu_seqlens_q, chunk_size)
 
 
 @lru_cache
@@ -197,12 +175,21 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         import os
         os.environ['FLA_INTRACARD_CP'] = '0'
 
-        if not has_fla() or not has_tilelang():
-            raise ImportError('fla and tilelang is required for CudaGatedDeltaRuleImpl')
-        from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+        if not has_tilelang():
+            raise ImportError('tilelang is required for CudaGatedDeltaRuleImpl')
 
+        fla_chunk_gated_delta_rule = None
+        if has_fla():
+            from fla.ops.gated_delta_rule import chunk_gated_delta_rule as fla_chunk_gated_delta_rule
+
+        from lmdeploy.pytorch.kernels.cuda.chunk_gated_delta_rule import (
+            chunk_gated_delta_rule as chunk_gated_delta_rule_with_chunk_states,
+        )
         from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
-        self.chunk_func = chunk_gated_delta_rule
+        # The local Triton forward additionally exposes per-chunk-boundary
+        # recurrent states for prefix-cache checkpointing.
+        self.fla_chunk_func = fla_chunk_gated_delta_rule
+        self.chunk_func_with_states = chunk_gated_delta_rule_with_chunk_states
         self.recurrent_func = fused_recurrent_gated_delta_rule
 
         register_step_metadata_impl(self)
@@ -266,6 +253,8 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         scale: float | None = None,
         use_qk_l2norm_in_kernel: bool = False,
         cu_seqlens: torch.Tensor | None = None,
+        chunk_indices: torch.Tensor | None = None,
+        chunk_offsets: torch.Tensor | None = None,
         output_final_state: bool = False,
         spec_state_offsets: torch.Tensor | None = None,
         transpose_state_layout: bool = False,
@@ -285,19 +274,35 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             # l2norm in fla would recompile when seqlen changed.
             q = torch.nn.functional.normalize(q, p=2, dim=-1)
             k = torch.nn.functional.normalize(k, p=2, dim=-1)
-        core_attn_out, last_state = self.chunk_func(
-            q,
-            k,
-            v,
-            g=g,
-            beta=beta,
-            scale=scale,
-            initial_state=init_state,
-            output_final_state=output_final_state,
-            use_qk_l2norm_in_kernel=False,
-            cu_seqlens=cu_seqlens,
-            transpose_state_layout=transpose_state_layout,
-        )
+        if chunk_indices is None and self.fla_chunk_func is not None:
+            core_attn_out, last_state = self.fla_chunk_func(
+                q,
+                k,
+                v,
+                g=g,
+                beta=beta,
+                scale=scale,
+                initial_state=init_state,
+                output_final_state=output_final_state,
+                cu_seqlens=cu_seqlens,
+                transpose_state_layout=transpose_state_layout,
+            )
+            chunk_states = None
+        else:
+            core_attn_out, last_state, chunk_states = self.chunk_func_with_states(
+                q,
+                k,
+                v,
+                g=g,
+                beta=beta,
+                scale=scale,
+                initial_state=init_state,
+                output_final_state=output_final_state,
+                cu_seqlens=cu_seqlens,
+                chunk_indices=chunk_indices,
+                chunk_offsets=chunk_offsets,
+                state_v_first=transpose_state_layout,
+            )
         if spec_state_offsets is not None:
             # write to next slots
             spec_write_offsets = spec_state_offsets[1]
@@ -306,7 +311,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             last_state = recurrent_state.index_copy_(0, state_indices, last_state.to(recurrent_state.dtype))
         if not output_final_state:
             last_state = None
-        return core_attn_out, last_state
+        return core_attn_out, last_state, chunk_states
 
     def fused_recurrent_gated_delta_rule(
         self,
