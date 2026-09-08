@@ -1,6 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
+import re
+
+_JSON_CONTAINER_SPECIAL = re.compile(r'["{}\[\]]')
+
 
 class JsonValueScanner:
     """Find the lexical boundary of one streamed JSON value.
@@ -89,36 +93,39 @@ class JsonValueScanner:
 
             if self._in_string:
                 quote_at = text.find('"', pos, size)
-                escape_at = text.find('\\', pos, size)
                 if quote_at < 0:
-                    special_at = escape_at
-                elif escape_at < 0:
-                    special_at = quote_at
-                else:
-                    special_at = min(quote_at, escape_at)
-                if special_at < 0:
+                    # Only an odd trailing backslash run affects the next
+                    # chunk; all earlier escapes are already self-contained.
+                    slash_at = size
+                    while slash_at > pos and text[slash_at - 1] == '\\':
+                        slash_at -= 1
+                    self._escape_next = (size - slash_at) % 2 == 1
                     return size
 
-                pos = special_at + 1
-                if special_at == escape_at:
-                    self._escape_next = True
+                # A quote is escaped exactly when its immediately preceding
+                # backslash run has odd length. Each run is inspected once.
+                slash_at = quote_at
+                while slash_at > pos and text[slash_at - 1] == '\\':
+                    slash_at -= 1
+                pos = quote_at + 1
+                if (quote_at - slash_at) % 2 == 1:
                     continue
+
                 self._in_string = False
                 if self._mode == 'string':
                     self.complete = True
                     break
                 continue
 
-            special_at = size
-            for token in '"{[}]':
-                found_at = text.find(token, pos, size)
-                if 0 <= found_at < special_at:
-                    special_at = found_at
-            if special_at == size:
+            # Search all container syntax in one pass. Separate ``str.find``
+            # calls would repeatedly scan the same suffix when values contain
+            # many short strings.
+            match = _JSON_CONTAINER_SPECIAL.search(text, pos, size)
+            if match is None:
                 return size
 
-            char = text[special_at]
-            pos = special_at + 1
+            char = match.group()
+            pos = match.end()
             if char == '"':
                 self._in_string = True
             elif char in '{[':

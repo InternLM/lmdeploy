@@ -59,7 +59,7 @@ def _final_streamed_call(parser, payload):
     return consumed, name, _arguments(deltas)
 
 
-def test_json_arguments_before_name_stream_in_source_order_and_preserve_duplicates():
+def test_json_arguments_before_name_emit_identity_first_and_preserve_duplicates():
     parser = Qwen3ToolParser()
     raw_arguments = '{"a":"one","a":"two"}'
     pending, deltas, _ = _feed_chunks(
@@ -78,12 +78,10 @@ def test_json_arguments_before_name_stream_in_source_order_and_preserve_duplicat
     first = deltas[0]
     assert first.id is not None
     assert first.type == 'function'
-    assert first.function.name is None
-    assert first.function.arguments == raw_arguments
-    name_delta = next(delta for delta in deltas if delta.function and delta.function.name)
-    assert name_delta.index == first.index
-    assert name_delta.id is None
-    assert name_delta.function.name == 'f'
+    assert first.function.name == 'f'
+    assert first.function.arguments is None
+    assert all(delta.index == first.index for delta in deltas)
+    assert all(delta.id is None and delta.type is None for delta in deltas[1:])
 
     complete = final_tool_calls(
         Qwen3ToolParser(), '{"arguments":' + raw_arguments + ',"name":"f"}')[0]
@@ -626,9 +624,9 @@ def test_response_parser_emits_trailing_text_after_atomic_tool_close():
         assert ''.join(content) == 'after'
         assert names == {0: 'get_weather'}
         assert arguments_by_index == {0: '{"city":"Beijing"}'}
-        assert ordered_calls[0].function.arguments
-        assert ordered_calls[0].function.name is None
-        assert ordered_calls[-1].function.name == 'get_weather'
+        assert ordered_calls[0].function.name == 'get_weather'
+        assert ordered_calls[0].function.arguments is None
+        assert ordered_calls[-1].function.arguments
         assert parser._pending == ''
         assert not hasattr(parser, '_accumulated_chunks')
     finally:

@@ -181,7 +181,10 @@ class ResponseParser:
         Returns:
             A list of ``(delta_message, tool_calls_emitted)`` pairs. Return
             ``[]`` when this engine step produces no visible delta (for example
-            while buffering protocol syntax or tool-call payload).
+            while buffering protocol syntax or tool-call payload). For every
+            accepted tool-call index, its first visible ``DeltaToolCall`` must
+            carry the call ID, type, and function name before any argument
+            fragments are exposed.
         """
         raise NotImplementedError
 
@@ -203,7 +206,7 @@ class BaseResponseParser(ResponseParser):
     - reasoning content
     - tool-call deltas
 
-    Parsing is protocol/profile-driven and supports mixed chunks where one
+    Parsing is protocol-driven and supports mixed chunks where one
     ``delta_text`` may contain multiple segments (for example reasoning close
     plus plain text plus tool open tag).
     """
@@ -337,6 +340,8 @@ class BaseResponseParser(ResponseParser):
             engine chunk contains reasoning, content, and tool-call segments.
             Return ``[]`` when this engine step produces no visible delta (for
             example while buffering protocol syntax or tool-call payload).
+            Tool calls follow the identity-first contract documented by
+            :class:`ResponseParser`.
         """
         self._update_reasoning_tokens(delta_token_ids)
         self._stream_final_received = bool(kwargs.get('final', False))

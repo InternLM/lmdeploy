@@ -21,8 +21,7 @@ class Glm47ToolParser(XmlToolParser):
     arg_key_start_token = '<arg_key>'
     arg_key_end_token = '</arg_key>'
     arg_value_start_token = '<arg_value>'
-    arg_value_end_token = '</arg_value>'
-    arg_value_close_tag = arg_value_end_token
+    arg_value_close_tag = '</arg_value>'
     # The complete closing marker is one token in supported GLM tokenizers.
     arg_value_close_prefixes = ()
 

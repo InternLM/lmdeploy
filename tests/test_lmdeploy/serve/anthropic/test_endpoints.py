@@ -24,6 +24,7 @@ from lmdeploy.serve.openai.protocol import (
 )
 from lmdeploy.serve.parsers.response_parser import BaseResponseParser
 from lmdeploy.serve.parsers.tool_parser.interns2preview_tool_parser import InternS2PreviewToolParser
+from lmdeploy.serve.parsers.tool_parser.qwen3_tool_parser import Qwen3ToolParser
 from lmdeploy.serve.utils.server_utils import protocol_error_response
 
 ANTHROPIC_HEADERS = {'anthropic-version': '2023-06-01'}
@@ -861,41 +862,39 @@ def test_stream_messages_response_preserves_tool_start_output_ids():
     assert output_ids == [11, 12, 13]
 
 
-def test_stream_messages_response_resolves_name_after_arguments():
-    class _ArgumentsBeforeNameParser:
+def test_stream_messages_response_uses_identity_first_parser_contract():
+    class _ArgumentsBeforeNameResponseParser(BaseResponseParser):
+        reasoning_parser_cls = None
+        tool_parser_cls = Qwen3ToolParser
 
-        def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
-            return [(
-                DeltaMessage(
-                    role='assistant',
-                    tool_calls=[
-                        DeltaToolCall(
-                            index=0,
-                            id='toolu_123',
-                            type='function',
-                            function=DeltaFunctionCall(arguments='{"query":"lmdeploy"}'),
-                        ),
-                        DeltaToolCall(
-                            index=0,
-                            function=DeltaFunctionCall(name='search'),
-                        ),
-                    ],
-                ),
-                True,
-            )]
+    response_parser = _ArgumentsBeforeNameResponseParser(
+        ChatCompletionRequest(
+            model='fake-model',
+            messages=[],
+            tools=[{'type': 'function', 'function': {'name': 'search'}}],
+            tool_choice='auto',
+            stream=True,
+        ))
 
     async def _result_generator():
         yield SimpleNamespace(
-            response='tool call',
+            response='<tool_call>{"arguments":{"query":"lmdeploy"}',
             token_ids=[],
             input_token_len=8,
             generate_token_len=1,
+            finish_reason=None,
+        )
+        yield SimpleNamespace(
+            response=',"name":"search"}</tool_call>',
+            token_ids=[],
+            input_token_len=8,
+            generate_token_len=2,
             finish_reason='stop',
         )
 
     payloads = _collect_stream_response_payloads(
         _result_generator(),
-        _ArgumentsBeforeNameParser(),
+        response_parser,
     )
 
     tool_start = next(

@@ -73,6 +73,11 @@ def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
 class ToolParser:
     """Base class for model-specific tool-call boundary extractors.
 
+    Every accepted call emits its identity before any arguments: the first
+    client-visible delta contains ``index``, ``id``, ``type``, and the function
+    name. Arguments encountered earlier in the model payload are retained and
+    released afterward in their original order.
+
     Streaming uses two distinct completion states. ``_payload_closed`` means
     the model-specific parser has reached the end of the inner payload; the
     outer closing marker may still be absent at that point. ``block_closed``
@@ -89,13 +94,11 @@ class ToolParser:
     def __init__(self):
         self._close_tag: str | None = None
         self._active_tool_call_id: str = ''
-        self._active_tool_index: int = -1
         self._name_emitted: bool = False
         self._allowed_tool_names: set[str] | None = None
         self._output_index: int = _PENDING_INDEX
         self._next_output_index: int = 0
-        self._first_delta: bool = True
-        self._pending_deltas: list[DeltaToolCall] = []
+        self._pending_arguments: list[str] = []
         self._payload_closed: bool = False
         self.block_closed: bool = False
 
@@ -163,12 +166,10 @@ class ToolParser:
             call_id: Model-provided call ID. An OpenAI-compatible ID is
                 generated when the protocol does not provide one.
         """
-        self._active_tool_index += 1
         self._active_tool_call_id = call_id if call_id is not None else f'chatcmpl-tool-{shortuuid.random()}'
         self._name_emitted = False
-        self._output_index = self._active_tool_index if self._allowed_tool_names is None else _PENDING_INDEX
-        self._first_delta = True
-        self._pending_deltas.clear()
+        self._output_index = _PENDING_INDEX
+        self._pending_arguments.clear()
 
     def feed_tool_block(self, text: str, deltas: list[DeltaToolCall], *, final: bool) -> int:
         """Consume a buffered prefix of an open streamed tool block.
@@ -224,8 +225,7 @@ class ToolParser:
 
     def _close_tool_block(self) -> None:
         self.block_closed = True
-        self._active_tool_call_id = ''
-        self._pending_deltas.clear()
+        self._pending_arguments.clear()
 
     def _emit_delta(
         self,
@@ -234,57 +234,64 @@ class ToolParser:
         name: str | None = None,
         arguments: str | None = None,
     ) -> None:
-        """Emit one fragment of the active call after tool-name filtering.
+        """Emit one fragment under the identity-first tool-call contract.
 
-        Arguments seen before the function name are buffered so accepted calls
-        retain source order. Rejected calls and their buffered arguments are
-        discarded. ``_begin_call`` must be called before the first fragment of
-        every logical tool call.
+        Arguments seen before the function name are buffered. Once the name is
+        accepted, the first emitted delta establishes the call identity, then
+        every buffered argument is released in its original order. Rejected
+        calls and their buffered arguments are discarded. ``_begin_call`` must
+        be called before the first fragment of every logical tool call.
         """
         if name is None and arguments is None:
             return
 
         output_index = self._output_index
-        hold_until_name = False
-        if output_index < 0:
-            if output_index == _REJECTED_INDEX:
-                return
-            if name is None:
-                # The placeholder is rewritten if the later name is accepted.
-                output_index = self._active_tool_index
-                hold_until_name = True
-            elif self._allowed_tool_names is None or name not in self._allowed_tool_names:
-                self._pending_deltas.clear()
-                self._output_index = _REJECTED_INDEX
-                return
-            else:
-                output_index = self._next_output_index
-                self._next_output_index += 1
-                self._output_index = output_index
-
-        if self._first_delta:
-            self._first_delta = False
-            call_id = self._active_tool_call_id
-            call_type = 'function'
-        else:
-            call_id = call_type = None
-        delta = DeltaToolCall(
-            id=call_id,
-            index=output_index,
-            type=call_type,
-            function=DeltaFunctionCall(name=name, arguments=arguments),
-        )
-        if hold_until_name:
-            self._pending_deltas.append(delta)
+        if output_index == _REJECTED_INDEX:
             return
 
-        if name is not None and self._pending_deltas:
-            # Flush arguments before a late name to preserve generation order.
-            for pending_delta in self._pending_deltas:
-                pending_delta.index = output_index
-            deltas.extend(self._pending_deltas)
-            self._pending_deltas.clear()
-        deltas.append(delta)
+        if output_index == _PENDING_INDEX:
+            if name is None:
+                # Arguments cannot be exposed until the call has a validated
+                # identity. Keep fragments separate to preserve their order.
+                self._pending_arguments.append(arguments)
+                return
+
+            allowed_names = self._allowed_tool_names
+            if allowed_names is not None and name not in allowed_names:
+                self._pending_arguments.clear()
+                self._output_index = _REJECTED_INDEX
+                return
+
+            output_index = self._next_output_index
+            self._next_output_index += 1
+            self._output_index = output_index
+            deltas.append(
+                DeltaToolCall(
+                    id=self._active_tool_call_id,
+                    index=output_index,
+                    type='function',
+                    function=DeltaFunctionCall(name=name),
+                ))
+            if arguments is not None:
+                self._pending_arguments.append(arguments)
+            for pending_arguments in self._pending_arguments:
+                deltas.append(
+                    DeltaToolCall(
+                        id=None,
+                        index=output_index,
+                        type=None,
+                        function=DeltaFunctionCall(arguments=pending_arguments),
+                    ))
+            self._pending_arguments.clear()
+            return
+
+        deltas.append(
+            DeltaToolCall(
+                id=None,
+                index=output_index,
+                type=None,
+                function=DeltaFunctionCall(name=name, arguments=arguments),
+            ))
 
     @staticmethod
     def build_tool_calls(deltas: list[DeltaToolCall]) -> list[ToolCall]:
