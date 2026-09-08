@@ -18,21 +18,19 @@ class Glm47ToolParser(XmlToolParser):
     """
 
     structural_tag_model = 'glm_4_7'
-    arg_key_start_token = '<arg_key>'
-    arg_key_end_token = '</arg_key>'
-    arg_value_start_token = '<arg_value>'
+    arg_key_open_tag = '<arg_key>'
+    arg_key_close_tag = '</arg_key>'
+    arg_value_open_tag = '<arg_value>'
     arg_value_close_tag = '</arg_value>'
     # The complete closing marker is one token in supported GLM tokenizers.
     arg_value_close_prefixes = ()
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
-        """Return the outer GLM tool-call opening tag."""
         return '<tool_call>'
 
     @classmethod
     def get_tool_close_tag(cls) -> str | None:
-        """Return the outer GLM tool-call closing tag."""
         return '</tool_call>'
 
     def _consume_function(
@@ -42,7 +40,7 @@ class Glm47ToolParser(XmlToolParser):
         final: bool,
     ) -> tuple[int, str, Literal['arg_start', 'done']] | None:
         """Resolve the leading plain-text function name once."""
-        arg_key_start = payload.find(self.arg_key_start_token, pos)
+        arg_key_start = payload.find(self.arg_key_open_tag, pos)
         block_end = payload.find(self.get_tool_close_tag(), pos)
         if block_end >= 0 and (arg_key_start < 0 or block_end < arg_key_start):
             return block_end, payload[pos:block_end].strip(), 'done'
@@ -55,21 +53,21 @@ class Glm47ToolParser(XmlToolParser):
 
     def _consume_arg_start(self, payload: str, pos: int) -> tuple[int, Literal['arg_name', 'done']] | None:
         """Enter ``arg_name`` or stop before the outer closing tag."""
-        arg_key_start = payload.find(self.arg_key_start_token, pos)
+        arg_key_start = payload.find(self.arg_key_open_tag, pos)
         block_end = payload.find(self.get_tool_close_tag(), pos)
         if block_end >= 0 and (arg_key_start < 0 or block_end < arg_key_start):
             return block_end, 'done'
         if arg_key_start < 0:
             return None
-        return arg_key_start + len(self.arg_key_start_token), 'arg_name'
+        return arg_key_start + len(self.arg_key_open_tag), 'arg_name'
 
     def _consume_arg_name(self, payload: str, pos: int) -> tuple[int, str] | None:
         """Read the argument key and return the raw-value start."""
-        key_end = payload.find(self.arg_key_end_token, pos)
+        key_end = payload.find(self.arg_key_close_tag, pos)
         if key_end < 0:
             return None
-        value_start = payload.find(self.arg_value_start_token, key_end + len(self.arg_key_end_token))
+        value_start = payload.find(self.arg_value_open_tag, key_end + len(self.arg_key_close_tag))
         if value_start < 0:
             return None
 
-        return value_start + len(self.arg_value_start_token), payload[pos:key_end].strip()
+        return value_start + len(self.arg_value_open_tag), payload[pos:key_end].strip()
