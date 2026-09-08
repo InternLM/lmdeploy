@@ -27,9 +27,7 @@ from .weight_format import (
 logger = get_logger('lmdeploy')
 
 
-def _build_quantized_formats(
-        model_format: str | None,
-        group_size: int | None) -> list[WeightFormat]:
+def _build_quantized_formats(model_format: str | None, group_size: int | None) -> list[WeightFormat]:
     formats: list[WeightFormat] = []
     if model_format in (None, 'hf'):
         pass
@@ -40,7 +38,7 @@ def _build_quantized_formats(
     elif model_format == 'compressed-tensors':
         formats.append(CompressedTensorFormat(block_in=group_size))
     elif model_format == 'fp8':
-        formats.extend((FP8Format(block_out=128), FP8Format(block_out=1)))
+        formats.append(FP8Format(block_out=128))
     elif model_format == 'mxfp4':
         formats.append(MXFP4Format())
     else:
@@ -221,10 +219,7 @@ def get_tm_config(model_path,
 
     # 3. Resolve dtype and format overrides.
     requested_dtype = engine_config.dtype
-    quantized_formats = _build_quantized_formats(
-        engine_config.model_format,
-        group_size,
-    )
+    quantized_formats = _build_quantized_formats(engine_config.model_format, group_size)
     executable = _get_executable_dtypes(
         quantized_formats,
         engine_config.devices[0],
