@@ -411,6 +411,8 @@ class BaseResponseParser(ResponseParser):
             indicates whether parser state/input was consumed.
         """
         if self._after_tool_block:
+            # A newline after a tool block is a separator only when another
+            # tool block follows; otherwise it remains assistant content.
             newline_end = 0
             pending_size = len(self._pending)
             while newline_end < pending_size and self._pending[newline_end] == '\n':
