@@ -861,6 +861,53 @@ def test_stream_messages_response_preserves_tool_start_output_ids():
     assert output_ids == [11, 12, 13]
 
 
+def test_stream_messages_response_resolves_name_after_arguments():
+    class _ArgumentsBeforeNameParser:
+
+        def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
+            return [(
+                DeltaMessage(
+                    role='assistant',
+                    tool_calls=[
+                        DeltaToolCall(
+                            index=0,
+                            id='toolu_123',
+                            type='function',
+                            function=DeltaFunctionCall(arguments='{"query":"lmdeploy"}'),
+                        ),
+                        DeltaToolCall(
+                            index=0,
+                            function=DeltaFunctionCall(name='search'),
+                        ),
+                    ],
+                ),
+                True,
+            )]
+
+    async def _result_generator():
+        yield SimpleNamespace(
+            response='tool call',
+            token_ids=[],
+            input_token_len=8,
+            generate_token_len=1,
+            finish_reason='stop',
+        )
+
+    payloads = _collect_stream_response_payloads(
+        _result_generator(),
+        _ArgumentsBeforeNameParser(),
+    )
+
+    tool_start = next(
+        item for item in payloads
+        if item['type'] == 'content_block_start' and item['content_block']['type'] == 'tool_use')
+    argument_delta = next(
+        item for item in payloads
+        if item['type'] == 'content_block_delta' and item['delta']['type'] == 'input_json_delta')
+    assert tool_start['content_block']['name'] == 'search'
+    assert argument_delta['delta']['partial_json'] == '{"query":"lmdeploy"}'
+
+
 def test_stream_messages_response_closes_text_before_resuming_tool_delta():
     class _InterleavedToolParser:
         def __init__(self):

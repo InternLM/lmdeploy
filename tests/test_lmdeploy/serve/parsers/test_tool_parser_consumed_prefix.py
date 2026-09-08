@@ -91,6 +91,29 @@ def test_json_arguments_before_name_stream_in_source_order_and_preserve_duplicat
 
 
 @pytest.mark.parametrize(
+    'chunks',
+    [
+        ('{"name":"f"}</tool_call>',),
+        ('{"name":"f"}', '</tool_call>'),
+        ('{"name":"f"}\n', '</tool_call>'),
+    ],
+)
+def test_json_emits_default_arguments_once(chunks):
+    parser = Qwen3ToolParser()
+
+    pending, deltas, _ = _feed_chunks(parser, chunks)
+
+    argument_deltas = [
+        delta.function.arguments
+        for delta in deltas
+        if delta.function is not None and delta.function.arguments is not None
+    ]
+    assert pending == ''
+    assert parser.block_closed
+    assert argument_deltas == ['{}']
+
+
+@pytest.mark.parametrize(
     ('parser_cls', 'payload'),
     [
         (

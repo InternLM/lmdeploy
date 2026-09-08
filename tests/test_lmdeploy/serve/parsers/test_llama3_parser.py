@@ -122,3 +122,18 @@ def test_llama3_streaming_emits_plain_text_after_tool_call_finishes():
     assert tool_emitted is False
     assert delta_msg.content == ' Done.'
     assert delta_msg.tool_calls is None
+
+
+def test_llama3_preserves_post_tool_whitespace_across_chunk_boundaries():
+    payload = ('{"name":"find_user_id_by_name_zip","parameters":{"first_name":"Chen",'
+               '"last_name":"Johnson","zip":77004}}')
+    text = f'<|python_tag|>{payload} Done.'
+
+    single_chunk = _build_parser().stream_chunk(text, [], final=True)
+    split_parser = _build_parser()
+    split_chunks = split_parser.stream_chunk(f'<|python_tag|>{payload}', [])
+    split_chunks.extend(split_parser.stream_chunk(' Done.', [], final=True))
+
+    single_content = ''.join(delta.content or '' for delta, _ in single_chunk)
+    split_content = ''.join(delta.content or '' for delta, _ in split_chunks)
+    assert single_content == split_content == ' Done.'

@@ -100,7 +100,7 @@ def _start_text_or_thinking(state: _StreamBlockState, kind: str) -> list[str]:
     return events
 
 
-def _start_tool_block(state: _StreamBlockState, tool_delta) -> list[str]:
+def _start_tool_block(state: _StreamBlockState, tool_delta, tool_name: str | None = None) -> list[str]:
     events: list[str] = []
     tool_index = tool_delta.index
     block = state.tool_blocks.get(tool_index)
@@ -115,7 +115,8 @@ def _start_tool_block(state: _StreamBlockState, tool_delta) -> list[str]:
         events.extend(_close_current_block(state))
     if block is None:
         function_delta = tool_delta.function
-        tool_name = '' if function_delta is None else function_delta.name or ''
+        if tool_name is None:
+            tool_name = '' if function_delta is None else function_delta.name or ''
         block_index = state.next_block_index
         state.next_block_index += 1
         block = dict(
@@ -284,10 +285,29 @@ async def stream_messages_response(parsed_stream,
                 content_output_ids is not None or content_output_logprobs is not None)
 
         if delta_message.tool_calls:
+            # A parser may preserve source order and return buffered arguments
+            # before a later name in the same batch. Anthropic fixes the tool
+            # name in content_block_start, so resolve it before emitting the
+            # batch without reordering its argument fragments.
             for tool_index, tool_delta in enumerate(delta_message.tool_calls):
-                for event in _start_tool_block(block_state, tool_delta):
-                    yield event
+                tool_name = None
                 function_delta = tool_delta.function
+                if (
+                    tool_delta.index not in block_state.tool_blocks
+                    and (function_delta is None or not function_delta.name)
+                ):
+                    for later_index in range(tool_index + 1, len(delta_message.tool_calls)):
+                        later_delta = delta_message.tool_calls[later_index]
+                        later_function = later_delta.function
+                        if (
+                            later_delta.index == tool_delta.index
+                            and later_function is not None
+                            and later_function.name
+                        ):
+                            tool_name = later_function.name
+                            break
+                for event in _start_tool_block(block_state, tool_delta, tool_name):
+                    yield event
                 if function_delta is None:
                     continue
                 partial_json = function_delta.arguments or ''

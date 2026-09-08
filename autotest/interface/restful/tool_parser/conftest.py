@@ -321,8 +321,8 @@ class _ToolCallTestBase:
         return self._require_mm_resource(filename)
 
     def _parser_validation_kwargs(self, tools=None):
-        """Kwargs for ``validate_*`` helpers using
-        ``ResponseParser.validate_complete``."""
+        """Kwargs for decoded-output replay through
+        ``ResponseParser.parse_complete``."""
         kwargs = {
             'tokenizer_path': self._tokenizer_path,
             'tool_parser_name': resolve_tool_parser_name(self._model_case),

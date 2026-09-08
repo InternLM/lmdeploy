@@ -53,7 +53,9 @@ class JsonToolParser(ToolParser):
         available. Other fields are scanned only to locate the next envelope
         field. The value scanner carries incomplete value state across calls;
         incomplete envelope syntax and possible closing-marker suffixes remain
-        in the input buffer.
+        in the input buffer. Once the envelope is done, any outer delimiter or
+        trailing content remains for :class:`ToolParser` and the response
+        parser respectively.
 
         Args:
             text: Buffered payload text after the outer opening marker.
@@ -68,6 +70,9 @@ class JsonToolParser(ToolParser):
         close_tag = self.get_tool_close_tag()
 
         while pos < size:
+            if self._phase == 'done':
+                break
+
             if self._phase not in ('arguments_value', 'skip_value') and close_tag and text.startswith(close_tag, pos):
                 self._finish_envelope(deltas)
                 break
@@ -216,10 +221,6 @@ class JsonToolParser(ToolParser):
                 else:
                     pos += 1
                 continue
-
-            if self._phase == 'done':
-                pos = self._skip_ws(text, pos)
-                break
 
         if final and self._phase in ('arguments_value', 'skip_value'):
             self._value_scanner.finish()

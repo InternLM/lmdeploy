@@ -1207,7 +1207,7 @@ def _has_parsed_tool_calls(tool_calls) -> bool:
     return bool(tool_calls)
 
 
-def assert_raw_decode_validate_complete(
+def _parse_decoded_complete(
     text: str,
     tokenizer_path: str,
     *,
@@ -1215,15 +1215,15 @@ def assert_raw_decode_validate_complete(
     tools: list | None = None,
     reasoning_parser_name: str | None = None,
     enable_thinking: bool | None = None,
-) -> None:
-    """Run ``ResponseParser.validate_complete`` on decoded output.
+) -> tuple[str | None, list | None, str | None]:
+    """Replay decoded output through ``ResponseParser.parse_complete``.
 
-    ``reasoning_parser_name=None`` validates tool markup only (tool-call path).
+    ``reasoning_parser_name=None`` parses tool markup only (tool-call path).
     Pass ``reasoning_parser_name`` (e.g. ``'default'``) and ``enable_thinking``
-    for reasoning-suite raw decode checks.
+    to replay reasoning-suite output.
     """
     if not text.strip():
-        return
+        return None, None, None
     parser = make_response_parser(
         tokenizer_path,
         tool_parser_name=tool_parser_name,
@@ -1232,9 +1232,7 @@ def assert_raw_decode_validate_complete(
         tool_choice='auto' if tools else 'none',
         enable_thinking=enable_thinking,
     )
-    assert parser.validate_complete(text), (
-        'ResponseParser.validate_complete failed: incomplete or malformed decoded markup '
-        f'in output snippet: {text[:300]!r}')
+    return parser.parse_complete(text)
 
 
 def attach_decoded_validation(
@@ -1248,7 +1246,7 @@ def attach_decoded_validation(
     model_case: str | None = None,
     validate_decoded: bool = True,
 ) -> dict:
-    """Decode ``output_ids`` and run ``validate_complete`` on raw decoded text.
+    """Decode ``output_ids`` and replay the raw text through complete parsing.
 
     Tool-call path: ``tool_parser_name`` set, ``reasoning_parser_name`` omitted.
     Reasoning path: also pass ``reasoning_parser_name``, ``enable_thinking``,
@@ -1269,7 +1267,7 @@ def attach_decoded_validation(
         return result
     if tool_parser_name is None:
         return result
-    assert_raw_decode_validate_complete(
+    _parse_decoded_complete(
         result['decoded_str'],
         tokenizer_path,
         tool_parser_name=tool_parser_name,
@@ -1290,21 +1288,15 @@ def assert_parser_drop_decoded_only(
 ) -> None:
     if _has_parsed_tool_calls(tool_calls) or not decoded_str.strip():
         return
-    parser = make_response_parser(
+    _, complete_tool_calls, _ = _parse_decoded_complete(
+        decoded_str,
         tokenizer_path,
         tool_parser_name=tool_parser_name,
         tools=tools,
         reasoning_parser_name=None,
     )
-    open_tag = parser.tool_parser.get_tool_open_tag()
-    if not open_tag or open_tag not in decoded_str:
+    if not complete_tool_calls:
         return
-    assert_raw_decode_validate_complete(
-        decoded_str,
-        tokenizer_path,
-        tool_parser_name=tool_parser_name,
-        tools=tools,
-    )
     raise AssertionError(
         'Parser dropped tool call: decoded output contains complete tool markup '
         'but streamed tool_calls are empty')

@@ -179,9 +179,9 @@ class ToolParser:
         call fragments are appended to ``deltas``. The caller must retain
         ``text[consumed:]`` and pass it back with the next chunk.
 
-        The model-specific parser first consumes its inner payload. Once that
-        payload is closed, this method consumes the configured outer closing
-        marker before closing the complete block.
+        The model-specific parser consumes only the inner payload. Once that
+        payload is closed, later calls bypass it and this method consumes the
+        configured outer closing marker before closing the complete block.
 
         Args:
             text: Buffered text following the tool opening marker.
@@ -195,7 +195,9 @@ class ToolParser:
             return 0
 
         close_tag = self._close_tag
-        consumed = self._consume_stream_payload(text, deltas, final=final)
+        consumed = 0
+        if not self._payload_closed:
+            consumed = self._consume_stream_payload(text, deltas, final=final)
         if self._payload_closed:
             if close_tag is None:
                 self._close_tool_block()
