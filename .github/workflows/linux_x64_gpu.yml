@@ -43,6 +43,12 @@ jobs:
           haskell: true
           large-packages: true
           swap-storage: false
+      - name: Add swap for CUDA compilation
+        run: |
+          sudo fallocate -l 32G /swapfile-lmdeploy-build
+          sudo chmod 600 /swapfile-lmdeploy-build
+          sudo mkswap /swapfile-lmdeploy-build
+          sudo swapon /swapfile-lmdeploy-build
       - name: Checkout repository
         uses: actions/checkout@v3
       - name: Build
