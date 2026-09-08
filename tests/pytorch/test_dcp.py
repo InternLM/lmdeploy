@@ -157,7 +157,7 @@ def test_nsa_metadata_localizes_each_causal_row():
                                 sequence_metadata=sequence_metadata,
                                 dcp_world_rank=(2, 1))
 
-    assert meta.dcp_k_seqlens.tolist() == [2, 4]
+    assert meta.dcp_local_kv_seqlens.tolist() == [2, 4]
     assert meta.indexer_kv_seqlens.tolist() == [2, 2, 3, 3, 4]
 
 

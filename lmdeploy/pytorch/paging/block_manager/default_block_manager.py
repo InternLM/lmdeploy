@@ -36,8 +36,8 @@ class DefaultBlockManager(BaseBlockManager):
 
         # DCP shards sequence tokens across ranks, so one scheduler block
         # spans ``dcp`` physical cache blocks in the unsharded sequence.
-        virtual_block_size = obj.block_size * self.dcp
-        num_all_blocks = _div_up(num_tokens, virtual_block_size)
+        scheduler_block_size = obj.block_size * self.dcp
+        num_all_blocks = _div_up(num_tokens, scheduler_block_size)
         return max(0, num_all_blocks - len(obj.logical_blocks))
 
     def can_allocate(self, msg: SchedulerSequence, prealloc_size: int = 0):

@@ -19,9 +19,9 @@ class NSAIndexMeta:
     """Meta info of NSAIndex layer."""
     cu_seqlen_q: Tensor
     q_seqlens: Tensor
-    k_seqlens: Tensor
-    dcp_k_seqlens: Tensor
-    cu_seqlen_k: Tensor
+    k_seqlens: Tensor  # global lengths used by interleaved cache writes
+    dcp_local_kv_seqlens: Tensor
+    cu_seqlen_k: Tensor  # cumulative offsets for rank-local KV
     block_offset: Tensor
     indexer_kv_seqlens: Tensor = None
     max_q_seqlen: int = None
@@ -54,7 +54,7 @@ def build_nsa_index_meta(*, num_tokens: int, is_decoding: bool,
                          block_size: int, num_gpu_blocks: int,
                          sequence_metadata,
                          indexer_kv_seqlens: Tensor | None = None,
-                         dcp_indexer_kv_seqlens: Tensor | None = None,
+                         dcp_local_indexer_kv_seqlens: Tensor | None = None,
                          dcp_world_rank: tuple[int, int] | None = None) -> NSAIndexMeta:
     """Build layer-invariant DSA metadata from a sequence layout.
 
@@ -74,16 +74,16 @@ def build_nsa_index_meta(*, num_tokens: int, is_decoding: bool,
         dcp_world_rank = get_dcp_world_rank()
     dcp_world_size, _ = dcp_world_rank
     if dcp_world_size == 1:
-        local_k_seqlens = sequence_metadata.kv_seqlens
-        local_cu_seqlen_k = sequence_metadata.cu_seqlens_k
+        dcp_local_kv_seqlens = sequence_metadata.kv_seqlens
+        dcp_local_cu_seqlens = sequence_metadata.cu_seqlens_k
     else:
-        local_k_seqlens, local_cu_seqlen_k = get_dcp_local_cu_seqlens(
+        dcp_local_kv_seqlens, dcp_local_cu_seqlens = get_dcp_local_cu_seqlens(
             sequence_metadata.kv_seqlens, dcp_world_rank)
-    if dcp_indexer_kv_seqlens is None:
+    if dcp_local_indexer_kv_seqlens is None:
         indexer_kv_seqlens = get_dcp_local_seq_lens(
             indexer_kv_seqlens, dcp_world_rank).to(torch.int32)
     else:
-        indexer_kv_seqlens = dcp_indexer_kv_seqlens
+        indexer_kv_seqlens = dcp_local_indexer_kv_seqlens
     # Scoring workspaces are rank-local, while sparse/dense dispatch is based
     # on the global sequence length stored in ``global_max_kv_seqlen``.
     max_kv_seqlen = (block_size * num_gpu_blocks if is_decoding else
@@ -99,8 +99,8 @@ def build_nsa_index_meta(*, num_tokens: int, is_decoding: bool,
         cu_seqlen_q=sequence_metadata.cu_seqlens_q,
         q_seqlens=q_seqlens,
         k_seqlens=sequence_metadata.kv_seqlens,
-        dcp_k_seqlens=local_k_seqlens,
-        cu_seqlen_k=local_cu_seqlen_k,
+        dcp_local_kv_seqlens=dcp_local_kv_seqlens,
+        cu_seqlen_k=dcp_local_cu_seqlens,
         block_offset=sequence_metadata.block_offsets,
         indexer_kv_seqlens=indexer_kv_seqlens,
         max_q_seqlen=max_q_seqlen,

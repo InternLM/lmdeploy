@@ -297,7 +297,8 @@ class FlashMLAImpl(TritonAttentionImpl):
 
         tile_scheduler_metadata, num_splits = self._get_scheduler_metadata(attn_metadata)
 
-        flash_kwargs = dict(
+        attn_output, softmax_lse = self.flash_mla_with_kvcache(
+            query,
             k_cache=k_cache,
             block_table=block_offsets,
             cache_seqlens=kv_seqlens,
@@ -309,8 +310,6 @@ class FlashMLAImpl(TritonAttentionImpl):
             is_fp8_kvcache=is_fp8_kvcache,
             indices=indices,
         )
-        attn_output, softmax_lse = self.flash_mla_with_kvcache(
-            query, **flash_kwargs)
 
         attn_output = attn_output[:, :, :num_q_heads]
         attn_output = attn_output.flatten(0, 1)
@@ -609,13 +608,12 @@ class FlashMLAImpl(TritonAttentionImpl):
         )
 
         prefix_lens = attn_metadata.kv_seqlens - attn_metadata.q_seqlens
-        prefix_total = attn_metadata.kv_flatten_size - current_key.size(0)
         batch_size = prefix_lens.numel()
         chunk_size = self._get_dcp_prefill_chunk_size(
             current_key.size(0), batch_size, k_cache.size(1))
-        max_prefix_len = min(prefix_total,
-                             max(0, attn_metadata.max_kv_seqlen - 1))
-        for chunk_start in range(0, max_prefix_len, chunk_size):
+        prefix_limit = self._get_dcp_prefill_prefix_limit(
+            attn_metadata, current_key.size(0))
+        for chunk_start in range(0, prefix_limit, chunk_size):
             context_k, context_cu_lens = self._gather_dcp_prefill_context_chunk(
                 k_cache,
                 v_cache,
@@ -652,6 +650,14 @@ class FlashMLAImpl(TritonAttentionImpl):
         average_q = max(1, num_query_tokens // batch_size)
         return max(virtual_block_size,
                    average_q // virtual_block_size * virtual_block_size)
+
+    @staticmethod
+    def _get_dcp_prefill_prefix_limit(
+            attn_metadata: TritonAttentionMetadata,
+            num_query_tokens: int) -> int:
+        """Return a host-side upper bound covering every cached prefix."""
+        prefix_total = attn_metadata.kv_flatten_size - num_query_tokens
+        return min(prefix_total, max(0, attn_metadata.max_kv_seqlen - 1))
 
     def _get_max_q_seqlen(
         self,
@@ -797,19 +803,19 @@ class FlashMLAImpl(TritonAttentionImpl):
         if nsa_indices is not None:
             raise RuntimeError('Sparse MLA indices require FlashMLASparseImpl.')
 
-        prefix_total = attn_metadata.kv_flatten_size - current_key.size(0)
-        if self.dcp_world_size > 1 and prefix_total > 0:
-            return self._prefill_dcp_context(
-                query,
-                current_key,
-                k_cache,
-                v_cache,
-                attn_metadata,
-                k_scales_zeros=k_scales_zeros,
-                v_scales_zeros=v_scales_zeros,
-            )
-
         if self.dcp_world_size > 1:
+            prefix_limit = self._get_dcp_prefill_prefix_limit(
+                attn_metadata, current_key.size(0))
+            if prefix_limit > 0:
+                return self._prefill_dcp_context(
+                    query,
+                    current_key,
+                    k_cache,
+                    v_cache,
+                    attn_metadata,
+                    k_scales_zeros=k_scales_zeros,
+                    v_scales_zeros=v_scales_zeros,
+                )
             flatten_k = current_key
             flatten_v = current_key[..., :self.v_head_size]
             if not self.use_fa3:

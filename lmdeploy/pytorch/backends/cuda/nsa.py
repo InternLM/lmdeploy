@@ -333,7 +333,7 @@ class DSAIndexerMetaBuilder(
             block_size=step_context.cache_config.block_size,
             num_gpu_blocks=step_context.cache_config.num_gpu_blocks,
             sequence_metadata=sequence_metadata,
-            dcp_indexer_kv_seqlens=buffer.indexer_kv_seqlens,
+            dcp_local_indexer_kv_seqlens=buffer.indexer_kv_seqlens,
         )
         meta.score_meta = _build_deep_gemm_score_meta(
             meta,
@@ -416,7 +416,7 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
             k_cache,
             k_s_cache[..., 0],
             meta.cu_seqlen_k,
-            meta.dcp_k_seqlens,
+            meta.dcp_local_kv_seqlens,
             meta.block_offset,
             out_size=meta.kv_flatten_size,
         )
@@ -568,7 +568,7 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
                                k_cache,
                                k_s_cache[..., 0],
                                meta.cu_seqlen_q,
-                               meta.dcp_k_seqlens,
+                               meta.dcp_local_kv_seqlens,
                                meta.block_offset,
                                max_q_seqlen=meta.max_q_seqlen,
                                max_k_seqlen=meta.max_kv_seqlen,

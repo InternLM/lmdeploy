@@ -225,30 +225,15 @@ def _build_dcp_group(context: 'DistContext', timeout: timedelta,
     if dcp == 1:
         context.dcp_group = DistGroup(rank=0)
         return
-
-    attn_tp = context.dist_config.attn_tp
-    world_size = context.dist_config.world_size
-    gpu_groups = []
-    cpu_groups = []
-    for tp_start in range(0, world_size, attn_tp):
-        for dcp_start in range(tp_start, tp_start + attn_tp, dcp):
-            ranks = tuple(range(dcp_start, dcp_start + dcp))
-            gpu_groups.append(
-                dist.new_group(ranks=ranks, timeout=timeout, backend=ccl_backend))
-            cpu_groups.append(
-                dist.new_group(ranks=ranks, timeout=timeout, backend=cpu_backend))
-
-    attn_tp_rank = context.attn_tp_group.rank
-    tp_group_start = context.rank - attn_tp_rank
-    groups_per_tp = attn_tp // dcp
-    group_id = (tp_group_start // attn_tp * groups_per_tp
-                + attn_tp_rank // dcp)
-    context.dcp_group = DistGroup(
-        rank=attn_tp_rank % dcp,
-        cpu_group=cpu_groups[group_id],
-        gpu_group=gpu_groups[group_id],
-        cpu_groups=cpu_groups,
-        gpu_groups=gpu_groups,
+    # DCP ranks are contiguous and ``dcp`` divides attention TP, so these are
+    # the same rank partitions created by the existing TP group builder.
+    context.dcp_group = _build_tp_group_impl(
+        tp=dcp,
+        rank=context.rank,
+        world_size=context.dist_config.world_size,
+        timeout=timeout,
+        cpu_backend=cpu_backend,
+        ccl_backend=ccl_backend,
     )
 
 

@@ -159,17 +159,12 @@ class FlashMLASparseImpl(FlashMLAImpl):
 
     def _prefill_sparse(self, query: torch.Tensor, flatten_k: torch.Tensor,
                         nsa_indices: torch.Tensor,
-                        attn_metadata: TritonAttentionMetadata,
-                        return_lse: bool = False
-                        ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+                        attn_metadata: TritonAttentionMetadata) -> torch.Tensor:
         """Run sparse prefill over flattened BF16 KV."""
         indices = self.index_mapper.map_flat_prefill(nsa_indices,
                                                      attn_metadata.q_seqlens,
                                                      attn_metadata.cu_seqlens_k)
-        return self._flash_mla_sparse_forward(query,
-                                              flatten_k,
-                                              indices,
-                                              return_lse=return_lse)
+        return self._flash_mla_sparse_forward(query, flatten_k, indices)
 
     def _map_dcp_prefill_partition(
             self, nsa_indices: torch.Tensor,
@@ -238,10 +233,9 @@ class FlashMLASparseImpl(FlashMLAImpl):
         batch_size = prefix_lens.numel()
         chunk_size = self._get_dcp_prefill_chunk_size(
             current_key.size(0), batch_size, k_cache.size(1))
-        prefix_total = attn_metadata.kv_flatten_size - current_key.size(0)
-        max_prefix_len = min(prefix_total,
-                             max(0, attn_metadata.max_kv_seqlen - 1))
-        for chunk_start in range(0, max_prefix_len, chunk_size):
+        prefix_limit = self._get_dcp_prefill_prefix_limit(
+            attn_metadata, current_key.size(0))
+        for chunk_start in range(0, prefix_limit, chunk_size):
             context_k, context_cu_lens = self._gather_dcp_prefill_context_chunk(
                 k_cache,
                 v_cache,
@@ -400,8 +394,9 @@ class FlashMLASparseImpl(FlashMLAImpl):
         if nsa_indices is None:
             raise RuntimeError('Sparse MLA requires DSA top-k indices.')
         if self.dcp_world_size > 1:
-            prefix_total = attn_metadata.kv_flatten_size - current_key.size(0)
-            if prefix_total > 0:
+            prefix_limit = self._get_dcp_prefill_prefix_limit(
+                attn_metadata, current_key.size(0))
+            if prefix_limit > 0:
                 return self._prefill_sparse_dcp(
                     query,
                     current_key,
