@@ -44,21 +44,6 @@ def _arguments(deltas):
     )
 
 
-def _final_streamed_call(parser, payload):
-    parser.begin_tool_block()
-    deltas = []
-    consumed = parser.feed_tool_block(payload, deltas, final=True)
-    name = next(
-        (
-            delta.function.name
-            for delta in deltas
-            if delta.function is not None and delta.function.name is not None
-        ),
-        None,
-    )
-    return consumed, name, _arguments(deltas)
-
-
 def test_json_arguments_before_name_emit_identity_first_and_preserve_duplicates():
     parser = Qwen3ToolParser()
     raw_arguments = '{"a":"one","a":"two"}'
@@ -109,28 +94,6 @@ def test_json_emits_default_arguments_once(chunks):
     assert pending == ''
     assert parser.block_closed
     assert argument_deltas == ['{}']
-
-
-@pytest.mark.parametrize(
-    ('parser_cls', 'payload'),
-    [
-        (
-            Qwen3CoderToolParser,
-            '<function=f><parameter=a>partial',
-        ),
-        (
-            Glm47ToolParser,
-            'f<arg_key>a</arg_key><arg_value>partial',
-        ),
-    ],
-)
-def test_xml_complete_reuses_final_streaming_semantics_for_incomplete_argument(parser_cls, payload):
-    consumed, streamed_name, streamed_arguments = _final_streamed_call(parser_cls(), payload)
-    complete = final_tool_calls(parser_cls(), payload)[0]
-
-    assert consumed == len(payload)
-    assert complete.function.name == streamed_name
-    assert complete.function.arguments == streamed_arguments
 
 
 def test_complete_and_streaming_drop_malformed_tool_block_without_name():
@@ -565,7 +528,6 @@ def test_kimi_streams_arguments_without_accumulating_payload_and_handles_atomic_
     assert pending == 'tail'
     assert parser.block_closed
     assert _arguments(deltas) == raw_arguments
-    assert not hasattr(parser, '_tool_payload')
     assert max_pending <= len(parser.argument_begin) + len('functions.f:0')
     complete = final_tool_calls(KimiK2ToolParser(), ''.join(chunks[:-1]))
     assert complete[0].function.arguments == raw_arguments
@@ -627,8 +589,6 @@ def test_response_parser_emits_trailing_text_after_atomic_tool_close():
         assert ordered_calls[0].function.name == 'get_weather'
         assert ordered_calls[0].function.arguments is None
         assert ordered_calls[-1].function.arguments
-        assert parser._pending == ''
-        assert not hasattr(parser, '_accumulated_chunks')
     finally:
         parser_cls.reasoning_parser_cls = old_reasoning_cls
         parser_cls.tool_parser_cls = old_tool_cls

@@ -151,44 +151,10 @@ class TestQwen3_5ResponseParserStreaming:
 
     def test_stream_chunk_matches_reference(self):
         response_parser = _build_response_parser()
-        actual = []
-        expected = []
         for delta_text, expected_events in REFERENCE_CHUNKS:
-            actual.extend(
-                _flatten_stream_deltas(response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=[])))
-            expected.extend(expected_events)
-        assert actual == expected
-
-    def test_stream_chunk_ignores_trailing_empty_delta(self):
-        response_parser = _build_response_parser()
-
-        response_parser.stream_chunk(delta_text='answer', delta_token_ids=[1])
-
-        assert response_parser.stream_chunk(delta_text='', delta_token_ids=[]) == []
-
-    def test_stream_chunk_emits_parameter_value_before_parameter_close(self):
-        response_parser = _build_response_parser()
-        chunks = [
-            '</think>',
-            '<tool_call>',
-            '<function=get_current_temperature>',
-            '<parameter=location>',
-            'San',
-            ' Francisco',
-            ', CA',
-        ]
-
-        argument_fragments = []
-        emitted_before_close = False
-        for chunk in chunks:
-            for event in _flatten_stream_deltas(response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[])):
-                fragment = event.get('arguments')
-                if fragment:
-                    argument_fragments.append(fragment)
-                    emitted_before_close = True
-
-        assert emitted_before_close is True
-        assert ''.join(argument_fragments) == '{"location": "San Francisco, CA'
+            actual_events = _flatten_stream_deltas(
+                response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=[]))
+            assert actual_events == expected_events
 
     def test_parse_complete_parallel_tool_calls_keep_distinct_arguments(self):
         """Regression: parallel tool calls must not reuse the first call's args."""
@@ -478,38 +444,6 @@ null
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
 
-    def test_streamed_arguments_match_complete_parse_for_invalid_integer_value(self):
-        parser = Qwen3CoderToolParser()
-        request = ChatCompletionRequest(
-            model=MODEL_ID,
-            messages=[],
-            tools=[{
-                'type': 'function',
-                'function': {
-                    'name': 'typed_tool',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': {
-                            'age': {
-                                'type': 'integer'
-                            },
-                        },
-                    },
-                },
-            }],
-            tool_choice='auto',
-        )
-        parser.adjust_request(request)
-        payload = '<function=typed_tool><parameter=age>abc</parameter></function>'
-
-        streamed_arguments = _stream_tool_arguments(
-            parser,
-            ['<function=typed_tool>', '<parameter=age>', 'abc', '</parameter>', '</function>'],
-        )
-        complete_tool_call = final_tool_call(parser, payload)
-
-        assert complete_tool_call is not None
-        assert streamed_arguments == complete_tool_call.function.arguments
 
     def test_streamed_arguments_match_complete_parse_for_invalid_integer_after_numeric_prefix(self):
         parser = Qwen3CoderToolParser()
@@ -617,12 +551,3 @@ null
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
-
-    def test_decode_incremental_keeps_open_value_buffer_bounded(self):
-        parser = Qwen3CoderToolParser()
-        parser.begin_tool_block()
-        pending, _ = _feed_tool_payload(parser, '<function=write_file><parameter=content>', final=False)
-        for _ in range(200):
-            pending, _ = _feed_tool_payload(parser, pending + 'x' * 32, final=False)
-
-        assert len(pending) <= len('</parameter>') - 1

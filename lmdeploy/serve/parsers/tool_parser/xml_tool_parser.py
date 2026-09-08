@@ -447,6 +447,8 @@ class XmlToolParser(ToolParser):
     @staticmethod
     def _resolve_schema_type(param_schema: dict[str, Any]) -> str | None:
         """Resolve a scalar or nullable-list JSON Schema ``type`` value."""
+        # TODO: Fully support union and nullable schemas, preserving all allowed types
+        # in streaming decisions and value coercion.
         schema_type = param_schema.get('type')
         if isinstance(schema_type, str):
             return schema_type

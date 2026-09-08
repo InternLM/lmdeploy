@@ -2,8 +2,6 @@ from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 
-from .helpers import first_stream_delta
-
 
 def _build_parser():
     cls = ResponseParserManager.get('default')
@@ -19,33 +17,27 @@ def _build_parser():
     return cls(request=request)
 
 
-def test_stream_chunk_handles_split_internlm_open_tag():
+def test_stream_chunk_matches_split_internlm_sequence():
     parser = _build_parser()
-    chunks = [
-        '<|action_start|>',
-        '<|plugin|>',
-        '\n{\n    "name": "get_weather",\n    "parameters": {"city": "Berlin"}\n}',
-        '<|action_end|>',
+    reference = [
+        ('<|action_start|>', []),
+        ('<|plugin|>', []),
+        ('\n{"name":"get_weather","parameters":{"city":"Ber', [
+            ('function', 'get_weather', None),
+            (None, None, '{"city":"Ber'),
+        ]),
+        ('lin"', [(None, None, 'lin"')]),
+        ('}}', [(None, None, '}')]),
+        ('<|action_end|>', []),
     ]
 
-    seen_name = False
-    seen_args = False
-    leaked_tag_text = []
-
-    for chunk in chunks:
-        delta, _tool_emitted = first_stream_delta(parser.stream_chunk(delta_text=chunk, delta_token_ids=[]))
-        if delta is None:
-            continue
-        if delta.content:
-            leaked_tag_text.append(delta.content)
-        if delta.tool_calls:
-            for call in delta.tool_calls:
-                if call.function and call.function.name == 'get_weather':
-                    seen_name = True
-                if call.function and call.function.arguments == '{"city": "Berlin"}':
-                    seen_args = True
-
-    assert seen_name
-    assert seen_args
-    assert '<|action_start|>' not in ''.join(leaked_tag_text)
-    assert '<|plugin|>' not in ''.join(leaked_tag_text)
+    for chunk, expected_calls in reference:
+        deltas = parser.stream_chunk(delta_text=chunk, delta_token_ids=[])
+        assert all(tool_emitted for _, tool_emitted in deltas)
+        assert all(delta.content is None for delta, _ in deltas)
+        actual_calls = [
+            (call.type, call.function.name, call.function.arguments)
+            for delta, _ in deltas
+            for call in (delta.tool_calls or [])
+        ]
+        assert actual_calls == expected_calls

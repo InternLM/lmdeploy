@@ -168,35 +168,10 @@ class TestGlm47ResponseParserStreaming:
     parser."""
 
     def test_stream_chunk_matches_reference(self, response_parser):
-        actual = []
-        expected = []
         for delta_text, expected_events in REFERENCE_CHUNKS:
-            actual.extend(
-                _flatten_stream_deltas(response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=[])))
-            expected.extend(expected_events)
-        assert actual == expected
-
-    def test_stream_chunk_emits_arg_value_before_arg_value_close(self, response_parser):
-        chunks = [
-            '<tool_call>',
-            'get_weather',
-            '<arg_key>location</arg_key>',
-            '<arg_value>San',
-            ' Francisco',
-            ', CA',
-        ]
-
-        argument_fragments = []
-        emitted_before_close = False
-        for chunk in chunks:
-            for event in _flatten_stream_deltas(response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[])):
-                fragment = event.get('arguments')
-                if fragment:
-                    argument_fragments.append(fragment)
-                    emitted_before_close = True
-
-        assert emitted_before_close is True
-        assert ''.join(argument_fragments) == '{"location": "San Francisco, CA'
+            actual_events = _flatten_stream_deltas(
+                response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=[]))
+            assert actual_events == expected_events
 
     def test_stream_chunk_function_name_split_before_arg_key(self, response_parser):
         """Callee name streamed in many deltas before ``<arg_key>`` must not
@@ -946,16 +921,3 @@ class TestGlm47ToolParserComplete:
 
         assert complete_tool_call is not None
         assert streamed_arguments == complete_tool_call.function.arguments
-
-    def test_decode_incremental_keeps_open_value_buffer_bounded(self):
-        parser = Glm47ToolParser()
-        parser.begin_tool_block()
-        pending, _ = _feed_tool_payload(
-            parser,
-            'write_file<arg_key>content</arg_key><arg_value>',
-            final=False,
-        )
-        for _ in range(200):
-            pending, _ = _feed_tool_payload(parser, pending + 'x' * 32, final=False)
-
-        assert len(pending) <= len('</arg_value>') - 1

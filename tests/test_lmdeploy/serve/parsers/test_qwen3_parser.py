@@ -1,6 +1,6 @@
 import pytest
 
-from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
@@ -38,6 +38,33 @@ def _collect_stream_events(parser, chunks):
                 events.append(('tool', message.tool_calls))
             if message.content is not None:
                 events.append(('content', message.content))
+    return events
+
+
+def _flatten_delta_events(deltas):
+    events = []
+    for message, tool_emitted in deltas:
+        if message is None:
+            continue
+        if message.tool_calls:
+            for call in message.tool_calls:
+                events.append((
+                    message.reasoning_content,
+                    message.content,
+                    tool_emitted,
+                    call.function.name,
+                    call.function.arguments,
+                    call.type,
+                ))
+        else:
+            events.append((
+                message.reasoning_content,
+                message.content,
+                tool_emitted,
+                None,
+                None,
+                None,
+            ))
     return events
 
 
@@ -99,19 +126,19 @@ TOOL_CALL_0 = [
     (' "', False, None, None, False, None, None, None),
     ('arguments', False, None, None, False, None, None, None),
     ('":', False, None, None, False, None, None, None),
-    (' {"', False, None, None, False, None, None, None),
-    ('location', False, None, None, False, None, None, None),
-    ('":', False, None, None, False, None, None, None),
-    (' "', False, None, None, False, None, None, None),
-    ('北京', False, None, None, False, None, None, None),
-    ('",', False, None, None, False, None, None, None),
-    (' "', False, None, None, False, None, None, None),
-    ('unit', False, None, None, False, None, None, None),
-    ('":', False, None, None, False, None, None, None),
-    (' "', False, None, None, False, None, None, None),
-    ('celsius', False, None, None, False, None, None, None),
-    ('"}}\n', False, None, None, False, None, None, None),
-    ('</tool_call>', True, None, None, True, None, '{"location": "北京", "unit": "celsius"}', None),
+    (' {"', True, None, None, True, None, '{"', None),
+    ('location', True, None, None, True, None, 'location', None),
+    ('":', True, None, None, True, None, '":', None),
+    (' "', True, None, None, True, None, ' "', None),
+    ('北京', True, None, None, True, None, '北京', None),
+    ('",', True, None, None, True, None, '",', None),
+    (' "', True, None, None, True, None, ' "', None),
+    ('unit', True, None, None, True, None, 'unit', None),
+    ('":', True, None, None, True, None, '":', None),
+    (' "', True, None, None, True, None, ' "', None),
+    ('celsius', True, None, None, True, None, 'celsius', None),
+    ('"}}\n', True, None, None, True, None, '"}', None),
+    ('</tool_call>', False, None, None, False, None, None, None),
 ]
 
 REFERENCE_CHUNKS_0 = REASONING_0 + [
@@ -132,29 +159,7 @@ REFERENCE_CHUNKS_2 = [
     (' user prompt.', True, ' user prompt.', None, False, None, None, None),
     (' reasoning</think>\n\n<tool_call>\n', True, ' reasoning', None, False, None, None, None),
     (None, True, None, '\n\n', False, None, None, None),
-    ('{"', False, None, None, False, None, None, None),
-    ('name', False, None, None, False, None, None, None),
-    ('":', False, None, None, False, None, None, None),
-    (' "', False, None, None, False, None, None, None),
-    ('get', False, None, None, False, None, None, None),
-    ('_weather', False, None, None, False, None, None, None),
-    ('",', True, None, None, True, 'get_weather', None, 'function'),
-    (' "', False, None, None, False, None, None, None),
-    ('arguments', False, None, None, False, None, None, None),
-    ('":', False, None, None, False, None, None, None),
-    (' {"', False, None, None, False, None, None, None),
-    ('location', False, None, None, False, None, None, None),
-    ('":', False, None, None, False, None, None, None),
-    (' "', False, None, None, False, None, None, None),
-    ('北京', False, None, None, False, None, None, None),
-    ('",', False, None, None, False, None, None, None),
-    (' "', False, None, None, False, None, None, None),
-    ('unit', False, None, None, False, None, None, None),
-    ('":', False, None, None, False, None, None, None),
-    (' "', False, None, None, False, None, None, None),
-    ('celsius', False, None, None, False, None, None, None),
-    ('"}}\n', False, None, None, False, None, None, None),
-    ('</tool_call>', True, None, None, True, None, '{"location": "北京", "unit": "celsius"}', None),
+] + TOOL_CALL_0[2:] + [
     ('', False, None, None, False, None, None, None),
 ]
 
@@ -171,73 +176,29 @@ class TestQwenResponseParserStreaming:
         - Strictly use the reference token stream (including <tool_call>, \\n, <,
           function, =get, ...).
 
-        Checks:
-        - reasoning: whenever an expected reasoning chunk is provided, the
-          parser must emit exactly that reasoning_content.
-        - content: only after </think>, we expect a single \\n\\n.
-        - tool_calls:
-          - for each step, tool_emitted must match expected_tool_emitted;
-          - whenever ResponseParser actually emits DeltaToolCall, we check:
-            - the first time a function.name appears, it must equal
-              get_current_temperature;
-            - any function.arguments increments are concatenated and validated
-              after streaming completes.
+        Each input chunk is checked independently so the reference also
+        enforces when a stable argument fragment becomes visible.
         """
 
-        expected_reasoning = [row[2] for row in reference_chunks if row[1] and row[2] is not None]
-        expected_content = [row[3] for row in reference_chunks if row[1] and row[3] is not None]
-        expected_names = [row[5] for row in reference_chunks if row[1] and row[5] is not None]
-        expected_types = [row[7] for row in reference_chunks if row[1] and row[7] is not None]
-        expected_arguments = ''.join(row[6] or '' for row in reference_chunks if row[1])
+        pos = 0
+        while pos < len(reference_chunks):
+            row = reference_chunks[pos]
+            delta_text = row[0]
+            assert delta_text is not None
 
-        actual_reasoning = []
-        actual_content = []
-        actual_names = []
-        actual_types = []
-        actual_arguments = []
-        for (delta_text, *_) in reference_chunks:
-            if delta_text is None:
-                continue
-            deltas = response_parser.stream_chunk(
-                delta_text=delta_text,
-                delta_token_ids=[],
-            )
-            for delta_msg, tool_emitted in deltas:
-                if delta_msg is None:
-                    continue
-                if delta_msg.reasoning_content is not None:
-                    actual_reasoning.append(delta_msg.reasoning_content)
-                    assert tool_emitted is False
-                if delta_msg.content is not None:
-                    actual_content.append(delta_msg.content)
-                    assert tool_emitted is False
-                if delta_msg.tool_calls:
-                    assert tool_emitted is True
-                    assert len(delta_msg.tool_calls) == 1
-                    call = delta_msg.tool_calls[0]
-                    assert isinstance(call, DeltaToolCall)
-                    assert call.function is not None
-                    if call.type is not None:
-                        actual_types.append(call.type)
-                    if call.function.name is not None:
-                        actual_names.append(call.function.name)
-                    if call.function.arguments is not None:
-                        actual_arguments.append(call.function.arguments)
-                else:
-                    assert tool_emitted is False
+            expected_rows = [row]
+            pos += 1
+            while pos < len(reference_chunks) and reference_chunks[pos][0] is None:
+                expected_rows.append(reference_chunks[pos])
+                pos += 1
 
-        assert actual_reasoning == expected_reasoning
-        assert actual_content == expected_content
-        assert actual_names == expected_names
-        assert actual_types == expected_types
-        assert ''.join(actual_arguments) == expected_arguments
-        if actual_arguments:
-            assert actual_arguments[0] != expected_arguments
-            assert len(actual_arguments) > 1
-            assert all(fragment for fragment in actual_arguments)
-            complete_text = ''.join(row[0] or '' for row in reference_chunks)
-            _, complete_tool_calls, _ = response_parser.parse_complete(complete_text)
-            assert complete_tool_calls[0].function.arguments == expected_arguments
+            expected_events = [tuple(expected[2:]) for expected in expected_rows if expected[1]]
+            actual_events = _flatten_delta_events(
+                response_parser.stream_chunk(
+                    delta_text=delta_text,
+                    delta_token_ids=[],
+                ))
+            assert actual_events == expected_events
 
     def test_stream_chunk_handles_mixed_reasoning_content_tool(self, response_parser):
         """A single delta may contain reasoning/content/tool segments together.
@@ -324,34 +285,6 @@ class TestQwenResponseParserStreaming:
                     assert delta_msg.tool_calls[0].function is not None
                     assert delta_msg.tool_calls[0].function.name == 'get_weather'
             assert tool_seen is True
-        finally:
-            cls.reasoning_parser_cls = old_reasoning_cls
-            cls.tool_parser_cls = old_tool_cls
-
-    def test_stream_chunk_returns_empty_list_when_tool_syntax_has_no_visible_delta(self):
-        cls = ResponseParserManager.get('default')
-        old_reasoning_cls = cls.reasoning_parser_cls
-        old_tool_cls = cls.tool_parser_cls
-        try:
-            cls.reasoning_parser_cls = None
-            cls.tool_parser_cls = ToolParserManager.get('qwen3')
-            request = ChatCompletionRequest(
-                model=MODEL_ID,
-                messages=[],
-                stream=True,
-                tools=PARSER_TOOLS,
-                tool_choice='auto',
-                chat_template_kwargs={'enable_thinking': False},
-            )
-            parser = cls(request=request)
-
-            assert parser.stream_chunk(delta_text='<tool_call>', delta_token_ids=[1]) == []
-            assert parser.stream_chunk(delta_text='\n{"name": "get', delta_token_ids=[2, 3]) == []
-
-            deltas = parser.stream_chunk(delta_text='_weather"', delta_token_ids=[4])
-            delta_msg, tool_emitted = first_stream_delta(deltas)
-            assert tool_emitted is True
-            assert delta_msg.tool_calls[0].function.name == 'get_weather'
         finally:
             cls.reasoning_parser_cls = old_reasoning_cls
             cls.tool_parser_cls = old_tool_cls

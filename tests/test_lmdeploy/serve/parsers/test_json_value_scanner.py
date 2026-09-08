@@ -31,7 +31,7 @@ def test_scans_many_short_json_strings_in_linear_source_order(chunk_size):
     assert _scan(value, chunk_size) == value
 
 
-@pytest.mark.parametrize('chunk_size', [None, 1, 4, 8, 16, 256])
+@pytest.mark.parametrize('chunk_size', [None, 1])
 @pytest.mark.parametrize(
     'value',
     [

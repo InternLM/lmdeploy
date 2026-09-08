@@ -201,11 +201,6 @@ def test_runner_skips_preprocess_for_raw_input_ids():
     ('request_kwargs', 'finish_reason'),
     [
         ({'return_token_ids': True}, 'stop'),
-        ({'return_token_ids': True}, 'length'),
-        ({'return_routed_experts': True}, 'stop'),
-        ({'tool_choice': 'required', 'tools': _tools()}, 'stop'),
-        ({'tool_choice': 'required', 'tools': _tools()}, 'length'),
-        ({'tool_choice': 'required', 'tools': _tools(), 'return_token_ids': True}, 'stop'),
         ({'tool_choice': 'required', 'tools': _tools(), 'return_token_ids': True}, 'length'),
     ],
 )

@@ -3,16 +3,14 @@ from __future__ import annotations
 
 import json
 
-from lmdeploy.deepseek_v32_encoding import dsml_token
+from lmdeploy.deepseek_v32_encoding import dsml_token as DSML_TOKEN
 from lmdeploy.serve.openai.protocol import DeltaToolCall
 
 from .json_value_scanner import JsonValueScanner
 from .tool_parser import ToolParser, ToolParserManager
 
-TOOL_CALLS_BLOCK_NAME = 'function_calls'
 
-
-@ToolParserManager.register_module(['deepseek-v32', 'deepseek-v3.2'])
+@ToolParserManager.register_module('deepseek-v32')
 class DeepSeekV32ToolParser(ToolParser):
     """Incrementally parse DeepSeek-V3.2 DSML function-call blocks.
 
@@ -20,10 +18,12 @@ class DeepSeekV32ToolParser(ToolParser):
     """
 
     structural_tag_model = 'deepseek_v3_2'
-    dsml_token = dsml_token
-    tool_calls_block_name = TOOL_CALLS_BLOCK_NAME
+    dsml_token = DSML_TOKEN
+    tool_calls_block_name = 'function_calls'
+
+    # Proper marker prefixes possible at decoded-token boundaries.
     tool_close_prefixes = (
-        f'</{dsml_token}{TOOL_CALLS_BLOCK_NAME}',
+        f'</{dsml_token}{tool_calls_block_name}',
         f'</{dsml_token}function_c',
         f'</{dsml_token}function',
         f'</{dsml_token}',
@@ -37,7 +37,6 @@ class DeepSeekV32ToolParser(ToolParser):
     def __init__(self) -> None:
         super().__init__()
         self._phase = 'invoke_start'
-        self._current_param_is_string = False
         self._emitted_param_count = 0
         self._value_scanner = JsonValueScanner()
 
@@ -52,7 +51,6 @@ class DeepSeekV32ToolParser(ToolParser):
     def begin_tool_block(self) -> None:
         super().begin_tool_block()
         self._phase = 'invoke_start'
-        self._current_param_is_string = False
         self._emitted_param_count = 0
         self._value_scanner.reset()
 
@@ -64,12 +62,13 @@ class DeepSeekV32ToolParser(ToolParser):
         invoke_close_tag = f'</{self.dsml_token}invoke>'
         parameter_close_tag = f'</{self.dsml_token}parameter>'
         section_close_tag = self.get_tool_close_tag()
+        size = len(text)
 
-        while pos < len(text):
+        while pos < size:
             if self._phase == 'invoke_start':
-                while pos < len(text) and text[pos].isspace():
+                while pos < size and text[pos].isspace():
                     pos += 1
-                if pos == len(text):
+                if pos == size:
                     break
                 if text.startswith(section_close_tag, pos):
                     self._payload_closed = True
@@ -107,9 +106,9 @@ class DeepSeekV32ToolParser(ToolParser):
                 continue
 
             if self._phase == 'parameter_or_invoke_end':
-                while pos < len(text) and text[pos].isspace():
+                while pos < size and text[pos].isspace():
                     pos += 1
-                if pos == len(text):
+                if pos == size:
                     break
                 if text.startswith(invoke_close_tag, pos):
                     self._emit_arguments(deltas, '}' if self._emitted_param_count else '{}')
@@ -139,9 +138,9 @@ class DeepSeekV32ToolParser(ToolParser):
                     break
                 header = text[pos:header_end]
                 param_name = self._attribute_value(header, 'name')
-                self._current_param_is_string = self._attribute_value(header, 'string') == 'true'
+                is_string = self._attribute_value(header, 'string') == 'true'
                 prefix = '{' if self._emitted_param_count == 0 else ', '
-                quote = '"' if self._current_param_is_string else ''
+                quote = '"' if is_string else ''
                 self._emit_arguments(
                     deltas,
                     f'{prefix}{json.dumps(param_name, ensure_ascii=False)}: {quote}',
@@ -149,7 +148,7 @@ class DeepSeekV32ToolParser(ToolParser):
                 self._emitted_param_count += 1
                 self._value_scanner.reset()
                 pos = header_end + 1
-                self._phase = 'string_value' if self._current_param_is_string else 'json_value'
+                self._phase = 'string_value' if is_string else 'json_value'
                 continue
 
             if self._phase == 'string_value':
@@ -181,24 +180,14 @@ class DeepSeekV32ToolParser(ToolParser):
                 pos = self._value_scanner.feed(text, pos, scan_limit)
                 if pos > start:
                     self._emit_arguments(deltas, text[start:pos])
-                if marker_at >= 0 and pos == marker_at and self._value_scanner.finish_scalar():
-                    self._phase = 'parameter_end'
-                    continue
                 if self._value_scanner.complete:
                     self._phase = 'parameter_end'
                     continue
-                if marker_at >= 0:
-                    if not self._value_scanner.in_string:
-                        self._phase = 'parameter_end'
-                        continue
-                    start = pos
-                    pos = self._value_scanner.feed(text, pos)
-                    if pos > start:
-                        self._emit_arguments(deltas, text[start:pos])
-                    if self._value_scanner.complete:
-                        self._phase = 'parameter_end'
-                        continue
-                elif scan_limit < len(text) and self._value_scanner.in_string:
+                if marker_at >= 0 and not self._value_scanner.in_string:
+                    # The DSML boundary also terminates malformed JSON values.
+                    self._phase = 'parameter_end'
+                    continue
+                if scan_limit < size and self._value_scanner.in_string:
                     start = pos
                     pos = self._value_scanner.feed(text, pos)
                     if pos > start:
@@ -209,9 +198,9 @@ class DeepSeekV32ToolParser(ToolParser):
                 break
 
             if self._phase == 'parameter_end':
-                while pos < len(text) and text[pos].isspace():
+                while pos < size and text[pos].isspace():
                     pos += 1
-                if pos == len(text):
+                if pos == size:
                     break
                 if not text.startswith(parameter_close_tag, pos):
                     next_pos = self._next_marker(
@@ -260,11 +249,7 @@ class DeepSeekV32ToolParser(ToolParser):
         next_pos = len(text)
         for marker, marker_prefixes in markers:
             marker_at = text.find(marker, pos)
-            if marker_at >= 0:
-                if marker_at < next_pos:
-                    next_pos = marker_at
-            else:
+            if marker_at < 0:
                 marker_at = ToolParser._stable_prefix_end(text, marker_prefixes, pos)
-                if marker_at < next_pos:
-                    next_pos = marker_at
+            next_pos = min(next_pos, marker_at)
         return next_pos

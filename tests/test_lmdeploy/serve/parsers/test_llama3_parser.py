@@ -67,25 +67,26 @@ def test_llama3_streaming_without_close_tag():
 def test_llama3_streaming_emits_arguments_before_json_payload_complete():
     parser = _build_parser()
 
-    parser.stream_chunk('<|python_tag|>', [])
-    chunks = [
-        '{"name":"find_user_id_by_name_zip","parameters":{"first_name":"Ch',
-        'en","last_name":"Johnson","zip":77004',
+    reference = [
+        ('<|python_tag|>', []),
+        ('{"name":"find_user_id_by_name_zip","parameters":{"first_name":"Ch', [
+            ('function', 'find_user_id_by_name_zip', None),
+            (None, None, '{"first_name":"Ch'),
+        ]),
+        ('en","last_name":"Johnson","zip":77004', [
+            (None, None, 'en","last_name":"Johnson","zip":77004'),
+        ]),
     ]
 
-    argument_fragments = []
-    for chunk in chunks:
-        for delta_msg, tool_emitted in parser.stream_chunk(chunk, []):
-            if not tool_emitted or delta_msg is None or not delta_msg.tool_calls:
-                continue
-            for call in delta_msg.tool_calls:
-                if call.function and call.function.arguments:
-                    argument_fragments.append(call.function.arguments)
-
-    assert argument_fragments
-    joined = ''.join(argument_fragments)
-    assert 'Chen' in joined
-    assert joined != '{"first_name":"Chen","last_name":"Johnson","zip":77004}'
+    for chunk, expected_calls in reference:
+        deltas = parser.stream_chunk(chunk, [])
+        assert all(tool_emitted for _, tool_emitted in deltas)
+        actual_calls = [
+            (call.type, call.function.name, call.function.arguments)
+            for delta_msg, _ in deltas
+            for call in (delta_msg.tool_calls or [])
+        ]
+        assert actual_calls == expected_calls
 
 
 def test_llama3_parse_complete_without_close_tag():

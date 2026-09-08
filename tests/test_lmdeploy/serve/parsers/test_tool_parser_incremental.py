@@ -150,6 +150,28 @@ def test_tool_parser_lifecycle_resets_stream_state(parser_cls, payloads):
     ]
 
 
+def test_kimi_streams_json_arguments_immediately():
+    parser = KimiK2ToolParser()
+    parser.begin_tool_block()
+    reference = [
+        (
+            '<|tool_call_begin|>functions.search:0<|tool_call_argument_begin|>{"query":"Deep',
+            [('function', 'search', None), (None, None, '{"query":"Deep')],
+        ),
+        ('Seek"', [(None, None, 'Seek"')]),
+        ('}<|tool_call_end|>', [(None, None, '}')]),
+    ]
+
+    pending = ''
+    for chunk, expected_calls in reference:
+        pending, calls = _feed(parser, pending, chunk)
+        actual_calls = [
+            (call.type, call.function.name, call.function.arguments)
+            for call in calls
+        ]
+        assert actual_calls == expected_calls
+
+
 @pytest.mark.parametrize(
     ('parser_cls', 'payload'),
     [

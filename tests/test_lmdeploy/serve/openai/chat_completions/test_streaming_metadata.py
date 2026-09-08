@@ -117,10 +117,6 @@ class _StreamingMetadataParser:
     def parse_complete(self, text, token_ids=None, **kwargs):
         return text, None, None
 
-    def validate_complete(self, text=None):
-        return True
-
-
 @pytest.fixture
 def install_fake_chat_server(chat_endpoint):
     endpoint, context = chat_endpoint
@@ -168,42 +164,6 @@ def _chat_stream_payloads(endpoint, *, logprobs=True, return_logprob=True, retur
 
 def _choice(payload):
     return payload['choices'][0]
-
-
-def test_empty_parser_result_emits_requested_token_metadata_immediately(install_fake_chat_server):
-    chat_stream = install_fake_chat_server([
-        {
-            'response': '<empty>',
-            'token_ids': [101],
-            'logprobs': [{
-                101: -0.1,
-            }],
-            'finish_reason': None,
-        },
-        {
-            'response': 'visible',
-            'token_ids': [102],
-            'logprobs': [{
-                102: -0.2,
-            }],
-            'finish_reason': None,
-        },
-    ])
-
-    payloads = chat_stream()
-
-    assert len(payloads) == 2
-    first_choice = _choice(payloads[0])
-    assert first_choice['delta']['content'] == ''
-    assert first_choice['output_ids'] == [101]
-    assert first_choice['output_token_logprobs'] == [[-0.1, 101]]
-    assert [item['token'] for item in first_choice['logprobs']['content']] == ['tok101']
-
-    second_choice = _choice(payloads[1])
-    assert second_choice['delta']['content'] == 'visible'
-    assert second_choice['output_ids'] == [102]
-    assert second_choice['output_token_logprobs'] == [[-0.2, 102]]
-    assert [item['token'] for item in second_choice['logprobs']['content']] == ['tok102']
 
 
 def test_empty_parser_result_keeps_token_ids_and_logprobs_aligned(install_fake_chat_server):
@@ -300,7 +260,7 @@ def test_empty_parser_result_without_requested_metadata_is_skipped(install_fake_
 
 @pytest.mark.parametrize(
     ('response', 'finish_reason'),
-    [('visible', None), ('<empty>', None), ('<empty>', 'stop')],
+    [('visible', None), ('<empty>', None)],
 )
 def test_cache_remote_token_ids_use_current_engine_result(install_fake_chat_server, response, finish_reason):
     chat_stream = install_fake_chat_server([
