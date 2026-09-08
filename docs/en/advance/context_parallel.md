@@ -84,6 +84,14 @@ using its log-sum-exp statistics. The full cached prefix is therefore never
 materialized on one rank. The same partition-and-merge flow is used after DSA
 switches prefill from dense MLA to sparse top-k attention.
 
+Context chunks are planned once per step from a 64 MiB KV-gather workspace
+(or enough for one logical block per request, if larger), independently of
+the incoming query length. Partition outputs accumulate in FP32 and are cast
+back to the model dtype after the final merge. Cache sizing reserves this
+workspace and the merge buffers. Under DCP, the DSA prefill logits budget also
+covers local and gathered top-k candidates; completed output indices are
+reserved separately.
+
 The BF16 MLA cache is supported for dense and sparse MLA. The blocked-FP8 MLA
 cache is also supported for sparse MLA. CUDA graph decode uses fixed-size
 sequence-length, LSE, and collective shapes from the existing batch buckets;

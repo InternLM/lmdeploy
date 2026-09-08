@@ -7,6 +7,7 @@ from typing import Any
 import torch
 
 from lmdeploy.messages import QuantPolicy
+from lmdeploy.pytorch.backends.cp_utils import DcpPrefillChunk
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import CudaAttentionMetaBuilder
@@ -505,42 +506,29 @@ class FlashMLAImpl(TritonAttentionImpl):
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
-        prefix_lens: torch.Tensor,
-        chunk_start: int,
-        chunk_size: int,
+        chunk: DcpPrefillChunk,
         out_dtype: torch.dtype,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Gather one globally ordered cached-prefix chunk."""
-        from lmdeploy.pytorch.backends.cp_utils import get_dcp_local_cu_seqlens
         from lmdeploy.pytorch.distributed import all_gather_into_tensor
         from lmdeploy.pytorch.kernels.cuda.dcp import scatter_dcp_prefill_kv
 
-        dcp_world_rank = self.dcp_world_size, self.dcp_rank
         dcp_world_size = self.dcp_world_size
         block_size = k_cache.size(1)
         virtual_block_size = block_size * dcp_world_size
-        assert chunk_start % virtual_block_size == 0
-        assert chunk_size % virtual_block_size == 0
-
-        chunk_lens = torch.clamp(prefix_lens - chunk_start,
-                                 min=0,
-                                 max=chunk_size)
-        local_lens, local_cu_lens = get_dcp_local_cu_seqlens(
-            chunk_lens, dcp_world_rank)
-        local_capacity = chunk_lens.numel() * chunk_size // dcp_world_size
-        block_start = chunk_start // virtual_block_size
-        num_blocks = chunk_size // virtual_block_size
+        local_capacity = chunk.kv_seqlens.numel() * chunk.size // dcp_world_size
+        block_start = chunk.start // virtual_block_size
+        num_blocks = chunk.size // virtual_block_size
         local_meta = replace(
             attn_metadata,
-            block_offsets=attn_metadata.block_offsets[:, block_start:
-                                                       block_start + num_blocks],
-            kv_start_loc=local_cu_lens[:-1].to(prefix_lens.dtype),
-            kv_seqlens=local_lens,
-            cu_seqlens_k=local_cu_lens,
+            block_offsets=attn_metadata.block_offsets[:, block_start:block_start + num_blocks],
+            kv_start_loc=chunk.local_cu_seqlens[:-1],
+            kv_seqlens=chunk.local_kv_seqlens[self.dcp_rank],
+            cu_seqlens_k=chunk.local_cu_seqlens,
             kv_flatten_size=local_capacity,
-            max_kv_seqlen=chunk_size // dcp_world_size,
+            max_kv_seqlen=chunk.size // dcp_world_size,
         )
         local_k, _ = self._flatten_prefill_kv_cache(
             k_cache,
@@ -555,27 +543,16 @@ class FlashMLAImpl(TritonAttentionImpl):
                                      *local_k.shape[1:])
         all_gather_into_tensor(gathered, local_k, group='dcp')
 
-        ranks = torch.arange(dcp_world_size,
-                             device=prefix_lens.device,
-                             dtype=prefix_lens.dtype)[:, None]
-        local_lens_by_rank = torch.clamp(torch.div(
-            chunk_lens[None, :] + dcp_world_size - 1 - ranks,
-            dcp_world_size,
-            rounding_mode='floor'),
-                                         min=0)
-        chunk_cu_lens = torch.nn.functional.pad(
-            chunk_lens.cumsum(0, dtype=torch.int32), (1, 0))
-        context_k = local_k.new_empty(chunk_lens.numel() * chunk_size,
-                                     *local_k.shape[1:])
+        context_k = local_k.new_empty(chunk.kv_seqlens.numel() * chunk.size, *local_k.shape[1:])
         scatter_dcp_prefill_kv(
             gathered,
             context_k,
-            prefix_lens=chunk_lens,
-            kv_start_loc=chunk_cu_lens[:-1],
-            local_lens=local_lens_by_rank,
+            prefix_lens=chunk.kv_seqlens,
+            kv_start_loc=chunk.cu_seqlens[:-1],
+            local_lens=chunk.local_kv_seqlens,
             chunk_start=0,
         )
-        return context_k, chunk_cu_lens
+        return context_k, chunk.cu_seqlens
 
     def _prefill_dcp_context(
         self,
@@ -607,20 +584,12 @@ class FlashMLAImpl(TritonAttentionImpl):
             return_lse=True,
         )
 
-        prefix_lens = attn_metadata.kv_seqlens - attn_metadata.q_seqlens
-        batch_size = prefix_lens.numel()
-        chunk_size = self._get_dcp_prefill_chunk_size(
-            current_key.size(0), batch_size, k_cache.size(1))
-        prefix_limit = self._get_dcp_prefill_prefix_limit(
-            attn_metadata, current_key.size(0))
-        for chunk_start in range(0, prefix_limit, chunk_size):
+        for chunk in attn_metadata.dcp_prefill_chunks:
             context_k, context_cu_lens = self._gather_dcp_prefill_context_chunk(
                 k_cache,
                 v_cache,
                 attn_metadata,
-                prefix_lens,
-                chunk_start,
-                chunk_size,
+                chunk,
                 out_dtype=query.dtype,
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
@@ -632,7 +601,7 @@ class FlashMLAImpl(TritonAttentionImpl):
                 cu_seqlens_q=q_cu_lens,
                 cu_seqlens_k=context_cu_lens,
                 max_seqlen_q=max_q_seqlen,
-                max_seqlen_k=chunk_size,
+                max_seqlen_k=chunk.size,
                 softmax_scale=self.scale,
                 causal=False,
                 kv_layout='shd',
@@ -640,24 +609,8 @@ class FlashMLAImpl(TritonAttentionImpl):
             )
             output, output_lse = merge_attention_states(
                 output, output_lse, context_output, context_lse)
-        return output
-
-    def _get_dcp_prefill_chunk_size(self, num_query_tokens: int,
-                                    batch_size: int,
-                                    block_size: int) -> int:
-        """Size context chunks from the current prefill token budget."""
-        virtual_block_size = block_size * self.dcp_world_size
-        average_q = max(1, num_query_tokens // batch_size)
-        return max(virtual_block_size,
-                   average_q // virtual_block_size * virtual_block_size)
-
-    @staticmethod
-    def _get_dcp_prefill_prefix_limit(
-            attn_metadata: TritonAttentionMetadata,
-            num_query_tokens: int) -> int:
-        """Return a host-side upper bound covering every cached prefix."""
-        prefix_total = attn_metadata.kv_flatten_size - num_query_tokens
-        return min(prefix_total, max(0, attn_metadata.max_kv_seqlen - 1))
+            del context_k, context_output, context_lse
+        return output.to(query.dtype)
 
     def _get_max_q_seqlen(
         self,
@@ -804,9 +757,7 @@ class FlashMLAImpl(TritonAttentionImpl):
             raise RuntimeError('Sparse MLA indices require FlashMLASparseImpl.')
 
         if self.dcp_world_size > 1:
-            prefix_limit = self._get_dcp_prefill_prefix_limit(
-                attn_metadata, current_key.size(0))
-            if prefix_limit > 0:
+            if attn_metadata.dcp_prefill_chunks:
                 return self._prefill_dcp_context(
                     query,
                     current_key,

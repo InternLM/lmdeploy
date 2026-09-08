@@ -2,6 +2,7 @@
 from datetime import timedelta
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from lmdeploy.pytorch.backends.cp_utils import (
@@ -11,6 +12,46 @@ from lmdeploy.pytorch.backends.cp_utils import (
     get_dcp_local_seq_lens,
 )
 from lmdeploy.pytorch.config import CacheConfig, DistConfig
+
+
+def test_dcp_prefill_chunks_cover_uneven_prefixes_with_bounded_workspace():
+    from lmdeploy.pytorch.backends.cp_utils import build_dcp_prefill_chunks, get_dcp_prefill_workspace_size
+
+    prefix_lens = torch.tensor([131072, 259, 0], dtype=torch.int32)
+    plans = [
+        build_dcp_prefill_chunks(prefix_lens=prefix_lens,
+                                 prefix_limit=131072,
+                                 block_size=64,
+                                 head_dim=576,
+                                 dcp_world_rank=(4, rank)) for rank in range(4)
+    ]
+    budget = get_dcp_prefill_workspace_size(batch_size=3, head_dim=576, block_size=64, dcp_size=4)
+    # Incoming query length is deliberately absent from the planner. Short
+    # continuations must not fall back to hundreds of 256-token collectives.
+    assert len(plans[0]) < 64
+    for rank, chunks in enumerate(plans):
+        torch.testing.assert_close(sum(chunk.kv_seqlens for chunk in chunks), prefix_lens)
+        for chunk, reference in zip(chunks, plans[0], strict=True):
+            assert (chunk.start, chunk.size) == (reference.start, reference.size)
+            assert chunk.start % 256 == chunk.size % 256 == 0
+            assert 3 * (chunk.size // 4 + 2 * chunk.size) * 576 * 2 <= budget
+            torch.testing.assert_close(chunk.local_kv_seqlens.sum(0), chunk.kv_seqlens.long())
+            torch.testing.assert_close(chunk.local_cu_seqlens[1:] - chunk.local_cu_seqlens[:-1],
+                                       chunk.local_kv_seqlens[rank])
+
+
+def test_dcp_score_budget_includes_candidates_and_rejects_oversized_row():
+    from lmdeploy.pytorch.backends.cuda.nsa import _get_max_score_rows
+
+    budget = 512 << 20
+    rows = _get_max_score_rows(2048, budget, topk=2048, dcp_size=4)
+    # Independently count aligned scores + mask, local/global ids, packed
+    # pairs, and gathered pairs; the original 8192-row call exceeds this cap.
+    row_bytes = 2048 * (5 + 4 + 4 + 8 + 4 * 8)
+    assert rows * row_bytes <= budget < (rows + 1) * row_bytes
+    assert rows < 8192
+    with pytest.raises(RuntimeError, match='One DCP score row'):
+        _get_max_score_rows(2048, 1024, topk=2048, dcp_size=4)
 
 
 def test_dcp_interleaved_sequence_mapping():

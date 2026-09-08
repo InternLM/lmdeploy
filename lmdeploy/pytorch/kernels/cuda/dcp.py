@@ -138,7 +138,8 @@ def _merge_attention_states_kernel(
     output_offset = row * stride_ob + head * stride_oh + dims * stride_od
     prefix = tl.load(PrefixOutput + prefix_offset, mask=mask, other=0.0)
     suffix = tl.load(SuffixOutput + suffix_offset, mask=mask, other=0.0)
-    merged = prefix * prefix_scale + suffix * suffix_scale
+    merged = (tl.where(prefix_scale == 0.0, 0.0, prefix * prefix_scale) +
+              tl.where(suffix_scale == 0.0, 0.0, suffix * suffix_scale))
     tl.store(Output + output_offset, merged, mask=mask)
     tl.store(OutputLse + row * stride_olb + head * stride_olh,
              tl.where(valid, tl.log(denominator) + safe_max,
@@ -293,7 +294,7 @@ def merge_attention_states(
         prefix_output: torch.Tensor, prefix_lse: torch.Tensor,
         suffix_output: torch.Tensor,
         suffix_lse: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Merge two independently normalized attention results."""
+    """Merge attention partitions, retaining FP32 output for further merges."""
     assert prefix_output.shape == suffix_output.shape
     assert prefix_lse.shape == suffix_lse.shape == prefix_output.shape[:2]
     if not prefix_output.is_cuda:
@@ -303,11 +304,13 @@ def merge_attention_states(
         merged_lse = torch.logsumexp(lse, dim=0)
         weights = torch.exp(lse - merged_lse)
         weights = torch.nan_to_num(weights, nan=0.0)
-        output = (prefix_output.float() * weights[0, ..., None] +
-                  suffix_output.float() * weights[1, ..., None])
-        return output.to(prefix_output.dtype), merged_lse
+        output = (torch.where(weights[0, ..., None] == 0, 0,
+                              prefix_output.float() * weights[0, ..., None]) +
+                  torch.where(weights[1, ..., None] == 0, 0,
+                              suffix_output.float() * weights[1, ..., None]))
+        return output, merged_lse
 
-    output = torch.empty_like(prefix_output)
+    output = torch.empty_like(prefix_output, dtype=torch.float32)
     output_lse = torch.empty_like(prefix_lse, dtype=torch.float32)
     block_d = triton.next_power_of_2(prefix_output.size(2))
     _merge_attention_states_kernel[prefix_output.shape[:2]](

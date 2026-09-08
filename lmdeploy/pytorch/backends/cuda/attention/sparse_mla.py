@@ -230,24 +230,17 @@ class FlashMLASparseImpl(FlashMLAImpl):
         output, output_lse = self._prefill_sparse_partition(
             query, current_key, current_indices)
 
-        batch_size = prefix_lens.numel()
-        chunk_size = self._get_dcp_prefill_chunk_size(
-            current_key.size(0), batch_size, k_cache.size(1))
-        prefix_limit = self._get_dcp_prefill_prefix_limit(
-            attn_metadata, current_key.size(0))
-        for chunk_start in range(0, prefix_limit, chunk_size):
+        for chunk in attn_metadata.dcp_prefill_chunks:
             context_k, context_cu_lens = self._gather_dcp_prefill_context_chunk(
                 k_cache,
                 v_cache,
                 attn_metadata,
-                prefix_lens,
-                chunk_start,
-                chunk_size,
+                chunk,
                 out_dtype=query.dtype,
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
             )
-            starts = torch.full_like(prefix_lens, chunk_start)
+            starts = torch.full_like(prefix_lens, chunk.start)
             context_indices = self._map_dcp_prefill_partition(
                 nsa_indices,
                 attn_metadata,
@@ -258,7 +251,8 @@ class FlashMLASparseImpl(FlashMLAImpl):
                 query, context_k, context_indices)
             output, output_lse = merge_attention_states(
                 output, output_lse, context_output, context_lse)
-        return output
+            del context_k, context_indices, context_output, context_lse
+        return output.to(query.dtype)
 
     def _decoding_sparse_bf16(
             self, query: torch.Tensor, k_cache: torch.Tensor,
@@ -394,9 +388,7 @@ class FlashMLASparseImpl(FlashMLAImpl):
         if nsa_indices is None:
             raise RuntimeError('Sparse MLA requires DSA top-k indices.')
         if self.dcp_world_size > 1:
-            prefix_limit = self._get_dcp_prefill_prefix_limit(
-                attn_metadata, current_key.size(0))
-            if prefix_limit > 0:
+            if attn_metadata.dcp_prefill_chunks:
                 return self._prefill_sparse_dcp(
                     query,
                     current_key,

@@ -135,6 +135,7 @@ def test_runtime_size_reserves_dsa_score_workspace(monkeypatch):
         cache_max_entry_count=1.0,
         max_prefill_token_num=16,
         max_batches=2,
+        dcp=1,
     )
     executor.specdecode_config = None
 
@@ -149,6 +150,25 @@ def test_runtime_size_reserves_dsa_score_workspace(monkeypatch):
 def test_get_min_num_gpu_blocks_rejects_worker_count_mismatch():
     with pytest.raises(ValueError, match='same worker ranks'):
         ExecutorBase._get_min_num_gpu_blocks([4096, 4096], [256])
+
+
+def test_runtime_size_reserves_dcp_gather_accumulator_and_candidates(monkeypatch):
+    monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', 1)
+    executor = object.__new__(ExecutorBase)
+    executor.model_config = SimpleNamespace(mla_index_topk=2048, head_dim=576, v_head_dim=0, num_attention_heads=64)
+    executor.dist_config = SimpleNamespace(attn_tp=8)
+    executor.cache_config = SimpleNamespace(cache_max_entry_count=1.0,
+                                            max_prefill_token_num=16,
+                                            max_batches=2,
+                                            dcp=4,
+                                            block_size=64)
+    runtime_size, num_tokens = executor._get_runtime_size([256 << 20], [_WorkerCachePlanSizes(target=1024)],
+                                                          vocab_size=100)
+    # Explicitly include MLA accumulators despite its empty standalone V cache.
+    expected = ((1 << 20) + (64 << 20) + (16 + 4) * 100 * 2 + 16 * 8 * (576 * 12 + 12) + 16 * 2048 * 4 + 2 * 2048 *
+                (16 + 8 * 4))
+    assert runtime_size == expected
+    assert num_tokens == 16
 
 
 def test_sync_spec_cache_block_size_updates_kernel_block_size():

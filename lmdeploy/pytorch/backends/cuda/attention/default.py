@@ -7,6 +7,7 @@ import torch
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends.attention import AttentionImpl, AttentionMetadata
+from lmdeploy.pytorch.backends.cp_utils import DcpPrefillChunk, build_dcp_prefill_chunks
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import CudaAttentionMetaBuilder, CudaSequenceMetadata, register_step_metadata_impl
@@ -57,6 +58,7 @@ class TritonAttentionMetadata(AttentionMetadata):
     max_kv_seqlen: int = None
     max_q_seqlen: int = None
     dcp_local_kv_seqlens: torch.Tensor = None
+    dcp_prefill_chunks: tuple[DcpPrefillChunk, ...] = ()
     kernel_metadata: tuple[Any, ...] = ()
 
 
@@ -69,6 +71,17 @@ def build_triton_attention_metadata(attn_meta_cls, step_context,
     dcp_world_rank = get_dcp_world_rank()
     dcp_local_kv_seqlens = get_dcp_local_seq_lens(
         sequence_metadata.kv_seqlens, dcp_world_rank)
+    dcp_prefill_chunks = ()
+    if dcp_world_rank[0] > 1 and not step_context.is_decoding:
+        prefix_total = sequence_metadata.kv_flatten_size - step_context.input_ids.numel()
+        prefix_limit = min(prefix_total, max(0, sequence_metadata.max_kv_seqlen - 1))
+        dcp_prefill_chunks = build_dcp_prefill_chunks(
+            prefix_lens=sequence_metadata.kv_seqlens - sequence_metadata.q_seqlens,
+            prefix_limit=prefix_limit,
+            block_size=step_context.cache_config.block_size,
+            head_dim=step_context.model_config.head_dim,
+            dcp_world_rank=dcp_world_rank,
+        )
 
     return attn_meta_cls(
         is_decoding=step_context.is_decoding,
@@ -83,6 +96,7 @@ def build_triton_attention_metadata(attn_meta_cls, step_context,
         cu_seqlens_k=sequence_metadata.cu_seqlens_k,
         max_kv_seqlen=sequence_metadata.max_kv_seqlen,
         dcp_local_kv_seqlens=dcp_local_kv_seqlens,
+        dcp_prefill_chunks=dcp_prefill_chunks,
     )
 
 
