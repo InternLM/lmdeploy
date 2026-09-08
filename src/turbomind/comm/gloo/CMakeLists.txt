@@ -8,15 +8,13 @@ FetchContent_Declare(
   GIT_TAG c7b7b022c124d9643957d9bd55f57ac59fce8fa2 # pytorch-v2.8.0-rc4
 )
 
-# Keep Gloo's BUILD_TEST and transport options local to its configuration.
-block(SCOPE_FOR VARIABLES PROPAGATE gloo_SOURCE_DIR gloo_BINARY_DIR)
-    set(GLOO_INSTALL OFF CACHE BOOL "" FORCE)
-    set(GLOO_STATIC_OR_SHARED STATIC CACHE STRING "" FORCE)
-    set(USE_NCCL OFF)
-    set(BUILD_TEST OFF)
-    set(USE_IBVERBS OFF)
-    FetchContent_MakeAvailable(gloo)
-endblock()
+# some settings of gloo,
+set(GLOO_INSTALL OFF CACHE BOOL "" FORCE)
+set(GLOO_STATIC_OR_SHARED STATIC CACHE STRING "" FORCE)
+set(USE_NCCL OFF)
+set(BUILD_TEST OFF)
+set(USE_IBVERBS OFF)
+FetchContent_MakeAvailable(gloo)
 
 # gloo build doesn't add include directories as a target property...
 target_include_directories(gloo PUBLIC
