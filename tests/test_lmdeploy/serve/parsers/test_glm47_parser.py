@@ -297,6 +297,21 @@ class TestGlm47ResponseParserStreaming:
         assert emitted_name == 'get_weather'
         assert emitted_args == '{"location": "Beijing"}'
 
+    def test_stream_chunk_resumes_reasoning_after_nested_tool(self):
+        parser = _make_response_parser_with_reasoning()
+        chunks = [
+            '<think>before<tool_call>get_weather',
+            '<arg_key>location</arg_key><arg_value>Beijing</arg_value>',
+            '</tool_call>after</think>answer',
+        ]
+
+        reasoning_seen, content_seen, emitted_name, emitted_args = _collect_stream(parser, chunks)
+
+        assert reasoning_seen == 'beforeafter'
+        assert content_seen == 'answer'
+        assert emitted_name == 'get_weather'
+        assert emitted_args == '{"location": "Beijing"}'
+
     def test_stream_chunk_reasoning_effort_high_starts_in_reasoning_mode(self):
         parser = _make_response_parser_with_reasoning({'reasoning_effort': 'high'})
 
@@ -351,6 +366,38 @@ class TestGlm47ResponseParserStreaming:
 
 class TestGlm47ToolParserComplete:
     """Complete-parse tests for glm47 tool payloads."""
+
+    def test_parse_complete_resumes_reasoning_after_nested_tool(self):
+        parser = _make_response_parser_with_reasoning()
+        text = (
+            '<think>before'
+            '<tool_call>get_weather'
+            '<arg_key>location</arg_key><arg_value>Beijing</arg_value>'
+            '</tool_call>after</think>answer'
+        )
+
+        content, tool_calls, reasoning = parser.parse_complete(text)
+
+        assert reasoning == 'beforeafter'
+        assert content == 'answer'
+        assert len(tool_calls) == 1
+        assert tool_calls[0].function.name == 'get_weather'
+        assert json.loads(tool_calls[0].function.arguments) == {'location': 'Beijing'}
+
+    def test_parse_complete_keeps_post_tool_text_in_unclosed_reasoning(self):
+        parser = _make_response_parser_with_reasoning()
+        text = (
+            '<think>before'
+            '<tool_call>get_weather'
+            '<arg_key>location</arg_key><arg_value>Beijing</arg_value>'
+            '</tool_call>after'
+        )
+
+        content, tool_calls, reasoning = parser.parse_complete(text)
+
+        assert reasoning == 'beforeafter'
+        assert content is None
+        assert len(tool_calls) == 1
 
     def test_parse_complete_tool_start_ends_reasoning_without_close_tag(self):
         parser = _make_response_parser_with_reasoning()

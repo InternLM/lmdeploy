@@ -72,16 +72,16 @@ Parser 对象是有状态的，每个响应拥有独立实例。不要在并发�
 `BaseResponseParser` 持有顶层状态机：
 
 ```text
-                       reasoning close
-                 +---------------------------+
-                 |                           v
-plain -- reasoning open --> reasoning      plain
-  |                              |
-  +--------- tool open ----------+
-                 |
-                 v
-                tool -- 外层工具块结束 --> plain
+plain     -- reasoning open ---------------------> reasoning
+reasoning -- reasoning close --------------------> plain
+plain     -- tool open --> tool -- 外层工具块结束 --> plain
+reasoning -- tool open --> tool -- 外层工具块结束 --> reasoning
 ```
+
+工具块只挂起一层所在模式；这里并不是通用的嵌套状态栈。从 plain 内容进入的工具块
+结束后回到 plain；从 reasoning 进入的工具块结束后回到 reasoning，之后遇到
+reasoning 结束标签才转入 plain。工具起始标签、payload 和结束标签只通过结构化工具
+调用 delta 表达，不会重复出现在 `reasoning_content` 中。
 
 引擎 chunk 不需要与这些边界对齐。例如，一个 chunk 可以同时包含 reasoning 的
 结束、普通正文、工具起始标签以及部分工具 payload。因此：
@@ -92,6 +92,11 @@ ResponseParser.stream_chunk(...) -> list[tuple[DeltaMessage, bool]]
 
 可以针对一个引擎 chunk 返回多个消息；当可能的标签或 payload 片段还在缓存时，
 它也可以返回空列表。
+
+流式 delta 保持模型各 channel 的实际顺序。例如 reasoning 内的工具块会按
+`reasoning -> tool_calls -> reasoning` 发出。完整响应继续使用现有的聚合 API 形态：
+工具前后的 reasoning 片段合并到 `reasoning_content`，工具调用和 plain 内容仍放在
+各自字段中；完整响应不会记录原始交错顺序。
 
 每个 `DeltaMessage` 携带的布尔值表示该消息是否发出了工具调用。`ChatRunner` 用它
 记录本次响应是否产生过工具调用，并据此决定是否将最终的 `stop` 转换为客户端看到
@@ -130,9 +135,13 @@ delta 构造完整调用。因此，边界处理的修复会同时作用于流�
 </tool_call>\n\n<tool_call>
 ```
 
-如果换行之后是普通文本，或者换行位于整个响应末尾，它仍然属于 content。这个
-判断跨越两个外层工具块，应由 Response Parser 负责；单个 Tool Parser 不应消费
-它。
+如果换行之后是普通文本，或者换行位于整个响应末尾，它仍然属于前一个工具块所
+挂起的 channel：嵌套工具对应 reasoning，否则对应 plain content。这个判断跨越
+两个外层工具块，应由 Response Parser 负责；单个 Tool Parser 不应消费它。
+
+Reasoning token 的统计依据是原始 reasoning 标签区间，而不是归一化后的输出
+channel。因此，`<think>` 与 `</think>` 之间的工具协议和 payload token 仍计入
+reasoning token，即使其原始文本不会出现在 `reasoning_content` 中。
 
 ## 已消费前缀接口
 
@@ -354,6 +363,8 @@ class ExampleJsonToolParser(JsonToolParser):
 - 在源格式允许两种顺序时，函数名分别位于参数之前和之后；
 - 无参数调用、重复参数、多个顺序调用和未知函数名；
 - 最终 chunk 中不完整或畸形的 payload，以及工具块后的普通正文；
+- reasoning 内嵌工具，包括被过滤的工具、工具后的 reasoning、工具间换行，以及
+  缺少最终 reasoning 结束标签；
 - reasoning、content 和工具片段位于同一个引擎 chunk；
 - 一个引擎 chunk 产生多个 Parser delta 时，token ID 和 log probability 的传输。
 

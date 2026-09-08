@@ -22,6 +22,25 @@ class _ReasoningTokenizer:
         }
 
 
+def _collect_stream_events(parser, chunks):
+    """Collect ordered response-channel events across streamed chunks."""
+    events = []
+    for index, chunk in enumerate(chunks):
+        deltas = parser.stream_chunk(
+            delta_text=chunk,
+            delta_token_ids=[],
+            final=index == len(chunks) - 1,
+        )
+        for message, _ in deltas:
+            if message.reasoning_content is not None:
+                events.append(('reasoning', message.reasoning_content))
+            if message.tool_calls:
+                events.append(('tool', message.tool_calls))
+            if message.content is not None:
+                events.append(('content', message.content))
+    return events
+
+
 @pytest.fixture()
 def response_parser():
     # Configure ResponseParser to use unified reasoning parser and Qwen3 tool parser.
@@ -387,6 +406,65 @@ class TestQwenResponseParserStreaming:
         assert delta_msg.content == ' final answer'
         assert tool_emitted is False
 
+    def test_stream_chunk_resumes_reasoning_after_nested_tool(self, response_parser):
+        text = (
+            '<think>before'
+            '<tool_call>{"name":"get_weather","arguments":{"city":"Beijing"}}</tool_call>'
+            'after</think>answer'
+        )
+
+        events = _collect_stream_events(response_parser, [text])
+
+        assert [kind for kind, _ in events] == ['reasoning', 'tool', 'reasoning', 'content']
+        assert events[0] == ('reasoning', 'before')
+        assert events[2:] == [('reasoning', 'after'), ('content', 'answer')]
+        tool_deltas = events[1][1]
+        assert tool_deltas[0].function.name == 'get_weather'
+        assert ''.join(call.function.arguments or '' for call in tool_deltas) == '{"city":"Beijing"}'
+
+    @pytest.mark.parametrize('separator', ['\n', '\n\n'])
+    def test_stream_chunk_drops_separator_between_nested_tools(self, response_parser, separator):
+        chunks = [
+            (
+                '<think>before'
+                '<tool_call>{"name":"get_weather","arguments":{"n":1}}</tool_call>'
+            ),
+            separator,
+            '<tool_',
+            (
+                'call>{"name":"get_weather","arguments":{"n":2}}</tool_call>'
+                'after</think>answer'
+            ),
+        ]
+
+        events = _collect_stream_events(response_parser, chunks)
+
+        assert [kind for kind, _ in events] == ['reasoning', 'tool', 'tool', 'reasoning', 'content']
+        assert ''.join(value for kind, value in events if kind == 'reasoning') == 'beforeafter'
+        assert ''.join(value for kind, value in events if kind == 'content') == 'answer'
+        tool_deltas = [call for kind, calls in events if kind == 'tool' for call in calls]
+        assert [call.index for call in tool_deltas if call.function.name] == [0, 1]
+        assert [
+            ''.join(call.function.arguments or '' for call in tool_deltas if call.index == index)
+            for index in (0, 1)
+        ] == ['{"n":1}', '{"n":2}']
+
+    def test_stream_chunk_filtered_nested_tool_still_resumes_reasoning(self, response_parser):
+        chunks = [
+            (
+                '<think>before'
+                '<tool_call>{"name":"not_available","arguments":{"x":1}}</tool_call>'
+            ),
+            '\n',
+            'after</think>answer',
+        ]
+
+        events = _collect_stream_events(response_parser, chunks)
+
+        assert [kind for kind, _ in events] == ['reasoning', 'reasoning', 'content']
+        assert ''.join(value for kind, value in events if kind == 'reasoning') == 'before\nafter'
+        assert events[-1] == ('content', 'answer')
+
     def test_stream_chunk_preserves_order(self):
         """Mixed single chunk should preserve event order without content
         merge."""
@@ -445,13 +523,15 @@ class TestQwenResponseParserStreaming:
             )
             parser = cls(request=request)
 
-            parser.stream_chunk('<think>reason', [1, 10, 11])
-            parser.stream_chunk('<tool_call>{}</tool_call>more', [3, 20, 5, 30])
-            parser.stream_chunk('</think>answer', [2, 40], final=True)
+            deltas = parser.stream_chunk('<think>reason', [1, 10, 11])
+            deltas += parser.stream_chunk('<tool_call>{}</tool_call>more', [3, 20, 5, 30])
+            deltas += parser.stream_chunk('</think>answer', [2, 40], final=True)
 
             # Every token after <think> and before </think> counts, including
             # tool protocol, payload, and post-tool tokens.
             assert parser.reasoning_tokens == 6
+            assert ''.join(delta.reasoning_content or '' for delta, _ in deltas) == 'reasonmore'
+            assert ''.join(delta.content or '' for delta, _ in deltas) == 'answer'
         finally:
             cls.reasoning_parser_cls = old_reasoning_cls
             cls.tool_parser_cls = old_tool_cls
@@ -459,6 +539,21 @@ class TestQwenResponseParserStreaming:
 
 
 class TestQwenResponseParserComplete:
+
+    def test_parse_complete_aggregates_reasoning_around_nested_tool(self, response_parser):
+        text = (
+            '<think>before'
+            '<tool_call>{"name":"get_weather","arguments":{"city":"Beijing"}}</tool_call>'
+            'after</think>answer'
+        )
+
+        content, tool_calls, reasoning = response_parser.parse_complete(text)
+
+        assert reasoning == 'beforeafter'
+        assert content == 'answer'
+        assert len(tool_calls) == 1
+        assert tool_calls[0].function.name == 'get_weather'
+        assert tool_calls[0].function.arguments == '{"city":"Beijing"}'
 
     def test_parse_complete_counts_only_reasoning_content_tokens(self):
         cls = ResponseParserManager.get('default')

@@ -184,7 +184,8 @@ class ResponseParser:
             while buffering protocol syntax or tool-call payload). For every
             accepted tool-call index, its first visible ``DeltaToolCall`` must
             carry the call ID, type, and function name before any argument
-            fragments are exposed.
+            fragments are exposed. A tool block nested in reasoning emits only
+            structured tool deltas, then resumes the reasoning channel.
         """
         raise NotImplementedError
 
@@ -208,7 +209,10 @@ class BaseResponseParser(ResponseParser):
 
     Parsing is protocol-driven and supports mixed chunks where one
     ``delta_text`` may contain multiple segments (for example reasoning close
-    plus plain text plus tool open tag).
+    plus plain text plus tool open tag). A tool block temporarily suspends its
+    containing channel: a block opened from reasoning resumes reasoning after
+    it closes, while a block opened from plain content resumes plain content.
+    Tool markup and payload are emitted only as structured tool-call deltas.
     """
 
     reasoning_parser_cls: ClassVar[type[ReasoningParser] | None] = None
@@ -317,6 +321,7 @@ class BaseResponseParser(ResponseParser):
             self._mode = self.MODE_REASONING
         else:
             self._mode = self.MODE_PLAIN
+        self._tool_return_mode: str = self._mode
         self._pending = ''
         self._after_tool_block = False
 
@@ -341,7 +346,8 @@ class BaseResponseParser(ResponseParser):
             Return ``[]`` when this engine step produces no visible delta (for
             example while buffering protocol syntax or tool-call payload).
             Tool calls follow the identity-first contract documented by
-            :class:`ResponseParser`.
+            :class:`ResponseParser`. Deltas preserve channel order, including
+            reasoning before and after a nested tool block.
         """
         self._update_reasoning_tokens(delta_token_ids)
         self._stream_final_received = bool(kwargs.get('final', False))
@@ -367,6 +373,9 @@ class BaseResponseParser(ResponseParser):
         deltas: list[tuple[DeltaMessage, bool]] = []
 
         while True:
+            if self._after_tool_block and not self._resolve_tool_separator():
+                break
+
             progressed = False
             if self._mode == self.MODE_PLAIN:
                 emitted, progressed = self._consume_plain()
@@ -380,8 +389,8 @@ class BaseResponseParser(ResponseParser):
                     else:
                         deltas.append((DeltaMessage(role='assistant', reasoning_content=emitted), False))
             if self._mode == self.MODE_TOOL:
-                # self._consume_plain() might change the mode to MODE_TOOL
-                # so we need to check the mode again
+                # The plain/reasoning consumer may enter tool mode, so dispatch
+                # the buffered payload without waiting for another engine chunk.
                 new_calls, progressed = self._consume_tool()
                 if new_calls:
                     deltas.append((DeltaMessage(role='assistant', tool_calls=new_calls), True))
@@ -410,35 +419,6 @@ class BaseResponseParser(ResponseParser):
             content produced in this step (or ``None``), and ``progressed``
             indicates whether parser state/input was consumed.
         """
-        if self._after_tool_block:
-            # A newline after a tool block is a separator only when another
-            # tool block follows; otherwise it remains assistant content.
-            newline_end = 0
-            pending_size = len(self._pending)
-            while newline_end < pending_size and self._pending[newline_end] == '\n':
-                newline_end += 1
-
-            if newline_end:
-                tool_tag = self._tool_open_tag
-                remaining = pending_size - newline_end
-                if not remaining:
-                    if not self._stream_final_received:
-                        return None, False
-                elif tool_tag is not None:
-                    if self._pending.startswith(tool_tag, newline_end):
-                        # Drop only the confirmed inter-block newlines. The
-                        # normal tag path below starts the next tool block.
-                        self._pending = self._pending[newline_end:]
-                    elif (
-                        remaining < len(tool_tag)
-                        and not self._stream_final_received
-                        and self._pending.startswith(tool_tag[:remaining], newline_end)
-                    ):
-                        # Keep both the newlines and a split tool-opening tag
-                        # until the next chunk resolves their role.
-                        return None, False
-            self._after_tool_block = False
-
         tags = [t for t in (self._reasoning_open_tag, self._tool_open_tag) if t]
         if not tags:
             if not self._pending:
@@ -485,9 +465,7 @@ class BaseResponseParser(ResponseParser):
         if earliest_tag == self._reasoning_open_tag:
             self._mode = self.MODE_REASONING
         else:
-            self._mode = self.MODE_TOOL
-            if self.tool_parser is not None:
-                self.tool_parser.begin_tool_block()
+            self._enter_tool_mode()
         return (prefix if prefix else None), True
 
     def _consume_reasoning(self) -> tuple[str | None, bool]:
@@ -497,8 +475,10 @@ class BaseResponseParser(ResponseParser):
         - Drops the explicit open tag if model emits it.
         - If no close tag is present, emits only the safe reasoning-text prefix and
           preserves possible partial-tag suffix for the next chunk.
-        - If a close tag or tool-open tag is found, emits text before it as
-          reasoning content and switches to the next protocol mode.
+        - If a close tag is found, emits text before it and switches to plain
+          mode.
+        - If a tool-open tag is found, emits text before it and temporarily
+          suspends reasoning. Reasoning resumes after that tool block closes.
 
         Returns:
             ``(emitted_text, progressed)`` where ``emitted_text`` is the reasoning
@@ -551,10 +531,47 @@ class BaseResponseParser(ResponseParser):
         if matched_tag == close_tag:
             self._mode = self.MODE_PLAIN
         else:
-            self._mode = self.MODE_TOOL
-            if self.tool_parser is not None:
-                self.tool_parser.begin_tool_block()
+            self._enter_tool_mode()
         return (reasoning_chunk if reasoning_chunk else None), True
+
+    def _enter_tool_mode(self) -> None:
+        """Start a tool block and remember which response mode it suspended."""
+        self._tool_return_mode = self._mode
+        self._mode = self.MODE_TOOL
+        self.tool_parser.begin_tool_block()
+
+    def _resolve_tool_separator(self) -> bool:
+        """Resolve possible newlines between consecutive tool blocks.
+
+        Newlines are discarded only after a following tool opening tag is
+        confirmed. Until then they remain buffered so they can be routed to
+        the mode that the preceding tool block suspended.
+
+        Returns:
+            Whether the pending input is ready for normal mode dispatch.
+        """
+        newline_end = 0
+        pending_size = len(self._pending)
+        while newline_end < pending_size and self._pending[newline_end] == '\n':
+            newline_end += 1
+
+        if newline_end:
+            tool_tag = self._tool_open_tag
+            remaining = pending_size - newline_end
+            if not remaining:
+                if not self._stream_final_received:
+                    return False
+            elif self._pending.startswith(tool_tag, newline_end):
+                self._pending = self._pending[newline_end:]
+            elif (
+                remaining < len(tool_tag)
+                and not self._stream_final_received
+                and self._pending.startswith(tool_tag[:remaining], newline_end)
+            ):
+                return False
+
+        self._after_tool_block = False
+        return True
 
     def _consume_tool(self) -> tuple[list[DeltaToolCall], bool]:
         """Delegate a tool block and drop only its consumed input prefix."""
@@ -572,7 +589,7 @@ class BaseResponseParser(ResponseParser):
         elif consumed:
             self._pending = self._pending[consumed:]
         if self.tool_parser.block_closed:
-            self._mode = self.MODE_PLAIN
+            self._mode = self._tool_return_mode
             self._after_tool_block = True
         return calls, consumed > 0 or self.tool_parser.block_closed
 

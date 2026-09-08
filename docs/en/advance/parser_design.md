@@ -75,16 +75,18 @@ instance between concurrent or sequential requests.
 `BaseResponseParser` owns the top-level state machine:
 
 ```text
-                       reasoning close
-                 +---------------------------+
-                 |                           v
-plain -- reasoning open --> reasoning      plain
-  |                              |
-  +--------- tool open ----------+
-                 |
-                 v
-                tool -- complete outer block --> plain
+plain     -- reasoning open -------------------------------> reasoning
+reasoning -- reasoning close ------------------------------> plain
+plain     -- tool open --> tool -- complete outer block --> plain
+reasoning -- tool open --> tool -- complete outer block --> reasoning
 ```
+
+A tool block suspends exactly one containing mode; this is not a generic
+nested-state stack. A tool opened from plain content returns to plain content.
+A tool opened from reasoning returns to reasoning, where a later reasoning
+close tag still performs the transition to plain content. The raw tool opening
+tag, payload, and closing tag are represented only by structured tool-call
+deltas and are not duplicated in `reasoning_content`.
 
 An engine chunk does not have to align with these boundaries. One chunk can,
 for example, contain the end of reasoning, plain content, a tool opening tag,
@@ -96,6 +98,13 @@ ResponseParser.stream_chunk(...) -> list[tuple[DeltaMessage, bool]]
 
 may return multiple messages for one engine chunk. It may also return an empty
 list while a possible marker or payload fragment is buffered.
+
+Streaming deltas preserve the model's channel order. For example, a tool block
+inside reasoning is emitted as `reasoning -> tool_calls -> reasoning`.
+Complete responses retain the existing aggregate API shape: reasoning
+fragments on both sides are concatenated into `reasoning_content`, while tool
+calls and plain content remain in their respective fields. The complete shape
+does not encode the original interleaving.
 
 The boolean paired with each `DeltaMessage` reports whether that message emits
 tool calls. `ChatRunner` uses it to track whether a terminal `stop` should be
@@ -141,9 +150,15 @@ separator in either of these sequences is not returned as assistant content:
 ```
 
 A newline followed by ordinary text, or a trailing newline at the end of the
-response, remains content. This decision belongs to the response parser
-because it spans two outer blocks; an individual tool parser must not consume
-it.
+response, remains in the channel suspended by the preceding tool block:
+reasoning for a nested tool, otherwise plain content. This decision belongs to
+the response parser because it spans two outer blocks; an individual tool
+parser must not consume it.
+
+Reasoning-token accounting follows the raw reasoning-tag interval rather than
+the normalized output channels. Consequently, tool protocol and payload tokens
+between `<think>` and `</think>` count as reasoning tokens even though their raw
+text is absent from `reasoning_content`.
 
 ## The consumed-prefix tool interface
 
@@ -399,6 +414,8 @@ complete parsing and the expected normalized result. Cover at least:
   and unknown function names;
 - incomplete or malformed final payloads and ordinary content after a tool
   block;
+- tools nested inside reasoning, including filtered tools, post-tool reasoning,
+  inter-tool newlines, and a missing final reasoning close tag;
 - reasoning, content, and tool segments sharing one engine chunk;
 - token-ID and log-probability transport when one engine chunk produces
   multiple parser deltas.

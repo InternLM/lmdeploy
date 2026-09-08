@@ -22,6 +22,7 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
+from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.response_parser import BaseResponseParser
 from lmdeploy.serve.parsers.tool_parser.interns2preview_tool_parser import InternS2PreviewToolParser
 from lmdeploy.serve.parsers.tool_parser.qwen3_tool_parser import Qwen3ToolParser
@@ -905,6 +906,53 @@ def test_stream_messages_response_uses_identity_first_parser_contract():
         if item['type'] == 'content_block_delta' and item['delta']['type'] == 'input_json_delta')
     assert tool_start['content_block']['name'] == 'search'
     assert argument_delta['delta']['partial_json'] == '{"query":"lmdeploy"}'
+
+
+def test_stream_messages_response_preserves_nested_tool_event_order():
+    class _NestedToolResponseParser(BaseResponseParser):
+        reasoning_parser_cls = ReasoningParserManager.get('default')
+        tool_parser_cls = Qwen3ToolParser
+
+    response_parser = _NestedToolResponseParser(
+        ChatCompletionRequest(
+            model='fake-model',
+            messages=[],
+            tools=[{'type': 'function', 'function': {'name': 'search'}}],
+            tool_choice='auto',
+            stream=True,
+            chat_template_kwargs={'enable_thinking': True},
+        ))
+
+    async def _result_generator():
+        chunks = [
+            ('<think>before', None),
+            ('<tool_call>{"name":"search","arguments":{"query":"lmdeploy"}}</tool_call>', None),
+            ('after</think>answer', 'stop'),
+        ]
+        for index, (response, finish_reason) in enumerate(chunks, start=1):
+            yield SimpleNamespace(
+                response=response,
+                token_ids=[],
+                input_token_len=8,
+                generate_token_len=index,
+                finish_reason=finish_reason,
+            )
+
+    payloads = _collect_stream_response_payloads(_result_generator(), response_parser)
+    block_starts = [item for item in payloads if item['type'] == 'content_block_start']
+
+    assert [item['index'] for item in block_starts] == [0, 1, 2, 3]
+    assert [item['content_block']['type'] for item in block_starts] == [
+        'thinking',
+        'tool_use',
+        'thinking',
+        'text',
+    ]
+    assert block_starts[1]['content_block']['name'] == 'search'
+    assert [
+        item['delta']['thinking'] for item in payloads
+        if item['type'] == 'content_block_delta' and item['delta']['type'] == 'thinking_delta'
+    ] == ['before', 'after']
 
 
 def test_stream_messages_response_closes_text_before_resuming_tool_delta():
