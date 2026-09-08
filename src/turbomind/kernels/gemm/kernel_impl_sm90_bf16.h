@@ -143,6 +143,10 @@ public:
 
         desc_.arch = Gemm::Arch::value;
 
+        if (!CheckArch()) {
+            return;
+        }
+
         auto func = gemm_kernel_sm90_bf16<Gemm>;
 
         cudaFuncGetAttributes(&info_.attr, func);

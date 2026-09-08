@@ -124,7 +124,12 @@ public:
 
         info_.chunk_size_k      = TILE_K;
         info_.dynamic_smem_size = Gemm::kSmemSize;
-        auto func               = gemm_universal_sm90_mxfp4_fp8<Gemm>;
+
+        if (!CheckArch()) {
+            return;
+        }
+
+        auto func = gemm_universal_sm90_mxfp4_fp8<Gemm>;
         cudaFuncGetAttributes(&info_.attr, func);
         if (info_.dynamic_smem_size > (48 << 10)) {
             cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, info_.dynamic_smem_size);

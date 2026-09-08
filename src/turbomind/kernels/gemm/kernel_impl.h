@@ -86,6 +86,11 @@ public:
 
         desc_.cluster_shape = {1, 1};
 
+        desc_.arch = Gemm::Arch::value;
+        if (!CheckArch()) {
+            return;
+        }
+
         auto func = gemm_kernel<Gemm, GemmParam, EpilogueParam, Sched>;
 
         cudaFuncGetAttributes(&info_.attr, func);
@@ -102,8 +107,6 @@ public:
         desc_.stages     = Impl::Stages;
         desc_.split_k    = Gemm::kSplitK;
         desc_.group_axis = Sched::group_axis;
-
-        desc_.arch = Gemm::Arch::value;
 
         info_.name = GetName();
     }

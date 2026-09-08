@@ -126,6 +126,10 @@ public:
         info_.chunk_size_k      = TILE_K;
         info_.dynamic_smem_size = Gemm::kSmemSize;
 
+        if (!CheckArch()) {
+            return;
+        }
+
         auto func = gemm_kernel_sm90_mixed<Gemm>;
         cudaFuncGetAttributes(&info_.attr, func);
         if (info_.dynamic_smem_size > (48 << 10)) {

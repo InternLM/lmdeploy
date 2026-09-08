@@ -117,11 +117,18 @@ public:
     }
 
 protected:
+    bool CheckArch();
+
     std::string GetName() const;
 
     const Family& family_;
     KernelDesc    desc_;
     KernelInfo    info_;
+
+private:
+    // Reuse the constructor's compatibility result during registration.
+    int  checked_arch_{-1};
+    bool available_{};
 };
 
 struct ClusteringParam {

@@ -12,6 +12,7 @@
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind::gemm {
 
@@ -20,8 +21,18 @@ Kernel::Kernel(const Family& family): family_{family}, desc_{}, info_{}
     desc_.family = family.id;
 }
 
+bool Kernel::CheckArch()
+{
+    checked_arch_ = getSMVersion() * 10;
+    available_    = is_arch_compatible(desc_.arch, checked_arch_);
+    return available_;
+}
+
 bool Kernel::is_available(int arch) const noexcept
 {
+    if (checked_arch_ >= 0 && arch == checked_arch_) {
+        return available_;
+    }
     return is_arch_compatible(desc_.arch, arch);
 }
 
@@ -199,11 +210,8 @@ std::string Kernel::GetName() const
 
 class TransposedKernel: public Kernel {
 public:
-    explicit TransposedKernel(Kernel& kernel): Kernel{kernel.family()}, kernel_(&kernel)
+    explicit TransposedKernel(Kernel& kernel): Kernel{kernel}, kernel_(&kernel)
     {
-        desc_ = kernel.desc();
-        info_ = kernel.info();
-
         desc_.transpose           = !desc_.transpose;
         desc_.supported_epilogues = static_cast<Epilogue>((int)desc_.supported_epilogues & ~(int)Epilogue::kGatedSilu);
     }
