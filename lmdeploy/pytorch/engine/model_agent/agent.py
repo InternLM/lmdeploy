@@ -1712,8 +1712,14 @@ class BaseModelAgent:
                     # Parameter objects (LinearWeights.update_weight registers a new
                     # nn.Parameter), so any CUDA graph captured before the update
                     # still references the freed old pointers. Drop the captured
-                    # graphs so the next forward re-captures with the new params.
+                    # graphs before rebuilding them with the new parameters.
                     self.reset_graph_runner()
+                    # PCG serving never captures missing plans. An active PCG
+                    # runner must be refreshed here; a sleeping runner has no
+                    # cache arena and is warmed by KV-cache wakeup instead.
+                    if (not self.state.is_sleeping
+                            and self.patched_model.get_prefill_warmup_token_sizes()):
+                        self.warmup()
 
                 torch.cuda.empty_cache()
                 return True, 'Succeeded to update parameter online.'

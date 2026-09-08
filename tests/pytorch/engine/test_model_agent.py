@@ -1318,6 +1318,60 @@ class TestResetGraphRunner:
         assert agent._prev_chunk_output is None
         assert agent._prev_chunk_last_logit is None
 
+    @pytest.mark.parametrize(
+        'is_sleeping,prefill_token_sizes,expected_warmup',
+        [
+            (False, [512], True),
+            (False, [], False),
+            (True, [512], False),
+        ],
+        ids=['awake-piecewise', 'awake-without-piecewise', 'sleeping-piecewise'],
+    )
+    def test_completed_distributed_update_refreshes_awake_piecewise_graphs(
+            self, monkeypatch, is_sleeping, prefill_token_sizes, expected_warmup):
+        from lmdeploy.serve.openai.protocol import UpdateWeightsFromDistributedRequest
+
+        events = []
+        model = object()
+        agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent._model_update_group = {'update': object()}
+        agent.patched_model = SimpleNamespace(
+            get_model=lambda: model,
+            get_prefill_warmup_token_sizes=lambda: prefill_token_sizes,
+        )
+        agent.spec_agent = SimpleNamespace(
+            get_model=lambda: None,
+            is_enabled=lambda: False,
+        )
+        agent.state = SimpleNamespace(is_sleeping=is_sleeping)
+        agent.all_context = nullcontext
+        agent.reset_graph_runner = lambda: events.append('reset')
+        agent.warmup = lambda: events.append('warmup')
+
+        monkeypatch.setattr(torch.cuda, 'current_device', lambda: 0)
+        monkeypatch.setattr(torch.cuda, 'synchronize', lambda: events.append('synchronize'))
+        monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: events.append('empty_cache'))
+        monkeypatch.setattr(
+            'lmdeploy.pytorch.engine.model_agent.agent.process_weights_after_loading',
+            lambda updated_model: events.append(('finalize', updated_model)),
+        )
+
+        request = UpdateWeightsFromDistributedRequest(
+            names=[],
+            dtypes=[],
+            shapes=[],
+            group_name='update',
+            finished=True,
+        )
+        result = agent.update_weights_from_distributed(request)
+
+        expected = [('finalize', model), 'synchronize', 'reset']
+        if expected_warmup:
+            expected.append('warmup')
+        expected.append('empty_cache')
+        assert result == (True, 'Succeeded to update parameter online.')
+        assert events == expected
+
     def test_spec_agent_reset_graph_runner_uses_draft_context(self):
         from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
 

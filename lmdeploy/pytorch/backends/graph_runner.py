@@ -37,9 +37,9 @@ _preparing_prefill: ContextVar[bool] = ContextVar('graph_runner_preparing_prefil
 
 @contextmanager
 def prefill_preparation_scope():
-    """Mark graph-runner startup prefill warmup.
+    """Mark ModelAgent-controlled graph-runner prefill warmup.
 
-    Only ModelAgent startup warmup enters this scope.
+    Only ModelAgent warmup enters this scope, during startup or an explicit graph refresh.
 
     The CUDA runner may build missing piecewise plans here. Serving-time dummy ranks never capture.
     """
@@ -51,7 +51,7 @@ def prefill_preparation_scope():
 
 
 def is_preparing_prefill() -> bool:
-    """Return whether startup prefill preparation is active."""
+    """Return whether ModelAgent prefill preparation is active."""
     return _preparing_prefill.get()
 
 

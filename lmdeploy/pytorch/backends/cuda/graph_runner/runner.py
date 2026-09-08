@@ -277,7 +277,7 @@ class CUDAGraphRunner(GraphRunner):
             if is_preparing_prefill():
                 return manager.prepare(descriptor, kwargs)
 
-        # Serving never captures. If startup warmup was skipped or this call is
+        # Serving never captures. If graph-runner warmup was skipped or this call is
         # unsupported, eager execution is selected before PCG can mutate state.
         return self._forward_eager(**kwargs)
 
