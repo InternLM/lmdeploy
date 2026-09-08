@@ -47,6 +47,13 @@ jobs:
         uses: actions/checkout@v3
       - name: Build
         run: |
+          free -h
+          vmstat -w -t 10 &
+          ci_vmstat_pid=$!
+          sudo dmesg --follow-new --time-format iso &
+          ci_dmesg_pid=$!
+          trap 'sudo kill "$ci_vmstat_pid" "$ci_dmesg_pid" 2>/dev/null || true' EXIT
+
           docker run --rm \
             -v ${{ github.workspace }}:/work \
             -w /work \
