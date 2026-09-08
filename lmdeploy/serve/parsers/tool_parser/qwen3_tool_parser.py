@@ -12,6 +12,8 @@ from .tool_parser import ToolParser, ToolParserManager
 class Qwen3ToolParser(ToolParser):
     """Tool parser for Qwen3 JSON tool-call payloads."""
 
+    structural_tag_model = 'qwen_3'
+
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
         return '<tool_call>'

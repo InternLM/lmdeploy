@@ -190,12 +190,26 @@ class ModelWeightLoader:
 
 
 @torch.inference_mode()
+def process_weights_after_loading(model: torch.nn.Module):
+    """Run module weight updates followed by dependent post-load hooks."""
+    for _, mod in model.named_modules():
+        if not hasattr(mod, 'update_weights'):
+            continue
+        mod.update_weights()
+
+    # Keep this as a second pass. Standard loading creates online-FP8 weights
+    # and scales, then update_weights() finalizes their backend representation.
+    # MLA can only absorb kv_b_proj into kc/vc after both steps are complete.
+    for _, mod in model.named_modules():
+        if not hasattr(mod, 'process_weights_after_loading'):
+            continue
+        mod.process_weights_after_loading()
+
+
+@torch.inference_mode()
 def load_model_weights(model: torch.nn.Module, checkpoint_path: str, prefix: str = None, device: torch.device = None):
     """Loading model weights."""
     loader = ModelWeightLoader(checkpoint_path, prefix=prefix)
     loader.load_model_weights(model, device=device)
     model.eval()
-    for _, mod in model.named_modules():
-        if not hasattr(mod, 'update_weights'):
-            continue
-        mod.update_weights()
+    process_weights_after_loading(model)
