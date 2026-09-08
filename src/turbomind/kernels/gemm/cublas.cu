@@ -540,9 +540,9 @@ void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t)
     linear.q_desc = {};
 }
 
-const Family dense_f16{100, 90, kHalf, kHalf, 1, 1, 1, 1, false, false, supports<kHalf, false>, pack<kHalf, false>};
+const Family dense_f16{100, 210, kHalf, kHalf, 1, 1, 1, 1, false, false, supports<kHalf, false>, pack<kHalf, false>};
 const Family dense_bf16{
-    101, 100, kBfloat16, kBfloat16, 1, 1, 1, 1, false, false, supports<kBfloat16, false>, pack<kBfloat16, false>};
+    101, 220, kBfloat16, kBfloat16, 1, 1, 1, 1, false, false, supports<kBfloat16, false>, pack<kBfloat16, false>};
 const Family grouped_f16{
     102, 90, kHalf, kHalf, 1, 1, 1, 1, false, true, supports<kHalf, true>, pack<kHalf, true>, 0, {}, false};
 const Family grouped_bf16{103,
