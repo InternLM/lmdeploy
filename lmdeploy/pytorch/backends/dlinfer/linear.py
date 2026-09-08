@@ -6,7 +6,7 @@ import torch.distributed as dist
 
 from lmdeploy.pytorch.kernels.dlinfer import linear
 
-from ..linear import LinearBuilder, LinearImpl
+from ..linear import LinearImpl
 
 
 class DlinferLinearImpl(LinearImpl):
@@ -17,6 +17,12 @@ class DlinferLinearImpl(LinearImpl):
         if os.getenv('DLINFER_LINEAR_USE_NN_LAYOUT', '0') == '1':
             weight = weight.data.t().contiguous()
         return weight, bias
+
+    def get_unquantized_weight(self, weight: torch.Tensor):
+        """Return weight in ``[out_features, in_features]`` layout."""
+        if os.getenv('DLINFER_LINEAR_USE_NN_LAYOUT', '0') == '1':
+            weight = weight.t()
+        return weight
 
     def forward(self,
                 x,
@@ -31,12 +37,3 @@ class DlinferLinearImpl(LinearImpl):
         if all_reduce:
             dist.all_reduce(out, group=group)
         return out
-
-
-class DlinferLinearBuilder(LinearBuilder):
-    """Dlinfer linear implementation builder."""
-
-    @staticmethod
-    def build(in_features: int, out_features: int, bias: bool = True, dtype: torch.dtype = None):
-        """build."""
-        return DlinferLinearImpl()

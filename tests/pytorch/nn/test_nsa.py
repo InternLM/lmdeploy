@@ -77,7 +77,7 @@ def test_deepgemm_prefill_scores_are_chunked_by_logits_budget(monkeypatch):
     deep_gemm = FakeDeepGemm()
     monkeypatch.setattr(cuda_nsa, '_get_deep_gemm', lambda: deep_gemm)
 
-    impl = object.__new__(cuda_nsa.TritonNSAIndexFP8)
+    impl = object.__new__(cuda_nsa.TritonNSAIndexFP8Impl)
     impl.dcp_world_size = 1
     impl.dcp_rank = 0
     impl.topk = 2
@@ -173,7 +173,7 @@ def test_deepgemm_prefill_scores_match_triton():
         packed_cache, 128)
     k_cache.copy_(torch.randn_like(k_cache.float()).to(k_cache.dtype))
     k_s_cache.copy_(torch.rand_like(k_s_cache) * 0.01)
-    impl = cuda_nsa.TritonNSAIndexFP8(
+    impl = cuda_nsa.TritonNSAIndexFP8Impl(
         topk=2048, softmax_scale=1.0, block_size=128, fill=-1)
 
     flat_k, flat_k_s = impl._flatten_prefill_k(packed_cache, q.size(-1), meta)
@@ -239,7 +239,7 @@ def test_short_prefill_caches_indexer_k_before_optional_scoring(
     monkeypatch.setattr(cuda_nsa, 'prepare_dsa_indexer_k_cache',
                         prepare_k_cache)
 
-    impl = object.__new__(cuda_nsa.TritonNSAIndexFP8)
+    impl = object.__new__(cuda_nsa.TritonNSAIndexFP8Impl)
     impl.dcp_world_size = 1
     impl.dcp_rank = 0
     impl.topk = 2048
@@ -294,7 +294,7 @@ def test_sparse_index_topk_is_resolved_at_init(monkeypatch):
     monkeypatch.setattr(cuda_nsa, '_get_sparse_index_topk',
                         lambda topk, use_dcp=False: selector)
 
-    index_impl = cuda_nsa.TritonNSAIndexFP8(
+    index_impl = cuda_nsa.TritonNSAIndexFP8Impl(
         topk=512, softmax_scale=1.0, block_size=128, fill=-1)
 
     assert index_impl._sparse_index_topk is selector

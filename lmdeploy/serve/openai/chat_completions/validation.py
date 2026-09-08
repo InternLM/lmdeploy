@@ -97,6 +97,9 @@ def check_request(request: ChatCompletionRequest,
             return 'The input_ids must not be an empty list.'
 
     parser_cls = server_context.response_parser_cls
+    if request.tool_choice == 'required' and not request.tools:
+        return '`tool_choice="required"` requires at least one tool.'
+
     if request.tool_choice != 'none' and request.tools:
         if parser_cls is None or parser_cls.tool_parser_cls is None:
             return 'Please launch the api_server with --tool-call-parser if you want to use tools.'

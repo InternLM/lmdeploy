@@ -49,9 +49,9 @@ def test_dcp_local_winners_are_compacted_with_valid_counts():
 def test_dcp_candidate_merge_is_exact_and_uses_global_position_ties(
         monkeypatch):
     from lmdeploy.pytorch import distributed
-    from lmdeploy.pytorch.backends.cuda.nsa import TritonNSAIndexFP8
+    from lmdeploy.pytorch.backends.cuda.nsa import TritonNSAIndexFP8Impl
 
-    impl = object.__new__(TritonNSAIndexFP8)
+    impl = object.__new__(TritonNSAIndexFP8Impl)
     impl.topk = 3
     impl.fill = -1
     impl.dcp_world_size = 2
@@ -162,7 +162,7 @@ def test_nsa_metadata_localizes_each_causal_row():
 
 
 def test_dcp_prefill_scoring_uses_global_sparse_boundary():
-    from lmdeploy.pytorch.backends.cuda.nsa import TritonNSAIndexFP8
+    from lmdeploy.pytorch.backends.cuda.nsa import TritonNSAIndexFP8Impl
     from lmdeploy.pytorch.backends.nsa import build_nsa_index_meta
 
     q_seqlens = torch.tensor([2], dtype=torch.int32)
@@ -181,7 +181,7 @@ def test_dcp_prefill_scoring_uses_global_sparse_boundary():
                                 num_gpu_blocks=100,
                                 sequence_metadata=sequence_metadata,
                                 dcp_world_rank=(2, 0))
-    impl = object.__new__(TritonNSAIndexFP8)
+    impl = object.__new__(TritonNSAIndexFP8Impl)
     impl.topk = 2048
     impl._allow_short_prefill_scoring_skip = True
 
