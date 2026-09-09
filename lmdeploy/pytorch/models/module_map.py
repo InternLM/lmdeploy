@@ -347,3 +347,9 @@ MODULE_MAP.update({
 
 # dflash qwen
 MODULE_MAP.update({'DFlashDraftModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_dflash.DFlashDraftModel'})
+
+# dspark external Qwen/Speculators drafts
+MODULE_MAP.update({
+    'DSparkDraftModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_dspark.Qwen3DSparkModel',
+    'Qwen3DSparkModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_dspark.Qwen3DSparkModel',
+})
