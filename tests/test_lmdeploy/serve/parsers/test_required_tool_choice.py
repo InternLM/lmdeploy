@@ -116,6 +116,8 @@ def _walk_formats(value):
 )
 @pytest.mark.parametrize('reasoning', [False, True])
 def test_builtin_required_formats_compile(parser_name, reasoning, xgrammar_compiler, configured_parser):
+    """Compile required tool formats across XGrammar's supported tag
+    representations."""
     request = _request()
     tools = request.tools
     parser = configured_parser(
@@ -129,7 +131,7 @@ def test_builtin_required_formats_compile(parser_name, reasoning, xgrammar_compi
     formats = list(_walk_formats(response_format['format']))
     required_groups = [
         item for item in formats
-        if item['type'] == 'tags_with_separator' and item.get('at_least_one') is True
+        if item['type'] in ('tags_with_separator', 'triggered_tags') and item.get('at_least_one') is True
     ]
     assert required_groups
 
@@ -141,6 +143,22 @@ def test_builtin_required_formats_compile(parser_name, reasoning, xgrammar_compi
     xgr, compiler = xgrammar_compiler
     compiled = compile_response_format(compiler, response_format)
     assert isinstance(compiled, xgr.CompiledGrammar)
+
+
+@pytest.mark.parametrize('reasoning', [False, True])
+@pytest.mark.parametrize('call_count', [0, 1, 2])
+def test_required_grammar_requires_at_least_one_tool_call(configured_parser, xgrammar_compiler, reasoning, call_count):
+    """Require a tool call before EOS, including after reasoning, and allow
+    multiple calls."""
+    parser = configured_parser(reasoning=reasoning)
+    xgr, compiler = xgrammar_compiler
+    matcher = xgr.GrammarMatcher(compile_response_format(compiler, parser.request.response_format))
+    call = '<tool_call>\n{"name": "get_weather", "arguments": {"city": "Paris"}}\n</tool_call>'
+    text = 'Need to check.</think>\n\n' if reasoning else ''
+    text += call * call_count
+
+    assert matcher.accept_string(text)
+    assert matcher.accept_token(0) is (call_count > 0)
 
 
 def test_required_rejects_tool_parser_without_response_format(monkeypatch):

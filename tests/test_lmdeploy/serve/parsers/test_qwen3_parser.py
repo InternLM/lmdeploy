@@ -3,9 +3,15 @@ import pytest
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
-from lmdeploy.serve.parsers.tool_parser import ToolParserManager
+from lmdeploy.serve.parsers.tool_parser import Qwen3ToolParser, ToolParserManager
 
-from .helpers import first_stream_delta
+from .helpers import (
+    feed_tool_chunks,
+    feed_tool_payload,
+    final_tool_call,
+    first_stream_delta,
+    tool_arguments,
+)
 
 MODEL_ID = 'Qwen/Qwen3-8B'
 PARSER_TOOLS = [{'type': 'function', 'function': {'name': 'get_weather'}}]
@@ -539,3 +545,135 @@ class TestQwenResponseParserComplete:
         finally:
             cls.reasoning_parser_cls = old_reasoning_cls
             cls.tool_parser_cls = old_tool_cls
+
+
+class TestQwen3ToolParser:
+
+    def test_arguments_before_name_preserve_duplicate_parameters(self):
+        raw_arguments = '{"a":"one","a":"two"}'
+        payload = '{"arguments":' + raw_arguments + ',"name":"f"}'
+
+        pending, deltas, _ = feed_tool_chunks(
+            Qwen3ToolParser(),
+            ['{"arguments":' + raw_arguments, ',"name":"f"}', '</tool_call>after'],
+        )
+        complete = final_tool_call(Qwen3ToolParser(), payload)
+
+        assert pending == 'after'
+        assert tool_arguments(deltas) == raw_arguments
+        assert complete.function.arguments == raw_arguments
+        assert deltas[0].function.name == 'f'
+        assert deltas[0].function.arguments is None
+        assert all(delta.index == deltas[0].index for delta in deltas)
+
+    @pytest.mark.parametrize(
+        'chunks',
+        [
+            ('{"name":"f"}</tool_call>',),
+            ('{"name":"f"}', '</tool_call>'),
+            ('{"name":"f"}\n', '</tool_call>'),
+        ],
+    )
+    def test_default_arguments_are_emitted_once(self, chunks):
+        parser = Qwen3ToolParser()
+
+        pending, deltas, _ = feed_tool_chunks(parser, list(chunks))
+
+        arguments = [
+            delta.function.arguments
+            for delta in deltas
+            if delta.function is not None and delta.function.arguments is not None
+        ]
+        assert pending == ''
+        assert parser.block_closed
+        assert arguments == ['{}']
+
+    @pytest.mark.parametrize(
+        ('payload', 'expected_name', 'expected_arguments'),
+        [
+            ('{"name":"f","name":"g","arguments":{}}', 'f', '{}'),
+            ('{"name":"f","arguments":{},"arguments":{}}', 'f', '{}{}'),
+            ('{"name":"f","arguments":{},"parameters":{}}', 'f', '{}'),
+        ],
+    )
+    def test_duplicate_envelope_fields_are_streamed_without_validation(
+        self,
+        payload,
+        expected_name,
+        expected_arguments,
+    ):
+        pending, deltas, _ = feed_tool_chunks(Qwen3ToolParser(), [payload + '</tool_call>'])
+        complete = final_tool_call(Qwen3ToolParser(), payload)
+
+        assert pending == ''
+        assert tool_arguments(deltas) == expected_arguments
+        assert next(delta.function.name for delta in deltas if delta.function.name is not None) == expected_name
+        assert complete.function.name == expected_name
+        assert complete.function.arguments == expected_arguments
+
+    def test_malformed_arguments_are_emitted_up_to_protocol_boundary(self):
+        payload = '{"name":"f","arguments":{"x":truX'
+
+        pending, deltas, _ = feed_tool_chunks(
+            Qwen3ToolParser(),
+            [payload, '</tool_call>tail'],
+        )
+        complete = final_tool_call(Qwen3ToolParser(), payload)
+
+        assert pending == 'tail'
+        assert tool_arguments(deltas) == '{"x":truX'
+        assert complete.function.arguments == '{"x":truX'
+
+    def test_protocol_close_marker_inside_argument_string_is_data(self):
+        raw_arguments = '{"text":"inside </tool_call> marker"}'
+        text = '{"name":"f","arguments":' + raw_arguments + '}</tool_call>tail'
+
+        pending, deltas, _ = feed_tool_chunks(Qwen3ToolParser(), [text])
+
+        assert pending == 'tail'
+        assert tool_arguments(deltas) == raw_arguments
+
+    @pytest.mark.parametrize(
+        'invalid_payload',
+        [
+            '{"arguments":{"secret":1}}',
+            '{"arguments":{"secret":1},"name":"missing"}',
+            '{"name":"missing","arguments":{"secret":1}}',
+        ],
+    )
+    def test_invalid_call_is_dropped_before_next_valid_call(self, invalid_payload):
+        parser = Qwen3ToolParser()
+        parser.adjust_request(
+            ChatCompletionRequest(
+                model=MODEL_ID,
+                messages=[],
+                tools=[{'type': 'function', 'function': {'name': 'get_weather'}}],
+                tool_choice='auto',
+            ))
+        emitted = []
+        for payload in (invalid_payload, '{"name":"get_weather","arguments":{"ok":1}}'):
+            parser.begin_tool_block()
+            pending, deltas = feed_tool_payload(parser, payload + '</tool_call>', final=False)
+            assert pending == ''
+            emitted.extend(deltas)
+
+        assert [delta.function.name for delta in emitted if delta.function.name] == ['get_weather']
+        assert tool_arguments(emitted) == '{"ok":1}'
+        assert {delta.index for delta in emitted} == {0}
+
+    def test_parameters_field_is_not_treated_as_arguments(self):
+        tool_call = final_tool_call(Qwen3ToolParser(), '{"name":"f","parameters":{"x":1}}')
+
+        assert tool_call.function.arguments == '{}'
+
+    def test_final_chunk_does_not_require_outer_close(self):
+        parser = Qwen3ToolParser()
+        parser.begin_tool_block()
+        text = '{"name":"f","arguments":{}}'
+        deltas = []
+
+        consumed = parser.feed_tool_block(text, deltas, final=True)
+
+        assert consumed == len(text)
+        assert parser.block_closed
+        assert tool_arguments(deltas) == '{}'

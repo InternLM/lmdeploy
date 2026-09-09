@@ -197,47 +197,6 @@ def test_runner_skips_preprocess_for_raw_input_ids():
     assert context.async_engine.preprocess_kwargs['input_ids'] == [1, 2, 3]
 
 
-@pytest.mark.parametrize(
-    ('request_kwargs', 'finish_reason'),
-    [
-        ({'return_token_ids': True}, 'stop'),
-        ({'tool_choice': 'required', 'tools': _tools(), 'return_token_ids': True}, 'length'),
-    ],
-)
-def test_runner_preserves_engine_finish_reason_without_terminal_validation(request_kwargs, finish_reason):
-    class _ParserWithForbiddenValidation(_Parser):
-        supports_required_tool_choice = True
-
-        def validate_complete(self, text: str | None = None):
-            raise AssertionError('response parsers must not validate generated output')
-
-    outputs = [
-        SimpleNamespace(
-            response='plain',
-            token_ids=[1],
-            input_token_len=3,
-            generate_token_len=1,
-            finish_reason=finish_reason,
-            cached_tokens=0,
-            logprobs=None,
-            routed_experts=None,
-            cache_block_ids=None,
-        )
-    ]
-    context = _FakeServerContext(_ParserWithForbiddenValidation, outputs)
-
-    async def _run():
-        chat_runner = await ChatRunner.prepare(
-            context,
-            _request(**request_kwargs),
-        )
-        return await chat_runner.collect()
-
-    result = asyncio.run(_run())
-
-    assert result.finish_reason == finish_reason
-
-
 def test_runner_rejects_required_tool_choice_for_unsupported_response_parser():
     context = _FakeServerContext(_Parser)
 

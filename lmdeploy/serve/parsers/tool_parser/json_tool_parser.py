@@ -2,39 +2,91 @@
 from __future__ import annotations
 
 import json
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from lmdeploy.serve.openai.protocol import DeltaToolCall
 
 from .json_value_scanner import JsonValueScanner
 from .tool_parser import ToolParser
 
+JsonParsePhase = Literal[
+    'payload_start',
+    'key_or_end',
+    'key',
+    'colon',
+    'value_start',
+    'function_name',
+    'arguments',
+    'skip_value',
+    'after_value',
+    'done',
+]
+
 
 class JsonToolParser(ToolParser):
     """Incrementally extract a JSON tool-call envelope.
 
-    Subclasses supply outer protocol tags. Complete parsing is inherited from
-    :class:`ToolParser` and therefore uses this incremental state machine too.
+    Streaming follows this state machine::
+
+        payload_start -- ``{`` --> key_or_end
+        key_or_end ---- key ----> colon
+        key ----------- key ----> colon
+        colon --------- ``:`` --> value_start
+        value_start --- name_field -----> function_name --+
+                    +-- argument_field -> arguments ------+--> after_value
+                    +-- other ----------> skip_value -----+
+        after_value --- ``,`` ----> key
+        key_or_end ---- ``}`` ----> done
+        after_value --- ``}`` ----> done
+
+    Each phase describes the syntax expected at the current cursor:
+
+    - ``payload_start`` searches for the opening ``{`` of the envelope.
+    - ``key_or_end`` follows that opening brace and accepts either the first
+      field name or ``}`` for an empty envelope.
+    - ``key`` follows a comma and expects the next field name.
+    - ``colon`` follows a field name and expects its separating ``:``.
+    - ``value_start`` skips leading whitespace and selects a value consumer
+      from the current field name.
+    - ``function_name`` waits for a complete quoted ``name_field`` value and
+      emits it as the function name.
+    - ``arguments`` scans and emits the configured ``argument_field`` value.
+    - ``skip_value`` scans any other field without emitting it.
+    - ``after_value`` follows a complete value and expects either ``,`` or
+      the envelope-closing ``}``.
+    - ``done`` leaves any outer closing marker for :class:`ToolParser`.
+
+    ``arguments`` is forwarded as it becomes lexically stable;
+    ``skip_value`` advances over other envelope fields without emitting them.
+    If arguments precede the function name, :class:`ToolParser` retains those
+    deltas until the name is known. A recognized outer closing marker may also
+    finish an incomplete envelope and transition it to ``done``.
+
+    Subclasses may configure ``name_field`` and ``argument_field`` and supply
+    outer protocol tags. Both configured fields must be direct members of the
+    JSON envelope; nested function objects require a different parser.
+    Complete parsing is inherited from :class:`ToolParser` and therefore uses
+    this incremental state machine too.
     """
 
+    name_field: ClassVar[str] = 'name'
     argument_field: ClassVar[str] = 'arguments'
 
     def __init__(self) -> None:
         """Initialize the JSON envelope state machine."""
         super().__init__()
-        self._phase = 'payload_start'
+        self._phase: JsonParsePhase = 'payload_start'
+        # Field name retained across chunks until its value is consumed.
         self._json_key: str | None = None
         self._arguments_seen = False
         self._value_scanner = JsonValueScanner()
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
-        """Return no outer opening tag for the bare JSON base parser."""
         return None
 
     @classmethod
     def get_tool_close_tag(cls) -> str | None:
-        """Return no outer closing tag for the bare JSON base parser."""
         return None
 
     def begin_tool_block(self) -> None:
@@ -73,7 +125,7 @@ class JsonToolParser(ToolParser):
             if self._phase == 'done':
                 break
 
-            if self._phase not in ('arguments_value', 'skip_value') and close_tag and text.startswith(close_tag, pos):
+            if self._phase not in ('arguments', 'skip_value') and close_tag and text.startswith(close_tag, pos):
                 self._finish_envelope(deltas)
                 break
 
@@ -82,6 +134,7 @@ class JsonToolParser(ToolParser):
                 if pos == size:
                     break
                 if text[pos] != '{':
+                    # Recover from a malformed prefix by looking for a later envelope opener.
                     pos += 1
                     continue
                 pos += 1
@@ -89,6 +142,7 @@ class JsonToolParser(ToolParser):
                 continue
 
             if self._phase in ('key_or_end', 'key'):
+                # Whitespace is valid here; extra commas are ignored while recovering the next field.
                 while pos < size and (text[pos].isspace() or text[pos] == ','):
                     pos += 1
                 if pos == size:
@@ -98,6 +152,7 @@ class JsonToolParser(ToolParser):
                     self._finish_envelope(deltas)
                     continue
                 if text[pos] != '"':
+                    # Recover by scanning for the next quoted field name or closing brace.
                     pos += 1
                     continue
                 key, end = self._read_string(text, pos)
@@ -113,6 +168,7 @@ class JsonToolParser(ToolParser):
                 if pos == size:
                     break
                 if text[pos] != ':':
+                    # Recover by scanning for the missing key/value separator.
                     pos += 1
                     continue
                 pos += 1
@@ -123,18 +179,18 @@ class JsonToolParser(ToolParser):
                 pos = self._skip_ws(text, pos)
                 if pos == size:
                     break
-                if self._json_key == 'name' and text[pos] == '"':
-                    self._phase = 'name_value'
+                if self._json_key == self.name_field and text[pos] == '"':
+                    self._phase = 'function_name'
                 else:
                     self._value_scanner.reset()
                     if self._json_key == self.argument_field:
                         self._arguments_seen = True
-                        self._phase = 'arguments_value'
+                        self._phase = 'arguments'
                     else:
                         self._phase = 'skip_value'
                 continue
 
-            if self._phase == 'name_value':
+            if self._phase == 'function_name':
                 name, end = self._read_string(text, pos)
                 if end < 0:
                     break
@@ -149,11 +205,11 @@ class JsonToolParser(ToolParser):
                 self._phase = 'after_value'
                 continue
 
-            if self._phase in ('arguments_value', 'skip_value'):
+            if self._phase in ('arguments', 'skip_value'):
                 if self._value_scanner.in_string and text.find('"', pos) < 0:
                     start = pos
                     pos = self._value_scanner.feed(text, pos)
-                    if self._phase == 'arguments_value' and pos > start:
+                    if self._phase == 'arguments' and pos > start:
                         self._emit_delta(
                             deltas,
                             arguments=text[start:pos],
@@ -169,7 +225,7 @@ class JsonToolParser(ToolParser):
                     scan_limit = size
                 start = pos
                 pos = self._value_scanner.feed(text, pos, scan_limit)
-                if self._phase == 'arguments_value' and pos > start:
+                if self._phase == 'arguments' and pos > start:
                     self._emit_delta(
                         deltas,
                         arguments=text[start:pos],
@@ -187,7 +243,7 @@ class JsonToolParser(ToolParser):
                     marker_end = marker_at + len(close_tag)
                     start = pos
                     pos = self._value_scanner.feed(text, pos, marker_end)
-                    if self._phase == 'arguments_value':
+                    if self._phase == 'arguments':
                         self._emit_delta(
                             deltas,
                             arguments=text[start:pos],
@@ -197,7 +253,7 @@ class JsonToolParser(ToolParser):
                 if scan_limit < size and pos == scan_limit and self._value_scanner.in_string:
                     start = pos
                     pos = self._value_scanner.feed(text, pos)
-                    if self._phase == 'arguments_value' and pos > start:
+                    if self._phase == 'arguments' and pos > start:
                         self._emit_delta(
                             deltas,
                             arguments=text[start:pos],
@@ -219,10 +275,11 @@ class JsonToolParser(ToolParser):
                     pos += 1
                     self._finish_envelope(deltas)
                 else:
+                    # Recover by scanning for the next field separator or closing brace.
                     pos += 1
                 continue
 
-        if final and self._phase in ('arguments_value', 'skip_value'):
+        if final and self._phase in ('arguments', 'skip_value'):
             self._value_scanner.finish()
         return pos
 
@@ -244,6 +301,7 @@ class JsonToolParser(ToolParser):
         ``('', -1)`` indicates that the closing quote is not buffered yet.
         """
         escaped = False
+        # "+ 1" to skip the opening quote
         pos = start + 1
         while pos < len(text):
             char = text[pos]

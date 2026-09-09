@@ -60,6 +60,8 @@ class JsonValueScanner:
                 pos += 1
             return pos
 
+        # Tiny streaming chunks are common. Scanning them directly is cheaper
+        # than entering the find/regex fast path below.
         if size - pos <= 4:
             while pos < size:
                 char = text[pos]

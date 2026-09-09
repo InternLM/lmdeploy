@@ -41,14 +41,14 @@ OpenAI / Anthropic response adapter
 
 The ownership boundaries are:
 
-| Component            | Owns                                                                                              | Does not own                           |
-| -------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| `ChatRunner`         | Engine iteration, request lifetime, finish status, token IDs, and log probabilities               | Model protocol syntax                  |
-| `ResponseParser`     | Routing between plain content, reasoning, and tool blocks; the unconsumed response suffix         | Tool payload grammar                   |
-| `ReasoningParser`    | Reasoning opening/closing tags and whether parsing starts in reasoning mode                       | Streaming buffers and response routing |
-| `ToolParser`         | The outer tool block, common call identity/filtering rules, and normalized `DeltaToolCall` output | Plain or reasoning content             |
-| Concrete tool parser | The inner payload grammar and its incremental state                                               | SSE framing and API transport metadata |
-| `JsonValueScanner`   | The lexical end of one JSON value                                                                 | JSON grammar or schema validation      |
+| Component            | Owns                                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------------------- |
+| `ChatRunner`         | Engine iteration, request lifetime, finish status, token IDs, and log probabilities               |
+| `ResponseParser`     | Routing between plain content, reasoning, and tool blocks; the unconsumed response suffix         |
+| `ReasoningParser`    | Reasoning opening/closing tags and whether parsing starts in reasoning mode                       |
+| `ToolParser`         | The outer tool block, common call identity/filtering rules, and normalized `DeltaToolCall` output |
+| Concrete tool parser | The tool's inner payload grammar and its incremental state                                        |
+| `JsonValueScanner`   | The lexical end of one JSON value                                                                 |
 
 The corresponding implementation is organized as follows:
 
@@ -81,14 +81,13 @@ plain     -- tool open --> tool -- complete outer block --> plain
 reasoning -- tool open --> tool -- complete outer block --> reasoning
 ```
 
-A tool block suspends exactly one containing mode; this is not a generic
-nested-state stack. A tool opened from plain content returns to plain content.
+A tool opened from plain content returns to plain content.
 A tool opened from reasoning returns to reasoning, where a later reasoning
 close tag still performs the transition to plain content. The raw tool opening
 tag, payload, and closing tag are represented only by structured tool-call
 deltas and are not duplicated in `reasoning_content`.
 
-An engine chunk does not have to align with these boundaries. One chunk can,
+An engine-generated chunk does not have to align with these boundaries. One chunk can,
 for example, contain the end of reasoning, plain content, a tool opening tag,
 and part of its payload. Therefore:
 
@@ -96,7 +95,7 @@ and part of its payload. Therefore:
 ResponseParser.stream_chunk(...) -> list[tuple[DeltaMessage, bool]]
 ```
 
-may return multiple messages for one engine chunk. It may also return an empty
+may return multiple messages for one chunk. It may also return an empty
 list while a possible marker or payload fragment is buffered.
 
 Streaming deltas preserve the model's channel order. For example, a tool block
@@ -120,8 +119,8 @@ prefix of an opening or closing marker. In tool mode, it is the suffix not
 consumed by `ToolParser.feed_tool_block`.
 
 `ChatRunner` attaches token IDs, log probabilities, and finish status only to
-the last parser delta produced from an engine chunk. This prevents transport
-metadata from being duplicated when one input chunk is split into several
+the last parser delta produced from a chunk. This prevents transport
+metadata from being duplicated when one chunk is split into several
 visible response deltas.
 
 ### Complete and streaming responses

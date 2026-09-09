@@ -38,14 +38,14 @@ OpenAI / Anthropic 响应适配层
 
 各组件的权责边界如下：
 
-| 组件               | 负责                                                                   | 不负责                    |
-| ------------------ | ---------------------------------------------------------------------- | ------------------------- |
-| `ChatRunner`       | 迭代引擎、管理请求生命周期、结束状态、token ID 和 log probability      | 模型协议语法              |
-| `ResponseParser`   | 在普通内容、reasoning 和工具块之间路由；持有响应中尚未消费的后缀       | 工具 payload 的语法       |
-| `ReasoningParser`  | 声明 reasoning 起止标签以及解析是否从 reasoning 模式开始               | 流式 buffer 和响应路由    |
-| `ToolParser`       | 管理外层工具块、公共的调用身份及过滤规则，并输出归一化 `DeltaToolCall` | 普通内容或 reasoning 内容 |
-| 具体工具 Parser    | 内部 payload 语法及其增量状态                                          | SSE 封装和 API 传输元数据 |
-| `JsonValueScanner` | 定位单个 JSON 值的词法结束边界                                         | JSON 语法或 schema 校验   |
+| 组件               | 负责                                                                             |
+| ------------------ | -------------------------------------------------------------------------------- |
+| `ChatRunner`       | 迭代引擎、管理请求生命周期、结束状态、token ID 和 log probability                |
+| `ResponseParser`   | 在content、reasoning_content 和 tool_call 之间切换状态；持有响应中尚未消费的后缀 |
+| `ReasoningParser`  | 声明 reasoning 起止标签以及解析是否从 reasoning 模式开始                         |
+| `ToolParser`       | 管理外层工具块、公共的调用身份及过滤规则，并输出归一化 `DeltaToolCall`           |
+| 具体工具 Parser    | 内部 payload 语法及其增量状态                                                    |
+| `JsonValueScanner` | 定位单个 JSON 值的词法结束边界                                                   |
 
 对应实现的文件分布如下：
 
@@ -78,7 +78,7 @@ plain     -- tool open --> tool -- 外层工具块结束 --> plain
 reasoning -- tool open --> tool -- 外层工具块结束 --> reasoning
 ```
 
-工具块只挂起一层所在模式；这里并不是通用的嵌套状态栈。从 plain 内容进入的工具块
+从 plain 内容进入的工具块
 结束后回到 plain；从 reasoning 进入的工具块结束后回到 reasoning，之后遇到
 reasoning 结束标签才转入 plain。工具起始标签、payload 和结束标签只通过结构化工具
 调用 delta 表达，不会重复出现在 `reasoning_content` 中。
