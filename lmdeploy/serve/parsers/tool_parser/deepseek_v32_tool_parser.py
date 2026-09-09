@@ -15,6 +15,26 @@ class DeepSeekV32ToolParser(ToolParser):
     """Incrementally parse DeepSeek-V3.2 DSML function-call blocks.
 
     Complete responses use this same consumer through the response parser.
+    A function name is available in the ``invoke`` header, so its identity is
+    emitted before any parameter fragments. String parameters contain raw text
+    and end at their closing tag; non-string parameters contain JSON and use a
+    lexical scanner to find the value boundary.
+
+    The parser moves through these phases::
+
+        invoke_start -- <invoke ...> --> invoke_header
+        invoke_header -- header end --> parameter_or_invoke_end
+        parameter_or_invoke_end -- <parameter ...> --> parameter_header
+        parameter_header -- string="true" --> string_value
+        parameter_header -- otherwise --> json_value
+        string_value -- </parameter> --> parameter_or_invoke_end
+        json_value -- value end --> parameter_end
+        parameter_end -- </parameter> --> parameter_or_invoke_end
+        parameter_or_invoke_end -- </invoke> --> invoke_start
+        invoke_start -- </function_calls> --> payload closed
+
+    ``ToolParser`` owns the surrounding block lifecycle and consumes the outer
+    ``function_calls`` closing tag after this parser marks the payload closed.
     """
 
     structural_tag_model = 'deepseek_v3_2'
@@ -55,6 +75,8 @@ class DeepSeekV32ToolParser(ToolParser):
         self._value_scanner.reset()
 
     def _consume_stream_payload(self, text: str, deltas: list[DeltaToolCall], *, final: bool) -> int:
+        """Consume the stable prefix of a DSML payload and append tool
+        deltas."""
         del final
         pos = 0
         invoke_tag = f'<{self.dsml_token}invoke'

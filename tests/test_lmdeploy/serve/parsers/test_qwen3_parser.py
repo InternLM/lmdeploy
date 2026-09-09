@@ -479,6 +479,30 @@ class TestQwenResponseParserStreaming:
 
 class TestQwenResponseParserComplete:
 
+    def test_parse_complete_keeps_next_tool_separate_after_malformed_envelope(self):
+        class PlainQwenResponseParser(ResponseParserManager.get('default')):
+            reasoning_parser_cls = None
+            tool_parser_cls = Qwen3ToolParser
+
+        request = ChatCompletionRequest(
+            model=MODEL_ID,
+            messages=[],
+            stream=False,
+            tools=[
+                {'type': 'function', 'function': {'name': 'f'}},
+                {'type': 'function', 'function': {'name': 'g'}},
+            ],
+            tool_choice='auto',
+        )
+        parser = PlainQwenResponseParser(request=request)
+        text = '<tool_call>{"name":"f","arguments":{} </tool_call><tool_call>{"name":"g","arguments":{}}</tool_call>'
+
+        content, tool_calls, reasoning = parser.parse_complete(text)
+
+        assert content is None
+        assert reasoning is None
+        assert [(call.function.name, call.function.arguments) for call in tool_calls] == [('f', '{}'), ('g', '{}')]
+
     def test_parse_complete_aggregates_reasoning_around_nested_tool(self, response_parser):
         text = (
             '<think>before'

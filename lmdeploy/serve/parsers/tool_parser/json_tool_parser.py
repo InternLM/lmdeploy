@@ -268,6 +268,12 @@ class JsonToolParser(ToolParser):
                 pos = self._skip_ws(text, pos)
                 if pos == size:
                     break
+                # Skipping JSON whitespace may expose an outer closing marker.
+                # Treat it as the protocol boundary before malformed-envelope
+                # recovery can consume the marker's leading character.
+                if close_tag and text.startswith(close_tag, pos):
+                    self._finish_envelope(deltas)
+                    break
                 if text[pos] == ',':
                     pos += 1
                     self._phase = 'key'

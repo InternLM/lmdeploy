@@ -125,14 +125,6 @@ class KimiK2ToolParser(ToolParser):
                     if self._value_scanner.complete:
                         self._phase = 'call_end'
                         continue
-                elif scan_limit < len(text) and self._value_scanner.in_string:
-                    start = pos
-                    pos = self._value_scanner.feed(text, pos)
-                    if pos > start:
-                        self._emit_arguments(deltas, text[start:pos])
-                    if self._value_scanner.complete:
-                        self._phase = 'call_end'
-                        continue
                 break
 
             if self._phase == 'call_end':
