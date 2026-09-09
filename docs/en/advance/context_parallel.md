@@ -109,7 +109,9 @@ When `dcp > 1`, the current implementation supports:
 - `tp` is divisible by `dcp`, and `dcp` divides the replicated KV
   head count.
 - `dp=1`, `ep=1`, and the hybrid engine role.
-- No speculative/MTP decode, sliding-window attention, MemDecode,
+- MTP (`deepseek_mtp`) with dense MLA (DeepSeek V3/V3.1) or sparse MLA
+  (DeepSeek V3.2/GLM DSA).
+- No sliding-window attention, MemDecode,
   prefill/decode disaggregation, or external KV-cache connector.
 
 `dcp=1` is the default and preserves the existing PyTorch execution and

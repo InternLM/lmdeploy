@@ -736,6 +736,7 @@ class SpecDecodeConfig:
         no_caches = ['medusa']
         if method not in no_caches:
             cache_config = CacheConfig(max_batches=target_cache_cfg.max_batches,
+                                       dcp=dist_config.dcp,
                                        block_size=target_cache_cfg.block_size,
                                        kernel_block_size=target_cache_cfg.kernel_block_size,
                                        num_cpu_blocks=target_cache_cfg.num_cpu_blocks,

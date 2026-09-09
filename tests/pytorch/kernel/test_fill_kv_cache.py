@@ -1024,3 +1024,48 @@ def test_fill_blocked_fp8_cache_dcp_matches_rank_local_reference():
 
         assert torch.equal(actual_k, expected_k)
         assert torch.equal(actual_s, expected_s)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+                    reason='blocked FP8 cache requires Hopper')
+@pytest.mark.parametrize('dcp_size', [2, 4])
+@pytest.mark.parametrize('accepted_drafts', [0, 2, 5])
+def test_dcp_speculative_cache_overwrites_rejected_positions(dcp_size, accepted_drafts):
+    from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
+
+    torch.manual_seed(12)
+    batch, query_len, block_size, head_dim = 2, 6, 64, 128
+    history = torch.tensor([block_size * dcp_size - 3, 1], device='cuda', dtype=torch.int32)
+    cu_q = torch.arange(batch + 1, device='cuda', dtype=torch.int32) * query_len
+    local_blocks = torch.tensor([[3, 1], [2, 0]], device='cuda', dtype=torch.int32)
+    global_blocks = torch.arange(4 * dcp_size, device='cuda', dtype=torch.int32).reshape(batch, -1)
+    states = [torch.randn(batch * query_len, 1, head_dim, device='cuda', dtype=torch.bfloat16)
+              for _ in range(2)]
+
+    def fill(k, cache, scales, lengths, blocks, size=1, rank=0):
+        fill_kv_cache_blocked_fp8(k, None, cache, None, scales, None,
+                                  cu_q, lengths, query_len, blocks,
+                                  group_size=head_dim, scale_fmt='ue8m0',
+                                  dcp_size=size, dcp_rank=rank)
+
+    reference = torch.zeros(4 * dcp_size, block_size, 1, head_dim,
+                            device='cuda', dtype=torch.float8_e4m3fn)
+    ref_scales = torch.zeros(4 * dcp_size, block_size, 1, 1, device='cuda')
+    ends = [history + query_len, history + accepted_drafts + 1 + query_len]
+    # One target verification writes six positions; the next step starts after
+    # the accepted prefix, overwriting rejected entries without moving history.
+    for k, lengths in zip(states, ends):
+        fill(k, reference, ref_scales, lengths, global_blocks)
+    for rank in range(dcp_size):
+        actual = torch.zeros(4, block_size, 1, head_dim, device='cuda', dtype=torch.float8_e4m3fn)
+        scales = torch.zeros(4, block_size, 1, 1, device='cuda')
+        for k, lengths in zip(states, ends):
+            fill(k, actual, scales, lengths, local_blocks, dcp_size, rank)
+        for request in range(batch):
+            # Index bytes because torch advanced indexing does not support all
+            # FP8 dtypes; compare both packed values and their scale metadata.
+            expected = reference.view(torch.uint8)[global_blocks[request]].flatten(0, 1)[rank::dcp_size]
+            observed = actual.view(torch.uint8)[local_blocks[request]].flatten(0, 1)
+            assert torch.equal(observed, expected)
+            expected_scales = ref_scales[global_blocks[request]].flatten(0, 1)[rank::dcp_size]
+            assert torch.equal(scales[local_blocks[request]].flatten(0, 1), expected_scales)

@@ -267,8 +267,7 @@ class CudaGraphMixin:
                 )
                 # Keep graph input addresses stable for the old FlashMLA metadata API.
                 scheduler_buffer.copy_(metadata.tile_scheduler_metadata)
-                input_buffers['num_splits'][:new_batch_size + 1].copy_(
-                    metadata.num_splits[:new_batch_size + 1])
+                input_buffers['num_splits'].copy_(metadata.num_splits)
             attn_metadata.tile_scheduler_metadata = scheduler_buffer
             attn_metadata.num_splits = input_buffers['num_splits']
 

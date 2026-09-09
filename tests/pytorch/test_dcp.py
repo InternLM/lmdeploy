@@ -7,11 +7,27 @@ import torch
 
 from lmdeploy.pytorch.backends.cp_utils import (
     compact_dcp_local_indices,
+    get_dcp_local_causal_seq_lens,
     get_dcp_local_cu_seqlens,
     get_dcp_local_indices,
     get_dcp_local_seq_lens,
 )
 from lmdeploy.pytorch.config import CacheConfig, DistConfig
+
+
+@pytest.mark.parametrize('dcp', [1, 2, 4])
+def test_mtp_cache_inherits_draft_dcp_geometry(monkeypatch, dcp):
+    from lmdeploy.pytorch.config import ModelConfig, SpecDecodeConfig
+
+    monkeypatch.setattr(ModelConfig, 'from_pretrained', lambda *args, **kwargs: None)
+    target_cache = CacheConfig(max_batches=4, block_size=64,
+                               kernel_block_size=64, num_cpu_blocks=0, num_gpu_blocks=8, dcp=dcp)
+    spec = SpecDecodeConfig.from_config(
+        method='deepseek_mtp', num_speculative_tokens=5, model='unused',
+        target_cache_cfg=target_cache, dist_config=DistConfig(tp=4, dcp=dcp))
+    assert spec.cache_config.dcp == dcp
+    assert spec.cache_config.block_size == target_cache.block_size
+    assert spec.cache_config.kernel_block_size == target_cache.kernel_block_size
 
 
 def test_dcp_prefill_chunks_cover_uneven_prefixes_with_bounded_workspace():
@@ -52,6 +68,18 @@ def test_dcp_score_budget_includes_candidates_and_rejects_oversized_row():
     assert rows < 8192
     with pytest.raises(RuntimeError, match='One DCP score row'):
         _get_max_score_rows(2048, 1024, topk=2048, dcp_size=4)
+
+
+@pytest.mark.parametrize('dcp_size', [2, 4])
+@pytest.mark.parametrize('query_len', [1, 2, 6])
+def test_dcp_local_causal_lengths_match_token_ownership(dcp_size, query_len):
+    lengths = [0, query_len, 64 * dcp_size - 1, 64 * dcp_size + 1]
+    kv_seqlens = torch.tensor(lengths, dtype=torch.int32)
+    for rank in range(dcp_size):
+        actual = get_dcp_local_causal_seq_lens(kv_seqlens, query_len, (dcp_size, rank))
+        expected = [len(range(rank, end - query_len + row + 1, dcp_size))
+                    for end in lengths for row in range(query_len)]
+        assert actual.tolist() == expected
 
 
 def test_dcp_interleaved_sequence_mapping():

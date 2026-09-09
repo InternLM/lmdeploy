@@ -7,7 +7,7 @@ from typing import Any
 import torch
 
 from lmdeploy.messages import QuantPolicy
-from lmdeploy.pytorch.backends.cp_utils import DcpPrefillChunk
+from lmdeploy.pytorch.backends.cp_utils import DcpPrefillChunk, get_dcp_local_causal_seq_lens
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import CudaAttentionMetaBuilder
@@ -38,12 +38,24 @@ def _build_flash_mla_metadata(kv_seqlens,
                               decoding_query_len: int,
                               is_fp8_kvcache: bool,
                               index_topk: int | None) -> FlashMLAAttentionMetadata:
-    """Build scheduler metadata from one selected FlashMLA implementation."""
+    """Build scheduler metadata from global request lengths."""
     if not needs_flash_mla_scheduler(is_fp8_kvcache, index_topk):
         return FlashMLAAttentionMetadata()
 
     import flash_mla
 
+    from lmdeploy.pytorch.backends.cp_utils import get_dcp_local_seq_lens
+    from lmdeploy.pytorch.distributed import get_dcp_world_rank
+
+    dcp_world_rank = get_dcp_world_rank()
+    dcp_world_size, _ = dcp_world_rank
+    if dcp_world_size > 1:
+        num_attention_heads *= dcp_world_size
+        if index_topk is None:
+            kv_seqlens = get_dcp_local_causal_seq_lens(kv_seqlens, decoding_query_len, dcp_world_rank)
+            decoding_query_len = 1
+        else:
+            kv_seqlens = get_dcp_local_seq_lens(kv_seqlens, dcp_world_rank)
     num_attention_heads *= decoding_query_len
     num_heads_q = None if index_topk is None else num_attention_heads
     tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
@@ -74,13 +86,9 @@ def update_flash_mla_metadata(attn_metadata,
                               is_fp8_kvcache: bool,
                               index_topk: int | None) -> None:
     """Populate the legacy single-group FlashMLA metadata fields."""
-    from lmdeploy.pytorch.distributed import get_dcp_world_rank
-    dcp_world_size, _ = get_dcp_world_rank()
-    kv_seqlens = (attn_metadata.dcp_local_kv_seqlens
-                  if dcp_world_size > 1 else attn_metadata.kv_seqlens)
     metadata = _build_flash_mla_metadata(
-        kv_seqlens,
-        num_attention_heads=num_attention_heads * dcp_world_size,
+        attn_metadata.kv_seqlens,
+        num_attention_heads=num_attention_heads,
         decoding_query_len=decoding_query_len,
         is_fp8_kvcache=is_fp8_kvcache,
         index_topk=index_topk,
@@ -93,17 +101,11 @@ def build_flash_mla_graph_metadata(step_context, kv_seqlens,
                                    decoding_query_len: int) -> FlashMLAAttentionMetadata:
     """Build legacy graph metadata from the model-level FlashMLA
     configuration."""
-    from lmdeploy.pytorch.backends.cp_utils import get_dcp_local_seq_lens
-    from lmdeploy.pytorch.distributed import get_dcp_world_rank
-
     num_attention_heads, _ = step_context.model_config.get_num_qkv_head_by_tp()
-    dcp_world_rank = get_dcp_world_rank()
-    dcp_world_size, _ = dcp_world_rank
-    kv_seqlens = get_dcp_local_seq_lens(kv_seqlens, dcp_world_rank)
     model_config = step_context.model_config
     return _build_flash_mla_metadata(
         kv_seqlens,
-        num_attention_heads=num_attention_heads * dcp_world_size,
+        num_attention_heads=num_attention_heads,
         decoding_query_len=decoding_query_len,
         is_fp8_kvcache=model_config.use_mla_fp8_cache,
         index_topk=model_config.mla_index_topk,
@@ -125,17 +127,10 @@ class FlashMLAAttentionMetaBuilder(
     def build(self, step_context, sequence_metadata) -> FlashMLAAttentionMetadata:
         if not step_context.is_decoding:
             return FlashMLAAttentionMetadata()
-        from lmdeploy.pytorch.backends.cp_utils import get_dcp_local_seq_lens
-        from lmdeploy.pytorch.distributed import get_dcp_world_rank
-
         batch_size = sequence_metadata.q_seqlens.size(0)
-        dcp_world_rank = get_dcp_world_rank()
-        dcp_world_size, _ = dcp_world_rank
-        kv_seqlens = get_dcp_local_seq_lens(sequence_metadata.kv_seqlens,
-                                            dcp_world_rank)
         return _build_flash_mla_metadata(
-            kv_seqlens,
-            num_attention_heads=(self.num_attention_heads * dcp_world_size),
+            sequence_metadata.kv_seqlens,
+            num_attention_heads=self.num_attention_heads,
             decoding_query_len=step_context.input_ids.size(1) // batch_size,
             is_fp8_kvcache=step_context.model_config.use_mla_fp8_cache,
             index_topk=self.index_topk,
@@ -147,11 +142,9 @@ class FlashMLAAttentionMetaBuilder(
 
     def make_cudagraph_buffer(self, graph_meta, input_buffers,
                               step_context) -> FlashMLAAttentionMetadata:
-        from lmdeploy.pytorch.distributed import get_dcp_world_rank
-        dcp_world_size, _ = get_dcp_world_rank()
         return _build_flash_mla_metadata(
             torch.ones(graph_meta.max_batchs, dtype=torch.int32, device=graph_meta.device),
-            num_attention_heads=self.num_attention_heads * dcp_world_size,
+            num_attention_heads=self.num_attention_heads,
             decoding_query_len=graph_meta.decode_query_len,
             is_fp8_kvcache=step_context.model_config.use_mla_fp8_cache,
             index_topk=self.index_topk,
@@ -159,8 +152,6 @@ class FlashMLAAttentionMetaBuilder(
 
     def fill_cudagraph_buffer(self, graph_meta, input_buffers, step_context,
                               buffer: FlashMLAAttentionMetadata) -> FlashMLAAttentionMetadata:
-        from lmdeploy.pytorch.distributed import get_dcp_world_rank
-        dcp_world_size, _ = get_dcp_world_rank()
         tile_scheduler_metadata = buffer.tile_scheduler_metadata
         if not isinstance(tile_scheduler_metadata, torch.Tensor):
             # FlashMLA 1.x initializes this object during the first kernel
@@ -170,8 +161,8 @@ class FlashMLAAttentionMetaBuilder(
             return buffer
 
         metadata = _build_flash_mla_metadata(
-            input_buffers.get('dcp_local_kv_seqlens', input_buffers['kv_seqlens']),
-            num_attention_heads=self.num_attention_heads * dcp_world_size,
+            input_buffers['kv_seqlens'],
+            num_attention_heads=self.num_attention_heads,
             decoding_query_len=graph_meta.decode_query_len,
             is_fp8_kvcache=step_context.model_config.use_mla_fp8_cache,
             index_topk=self.index_topk,
@@ -721,8 +712,20 @@ class FlashMLAImpl(TritonAttentionImpl):
             return self._decoding_paged(query, k_cache, attn_metadata)
 
         query = self._gather_dcp_query(query)
+        query_len = query.size(0) // attn_metadata.q_seqlens.numel()
+        if query_len > 1:
+            # Consecutive global queries do not advance each interleaved
+            # shard by one token. Present each row as a one-query request
+            # with its own causal length instead of FlashMLA's local mask.
+            attn_metadata = replace(
+                attn_metadata,
+                q_seqlens=attn_metadata.q_seqlens.new_ones(query.size(0)),
+                dcp_local_kv_seqlens=get_dcp_local_causal_seq_lens(
+                    attn_metadata.kv_seqlens, query_len, (self.dcp_world_size, self.dcp_rank)),
+                block_offsets=attn_metadata.block_offsets.repeat_interleave(query_len, dim=0),
+            )
         local_output, local_lse = self._decoding_paged(
-            query, k_cache, attn_metadata, return_lse=True)
+            query, k_cache, attn_metadata, causal=False, return_lse=True)
         return self._merge_dcp_attention(
             local_output,
             local_lse,

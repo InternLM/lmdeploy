@@ -70,6 +70,15 @@ def get_dcp_local_seq_lens(seq_lens: torch.Tensor,
                        min=0)
 
 
+def get_dcp_local_causal_seq_lens(kv_seqlens: torch.Tensor, query_len: int,
+                                  dcp_world_rank: tuple[int, int]) -> torch.Tensor:
+    """Return rank-local causal lengths, flattened in request/query order."""
+    if query_len > 1:
+        offsets = torch.arange(1 - query_len, 1, device=kv_seqlens.device, dtype=kv_seqlens.dtype)
+        kv_seqlens = (kv_seqlens[:, None] + offsets).flatten()
+    return get_dcp_local_seq_lens(kv_seqlens, dcp_world_rank)
+
+
 def get_dcp_local_cu_seqlens(
         seq_lens: torch.Tensor,
         dcp_world_rank: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor]:
