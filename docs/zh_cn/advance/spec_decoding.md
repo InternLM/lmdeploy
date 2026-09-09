@@ -142,6 +142,49 @@ Qwen/Qwen3.5-35B-A3B \
 设置 DFlash block size 后，它会覆盖 `--speculative-num-draft-tokens`，
 并将新提出的 token 数设置为 `block_size - 1`。
 
+### DSpark
+
+DSpark 使用 DFlash 风格的并行草稿骨干网络，并通过轻量的从左到右 Markov
+校正引入块内依赖。LMDeploy 的首个实现使用固定验证窗口和贪心解码，支持外部
+Speculators 格式草稿模型，以及在同一 checkpoint 中包含 `mtp.*` DSpark
+权重的 DeepSeek-V4 模型。对于后一种模型，将 `model` 留空即可复用目标
+checkpoint 作为草稿权重来源。
+
+```python
+from lmdeploy import PytorchEngineConfig, pipeline
+from lmdeploy.messages import SpeculativeConfig
+
+def main():
+    model = 'deepseek-ai/DeepSeek-V4-Flash-0731'
+    pipe = pipeline(
+        model,
+        backend_config=PytorchEngineConfig(tp=4),
+        speculative_config=SpeculativeConfig(
+            method='dspark',
+            num_speculative_tokens=5,
+        ),
+    )
+
+
+if __name__ == '__main__':
+    main()
+```
+
+```shell
+lmdeploy serve api_server deepseek-ai/DeepSeek-V4-Flash-0731 \
+  --backend pytorch \
+  --tp 4 \
+  --speculative-algorithm dspark \
+  --speculative-num-draft-tokens 5
+```
+
+DSpark V1 支持 CUDA Graph 执行，该模式是默认且推荐的高性能路径。
+仅在调试时使用 `eager_mode=True` 或传入 `--eager-mode` 作为回退方案。
+DSpark V1 需要 `dp=1` 和 `ep=1`。固定窗口版本暂不支持前缀缓存、草稿
+KV-cache 量化、引导解码、输出 log probabilities，以及基于置信度的动态验证。
+目标模型的单 token 解码与固定窗口验证在 logits 接近并列时可能产生不同的
+浮点结果，因此 DSpark V1 目前不保证贪心输出与仅使用目标模型时逐比特一致。
+
 ## 投机解码与结构化输出
 
 投机解码（MTP）可以与[结构化输出](./structed_output.md)结合使用，使草稿模型提出的 token 也遵循语法约束（如 JSON Schema、正则表达式），从而显著提高接受率。

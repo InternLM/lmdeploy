@@ -15,7 +15,8 @@ class V4PrefillTokenMeta:
 
 
 def build_prefill_token_meta(q_seqlens: torch.Tensor,
-                             cu_q_seqlens: torch.Tensor | None = None):
+                             cu_q_seqlens: torch.Tensor | None = None,
+                             total_tokens: int | None = None):
     """Build per-token prefill sequence mapping without CUDA sync.
 
     Given q_seqlens [bsz], returns token_pos [total_q] where token_pos[i] is the position of token i within its
@@ -26,7 +27,8 @@ def build_prefill_token_meta(q_seqlens: torch.Tensor,
             q_seqlens.new_zeros(1, device=q_seqlens.device),
             q_seqlens.cumsum(0),
         ])
-    total_tokens = cu_q_seqlens[-1]
+    if total_tokens is None:
+        total_tokens = cu_q_seqlens[-1]
     token_id = torch.arange(total_tokens, dtype=cu_q_seqlens.dtype,
                             device=q_seqlens.device)
     seq_id = torch.searchsorted(cu_q_seqlens[1:], token_id, right=True)

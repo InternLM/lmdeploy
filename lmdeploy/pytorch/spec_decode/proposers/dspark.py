@@ -103,6 +103,71 @@ class DSpark(DFlash):
             target_inputs_embeds=None,
         )
 
+    def _prepare_context_materialization(
+            self, model_inputs: ModelInputs,
+            extra_inputs: ARSpecExtraInputs):
+        """Keep only committed verifier rows for the V4 draft ring cache.
+
+        DFlash can leave rejected rows in pageable KV and hide them with logical lengths.  Bundled V4 DSpark also owns a
+        fixed circular window state, where those future writes can overwrite still-live history, so its decode
+        materialization must be compacted to the accepted prefix.
+        """
+        if not model_inputs.is_decoding:
+            return super()._prepare_context_materialization(
+                model_inputs, extra_inputs)
+
+        target_hidden = self._flatten_target_hidden(extra_inputs)
+        context_lengths = self._context_lengths(model_inputs, extra_inputs)
+        query_start_positions = self._query_start_positions(
+            model_inputs, context_lengths)
+        batch_size = context_lengths.numel()
+        query_width = model_inputs.max_q_seqlen
+        keep = (torch.arange(query_width,
+                             device=context_lengths.device).unsqueeze(0)
+                < context_lengths.unsqueeze(1))
+        input_ids = model_inputs.input_ids.reshape(
+            batch_size, query_width)[keep].unsqueeze(0)
+        hidden_width = target_hidden.size(-1)
+        target_hidden = target_hidden.reshape(
+            batch_size, query_width, hidden_width)[keep]
+
+        context_inputs = model_inputs.clone(
+            input_ids=input_ids,
+            seq_length=context_lengths,
+            target_hidden_states=None,
+            target_position_ids=None,
+            target_inputs_embeds=None,
+            is_decoding=False,
+        )
+        return (context_inputs, target_hidden, context_lengths,
+                query_start_positions)
+
+    def _forward_query(self, query_inputs: ModelInputs,
+                       cache_engine: CacheEngine):
+        """Run a DSpark query block without committing mask-query V4 state.
+
+        Query rows are proposal workspace, not committed context.  They share the bundled V4 draft's circular window
+        cache, so leaving them there can evict live history once the 128-token ring wraps.  Materialized target rows
+        remain committed; only the following query forward is rolled back.
+        """
+        state_engine = getattr(cache_engine, 'state_cache_engine', None)
+        if (state_engine is None
+                or 'v4_window_kv_fp8' not in state_engine.named_state_caches):
+            return self._forward(query_inputs, cache_engine=cache_engine)
+        transaction = state_engine.begin_v4_speculative_transaction(
+            query_inputs.state_offsets,
+            query_inputs.history_lengths,
+            query_inputs.seq_length,
+            query_inputs.max_q_seqlen,
+        )
+        try:
+            return self._forward(query_inputs, cache_engine=cache_engine)
+        finally:
+            # None of the anchor/mask query KVs is the target-feature KV that
+            # represents committed context.  Restore every touched row.
+            state_engine.finish_v4_speculative_transaction(
+                transaction, query_inputs.seq_length)
+
     async def propose_block(self,
                             model_inputs: ModelInputs,
                             extra_inputs: ARSpecExtraInputs,
@@ -121,7 +186,7 @@ class DSpark(DFlash):
             model_inputs, context_lengths, extra_inputs.next_token_ids,
             query_start_positions=query_starts)
         self._materialize_context(context_inputs, target_hidden, cache_engine)
-        outputs = self._forward(query_inputs, cache_engine=cache_engine)
+        outputs = self._forward_query(query_inputs, cache_engine)
         batch_size = query_inputs.seq_length.numel()
         sampled = outputs.get('draft_token_ids')
         if sampled is None:

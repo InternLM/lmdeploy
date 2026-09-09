@@ -136,6 +136,7 @@ class CUDASingleGraphRunner:
         num_blocks: int,
         is_decoding: bool,
         decode_query_len: int,
+        max_kv_seqlen: int,
         pool: tuple[int, int],
         model_config: ModelConfig,
         device: torch.device,
@@ -155,6 +156,7 @@ class CUDASingleGraphRunner:
             num_blocks=num_blocks,
             is_decoding=is_decoding,
             device=device,
+            max_kv_seqlen=max_kv_seqlen,
             input_buffers=dict(),
             output_buffers=dict(),
             vocab_size=self.model_config.vocab_size,
@@ -163,7 +165,11 @@ class CUDASingleGraphRunner:
             mla_index_topk=getattr(self.model_config, 'mla_index_topk', None),
             use_fa3_decoding=(model_config.model_paradigm == 'ar_spec'
                               and not getattr(model_config, 'use_flash_mla', False)),
-            is_ssm=len(model_config.states_shapes) > 0,
+            # Both legacy SSM states and named state caches use state_offsets.
+            # V4 declares only state_cache_specs, so omitting this buffer would
+            # freeze the dummy warmup slot into every graph replay.
+            is_ssm=(len(model_config.states_shapes) > 0
+                    or len(model_config.state_cache_specs) > 0),
             use_mrope=model_config.use_mrope,
             block_size=model_config.block_size,
             decode_query_len=decode_query_len,
@@ -190,9 +196,30 @@ class CUDASingleGraphRunner:
         self.model.update_context_cudagraph(self.meta, context)
         current_stream = torch.cuda.current_stream()
 
+        # Stateful models update their named state caches during forward.  The
+        # eager warmup below must not consume the request state before the
+        # captured forward runs.  Snapshot only the active state rows (rather
+        # than the full, potentially large caches), then restore them between
+        # warmup and capture.  The capture execution itself is intentionally
+        # left committed so the first request advances state exactly once.
+        state_backups = []
+        named_state_caches = getattr(context, 'named_state_caches', None)
+        state_ids = self.meta.input_buffers.get('state_ids')
+        if named_state_caches and state_ids is not None:
+            active_state_ids = torch.unique(state_ids[state_ids >= 0])
+            for cache in named_state_caches.values():
+                state_backups.append((cache, cache.index_select(1, active_state_ids).clone()))
+
         # warmup
         warmup_output = self.model_forward(**padded_kwargs)
         warmup_buffers = self.model.make_output_buffers(warmup_output)
+
+        for cache, backup in state_backups:
+            # CUDA index_copy does not implement float8.  A byte view keeps
+            # the state-row dimension unchanged and provides an exact,
+            # dtype-agnostic restore for all named cache formats.
+            cache.view(torch.uint8).index_copy_(
+                1, active_state_ids, backup.view(torch.uint8))
 
         if self.USE_GRAPH:
             step_meta_plan = self.meta.step_meta_plan
@@ -216,7 +243,9 @@ class CUDASingleGraphRunner:
                                   capture_error_mode='thread_local'):
                 output = self.model_forward(**padded_kwargs)
         else:
-            output = warmup_output
+            # Fake capture still represents one real model invocation.  Run it
+            # after restoring the warmup side effects so state advances once.
+            output = self.model_forward(**padded_kwargs)
 
         output_buffers = self.model.make_output_buffers(output)
         self.meta.output_buffers = output_buffers
@@ -252,6 +281,8 @@ class CUDAGraphRunner(GraphRunner):
         super().__init__(model, model_config, cache_config, backend_config, device)
         self.max_batches = cache_config.max_batches
         self.num_blocks = cache_config.num_gpu_blocks
+        self.max_kv_seqlen = cache_config.max_session_len or (
+            cache_config.num_gpu_blocks * cache_config.block_size)
 
         # Speculative decoding on CUDA requires FlashAttention-3 (FA3),
         # unless the model uses FlashMLA (e.g., DeepSeek MTP) which handles
@@ -371,6 +402,7 @@ class CUDAGraphRunner(GraphRunner):
                 num_blocks=self.num_blocks,
                 is_decoding=is_decoding,
                 decode_query_len=decode_query_len,
+                max_kv_seqlen=self.max_kv_seqlen,
                 pool=self.graph_pool_handle,
                 model_config=self.model_config,
                 device=self.device,

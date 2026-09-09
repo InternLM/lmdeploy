@@ -171,12 +171,17 @@ def _score_kv_kernel(
 
     Prefill overlap data windows per compression point at compress_abs:
       prev window: abs_pos in [compress_abs - 2*ratio + 1, compress_abs - ratio]
-        - If prev_abs_base < 0:        zeros / -1e30 (no history)
-        - If prev_abs_base < start_pos: read from state (ring buffer rows)
-        - Else:                         read from kv LEFT half + score + ape
+        - Positions before zero:        zeros / -1e30 (no history)
+        - Positions before start_pos:   read from state (ring buffer rows)
+        - Positions from start_pos on:  read from kv LEFT half + score + ape
       curr window: abs_pos in [compress_abs - ratio + 1, compress_abs]
-        - Always in new tokens: read from kv RIGHT half + score + ape
+        - Positions before start_pos:   read from state (ring buffer rows)
+        - Positions from start_pos on:  read from kv RIGHT half + score + ape
       Manual softmax over [2*ratio] (prev+curr as separate blocks).
+
+    A window can straddle the history/current boundary when start_pos is not
+    ratio-aligned. Each row must therefore select its source independently;
+    treating the whole window as current would form a negative kv_ptr offset.
 
     Prefill non-overlap data windows:
       abs_pos in [compress_abs - ratio + 1, compress_abs]
@@ -319,49 +324,82 @@ def _score_kv_kernel(
                 prev_abs_base = compress_abs - 2 * ratio + 1
                 curr_abs_base = compress_abs - ratio + 1
 
-                if prev_abs_base < 0:
-                    prev_kv = tl.zeros((ratio, BLOCK_D), dtype=tl.float32)
-                    prev_score = tl.full((ratio, BLOCK_D), -1e30, dtype=tl.float32)
-                elif prev_abs_base < start_pos:
-                    _prev_head = (prev_abs_base // ratio % 2) * ratio
-                    _prev_row_ids = (_prev_head + row_ids) % cap
-                    prev_kv = tl.load(
-                        kv_state_ptr + state_id * kvc_stride_n +
-                        _prev_row_ids[:, None] * kvc_stride_r +
-                        offs_d[None, :] * kvc_stride_d).to(tl.float32)
-                    prev_score = tl.load(
-                        score_state_ptr + state_id * scorec_stride_n +
-                        _prev_row_ids[:, None] * scorec_stride_r +
-                        offs_d[None, :] * scorec_stride_d).to(tl.float32)
-                else:
-                    _prev_kv_pos = seq_start + (prev_abs_base - start_pos)
-                    _prev_abs_pos = prev_abs_base + row_ids
-                    prev_kv = tl.load(
-                        kv_ptr + (_prev_kv_pos + row_ids[:, None]) * kv_stride_s +
-                        offs_d[None, :] * kv_stride_d).to(tl.float32)
-                    _prev_score_raw = tl.load(
-                        score_ptr + (_prev_kv_pos + row_ids[:, None]) * score_stride_s +
-                        offs_d[None, :] * score_stride_d).to(tl.float32)
-                    _prev_ape = tl.load(
-                        ape_ptr + (_prev_abs_pos % ratio)[:, None] * ape_stride_r +
-                        offs_d[None, :] * ape_stride_d).to(tl.float32)
-                    prev_score = _prev_score_raw + _prev_ape
+                _prev_abs_pos = prev_abs_base + row_ids
+                _prev_valid = _prev_abs_pos >= 0
+                _prev_from_state = _prev_valid & (_prev_abs_pos < start_pos)
+                _prev_from_input = _prev_abs_pos >= start_pos
+                _prev_state_rows = (_prev_abs_pos + ratio) % cap
+                _prev_state_mask = _prev_from_state[:, None]
+                prev_kv_state = tl.load(
+                    kv_state_ptr + state_id * kvc_stride_n +
+                    _prev_state_rows[:, None] * kvc_stride_r +
+                    offs_d[None, :] * kvc_stride_d,
+                    mask=_prev_state_mask, other=0.0).to(tl.float32)
+                prev_score_state = tl.load(
+                    score_state_ptr + state_id * scorec_stride_n +
+                    _prev_state_rows[:, None] * scorec_stride_r +
+                    offs_d[None, :] * scorec_stride_d,
+                    mask=_prev_state_mask, other=-1e30).to(tl.float32)
+
+                _prev_kv_pos = seq_start + (_prev_abs_pos - start_pos)
+                _prev_input_mask = _prev_from_input[:, None]
+                prev_kv_input = tl.load(
+                    kv_ptr + _prev_kv_pos[:, None] * kv_stride_s +
+                    offs_d[None, :] * kv_stride_d,
+                    mask=_prev_input_mask, other=0.0).to(tl.float32)
+                _prev_score_raw = tl.load(
+                    score_ptr + _prev_kv_pos[:, None] * score_stride_s +
+                    offs_d[None, :] * score_stride_d,
+                    mask=_prev_input_mask, other=0.0).to(tl.float32)
+                _prev_ape = tl.load(
+                    ape_ptr + (_prev_abs_pos % ratio)[:, None] * ape_stride_r +
+                    offs_d[None, :] * ape_stride_d,
+                    mask=_prev_input_mask, other=0.0).to(tl.float32)
+                prev_score_input = tl.where(_prev_input_mask,
+                                            _prev_score_raw + _prev_ape, -1e30)
+                prev_kv = tl.where(_prev_state_mask, prev_kv_state,
+                                   prev_kv_input)
+                prev_score = tl.where(_prev_state_mask, prev_score_state,
+                                      prev_score_input)
 
                 if USE_PDL:
                     tl.extra.cuda.gdc_launch_dependents()
 
-                _curr_kv_pos = seq_start + (curr_abs_base - start_pos)
                 _curr_abs_pos = curr_abs_base + row_ids
-                curr_kv = tl.load(
-                    kv_ptr + (_curr_kv_pos + row_ids[:, None]) * kv_stride_s +
-                    (head_dim + offs_d[None, :]) * kv_stride_d).to(tl.float32)
+                _curr_from_state = _curr_abs_pos < start_pos
+                _curr_from_input = _curr_abs_pos >= start_pos
+                _curr_state_rows = (_curr_abs_pos + ratio) % cap
+                _curr_state_mask = _curr_from_state[:, None]
+                curr_kv_state = tl.load(
+                    kv_state_ptr + state_id * kvc_stride_n +
+                    _curr_state_rows[:, None] * kvc_stride_r +
+                    (head_dim + offs_d[None, :]) * kvc_stride_d,
+                    mask=_curr_state_mask, other=0.0).to(tl.float32)
+                curr_score_state = tl.load(
+                    score_state_ptr + state_id * scorec_stride_n +
+                    _curr_state_rows[:, None] * scorec_stride_r +
+                    (head_dim + offs_d[None, :]) * scorec_stride_d,
+                    mask=_curr_state_mask, other=-1e30).to(tl.float32)
+
+                _curr_kv_pos = seq_start + (_curr_abs_pos - start_pos)
+                _curr_input_mask = _curr_from_input[:, None]
+                curr_kv_input = tl.load(
+                    kv_ptr + _curr_kv_pos[:, None] * kv_stride_s +
+                    (head_dim + offs_d[None, :]) * kv_stride_d,
+                    mask=_curr_input_mask, other=0.0).to(tl.float32)
                 _curr_score_raw = tl.load(
-                    score_ptr + (_curr_kv_pos + row_ids[:, None]) * score_stride_s +
-                    (head_dim + offs_d[None, :]) * score_stride_d).to(tl.float32)
+                    score_ptr + _curr_kv_pos[:, None] * score_stride_s +
+                    (head_dim + offs_d[None, :]) * score_stride_d,
+                    mask=_curr_input_mask, other=0.0).to(tl.float32)
                 _curr_ape = tl.load(
                     ape_ptr + (_curr_abs_pos % ratio)[:, None] * ape_stride_r +
-                    (head_dim + offs_d[None, :]) * ape_stride_d).to(tl.float32)
-                curr_score = _curr_score_raw + _curr_ape
+                    (head_dim + offs_d[None, :]) * ape_stride_d,
+                    mask=_curr_input_mask, other=0.0).to(tl.float32)
+                curr_score_input = _curr_score_raw + _curr_ape
+                curr_kv = tl.where(_curr_state_mask, curr_kv_state,
+                                   curr_kv_input)
+                curr_score = tl.where(_curr_state_mask, curr_score_state,
+                                      curr_score_input)
 
                 global_max = tl.maximum(tl.max(prev_score, 0), tl.max(curr_score, 0))
                 exp_prev = tl.exp(prev_score - global_max[None, :])
@@ -373,17 +411,47 @@ def _score_kv_kernel(
                     tl.extra.cuda.gdc_launch_dependents()
 
                 _abs_pos_base = compress_abs - ratio + 1
-                _kv_pos_base = seq_start + (_abs_pos_base - start_pos)
-                merged_kv = tl.load(
-                    kv_ptr + (_kv_pos_base + row_ids[:, None]) * kv_stride_s +
-                    offs_d[None, :] * kv_stride_d).to(tl.float32)
-                merged_score = tl.load(
-                    score_ptr + (_kv_pos_base + row_ids[:, None]) * score_stride_s +
-                    offs_d[None, :] * score_stride_d).to(tl.float32)
-                _ape_vals = tl.load(
-                    ape_ptr + ((_abs_pos_base + row_ids) % ratio)[:, None] * ape_stride_r +
-                    offs_d[None, :] * ape_stride_d).to(tl.float32)
-                merged_score = merged_score + _ape_vals
+                _abs_pos = _abs_pos_base + row_ids
+                _from_state = _abs_pos < start_pos
+                _from_input = ~_from_state
+
+                # A ratio-128 speculative block can cross a compression
+                # boundary while containing only Q rows. Read the historical
+                # prefix from the recurrent ring and only the current suffix
+                # from this block. The former implementation addressed the
+                # complete 128-row window relative to ``kv_ptr`` and formed a
+                # negative pointer whenever start_pos > 0.
+                _state_rows = _abs_pos % ratio
+                _state_mask = _from_state[:, None]
+                state_kv = tl.load(
+                    kv_state_ptr + state_id * kvc_stride_n +
+                    _state_rows[:, None] * kvc_stride_r +
+                    offs_d[None, :] * kvc_stride_d,
+                    mask=_state_mask, other=0.0).to(tl.float32)
+                state_score = tl.load(
+                    score_state_ptr + state_id * scorec_stride_n +
+                    _state_rows[:, None] * scorec_stride_r +
+                    offs_d[None, :] * scorec_stride_d,
+                    mask=_state_mask, other=-1e30).to(tl.float32)
+
+                _input_pos = seq_start + (_abs_pos - start_pos)
+                _input_mask = _from_input[:, None]
+                input_kv = tl.load(
+                    kv_ptr + _input_pos[:, None] * kv_stride_s +
+                    offs_d[None, :] * kv_stride_d,
+                    mask=_input_mask, other=0.0).to(tl.float32)
+                input_score = tl.load(
+                    score_ptr + _input_pos[:, None] * score_stride_s +
+                    offs_d[None, :] * score_stride_d,
+                    mask=_input_mask, other=0.0).to(tl.float32)
+                input_ape = tl.load(
+                    ape_ptr + (_abs_pos % ratio)[:, None] * ape_stride_r +
+                    offs_d[None, :] * ape_stride_d,
+                    mask=_input_mask, other=0.0).to(tl.float32)
+
+                merged_kv = tl.where(_state_mask, state_kv, input_kv)
+                merged_score = tl.where(
+                    _state_mask, state_score, input_score + input_ape)
 
                 soft_score = tl.softmax(merged_score, 0)
                 compressed = tl.sum(merged_kv * soft_score, 0)
@@ -672,49 +740,80 @@ def _score_kv_tiled_prefill_kernel(
         prev_abs_base = compress_abs - 2 * ratio + 1
         curr_abs_base = compress_abs - ratio + 1
 
-        if prev_abs_base < 0:
-            prev_score = tl.full((ratio, BLOCK_D), NEG_INF, dtype=tl.float32)
-            prev_kv = tl.zeros((ratio, BLOCK_D), dtype=tl.float32)
-        elif prev_abs_base < start_pos:
-            _prev_head = (prev_abs_base // ratio % 2) * ratio
-            _prev_row_ids = (_prev_head + row_ids) % cap
-            prev_score = tl.load(
-                score_state_ptr + state_id * scorec_stride_n +
-                _prev_row_ids[:, None] * scorec_stride_r +
-                offs_d[None, :] * scorec_stride_d).to(tl.float32)
-            prev_kv = tl.load(
-                kv_state_ptr + state_id * kvc_stride_n +
-                _prev_row_ids[:, None] * kvc_stride_r +
-                offs_d[None, :] * kvc_stride_d).to(tl.float32)
-        else:
-            _prev_kv_pos = seq_start + (prev_abs_base - start_pos)
-            _prev_abs_pos = prev_abs_base + row_ids
-            prev_kv = tl.load(
-                kv_ptr + (_prev_kv_pos + row_ids[:, None]) * kv_stride_s +
-                offs_d[None, :] * kv_stride_d).to(tl.float32)
-            _prev_score_raw = tl.load(
-                score_ptr + (_prev_kv_pos + row_ids[:, None]) * score_stride_s +
-                offs_d[None, :] * score_stride_d).to(tl.float32)
-            _prev_ape = tl.load(
-                ape_ptr + (_prev_abs_pos % ratio)[:, None] * ape_stride_r +
-                offs_d[None, :] * ape_stride_d).to(tl.float32)
-            prev_score = _prev_score_raw + _prev_ape
+        _prev_abs_pos = prev_abs_base + row_ids
+        _prev_valid = _prev_abs_pos >= 0
+        _prev_from_state = _prev_valid & (_prev_abs_pos < start_pos)
+        _prev_from_input = _prev_abs_pos >= start_pos
+        _prev_state_rows = (_prev_abs_pos + ratio) % cap
+        _prev_state_mask = _prev_from_state[:, None]
+        prev_score_state = tl.load(
+            score_state_ptr + state_id * scorec_stride_n +
+            _prev_state_rows[:, None] * scorec_stride_r +
+            offs_d[None, :] * scorec_stride_d,
+            mask=_prev_state_mask, other=NEG_INF).to(tl.float32)
+        prev_kv_state = tl.load(
+            kv_state_ptr + state_id * kvc_stride_n +
+            _prev_state_rows[:, None] * kvc_stride_r +
+            offs_d[None, :] * kvc_stride_d,
+            mask=_prev_state_mask, other=0.0).to(tl.float32)
+
+        _prev_kv_pos = seq_start + (_prev_abs_pos - start_pos)
+        _prev_input_mask = _prev_from_input[:, None]
+        prev_kv_input = tl.load(
+            kv_ptr + _prev_kv_pos[:, None] * kv_stride_s +
+            offs_d[None, :] * kv_stride_d,
+            mask=_prev_input_mask, other=0.0).to(tl.float32)
+        _prev_score_raw = tl.load(
+            score_ptr + _prev_kv_pos[:, None] * score_stride_s +
+            offs_d[None, :] * score_stride_d,
+            mask=_prev_input_mask, other=0.0).to(tl.float32)
+        _prev_ape = tl.load(
+            ape_ptr + (_prev_abs_pos % ratio)[:, None] * ape_stride_r +
+            offs_d[None, :] * ape_stride_d,
+            mask=_prev_input_mask, other=0.0).to(tl.float32)
+        prev_score_input = tl.where(_prev_input_mask,
+                                    _prev_score_raw + _prev_ape, NEG_INF)
+        prev_kv = tl.where(_prev_state_mask, prev_kv_state, prev_kv_input)
+        prev_score = tl.where(_prev_state_mask, prev_score_state,
+                              prev_score_input)
 
         if USE_PDL:
             tl.extra.cuda.gdc_launch_dependents()
 
-        _curr_kv_pos = seq_start + (curr_abs_base - start_pos)
         _curr_abs_pos = curr_abs_base + row_ids
-        curr_kv = tl.load(
-            kv_ptr + (_curr_kv_pos + row_ids[:, None]) * kv_stride_s +
-            (head_dim + offs_d[None, :]) * kv_stride_d).to(tl.float32)
+        _curr_from_state = _curr_abs_pos < start_pos
+        _curr_from_input = _curr_abs_pos >= start_pos
+        _curr_state_rows = (_curr_abs_pos + ratio) % cap
+        _curr_state_mask = _curr_from_state[:, None]
+        curr_kv_state = tl.load(
+            kv_state_ptr + state_id * kvc_stride_n +
+            _curr_state_rows[:, None] * kvc_stride_r +
+            (head_dim + offs_d[None, :]) * kvc_stride_d,
+            mask=_curr_state_mask, other=0.0).to(tl.float32)
+        curr_score_state = tl.load(
+            score_state_ptr + state_id * scorec_stride_n +
+            _curr_state_rows[:, None] * scorec_stride_r +
+            (head_dim + offs_d[None, :]) * scorec_stride_d,
+            mask=_curr_state_mask, other=NEG_INF).to(tl.float32)
+
+        _curr_kv_pos = seq_start + (_curr_abs_pos - start_pos)
+        _curr_input_mask = _curr_from_input[:, None]
+        curr_kv_input = tl.load(
+            kv_ptr + _curr_kv_pos[:, None] * kv_stride_s +
+            (head_dim + offs_d[None, :]) * kv_stride_d,
+            mask=_curr_input_mask, other=0.0).to(tl.float32)
         curr_score_raw = tl.load(
-            score_ptr + (_curr_kv_pos + row_ids[:, None]) * score_stride_s +
-            (head_dim + offs_d[None, :]) * score_stride_d).to(tl.float32)
+            score_ptr + _curr_kv_pos[:, None] * score_stride_s +
+            (head_dim + offs_d[None, :]) * score_stride_d,
+            mask=_curr_input_mask, other=0.0).to(tl.float32)
         curr_ape = tl.load(
             ape_ptr + (_curr_abs_pos % ratio)[:, None] * ape_stride_r +
-            (head_dim + offs_d[None, :]) * ape_stride_d).to(tl.float32)
-        curr_score = curr_score_raw + curr_ape
+            (head_dim + offs_d[None, :]) * ape_stride_d,
+            mask=_curr_input_mask, other=0.0).to(tl.float32)
+        curr_score_input = curr_score_raw + curr_ape
+        curr_kv = tl.where(_curr_state_mask, curr_kv_state, curr_kv_input)
+        curr_score = tl.where(_curr_state_mask, curr_score_state,
+                              curr_score_input)
 
         global_max = tl.maximum(tl.max(prev_score, 0), tl.max(curr_score, 0))
         exp_prev = tl.exp(prev_score - global_max[None, :])
@@ -730,17 +829,41 @@ def _score_kv_tiled_prefill_kernel(
             tl.extra.cuda.gdc_launch_dependents()
 
         _abs_pos_base = compress_abs - ratio + 1
-        _kv_pos_base = seq_start + (_abs_pos_base - start_pos)
-        merged_kv = tl.load(
-            kv_ptr + (_kv_pos_base + row_ids[:, None]) * kv_stride_s +
-            offs_d[None, :] * kv_stride_d).to(tl.float32)
-        merged_score = tl.load(
-            score_ptr + (_kv_pos_base + row_ids[:, None]) * score_stride_s +
-            offs_d[None, :] * score_stride_d).to(tl.float32)
-        _ape_vals = tl.load(
-            ape_ptr + ((_abs_pos_base + row_ids) % ratio)[:, None] * ape_stride_r +
-            offs_d[None, :] * ape_stride_d).to(tl.float32)
-        merged_score = merged_score + _ape_vals
+        _abs_pos = _abs_pos_base + row_ids
+        _from_state = _abs_pos < start_pos
+        _from_input = ~_from_state
+
+        _state_rows = _abs_pos % ratio
+        _state_mask = _from_state[:, None]
+        state_kv = tl.load(
+            kv_state_ptr + state_id * kvc_stride_n +
+            _state_rows[:, None] * kvc_stride_r +
+            offs_d[None, :] * kvc_stride_d,
+            mask=_state_mask, other=0.0).to(tl.float32)
+        state_score = tl.load(
+            score_state_ptr + state_id * scorec_stride_n +
+            _state_rows[:, None] * scorec_stride_r +
+            offs_d[None, :] * scorec_stride_d,
+            mask=_state_mask, other=NEG_INF).to(tl.float32)
+
+        _input_pos = seq_start + (_abs_pos - start_pos)
+        _input_mask = _from_input[:, None]
+        input_kv = tl.load(
+            kv_ptr + _input_pos[:, None] * kv_stride_s +
+            offs_d[None, :] * kv_stride_d,
+            mask=_input_mask, other=0.0).to(tl.float32)
+        input_score = tl.load(
+            score_ptr + _input_pos[:, None] * score_stride_s +
+            offs_d[None, :] * score_stride_d,
+            mask=_input_mask, other=0.0).to(tl.float32)
+        input_ape = tl.load(
+            ape_ptr + (_abs_pos % ratio)[:, None] * ape_stride_r +
+            offs_d[None, :] * ape_stride_d,
+            mask=_input_mask, other=0.0).to(tl.float32)
+
+        merged_kv = tl.where(_state_mask, state_kv, input_kv)
+        merged_score = tl.where(
+            _state_mask, state_score, input_score + input_ape)
 
         soft_score = tl.softmax(merged_score, 0)
         compressed = tl.sum(merged_kv * soft_score, 0)
@@ -857,7 +980,8 @@ def score_kv(
       first_compress = ((start_pos + ratio) // ratio) * ratio - 1
     Overlap: prev window may come from state (history) or kv LEFT half;
       curr window from kv RIGHT half. Manual softmax.
-    Non-overlap: reads kv + score + ape directly, tl.softmax.
+    Non-overlap: merges history from the state ring with current block rows,
+      then applies tl.softmax.
 
     Args:
         kv: [S, D] flat kv tensor, D = coff * head_dim. Read-only.
@@ -1056,6 +1180,7 @@ def _fast_pow2(x):
 def _fill_compressed_kv_kernel(
     ckv_ptr,
     kv_cache_ptr,
+    state_ids_ptr,
     cu_q_seqlens_ptr,
     kv_seqlens_ptr,
     block_offsets_ptr,
@@ -1088,10 +1213,19 @@ def _fill_compressed_kv_kernel(
     is_decoding: tl.constexpr,
     has_fp8: tl.constexpr,
     has_fp8_simple: tl.constexpr,
+    has_state_ids: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
 ):
     group_id = tl.program_id(0)
     batch_id = tl.program_id(1)
+
+    # Graph padding uses static non-zero q/kv lengths, but state_id=-1 marks
+    # those requests inactive. Without this guard their compressor CTAs all
+    # write through padded block-table row zero and corrupt a live cache row.
+    if has_state_ids:
+        state_id = tl.load(state_ids_ptr + batch_id)
+        if state_id < 0:
+            return
 
     seq_start = tl.load(cu_q_seqlens_ptr + batch_id)
     seq_end = tl.load(cu_q_seqlens_ptr + batch_id + 1)
@@ -1296,6 +1430,7 @@ def fill_compressed_kv(
     max_seqlen_q: int,
     fp8_cache: torch.Tensor | None = None,
     kv_scale_cache: torch.Tensor | None = None,
+    state_ids: torch.Tensor | None = None,
     ):
     """Write compressed KV entries from compressed_kv into paged caches.
 
@@ -1343,9 +1478,14 @@ def fill_compressed_kv(
         fp8_cache: optional [num_blocks, entries_per_block, packed_dim] FP8 cache.
         kv_scale_cache: optional [num_blocks, entries_per_block, 1] FP32 scale cache.
             Required when kv_cache is provided.
+        state_ids: optional [B] state-cache slots. Negative graph-padding
+            entries suppress the corresponding paged-cache write.
     """
     B = kv_seqlens.size(0)
     head_dim = compressed_kv.size(-1)
+    if state_ids is not None and state_ids.numel() != B:
+        raise ValueError('state_ids must have one entry per compressed-KV '
+                         f'sequence, got {state_ids.numel()} for {B}.')
 
     is_decoding = compressed_kv.size(0) == B
 
@@ -1359,9 +1499,11 @@ def fill_compressed_kv(
 
     targets = _prepare_compressed_kv_write_targets(
         compressed_kv, kv_cache, fp8_cache, kv_scale_cache)
+    state_ids_ptr = kv_seqlens if state_ids is None else state_ids
 
     _fill_compressed_kv_kernel[grid](
-        compressed_kv, targets.kv_cache, cu_q_seqlens, kv_seqlens, block_offsets,
+        compressed_kv, targets.kv_cache, state_ids_ptr, cu_q_seqlens,
+        kv_seqlens, block_offsets,
         *compressed_kv.stride(),
         *targets.kv_cache.stride(),
         *block_offsets.stride(),
@@ -1379,6 +1521,7 @@ def fill_compressed_kv(
         is_decoding=is_decoding,
         has_fp8=targets.has_fp8,
         has_fp8_simple=targets.has_fp8_simple,
+        has_state_ids=state_ids is not None,
         GROUP_SIZE=GROUP_SIZE,
         num_warps=4,
     )

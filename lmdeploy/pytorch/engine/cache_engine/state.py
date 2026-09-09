@@ -147,3 +147,81 @@ class StateCacheEngine:
                 src_tensor = tensor.narrow(slot_axis, src, length)
                 dst_tensor = tensor.narrow(slot_axis, dst, length)
                 dst_tensor.copy_(src_tensor, non_blocking=True)
+
+    def begin_v4_speculative_transaction(self, state_offsets: torch.Tensor,
+                                         start_positions: torch.Tensor,
+                                         q_seqlens: torch.Tensor,
+                                         max_q_seqlen: int):
+        """Snapshot V4 circular rows before speculative verification."""
+        state_offsets = state_offsets.to(dtype=torch.long)
+        start_positions = start_positions.to(dtype=torch.long)
+        q_seqlens = q_seqlens.to(dtype=torch.long)
+        max_q_seqlen = int(max_q_seqlen)
+        offsets = torch.arange(max_q_seqlen, device=q_seqlens.device)
+        positions = start_positions.unsqueeze(1) + offsets.unsqueeze(0)
+        snapshots = {}
+        v4_names = (
+            'v4_window_kv_fp8',
+            'v4_compress_state_r4',
+            'v4_compress_state_r4_idx',
+            'v4_compress_state_r128',
+        )
+        for name in v4_names:
+            if name not in self.named_state_caches:
+                continue
+            cache = self.named_state_caches[name]
+            num_rows = cache.size(2)
+            if name == 'v4_window_kv_fp8':
+                capacity = num_rows
+                rows = torch.remainder(positions, capacity)
+            elif name in ('v4_compress_state_r4',
+                          'v4_compress_state_r4_idx'):
+                capacity = num_rows // 2
+                rows = torch.remainder(positions + 4, capacity)
+                rows = torch.cat([rows, rows + capacity], dim=1)
+            else:
+                capacity = num_rows // 2
+                rows = torch.remainder(positions, capacity)
+                rows = torch.cat([rows, rows + capacity], dim=1)
+            if max_q_seqlen > capacity:
+                raise RuntimeError(
+                    'V4 speculative transaction cannot disambiguate multiple '
+                    f'writes to one {name!r} ring row: query length '
+                    f'{max_q_seqlen}, capacity {capacity}.')
+
+            # Layer-scoped V4 state views use [layers, slots, rows, ...].
+            before = cache[:, state_offsets[:, None], rows].clone()
+            snapshots[name] = (rows, before)
+        if not snapshots:
+            return None
+        return dict(state_offsets=state_offsets,
+                    q_seqlens=q_seqlens,
+                    max_q_seqlen=max_q_seqlen,
+                    snapshots=snapshots)
+
+    def finish_v4_speculative_transaction(self, transaction,
+                                          num_rejected_tokens: torch.Tensor):
+        """Restore V4 circular rows written only by rejected candidates."""
+        if transaction is None:
+            return
+        state_offsets = transaction['state_offsets']
+        q_seqlens = transaction['q_seqlens']
+        snapshots = transaction['snapshots']
+        accepted = (q_seqlens - num_rejected_tokens.to(q_seqlens)).clamp(
+            min=0)
+        max_q = transaction['max_q_seqlen']
+        offsets = torch.arange(max_q, device=q_seqlens.device)
+        valid = offsets.unsqueeze(0) < q_seqlens.unsqueeze(1)
+        rejected = valid & (offsets.unsqueeze(0) >= accepted.unsqueeze(1))
+
+        for name, (rows, before) in snapshots.items():
+            cache = self.named_state_caches[name]
+            mask = rejected
+            if rows.size(1) == 2 * max_q:
+                mask = torch.cat([mask, mask], dim=1)
+            current = cache[:, state_offsets[:, None], rows]
+            mask = mask.unsqueeze(0)
+            while mask.dim() < current.dim():
+                mask = mask.unsqueeze(-1)
+            restored = torch.where(mask, before, current)
+            cache[:, state_offsets[:, None], rows] = restored

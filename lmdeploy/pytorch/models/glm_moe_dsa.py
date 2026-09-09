@@ -309,6 +309,7 @@ class GlmMoeDsaModel(DeepseekV32Model):
 
         hidden_states = inputs_embeds
         residual = None
+        aux_hidden_states = []
         cos, sin = self.rotary_emb(hidden_states, position_ids)
         rotary_pos_emb = (cos[0], sin[0])
         for idx, decoder_layer in enumerate(self.layers):
@@ -321,7 +322,12 @@ class GlmMoeDsaModel(DeepseekV32Model):
                 topk_indices_buffer=self.topk_indices_buffer,
                 all_routed_experts=all_routed_experts,
             )
+            if idx in self._aux_hidden_state_layers_set:
+                aux_hidden_states.append(hidden_states + residual)
         hidden_states, _ = self.norm(hidden_states, residual)
+        if aux_hidden_states:
+            return dict(hidden_states=hidden_states,
+                        aux_hidden_states=torch.cat(aux_hidden_states, dim=-1))
         return hidden_states
 
     def forward_microbatch(
@@ -371,16 +377,32 @@ class GlmMoeDsaForCausalLM(DeepseekV32ForCausalLM):
                 dtype=torch.uint16,
             )
         step_ctx = get_step_ctx_manager().current_context()
-        forward = self.model.forward_microbatch if step_ctx.enable_microbatch else self.model.forward
-        hidden_states = forward(input_ids=input_ids,
+        capture_aux = bool(self.model.aux_hidden_state_layers)
+        forward = (self.model.forward_microbatch
+                   if step_ctx.enable_microbatch and not capture_aux else
+                   self.model.forward)
+        model_outputs = forward(input_ids=input_ids,
                                 position_ids=position_ids,
                                 past_key_values=past_key_values,
                                 attn_metadata=attn_metadata,
                                 inputs_embeds=inputs_embeds,
                                 all_routed_experts=all_routed_experts)
+        aux_hidden_states = None
+        if isinstance(model_outputs, dict):
+            aux_hidden_states = model_outputs['aux_hidden_states']
+            hidden_states = model_outputs['hidden_states']
+        else:
+            hidden_states = model_outputs
         if all_routed_experts is None:
-            return hidden_states
-        return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
+            if aux_hidden_states is None:
+                return hidden_states
+            return dict(hidden_states=hidden_states,
+                        aux_hidden_states=aux_hidden_states)
+        outputs = dict(hidden_states=hidden_states,
+                       all_routed_experts=all_routed_experts)
+        if aux_hidden_states is not None:
+            outputs['aux_hidden_states'] = aux_hidden_states
+        return outputs
 
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
                                update_pe_mapping: list):

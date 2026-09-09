@@ -158,6 +158,9 @@ class CacheConfig:
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
+    # Per-request logical capacity. CUDA graphs need this separately from the
+    # global GPU-block pool when sizing fixed V4 speculative workspaces.
+    max_session_len: int | None = None
     kernel_block_size: int = -1
     window_size: int = -1
     cache_max_entry_count: float = 0.8
@@ -442,6 +445,9 @@ class ModelConfig:
     use_flash_mla: bool = False
     mla_kv_cache_dtype: str | None = None
     mla_index_topk: int | None = None
+    # DeepSeek-V4 separates the model-visible local window from the physical
+    # ring capacity reserved for an in-flight speculative verify block.
+    v4_ring_storage_capacity: int | None = None
 
     # dllm
     model_paradigm: str = 'ar'
@@ -836,6 +842,7 @@ class SpecDecodeConfig:
         if method not in no_caches:
             cache_config = CacheConfig(max_batches=target_cache_cfg.max_batches,
                                        block_size=target_cache_cfg.block_size,
+                                       max_session_len=target_cache_cfg.max_session_len,
                                        kernel_block_size=target_cache_cfg.kernel_block_size,
                                        num_cpu_blocks=target_cache_cfg.num_cpu_blocks,
                                        num_gpu_blocks=target_cache_cfg.num_gpu_blocks,

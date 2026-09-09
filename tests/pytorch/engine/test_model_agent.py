@@ -348,6 +348,113 @@ def _make_agent_with_queues():
     return agent
 
 
+class _RecordingWeightModel:
+
+    def __init__(self):
+        self.loaded = []
+
+    def load_weights(self, weights):
+        self.loaded.extend(name for name, _ in weights)
+
+
+class _PatchedWeightModel:
+
+    def __init__(self, model):
+        self.model = model
+
+    def get_model(self):
+        return self.model
+
+
+class _BundledDSparkAgent:
+
+    method = 'dspark'
+    specdecode_config = SimpleNamespace(dspark_bundled_draft=True)
+
+    def __init__(self, model):
+        self.model = model
+
+    def is_enabled(self):
+        return True
+
+    def get_model(self):
+        return self.model
+
+
+def _make_weight_update_agent(agent_module):
+    main = _RecordingWeightModel()
+    draft = _RecordingWeightModel()
+    agent = agent_module.BaseModelAgent.__new__(agent_module.BaseModelAgent)
+    agent.patched_model = _PatchedWeightModel(main)
+    agent.spec_agent = _BundledDSparkAgent(draft)
+    agent.dist_ctx = SimpleNamespace(tp_group=SimpleNamespace(rank=0))
+    agent._update_params_ipc_tensor = None
+    agent._update_params_ipc_event = None
+    agent._model_update_group = {'test': object()}
+    agent.all_context = nullcontext
+    return agent, main, draft
+
+
+def test_update_params_routes_bundled_dspark_weights(monkeypatch):
+    import lmdeploy.pytorch.engine.model_agent.agent as agent_module
+    from lmdeploy.serve.openai.protocol import UpdateParamsRequest
+
+    agent, main, draft = _make_weight_update_agent(agent_module)
+
+    def construct(value, *args):
+        return torch.tensor([value])
+
+    serialized = [
+        ('model.weight', (construct, (1, None, None, None, None, None, None))),
+        ('mtp.0.weight', (construct, (2, None, None, None, None, None, None))),
+    ]
+    monkeypatch.setattr(agent_module, 'ForkingPickler',
+                        SimpleNamespace(loads=lambda _: serialized))
+    monkeypatch.setattr(agent_module.pybase64, 'b64decode', lambda _: b'ignored')
+    monkeypatch.setattr(torch.cuda, 'current_device', lambda: 0)
+    monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
+    monkeypatch.setattr(
+        agent_module.ModelWeightLoader, '_rename_weights_iterator',
+        staticmethod(lambda weights, model: iter(weights)))
+
+    agent.update_params(UpdateParamsRequest(serialized_named_tensors='ignored'))
+
+    assert main.loaded == ['model.weight']
+    assert draft.loaded == ['mtp.0.weight']
+
+
+def test_distributed_update_routes_bundled_dspark_weights(monkeypatch):
+    import lmdeploy.pytorch.engine.model_agent.agent as agent_module
+    from lmdeploy.serve.openai.protocol import UpdateWeightsFromDistributedRequest
+
+    agent, main, draft = _make_weight_update_agent(agent_module)
+    real_empty = torch.empty
+
+    def cpu_empty(shape, dtype=None, device=None, **kwargs):
+        return real_empty(shape, dtype=dtype, device='cpu', **kwargs)
+
+    monkeypatch.setattr(torch, 'empty', cpu_empty)
+    monkeypatch.setattr(torch.cuda, 'current_device', lambda: 0)
+    monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
+    monkeypatch.setattr(
+        agent_module.dist, 'broadcast',
+        lambda *args, **kwargs: SimpleNamespace(wait=lambda: None))
+    monkeypatch.setattr(
+        agent_module.ModelWeightLoader, '_rename_weights_iterator',
+        staticmethod(lambda weights, model: iter(weights)))
+
+    ok, _ = agent.update_weights_from_distributed(
+        UpdateWeightsFromDistributedRequest(
+            names=['model.weight', 'mtp.0.weight'],
+            dtypes=['float32', 'float32'],
+            shapes=[[1], [1]],
+            group_name='test'))
+
+    assert ok
+    assert main.loaded == ['model.weight']
+    assert draft.loaded == ['mtp.0.weight']
+
+
 def test_prepare_inputs_prefill_keeps_chunk_model_metas_across_interleaved_prefill():
     from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
@@ -1046,6 +1153,172 @@ def test_async_model_forward_preserves_cache_inputs_through_forward_impl():
 
     assert seen == [(model_inputs, cache_inputs)]
     assert output['logits'] is hidden_states
+
+
+def test_async_model_forward_rolls_back_v4_transaction_on_failure():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    inputs = SimpleNamespace(
+        input_ids=torch.tensor([[10, 11, 12, 13, 14, 15]]),
+        is_decoding=True,
+        is_dummy=False,
+        state_offsets=torch.tensor([3]),
+        history_lengths=torch.tensor([126]),
+        seq_length=torch.tensor([6]),
+        max_q_seqlen=6,
+        max_kv_seqlen=132,
+        sum_kv_seqlen=132,
+        mrope_pos_ids=None,
+    )
+    inputs.clone = lambda **kwargs: SimpleNamespace(**{
+        **inputs.__dict__,
+        **kwargs,
+    })
+    calls = []
+
+    class _StateCacheEngine:
+        named_state_caches = {'v4_window_kv_fp8': object()}
+
+        def begin_v4_speculative_transaction(self, *args):
+            calls.append(('begin', args))
+            return {'q_seqlens': inputs.seq_length}
+
+        def finish_v4_speculative_transaction(self, transaction, rejected):
+            calls.append(('finish', transaction, rejected))
+
+    async def fail_forward(*args, **kwargs):
+        raise RuntimeError('target failed')
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.memdecode_agent = None
+    agent.spec_agent = SimpleNamespace(
+        specdecode_config=SimpleNamespace(method='dspark'))
+    agent.state_cache_engine = _StateCacheEngine()
+    agent._v4_speculative_state_transaction = None
+    agent.async_forward = fail_forward
+
+    with pytest.raises(RuntimeError, match='target failed'):
+        asyncio.run(agent._async_model_forward(inputs, return_logits=False))
+
+    assert calls[0] == (('begin', (inputs.state_offsets,
+                                   inputs.history_lengths,
+                                   inputs.seq_length,
+                                   inputs.max_q_seqlen)))
+    assert calls[1][0] == 'finish'
+    assert calls[1][1] == {'q_seqlens': inputs.seq_length}
+    assert torch.equal(calls[1][2], inputs.seq_length)
+    assert agent._v4_speculative_state_transaction is None
+
+
+def test_v4_dspark_batched_forward_runs_target_once_and_preserves_logit_layout():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+    from lmdeploy.pytorch.model_inputs import ModelInputs
+
+    inputs = ModelInputs(
+        input_ids=torch.tensor([[10, 11, 12, 20, 21, 22]]),
+        seq_length=torch.tensor([3, 3]),
+        history_lengths=torch.tensor([7, 17]),
+        block_offsets=torch.tensor([[0], [1]], dtype=torch.int32),
+        is_decoding=True,
+        num_ignored_history=torch.tensor([0, 0]),
+        max_q_seqlen=3,
+        max_kv_seqlen=20,
+        sum_kv_seqlen=30,
+        state_offsets=torch.tensor([4, 5]),
+    )
+    calls = []
+
+    async def batched_forward(step_inputs, cache_inputs=None):
+        calls.append((step_inputs, cache_inputs))
+        ids = step_inputs.input_ids.float()
+        return {
+            'hidden_states': ids.unsqueeze(-1),
+            'aux_hidden_states': (ids + 100).unsqueeze(-1),
+        }
+
+    class _StateCacheEngine:
+        named_state_caches = {'v4_window_kv_fp8': object()}
+
+        def begin_v4_speculative_transaction(self, *args):
+            return {'args': args}
+
+    class _SpecAgent:
+        specdecode_config = SimpleNamespace(method='dspark')
+
+        def update_main_model_outputs(self, output, step_inputs):
+            assert step_inputs is inputs
+            return output['hidden_states'], output
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.memdecode_agent = None
+    agent.spec_agent = _SpecAgent()
+    agent.state_cache_engine = _StateCacheEngine()
+    agent._v4_speculative_state_transaction = None
+    agent.async_forward = batched_forward
+
+    def get_logits(hidden_states):
+        token_ids = hidden_states.long().squeeze(-1) + 1
+        return torch.nn.functional.one_hot(
+            token_ids, num_classes=32).float()
+
+    agent.get_logits = get_logits
+    cache_inputs = object()
+    output = asyncio.run(agent._async_model_forward(
+        inputs, return_logits=True, cache_inputs=cache_inputs))
+
+    assert calls == [(inputs, cache_inputs)]
+    assert output['hidden_states'].squeeze(-1).tolist() == [
+        [10, 11, 12, 20, 21, 22]
+    ]
+    assert output['aux_hidden_states'].squeeze(-1).tolist() == [
+        [110, 111, 112, 120, 121, 122]
+    ]
+    assert output['logits'].argmax(-1).tolist() == [
+        [11, 12, 13, 21, 22, 23]
+    ]
+
+
+def test_non_spec_follower_postprocess_has_no_rejection_counts():
+    from contextlib import nullcontext
+
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    next_token = torch.tensor([7])
+    extra = SimpleNamespace()
+
+    class _AgentStrategy:
+
+        def make_dummy_next_token(self, inputs, logits, extra_inputs):
+            return next_token, extra_inputs
+
+        def make_extra_outputs(self, extra_inputs):
+            return 'extra-output'
+
+    class _SpecAgent:
+
+        async def async_model_forward(self, inputs, extra_inputs,
+                                      sampling_inputs):
+            return extra_inputs
+
+        def post_broadcast(self, *args, **kwargs):
+            return nullcontext()
+
+        def is_enabled(self):
+            return False
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.rank = 1
+    agent.dist_ctx = None
+    agent.agent_strategy = _AgentStrategy()
+    agent.spec_agent = _SpecAgent()
+    agent._v4_speculative_state_transaction = None
+    agent._broadcast_next_token = lambda *args, **kwargs: nullcontext()
+    inputs = SimpleNamespace(is_dummy=False)
+
+    result = asyncio.run(agent._step_postprocess_without_output(
+        inputs, torch.ones(1, 2), extra, None, need_broadcast_next=True))
+
+    assert result == (inputs, next_token, extra, 'extra-output')
 
 
 class TestDrainQueues:
@@ -1806,8 +2079,11 @@ class TestMemDecodeModelAgentLifecycle:
         def _cache_swapping(cache_engine, swap_in_map=None, swap_out_map=None):
             calls.append((cache_engine, swap_in_map, swap_out_map))
 
-        async def _async_model_forward(_inputs, return_logits, cache_inputs=None):
+        async def _async_model_forward(_inputs, return_logits,
+                                       cache_inputs=None,
+                                       sampling_inputs=None):
             assert cache_inputs is None
+            assert sampling_inputs is None
             raise _StopAfterSwap
 
         monkeypatch.setattr(agent_module, 'get_dist_manager', lambda: _DistManager())

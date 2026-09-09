@@ -338,9 +338,16 @@ class ExecutorBase:
         logger.debug(f'minimal free gpu memory: {min(free_mems) >> 20} mb')
         return free_mems
 
-    def _reserve_state_cache_mem(self, free_mems: list[int]) -> list[int]:
+    def _reserve_state_cache_mem(self,
+                                 free_mems: list[int],
+                                 spec_cache_config: CacheConfig | None = None,
+                                 spec_model_config: ModelConfig | None = None) -> list[int]:
         """Reserve non-pageable state cache memory from free memory."""
         state_cache_mem = self._get_state_cache_mem() + self._get_mem_state_cache_mem()
+        if spec_cache_config is not None and spec_model_config is not None:
+            state_cache_mem += self._get_state_cache_mem(
+                cache_config=spec_cache_config,
+                model_config=spec_model_config)
         # State cache is allocated as a separate pool and is not governed by
         # cache_max_entry_count, so subtract it from every rank first.
         free_mems = [free_mem - state_cache_mem for free_mem in free_mems]
@@ -407,10 +414,13 @@ class ExecutorBase:
         self.cache_config.states_shapes = self.model_config.states_shapes
 
         spec_cache_config, spec_model_config = self._get_spec_configs()
+        if spec_cache_config is not None and spec_model_config is not None:
+            spec_cache_config.states_shapes = spec_model_config.states_shapes
         cache_block_sizes = self._prepare_worker_cache_plans(self.cache_config, spec_cache_config)
 
         free_mems = self._get_free_gpu_mems()
-        free_mems = self._reserve_state_cache_mem(free_mems)
+        free_mems = self._reserve_state_cache_mem(
+            free_mems, spec_cache_config, spec_model_config)
         free_mems = self._reserve_runtime_mem(free_mems, cache_block_sizes, spec_cache_config)
         self._update_num_gpu_blocks(free_mems, cache_block_sizes, spec_cache_config)
 

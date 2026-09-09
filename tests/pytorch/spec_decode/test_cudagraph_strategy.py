@@ -67,6 +67,7 @@ def test_cudagraph_step_metadata_plan_owns_single_token_capture_buffers(monkeypa
         num_blocks=1,
         is_decoding=True,
         device=torch.device('cpu'),
+        max_kv_seqlen=64,
         input_buffers={},
         output_buffers={},
         use_fa3_decoding=True,
@@ -99,6 +100,9 @@ def test_cudagraph_step_metadata_plan_owns_single_token_capture_buffers(monkeypa
     )
 
     assert plan.max_seqlen_q_calls == [1, 1]
+    assert attn_metadata.is_cuda_graph is True
+    assert attn_metadata.graph_max_kv_seqlen == 64
+    assert attn_metadata.graph_sum_kv_seqlen == 8 * 64
 
 
 def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypatch):

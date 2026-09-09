@@ -38,6 +38,7 @@ from .deepseek_v2 import (
     DeepseekV2MoE,
     yarn_get_mscale,
 )
+from .patch import get_build_model_context
 
 
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
@@ -480,8 +481,13 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
         defer_attn_all_reduce = RMSNorm.can_handle_all_reduce('attn')
         # MLP is consumed by the next target layer, so terminal and MTP blocks
         # must still reduce their outputs.
-        defer_mlp_all_reduce = (layer_idx < config.num_hidden_layers - 1
-                                and RMSNorm.can_handle_all_reduce('mlp'))
+        captured_layers = frozenset(
+            get_build_model_context().spec_model_ctx.
+            target_aux_hidden_state_layers)
+        defer_mlp_all_reduce = (
+            layer_idx < config.num_hidden_layers - 1
+            and layer_idx not in captured_layers
+            and RMSNorm.can_handle_all_reduce('mlp'))
 
         # build attention layer
         self.self_attn = self.attention_cls(
@@ -529,6 +535,10 @@ class DeepseekV32Model(DeepseekV2Model):
             self.decoder_layer_cls(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
+        self.aux_hidden_state_layers: tuple[int, ...] = \
+            get_build_model_context().spec_model_ctx.target_aux_hidden_state_layers
+        self._aux_hidden_state_layers_set = frozenset(
+            self.aux_hidden_state_layers)
 
         # build norm
         self.norm = RMSNorm(config.hidden_size,
@@ -546,6 +556,38 @@ class DeepseekV32Model(DeepseekV2Model):
         update_params = build_rotary_params(config)
         rope_params.update(update_params)
         self.rotary_emb = build_rotary_embedding(**rope_params)
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
+        attn_metadata: Any = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+    ):
+        """Forward with optional post-layer DSpark auxiliary capture."""
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+        hidden_states = inputs_embeds
+        residual = None
+        cos, sin = self.rotary_emb(hidden_states, position_ids)
+        rotary_pos_emb = (cos[0], sin[0])
+        aux_hidden_states = []
+        for idx, decoder_layer in enumerate(self.layers):
+            hidden_states, residual = decoder_layer(
+                hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_values[idx],
+                residual=residual,
+                attn_metadata=attn_metadata,
+            )
+            if idx in self._aux_hidden_state_layers_set:
+                aux_hidden_states.append(hidden_states + residual)
+        hidden_states, _ = self.norm(hidden_states, residual)
+        if aux_hidden_states:
+            return dict(hidden_states=hidden_states,
+                        aux_hidden_states=torch.cat(aux_hidden_states, dim=-1))
+        return hidden_states
 
 
 class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
@@ -571,6 +613,38 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
         if config.tie_word_embeddings:
             self.lm_head.tie_weights(self.model.get_input_embeddings())
         self._load_buffers = dict()
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: list[list[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
+        **kwargs,
+    ):
+        del kwargs
+        # Layer capture needs the ordinary ordered loop; microbatch overlap
+        # cannot expose completed intermediate states.
+        capture_aux = bool(self.model.aux_hidden_state_layers)
+        step_ctx = self.ctx_mgr.current_context()
+        forward = (self.model.forward_microbatch
+                   if step_ctx.enable_microbatch and not capture_aux else
+                   self.model.forward)
+        return forward(input_ids=input_ids,
+                       position_ids=position_ids,
+                       past_key_values=past_key_values,
+                       attn_metadata=attn_metadata,
+                       inputs_embeds=inputs_embeds)
+
+    def get_outputs_cudagraph(self, output_buffers: dict[str, torch.Tensor],
+                              input_ids: torch.Tensor, **kwargs):
+        outputs = super().get_outputs_cudagraph(output_buffers, input_ids,
+                                                **kwargs)
+        aux_hidden_states = output_buffers.get('aux_hidden_states')
+        if aux_hidden_states is not None:
+            outputs['aux_hidden_states'] = aux_hidden_states[:, :input_ids.size(-1)]
+        return outputs
 
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
                                update_pe_mapping: list):

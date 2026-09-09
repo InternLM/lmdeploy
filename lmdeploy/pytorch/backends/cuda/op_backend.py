@@ -93,7 +93,10 @@ class CudaOpsBackend(DefaultOpsBackend):
             from .attention.v4 import TritonV4AttentionImpl
             return cast(
                 ImplT,
-                TritonV4AttentionImpl(spec.head_dim, spec.scale, spec.window_size, spec.compress_ratio),
+                TritonV4AttentionImpl(spec.head_dim, spec.scale,
+                                      spec.window_size,
+                                      spec.ring_storage_capacity,
+                                      spec.compress_ratio),
             )
         if isinstance(spec, V4IndexerBuildSpec):
             from .v4_indexer import TritonV4IndexerImpl

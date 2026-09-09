@@ -71,8 +71,11 @@ class V4Compressor(nn.Module):
         compressed_kv: torch.Tensor,
         block_caches: Mapping[str, torch.Tensor],
         meta: V4CompressorMetadata,
+        state_ids: torch.Tensor | None = None,
     ) -> None:
-        self.impl.write_compressed_kv(compressed_kv, block_caches, meta)
+        self.impl.write_compressed_kv(
+            compressed_kv, block_caches, meta,
+            state_ids=state_ids)
 
     def rotate_activation(self, x: torch.Tensor) -> torch.Tensor:
         return self.impl.rotate_activation(x)

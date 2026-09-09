@@ -225,22 +225,20 @@ def _reference_score_kv(kv, score, ape, kv_state, score_state, state_ids,
                     # curr window: abs_pos in [compress_abs - ratio + 1, compress_abs]
                     curr_abs_base = compress_abs - ratio + 1
 
-                    # prev window
-                    if prev_abs_base < 0:
-                        prev_kv = torch.zeros(ratio, head_dim, dtype=torch.float32, device=kv.device)
-                        prev_score = torch.full((ratio, head_dim), -1e30, dtype=torch.float32, device=kv.device)
-                    elif prev_abs_base < start_pos:
-                        # read from state
-                        cap = 2 * ratio
-                        _prev_head = (prev_abs_base // ratio % 2) * ratio
-                        prev_rows = [(_prev_head + i) % cap for i in range(ratio)]
-                        prev_kv = kv_state[sid, prev_rows, :head_dim].float()
-                        prev_score = score_state[sid, prev_rows, :head_dim].float()
-                    else:
-                        prev_kv = torch.zeros(ratio, head_dim, dtype=torch.float32, device=kv.device)
-                        prev_score = torch.zeros(ratio, head_dim, dtype=torch.float32, device=kv.device)
-                        for i in range(ratio):
-                            abs_pos_i = prev_abs_base + i
+                    # A ratio-sized window can straddle the history/current
+                    # boundary, so choose the source independently per row.
+                    cap = 2 * ratio
+                    prev_kv = torch.zeros(ratio, head_dim, dtype=torch.float32, device=kv.device)
+                    prev_score = torch.full((ratio, head_dim), -1e30, dtype=torch.float32, device=kv.device)
+                    for i in range(ratio):
+                        abs_pos_i = prev_abs_base + i
+                        if abs_pos_i < 0:
+                            continue
+                        if abs_pos_i < start_pos:
+                            state_row = (abs_pos_i + ratio) % cap
+                            prev_kv[i] = kv_state[sid, state_row, :head_dim].float()
+                            prev_score[i] = score_state[sid, state_row, :head_dim].float()
+                        else:
                             kv_pos = seq_start + (abs_pos_i - start_pos)
                             prev_kv[i] = kv[kv_pos, :head_dim].float()
                             prev_score[i] = score[kv_pos, :head_dim].float() + ape[abs_pos_i % ratio, :head_dim]
@@ -250,9 +248,14 @@ def _reference_score_kv(kv, score, ape, kv_state, score_state, state_ids,
                     curr_score = torch.zeros(ratio, head_dim, dtype=torch.float32, device=kv.device)
                     for i in range(ratio):
                         abs_pos_i = curr_abs_base + i
-                        kv_pos = seq_start + (abs_pos_i - start_pos)
-                        curr_kv[i] = kv[kv_pos, head_dim:].float()
-                        curr_score[i] = score[kv_pos, head_dim:].float() + ape[abs_pos_i % ratio, head_dim:]
+                        if abs_pos_i < start_pos:
+                            state_row = (abs_pos_i + ratio) % cap
+                            curr_kv[i] = kv_state[sid, state_row, head_dim:].float()
+                            curr_score[i] = score_state[sid, state_row, head_dim:].float()
+                        else:
+                            kv_pos = seq_start + (abs_pos_i - start_pos)
+                            curr_kv[i] = kv[kv_pos, head_dim:].float()
+                            curr_score[i] = score[kv_pos, head_dim:].float() + ape[abs_pos_i % ratio, head_dim:]
 
                     merged_kv = torch.cat([prev_kv, curr_kv], dim=0)
                     merged_score = torch.cat([prev_score, curr_score], dim=0)
@@ -262,9 +265,19 @@ def _reference_score_kv(kv, score, ape, kv_state, score_state, state_ids,
                     abs_base = compress_abs - ratio + 1
                     for i in range(ratio):
                         abs_pos_i = abs_base + i
-                        kv_pos = seq_start + (abs_pos_i - start_pos)
-                        merged_kv[i] = kv[kv_pos, :head_dim].float()
-                        merged_score[i] = score[kv_pos, :head_dim].float() + ape[abs_pos_i % ratio, :head_dim]
+                        if abs_pos_i < start_pos:
+                            state_row = abs_pos_i % ratio
+                            merged_kv[i] = kv_state[
+                                sid, state_row, :head_dim].float()
+                            merged_score[i] = score_state[
+                                sid, state_row, :head_dim].float()
+                        else:
+                            kv_pos = seq_start + (abs_pos_i - start_pos)
+                            merged_kv[i] = kv[
+                                kv_pos, :head_dim].float()
+                            merged_score[i] = (
+                                score[kv_pos, :head_dim].float()
+                                + ape[abs_pos_i % ratio, :head_dim])
 
                 compressed = (merged_kv * merged_score.softmax(dim=0)).sum(dim=0)
                 write_pos = seq_start + (compress_abs - start_pos)
@@ -415,6 +428,8 @@ class TestScoreKV:
     @pytest.mark.parametrize('kv_seqlens_list, q_seqlens_list', [
         ([8, 16], [8, 16]),       # no history
         ([12, 24], [8, 16]),      # with history
+        ([51], [6]),               # curr window straddles history/current
+        ([55], [10]),              # later prev window also straddles
     ])
     def test_prefill_overlap(self, kv_seqlens_list, q_seqlens_list, ratio, head_dim,
                              num_states, overlap, device, dtype):
@@ -440,6 +455,7 @@ class TestScoreKV:
     @pytest.mark.parametrize('kv_seqlens_list, q_seqlens_list', [
         ([256, 512], [256, 512]),
         ([512, 1024], [256, 128]),
+        ([80, 128], [6, 6]),       # mixed batch; second window straddles history/current
     ])
     def test_prefill_ratio_128(self, kv_seqlens_list, q_seqlens_list, ratio, head_dim,
                                num_states, overlap, device, dtype):
@@ -465,8 +481,7 @@ class TestScoreKVLargeHeadDim:
     config.
 
     The original tests all use head_dim=128 where n_tiles=1, so a double-d_off bug in the kernel was masked (d_off=0 for
-    the only tile). Only overlap=True ratio=4 is tested because that is the V4 model's actual config — overlap=False
-    ratio=4 is not a real config, and overlap=False ratio=128 prefill had no bug (offs_d without d_off prefix).
+    the only tile). Ratio-128 also covers the short speculative chunk that straddles a 128-token compression boundary.
     """
 
     @pytest.fixture
@@ -600,11 +615,130 @@ class TestScoreKVLargeHeadDim:
     @pytest.mark.parametrize('ratio', [4], indirect=True)
     @pytest.mark.parametrize('kv_seqlens_list, q_seqlens_list', [
         ([12, 24], [8, 16]),
+        ([51], [6]),
+        ([55], [10]),
     ])
     def test_prefill_overlap(self, kv_seqlens_list, q_seqlens_list, ratio, head_dim,
                              num_states, overlap, device, dtype):
         self._run_prefill_test(kv_seqlens_list, q_seqlens_list, ratio, head_dim,
                                num_states, overlap, device, dtype)
+
+    @pytest.mark.parametrize('overlap', [False], indirect=True)
+    @pytest.mark.parametrize('ratio', [128], indirect=True)
+    @pytest.mark.parametrize(('kv_seqlens_list', 'q_seqlens_list'), [
+        ([80, 128], [6, 6]),
+    ])
+    def test_prefill_ratio_128_mixed_history_current(
+            self, kv_seqlens_list, q_seqlens_list, ratio, head_dim,
+            num_states, overlap, device, dtype):
+        self._run_prefill_test(kv_seqlens_list, q_seqlens_list, ratio,
+                               head_dim, num_states, overlap, device, dtype)
+
+
+def test_score_kv_mixed_window_cuda_graph_replay():
+    """Graph replay must not read before the rectangular query buffer."""
+    from lmdeploy.pytorch.kernels.cuda.v4_compressor import (
+        fill_compress_state,
+        score_kv,
+    )
+
+    device = 'cuda'
+    dtype = torch.bfloat16
+    ratio = 4
+    head_dim = 512
+    width = 2 * head_dim
+    history_len = 45
+    qlen = 10
+    state_ids = torch.tensor([0], dtype=torch.int32, device=device)
+    ape = torch.randn(ratio, width, dtype=torch.float32, device=device)
+    kv_state = torch.zeros(1, 2 * ratio, width, dtype=dtype, device=device)
+    score_state = torch.full((1, 2 * ratio, width), float('-inf'),
+                             dtype=torch.float32, device=device)
+
+    hist_kv = torch.randn(history_len, width, dtype=dtype, device=device)
+    hist_score = torch.randn_like(hist_kv)
+    hist_cu_q = torch.tensor([0, history_len], dtype=torch.int32, device=device)
+    hist_kvlen = torch.tensor([history_len], dtype=torch.int32, device=device)
+    fill_compress_state(hist_kv, hist_score, ape, kv_state, score_state,
+                        state_ids, hist_cu_q, hist_kvlen)
+
+    cu_q = torch.tensor([0, qlen], dtype=torch.int32, device=device)
+    kvlen = torch.tensor([history_len + qlen], dtype=torch.int32, device=device)
+    static_kv = torch.randn(qlen, width, dtype=dtype, device=device)
+    static_score = torch.randn_like(static_kv)
+    output = torch.zeros(qlen, head_dim, dtype=dtype, device=device)
+
+    # Compile the Triton specialization before entering stream capture.
+    score_kv(static_kv, static_score, ape, kv_state, score_state, state_ids,
+             cu_q, kvlen, output, True, qlen)
+    torch.cuda.synchronize()
+
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        score_kv(static_kv, static_score, ape, kv_state, score_state,
+                 state_ids, cu_q, kvlen, output, True, qlen)
+
+    replay_kv = torch.randn_like(static_kv)
+    replay_score = torch.randn_like(static_score)
+    expected = _reference_score_kv(
+        replay_kv, replay_score, ape, kv_state, score_state, state_ids,
+        cu_q, kvlen, True)
+    static_kv.copy_(replay_kv)
+    static_score.copy_(replay_score)
+    output.zero_()
+    graph.replay()
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(output.float(), expected.float(),
+                               atol=1e-2, rtol=1e-2)
+
+
+def test_v4_window_pack_skips_padded_state_slot():
+    """A graph-padded -1 slot must not be redirected to live slot zero."""
+    from lmdeploy.pytorch.kernels.cuda.v4_pack_window import (
+        pack_window_tokens_fp8,
+    )
+
+    device = 'cuda'
+    cache = torch.zeros(
+        2, 8, 584, dtype=torch.float8_e4m3fn, device=device)
+    before = cache.view(torch.uint8).clone()
+    kv = torch.randn(1, 512, dtype=torch.bfloat16, device=device)
+    slot = torch.tensor([-1], dtype=torch.long, device=device)
+    position = torch.tensor([3], dtype=torch.long, device=device)
+
+    pack_window_tokens_fp8(kv, cache, slot, position)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(cache.view(torch.uint8), before)
+
+
+def test_fill_compressed_kv_skips_padded_state_slot():
+    """Static graph qlens must not make a padded request write block zero."""
+    from lmdeploy.pytorch.kernels.cuda.v4_compressor import (
+        fill_compressed_kv,
+    )
+
+    device = 'cuda'
+    compressed_kv = torch.randn(
+        6, 512, dtype=torch.bfloat16, device=device)
+    cache = torch.zeros(
+        1, 64, 584, dtype=torch.float8_e4m3fn, device=device)
+    before = cache.view(torch.uint8).clone()
+    fill_compressed_kv(
+        compressed_kv,
+        None,
+        torch.tensor([0, 6], dtype=torch.int32, device=device),
+        torch.tensor([6], dtype=torch.int32, device=device),
+        torch.zeros((1, 1), dtype=torch.int32, device=device),
+        compress_ratio=4,
+        block_size=256,
+        max_seqlen_q=6,
+        fp8_cache=cache,
+        state_ids=torch.tensor([-1], dtype=torch.long, device=device),
+    )
+    torch.cuda.synchronize()
+    torch.testing.assert_close(cache.view(torch.uint8), before)
 
 
 class TestScoreAndFillStateDecode:

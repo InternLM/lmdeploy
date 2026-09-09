@@ -26,6 +26,7 @@ from lmdeploy.pytorch.nn.rotary_embedding import build_rotary_embedding
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.utils import get_logger
 
+from .patch import get_build_model_context
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1, build_embedding
 
@@ -98,6 +99,7 @@ class V4Args:
     o_groups: int
     o_lora_rank: int
     window_size: int
+    ring_storage_capacity: int
     compress_ratios: tuple[int, ...]
     compress_rope_theta: float
     original_seq_len: int
@@ -225,7 +227,9 @@ class Compressor(nn.Module):
 
         # ---- Phase G: Resolve and write the compressor-owned block cache ----
         block_caches = self.compressor_impl.resolve_block_caches(caches.block_caches)
-        self.compressor_impl.write_compressed_kv(compressed_kv, block_caches, v4_compressor_meta)
+        self.compressor_impl.write_compressed_kv(
+            compressed_kv, block_caches, v4_compressor_meta,
+            state_ids=state_ids)
         return block_caches
 
     def rotate_activation(self, x: torch.Tensor) -> torch.Tensor:
@@ -356,6 +360,7 @@ class Attention(nn.Module):
         self.n_groups = args.o_groups
         self.n_local_groups = args.o_groups // world_size
         self.window_size = args.window_size
+        self.ring_storage_capacity = args.ring_storage_capacity
         self.compress_ratio = args.compress_ratios[layer_id]
         self.eps = args.norm_eps
         self.o_lora_rank = args.o_lora_rank
@@ -411,6 +416,7 @@ class Attention(nn.Module):
         self.attn_fwd = NativeV4Attention(head_size=self.head_dim,
                                           scale=self.softmax_scale,
                                           window_size=self.window_size,
+                                          ring_storage_capacity=self.ring_storage_capacity,
                                           compress_ratio=self.compress_ratio)
         self.compressor = None
         self.indexer = None
@@ -691,6 +697,8 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             o_groups=config.o_groups,
             o_lora_rank=config.o_lora_rank,
             window_size=config.sliding_window,
+            ring_storage_capacity=getattr(config, 'v4_ring_storage_capacity',
+                                          config.sliding_window),
             compress_ratios=tuple(get_v4_compress_ratios(config)),
             compress_rope_theta=config.compress_rope_theta,
             original_seq_len=compress_rope_params['original_max_position_embeddings'],
@@ -737,6 +745,9 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             Block(config, layer_idx, self.args, dtype=self.dtype, device=self.device)
             for layer_idx in range(config.num_hidden_layers)
         ])
+        self.aux_hidden_state_layers: tuple[int, ...] = \
+            get_build_model_context().spec_model_ctx.target_aux_hidden_state_layers
+        self._aux_hidden_state_layers_set = frozenset(self.aux_hidden_state_layers)
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=self.dtype, device=self.device)
         self.head = self.build_lm_head(
                             config.hidden_size,
@@ -787,7 +798,9 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         v4_meta_cls = get_backend().get_v4_attention_metadata_cls()
         v4_meta = v4_meta_cls.from_step_context(
             attn_metadata, context,
-            window_size=self.args.window_size, slot=safe_state_ids)
+            window_size=self.args.window_size,
+            ring_storage_capacity=self.args.ring_storage_capacity,
+            slot=safe_state_ids)
 
         # Pre-build indexer/compressor metadata once (not per-layer).
         v4_indexer_meta = v4_meta.build_indexer_metadata()
@@ -828,6 +841,7 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             compress_pos_emb[ratio] = (cos_c[0, :, :rd // 2], sin_c[0, :, :rd // 2])
 
         # Single layer loop — no tensor indexing inside
+        aux_hidden_states = []
         for layer in self.layers:
             if layer.attn.compress_ratio:
                 rot_emb, comp_emb = rotary_pos_emb_compress, compress_pos_emb[layer.attn.compress_ratio]
@@ -835,8 +849,29 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                 rot_emb, comp_emb = rotary_pos_emb_plain, None
             h = layer(h, v4_meta, v4_indexer_meta, v4_compressor_meta, input_ids, safe_state_ids, caches,
                       rotary_pos_emb=rot_emb, compress_pos_emb=comp_emb)
+            if layer.layer_id in self._aux_hidden_state_layers_set:
+                # DSpark consumes one ordinary hidden vector per selected V4
+                # layer.  V4 carries ``hc_mult`` residual streams internally;
+                # match the reference runtime by mean-pooling those streams.
+                aux_hidden_states.append(h.mean(dim=2))
 
+        if aux_hidden_states:
+            return dict(hidden_states=h,
+                        aux_hidden_states=torch.cat(aux_hidden_states, dim=-1))
         return h
+
+    def get_input_embeddings(self):
+        """Return the target embedding shared by bundled DSpark stages."""
+        return self.embed
+
+    def get_outputs_cudagraph(self, output_buffers: dict[str, torch.Tensor],
+                              input_ids: torch.Tensor, **kwargs):
+        """Preserve DSpark target auxiliary states across graph replay."""
+        outputs = super().get_outputs_cudagraph(output_buffers, input_ids, **kwargs)
+        aux_hidden_states = output_buffers.get('aux_hidden_states')
+        if aux_hidden_states is not None:
+            outputs['aux_hidden_states'] = aux_hidden_states[:, :input_ids.size(-1)]
+        return outputs
 
     def prepare_inputs_for_generation(self,
                                       past_key_values: list[list[torch.Tensor]],

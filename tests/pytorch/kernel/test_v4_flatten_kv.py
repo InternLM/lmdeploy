@@ -62,7 +62,7 @@ def _reference_flatten_v4_kv(window_kv_cache, compressed_kv_cache, block_offsets
             window_start = max(0, sp - window_size)
             for t in range(prev_window_len):
                 actual_pos = window_start + t
-                ring_pos = actual_pos % window_size
+                ring_pos = actual_pos % window_kv_cache.size(1)
                 if slot is not None:
                     s = slot[b].item()
                     if s < 0:
@@ -83,7 +83,7 @@ def _reference_flatten_v4_kv(window_kv_cache, compressed_kv_cache, block_offsets
             window_start = max(0, total_len - window_size)
             for t in range(window_kv_len):
                 actual_pos = window_start + t
-                ring_pos = actual_pos % window_size
+                ring_pos = actual_pos % window_kv_cache.size(1)
                 flat.append(window_kv_cache[b, ring_pos])
 
         # Compressed region
@@ -397,6 +397,45 @@ class TestFlattenV4KV:
             raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
 
         torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1, rtol=0.05)
+        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
+
+    def test_fp8_window_raw_kv_uses_expanded_physical_ring(self, device,
+                                                            dtype):
+        """Logical visibility W and physical modulo R are independent."""
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
+        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
+
+        window_size = 4
+        ring_storage_capacity = 6
+        head_dim = V4_FLASHMLA_HEAD_DIM
+        start = 9
+        q_len = 2
+        total_lens = torch.tensor([start + q_len], dtype=torch.long,
+                                  device=device)
+        start_pos = torch.tensor([start], dtype=torch.long, device=device)
+        q_seqlens = torch.tensor([q_len], dtype=torch.long, device=device)
+
+        ring = torch.zeros(1, ring_storage_capacity, head_dim, dtype=dtype,
+                           device=device)
+        for absolute in range(start):
+            ring[0, absolute % ring_storage_capacity].fill_(absolute + 1)
+        fp8_window = _pack_bf16_window_to_fp8(
+            ring, 1, ring_storage_capacity, device)
+        raw_kv = torch.randn(q_len, head_dim, dtype=dtype, device=device)
+        block_offsets = torch.zeros(1, 1, dtype=torch.long, device=device)
+
+        ref_kv, ref_cu = _reference_flatten_v4_kv(
+            ring, None, block_offsets, total_lens, window_size, 0,
+            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
+        total, max_flat = _flat_kv_bounds(
+            total_lens, window_size, 0, start_pos, q_seqlens)
+        flat_kv, cu = flatten_v4_kv(
+            fp8_window, block_offsets, total_lens, window_size, 0,
+            total, max_flat, raw_kv=raw_kv, raw_kv_lens=q_seqlens,
+            start_pos=start_pos)
+
+        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1,
+                                   rtol=0.05)
         assert cu.cpu().tolist() == ref_cu.cpu().tolist()
 
     def test_fp8_window_raw_kv_first_time(self, device, dtype):
