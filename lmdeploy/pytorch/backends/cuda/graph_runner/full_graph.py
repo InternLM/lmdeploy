@@ -87,6 +87,7 @@ def _make_graph_meta(
     num_blocks: int,
     is_decoding: bool,
     decode_query_len: int,
+    max_kv_seqlen: int,
     device: torch.device,
 ) -> CudaGraphMeta:
     """Build the fixed metadata owned by one full CUDA graph."""
@@ -100,6 +101,7 @@ def _make_graph_meta(
         num_blocks=num_blocks,
         is_decoding=is_decoding,
         device=device,
+        max_kv_seqlen=max_kv_seqlen,
         input_buffers=dict(),
         output_buffers=dict(),
         vocab_size=model_config.vocab_size,
@@ -107,7 +109,11 @@ def _make_graph_meta(
         use_flash_mla=model_config.use_flash_mla,
         mla_index_topk=model_config.mla_index_topk,
         use_fa3_decoding=(model_config.model_paradigm == 'ar_spec' and not model_config.use_flash_mla),
-        is_ssm=bool(model_config.states_shapes),
+        # Both legacy SSM states and named state caches use state_offsets.
+        # V4 declares only state_cache_specs, so omitting this buffer would
+        # freeze the dummy warmup slot into every graph replay.
+        is_ssm=(bool(model_config.states_shapes)
+                or bool(model_config.state_cache_specs)),
         use_mrope=model_config.use_mrope,
         block_size=model_config.block_size,
         decode_query_len=decode_query_len,
@@ -126,6 +132,7 @@ class CUDASingleGraphRunner:
         num_blocks: int,
         is_decoding: bool,
         decode_query_len: int,
+        max_kv_seqlen: int,
         pool: tuple[int, int],
         model_config: ModelConfig,
         device: torch.device,
@@ -142,6 +149,7 @@ class CUDASingleGraphRunner:
             num_blocks=num_blocks,
             is_decoding=is_decoding,
             decode_query_len=decode_query_len,
+            max_kv_seqlen=max_kv_seqlen,
             device=device,
         )
         self._pool = pool
@@ -158,15 +166,36 @@ class CUDASingleGraphRunner:
         padded_kwargs = self._bind_inputs(**kwargs)
         capture_stream = torch.cuda.current_stream() if self._use_graph else None
 
+        # Stateful models update their named state caches during forward. The
+        # eager warmup below must not consume request state before the captured
+        # forward. Snapshot only active rows, then restore them before capture.
+        state_backups = []
+        context = self._ctx_mgr.current_context()
+        named_state_caches = getattr(context, 'named_state_caches', None)
+        state_ids = self.meta.input_buffers.get('state_ids')
+        if named_state_caches and state_ids is not None:
+            active_state_ids = torch.unique(state_ids[state_ids >= 0])
+            for cache in named_state_caches.values():
+                state_backups.append(
+                    (cache, cache.index_select(1, active_state_ids).clone()))
+
         # warmup
         warmup_output = self._model_forward(**padded_kwargs)
         warmup_buffers = self.model.make_output_buffers(warmup_output)
+
+        for cache, backup in state_backups:
+            # CUDA index_copy does not implement float8. A byte view keeps the
+            # state-row dimension unchanged and restores every dtype exactly.
+            cache.view(torch.uint8).index_copy_(
+                1, active_state_ids, backup.view(torch.uint8))
 
         if self._use_graph:
             assert capture_stream is not None
             output = self._capture_model(padded_kwargs, capture_stream)
         else:
-            output = warmup_output
+            # Fake capture still represents one real model invocation. Run it
+            # after restoring warmup side effects so state advances once.
+            output = self._model_forward(**padded_kwargs)
 
         self.meta.output_buffers = self.model.make_output_buffers(output)
         return self.model.get_outputs_cudagraph(warmup_buffers, **kwargs)

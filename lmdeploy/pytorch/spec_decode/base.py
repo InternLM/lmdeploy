@@ -53,6 +53,7 @@ class BaseSpecModelAgent:
         self.device = device
         self.cache_engine = None
         self.block_cache_plan = None
+        self.state_cache_engine = None
         self.inputs_strategy = inputs_strategy
         self.agent_strategy = agent_strategy
         self.misc_config = misc_config

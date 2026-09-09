@@ -105,6 +105,7 @@ def _flatten_v4_kv_kernel(
     win_scale_stride_pos,
     win_scale_stride_d,
     WINDOW_SIZE: tl.constexpr,
+    RING_STORAGE_CAPACITY: tl.constexpr,
     COMPRESS_RATIO: tl.constexpr,
     HEAD_DIM: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
@@ -134,7 +135,7 @@ def _flatten_v4_kv_kernel(
         # ---- Previous window region (FP8 dequantize) ----
         window_start = start_pos_val - WINDOW_SIZE if start_pos_val > WINDOW_SIZE else 0
         actual_pos = window_start + token_id
-        ring_pos = actual_pos % WINDOW_SIZE
+        ring_pos = actual_pos % RING_STORAGE_CAPACITY
 
         if HAS_SLOT:
             slot_val = tl.load(slot_ptr + batch_id)
@@ -229,7 +230,8 @@ def flatten_v4_kv(
     contains the last min(start_pos, window_size) tokens from the ring buffer.
 
     Args:
-        fp8_window_kv_cache: [num_total_slots, window_size, packed_dim]
+        fp8_window_kv_cache: [num_total_slots, ring_storage_capacity,
+            packed_dim]
             FP8 V4 FlashMLA sparse window cache.
         block_offsets: [bsz, num_blocks] page table.
         kv_seqlens: [bsz] total KV length per sequence.
@@ -391,6 +393,7 @@ def flatten_v4_kv(
         win_scale_view.stride(1),
         win_scale_view.stride(2),
         WINDOW_SIZE=window_size,
+        RING_STORAGE_CAPACITY=win_ws,
         COMPRESS_RATIO=compress_ratio,
         HEAD_DIM=head_dim,
         BLOCK_SIZE=block_size,

@@ -68,13 +68,19 @@ def draft_model_forward(
         # forward
         ctx_mgr = model.ctx_mgr
         kv_caches = cache_engine.gpu_cache
+        state_cache_engine = getattr(cache_engine, 'state_cache_engine', None)
+        state_caches = (None if state_cache_engine is None else
+                        state_cache_engine.state_caches)
         context = ctx_mgr.build_context(
             inputs=inputs,
             model_config=model_config,
             cache_config=cache_engine.cache_config,
             kv_caches=kv_caches,
+            state_caches=state_caches,
         )
         context.block_caches = cache_engine.block_caches
+        if state_cache_engine is not None:
+            context.named_state_caches = state_cache_engine.named_state_caches
         with ctx_mgr.context(context):
             model_metas = None
             model_metas = model.update_model_metas(
