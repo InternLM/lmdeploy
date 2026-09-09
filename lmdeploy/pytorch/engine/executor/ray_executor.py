@@ -314,6 +314,18 @@ class RayExecutor(ExecutorBase):
                 logger.info('Warming up distribute environment, this might take long time, please waiting...')
                 ray.get([worker.warmup_dist.remote() for worker in self.workers])
 
+    def init(self):
+        """Initialize workers and abort all of them if initialization fails."""
+        try:
+            super().init()
+        except BaseException:
+            for worker in self.workers:
+                with contextlib.suppress(Exception):
+                    ray.kill(worker)
+            with contextlib.suppress(Exception):
+                self.ray_ctx.shutdown()
+            raise
+
     def collective_rpc(self,
                        method: str,
                        args: tuple[Any] = None,
