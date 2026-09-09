@@ -234,6 +234,10 @@ with set_envs():
     # DSA indexer score memory
     dsa_indexer_max_logits_mb = max(1, env_to_int('LMDEPLOY_DSA_INDEXER_MAX_LOGITS_MB', 512))
 
+    # sparse MLA attention
+    sparse_mla_backend = env_to_choice('LMDEPLOY_SPARSE_MLA_BACKEND', 'flashmla',
+                                       {'flashmla', 'tilelang'})
+
     # cudagraph
     # fake capture flag for debug cudagraph padding behavior
     fake_capture = env_to_bool('LMDEPLOY_FAKE_CUDA_GRAPH_CAPTURE', False)

@@ -3,6 +3,7 @@ import functools
 
 import torch
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.attention import PagedAttentionBuildSpec
 from lmdeploy.utils import get_logger
 
@@ -107,6 +108,14 @@ def _build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl
 
     if spec.use_flash_mla is True:
         if spec.mla_index_topk is not None:
+            if _envs.sparse_mla_backend == 'tilelang':
+                logger.debug('Build TileLangSparseMLAImpl Attention')
+                from .sparse_mla import TileLangSparseMLAImpl
+                return TileLangSparseMLAImpl(
+                    mla_index_topk=spec.mla_index_topk,
+                    use_fa3=use_fa3,
+                    **common_args,
+                )
             logger.debug('Build FlashMLASparseImpl Attention')
             from .sparse_mla import FlashMLASparseImpl
             return FlashMLASparseImpl(
