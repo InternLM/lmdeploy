@@ -2,6 +2,7 @@
 import torch
 import torch.distributed as dist
 
+from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.backends.cuda.token_dispatcher import (
     DeepEPBuffer,
     DeepEPTokenDispatcherLowLatency,
@@ -17,6 +18,7 @@ from lmdeploy.pytorch.kernels.cuda.compressed_tensors_w4a16 import (
 )
 from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _renormalize
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+from lmdeploy.utils import get_logger
 
 from .default import dispatch_ll
 from .ep_utils import gather_outputs_by_attn_tp, split_inputs_by_attn_tp
@@ -93,6 +95,7 @@ class DeepEPFusedMoEW4A16Impl(FusedMoEW4A16Impl):
         out_dtype: torch.dtype,
         num_max_dispatch_tokens_per_rank: int,
         layer_idx: int,
+        local_backend: str = 'triton',
     ):
         if top_k < 1 or num_experts < 1 or top_k > num_experts:
             raise ValueError(
@@ -139,6 +142,17 @@ class DeepEPFusedMoEW4A16Impl(FusedMoEW4A16Impl):
         self.num_max_dispatch_tokens_per_rank = (
             num_max_dispatch_tokens_per_rank)
         self.layer_idx = layer_idx
+        self._fused_moe = fused_moe_w4a16
+        self._fused_moe_masked = fused_moe_w4a16_masked
+        if local_backend == 'cute':
+            from lmdeploy.pytorch.kernels.cuda.compressed_tensors_w4a16_cute import (
+                fused_moe_w4a16_cute,
+                fused_moe_w4a16_cute_masked,
+            )
+            self._fused_moe = fused_moe_w4a16_cute
+            self._fused_moe_masked = fused_moe_w4a16_cute_masked
+        elif local_backend != 'triton':
+            raise ValueError(f'Unsupported DeepEP W4A16 local backend: {local_backend}')
 
         get_deepep_state().enable()
         if hasattr(DeepEPBuffer, 'set_explicitly_destroy'):
@@ -211,7 +225,7 @@ class DeepEPFusedMoEW4A16Impl(FusedMoEW4A16Impl):
             # [0, E_local) IDs and marks non-local slots as -1/zero.  The W4
             # kernel must filter those invalid routes instead of remapping
             # them to a real expert.
-            out_states = fused_moe_w4a16(
+            out_states = self._fused_moe(
                 recv_hidden_states,
                 gate_up_packed,
                 gate_up_scale,
@@ -252,7 +266,7 @@ class DeepEPFusedMoEW4A16Impl(FusedMoEW4A16Impl):
         )
         recv_tensor = DisposibleTensor.maybe_unwrap(recv_hidden_states)
         try:
-            out_states = fused_moe_w4a16_masked(
+            out_states = self._fused_moe_masked(
                 recv_tensor,
                 gate_up_packed,
                 gate_up_scale,
@@ -316,8 +330,59 @@ class DeepEPFusedMoEW4A16Impl(FusedMoEW4A16Impl):
         return gather_outputs_by_attn_tp(out_states, split_size)
 
 
+class CuteFusedMoEW4A16Impl(TritonFusedMoEW4A16Impl):
+    """Hopper BF16 WGMMA RS with TMA and register-side INT4 dequantization."""
+
+    def __init__(self, top_k: int, num_experts: int, renormalize: bool, num_bits: int, group_size: int):
+        super().__init__(top_k, num_experts, renormalize, num_bits, group_size)
+        from lmdeploy.pytorch.kernels.cuda.compressed_tensors_w4a16_cute import fused_moe_w4a16_cute
+        self._fused_moe = fused_moe_w4a16_cute
+
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
+                gate_up_packed: torch.Tensor, gate_up_scale: torch.Tensor, down_packed: torch.Tensor,
+                down_scale: torch.Tensor) -> torch.Tensor:
+        """Run local experts with the canonical packed W4A16 layout."""
+        if gate_up_packed.shape[0] != self.num_experts:
+            raise ValueError(f'Expected {self.num_experts} experts, got {gate_up_packed.shape[0]}')
+        return self._fused_moe(hidden_states, gate_up_packed, gate_up_scale,
+                               down_packed, down_scale, topk_weights, topk_ids,
+                               self.top_k, self.renormalize)
+
+
+def _build_fused_moe_cute(spec: FusedMoEW4A16BuildSpec) -> FusedMoEW4A16Impl:
+    """Build the Hopper provider while preserving TP and DeepEP contracts."""
+    if spec.num_bits != 4 or spec.group_size != 32:
+        raise ValueError('cute supports only INT4 group-size 32')
+    if spec.output_dtype != torch.bfloat16 or spec.hidden_dim < 32 or spec.hidden_dim % 32:
+        raise ValueError('cute requires BF16 and hidden_dim divisible by 32')
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
+        raise RuntimeError('cute requires a Hopper SM90 GPU')
+    impl: FusedMoEW4A16Impl
+    try:
+        if spec.ep_size > 1:
+            impl = DeepEPFusedMoEW4A16Impl(
+                top_k=spec.top_k, num_experts=spec.num_experts, hidden_dim=spec.hidden_dim,
+                ep_size=spec.ep_size, ep_group=spec.ep_group, renormalize=spec.renormalize,
+                num_bits=spec.num_bits, group_size=spec.group_size, out_dtype=spec.output_dtype,
+                num_max_dispatch_tokens_per_rank=spec.num_max_dispatch_tokens_per_rank,
+                layer_idx=spec.layer_idx, local_backend='cute')
+        else:
+            impl = CuteFusedMoEW4A16Impl(
+                top_k=spec.top_k, num_experts=spec.num_experts,
+                renormalize=spec.renormalize, num_bits=spec.num_bits,
+                group_size=spec.group_size)
+    except ImportError as exc:
+        raise ImportError('cute requires nvidia-cutlass-dsl and cuda-python; EP additionally requires DeepEP') from exc
+    if spec.layer_idx in (0, 1):
+        get_logger('lmdeploy').info('Using cute compressed-tensors MoE provider '
+                                   '(CuTe DSL BF16 WGMMA RS, TMA double buffer)')
+    return impl
+
+
 def _build_fused_moe_w4a16(spec: FusedMoEW4A16BuildSpec) -> FusedMoEW4A16Impl:
     """Build the selected CUDA compressed-tensors W4A16 MoE."""
+    if envs.w4a16_moe_backend == 'cute':
+        return _build_fused_moe_cute(spec)
     if spec.ep_size > 1:
         return DeepEPFusedMoEW4A16Impl(
             top_k=spec.top_k,
