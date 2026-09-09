@@ -49,6 +49,7 @@ class V4CompressorImpl(ABC):
         compressed_kv: torch.Tensor,
         block_caches: Mapping[str, torch.Tensor],
         meta: V4CompressorMetadata,
+        state_ids: torch.Tensor | None = None,
     ) -> None:
         raise NotImplementedError
 

@@ -78,6 +78,7 @@ class ConfigBuilder:
             kernel_block_size=engine_config.kernel_block_size,
             num_cpu_blocks=engine_config.num_cpu_blocks,
             num_gpu_blocks=engine_config.num_gpu_blocks,
+            max_session_len=engine_config.session_len,
             cache_max_entry_count=engine_config.cache_max_entry_count,
             max_prefill_token_num=engine_config.max_prefill_token_num,
             cudagraph_capture_batch_sizes=engine_config.cudagraph_capture_batch_sizes,

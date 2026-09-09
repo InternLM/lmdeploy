@@ -13,13 +13,18 @@ from lmdeploy.pytorch.models.patch import get_build_model_context
 class V4Attention(nn.Module):
     """DeepSeek V4 cache-aware attention wrapper."""
 
-    def __init__(self, head_size: int, scale: float, window_size: int, compress_ratio: int, **kwargs):
+    def __init__(self, head_size: int, scale: float, window_size: int,
+                 compress_ratio: int,
+                 ring_storage_capacity: int | None = None, **kwargs):
         super().__init__()
+        if ring_storage_capacity is None:
+            ring_storage_capacity = window_size
         self.impl = get_backend().build_op(
             V4AttentionBuildSpec(
                 head_dim=head_size,
                 scale=scale,
                 window_size=window_size,
+                ring_storage_capacity=ring_storage_capacity,
                 compress_ratio=compress_ratio,
             ),
             enable_deterministic=get_build_model_context().enable_deterministic,

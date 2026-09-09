@@ -38,14 +38,35 @@ def _as_dict(value: Any) -> dict:
     return dict(vars(value))
 
 
+def checkpoint_bundles_dspark(config: Any) -> bool:
+    """Return whether a target checkpoint advertises bundled DSpark stages."""
+    prefixed = any(
+        _get(config, name, None) is not None
+        for name in ('dspark_block_size', 'dspark_markov_rank',
+                     'dspark_noise_token_id', 'dspark_target_layer_ids'))
+    # A nested ``dspark_config`` is used by some native target checkpoints.
+    # Do not classify raw Speculators draft configs this way: they carry the
+    # explicit ``speculators_model_type=dspark`` marker.
+    nested = _get(config, 'dspark_config', None)
+    native_nested = (nested is not None and
+                     _get(config, 'speculators_model_type', None) != 'dspark'
+                     and _get(config, 'model_type', None) == 'deepseek_v4')
+    return prefixed or native_nested
+
+
 def prepare_dspark_hf_config(config: Any) -> Any:
     """Normalize known DSpark checkpoint schemas for LMDeploy model builders.
 
     Transformers' Speculators config keeps the Qwen draft backbone under
     ``transformer_layer_config``.  LMDeploy model builders consume a flat
     config, so copy that transformer metadata onto the outer config while
-    retaining DSpark-specific fields.
+    retaining DSpark-specific fields.  Bundled DeepSeek-V4 checkpoints keep
+    their target config and only need a draft architecture override.
     """
+    if checkpoint_bundles_dspark(config):
+        _set(config, 'architectures', ['DeepseekV4ForCausalLMDSpark'])
+        return config
+
     architectures = list(_get(config, 'architectures', None) or [])
     speculators_type = _get(config, 'speculators_model_type', None)
     is_raw = speculators_type == 'dspark' or 'DSparkDraftModel' in architectures
@@ -117,34 +138,49 @@ def _validate_layer_ids(layer_ids: Any, target_num_layers: int) -> tuple[int, ..
 
 def parse_dspark_config(draft_hf_config: Any, num_speculative_tokens: int,
                         target_num_layers: int) -> DSparkResolvedConfig:
-    """Parse external Speculators and native dense Qwen DSpark."""
+    """Parse external Speculators/dense and bundled DeepSeek-V4 DSpark."""
     if (isinstance(num_speculative_tokens, bool)
             or not isinstance(num_speculative_tokens, int)
             or num_speculative_tokens < 1):
         raise ValueError('DSpark num_speculative_tokens must be a positive integer.')
 
-    bundled = False
+    bundled = checkpoint_bundles_dspark(draft_hf_config)
     architectures = list(_get(draft_hf_config, 'architectures', None) or [])
-    raw_speculators = (
+    raw_speculators = (not bundled and (
         _get(draft_hf_config, 'speculators_model_type', None) == 'dspark'
         or _get(draft_hf_config, 'transformer_layer_config', None) is not None
-        or 'DSparkDraftModel' in architectures)
+        or 'DSparkDraftModel' in architectures))
     nested_dspark = _as_dict(_get(draft_hf_config, 'dspark_config', None))
-    block_capacity = _get(draft_hf_config, 'block_size', None)
-    mask_token_id = _get(draft_hf_config, 'mask_token_id',
-                         nested_dspark.get('mask_token_id'))
-    raw_aux_ids = _get(draft_hf_config, 'aux_hidden_state_layer_ids', None)
-    if raw_aux_ids is not None:
-        layer_ids = [int(idx) - 1 for idx in raw_aux_ids]
+    if bundled:
+        block_capacity = _get(draft_hf_config, 'dspark_block_size',
+                              nested_dspark.get('block_size'))
+        mask_token_id = _get(draft_hf_config, 'dspark_noise_token_id',
+                             nested_dspark.get('mask_token_id'))
+        layer_ids = _get(draft_hf_config, 'dspark_target_layer_ids',
+                         nested_dspark.get('target_layer_ids'))
+        markov_rank = _get(draft_hf_config, 'dspark_markov_rank',
+                           nested_dspark.get('markov_rank'))
+        markov_head_type = _get(draft_hf_config, 'dspark_markov_head_type',
+                                nested_dspark.get('markov_head_type', 'vanilla'))
+        sample_from_anchor = bool(
+            _get(draft_hf_config, 'sample_from_anchor',
+                 nested_dspark.get('sample_from_anchor', True)))
     else:
-        layer_ids = _get(draft_hf_config, 'target_layer_ids', None)
-    markov_rank = _get(draft_hf_config, 'markov_rank',
-                       nested_dspark.get('markov_rank'))
-    markov_head_type = _get(draft_hf_config, 'markov_head_type',
-                            nested_dspark.get('markov_head_type', 'vanilla'))
-    sample_from_anchor = bool(_get(
-        draft_hf_config, 'sample_from_anchor',
-        not bool(_get(draft_hf_config, 'dspark_bonus_anchor', False))))
+        block_capacity = _get(draft_hf_config, 'block_size', None)
+        mask_token_id = _get(draft_hf_config, 'mask_token_id',
+                             nested_dspark.get('mask_token_id'))
+        raw_aux_ids = _get(draft_hf_config, 'aux_hidden_state_layer_ids', None)
+        if raw_aux_ids is not None:
+            layer_ids = [int(idx) - 1 for idx in raw_aux_ids]
+        else:
+            layer_ids = _get(draft_hf_config, 'target_layer_ids', None)
+        markov_rank = _get(draft_hf_config, 'markov_rank',
+                           nested_dspark.get('markov_rank'))
+        markov_head_type = _get(draft_hf_config, 'markov_head_type',
+                                nested_dspark.get('markov_head_type', 'vanilla'))
+        sample_from_anchor = bool(_get(draft_hf_config, 'sample_from_anchor',
+                                       not bool(_get(draft_hf_config,
+                                                     'dspark_bonus_anchor', False))))
 
     if block_capacity is None:
         raise ValueError('DSpark checkpoint requires block_size or dspark_block_size.')
@@ -186,8 +222,8 @@ def parse_dspark_config(draft_hf_config: Any, num_speculative_tokens: int,
         or nested_dspark.get('draft_vocab_size') or vocab_size)
     if draft_vocab_size <= 0:
         raise ValueError(f'DSpark draft_vocab_size must be positive, got {draft_vocab_size}.')
-    enable_confidence_head = bool(_get(draft_hf_config,
-                                       'enable_confidence_head', False))
+    enable_confidence_head = bool(_get(draft_hf_config, 'enable_confidence_head',
+                                       bundled))
     confidence_head_with_markov = bool(
         _get(draft_hf_config, 'confidence_head_with_markov', True))
     return DSparkResolvedConfig(

@@ -197,7 +197,14 @@ class DFlash(BaseSpecProposer):
                 model_config=self.specdecode_config.model_config,
                 cache_config=cache_engine.cache_config,
                 kv_caches=kv_caches,
+                state_caches=(None if getattr(cache_engine,
+                                              'state_cache_engine', None) is None
+                              else cache_engine.state_cache_engine.state_caches),
             )
+            context.block_caches = cache_engine.block_caches
+            if getattr(cache_engine, 'state_cache_engine', None) is not None:
+                context.named_state_caches = \
+                    cache_engine.state_cache_engine.named_state_caches
             with ctx_mgr.context(context):
                 self._draft_model().precompute_and_store_context_kv(
                     target_hidden=target_hidden,

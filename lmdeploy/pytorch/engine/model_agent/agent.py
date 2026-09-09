@@ -443,10 +443,15 @@ class BaseModelAgent:
         self._prev_chunk_output: dict = None
         # Last logit row of the previous chunk, used to score cross-chunk prompt tokens.
         self._prev_chunk_last_logit: torch.Tensor | None = None
+        self._v4_speculative_state_transaction = None
 
     def reset_runtime_state(self):
         """Discard request-local decode and chunk state after sleep cancels
         sessions."""
+        transaction = getattr(self, '_v4_speculative_state_transaction', None)
+        if transaction is not None:
+            self._finish_v4_speculative_state_transaction(
+                transaction['q_seqlens'])
         self.step_inputs = self.strategy_factory.build_step_inputs()
         self._prev_chunk_output = None
         self._prev_chunk_last_logit = None
@@ -597,38 +602,93 @@ class BaseModelAgent:
         inputs: ModelInputs,
         return_logits: bool,
         cache_inputs: CacheCheckpointInputs | None = None,
+        sampling_inputs: SamplingInputs | None = None,
     ):
         """Model forward."""
         memdecode_agent = getattr(self, 'memdecode_agent', None)
         if memdecode_agent is not None and return_logits:
             raise RuntimeError('MemDecode does not support returned prompt logits yet.')
 
-        ret = await self.async_forward(inputs, cache_inputs=cache_inputs)
-        if self._is_prefill_input_logprobs(inputs):
-            # This is the only lm-head projection for scoring: return before
-            # the ordinary all/sampling-logits projection below.
-            ret['logits'] = self._get_input_logits(ret['hidden_states'][0], inputs)
+        spec_agent = getattr(self, 'spec_agent', None)
+        spec_config = getattr(spec_agent, 'specdecode_config', None)
+        state_cache_engine = getattr(self, 'state_cache_engine', None)
+        use_v4_transaction = (
+            spec_config is not None and spec_config.method == 'dspark'
+            and inputs.is_decoding and not inputs.is_dummy
+            and state_cache_engine is not None
+            and 'v4_window_kv_fp8' in state_cache_engine.named_state_caches)
+        if use_v4_transaction:
+            self._v4_speculative_state_transaction = (
+                self.state_cache_engine.begin_v4_speculative_transaction(
+                    inputs.state_offsets,
+                    inputs.history_lengths,
+                    inputs.seq_length,
+                    inputs.max_q_seqlen,
+                ))
+
+        try:
+            ret = await self.async_forward(
+                inputs, cache_inputs=cache_inputs)
+
+            if self._is_prefill_input_logprobs(inputs):
+                # This is the only lm-head projection for scoring: return
+                # before the ordinary all/sampling-logits projection below.
+                ret['logits'] = self._get_input_logits(
+                    ret['hidden_states'][0], inputs)
+                return ret
+
+            if not return_logits:
+                ret = self._postprocess_forward_output(ret, inputs)
+
+            if memdecode_agent is not None:
+                base_hidden_states = ret['hidden_states']
+                base_logits = self.get_logits(base_hidden_states)
+
+                return await memdecode_agent.fuse_with_base(
+                    inputs=inputs,
+                    base_output=ret,
+                    base_logits=base_logits,
+                    postprocess_output=self._postprocess_forward_output,
+                )
+
+            hidden_states, ret = self.spec_agent.update_main_model_outputs(
+                ret, inputs)
+
+            if use_v4_transaction and inputs.max_q_seqlen > 1:
+                # Keep the comparatively cheap LM head at the ordinary
+                # per-position batch shape while the transformer verifies the
+                # whole candidate block in one batched forward.
+                query_len = inputs.max_q_seqlen
+                logits = torch.stack([
+                    self.get_logits(
+                        hidden_states[:, position::query_len])
+                    for position in range(query_len)
+                ], dim=2).flatten(1, 2)
+            else:
+                logits = self.get_logits(hidden_states)
+            ret['logits'] = logits
             return ret
+        except BaseException:
+            # No rejection decision exists when the target path fails. Undo
+            # every speculative row before leaving the agent reusable.
+            self._finish_v4_speculative_state_transaction(
+                inputs.seq_length)
+            raise
 
-        if not return_logits:
-            ret = self._postprocess_forward_output(ret, inputs)
-
-        if memdecode_agent is not None:
-            base_hidden_states = ret['hidden_states']
-            base_logits = self.get_logits(base_hidden_states)
-
-            return await memdecode_agent.fuse_with_base(
-                inputs=inputs,
-                base_output=ret,
-                base_logits=base_logits,
-                postprocess_output=self._postprocess_forward_output,
-            )
-
-        hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, inputs)
-
-        logits = self.get_logits(hidden_states)
-        ret['logits'] = logits
-        return ret
+    def _finish_v4_speculative_state_transaction(
+            self, num_rejected_tokens: torch.Tensor | None):
+        """Commit accepted V4 verifier rows and restore its rejected tail."""
+        transaction = getattr(self, '_v4_speculative_state_transaction', None)
+        if transaction is None:
+            return
+        if num_rejected_tokens is None:
+            raise RuntimeError(
+                'Missing rejection counts for a pending V4 transaction.')
+        try:
+            self.state_cache_engine.finish_v4_speculative_transaction(
+                transaction, num_rejected_tokens)
+        finally:
+            self._v4_speculative_state_transaction = None
 
     def _get_outputs_with_logprobs(
         self,
@@ -889,6 +949,10 @@ class BaseModelAgent:
         with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 
+        # Rejection results are now available on every TP rank. Roll back the
+        # rejected target rows before any rank starts the next draft proposal.
+        self._finish_v4_speculative_state_transaction(
+            getattr(extra_inputs, 'num_rejected_tokens', None))
         extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
 
         if inputs.is_dummy:
@@ -944,6 +1008,8 @@ class BaseModelAgent:
         with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 
+        self._finish_v4_speculative_state_transaction(
+            getattr(extra_inputs, 'num_rejected_tokens', None))
         extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
 
         if inputs.is_dummy:
@@ -1058,6 +1124,7 @@ class BaseModelAgent:
             inputs,
             return_logits=return_logits or return_ce_loss,
             cache_inputs=cache_inputs,
+            sampling_inputs=sampling_inputs,
         )
         # The forward has now queued its KV writes on the current CUDA stream.
         # The connector records a readiness event before its sender reads them.
@@ -1541,7 +1608,14 @@ class BaseModelAgent:
 
     def _split_updated_weights(self, weights: list[tuple[str, torch.Tensor]]):
         """Split target and draft weights using the existing MTP contract."""
-        if not self.spec_agent.is_enabled() or self.spec_agent.method != 'qwen3_5_mtp':
+        if not self.spec_agent.is_enabled():
+            return weights, []
+        method = self.spec_agent.method
+        bundled_dspark = (
+            method == 'dspark'
+            and bool(getattr(self.spec_agent.specdecode_config,
+                             'dspark_bundled_draft', False)))
+        if method != 'qwen3_5_mtp' and not bundled_dspark:
             return weights, []
         main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]
         draft = [(name, weight) for name, weight in weights if name.startswith('mtp.')]
@@ -1705,14 +1779,6 @@ class BaseModelAgent:
                 return list(bucket.reconstruct_tensors())
             return [(k, _construct(v)) for k, v in weights]
 
-        def _split_main_and_draft(weights):
-            # TODO, zhouxinyu, support split and update weights for other mtp methods
-            if not self.spec_agent.is_enabled() or self.spec_agent.method != 'qwen3_5_mtp':
-                return weights, []
-            main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]
-            draft = [(name, weight) for name, weight in weights if name.startswith('mtp.')]
-            return main, draft
-
         with self.all_context():
             # After deserialization, weights is a dict with following keys:
             # - metadata: List[FlattenedTensorMetadata]
@@ -1727,7 +1793,7 @@ class BaseModelAgent:
             spec_model = self.spec_agent.get_model()
 
             weights = _deserialize_weights(serialized_data)
-            main_weights, draft_weights = _split_main_and_draft(weights)
+            main_weights, draft_weights = self._split_updated_weights(weights)
 
             for m, w, tag in [(model, main_weights, 'main'), (spec_model, draft_weights, 'draft')]:
                 if m is None or not w:
@@ -1866,6 +1932,7 @@ class BaseModelAgent:
         spec_model = self.spec_agent.get_model()
         if spec_model is not None:
             self.spec_agent.cache_engine = None
+            self.spec_agent.state_cache_engine = None
             spec_model.to(device=device, non_blocking=True)
 
         torch.cuda.synchronize()
@@ -1938,4 +2005,6 @@ class BaseModelAgent:
         self.cache_engine = None
         self.block_cache_plan = None
         self.state_cache_engine = None
+        self.spec_agent.cache_engine = None
+        self.spec_agent.state_cache_engine = None
         torch.cuda.empty_cache()

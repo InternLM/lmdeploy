@@ -248,6 +248,44 @@ def test_deepseek_v4_model_config_uses_native_layer_types():
     assert state_specs['v4_compress_state_r128'].layer_ids == [2]
 
 
+def test_deepseek_v4_dspark_separates_logical_window_and_ring_storage():
+    hf_config = _make_deepseek_v4_hf_config([0, 4, 128])
+
+    model_config = AutoModelConfigBuilder.build(
+        hf_config, spec_method='dspark', num_spec_tokens=5)
+
+    state_specs = {spec.name: spec for spec in model_config.state_cache_specs}
+    assert model_config.sliding_window == 128
+    assert model_config.v4_ring_storage_capacity == 134
+    assert hf_config.sliding_window == 128
+    assert hf_config.v4_ring_storage_capacity == 134
+    assert state_specs['v4_window_kv_fp8'].shape[0] == 134
+
+
+@pytest.mark.parametrize('spec_method', ['dflash', 'mtp'])
+def test_deepseek_v4_all_spec_methods_reserve_rectangular_ring(spec_method):
+    hf_config = _make_deepseek_v4_hf_config([0], num_hidden_layers=1)
+
+    model_config = AutoModelConfigBuilder.build(
+        hf_config, spec_method=spec_method, num_spec_tokens=5)
+
+    state_specs = {spec.name: spec for spec in model_config.state_cache_specs}
+    assert model_config.sliding_window == 128
+    assert model_config.v4_ring_storage_capacity == 134
+    assert hf_config.v4_ring_storage_capacity == 134
+    assert state_specs['v4_window_kv_fp8'].shape[0] == 134
+
+
+def test_deepseek_v4_target_only_keeps_window_sized_ring():
+    hf_config = _make_deepseek_v4_hf_config([0], num_hidden_layers=1)
+
+    model_config = AutoModelConfigBuilder.build(hf_config)
+
+    state_specs = {spec.name: spec for spec in model_config.state_cache_specs}
+    assert model_config.v4_ring_storage_capacity == 128
+    assert state_specs['v4_window_kv_fp8'].shape[0] == 128
+
+
 def test_deepseek_v4_model_config_rejects_layer_type_count_mismatch():
     hf_config = _make_deepseek_v4_hf_config([0, 4, 128])
     hf_config.num_hidden_layers = 2
