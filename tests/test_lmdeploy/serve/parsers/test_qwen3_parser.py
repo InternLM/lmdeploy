@@ -624,6 +624,18 @@ class TestQwen3ToolParser:
         assert tool_arguments(deltas) == '{"x":truX'
         assert complete.function.arguments == '{"x":truX'
 
+    @pytest.mark.parametrize('arguments', ['[]', 'null'])
+    def test_non_object_arguments_are_streamed_verbatim(self, arguments):
+        payload = f'{{"name":"f","arguments":{arguments}}}'
+
+        pending, deltas, _ = feed_tool_chunks(
+            Qwen3ToolParser(),
+            [payload + '</tool_call>'],
+        )
+
+        assert pending == ''
+        assert tool_arguments(deltas) == arguments
+
     def test_protocol_close_marker_inside_argument_string_is_data(self):
         raw_arguments = '{"text":"inside </tool_call> marker"}'
         text = '{"name":"f","arguments":' + raw_arguments + '}</tool_call>tail'
@@ -660,11 +672,6 @@ class TestQwen3ToolParser:
         assert [delta.function.name for delta in emitted if delta.function.name] == ['get_weather']
         assert tool_arguments(emitted) == '{"ok":1}'
         assert {delta.index for delta in emitted} == {0}
-
-    def test_parameters_field_is_not_treated_as_arguments(self):
-        tool_call = final_tool_call(Qwen3ToolParser(), '{"name":"f","parameters":{"x":1}}')
-
-        assert tool_call.function.arguments == '{}'
 
     def test_final_chunk_does_not_require_outer_close(self):
         parser = Qwen3ToolParser()

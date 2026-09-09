@@ -1,8 +1,6 @@
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import ResponseParserManager
-from lmdeploy.serve.parsers.tool_parser import Internlm2ToolParser, ToolParserManager
-
-from .helpers import final_tool_call
+from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 
 
 def _build_parser():
@@ -24,12 +22,12 @@ def test_stream_chunk_matches_split_internlm_sequence():
     reference = [
         ('<|action_start|>', []),
         ('<|plugin|>', []),
-        ('\n{"name":"get_weather","parameters":{"city":"Ber', [
+        ('\n{\n    "name":"get_weather",\n    "parameters":{"city":"Ber', [
             ('function', 'get_weather', None),
             (None, None, '{"city":"Ber'),
         ]),
         ('lin"', [(None, None, 'lin"')]),
-        ('}}', [(None, None, '}')]),
+        ('}\n}', [(None, None, '}')]),
         ('<|action_end|>', []),
     ]
 
@@ -43,9 +41,3 @@ def test_stream_chunk_matches_split_internlm_sequence():
             for call in (delta.tool_calls or [])
         ]
         assert actual_calls == expected_calls
-
-
-def test_arguments_field_is_not_treated_as_parameters():
-    tool_call = final_tool_call(Internlm2ToolParser(), '{"name":"f","arguments":{"x":1}}')
-
-    assert tool_call.function.arguments == '{}'

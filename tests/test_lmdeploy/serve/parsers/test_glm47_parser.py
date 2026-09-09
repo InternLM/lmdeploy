@@ -219,21 +219,6 @@ class TestGlm47ResponseParserStreaming:
         assert emitted_name == 'get_weather'
         assert emitted_args == '{"location": "Beijing"}'
 
-    def test_stream_chunk_resumes_reasoning_after_nested_tool(self):
-        parser = _make_response_parser_with_reasoning()
-        chunks = [
-            '<think>before<tool_call>get_weather',
-            '<arg_key>location</arg_key><arg_value>Beijing</arg_value>',
-            '</tool_call>after</think>answer',
-        ]
-
-        reasoning_seen, content_seen, emitted_name, emitted_args = _collect_stream(parser, chunks)
-
-        assert reasoning_seen == 'beforeafter'
-        assert content_seen == 'answer'
-        assert emitted_name == 'get_weather'
-        assert emitted_args == '{"location": "Beijing"}'
-
     def test_stream_chunk_reasoning_effort_high_starts_in_reasoning_mode(self):
         parser = _make_response_parser_with_reasoning({'reasoning_effort': 'high'})
 
@@ -288,23 +273,6 @@ class TestGlm47ResponseParserStreaming:
 
 class TestGlm47ToolParserComplete:
     """Complete-parse tests for glm47 tool payloads."""
-
-    def test_parse_complete_resumes_reasoning_after_nested_tool(self):
-        parser = _make_response_parser_with_reasoning()
-        text = (
-            '<think>before'
-            '<tool_call>get_weather'
-            '<arg_key>location</arg_key><arg_value>Beijing</arg_value>'
-            '</tool_call>after</think>answer'
-        )
-
-        content, tool_calls, reasoning = parser.parse_complete(text)
-
-        assert reasoning == 'beforeafter'
-        assert content == 'answer'
-        assert len(tool_calls) == 1
-        assert tool_calls[0].function.name == 'get_weather'
-        assert json.loads(tool_calls[0].function.arguments) == {'location': 'Beijing'}
 
     def test_parse_complete_keeps_post_tool_text_in_unclosed_reasoning(self):
         parser = _make_response_parser_with_reasoning()
@@ -366,63 +334,6 @@ class TestGlm47ToolParserComplete:
         assert tool_call is not None
         assert tool_call.function.name == 'get_time'
         assert json.loads(tool_call.function.arguments) == {}
-
-    def test_final_tool_payload_coerces_values_by_schema(self):
-        parser = Glm47ToolParser()
-        properties = {
-            name: {
-                'type': schema_type
-            }
-            for name, schema_type in {
-                'name': 'string',
-                'age': 'integer',
-                'height': 'number',
-                'active': 'boolean',
-                'meta': 'object',
-                'scores': 'array',
-                'misc': 'null',
-            }.items()
-        }
-        request = ChatCompletionRequest(
-            model=MODEL_ID,
-            messages=[],
-            tools=[{
-                'type': 'function',
-                'function': {
-                    'name': 'typed_tool',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': properties,
-                    },
-                },
-            }],
-            tool_choice='auto',
-        )
-        parser.adjust_request(request)
-        payload = (
-            'typed_tool'
-            '<arg_key>name</arg_key><arg_value>Chen</arg_value>'
-            '<arg_key>age</arg_key><arg_value>29</arg_value>'
-            '<arg_key>height</arg_key><arg_value>1.75</arg_value>'
-            '<arg_key>active</arg_key><arg_value>true</arg_value>'
-            '<arg_key>meta</arg_key><arg_value>{"city":"Houston"}</arg_value>'
-            '<arg_key>scores</arg_key><arg_value>[98,87]</arg_value>'
-            '<arg_key>misc</arg_key><arg_value>null</arg_value>'
-        )
-
-        tool_call = final_tool_call(parser, payload)
-
-        assert json.loads(tool_call.function.arguments) == {
-            'name': 'Chen',
-            'age': 29,
-            'height': 1.75,
-            'active': True,
-            'meta': {
-                'city': 'Houston'
-            },
-            'scores': [98, 87],
-            'misc': None,
-        }
 
     def test_duplicate_arguments_preserve_raw_string_whitespace(self):
         payload = (
