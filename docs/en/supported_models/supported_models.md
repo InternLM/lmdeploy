@@ -129,7 +129,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 
 ```{note}
 * [1] PyTorch engine removes the support of original llava models after v0.6.4. Please use their corresponding transformers models instead, which can be found in https://huggingface.co/llava-hf
-* [2] MiMo-V2-Flash is supported with attention TP 4 and TP 8. The checkpoint uses FP8 weights; runtime activations and KV caches require BF16 and the PyTorch CUDA backend.
+* [2] MiMo-V2-Flash currently supports attention TP=4 and TP=8 only. Its checkpoint uses FP8 weight-only quantization; runtime activations and KV cache must use BF16 with the PyTorch CUDA backend.
 Starting from version 0.11.1, PytorchEngine no longer provides support for mllama.
 ```
 
