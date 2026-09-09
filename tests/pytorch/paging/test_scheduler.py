@@ -198,8 +198,9 @@ class TestScheduler:
         assert scheduler.schedule_metrics.cache_usage == 0.0
         get_request_cache_usage.assert_not_called()
 
-    def test_cache_usage_includes_prefix_only_blocks_by_default(self, cache_config, scheduler_config, seq_meta,
-                                                                block_size, num_gpu_blocks, monkeypatch):
+    def test_cache_usage_includes_prefix_only_blocks_when_request_mode_disabled(self, cache_config, scheduler_config,
+                                                                                seq_meta, block_size, num_gpu_blocks,
+                                                                                monkeypatch):
         monkeypatch.setattr(scheduler_module._envs, 'enable_request_cache_usage_metric', False)
         cache_config.enable_prefix_caching = True
         scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
