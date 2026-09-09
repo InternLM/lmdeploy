@@ -531,6 +531,9 @@ class ModelConfig:
 
         from lmdeploy.pytorch.transformers import config_from_pretrained
         hf_config = config_from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
+        if is_draft_model and spec_method == 'dspark':
+            from lmdeploy.pytorch.spec_decode.dspark_utils import prepare_dspark_hf_config
+            hf_config = prepare_dspark_hf_config(hf_config)
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.
             hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
@@ -612,7 +615,7 @@ class ModelConfig:
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config, dtype, device_type=device_type)
 
-        if spec_method == 'dflash':
+        if spec_method in ('dflash', 'dspark'):
             model_config.model_paradigm = 'ar_spec'
 
         # update eos_token_id to list
@@ -701,6 +704,17 @@ class SpecDecodeConfig:
     dist_config: DistConfig = field(default_factory=DistConfig)
     target_layer_ids: tuple[int, ...] | None = None
     mask_token_id: int | None = None
+    dspark_sample_from_anchor: bool | None = None
+    dspark_draft_query_len: int | None = None
+    dspark_verify_block_len: int | None = None
+    dspark_checkpoint_block_capacity: int | None = None
+    draft_vocab_size: int | None = None
+    markov_rank: int | None = None
+    markov_head_type: str | None = None
+    dspark_bundled_draft: bool = False
+    enable_confidence_head: bool = False
+    confidence_head_with_markov: bool = False
+    dynamic_verify_policy: str | None = None
 
     @classmethod
     def from_config(
@@ -724,6 +738,7 @@ class SpecDecodeConfig:
                                                    dist_config=dist_config,
                                                    is_draft_model=True,
                                                    spec_method=method,
+                                                   num_spec_tokens=num_speculative_tokens,
                                                    block_size=target_cache_cfg.block_size,
                                                    model_format=model_format,
                                                    hf_overrides=hf_overrides,
@@ -731,6 +746,7 @@ class SpecDecodeConfig:
                                                    )
         target_layer_ids = None
         mask_token_id = None
+        dspark_config = None
         if method == 'dflash':
             from lmdeploy.pytorch.spec_decode.dflash_utils import (
                 parse_dflash_config,
@@ -765,6 +781,55 @@ class SpecDecodeConfig:
                 num_speculative_tokens,
                 target_num_layers=target_num_layers,
             )
+        elif method == 'dspark':
+            from lmdeploy.pytorch.spec_decode.dspark_utils import (
+                parse_dspark_config,
+                validate_dspark_cache_config,
+                validate_dspark_runtime_config,
+                validate_dspark_target_config,
+            )
+            validate_dspark_cache_config(target_cache_cfg)
+            validate_dspark_runtime_config(cache_config=target_cache_cfg)
+            if target_model is None:
+                raise ValueError('DSpark requires an explicit target_model for checkpoint compatibility checks.')
+            target_model_config = ModelConfig.from_pretrained(
+                target_model,
+                trust_remote_code=trust_remote_code,
+                dtype=dtype,
+                dist_config=dist_config,
+                is_draft_model=False,
+                spec_method=method,
+                num_spec_tokens=num_speculative_tokens,
+                model_format=model_format,
+                hf_overrides=hf_overrides,
+                device_type=target_cache_cfg.device_type,
+                block_size=target_cache_cfg.block_size,
+            )
+            target_num_layers = getattr(target_model_config.llm_config, 'num_hidden_layers',
+                                        target_model_config.num_layers)
+            dspark_config = parse_dspark_config(
+                model_config.hf_config,
+                num_speculative_tokens,
+                target_num_layers=target_num_layers,
+            )
+            validate_dspark_target_config(
+                model_config.hf_config,
+                target_model_config.llm_config,
+                dspark_config,
+            )
+            target_layer_ids = dspark_config.target_layer_ids
+            mask_token_id = dspark_config.mask_token_id
+            # Draft model constructors consume normalized values regardless of
+            # whether the source checkpoint used Speculators or dspark_* keys.
+            for key, value in (
+                    ('markov_rank', dspark_config.markov_rank),
+                    ('markov_head_type', dspark_config.markov_head_type),
+                    ('draft_vocab_size', dspark_config.draft_vocab_size),
+                    ('dspark_sample_from_anchor',
+                     dspark_config.sample_from_anchor),
+                    ('dspark_draft_query_len', dspark_config.draft_query_len),
+                    ('dspark_num_speculative_tokens', num_speculative_tokens)):
+                setattr(model_config.hf_config, key, value)
         cache_config = None
         # include medusa
         no_caches = ['medusa']
@@ -789,6 +854,27 @@ class SpecDecodeConfig:
             num_speculative_tokens=num_speculative_tokens,
             target_layer_ids=target_layer_ids,
             mask_token_id=mask_token_id,
+            dspark_sample_from_anchor=(None if dspark_config is None else
+                                      dspark_config.sample_from_anchor),
+            dspark_draft_query_len=(None if dspark_config is None else
+                                    dspark_config.draft_query_len),
+            dspark_verify_block_len=(None if dspark_config is None else
+                                     dspark_config.verify_block_len),
+            dspark_checkpoint_block_capacity=(None if dspark_config is None else
+                                               dspark_config.checkpoint_block_capacity),
+            draft_vocab_size=(None if dspark_config is None else
+                               dspark_config.draft_vocab_size),
+            markov_rank=(None if dspark_config is None else dspark_config.markov_rank),
+            markov_head_type=(None if dspark_config is None else
+                              dspark_config.markov_head_type),
+            dspark_bundled_draft=(False if dspark_config is None else
+                                  dspark_config.bundled_draft),
+            enable_confidence_head=(False if dspark_config is None else
+                                    dspark_config.enable_confidence_head),
+            confidence_head_with_markov=(False if dspark_config is None else
+                                         dspark_config.confidence_head_with_markov),
+            dynamic_verify_policy=(None if dspark_config is None else
+                                   dspark_config.dynamic_verify_policy),
         )
         return obj
 

@@ -13,6 +13,17 @@ def test_arspec_cudagraph_uses_same_allocation_for_full_spec_capture():
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=40) == 40
 
 
+def test_dspark_cudagraph_keeps_target_and_draft_query_widths_distinct():
+    strategy = ARSpecCudagraphStrategy(num_spec_tokens=5, method='dspark')
+
+    # One live request padded to a four-request bucket. The target verifies
+    # N+1 rows while the sample-from-anchor draft queries only N rows.
+    assert strategy.get_max_tokens(batch_size=4, origin_batch_size=1,
+                                   num_tokens=6) == 24
+    assert strategy.get_max_tokens(batch_size=4, origin_batch_size=1,
+                                   num_tokens=5) == 20
+
+
 def test_arspec_cudagraph_keeps_full_spec_capture_for_eagle3():
     strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, method='eagle3')
 

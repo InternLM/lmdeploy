@@ -220,13 +220,23 @@ class ConfigBuilder:
             # TODO support tp > 1, ep > 1 for other methods
             if speculative_config.method in ('deepseek_mtp', 'qwen3_5_mtp', 'hy3_mtp'):
                 draft_dist_config = dist_config
-            elif speculative_config.method == 'dflash':
-                from lmdeploy.pytorch.spec_decode.dflash_utils import (
-                    validate_dflash_dist_config,
-                    validate_dflash_runtime_config,
-                )
-                validate_dflash_dist_config(dist_config)
-                validate_dflash_runtime_config(cache_config=cache_config, backend_config=engine_config)
+            elif speculative_config.method in ('dflash', 'dspark'):
+                if speculative_config.method == 'dflash':
+                    from lmdeploy.pytorch.spec_decode.dflash_utils import (
+                        validate_dflash_dist_config as validate_dist_config,
+                    )
+                    from lmdeploy.pytorch.spec_decode.dflash_utils import (
+                        validate_dflash_runtime_config as validate_runtime_config,
+                    )
+                else:
+                    from lmdeploy.pytorch.spec_decode.dspark_utils import (
+                        validate_dspark_dist_config as validate_dist_config,
+                    )
+                    from lmdeploy.pytorch.spec_decode.dspark_utils import (
+                        validate_dspark_runtime_config as validate_runtime_config,
+                    )
+                validate_dist_config(dist_config)
+                validate_runtime_config(cache_config=cache_config, backend_config=engine_config)
                 draft_dist_config = copy.deepcopy(dist_config)
             elif speculative_config.method == 'eagle3' and draft_arch == _EAGLE3_DEEPSEEK_ARCH:
                 draft_dist_config = dist_config
