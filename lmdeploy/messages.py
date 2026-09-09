@@ -152,6 +152,23 @@ class GenerationConfig:
                     "regex_schema": "call me [A-Za-z]{1,10}"
                 }
 
+            or, an XGrammar structural tag:
+
+            .. code-block:: json
+
+                {
+                    "type": "structural_tag",
+                    "format": {
+                        "type": "tag",
+                        "begin": "<answer>",
+                        "content": {
+                            "type": "regex",
+                            "pattern": "[0-9]{1,3}"
+                        },
+                        "end": "</answer>"
+                    }
+                }
+
         logits_processors: Custom logit processors.
         repetition_ngram_size: The size of n-grams to consider for repetition early stop.
             Must be non-negative; values below 0 are treated as 0.
@@ -229,8 +246,7 @@ class GenerationConfig:
         if tokenizer_eos_token_id is not None:
             stop_token_ids.add(tokenizer_eos_token_id)
 
-        # add eos_token_id from model's generation_config.json file if there
-        # is any.
+        # add eos_token_id from the model's generation config, if any.
         eos_token_id = generation_config.get('eos_token_id')
         if eos_token_id is not None:
             if isinstance(eos_token_id, int):
@@ -459,6 +475,9 @@ class PytorchEngineConfig:
             would be allocate according to current environment.
         adapters: The path configs to lora adapters.
         max_prefill_token_num: tokens per iteration.
+        piecewise_cudagraph_max_tokens: Enable piecewise CUDA graph and set its
+            maximum captured prefill token bucket. If not specified, piecewise
+            CUDA graph is disabled.
         cudagraph_capture_batch_sizes: Batch sizes to capture CUDA graphs for.
             If not specified, the engine will infer them from max_batch_size.
             max_batch_size is always captured.
@@ -571,6 +590,7 @@ class PytorchEngineConfig:
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
     kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
+    piecewise_cudagraph_max_tokens: int | None = None
 
     def __post_init__(self):
         """Check input validation."""
@@ -585,6 +605,8 @@ class PytorchEngineConfig:
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
+        assert (self.piecewise_cudagraph_max_tokens is None
+                or self.piecewise_cudagraph_max_tokens > 0), 'invalid piecewise_cudagraph_max_tokens'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'

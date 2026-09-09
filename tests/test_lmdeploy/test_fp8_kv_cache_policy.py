@@ -9,12 +9,8 @@ from pydantic_core import ValidationError
 from lmdeploy.cli.utils import ArgumentHelper
 from lmdeploy.messages import PytorchEngineConfig, QuantPolicy, TurbomindEngineConfig
 from lmdeploy.pytorch.config import CacheConfig
-from lmdeploy.pytorch.engine.cache_engine import (
-    CacheDesc,
-    CacheEngine,
-    _describe_kv_cache_quant_policy,
-    _get_fp8_cache_dtype,
-)
+from lmdeploy.pytorch.engine.cache_engine import CacheDesc
+from lmdeploy.pytorch.engine.cache_engine.schema import build_quant_cache_descs
 
 
 def test_quant_policy_fp8_aliases():
@@ -57,17 +53,6 @@ def test_turbomind_config_rejects_fp8_quant_policies(quant_policy):
         TurbomindEngineConfig(quant_policy=quant_policy)
 
 
-def test_fp8_kv_cache_dtype_mapping():
-    assert _get_fp8_cache_dtype(QuantPolicy.FP8) is torch.float8_e4m3fn
-    assert _get_fp8_cache_dtype(QuantPolicy.FP8_E5M2) is torch.float8_e5m2
-
-
-def test_fp8_kv_cache_log_description():
-    assert _describe_kv_cache_quant_policy(QuantPolicy.FP8) == 'fp8_e4m3 KV cache'
-    assert _describe_kv_cache_quant_policy(QuantPolicy.FP8_E5M2) == 'fp8_e5m2 KV cache'
-    assert _describe_kv_cache_quant_policy(QuantPolicy.NONE) is None
-
-
 def test_fp8_quant_cache_descs_are_empty():
     model_config = SimpleNamespace(dtype=torch.float16)
     k_desc = CacheDesc(shape=[4, 16, 2, 128], dtype=torch.float8_e4m3fn)
@@ -79,4 +64,4 @@ def test_fp8_quant_cache_descs_are_empty():
                                       num_gpu_blocks=1,
                                       quant_policy=QuantPolicy.FP8)
 
-    assert CacheEngine.get_quant_cache_descs(k_desc, v_desc, model_config, normal_cache_config) == []
+    assert build_quant_cache_descs(k_desc, v_desc, model_config, normal_cache_config) == []

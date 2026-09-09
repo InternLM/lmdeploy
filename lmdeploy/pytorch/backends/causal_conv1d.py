@@ -1,11 +1,28 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import torch
+
+from .base import BuildSpec
+from .gated_delta_rule import GatedDeltaMeta
 
 
 class CausalConv1dImpl(ABC):
     """CausalConv1d implementation api."""
+
+    @abstractmethod
+    def forward(
+        self,
+        x: torch.Tensor,
+        weight: torch.Tensor,
+        bias: torch.Tensor | None,
+        conv_state: torch.Tensor,
+        gated_delta_meta: GatedDeltaMeta,
+        activation: str,
+    ) -> torch.Tensor:
+        """Run causal convolution and update its state cache."""
+        raise NotImplementedError
 
     @abstractmethod
     def conv1d_fn(self,
@@ -34,11 +51,6 @@ class CausalConv1dImpl(ABC):
         raise NotImplementedError
 
 
-class CausalConv1dBuilder(ABC):
-    """CausalConv1d implementation builder."""
-
-    @staticmethod
-    @abstractmethod
-    def build():
-        """build."""
-        raise NotImplementedError
+@dataclass(frozen=True)
+class CausalConv1dBuildSpec(BuildSpec[CausalConv1dImpl]):
+    """Request construction of a causal-convolution operator."""

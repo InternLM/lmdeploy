@@ -350,14 +350,12 @@ class StepContext:
     state_caches: list | None = None
     state_offsets: torch.LongTensor | None = None
 
-    # named cache views for models with block_cache_specs / state_cache_specs
+    # named views for operator-owned block caches and configured state caches
     block_caches: Mapping[str, torch.Tensor] | None = None
     named_state_caches: Mapping[str, torch.Tensor] | None = None
 
     # mrope
     mrope_position_ids: torch.Tensor | None = None
-
-    _outputs: dict = field(default_factory=dict)
 
     # chunk with multimodal
     is_chunk_multimodal: bool = False
@@ -517,6 +515,7 @@ class StepContext:
 class BuildModelContext:
     """Context for building model."""
     language_model_only: bool = False
+    enable_deterministic: bool = False
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False

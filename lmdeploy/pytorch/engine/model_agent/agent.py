@@ -5,6 +5,7 @@ from collections import deque
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
+from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
 from typing import Any
@@ -14,13 +15,17 @@ import pybase64
 import torch
 import torch.distributed as dist
 from torch.profiler import record_function
+from tqdm.auto import tqdm
 
 from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.graph_runner import prefill_preparation_scope
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_engine.collector import collect_block_cache_requests
+from lmdeploy.pytorch.engine.cache_engine.plan import build_block_cache_plan
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
@@ -32,7 +37,11 @@ from lmdeploy.pytorch.spec_decode import build_spec_agent
 from lmdeploy.pytorch.strategies import build_strategy_factory
 from lmdeploy.pytorch.strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 from lmdeploy.pytorch.utils import get_gpu_memory, monkey_patch_hf_modules_cache, wait_for_async_tasks
-from lmdeploy.pytorch.weight_loader.model_weight_loader import ModelWeightLoader, load_model_weights
+from lmdeploy.pytorch.weight_loader.model_weight_loader import (
+    ModelWeightLoader,
+    load_model_weights,
+    process_weights_after_loading,
+)
 from lmdeploy.serve.openai.protocol import (
     DestroyWeightsUpdateGroupRequest,
     InitWeightsUpdateGroupRequest,
@@ -181,7 +190,7 @@ def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: d
         issued_cache_op = True
 
     if issued_cache_op:
-        cache_engine.events.wait()
+        cache_engine.swap_event.wait()
 
 
 def _restore_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None,
@@ -193,7 +202,7 @@ def _restore_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpoint
     if cache_inputs.kv_restore_plan is not None:
         cache_engine.copy_logical_blocks(cache_inputs.kv_restore_plan)
     if cache_inputs.state_restore_plan is not None:
-        state_cache_engine.copy_caches(*cache_inputs.state_restore_plan)
+        state_cache_engine.copy_slots(*cache_inputs.state_restore_plan)
 
 
 def _save_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None,
@@ -205,13 +214,14 @@ def _save_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInp
     if cache_inputs.kv_save_plan is not None:
         cache_engine.copy_logical_blocks(cache_inputs.kv_save_plan)
     if cache_inputs.state_save_plan is not None:
-        state_cache_engine.copy_caches(*cache_inputs.state_save_plan)
+        state_cache_engine.copy_slots(*cache_inputs.state_save_plan)
 
 
 @torch.inference_mode()
 def model_forward(
     model: torch.nn.Module,
     inputs: ModelInputs,
+    model_config: ModelConfig,
     cache_engine: CacheEngine,
     state_cache_engine: StateCacheEngine,
     stream: torch.cuda.Stream = None,
@@ -224,14 +234,14 @@ def model_forward(
         ctx_mgr = model.ctx_mgr
         context = ctx_mgr.build_context(
             inputs=inputs,
-            model_config=cache_engine.model_config,
+            model_config=model_config,
             cache_config=cache_engine.cache_config,
             kv_caches=cache_engine.gpu_cache,
             state_caches=state_cache_engine.state_caches,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
 
-        # Attach named cache views for models that declare block_cache_specs / state_cache_specs.
+        # Attach operator-owned block caches and configured state caches.
         context.block_caches = cache_engine.block_caches
         context.named_state_caches = state_cache_engine.named_state_caches
 
@@ -366,6 +376,9 @@ class BaseModelAgent:
 
         self.patched_model = None
         self.cache_engine = None
+        self.block_cache_plan = None
+        # Exact target/draft bytes used when cache capacity was calculated.
+        self._cache_plan_block_nbytes: tuple[int, int]
         self.state_cache_engine = None
         self.kv_connector = None
         self.profiler: AgentProfiler = None
@@ -463,6 +476,41 @@ class BaseModelAgent:
             gpu_mem_physical_free, _ = get_gpu_memory()
             return gpu_mem_physical_free
 
+    def _warmup_prefill(self) -> None:
+        """Warm the prefill shapes requested by the active graph runner."""
+        token_sizes = sorted(self.patched_model.get_prefill_warmup_token_sizes(), reverse=True)
+        if token_sizes:
+            with prefill_preparation_scope():
+                for num_tokens in tqdm(token_sizes, desc='Warming up prefill', disable=self.rank != 0):
+                    inputs = self.inputs_strategy.make_dummy(
+                        1,
+                        is_decoding=False,
+                        device='cuda',
+                        vocab_size=self.model_config.vocab_size,
+                        max_q_seqlen=num_tokens,
+                        meta=self.make_dummy_meta,
+                    )
+                    start = time.perf_counter()
+                    logger.debug('Warmup prefill num_tokens=%d start.', num_tokens)
+                    self._forward_impl(inputs)
+                    torch.cuda.synchronize()
+                    logger.debug('Warmup prefill num_tokens=%d done in %.2f seconds.', num_tokens,
+                                 time.perf_counter() - start)
+        else:
+            inputs = self.inputs_strategy.make_dummy(self.cache_config.max_batches,
+                                                     is_decoding=False,
+                                                     device='cuda',
+                                                     vocab_size=self.model_config.vocab_size,
+                                                     meta=self.make_dummy_meta)
+            if self.dist_config.dp > 1:
+                num_tokens = inputs.input_ids.numel()
+                inputs.build_dp_meta([num_tokens] * self.dist_config.world_size)
+                inputs.dp_meta.dp_is_decoding = False
+            logger.debug('Warmup prefill start.')
+            self._forward_impl(inputs)
+            torch.cuda.synchronize()
+            logger.debug('Warmup prefill done.')
+
     def warmup(self):
         """warmup."""
         from lmdeploy.pytorch.envs import skip_warmup
@@ -477,8 +525,6 @@ class BaseModelAgent:
         with self.all_context(), torch.cuda.stream(self.stream):
             max_batches = self.cache_config.max_batches
             world_size = self.dist_config.world_size
-
-            num_tokens = max_batches
             dp = self.dist_config.dp
 
             if dp > 1:
@@ -486,20 +532,7 @@ class BaseModelAgent:
                 group = self.dist_ctx.cpu_group
                 dist.barrier(group=group)
 
-            # warmup prefill
-            inputs = self.inputs_strategy.make_dummy(max_batches,
-                                                     is_decoding=False,
-                                                     device='cuda',
-                                                     vocab_size=self.model_config.vocab_size,
-                                                     meta=self.make_dummy_meta)
-            if dp > 1:
-                num_tokens = inputs.input_ids.numel()
-                inputs.build_dp_meta([num_tokens] * world_size)
-                inputs.dp_meta.dp_is_decoding = False
-            logger.debug('Warmup prefill start.')
-            self._forward_impl(inputs)
-            torch.cuda.synchronize()
-            logger.debug('Warmup prefill done.')
+            self._warmup_prefill()
 
             # warmup decoding(with cuda graph)
             capture_batch_sizes = self.patched_model.get_capture_batch_sizes()
@@ -507,7 +540,7 @@ class BaseModelAgent:
             if self.cache_config.role == EngineRole.Prefill:
                 # do not warmup decoding for prefill engine
                 capture_batch_sizes = []
-            for num_tokens in capture_batch_sizes:
+            for num_tokens in tqdm(capture_batch_sizes, desc='Warming up decoding', disable=self.rank != 0):
                 inputs = self.inputs_strategy.make_dummy(num_tokens,
                                                          is_decoding=True,
                                                          device='cuda',
@@ -1342,6 +1375,7 @@ class BaseModelAgent:
         enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
 
         build_model_ctx = BuildModelContext(language_model_only=self.misc_config.language_model_only,
+                                            enable_deterministic=self.backend_config.enable_deterministic,
                                             dllm_config=self.misc_config.dllm_config,
                                             strategy_factory=self.strategy_factory,
                                             enable_return_routed_experts=enable_return_routed_experts,
@@ -1369,6 +1403,31 @@ class BaseModelAgent:
                                         build_model_ctx=self.build_model_ctx)
             if self.memdecode_agent is not None:
                 self.memdecode_agent.build_model(self.misc_config.empty_init, build_model_ctx=self.build_model_ctx)
+
+    def build_cache_plans(self, cache_config: CacheConfig,
+                          spec_cache_config: CacheConfig | None = None) -> tuple[int, int, int]:
+        """Build worker-local plans and return target/spec/memory block
+        bytes."""
+        with self.all_context():
+            tp = self.dist_config.attn_tp
+            cache_request_model = self.patched_model
+            # Ray may recollect plans after the model has been graph-wrapped.
+            if not isinstance(cache_request_model, torch.nn.Module):
+                cache_request_model = cache_request_model.get_model()
+            request_collector = partial(collect_block_cache_requests, cache_request_model)
+            self.block_cache_plan = build_block_cache_plan(
+                self.model_config,
+                cache_config,
+                tp,
+                request_collector=request_collector,
+            )
+            target_nbytes = self.block_cache_plan.logical_block_nbytes
+            spec_nbytes = self.spec_agent.build_cache_plan(spec_cache_config)
+            memory_nbytes = 0
+            if self.memdecode_agent is not None:
+                memory_nbytes = self.memdecode_agent.build_cache_plan(cache_config)
+            self._cache_plan_block_nbytes = (target_nbytes, spec_nbytes)
+            return target_nbytes, spec_nbytes, memory_nbytes
 
     def build_graph_runner(self):
         """Build graph runner."""
@@ -1407,11 +1466,10 @@ class BaseModelAgent:
             tp_rank = dist_ctx.attn_tp_group.rank
 
             self.cache_engine = CacheEngine(self.cache_config,
-                                            self.model_config,
                                             rank=self.rank,
                                             tp_rank=tp_rank,
-                                            world_size=tp,
-                                            cache_stream=self.cache_stream)
+                                            cache_stream=self.cache_stream,
+                                            block_cache_plan=self.block_cache_plan)
             self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
 
             self.kv_connector = build_kv_connector(
@@ -1434,6 +1492,7 @@ class BaseModelAgent:
         output = model_forward(
             self.patched_model,
             inputs,
+            self.model_config,
             self.cache_engine,
             state_cache_engine=self.state_cache_engine,
             stream=self.stream,
@@ -1553,9 +1612,7 @@ class BaseModelAgent:
 
             if request.finished:
                 for m in filter(None, [model, spec_model]):
-                    for _, mod in m.named_modules():
-                        if hasattr(mod, 'update_weights'):
-                            mod.update_weights()
+                    process_weights_after_loading(m)
 
                     torch.cuda.synchronize()
                     self._update_params_ipc_event = None
@@ -1649,16 +1706,20 @@ class BaseModelAgent:
 
                 if request.finished:
                     for m in filter(None, [model, spec_model]):
-                        for _, mod in m.named_modules():
-                            if hasattr(mod, 'update_weights'):
-                                mod.update_weights()
+                        process_weights_after_loading(m)
                         torch.cuda.synchronize()
                     # FusedMoE.update_weights() above replaces the gate_up / down
                     # Parameter objects (LinearWeights.update_weight registers a new
                     # nn.Parameter), so any CUDA graph captured before the update
                     # still references the freed old pointers. Drop the captured
-                    # graphs so the next forward re-captures with the new params.
+                    # graphs before rebuilding them with the new parameters.
                     self.reset_graph_runner()
+                    # PCG serving never captures missing plans. An active PCG
+                    # runner must be refreshed here; a sleeping runner has no
+                    # cache arena and is warmed by KV-cache wakeup instead.
+                    if (not self.state.is_sleeping
+                            and self.patched_model.get_prefill_warmup_token_sizes()):
+                        self.warmup()
 
                 torch.cuda.empty_cache()
                 return True, 'Succeeded to update parameter online.'
@@ -1713,6 +1774,26 @@ class BaseModelAgent:
         torch.cuda.empty_cache()
         self.state.to_sleep.clear()
 
+    def _rebuild_models_after_level2_sleep(self):
+        """Rebuild models, cache bindings, and graph runners in that order."""
+        expected_block_nbytes = self._cache_plan_block_nbytes
+        old_empty_init = self.misc_config.empty_init
+        self.misc_config.empty_init = True
+        try:
+            self.build_model()
+            target_nbytes, spec_nbytes, _ = self.build_cache_plans(
+                self.cache_config,
+                self.spec_agent.cache_config,
+            )
+            actual_block_nbytes = (target_nbytes, spec_nbytes)
+            if actual_block_nbytes != expected_block_nbytes:
+                raise RuntimeError(
+                    'Level-2 wakeup rebuilt cache plans with different logical-block sizes: '
+                    f'expected target/draft {expected_block_nbytes}, got {actual_block_nbytes}.')
+            self.build_graph_runner()
+        finally:
+            self.misc_config.empty_init = old_empty_init
+
     @torch.inference_mode()
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
@@ -1732,11 +1813,7 @@ class BaseModelAgent:
                     spec_model.to(torch.cuda.current_device())
             else:
                 # user should update weights after wakeup
-                old_empty_init = self.misc_config.empty_init
-                self.misc_config.empty_init = True
-                self.build_model()
-                self.build_graph_runner()
-                self.misc_config.empty_init = old_empty_init
+                self._rebuild_models_after_level2_sleep()
 
         if 'kv_cache' in tags:
             self.build_cache_engine()
@@ -1754,5 +1831,6 @@ class BaseModelAgent:
             self.memdecode_agent.release()
         self.patched_model = None
         self.cache_engine = None
+        self.block_cache_plan = None
         self.state_cache_engine = None
         torch.cuda.empty_cache()

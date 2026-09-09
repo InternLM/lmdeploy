@@ -1,8 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import torch
+
+from .base import BuildSpec
 
 
 @dataclass
@@ -30,25 +33,22 @@ class V4IndexerOutput:
     topk_length: torch.Tensor
 
 
-class BaseV4Indexer(ABC):
+class V4IndexerImpl(ABC):
 
     @abstractmethod
     def forward(self,
                 query: torch.Tensor,
                 weights: torch.Tensor,
-                index_kv_cache: torch.Tensor,
-                index_kv_scale_cache: torch.Tensor | None,
+                block_caches: Mapping[str, torch.Tensor],
                 meta: V4IndexerMetadata) -> V4IndexerOutput:
         raise NotImplementedError
 
 
-class BaseV4IndexerBuilder:
+@dataclass(frozen=True)
+class V4IndexerBuildSpec(BuildSpec[V4IndexerImpl]):
+    """Immutable requirements for constructing a DeepSeek-V4 indexer."""
 
-    @staticmethod
-    @abstractmethod
-    def build(index_topk: int,
-              compress_ratio: int,
-              num_heads: int,
-              head_dim: int) -> BaseV4Indexer:
-        """Build layer implementation."""
-        raise NotImplementedError
+    index_top_k: int
+    compress_ratio: int
+    num_heads: int
+    head_dim: int

@@ -18,7 +18,7 @@ from lmdeploy.pytorch.backends.selector import init_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.utils import get_logger, try_import_deeplink
 
-from .base import ExecutorBase
+from .base import ExecutorBase, _WorkerCachePlanSizes
 from .base_worker import WorkerWrapperBase
 from .dist_utils import find_available_port, setup_master_addr
 
@@ -363,6 +363,12 @@ class MPExecutor(ExecutorBase):
     def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig = None):
         """Set all cache config."""
         self.collective_rpc('set_model_config', args=(model_config, spec_model_config))
+
+    def _prepare_worker_cache_plans(self, cache_config: CacheConfig,
+                                    spec_cache_config: CacheConfig | None = None) -> list[_WorkerCachePlanSizes]:
+        """Prepare and size rank-local cache plans on every worker."""
+        worker_sizes = self.collective_rpc('build_cache_plans', args=(cache_config, spec_cache_config))
+        return [_WorkerCachePlanSizes(*sizes) for sizes in worker_sizes]
 
     def build_graph_runner(self):
         """Build graph runner."""
