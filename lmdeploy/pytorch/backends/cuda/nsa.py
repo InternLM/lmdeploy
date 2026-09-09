@@ -12,7 +12,12 @@ from lmdeploy.pytorch.backends.cuda.step_metadata import (
     CudaSequenceMetadata,
     register_step_metadata_impl,
 )
-from lmdeploy.pytorch.consts import DSA_INDEX_SCALE_BYTES
+from lmdeploy.pytorch.consts import (
+    DSA_INDEX_SCALE_BYTES,
+    DSA_INDEXER_K_CACHE_NAME,
+    dsa_packed_indexer_k_cache_shape,
+)
+from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheGeometry, BlockCacheRequest
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
@@ -28,8 +33,7 @@ from lmdeploy.pytorch.kernels.cuda.step_metadata.fill_dsa_indexer_metadata impor
 from lmdeploy.utils import get_logger
 
 from ..nsa import (
-    BaseNSAIndexFP8,
-    BaseNSAIndexFP8Builder,
+    NSAIndexFP8Impl,
     NSAIndexMeta,
     build_nsa_index_meta,
     should_skip_nsa_indexer,
@@ -328,7 +332,7 @@ class DSAIndexerMetaBuilder(
         return meta
 
 
-class TritonNSAIndexFP8(BaseNSAIndexFP8):
+class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
 
     def __init__(self, topk: int, softmax_scale: float, block_size: int,
                  fill: int,
@@ -345,6 +349,21 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         self._sparse_index_topk = _get_sparse_index_topk(topk)
         self._step_meta_group: int | None = None
         register_step_metadata_impl(self)
+
+    def get_block_cache_requests(self, geometry: BlockCacheGeometry,
+                                 head_dim: int) -> tuple[BlockCacheRequest, ...]:
+        """Request one DeepGEMM-compatible packed cache row per indexer."""
+        if geometry.logical_block_size != geometry.kernel_block_size:
+            raise ValueError(
+                'DSA indexer cache requires equal logical and kernel block sizes, '
+                f'got {geometry.logical_block_size} and {geometry.kernel_block_size}.')
+        request = BlockCacheRequest(
+            name=DSA_INDEXER_K_CACHE_NAME,
+            shape=dsa_packed_indexer_k_cache_shape(geometry.kernel_block_size, head_dim),
+            dtype=torch.uint8,
+            per_row_contiguous=True,
+        )
+        return (request, )
 
     def _should_skip_scoring(self, meta: NSAIndexMeta) -> bool:
         """Whether dense prefill makes index scoring unnecessary."""
@@ -560,18 +579,3 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                     eps=norm_eps,
                                     rope_interleaved=rope_interleaved)
         return self._maybe_score_and_select(q, q_s, indexer_k_cache, meta)
-
-
-class TritonNSAIndexFP8Builder(BaseNSAIndexFP8Builder):
-
-    @staticmethod
-    def build(topk: int, softmax_scale: float, block_size: int = 128,
-              fill: int = -1,
-              allow_short_prefill_scoring_skip: bool = False) -> BaseNSAIndexFP8:
-        return TritonNSAIndexFP8(
-            topk,
-            softmax_scale=softmax_scale,
-            block_size=block_size,
-            fill=fill,
-            allow_short_prefill_scoring_skip=allow_short_prefill_scoring_skip,
-        )

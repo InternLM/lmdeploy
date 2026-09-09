@@ -90,6 +90,7 @@ def _bare_model_agent():
     agent.model_config = SimpleNamespace(num_replicate_key_value_heads=4)
     agent.rank = 7
     agent.cache_stream = object()
+    agent.block_cache_plan = object()
     agent.dist_config = SimpleNamespace(attn_tp=8)
     agent.memdecode_agent = None
     return agent
@@ -149,7 +150,7 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
     cache_call = events[1]
     assert cache_call[2]['rank'] == 7
     assert cache_call[2]['tp_rank'] == 3
-    assert cache_call[2]['world_size'] == 8
+    assert cache_call[2]['block_cache_plan'] is agent.block_cache_plan
     factory_call = events[3]
     assert factory_call[1] is KVConnectorRole.WORKER
     assert factory_call[3] == {

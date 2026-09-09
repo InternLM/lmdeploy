@@ -88,6 +88,54 @@ class TestBlockTrie(BlockTrieTestMixin):
         ref_cnt = allocator.get_ref_count(logical_blocks.get_real_blocks())
         assert np.array_equal(ref_cnt, [4, 3])
 
+    def test_logprob_prefix_match_is_capped_at_scoring_start(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = list(range(block_size * 3 + 1))
+
+        cached = sess.add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+        cached_blocks = cached.logical_blocks.get_real_blocks().copy()
+
+        param = SamplingParam(num_logprobs=0, logprob_start_len=block_size + 3)
+        scored = sess.add_sequence(token_ids, sampling_param=param)
+        assert scored.get_prefix_cache_max_candidate_step() == block_size + 3
+        assert scored.get_prefix_cache_max_match_step() == block_size
+
+        block_trie.match(scored)
+
+        assert scored.num_history_ids == block_size
+        assert scored.prefix_cache.recompute_overlap.fresh_block_range == range(1, 3)
+
+        block_mgr.allocate(scored)
+        fresh_blocks = scored.logical_blocks.get_real_blocks()[1:3].copy()
+        assert not np.array_equal(fresh_blocks, cached_blocks[1:3])
+
+        block_trie.allocate(scored)
+
+        assert np.array_equal(scored.logical_blocks.get_real_blocks()[1:3], fresh_blocks)
+        assert scored.prefix_cache.recompute_overlap.fresh_block_range is None
+        assert scored.prefix_cache.trie_cursor.prefix_len == block_size * 3
+
+    def test_logprob_start_minus_one_preserves_prefix_match_limit(self, block_trie, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = list(range(block_size * 3 + 1))
+
+        cached = sess.add_sequence(token_ids)
+        scheduler.block_manager.allocate(cached)
+        block_trie.allocate(cached)
+
+        default_seq = sess.add_sequence(token_ids)
+        generated_only = sess.add_sequence(token_ids,
+                                           sampling_param=SamplingParam(num_logprobs=0, logprob_start_len=-1))
+        assert default_seq.get_prefix_cache_max_match_step() == generated_only.get_prefix_cache_max_match_step()
+
+        block_trie.match(default_seq)
+        block_trie.match(generated_only)
+        assert default_seq.num_history_ids == generated_only.num_history_ids == block_size * 3
+
     def test_match_recompute_overlap_stays_private_during_allocate(self, block_trie, block_mgr, scheduler):
         allocator = block_trie.allocator
         sess = scheduler.add_session(0)
@@ -274,6 +322,31 @@ class TestBlockTrie(BlockTrieTestMixin):
         assert np.array_equal(seq.logical_blocks.get_real_blocks()[2:4], fresh_overlap_blocks)
         assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
         assert seq.prefix_cache.trie_cursor.prefix_len == block_size * 4
+
+    def test_logprob_ssm_checkpoint_beyond_scoring_start_is_ignored(self, ssm_scheduler):
+        block_trie = ssm_scheduler.block_trie
+        block_mgr = ssm_scheduler.block_manager
+        sess = ssm_scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [token for token in range(1, 5) for _ in range(block_size)]
+        token_ids.append(9)
+
+        cached = sess.add_sequence(token_ids)
+        block_mgr.allocate(cached)
+        block_trie.allocate(cached)
+        deep_state = block_trie.state_checkpoints.reserve_save(cached, step=block_size * 4)
+        assert deep_state >= 0
+        assert block_trie.state_checkpoints.publish_save(cached)
+
+        param = SamplingParam(num_logprobs=0, logprob_start_len=block_size * 2 + 3)
+        scored = sess.add_sequence(token_ids, sampling_param=param)
+        assert scored.get_prefix_cache_max_candidate_step() == block_size * 2 + 3
+
+        block_trie.match(scored)
+
+        assert scored.num_history_ids == 0
+        assert scored.prefix_cache.restore.slot == -1
+        assert scored.prefix_cache.restore.node is None
 
     def test_ssm_match_recompute_falls_back_for_required_overlap(self, ssm_scheduler):
         block_trie = ssm_scheduler.block_trie

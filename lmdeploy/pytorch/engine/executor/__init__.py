@@ -1,11 +1,32 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Sequence
 from logging import Logger
 
+from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
+
+
+def _finalize_sparse_mla_cache_policy(model_configs: Sequence[ModelConfig], cache_config: CacheConfig) -> None:
+    """Translate the generic cache policy for sparse-MLA models.
+
+    This runs before executors copy configs to workers or build model
+    operators. Sparse MLA records its physical dtype on ``ModelConfig`` and
+    must not expose that choice as generic KV quantization at runtime.
+    """
+    sparse_mla_configs = [config for config in model_configs if config.mla_index_topk is not None]
+    if not sparse_mla_configs or cache_config.quant_policy == QuantPolicy.NONE:
+        return
+    if cache_config.quant_policy != QuantPolicy.FP8:
+        raise ValueError(f'Sparse MLA does not support quant_policy={cache_config.quant_policy}. '
+                         'Use none/0 for BF16 or fp8/16 for FP8.')
+
+    for model_config in sparse_mla_configs:
+        model_config.mla_kv_cache_dtype = 'fp8_ds_mla'
+    cache_config.quant_policy = QuantPolicy.NONE
 
 
 def get_distributed_executor_backend(world_size: int, dp: int, device_type: str, logger: Logger = None):
@@ -83,6 +104,15 @@ def build_executor(
         device_type=device_type,
         block_size=cache_config.block_size,
     )
+
+    # Finalize cache policy before any executor copies configs to workers or
+    # builds backend operators. Target and memory models share CacheConfig.
+    shared_cache_models = [model_config]
+    if memdecode_config := misc_config.memdecode_config:
+        shared_cache_models.append(memdecode_config.memory_model_config)
+    _finalize_sparse_mla_cache_policy(shared_cache_models, cache_config)
+    if specdecode_config is not None and specdecode_config.cache_config is not None:
+        _finalize_sparse_mla_cache_policy([specdecode_config.model_config], specdecode_config.cache_config)
 
     if distributed_executor_backend is None:
         distributed_executor_backend = get_distributed_executor_backend(world_size, dp, device_type, logger)

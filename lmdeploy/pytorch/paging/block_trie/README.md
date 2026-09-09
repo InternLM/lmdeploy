@@ -185,9 +185,10 @@ release clears both the fresh range and the canonical mapping while keeping
 the strategy's `recompute_blocks` policy.
 
 For SSM matching, the same concept begins at the selected state-checkpoint
-step. The checkpoint supplies the recurrent state and canonical KV before that
-step; any deeper cached blocks form the recomputed suffix and receive fresh
-sequence-owned KV.
+step. The checkpoint supplies the recurrent state and canonical full KV blocks
+before its anchor. A non-aligned checkpoint also supplies one frozen partial
+block, which is copied into a private request-owned destination before forward;
+any deeper cached blocks remain private and writable as well.
 
 ## SSM Checkpoint Matching
 
@@ -205,16 +206,17 @@ Candidate steps are searched from deepest to shallowest. The exact verifier,
 `verify_candidate()`, then checks that:
 
 - the node still owns a published checkpoint;
-- the checkpoint owner remains attached and its canonical path has the
-  expected length;
+- the full-block anchor and canonical path have the expected length;
+- partial checkpoints own exactly one frozen logical block;
 - the sparse key and adapter still match the node;
 - the step is valid for this request and outside multimodal interiors; and
 - the immutable full-prefix token and multimodal identities match exactly.
 
-On a hit, `BlockTrie` acquires the checkpoint's canonical KV blocks, advances
-the sequence, records `prefix_cache.restore`, and applies routed-expert and
-recompute-overlap policy. A KV path without an exact published checkpoint is a
-miss.
+On a hit, `BlockTrie` acquires the checkpoint's canonical full KV blocks,
+advances the sequence to the exact step, records `prefix_cache.restore`, and
+keeps the partial destination and known suffix private. Partial checkpoints
+fail closed when routed-expert tail history is requested. A KV path without an
+exact published checkpoint is a miss.
 
 `StateCheckpointMatchData` intentionally freezes full-prefix host identity and
 the canonical logical KV path at publication. This makes lookup independent of
@@ -229,7 +231,9 @@ copied into a request-owned private block before forward.
 
 ## SSM Checkpoint Lifecycle
 
-A node checkpoint has three ownership states:
+A node checkpoint has three ownership states. Its record always owns a state
+slot and may additionally own one frozen logical KV block when the exact step
+is not block-aligned:
 
 | State     | Representation                                | Matchable? |
 | --------- | --------------------------------------------- | ---------- |
@@ -239,26 +243,26 @@ A node checkpoint has three ownership states:
 
 `pin_count > 0` is an overlay on a published checkpoint. A pinned checkpoint
 cannot be evicted or released because an asynchronous restore or save copy may
-still reference its slot.
+still reference its state slot or frozen block.
 
-Prefill checkpoints may use any positive model-forward boundary outside a
-multimodal span. Decode checkpoints remain block-aligned. One checkpoint is
-kept per full-block anchor; a later unpinned checkpoint at that anchor may
-replace the older one.
+Prefill checkpoints may be reserved at any positive model-forward boundary
+outside multimodal spans. Decode checkpoints remain block-aligned. One
+checkpoint is retained per full-block anchor; an unpinned variant may replace
+the older checkpoint while reusing its resources.
 
 ### Save path
 
 ```text
 InputsMakerAsync
   reserve_save(seq)
-  producer partial block -> frozen block, if needed
-  runtime slot -> checkpoint slot
+  producer partial block -> frozen block KV copy plan (when partial)
+  runtime slot -> checkpoint slot copy plan
         |
         v
 ModelAgent.model_forward()
   run model
-  queue partial KV -> frozen KV
-  queue runtime state -> checkpoint state
+  queue producer partial block -> frozen block
+  queue runtime state -> checkpoint copy on the forward stream
         |
         v
 EngineLoop
@@ -284,13 +288,13 @@ BlockTrie.match()
         v
 Scheduler / InputsMakerAsync
   pin_restore(seq) before checkpoint eviction can run
-  frozen block -> private request block, if needed
-  checkpoint slot -> runtime slot
+  frozen block -> request-private block KV copy plan (when partial)
+  checkpoint slot -> runtime slot copy plan
         |
         v
 ModelAgent.model_forward()
-  queue frozen KV -> private KV
-  queue checkpoint -> runtime state before model execution
+  queue frozen block -> request-private block
+  queue checkpoint -> runtime state copy before model execution
         |
         v
 EngineLoop
@@ -304,10 +308,10 @@ clears a selected restore.
 ## Device-copy Contract
 
 The input maker stores one-forward KV and state plans in
-`CacheCheckpointInputs`. KV plans are transferred with the forward payload;
-state plans stay as compact host integer sequences. `ModelAgent` executes both
-through their cache owners before or after model execution on the same forward
-stream.
+`CacheCheckpointInputs`, beside persistent model inputs. KV logical ids are
+resolved through paging into the device plan consumed by `CacheEngine`; compact
+state pairs remain on the host for `StateCacheEngine`. `ModelAgent` executes
+both around model execution on the same forward stream.
 
 Keep these rules:
 
@@ -329,9 +333,11 @@ accounted:
 - `KVBlockLifecycle.evict()` removes attached leaf nodes whose KV reference
   count proves that no sequence still shares them. Removing a KV leaf also
   releases its unpinned state checkpoint.
-- `StateCheckpointLifecycle.evict()` may release any published, unpinned
-  checkpoint while retaining the node and its trie KV block. Both checkpoint
-  eviction paths use `last_access_time` as LRU order.
+- `StateCheckpointLifecycle.evict()` may release a published, unpinned state
+  checkpoint while retaining the node and its KV block. It uses
+  `last_access_time` as state-only LRU order.
+- KV pressure first calls `evict_frozen_checkpoints()` so an unpinned partial
+  checkpoint can release one frozen block without removing its trie anchor.
 
 Both paths revalidate candidates because their heaps and indexes are auxiliary
 state that may contain stale entries.
@@ -350,7 +356,8 @@ state that may contain stale entries.
   from trie-owned blocks and remain private while forward writes them.
 - Trie nodes attach once, and eviction detaches leaves only; attached ancestor
   paths never change.
-- Pinned checkpoints and shared KV nodes are not evictable.
+- Pinned checkpoints, their frozen blocks, and shared trie KV nodes are not
+  evictable.
 - Blocks in `recompute_overlap` must remain sequence-owned and writable through
   `BlockTrie.allocate()`.
 - `block_size` is the scheduler/trie identity unit. `kernel_block_size` is a

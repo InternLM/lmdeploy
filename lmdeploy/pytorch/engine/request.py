@@ -34,6 +34,9 @@ class Response:
     err_msg: str = ''
     is_done: bool = False
     req_metrics: RequestMetrics = None
+    # Raw rows in InferOutput.logprobs format, accumulated across scoring
+    # prefill chunks until the terminal response.
+    _input_logprobs: list[tuple[list[float], list[int]]] | None = None
 
 
 @dataclass

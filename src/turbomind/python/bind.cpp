@@ -702,11 +702,29 @@ PYBIND11_MODULE(_turbomind, m)
                  auto device = getDLDevice(self);
                  return std::tuple<int, int>(int(device.device_type), device.device_id);
              })
-        .def("t", [](const Tensor& self) { return std::make_shared<Tensor>(self.t()); });
+        .def("t", [](const Tensor& self) { return std::make_shared<Tensor>(self.t()); })
+        .def(
+            "reinterpret",
+            [](const Tensor& self, ft::DataType dtype, std::vector<ft::core::ssize_t> shape) {
+                ft::core::Layout layout{std::move(shape)};
+                auto             buffer = self.buffer().view(dtype);
+                if (buffer.size() != layout.cosize()) {
+                    throw py::value_error("reinterpret requires the source and destination to have the same byte size");
+                }
+                return std::make_shared<Tensor>(std::move(buffer), std::move(layout));
+            },
+            "dtype"_a,
+            "shape"_a);
     m.def(
         "from_dlpack",
-        [](py::object obj) {
-            py::capsule      cap = obj.attr("__dlpack__")();
+        [](py::object obj, py::object stream) {
+            py::capsule cap;
+            if (stream.is_none()) {
+                cap = obj.attr("__dlpack__")();
+            }
+            else {
+                cap = obj.attr("__dlpack__")("stream"_a = stream);
+            }
             DLManagedTensor* dlmt =
                 static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
             auto ret = DLManagedTensorToTritonTensor(dlmt);
@@ -714,7 +732,8 @@ PYBIND11_MODULE(_turbomind, m)
             cap.set_name("used_dltensor");
             return ret;
         },
-        "dl_managed_tensor"_a);
+        "dl_managed_tensor"_a,
+        "stream"_a = py::none());
     m.def(
         "from_dlpack_with_strides",
         [](py::object obj) {
@@ -843,12 +862,18 @@ PYBIND11_MODULE(_turbomind, m)
 
     m.def(
         "create_device_context",
-        []() {
-            auto stream = ft::core::Stream::create();
+        [](py::object stream_ptr) {
+            const bool use_external_stream = !stream_ptr.is_none();
+            auto       stream =
+                use_external_stream ?
+                          ft::core::Stream::borrow(reinterpret_cast<cudaStream_t>(py::cast<std::uintptr_t>(stream_ptr))) :
+                          ft::core::Stream::create();
             return std::make_unique<PyContextGuard>(
-                stream, ft::core::Allocator{ft::kCPU}, ft::core::Allocator{stream, false});
+                stream, ft::core::Allocator{ft::kCPU}, ft::core::Allocator{stream, use_external_stream});
         },
-        "Create a ContextGuard with stream + host + device allocators.\n\n"
+        "stream_ptr"_a = py::none(),
+        "Create a ContextGuard with stream + host + device allocators. When "
+        "stream_ptr is provided, borrow that externally owned CUDA stream.\n\n"
         "Objects that use core::Context::stream() in their constructor or destructor "
         "(notably LlamaLinear) must be destroyed before this context exits.");
 
