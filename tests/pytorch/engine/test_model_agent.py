@@ -605,6 +605,7 @@ def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
     assert proposer.guided_helper is spec_agent.guided_helper
 
 def _make_minimal_build_agent(target_layer_ids, mask_token_id=99):
+    from lmdeploy.pytorch.config import BackendConfig
     from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
     from lmdeploy.pytorch.spec_decode.base import BaseSpecModelAgent
 
@@ -621,6 +622,7 @@ def _make_minimal_build_agent(target_layer_ids, mask_token_id=99):
     agent.adapters = None
     agent.device = torch.device('cpu')
     agent.rank = 0
+    agent.backend_config = BackendConfig()
     agent.model_config = SimpleNamespace(
         custom_module_map=None,
         quant_config=None,
