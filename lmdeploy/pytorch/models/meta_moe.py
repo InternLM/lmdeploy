@@ -11,7 +11,7 @@ from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.model_inputs import StepContextManager
 from lmdeploy.pytorch.nn import RMSNorm, build_rotary_embedding_from_config
-from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMeta
+from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMeta, GatedDeltaMetaBuilder
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -241,6 +241,8 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
         # build rotary embedding
         self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
 
+        self.gated_delta_meta_builder = GatedDeltaMetaBuilder()
+
     def forward(
         self,
         input_ids: torch.LongTensor,
@@ -270,9 +272,8 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
         cos, sin = cos[0], sin[0]
         rotary_pos_emb = (cos, sin)
 
-        # make seq_idx
-        gated_delta_meta = GatedDeltaMeta(hidden_states.size(1), self.config.linear_conv_kernel_dim, state_ids,
-                                          attn_metadata)
+        gated_delta_meta = self.gated_delta_meta_builder(hidden_states.size(1),
+                                                         self.config.linear_conv_kernel_dim, state_ids, attn_metadata)
 
         # decoding
         residual = None
