@@ -379,10 +379,31 @@ def _build_fused_moe_cute(spec: FusedMoEW4A16BuildSpec) -> FusedMoEW4A16Impl:
     return impl
 
 
+def _supports_cute(spec: FusedMoEW4A16BuildSpec) -> bool:
+    """Check build-time compatibility without constructing an EP dispatcher."""
+    if (spec.num_bits != 4 or spec.group_size != 32 or spec.output_dtype != torch.bfloat16
+            or spec.hidden_dim < 32 or spec.hidden_dim % 32):
+        return False
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
+        return False
+    try:
+        from lmdeploy.pytorch.kernels.cuda.compressed_tensors_w4a16_cute import fused_moe_w4a16_cute  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def _build_fused_moe_w4a16(spec: FusedMoEW4A16BuildSpec) -> FusedMoEW4A16Impl:
-    """Build the selected CUDA compressed-tensors W4A16 MoE."""
-    if envs.w4a16_moe_backend == 'cute':
+    """Build the requested provider or the best compatible provider."""
+    provider = envs.w4a16_moe_backend
+
+    if provider == 'auto':
+        provider = 'cute' if _supports_cute(spec) else 'triton'
+
+    if provider == 'cute':
         return _build_fused_moe_cute(spec)
+    if provider != 'triton':
+        raise ValueError(f'Unsupported compressed-tensors W4A16 MoE provider: {provider}')
     if spec.ep_size > 1:
         return DeepEPFusedMoEW4A16Impl(
             top_k=spec.top_k,
