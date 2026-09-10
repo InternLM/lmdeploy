@@ -139,8 +139,11 @@ class DlinferNSAIndexBF16(NSAIndexFP8Impl):
         k: Tensor,
         weights: Tensor,
         indexer_k_cache: Tensor,
-        meta: DlinferNSAIndexMeta,
+        attn_metadata=None,
+        meta: DlinferNSAIndexMeta | None = None,
     ) -> Tensor:
+        if meta is None:
+            meta = self.get_step_metadata(attn_metadata)
         return self._forward_index(q, k, weights, indexer_k_cache, meta)
 
     def forward_fused(
@@ -156,7 +159,8 @@ class DlinferNSAIndexBF16(NSAIndexFP8Impl):
         norm_eps: float,
         head_gate_scale: float,
         rope_interleaved: bool,
-        meta: DlinferNSAIndexMeta,
+        attn_metadata=None,
+        meta: DlinferNSAIndexMeta | None = None,
     ) -> Tensor:
         raise NotImplementedError(
             'DSA indexer fused preprocessing is not supported on Ascend.')
