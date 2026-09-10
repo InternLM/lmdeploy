@@ -126,43 +126,6 @@ def test_dcp_local_winners_are_compacted_with_valid_counts():
     assert local.tolist() == [[4, 3, 2, -1, -1, -1], [-1, -1, -1, -1, -1, -1]]
 
 
-def test_dcp_candidate_merge_is_exact_and_uses_global_position_ties(
-        monkeypatch):
-    from lmdeploy.pytorch import distributed
-    from lmdeploy.pytorch.backends.cuda.nsa import TritonNSAIndexFP8Impl
-
-    impl = object.__new__(TritonNSAIndexFP8Impl)
-    impl.topk = 3
-    impl.fill = -1
-    impl.dcp_world_size = 2
-    impl.dcp_rank = 0
-
-    remote_scores = torch.tensor([[10.0, 7.0, 1.0]])
-    remote_positions = torch.tensor([[1, 3, 5]], dtype=torch.int32)
-    remote_packed = torch.empty(1, 3, 2, dtype=torch.float32)
-    remote_packed[..., 0].copy_(remote_scores)
-    remote_packed.view(torch.int32)[..., 1].copy_(remote_positions)
-    collective_calls = 0
-
-    def fake_all_gather(output, input_tensor, group='tp', async_op=False):
-        nonlocal collective_calls
-        collective_calls += 1
-        assert group == 'dcp'
-        output[:1].copy_(input_tensor)
-        output[1:].copy_(remote_packed)
-
-    monkeypatch.setattr(distributed, 'all_gather_into_tensor', fake_all_gather)
-    local_scores = torch.tensor([[5.0, 9.0, 7.0]])
-    local_indices = torch.tensor([[1, 2, 0]], dtype=torch.int32)
-
-    selected = impl._merge_dcp_topk(local_scores, local_indices)
-
-    # Global winners are score-10 position 1, score-9 position 2, then the
-    # lower global position among the equal score-7 candidates (3 before 4).
-    assert selected.tolist() == [[1, 2, 3]]
-    assert collective_calls == 1
-
-
 def test_dcp_block_allocation_uses_virtual_block_size():
     from lmdeploy.pytorch.engine.engine import _build_seq_meta
     from lmdeploy.pytorch.paging.block_manager import build_block_manager

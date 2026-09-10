@@ -153,7 +153,6 @@ def _scatter_dcp_prefill_kv_kernel(
     PrefixLens,
     KvStartLoc,
     LocalLens,
-    chunk_start,
     chunk_rows,
     num_sequences,
     row_width,
@@ -168,7 +167,7 @@ def _scatter_dcp_prefill_kv_kernel(
 ):
     source_row = tl.program_id(0)
     rank = source_row // chunk_rows
-    local_position = chunk_start + source_row % chunk_rows
+    local_position = source_row % chunk_rows
 
     request = 0
     request_start = 0
@@ -207,16 +206,9 @@ def _scatter_dcp_prefill_kv_kernel(
 
 def prepare_dcp_lse(local_lse: torch.Tensor,
                     valid_rows: torch.Tensor) -> torch.Tensor:
-    """Normalize one rank's LSE before the DCP all-gather."""
+    """Normalize and compact LSE for DCP collectives or partition merging."""
     assert local_lse.dim() == 2
     assert valid_rows.shape == local_lse.shape[:1]
-    if not local_lse.is_cuda:
-        local_lse = local_lse.float()
-        finite = torch.isfinite(local_lse)
-        return torch.where(valid_rows[:, None] & finite, local_lse,
-                           torch.full_like(local_lse,
-                                           -torch.inf)).contiguous()
-
     output = torch.empty(local_lse.shape,
                          dtype=torch.float32,
                          device=local_lse.device)
@@ -258,16 +250,6 @@ def correct_dcp_attention_output(local_output: torch.Tensor,
     assert local_output.shape[:2] == (num_tokens, num_heads)
     assert 0 <= dcp_rank < dcp_size
 
-    if not local_output.is_cuda:
-        global_lse = torch.logsumexp(gathered_lse.float(), dim=0)
-        correction = torch.exp(gathered_lse[dcp_rank].float() - global_lse)
-        correction = torch.nan_to_num(correction,
-                                      nan=0.0,
-                                      posinf=0.0,
-                                      neginf=0.0)
-        return (local_output.float() * correction[..., None]).transpose(
-            0, 1).contiguous()
-
     corrected = torch.empty((num_heads, num_tokens, local_output.size(2)),
                             dtype=torch.float32,
                             device=local_output.device)
@@ -297,19 +279,6 @@ def merge_attention_states(
     """Merge attention partitions, retaining FP32 output for further merges."""
     assert prefix_output.shape == suffix_output.shape
     assert prefix_lse.shape == suffix_lse.shape == prefix_output.shape[:2]
-    if not prefix_output.is_cuda:
-        lse = torch.stack([prefix_lse.float(), suffix_lse.float()])
-        lse = torch.where(torch.isfinite(lse), lse,
-                          torch.full_like(lse, -torch.inf))
-        merged_lse = torch.logsumexp(lse, dim=0)
-        weights = torch.exp(lse - merged_lse)
-        weights = torch.nan_to_num(weights, nan=0.0)
-        output = (torch.where(weights[0, ..., None] == 0, 0,
-                              prefix_output.float() * weights[0, ..., None]) +
-                  torch.where(weights[1, ..., None] == 0, 0,
-                              suffix_output.float() * weights[1, ..., None]))
-        return output, merged_lse
-
     output = torch.empty_like(prefix_output, dtype=torch.float32)
     output_lse = torch.empty_like(prefix_lse, dtype=torch.float32)
     block_d = triton.next_power_of_2(prefix_output.size(2))
@@ -336,8 +305,9 @@ def merge_attention_states(
 def scatter_dcp_prefill_kv(gathered: torch.Tensor, output: torch.Tensor, *,
                            prefix_lens: torch.Tensor,
                            kv_start_loc: torch.Tensor,
-                           local_lens: torch.Tensor, chunk_start: int) -> None:
-    """Scatter one rank-major gathered KV chunk into global sequence order."""
+                           local_lens: torch.Tensor) -> None:
+    """Scatter rank-major KV into sequence order using chunk-relative
+    lengths."""
     assert gathered.is_contiguous() and output.is_contiguous()
     assert gathered.dim() == output.dim()
     dcp_size, num_sequences = local_lens.shape
@@ -348,31 +318,6 @@ def scatter_dcp_prefill_kv(gathered: torch.Tensor, output: torch.Tensor, *,
     gathered_rows = gathered.view(gathered.size(0), -1)
     output_rows = output.view(output.size(0), -1)
 
-    if not gathered.is_cuda:
-        local_lens_cpu = local_lens.cpu()
-        prefix_lens_cpu = prefix_lens.cpu()
-        kv_start_loc_cpu = kv_start_loc.cpu()
-        for rank in range(dcp_size):
-            request_start = 0
-            for request in range(num_sequences):
-                request_len = int(local_lens_cpu[rank, request])
-                begin = max(chunk_start, request_start)
-                end = min(chunk_start + chunk_rows,
-                          request_start + request_len)
-                if begin < end:
-                    local_positions = torch.arange(begin - request_start,
-                                                   end - request_start)
-                    global_positions = local_positions * dcp_size + rank
-                    valid = global_positions < int(prefix_lens_cpu[request])
-                    source = rank * chunk_rows + begin - chunk_start
-                    source_rows = torch.arange(source,
-                                               source + end - begin)[valid]
-                    output_rows[
-                        int(kv_start_loc_cpu[request]) +
-                        global_positions[valid]] = gathered_rows[source_rows]
-                request_start += request_len
-        return
-
     row_width = gathered_rows.size(1)
     block_d = triton.next_power_of_2(row_width)
     _scatter_dcp_prefill_kv_kernel[(gathered_rows.size(0), )](
@@ -381,7 +326,6 @@ def scatter_dcp_prefill_kv(gathered: torch.Tensor, output: torch.Tensor, *,
         prefix_lens,
         kv_start_loc,
         local_lens,
-        chunk_start,
         chunk_rows,
         num_sequences,
         row_width,

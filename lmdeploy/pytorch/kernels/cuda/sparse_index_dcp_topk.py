@@ -110,17 +110,6 @@ def pack_dcp_topk_candidates(scores: torch.Tensor, local_indices: torch.Tensor,
     packed = torch.empty((*local_indices.shape, 2),
                          dtype=torch.float32,
                          device=local_indices.device)
-    if not scores.is_cuda:
-        safe_indices = local_indices.clamp_min(0).long()
-        local_scores = scores.gather(1, safe_indices)
-        local_scores = torch.where(local_indices >= 0, local_scores,
-                                   torch.full_like(local_scores, -torch.inf))
-        global_indices = torch.where(local_indices >= 0,
-                                     local_indices * dcp_size + dcp_rank, -1)
-        packed[..., 0].copy_(local_scores)
-        packed.view(torch.int32)[..., 1].copy_(global_indices)
-        return packed
-
     block = 512
     grid = (local_indices.size(0), triton.cdiv(local_indices.size(1), block))
     _pack_dcp_topk_candidates_kernel[grid](
@@ -346,28 +335,6 @@ def sparse_dcp_candidate_topk(gathered_candidates: torch.Tensor,
     dcp_size, num_tokens, local_k, pair_width = gathered_candidates.shape
     assert local_k == k and pair_width == 2
     assert gathered_candidates.dtype == torch.float32
-    if not gathered_candidates.is_cuda:
-        scores = gathered_candidates[...,
-                                     0].permute(1, 0,
-                                                2).reshape(num_tokens, -1)
-        ids = gathered_candidates.view(torch.int32)[..., 1]
-        ids = ids.permute(1, 0, 2).reshape(num_tokens, -1)
-        output = torch.full((num_tokens, k),
-                            fill,
-                            dtype=torch.int32,
-                            device=gathered_candidates.device)
-        for row in range(num_tokens):
-            valid = ids[row] >= 0
-            row_ids = ids[row, valid]
-            row_scores = scores[row, valid]
-            id_order = torch.argsort(row_ids, stable=True)
-            score_order = torch.argsort(row_scores[id_order],
-                                        descending=True,
-                                        stable=True)
-            selected = row_ids[id_order[score_order[:k]]]
-            output[row, :selected.numel()] = selected
-        return output
-
     output = torch.empty((num_tokens, k),
                          dtype=torch.int32,
                          device=gathered_candidates.device)

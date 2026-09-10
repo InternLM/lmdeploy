@@ -190,8 +190,9 @@ class FlashMLASparseImpl(FlashMLAImpl):
     def _prefill_sparse_partition(
             self, query: torch.Tensor, flatten_k: torch.Tensor,
             indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run one sparse partition and neutralize rows without selected KV."""
+        """Run one sparse partition and prepare its LSE for merging."""
         from lmdeploy.pytorch.backends.cp_utils import compact_valid_indices
+        from lmdeploy.pytorch.kernels.cuda.dcp import prepare_dcp_lse
 
         indices, valid_counts = compact_valid_indices(indices)
         valid_counts = valid_counts.flatten()
@@ -200,11 +201,9 @@ class FlashMLASparseImpl(FlashMLAImpl):
                                                      indices,
                                                      return_lse=True,
                                                      topk_length=valid_counts)
-        valid_rows = valid_counts > 0
-        output.masked_fill_(~valid_rows[:, None, None], 0)
-        lse = torch.where(valid_rows[:, None] & torch.isfinite(lse), lse,
-                          torch.full_like(lse, -torch.inf)).contiguous()
-        return output, lse
+        # The FP32 merge ignores zero-weight outputs, including NaNs from
+        # empty partitions. Only their LSE needs to be neutralized here.
+        return output, prepare_dcp_lse(lse, valid_counts > 0)
 
     def _prefill_sparse_dcp(
         self,

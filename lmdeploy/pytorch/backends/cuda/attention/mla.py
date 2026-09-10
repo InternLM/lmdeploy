@@ -593,7 +593,6 @@ class FlashMLAImpl(TritonAttentionImpl):
             prefix_lens=chunk.kv_seqlens,
             kv_start_loc=chunk.cu_seqlens[:-1],
             local_lens=chunk.local_kv_seqlens,
-            chunk_start=0,
         )
         return context_k, chunk.cu_seqlens
 
