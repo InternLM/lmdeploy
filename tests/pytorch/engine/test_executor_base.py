@@ -152,10 +152,12 @@ def test_get_min_num_gpu_blocks_rejects_worker_count_mismatch():
         ExecutorBase._get_min_num_gpu_blocks([4096, 4096], [256])
 
 
-def test_runtime_size_reserves_dcp_gather_accumulator_and_candidates(monkeypatch):
+@pytest.mark.parametrize('draft_tokens', [0, 5, 9])
+def test_runtime_size_reserves_dcp_gather_accumulator_and_candidates(monkeypatch, draft_tokens):
     monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', 1)
     executor = object.__new__(ExecutorBase)
     executor.model_config = SimpleNamespace(mla_index_topk=2048, head_dim=576, v_head_dim=0, num_attention_heads=64)
+    executor.specdecode_config = SimpleNamespace(num_speculative_tokens=draft_tokens) if draft_tokens else None
     executor.dist_config = SimpleNamespace(attn_tp=8)
     executor.cache_config = SimpleNamespace(cache_max_entry_count=1.0,
                                             max_prefill_token_num=16,
@@ -165,8 +167,9 @@ def test_runtime_size_reserves_dcp_gather_accumulator_and_candidates(monkeypatch
     runtime_size, num_tokens = executor._get_runtime_size([256 << 20], [_WorkerCachePlanSizes(target=1024)],
                                                           vocab_size=100)
     # Explicitly include MLA accumulators despite its empty standalone V cache.
-    expected = ((1 << 20) + (64 << 20) + (16 + 4) * 100 * 2 + 16 * 8 * (576 * 12 + 12) + 16 * 2048 * 4 + 2 * 2048 *
-                (16 + 8 * 4))
+    decode_rows = 2 * (draft_tokens + 1)
+    expected = ((1 << 20) + (64 << 20) + (16 + 4) * 100 * 2 + 16 * 8 * (576 * 12 + 12) +
+                max(16, decode_rows) * 2048 * 4 + decode_rows * 2048 * (16 + 8 * 4))
     assert runtime_size == expected
     assert num_tokens == 16
 

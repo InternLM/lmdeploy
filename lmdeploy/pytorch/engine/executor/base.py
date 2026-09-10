@@ -234,7 +234,11 @@ class ExecutorBase:
         return runtime_cache_size, max_prefill_token_num
 
     def _get_dcp_workspace_size(self, num_prefill_tokens: int) -> int:
-        """Reserve DCP prefix gathering, FP32 merging, and top-k buffers."""
+        """Estimate bytes for DCP prefix gather, FP32 merge, and top-k buffers.
+
+        The DSA prefill score budget is reserved separately. Flattened indexer KV is not included and relies on
+        remaining memory headroom.
+        """
         from lmdeploy.pytorch.backends.cp_utils import (
             get_dcp_prefill_workspace_size,
             get_dcp_topk_workspace_size,
@@ -255,10 +259,16 @@ class ExecutorBase:
         # the full latent-plus-RoPE width as an upper bound for attention V.
         workspace += num_prefill_tokens * local_heads * (model.head_dim * 12 + 12)
         if model.mla_index_topk is not None:
-            # Prefill scores + row-local candidates share the score budget;
-            # the completed rows' ids survive across all query chunks.
-            workspace += num_prefill_tokens * model.mla_index_topk * 4
-            workspace += get_dcp_topk_workspace_size(config.max_batches, model.mla_index_topk, config.dcp)
+            decode_rows = config.max_batches
+            if self.specdecode_config is not None:
+                # Verification processes the draft tokens plus one target token.
+                decode_rows *= self.specdecode_config.num_speculative_tokens + 1
+            # Final INT32 ids cover every prefill or verification row and
+            # survive across prefill query chunks.
+            workspace += max(num_prefill_tokens, decode_rows) * model.mla_index_topk * 4
+            # Prefill row-local candidates share the separate score budget;
+            # decode candidate merging needs space for all verification rows.
+            workspace += get_dcp_topk_workspace_size(decode_rows, model.mla_index_topk, config.dcp)
         return workspace
 
     def _adjust_block_size(self):
