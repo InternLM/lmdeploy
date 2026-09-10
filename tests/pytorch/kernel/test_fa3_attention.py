@@ -70,22 +70,9 @@ def test_swa_state_ring_uses_dedicated_backend_implementation():
     assert impl.paged_attention_fwd is None
 
 
-def test_paged_attention_spec_requires_native_multi_token_decode(monkeypatch):
+def test_paged_attention_build_spec_is_pure_configuration():
     from lmdeploy.pytorch.backends.attention import PagedAttentionBuildSpec
     from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
-    from lmdeploy.pytorch.model_inputs import StepContextManager, set_step_ctx_manager
-
-    ctx = StepContextManager(SimpleNamespace(
-        model_paradigm='ar_spec',
-        use_flash_mla=False,
-        num_spec_tokens=2,
-        enable_return_routed_experts=False,
-        max_batch_size=1,
-    ))
-    monkeypatch.setattr('lmdeploy.pytorch.backends.cuda.attention.require_fa3_for_speculative_decoding',
-                        lambda: None)
-    monkeypatch.setattr('lmdeploy.pytorch.model_inputs.get_step_ctx_manager', lambda: ctx)
-
     spec = PagedAttentionBuildSpec(
         num_heads=8,
         head_dim=192,
@@ -102,7 +89,7 @@ def test_paged_attention_spec_requires_native_multi_token_decode(monkeypatch):
         block_sparse_size=1,
     )
 
-    assert spec.requires_multi_token_decode is True
+    assert not hasattr(spec, 'requires_multi_token_decode')
     assert CudaOpsBackend.build_op(spec) is not None
 
 

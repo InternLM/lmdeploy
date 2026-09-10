@@ -216,9 +216,13 @@ class MiMoV2FlashMTPModel(nn.Module, CudaGraphMixin):
         'gate_up_proj': ['gate_proj', 'up_proj'],
     }
 
-    def get_cudagraph_capture_state(self, past_key_values: list[list[torch.Tensor]],
+    def get_cudagraph_capture_state(self,
+                                    past_key_values: list[list[torch.Tensor]],
+                                    attn_metadata: Any = None,
+                                    num_blocks: int = 0,
                                     spec_step_idx: int = 0) -> GraphCaptureState:
         """Return the active depth cache that Graph capture must preserve."""
+        del attn_metadata, num_blocks
         depth = spec_step_idx % self.model.num_mtp_layers
         return GraphCaptureState(tensors=tuple(past_key_values[depth]))
 

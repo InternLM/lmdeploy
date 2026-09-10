@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from lmdeploy.pytorch.strategies.ar_spec.cudagraph import ARSpecCudagraphStrategy
 
 
@@ -118,6 +120,38 @@ def test_cudagraph_fa3_metadata_uses_single_query_len_for_single_token_capture()
     )
 
     assert model.max_seqlen_q_calls == [1, 1]
+
+
+def test_mimo_target_multi_token_capability_reads_transformer_layers():
+    from lmdeploy.pytorch.models.mimo_v2_flash import MiMoV2FlashForCausalLM
+
+    model = MiMoV2FlashForCausalLM.__new__(MiMoV2FlashForCausalLM)
+    model.model = SimpleNamespace(
+        layers=[
+            SimpleNamespace(self_attn=SimpleNamespace(attn_fwd=SimpleNamespace(
+                supports_multi_token_decode=True))),
+        ])
+
+    assert model.supports_multi_token_decode() is True
+
+
+def test_mimo_mtp_capture_state_accepts_runner_protocol():
+    import torch
+
+    from lmdeploy.pytorch.models.mimo_v2_flash_mtp import MiMoV2FlashMTPModel
+
+    model = MiMoV2FlashMTPModel.__new__(MiMoV2FlashMTPModel)
+    model.model = SimpleNamespace(num_mtp_layers=2)
+    caches = [[torch.zeros(1), torch.zeros(1)], [torch.ones(1), torch.ones(1)]]
+
+    state = model.get_cudagraph_capture_state(
+        caches,
+        attn_metadata=SimpleNamespace(q_seqlens=torch.tensor([1])),
+        num_blocks=8,
+        spec_step_idx=3,
+    )
+
+    assert state.tensors == tuple(caches[1])
 
 
 def test_full_graph_disables_legacy_fa3_metadata_without_support(monkeypatch):

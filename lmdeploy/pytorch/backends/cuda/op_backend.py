@@ -197,9 +197,6 @@ class CudaOpsBackend(DefaultOpsBackend):
             return cast(ImplT, _build_fused_moe_v4_fp4(spec))
         if isinstance(spec, PagedAttentionBuildSpec):
             from .attention import _build_paged_attention
-            if spec.requires_multi_token_decode:
-                from .attention import require_fa3_for_speculative_decoding
-                require_fa3_for_speculative_decoding()
             return cast(ImplT, _build_paged_attention(spec))
         if isinstance(spec, SWAStateRingAttentionBuildSpec):
             from .attention.swa_state_ring import SWAStateRingAttentionImpl

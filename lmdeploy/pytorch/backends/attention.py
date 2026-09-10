@@ -227,18 +227,6 @@ class PagedAttentionBuildSpec(BuildSpec[AttentionImpl[AttentionMetadata]]):
     learnable_sink: bool
     block_sparse_size: int
 
-    @property
-    def requires_multi_token_decode(self) -> bool:
-        """Whether speculative decode needs a native multi-token backend."""
-        from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
-
-        ctx_manager = get_step_ctx_manager()
-        if ctx_manager is None:
-            return False
-        build_ctx = ctx_manager.build_ctx
-        return (build_ctx.model_paradigm == 'ar_spec' and not build_ctx.use_flash_mla
-                and build_ctx.num_spec_tokens > 0)
-
 
 @dataclass(frozen=True)
 class SWAStateRingAttentionBuildSpec(BuildSpec[AttentionImpl[AttentionMetadata]]):
