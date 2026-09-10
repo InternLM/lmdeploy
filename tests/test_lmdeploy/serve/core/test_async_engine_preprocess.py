@@ -118,8 +118,10 @@ def test_preprocess_rejects_active_session_without_removing_it():
 
 @pytest.mark.parametrize('schema', [
     {'type': 'not-a-json-schema-type'},
-    {'type': 'object', 'properties': {'value': {'type': 'string', 'pattern': '(?=a)a'}}, 'required': ['value']},
-], ids=['invalid_schema', 'unsupported_grammar'])
+    # Use invalid syntax: unsupported lookahead is only warned about/ignored
+    # by newer XGrammar versions and no longer guarantees a compilation error.
+    {'type': 'object', 'properties': {'value': {'type': 'string', 'pattern': '['}}, 'required': ['value']},
+], ids=['invalid_schema', 'invalid_regex'])
 def test_preprocess_rejects_uncompilable_response_format(schema):
     import xgrammar as xgr
 
