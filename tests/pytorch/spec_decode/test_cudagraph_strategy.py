@@ -139,7 +139,7 @@ def test_cudagraph_capture_rolls_back_state_before_semantic_forward(monkeypatch)
 
     cache = [torch.arange(24).view(6, 4), torch.arange(24, 48).view(6, 4)]
     original = [tensor.clone() for tensor in cache]
-    block_offsets = torch.tensor([[1, 3], [3, 4]])
+    block_offsets = torch.tensor([[-1, 1, 3], [3, 4, 8]])
     block_ids = torch.tensor([1, 3, 4])
 
     class FakeSingleGraphRunner:

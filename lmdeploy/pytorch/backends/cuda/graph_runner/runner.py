@@ -275,8 +275,13 @@ class CUDAGraphRunner(GraphRunner):
         if capture_cache is not None:
             attn_metadata = kwargs['attn_metadata']
             batch_size = attn_metadata.q_seqlens.numel()
-            block_ids = torch.unique(attn_metadata.block_offsets[:batch_size]).long()
-            snapshot = [tensor.index_select(0, block_ids).clone() for tensor in capture_cache]
+            candidate_ids = attn_metadata.block_offsets[:batch_size].flatten().long()
+            valid_ids = candidate_ids[(candidate_ids >= 0) & (candidate_ids < self.num_blocks)]
+            block_ids = torch.unique(valid_ids)
+            if block_ids.numel() > 0:
+                snapshot = [tensor.index_select(0, block_ids).clone() for tensor in capture_cache]
+            else:
+                block_ids = None
 
         try:
             output = runner.capture(**kwargs)
