@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
-from collections.abc import Hashable
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 
 import torch
@@ -12,7 +12,12 @@ from lmdeploy.pytorch.backends.cuda.step_metadata import (
     CudaSequenceMetadata,
     register_step_metadata_impl,
 )
-from lmdeploy.pytorch.consts import DSA_INDEX_SCALE_BYTES
+from lmdeploy.pytorch.consts import (
+    DSA_INDEX_SCALE_BYTES,
+    DSA_INDEXER_K_CACHE_NAME,
+    dsa_packed_indexer_k_cache_shape,
+)
+from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheGeometry, BlockCacheRequest
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
@@ -28,8 +33,7 @@ from lmdeploy.pytorch.kernels.cuda.step_metadata.fill_dsa_indexer_metadata impor
 from lmdeploy.utils import get_logger
 
 from ..nsa import (
-    BaseNSAIndexFP8,
-    BaseNSAIndexFP8Builder,
+    NSAIndexFP8Impl,
     NSAIndexMeta,
     build_nsa_index_meta,
     should_skip_nsa_indexer,
@@ -328,7 +332,7 @@ class DSAIndexerMetaBuilder(
         return meta
 
 
-class TritonNSAIndexFP8(BaseNSAIndexFP8):
+class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
 
     def __init__(self, topk: int, softmax_scale: float, block_size: int,
                  fill: int,
@@ -344,7 +348,24 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         self.max_logits_bytes = _envs.dsa_indexer_max_logits_mb * (1 << 20)
         self._sparse_index_topk = _get_sparse_index_topk(topk)
         self._step_meta_group: int | None = None
+        self._piecewise_forward: Callable[..., Tensor] | None = None
+        self._piecewise_forward_fused: Callable[..., Tensor] | None = None
         register_step_metadata_impl(self)
+
+    def get_block_cache_requests(self, geometry: BlockCacheGeometry,
+                                 head_dim: int) -> tuple[BlockCacheRequest, ...]:
+        """Request one DeepGEMM-compatible packed cache row per indexer."""
+        if geometry.logical_block_size != geometry.kernel_block_size:
+            raise ValueError(
+                'DSA indexer cache requires equal logical and kernel block sizes, '
+                f'got {geometry.logical_block_size} and {geometry.kernel_block_size}.')
+        request = BlockCacheRequest(
+            name=DSA_INDEXER_K_CACHE_NAME,
+            shape=dsa_packed_indexer_k_cache_shape(geometry.kernel_block_size, head_dim),
+            dtype=torch.uint8,
+            per_row_contiguous=True,
+        )
+        return (request, )
 
     def _should_skip_scoring(self, meta: NSAIndexMeta) -> bool:
         """Whether dense prefill makes index scoring unnecessary."""
@@ -353,9 +374,10 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
 
     def _maybe_score_and_select(self, q: Tensor, q_s: Tensor,
                                 indexer_k_cache: Tensor,
-                                meta: NSAIndexMeta) -> Tensor | None:
+                                meta: NSAIndexMeta,
+                                force_scoring: bool = False) -> Tensor | None:
         """Score after the caller has preserved K for future decode."""
-        if self._should_skip_scoring(meta):
+        if not force_scoring and self._should_skip_scoring(meta):
             return None
         return self._score_and_select(q, q_s, indexer_k_cache, meta)
 
@@ -505,8 +527,94 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                causal=True)
         return self._select_topk(scores, meta)
 
-    def forward(self, q: Tensor, k: Tensor, weights: Tensor,
-                indexer_k_cache: Tensor, meta: NSAIndexMeta) -> Tensor | None:
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Return whether this selected CUDA implementation supports PCG."""
+        return True
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Install the DSA indexer eager boundary owned by this CUDA op.
+
+        The indexer runs DeepGEMM paged-MQA scoring plus a dynamic top-k
+        selection that cannot live inside a captured graph piece. Wrap both
+        entry points so the token-axis inputs are sliced to the active
+        raw-token extent and the top-k result is bound through a view-tolerant
+        bridge. ``meta`` is recomputed inside the boundary from the live
+        ``attn_metadata`` frame input, because a captured ``NSAIndexMeta``
+        object would go stale across requests. Scoring is forced because the
+        bridge needs a tensor; when the prefill is short enough for dense
+        fallback, sparse FlashMLA ignores these indices anyway.
+        """
+        if self._piecewise_forward is not None:
+            return
+
+        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            ViewTolerantPaddedAdapter,
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        @eager_boundary(
+            adapter_factory=ViewTolerantPaddedAdapter,
+            reuse_bridge_after_next_step=True,
+        )
+        def run_eager_indexer(q: Tensor, k: Tensor, weights: Tensor,
+                               indexer_k_cache: Tensor, attn_metadata=None,
+                               meta: NSAIndexMeta | None = None) -> Tensor:
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            raw_tokens = execution.raw_tokens
+            if meta is None:
+                meta = self.get_step_metadata(attn_metadata)
+            return self._forward_indexer(q[:raw_tokens], k[:raw_tokens], weights[:raw_tokens],
+                                         indexer_k_cache, meta, force_scoring=True)
+
+        def piecewise_forward(q: Tensor, k: Tensor, weights: Tensor,
+                              indexer_k_cache: Tensor, attn_metadata=None,
+                              meta: NSAIndexMeta | None = None) -> Tensor | None:
+            if get_piecewise_graph_execution() is None:
+                if meta is None:
+                    meta = self.get_step_metadata(attn_metadata)
+                return self._forward_indexer(q, k, weights, indexer_k_cache, meta)
+            return run_eager_indexer(q, k, weights, indexer_k_cache, attn_metadata=attn_metadata, meta=meta)
+
+        @eager_boundary(
+            adapter_factory=ViewTolerantPaddedAdapter,
+            reuse_bridge_after_next_step=True,
+        )
+        def run_eager_indexer_fused(q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor,
+                                    norm_bias: Tensor, cos: Tensor, sin: Tensor, indexer_k_cache: Tensor,
+                                    norm_eps: float, head_gate_scale: float, rope_interleaved: bool,
+                                    attn_metadata=None, meta: NSAIndexMeta | None = None) -> Tensor:
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            raw_tokens = execution.raw_tokens
+            if meta is None:
+                meta = self.get_step_metadata(attn_metadata)
+            return self._forward_indexer_fused(q[:raw_tokens], k[:raw_tokens], weights[:raw_tokens], norm_weight,
+                                               norm_bias, cos[:raw_tokens], sin[:raw_tokens], indexer_k_cache,
+                                               norm_eps, head_gate_scale, rope_interleaved, meta,
+                                               force_scoring=True)
+
+        def piecewise_forward_fused(q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor, norm_bias: Tensor,
+                                    cos: Tensor, sin: Tensor, indexer_k_cache: Tensor, norm_eps: float,
+                                    head_gate_scale: float, rope_interleaved: bool, attn_metadata=None,
+                                    meta: NSAIndexMeta | None = None) -> Tensor | None:
+            if get_piecewise_graph_execution() is None:
+                if meta is None:
+                    meta = self.get_step_metadata(attn_metadata)
+                return self._forward_indexer_fused(q, k, weights, norm_weight, norm_bias, cos, sin, indexer_k_cache,
+                                                   norm_eps, head_gate_scale, rope_interleaved, meta)
+            return run_eager_indexer_fused(q, k, weights, norm_weight, norm_bias, cos, sin, indexer_k_cache, norm_eps,
+                                           head_gate_scale, rope_interleaved, attn_metadata=attn_metadata, meta=meta)
+
+        self._piecewise_forward = piecewise_forward
+        self._piecewise_forward_fused = piecewise_forward_fused
+        self.forward = piecewise_forward
+        self.forward_fused = piecewise_forward_fused
+
+    def _forward_indexer(self, q: Tensor, k: Tensor, weights: Tensor,
+                         indexer_k_cache: Tensor, meta: NSAIndexMeta,
+                         force_scoring: bool = False) -> Tensor | None:
         assert q.dim() == 3
         assert k.dim() == 2
         k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
@@ -530,11 +638,12 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                   block_offsets=meta.block_offset,
                                   group_size=self.block_size,
                                   scale_fmt=self.scale_fmt)
-        return self._maybe_score_and_select(q, q_s, indexer_k_cache, meta)
+        return self._maybe_score_and_select(q, q_s, indexer_k_cache, meta, force_scoring)
 
-    def forward_fused(self, q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor,
-                      sin: Tensor, indexer_k_cache: Tensor, norm_eps: float, head_gate_scale: float,
-                      rope_interleaved: bool, meta: NSAIndexMeta) -> Tensor | None:
+    def _forward_indexer_fused(self, q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor, norm_bias: Tensor,
+                               cos: Tensor, sin: Tensor, indexer_k_cache: Tensor, norm_eps: float,
+                               head_gate_scale: float, rope_interleaved: bool, meta: NSAIndexMeta,
+                               force_scoring: bool = False) -> Tensor | None:
         """Prepare FP8 Q and write K cache without allocating rotated BF16
         Q/K."""
         k_cache, k_s_cache = _get_dsa_indexer_k_cache_views(
@@ -559,19 +668,28 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                     max_q_seqlen=meta.max_q_seqlen,
                                     eps=norm_eps,
                                     rope_interleaved=rope_interleaved)
-        return self._maybe_score_and_select(q, q_s, indexer_k_cache, meta)
+        return self._maybe_score_and_select(q, q_s, indexer_k_cache, meta, force_scoring)
 
+    def forward(self, q: Tensor, k: Tensor, weights: Tensor,
+                indexer_k_cache: Tensor, attn_metadata=None,
+                meta: NSAIndexMeta | None = None) -> Tensor | None:
+        piecewise_forward = getattr(self, '_piecewise_forward', None)
+        if piecewise_forward is not None:
+            return piecewise_forward(q, k, weights, indexer_k_cache, attn_metadata=attn_metadata, meta=meta)
+        if meta is None:
+            meta = self.get_step_metadata(attn_metadata)
+        return self._forward_indexer(q, k, weights, indexer_k_cache, meta)
 
-class TritonNSAIndexFP8Builder(BaseNSAIndexFP8Builder):
-
-    @staticmethod
-    def build(topk: int, softmax_scale: float, block_size: int = 128,
-              fill: int = -1,
-              allow_short_prefill_scoring_skip: bool = False) -> BaseNSAIndexFP8:
-        return TritonNSAIndexFP8(
-            topk,
-            softmax_scale=softmax_scale,
-            block_size=block_size,
-            fill=fill,
-            allow_short_prefill_scoring_skip=allow_short_prefill_scoring_skip,
-        )
+    def forward_fused(self, q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor, norm_bias: Tensor, cos: Tensor,
+                      sin: Tensor, indexer_k_cache: Tensor, norm_eps: float, head_gate_scale: float,
+                      rope_interleaved: bool, attn_metadata=None,
+                      meta: NSAIndexMeta | None = None) -> Tensor | None:
+        piecewise_forward_fused = getattr(self, '_piecewise_forward_fused', None)
+        if piecewise_forward_fused is not None:
+            return piecewise_forward_fused(q, k, weights, norm_weight, norm_bias, cos, sin, indexer_k_cache,
+                                           norm_eps, head_gate_scale, rope_interleaved,
+                                           attn_metadata=attn_metadata, meta=meta)
+        if meta is None:
+            meta = self.get_step_metadata(attn_metadata)
+        return self._forward_indexer_fused(q, k, weights, norm_weight, norm_bias, cos, sin, indexer_k_cache, norm_eps,
+                                           head_gate_scale, rope_interleaved, meta)

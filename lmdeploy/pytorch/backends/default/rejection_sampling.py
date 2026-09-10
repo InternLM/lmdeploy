@@ -3,7 +3,6 @@ import torch
 
 from ..rejection_sampling import (
     PLACEHOLDER_TOKEN_ID,
-    RejectionSamplingBuilder,
     RejectionSamplingImpl,
 )
 
@@ -143,11 +142,3 @@ class DefaultRejectionSamplingImpl(RejectionSamplingImpl):
             accepted,
             bonus_token_ids,
         )
-
-
-class DefaultRejectionSamplingBuilder(RejectionSamplingBuilder):
-    """Build the portable Torch rejection sampler."""
-
-    @staticmethod
-    def build() -> RejectionSamplingImpl:
-        return DefaultRejectionSamplingImpl()

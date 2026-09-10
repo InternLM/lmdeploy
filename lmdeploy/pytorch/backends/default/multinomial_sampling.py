@@ -2,7 +2,7 @@
 
 import torch
 
-from ..multinomial_sampling import MultinomialSamplingBuilder, MultinomialSamplingImpl
+from ..multinomial_sampling import MultinomialSamplingImpl
 
 
 class DefaultMultinomialSamplingImpl(MultinomialSamplingImpl):
@@ -17,12 +17,3 @@ class DefaultMultinomialSamplingImpl(MultinomialSamplingImpl):
         sampled_index = torch.multinomial(scores, num_samples=1, replacement=True)
         outputs = torch.gather(indices, dim=1, index=sampled_index)
         return outputs.view(-1)
-
-
-class DefaultMultinomialSamplingBuilder(MultinomialSamplingBuilder):
-    """Multinomial sampling implementation builder."""
-
-    @staticmethod
-    def build():
-        """build."""
-        return DefaultMultinomialSamplingImpl()

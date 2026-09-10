@@ -7,7 +7,7 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
@@ -132,10 +132,25 @@ class Glm4MoeMLP(nn.Module):
                  intermediate_size: int = None,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 is_tp: bool = True,
+                 is_shared_expert: bool = False,
                  all_reduce: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
+        if is_shared_expert:
+            dist_config = get_dist_manager().current_config()
+            dp = dist_config.dp
+            if dp == 1:
+                # split weight, do all reduce in moe
+                is_tp = True
+                all_reduce = False
+            else:
+                # TODO: support shared-expert TP under DP. Until shared-expert
+                # partials join the routed-expert reduction, keep the MLP replicated.
+                is_tp = False
+                all_reduce = False
+        else:
+            is_tp = True
+
         if intermediate_size is None:
             intermediate_size = config.intermediate_size
 
@@ -177,8 +192,7 @@ class Glm4MoE(nn.Module):
                  config: PretrainedConfig,
                  layer_idx: int,
                  dtype: torch.dtype = None,
-                 device: torch.device = None,
-                 is_tp: bool = True):
+                 device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
@@ -189,6 +203,11 @@ class Glm4MoE(nn.Module):
         self.renormalize = self.norm_topk_prob
 
         self.routed_scaling_factor = config.routed_scaling_factor
+
+        dist_config = get_dist_manager().current_config()
+        dp = dist_config.dp
+        world_size = dist_config.world_size
+        moe_all_reduce = dp > 1 and dist_config.tp > 1
 
         # build gate
         # refers to https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/glm4_moe.py
@@ -217,7 +236,7 @@ class Glm4MoE(nn.Module):
             dtype=dtype,
             device=device,
             quant_config=quantization_config,
-            all_reduce=False,
+            all_reduce=moe_all_reduce,
             layer_idx=layer_idx,
         )
 
@@ -228,13 +247,11 @@ class Glm4MoE(nn.Module):
             intermediate_size=intermediate_size,
             dtype=dtype,
             device=device,
-            is_tp=is_tp,
-            all_reduce=False,
+            is_shared_expert=True,
         )
 
         # get all reduce
-        world_size, _ = get_tp_world_rank()
-        if world_size > 1:
+        if dp == 1 and world_size > 1:
             self._all_reduce = True
         else:
             self._all_reduce = False

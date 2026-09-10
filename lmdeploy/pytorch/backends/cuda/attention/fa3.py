@@ -271,7 +271,7 @@ class FA3Impl(TritonAttentionImpl):
         num_kv_heads: int = None,
         v_head_size: int = None,
         alibi: bool = False,
-        sliding_window: tuple = None,
+        sliding_window: tuple[int, int] | None = None,
         logit_softcapping: float = 0.0,
         causal: bool = True,
         **kwargs,
@@ -307,6 +307,10 @@ class FA3Impl(TritonAttentionImpl):
             causal=self.causal,
             has_softcap=self.logit_softcapping > 0,
         )
+
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Return whether this selected implementation supports PCG."""
+        return True
 
     def _get_scheduler_metadata(self, attn_metadata: TritonAttentionMetadata):
         kernel_metadata = self.get_step_kernel_metadata(attn_metadata)

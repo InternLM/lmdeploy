@@ -142,6 +142,7 @@ class SubCliServe:
         ArgumentHelper.role(pt_group)
         ArgumentHelper.migration_backend(pt_group)
         ArgumentHelper.cudagraph_capture_batch_sizes(pt_group)
+        ArgumentHelper.piecewise_cudagraph_max_tokens(pt_group)
         # multi-node serving args
         node_rank_act = ArgumentHelper.node_rank(pt_group)
         num_nodes_act = ArgumentHelper.num_nodes(pt_group)
@@ -181,6 +182,9 @@ class SubCliServe:
 
         # spec decode
         ArgumentHelper.add_spec_group(parser)
+
+        # kv transfer
+        ArgumentHelper.kv_transfer_config(pt_group)
 
     @staticmethod
     def add_parser_proxy():
@@ -234,6 +238,11 @@ class SubCliServe:
             # set auto backend mode
             backend = autoget_backend(args.model_path, trust_remote_code=args.trust_remote_code)
 
+        kv_transfer_config = getattr(args, 'kv_transfer_config', None)
+        if kv_transfer_config is not None and backend != 'pytorch':
+            raise ValueError('--kv-transfer-config is supported only by the PyTorch engine; '
+                             'set --backend pytorch to enable a KV connector')
+
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
             adapters = get_lora_adapters(args.adapters)
@@ -256,6 +265,7 @@ class SubCliServe:
                 eager_mode=args.eager_mode,
                 empty_init=args.empty_init,
                 max_prefill_token_num=args.max_prefill_token_num,
+                piecewise_cudagraph_max_tokens=args.piecewise_cudagraph_max_tokens,
                 cudagraph_capture_batch_sizes=args.cudagraph_capture_batch_sizes,
                 enable_microbatch=args.enable_microbatch,
                 enable_eplb=args.enable_eplb,
@@ -272,6 +282,7 @@ class SubCliServe:
                 dllm_confidence_threshold=args.dllm_confidence_threshold,
                 enable_return_routed_experts=args.enable_return_routed_experts,
                 distributed_executor_backend=args.distributed_executor_backend,
+                kv_transfer_config=kv_transfer_config,
             )
         else:
             from lmdeploy.messages import TurbomindEngineConfig

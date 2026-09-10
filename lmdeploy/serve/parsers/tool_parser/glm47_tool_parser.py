@@ -21,10 +21,13 @@ class Glm47ToolParser(XmlToolParser):
     ``function_name<arg_key>k</arg_key><arg_value>v</arg_value>...``
     """
 
+    structural_tag_model = 'glm_4_7'
+
     arg_key_start_token = '<arg_key>'
     arg_key_end_token = '</arg_key>'
     arg_value_start_token = '<arg_value>'
     arg_value_end_token = '</arg_value>'
+    validate_tool_names = True
     _complete_payload_pattern = re.compile(
         r'^\s*[^\s<]+(?:\s*<arg_key>[^<]+</arg_key>\s*<arg_value>.*?</arg_value>)*\s*$',
         re.DOTALL,

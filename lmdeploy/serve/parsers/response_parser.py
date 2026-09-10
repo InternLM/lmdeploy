@@ -24,6 +24,7 @@ logger = get_logger('lmdeploy')
 
 ResponseParserManager = Registry('response_parser', locations=['lmdeploy.serve.parsers.response_parser'])
 
+
 def validate_parser_names(
     reasoning_parser_name: str | None = None,
     tool_parser_name: str | None = None,
@@ -155,6 +156,7 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
 
 
 class ResponseParser:
+    supports_required_tool_choice: ClassVar[bool] = False
     reasoning_tokens: int | None
 
     @classmethod
@@ -193,6 +195,7 @@ class ResponseParser:
 
     def validate_complete(self, text: str | None = None) -> bool:
         return True
+
 
 @dataclass
 class ProtocolProfile:
@@ -236,6 +239,7 @@ class BaseResponseParser(ResponseParser):
     reasoning_parser_cls: ClassVar[type[ReasoningParser] | None] = None
     tool_parser_cls: ClassVar[type[ToolParser] | None] = None
     tokenizer: ClassVar[PreTrainedTokenizerBase | None] = None
+    supports_required_tool_choice: ClassVar[bool] = True
     MODE_PLAIN: ClassVar[str] = 'plain'
     MODE_REASONING: ClassVar[str] = 'reasoning'
     MODE_TOOL: ClassVar[str] = 'tool'
@@ -293,19 +297,33 @@ class BaseResponseParser(ResponseParser):
             self.enable_thinking = True
         self.reasoning_parser: ReasoningParser | None = rcls(**self._kwargs) if rcls else None
         self.tool_parser: ToolParser | None = tcls() if tcls else None
+        self.reasoning_enabled = bool(
+            self.reasoning_parser is not None
+            and self.enable_thinking is not False
+            and self.reasoning_parser.starts_in_reasoning_mode()
+        )
         if self.tool_parser is not None:
             self.request = self.tool_parser.adjust_request(request)
         else:
-            self.request = self.dump_tools(request)
+            if request.tool_choice == 'required':
+                raise ValueError('`tool_choice="required"` requires a configured tool-call parser.')
+            from .tool_parser.tool_parser import dump_tools
+
+            self.request = dump_tools(request)
 
         self.request = normalize_chat_request(self.request)
+        if request.tool_choice == 'required':
+            required_response_format = self.tool_parser.build_required_response_format(
+                request.tools or [], reasoning=self.reasoning_enabled)
+            # Internal structural tags override client response_format because
+            # an engine can apply only one guided-decoding constraint.
+            self.request = self.request.model_copy(update={'response_format': required_response_format})
 
         self._accumulated_chunks: list[str] = []
         self._received_any_text = False
 
         self.profile = self._build_profile()
-        if (self.reasoning_parser is not None and self.enable_thinking is not False
-                and self.profile.starts_in_reasoning_mode):
+        if self.reasoning_enabled:
             self._mode = self.MODE_REASONING
         else:
             self._mode = self.MODE_PLAIN
@@ -392,43 +410,6 @@ class BaseResponseParser(ResponseParser):
         ):
             deltas.append((DeltaMessage(role='assistant', content=''), False))
         return deltas
-
-    @staticmethod
-    def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
-        """Dump tools to a list of dicts to fit jinja chat template."""
-        from lmdeploy.serve.openai.protocol import AllowedToolChoice
-
-        if isinstance(request.tool_choice, AllowedToolChoice):
-            allowed_names: set[str] = set()
-            allowed_functions: list[dict] = []
-            for t in request.tool_choice.allowed_tools.tools:
-                func = t.get('function', {})
-                if isinstance(func, dict) and 'name' in func:
-                    allowed_names.add(func['name'])
-                    allowed_functions.append(func)
-
-            if not request.tools:
-                return request.model_copy(update={'tools': allowed_functions or None})
-
-            request_tool_names = {item.function.name for item in request.tools}
-            missing = sorted(allowed_names - request_tool_names)
-            if missing:
-                raise ValueError(f'Allowed tool(s) not found in request.tools: {missing}')
-
-            tools = [item.function.model_dump() for item in request.tools if item.function.name in allowed_names]
-            return request.model_copy(update={'tools': tools})
-
-        if not request.tools:
-            return request.model_copy(update={'tools': None})
-
-        if not isinstance(request.tool_choice, str):
-            tools = [
-                item.function.model_dump() for item in request.tools
-                if item.function.name == request.tool_choice.function.name
-            ]
-        else:
-            tools = [item.function.model_dump() for item in request.tools]
-        return request.model_copy(update={'tools': tools})
 
     def _consume_plain(self) -> tuple[str | None, bool]:
         """Consume buffered text while in plain mode.
@@ -589,9 +570,11 @@ class BaseResponseParser(ResponseParser):
             if (self.profile.tool_payload_format == 'json'
                 and self._is_complete_json_object(self.tool_parser._tool_payload)):
                 out.extend(self.tool_parser.decode_tool_incremental(added_text='', final=True))
+                out = self.tool_parser.filter_tool_call_deltas(out)
                 self.tool_parser.finish_tool_call()
                 self._mode = self.MODE_PLAIN
-            return out, True
+                return out, True
+            return self.tool_parser.filter_tool_call_deltas(out), True
 
         idx = self._pending.find(close_tag)
 
@@ -600,12 +583,14 @@ class BaseResponseParser(ResponseParser):
                 return [], False
             emit = self._pending
             self._pending = ''
-            return self.tool_parser.decode_tool_incremental(added_text=emit, final=False), True
+            calls = self.tool_parser.decode_tool_incremental(added_text=emit, final=False)
+            return self.tool_parser.filter_tool_call_deltas(calls), True
 
         # Final chunk inside tool block.
         inner = self._pending[:idx]
         self._pending = self._pending[idx + len(close_tag):]
         calls = self.tool_parser.decode_tool_incremental(added_text=inner, final=True)
+        calls = self.tool_parser.filter_tool_call_deltas(calls)
         self.tool_parser.finish_tool_call()
         self._mode = self.MODE_PLAIN
         return calls, True
@@ -688,8 +673,7 @@ class BaseResponseParser(ResponseParser):
         reasoning_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         pos = 0
-        mode = self.MODE_REASONING if (self.profile.starts_in_reasoning_mode and self.reasoning_parser is not None
-                                       and self.enable_thinking is not False) else self.MODE_PLAIN
+        mode = self.MODE_REASONING if self.reasoning_enabled else self.MODE_PLAIN
         n = len(text)
         plain_open_tags = [
             t for t in (self.profile.reasoning_open_tag, self.profile.tool_open_tag) if t
@@ -752,11 +736,9 @@ class BaseResponseParser(ResponseParser):
                 close_idx = n
                 tool_payload = text[open_idx + len(open_tag):].strip()
             parsed_call = self.tool_parser.parse_tool_call_complete(tool_payload) if self.tool_parser else None
-            if parsed_call:
-                if isinstance(parsed_call, list):
-                    tool_calls.extend(parsed_call)
-                else:
-                    tool_calls.append(parsed_call)
+            if parsed_call and self.tool_parser is not None:
+                parsed_calls = parsed_call if isinstance(parsed_call, list) else [parsed_call]
+                tool_calls.extend(self.tool_parser.filter_tool_calls(parsed_calls))
                 pos = close_idx + len(close_tag) if close_tag else n
             else:
                 # Tool call parsing failed — fall back to plain text.
@@ -773,8 +755,7 @@ class BaseResponseParser(ResponseParser):
     def validate_complete(self, text: str | None = None) -> bool:
         text = self._get_accumulated_text() if text is None else text
 
-        if (self.profile.starts_in_reasoning_mode and self.reasoning_parser is not None
-                and self.enable_thinking is not False):
+        if self.reasoning_enabled:
             close_tag = self.profile.reasoning_close_tag
             close_idx = text.find(close_tag) if close_tag else -1
             if close_idx < 0:

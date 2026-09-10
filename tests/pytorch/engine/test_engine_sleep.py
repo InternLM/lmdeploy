@@ -33,6 +33,9 @@ class _FakeScheduler:
         self.ended_sessions.append(session_id)
         self.sessions.pop(session_id)
 
+    def finish_deferred_kv_transfers_after_worker_drain(self):
+        pass
+
 
 class _FakeEngineLoop:
 

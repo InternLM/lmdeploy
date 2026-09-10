@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any, Literal
 
@@ -11,7 +12,7 @@ from fastapi.responses import JSONResponse
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.core.generation_config import build_generation_config
-from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool, ToolChoice, ToolChoiceFuncName
 from lmdeploy.serve.openai.responses.protocol import ResponsesRequest
 from lmdeploy.utils import get_logger
 
@@ -54,6 +55,84 @@ def request_error_response(error: RequestError, *, param: str | None = None) -> 
                           error_code=error.code)
 
 
+@dataclass
+class ResponsesRequestContext:
+    """Validated Responses request data needed by the serving layer."""
+
+    model_name: str
+    chat_request: ChatCompletionRequest
+
+
+def check_request(
+    request: ResponsesRequest,
+    server_context,
+) -> tuple[ResponsesRequestContext | None, JSONResponse | None]:
+    """Validate and adapt a Responses request for chat execution."""
+
+    validation_error = validate_text_v1_request(request)
+    if validation_error is not None:
+        return None, validation_error
+    validation_error = _validate_sampling_request(request)
+    if validation_error is not None:
+        return None, validation_error
+
+    model_name = request.model or server_context.async_engine.model_name
+    if model_name not in _get_model_list(server_context):
+        return None, error_response(HTTPStatus.NOT_FOUND, f'The model {model_name!r} does not exist.', param='model')
+
+    try:
+        messages = messages_from_input(request)
+    except ValueError as err:
+        return None, error_response(HTTPStatus.BAD_REQUEST, str(err), param='input')
+    try:
+        text_response_format = response_format_from_text(request.text)
+    except ValueError as err:
+        return None, error_response(HTTPStatus.BAD_REQUEST, str(err), param='text')
+    try:
+        tools = openai_tools_from_responses(request)
+    except ValueError as err:
+        return None, error_response(HTTPStatus.BAD_REQUEST, str(err), param='tools')
+    tool_choice_error = _validate_tool_choice_request(
+        request,
+        tools,
+        server_context.response_parser_cls,
+    )
+    if tool_choice_error is not None:
+        return None, tool_choice_error
+    try:
+        tool_choice = tool_choice_from_responses(request.tool_choice, tools)
+    except ValueError as err:
+        return None, error_response(HTTPStatus.BAD_REQUEST, str(err), param='tool_choice')
+
+    tools_enabled = bool(tools and tool_choice != 'none')
+    chat_request_kwargs = dict(
+        model=model_name,
+        messages=messages,
+        max_completion_tokens=request.max_output_tokens,
+        temperature=request.temperature,
+        top_p=request.top_p,
+        top_k=request.top_k,
+        stop=request.stop,
+        tools=tools if tools_enabled else None,
+        tool_choice=tool_choice,
+        response_format=text_response_format,
+        repetition_penalty=request.repetition_penalty,
+        min_p=request.min_p,
+    )
+    for field_name in ('ignore_eos', 'skip_special_tokens', 'include_stop_str_in_output'):
+        if field_name in request.model_fields_set:
+            chat_request_kwargs[field_name] = getattr(request, field_name)
+    chat_request = ChatCompletionRequest(**chat_request_kwargs)
+    return ResponsesRequestContext(model_name=model_name, chat_request=chat_request), None
+
+
+def _get_model_list(server_context) -> list[str]:
+    model_names = [server_context.async_engine.model_name]
+    cfg = server_context.engine_config
+    model_names += getattr(cfg, 'adapters', None) or []
+    return model_names
+
+
 def validate_text_v1_request(request: ResponsesRequest) -> JSONResponse | None:
     if request.background:
         return error_response(HTTPStatus.BAD_REQUEST, 'background mode is not supported by Responses Text V1.',
@@ -71,6 +150,20 @@ def validate_text_v1_request(request: ResponsesRequest) -> JSONResponse | None:
         return error_response(HTTPStatus.BAD_REQUEST, 'prompt is not supported by Responses Text V1.', param='prompt')
     if request.input is None:
         return error_response(HTTPStatus.BAD_REQUEST, 'input is required by Responses Text V1.', param='input')
+    if isinstance(request.input, list) and len(request.input) == 0:
+        return error_response(HTTPStatus.BAD_REQUEST, 'input must not be an empty list.', param='input')
+    return None
+
+
+def _validate_sampling_request(request: ResponsesRequest) -> JSONResponse | None:
+    if request.temperature is not None and not (0 <= request.temperature <= 2):
+        return error_response(HTTPStatus.BAD_REQUEST, 'temperature must be in [0, 2].', param='temperature')
+    if request.top_p is not None and not (0 <= request.top_p <= 1):
+        return error_response(HTTPStatus.BAD_REQUEST, 'top_p must be in [0, 1].', param='top_p')
+    if request.top_k is not None and request.top_k < 0:
+        return error_response(HTTPStatus.BAD_REQUEST, 'top_k cannot be a negative integer.', param='top_k')
+    if request.min_p is not None and not (0 <= request.min_p <= 1):
+        return error_response(HTTPStatus.BAD_REQUEST, 'min_p must be in [0, 1].', param='min_p')
     return None
 
 
@@ -263,6 +356,57 @@ def tool_choice_from_responses(tool_choice: Any,
     raise ValueError('Unsupported tool_choice. Expected string or function tool choice object.')
 
 
+def _validate_tool_choice_request(request: ResponsesRequest,
+                                  tools: list[Tool] | None,
+                                  parser_cls) -> JSONResponse | None:
+    """Validate tool parser availability for a Responses request."""
+
+    tool_choice = request.tool_choice
+    tool_choice_dict = _as_dict(tool_choice)
+    if tool_choice_dict:
+        tool_choice_type = tool_choice_dict.get('type')
+        if tool_choice_type != 'function':
+            return error_response(
+                HTTPStatus.BAD_REQUEST,
+                f'Unsupported tool_choice type: {tool_choice_type!r}.',
+                param='tool_choice',
+            )
+        name = tool_choice_dict.get('name')
+        if not name:
+            return error_response(
+                HTTPStatus.BAD_REQUEST,
+                'Missing `name` in function tool_choice.',
+                param='tool_choice',
+            )
+        tool_names = {tool.function.name for tool in tools or []}
+        if name not in tool_names:
+            return error_response(
+                HTTPStatus.BAD_REQUEST,
+                f"Tool choice 'function' not found in `tools`: {name!r}.",
+                param='tool_choice',
+            )
+    elif not _is_known_string_tool_choice(tool_choice):
+        return error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'Unsupported tool_choice: {tool_choice!r}.',
+            param='tool_choice',
+        )
+
+    if tools and tool_choice != 'none':
+        if parser_cls is None or parser_cls.tool_parser_cls is None:
+            return error_response(
+                HTTPStatus.BAD_REQUEST,
+                'Please launch the api_server with --tool-call-parser if you want to use tool calling.',
+                param='tools',
+            )
+
+    return None
+
+
+def _is_known_string_tool_choice(tool_choice: Any) -> bool:
+    return tool_choice is None or tool_choice in ('auto', 'none', 'required')
+
+
 def _response_format_from_text(text: Any) -> dict[str, Any] | None:
     if not text:
         return None
@@ -288,6 +432,11 @@ def _response_format_from_text(text: Any) -> dict[str, Any] | None:
             ),
         )
     raise ValueError(f'Unsupported text.format type: {format_type!r}.')
+
+
+def response_format_from_text(text: Any) -> dict[str, Any] | None:
+    """Map Responses ``text.format`` to the internal response_format shape."""
+    return _response_format_from_text(text)
 
 
 def to_generation_config(

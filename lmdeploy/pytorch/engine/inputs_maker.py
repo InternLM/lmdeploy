@@ -86,6 +86,51 @@ def _make_state_prefix_cache_save_plan(messages: list['SchedulerSequence'],
     return tuple(src_offsets), tuple(dst_offsets)
 
 
+def fill_logits_indices(model_inputs: ModelInputs, messages: list['SchedulerSequence'], query_lengths: list[int]):
+    """Build ordered source-hidden indices and per-sequence output rows.
+
+    Non-final long-prefill chunks still project their final source row, but
+    that row is emitted by the next chunk through ModelAgent's
+    ``_prev_chunk_last_logit`` carry.
+    """
+    if not any(msg.logprob_start_pos >= 0 for msg in messages):
+        model_inputs.logits_indices = None
+        model_inputs.seq_logit_length = None
+        return model_inputs
+
+    indices = []
+    row_counts = []
+    base = 0
+    for msg, query_len in zip(messages, query_lengths, strict=True):
+        chunk_start = msg.num_history_ids
+        chunk_end = chunk_start + query_len
+        logprob_start = msg.logprob_start_pos
+        input_end = msg.input_end_pos
+
+        range_start = max(chunk_start, logprob_start) if logprob_start >= 0 else chunk_end
+        range_end = min(chunk_end, input_end - 1)
+        num_projected_rows = max(0, range_end - range_start)
+        indices.extend(range(base + range_start - chunk_start, base + range_end - chunk_start))
+
+        has_prev_chunk_logit = (logprob_start >= 0 and msg.input_start_pos < chunk_start
+                                and logprob_start < chunk_start and chunk_start < input_end)
+        stash_current_last_logit = (range_end == chunk_end and num_projected_rows > 0
+                                    and chunk_end < input_end)
+        if stash_current_last_logit:
+            assert len(messages) == 1, 'long-prefill cross-chunk logit carry requires a single request'
+        row_count = num_projected_rows
+        if has_prev_chunk_logit:
+            row_count += 1
+        if stash_current_last_logit:
+            row_count -= 1
+        row_counts.append(row_count)
+        base += query_len
+
+    model_inputs.logits_indices = torch.tensor(indices, dtype=torch.long)
+    model_inputs.seq_logit_length = torch.tensor(row_counts, dtype=torch.long)
+    return model_inputs
+
+
 @dataclass
 class InputsMakerConfig:
     """Input maker config.
@@ -262,9 +307,16 @@ class _ForwardInputsResult:
     extra_inputs: object | None = None
     swap_in_map: dict = field(default_factory=dict)
     swap_out_map: dict = field(default_factory=dict)
+    # In-flight KV I/O may need a connector-only executor step to make
+    # progress even when the scheduler selected no model work.
+    kv_connector_metadata: object | None = None
 
     def is_empty(self):
-        return self.inputs is None and self.delta is None
+        return (
+            self.inputs is None
+            and self.delta is None
+            and self.kv_connector_metadata is None
+        )
 
     def set_work(self,
                  running: 'SeqList',
@@ -346,7 +398,24 @@ class _ForwardInputsTask:
         if self.result.inputs is not None and not self.result.inputs.is_decoding:
             maker._decode_count = 0
 
-        if self.result.is_empty():
+        result = self.result
+        connector_token_lens = ()
+        connector_enabled = maker.scheduler.kv_connector is not None
+        if (connector_enabled and result.inputs is not None
+                and not result.inputs.is_decoding and not result.inputs.is_dummy):
+            # A prefill writes KV through the end of its query. The connector
+            # uses this post-forward boundary to save newly completed blocks.
+            token_lens = result.inputs.history_lengths + result.inputs.seq_length
+            connector_token_lens = tuple(token_lens.tolist())
+        # Build metadata even without model work: a pending load/save still
+        # needs executor steps to submit work and poll asynchronous completion.
+        result.kv_connector_metadata = self.scheduler.build_connector_meta(
+            result.running,
+            result.swap_in_map,
+            result.swap_out_map,
+            connector_token_lens,
+        )
+        if result.is_empty():
             return None
         return self._build_payload()
 
@@ -599,7 +668,11 @@ class _ForwardInputsTask:
     def _build_payload(self):
         maker = self.maker
         result = self.result
-        sampling_inputs = maker.sampling_strategy.make_sampling_inputs(result.running)
+        has_model_work = result.inputs is not None or result.delta is not None
+        if has_model_work:
+            sampling_inputs = maker.sampling_strategy.make_sampling_inputs(result.running)
+        else:
+            sampling_inputs = None
         if result.inputs is not None:
             stopping_criteria = maker.model_agent_strategy.make_stopping_criteria(result.running)
         else:
@@ -618,6 +691,7 @@ class _ForwardInputsTask:
             extra_inputs=result.extra_inputs,
             return_routed_experts=self._need_routed_experts(),
             return_ce_loss=self._need_ce_loss(),
+            kv_connector_metadata=result.kv_connector_metadata,
         )
 
 
@@ -1021,6 +1095,8 @@ class InputsMakerAsync:
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
         )
+        if is_prefill:
+            model_inputs = fill_logits_indices(model_inputs, messages, [len(ids) for ids in token_ids])
 
         # adapters
         self._set_adapter_ids(model_inputs, messages)
@@ -1081,6 +1157,7 @@ class InputsMakerAsync:
             model_metas=model_metas,
             is_chunk=True,
         )
+        model_inputs = fill_logits_indices(model_inputs, [seq], [chunk_size])
 
         # adapters
         self._set_adapter_ids(model_inputs, [seq])
@@ -1214,7 +1291,9 @@ class InputsMakerAsync:
         if is_decoding:
             self.running_seqs = running
         else:
-            self.running_seqs += running
+            for seq in running:
+                if seq.sampling_param.max_new_tokens > 0:
+                    self.running_seqs.append(seq)
 
     def deactivate_evict_seqs(self):
         """Deactivate and evict seqs."""

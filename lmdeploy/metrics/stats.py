@@ -239,7 +239,17 @@ class IterationStats:
             return
 
         new_generation_tokens = len(outputs.token_ids)
+        if outputs.status != ResponseType.SUCCESS:
+            req_stats.finish_reason = outputs.status
+            req_stats.finish_time = self.iteration_timestamp
         if new_generation_tokens == 0:
+            if outputs.status != ResponseType.SUCCESS and req_stats.first_token_time == 0:
+                # A scoring-only request has no first generated token. Use the
+                # terminal timestamp as the internal prefill/decode boundary:
+                # full inference time is prefill and decode time is zero.
+                req_stats.first_token_time = req_stats.finish_time
+                req_stats.lastest_token_time = req_stats.finish_time
+                self.prompt_tokens = req_stats.prompt_tokens
             return
 
         self.new_generation_tokens = new_generation_tokens
@@ -255,11 +265,6 @@ class IterationStats:
 
         req_stats.lastest_token_time = outputs.req_metrics.token_timestamp
         req_stats.generation_tokens += new_generation_tokens
-
-        if outputs.status != ResponseType.SUCCESS:
-            req_stats.finish_reason = outputs.status
-            req_stats.finish_time = self.iteration_timestamp
-
 
 # modify from vllm
 @dataclass

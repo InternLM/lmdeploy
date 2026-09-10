@@ -2,7 +2,7 @@
 
 from torch import nn
 
-from ..activation import GeluAndMulBuilder, GeluAndMulImpl, SiluAndMulBuilder, SiluAndMulImpl
+from ..activation import GeluAndMulImpl, SiluAndMulImpl
 
 
 class DefaultSiluAndMulImpl(SiluAndMulImpl):
@@ -18,15 +18,6 @@ class DefaultSiluAndMulImpl(SiluAndMulImpl):
         return self.silu(gate) * up
 
 
-class DefaultSiluAndMulBuilder(SiluAndMulBuilder):
-    """Silu and mul implementation builder."""
-
-    @staticmethod
-    def build(inplace: bool = False):
-        """build."""
-        return DefaultSiluAndMulImpl(inplace)
-
-
 class DefaultGeluAndMulImpl(GeluAndMulImpl):
     """Gelu + multiple residual fused implementation."""
 
@@ -37,12 +28,3 @@ class DefaultGeluAndMulImpl(GeluAndMulImpl):
         """forward."""
         gate, up = x.chunk(2, -1)
         return self.act(gate) * up
-
-
-class DefaultGeluAndMulBuilder(GeluAndMulBuilder):
-    """Gelu and mul implementation builder."""
-
-    @staticmethod
-    def build(approximate: str = 'none'):
-        """build."""
-        return DefaultGeluAndMulImpl(approximate)

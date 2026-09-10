@@ -51,6 +51,23 @@ def test_step_context_global_is_decoding_uses_dp_global_state():
     assert not step_ctx.global_is_decoding()
 
 
+def test_model_inputs_logprob_metadata_clone_device_and_step_lifecycle():
+    inputs = _make_model_inputs(is_decoding=True)
+    inputs.logits_indices = torch.tensor([0])
+    inputs.seq_logit_length = torch.tensor([1])
+
+    clone = inputs.clone()
+    assert clone.logits_indices.tolist() == [0]
+    assert clone.seq_logit_length.tolist() == [1]
+    moved = clone.to_device('cpu')
+    assert moved.logits_indices.tolist() == [0]
+    assert moved.seq_logit_length.device.type == 'cpu'
+
+    stepped = inputs.step(torch.tensor([[4]]))
+    assert stepped.logits_indices is None
+    assert stepped.seq_logit_length is None
+
+
 def test_model_inputs_record_stream_matches_device_owned_fields():
     recorded = []
 

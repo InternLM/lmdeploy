@@ -642,6 +642,15 @@ class ArgumentHelper:
                                    help='the max number of tokens per iteration during prefill')
 
     @staticmethod
+    def piecewise_cudagraph_max_tokens(parser):
+        return parser.add_argument('--piecewise-cudagraph-max-tokens',
+                                   type=int,
+                                   default=None,
+                                   help='Enable piecewise CUDA graph in the PyTorch engine and capture prefill '
+                                   'token buckets up to this value. If not specified, piecewise CUDA graph is '
+                                   'disabled')
+
+    @staticmethod
     def cudagraph_capture_batch_sizes(parser):
         return parser.add_argument('--cudagraph-capture-batch-sizes',
                                    type=int,
@@ -843,6 +852,20 @@ class ArgumentHelper:
                                    action='store_true',
                                    default=False,
                                    help='Whether to trust remote code from model repositories.')
+
+    @staticmethod
+    def kv_transfer_config(parser):
+        """Add external KV-cache connector configuration."""
+        return parser.add_argument(
+            '--kv-transfer-config',
+            type=json.loads,
+            default=None,
+            help='External KV-cache connector configuration for the PyTorch engine. '
+            'Mooncake Store requires MOONCAKE_CONFIG_PATH (or '
+            'kv_connector_extra_config.mooncake_config_path) and does not support '
+            'distributed_executor_backend="mp". '
+            'Example: '
+            "'{\"kv_connector\":\"MooncakeStoreConnector\",\"kv_role\":\"kv_both\"}'.")
 
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py

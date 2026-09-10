@@ -18,6 +18,9 @@ from .xml_tool_parser import XmlToolParser
 class Qwen3CoderToolParser(XmlToolParser):
     """Tool parser for Qwen3Coder XML tool-call payloads."""
 
+    structural_tag_model = 'qwen_3_coder'
+    reasoning_structural_tag_model = 'qwen_3_5'
+
     func_prefix = '<function='
     func_suffix = '</function>'
     param_prefix = '<parameter='

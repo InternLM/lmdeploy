@@ -45,6 +45,13 @@ class AutoModelConfigBuilder(ABC):
         logger.debug(f'build model config with {valid_builder.__name__}')
 
         cfg = valid_builder.build(hf_config, model_path, **kwargs)
+        llm_config = cfg.llm_config
+        replica_source = llm_config if llm_config is not None else hf_config
+        cfg.num_replicate_key_value_heads = getattr(
+            replica_source,
+            'num_replicate_key_value_heads',
+            getattr(hf_config, 'num_replicate_key_value_heads', 1),
+        )
         if cfg.hf_config is None:
             cfg.hf_config = hf_config
         if cfg.llm_config is None:
@@ -56,11 +63,12 @@ class AutoModelConfigBuilder(ABC):
     def update_num_kv_heads(cls, hf_config, tp, num_key_value_heads):
         """Update num kv heads."""
         # update num_kv_heads for tp mode
+        n_replicate = 1
         if tp > 1 and tp > num_key_value_heads:
             assert tp % num_key_value_heads == 0
             n_replicate = tp // num_key_value_heads
-            hf_config.num_replicate_key_value_heads = n_replicate
             num_key_value_heads = tp
 
+        hf_config.num_replicate_key_value_heads = n_replicate
         hf_config.num_key_value_heads = num_key_value_heads
         return num_key_value_heads

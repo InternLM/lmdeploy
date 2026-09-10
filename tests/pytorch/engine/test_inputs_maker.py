@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import torch
 
+import lmdeploy.pytorch.engine.engine_loop as engine_loop_module
 import lmdeploy.pytorch.engine.inputs_maker as inputs_maker_module
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
@@ -17,8 +18,48 @@ from lmdeploy.pytorch.engine.inputs_maker import (
     LongContextChunker,
     _make_state_prefix_cache_restore_plan,
     _make_state_prefix_cache_save_plan,
+    fill_logits_indices,
 )
+from lmdeploy.pytorch.engine.model_agent.agent import BatchedOutputs
+from lmdeploy.pytorch.kv_connector import KVConnectorOutput
 from lmdeploy.pytorch.messages import MessageStatus, StateCheckpointRestore, StateCheckpointSaveReservation
+
+
+def _logprob_seq(history, input_start, input_end, logprob_start, all_ids):
+    return SimpleNamespace(num_history_ids=history,
+                           input_start_pos=input_start,
+                           input_end_pos=input_end,
+                           logprob_start_pos=logprob_start,
+                           all_ids=all_ids)
+
+
+def test_logits_indices_keep_batch_alignment_and_exact_targets():
+    disabled = _logprob_seq(2, 0, 5, -1, list(range(5)))
+    enabled = _logprob_seq(10, 8, 15, 11, list(range(20)))
+    empty = _logprob_seq(20, 17, 20, 20, list(range(24)))
+
+    model_inputs = fill_logits_indices(SimpleNamespace(), [disabled, enabled, empty], [3, 5, 0])
+    assert model_inputs.logits_indices.tolist() == [4, 5, 6]
+    assert model_inputs.seq_logit_length.tolist() == [0, 3, 0]
+
+
+def test_logits_indices_shift_cross_chunk_target_to_next_chunk():
+    first = _logprob_seq(0, 0, 10, 2, list(range(12)))
+    model_inputs = fill_logits_indices(SimpleNamespace(), [first], [4])
+    assert model_inputs.logits_indices.tolist() == [2, 3]
+    assert model_inputs.seq_logit_length.tolist() == [1]
+
+    middle = _logprob_seq(4, 0, 10, 2, list(range(12)))
+    model_inputs = fill_logits_indices(SimpleNamespace(), [middle], [4])
+    assert model_inputs.logits_indices.tolist() == [0, 1, 2, 3]
+    assert model_inputs.seq_logit_length.tolist() == [4]
+
+    # Final chunks exclude the last input hidden, which is reserved for
+    # generated/control-token sampling, but include the carried previous row.
+    final = _logprob_seq(8, 0, 10, 2, list(range(12)))
+    model_inputs = fill_logits_indices(SimpleNamespace(), [final], [2])
+    assert model_inputs.logits_indices.tolist() == [0]
+    assert model_inputs.seq_logit_length.tolist() == [2]
 
 
 @dataclass
@@ -44,6 +85,7 @@ class _DummySeq:
         self.return_routed_experts = False
         self.return_ce_loss = False
         self.status = MessageStatus.RUNNING
+        self.sampling_param = SimpleNamespace(max_new_tokens=512)
 
     def set_step(self, step: int):
         self.num_history_ids = step
@@ -124,6 +166,8 @@ class _FakeScheduler:
         self.waiting = waiting or []
         self._num_ready = num_ready
         self._num_running = num_running
+        self.kv_connector = None
+        self.connector_meta_calls = []
 
     def schedule(self,
                  is_prefill: bool,
@@ -149,6 +193,16 @@ class _FakeScheduler:
     def num_running(self):
         return self._num_running
 
+    def build_connector_meta(
+        self,
+        running,
+        swap_in_map=None,
+        swap_out_map=None,
+        connector_token_lens=(),
+    ):
+        self.connector_meta_calls.append(tuple(connector_token_lens))
+        return None
+
 
 class _FakeEngineStrategy:
 
@@ -173,10 +227,13 @@ class _FakeModelAgentStrategy:
 
 def _fake_model_inputs(is_chunk: bool = False):
     return SimpleNamespace(is_decoding=False,
+                           is_dummy=False,
                            is_chunk=is_chunk,
                            is_first_chunk=False,
                            is_last_chunk=False,
-                           is_chunk_multimodal=False)
+                           is_chunk_multimodal=False,
+                           history_lengths=torch.tensor([0]),
+                           seq_length=torch.tensor([1]))
 
 
 def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
@@ -242,6 +299,35 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
         ('unpin_saves', True),
     ]
     assert not state_checkpoints.pinned
+
+
+def test_engine_loop_routes_connector_only_output_without_model_postprocess():
+    seen = []
+
+    class _Scheduler:
+
+        def update_connector_output(self, output):
+            seen.append(output)
+
+        def release_completed_prefill_reservations(self, running):
+            raise AssertionError('connector-only output has no completed model prefill')
+
+    def fail_model_postprocess(*args, **kwargs):
+        raise AssertionError('connector-only output must skip model postprocess')
+
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = _Scheduler()
+    loop._make_infer_outputs = fail_model_postprocess
+    connector_output = KVConnectorOutput(finished_receiving={11})
+
+    loop._finish_forward_output(
+        BatchedOutputs.connector_only(connector_output),
+        running=[],
+        model_inputs=None,
+        delta=None,
+    )
+
+    assert seen == [connector_output]
 
 
 def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save():
@@ -330,6 +416,41 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
 
     assert result == ('forward_inputs', ['long-seq'])
     assert events == ['collect_migration_done', 'send_next_inputs']
+
+
+def test_engine_loop_uses_short_yield_only_for_pending_lookup(monkeypatch):
+    sleeps = []
+
+    class _BlockManager:
+        num_gpu_blocks = 8
+
+        def __init__(self):
+            self.reads = 0
+
+        def get_num_free_gpu_blocks(self):
+            self.reads += 1
+            return 4
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    block_manager = _BlockManager()
+    scheduler = SimpleNamespace(
+        last_schedule_had_pending_lookup=True,
+        block_manager=block_manager,
+    )
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.scheduler = scheduler
+    monkeypatch.setattr(engine_loop_module.asyncio, 'sleep', record_sleep)
+
+    asyncio.run(loop._wait_for_schedulable_prefill())
+    assert sleeps == [0.001]
+    assert block_manager.reads == 0
+
+    scheduler.last_schedule_had_pending_lookup = False
+    asyncio.run(loop._wait_for_schedulable_prefill())
+    assert sleeps == [0.001, 0.1]
+    assert block_manager.reads == 1
 
 
 def test_engine_loop_reset_runtime_state_delegates_to_inputs_maker():
@@ -516,6 +637,44 @@ def test_single_forward_multimodal_long_context_stays_normal_prefill_for_spec_de
     assert not model_inputs.is_first_chunk
     assert not model_inputs.is_last_chunk
     assert not model_inputs.is_chunk_multimodal
+
+
+def test_prefill_passes_actual_computed_token_boundaries_to_kv_connector():
+    seq = _DummySeq(
+        history_ids=4,
+        token_ids=4,
+        all_multimodals={},
+        input_multimodals={},
+    )
+    model_inputs = SimpleNamespace(
+        is_decoding=False,
+        is_dummy=False,
+        is_chunk=False,
+        is_first_chunk=False,
+        is_last_chunk=False,
+        is_chunk_multimodal=False,
+        history_lengths=torch.tensor([4]),
+        seq_length=torch.tensor([4]),
+    )
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
+    maker.spec_decoding = False
+    maker.scheduler = _FakeScheduler([seq])
+    maker.scheduler.kv_connector = object()
+    maker.engine_strategy = _FakeEngineStrategy()
+    maker.sampling_strategy = _FakeSamplingStrategy()
+    maker.model_agent_strategy = _FakeModelAgentStrategy()
+    maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
+    maker.running_seqs = []
+    maker.to_evict_seqs = []
+    maker._decode_count = 0
+    maker.create_model_inputs = lambda seqs, is_prefill: model_inputs
+    maker._prepare_prefill_cache_inputs = lambda seqs: None
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [], [])
+
+    maker._make_forward_inputs(prefill=True)
+
+    assert maker.scheduler.connector_meta_calls == [(8, )]
 
 
 def test_spec_decoding_text_turn_ignores_previous_multimodal_chunk_limit():
@@ -1154,6 +1313,36 @@ def test_normal_prefill_can_update_running_while_long_chunker_is_active():
     assert maker.running_seqs == [short_seq]
     assert maker.long_context_chunker.enabled()
     assert maker.long_context_chunker.next_step == 0
+
+
+def test_scoring_prefill_never_enters_decode_running_set():
+    seq = _DummySeq(history_ids=0,
+                    token_ids=16,
+                    all_multimodals={},
+                    input_multimodals={})
+    seq.sampling_param.max_new_tokens = 0
+    model_inputs = _fake_model_inputs()
+    model_inputs.logits_indices = torch.tensor([0])
+    maker = _make_policy_maker(seq)
+
+    maker.update_running_seqs([seq], model_inputs)
+
+    assert maker.running_seqs == []
+
+
+def test_prefill_running_update_filters_by_decode_need_not_logits_metadata():
+    long_seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
+    scoring_seq = _DummySeq(history_ids=0, token_ids=16, all_multimodals={}, input_multimodals={})
+    decode_seq = _DummySeq(history_ids=0, token_ids=16, all_multimodals={}, input_multimodals={})
+    scoring_seq.sampling_param.max_new_tokens = 0
+    decode_seq.sampling_param.max_new_tokens = 3
+    model_inputs = _fake_model_inputs()
+    model_inputs.logits_indices = torch.tensor([0])
+    maker = _make_policy_maker(long_seq)
+
+    maker.update_running_seqs([scoring_seq, decode_seq], model_inputs)
+
+    assert maker.running_seqs == [decode_seq]
 
 
 def test_last_long_context_chunk_runs_as_prefill_on_prefill_turn():
