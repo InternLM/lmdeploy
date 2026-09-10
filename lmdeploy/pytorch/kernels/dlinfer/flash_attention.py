@@ -14,7 +14,6 @@ def flash_attention_fwd(
     kv_seqlens: Tensor,
     num_heads: int,
     num_kv_heads: int,
-    actual_seq_lengths_cpu: Tensor,
     max_q_seqlen: int = None,
     window_size: int = None,
     sm_scale: float = None,
