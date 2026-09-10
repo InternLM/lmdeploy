@@ -697,6 +697,10 @@ class MiMoV2FlashForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         'gate_up_proj': ['gate_proj', 'up_proj'],
     }
 
+    def supports_multi_token_decode(self) -> bool:
+        """Return whether every selected attention path supports spec queries."""
+        return all(layer.self_attn.attn_fwd.supports_multi_token_decode for layer in self.layers)
+
     def _prefix_cache_graph_is_safe(self) -> bool:
         """Return whether this MiMo step can safely replay with shared blocks.
 

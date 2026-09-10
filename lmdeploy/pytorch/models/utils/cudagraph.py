@@ -114,6 +114,10 @@ class CudaGraphMixin:
         """
         return ((max_query_len, 0), (1, 0))
 
+    def supports_multi_token_decode(self) -> bool:
+        """Return whether all attention paths support multi-token decode."""
+        return False
+
     def get_cudagraph_extra_key(self, **kwargs) -> tuple:
         """Get model-specific CUDA graph keys."""
         return ()

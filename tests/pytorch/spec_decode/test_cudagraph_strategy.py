@@ -120,6 +120,43 @@ def test_cudagraph_fa3_metadata_uses_single_query_len_for_single_token_capture()
     assert model.max_seqlen_q_calls == [1, 1]
 
 
+def test_full_graph_disables_legacy_fa3_metadata_without_support(monkeypatch):
+    from types import SimpleNamespace
+
+    from lmdeploy.pytorch.backends.cuda.graph_runner.full_graph import _make_graph_meta
+
+    ctx_mgr = SimpleNamespace(backend_step_meta_plan=None)
+    model_config = SimpleNamespace(
+        vocab_size=100,
+        use_mla_fp8_cache=False,
+        use_flash_mla=False,
+        mla_index_topk=None,
+        model_paradigm='ar',
+        states_shapes=None,
+        use_mrope=False,
+        block_size=64,
+    )
+    common_kwargs = dict(
+        max_batches=1,
+        max_tokens=1,
+        num_blocks=1,
+        is_decoding=True,
+        decode_query_len=1,
+        device='cpu',
+    )
+
+    meta = _make_graph_meta(model_config, ctx_mgr, **common_kwargs)
+    assert meta.use_fa3_decoding is False
+
+    model_config.model_paradigm = 'ar_spec'
+    meta = _make_graph_meta(model_config, ctx_mgr, **common_kwargs)
+    assert meta.use_fa3_decoding is True
+
+    meta = _make_graph_meta(
+        model_config, ctx_mgr, supports_multi_token_decode=True, **common_kwargs)
+    assert meta.use_fa3_decoding is False
+
+
 def test_graph_capture_state_snapshots_request_visible_paged_rows():
     import torch
 
@@ -267,6 +304,7 @@ def test_cudagraph_capture_rolls_back_state_before_semantic_forward(monkeypatch)
     runner.get_graph_key = lambda **kwargs: (2, True, False, 2)
     runner._get_max_tokens = lambda *args: 4
     runner._get_decode_model_forward = lambda: model
+    runner._supports_multi_token_decode = False
     runner._full_graph_runners = {}
     runner.num_blocks = 8
     runner._full_graph_pool_handle = None
