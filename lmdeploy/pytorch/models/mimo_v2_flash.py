@@ -13,7 +13,14 @@ from torch import nn
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheBinding, BlockCacheRequest, BlockCacheRequestContext
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn import (
+    ApplyRotaryEmb,
+    Attention,
+    RMSNorm,
+    SiluAndMul,
+    SWAStateRingAttention,
+    build_rotary_embedding,
+)
 from lmdeploy.pytorch.nn.eplb import EPLBManager
 from lmdeploy.pytorch.nn.linear import build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
@@ -104,7 +111,7 @@ class MiMoV2Attention(nn.Module):
         config: Any,
         is_swa: bool,
         block_cache_prefix: str | None = None,
-        enable_paged_verification: bool = False,
+        use_paged_cache: bool = False,
         quantize_o_proj: bool = True,
         dtype: torch.dtype | None = None,
         device: torch.device | None = None,
@@ -171,28 +178,41 @@ class MiMoV2Attention(nn.Module):
             prefix=add_prefix('qkv_proj', prefix),
         )
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
-        enable_paged_multi_token_decode = bool(
-            enable_paged_verification or getattr(config, '_lmdeploy_use_paged_swa', False)
-        )
-        self.attn_fwd = Attention(
-            num_heads,
-            self.head_dim,
-            num_kv_heads=num_kv_heads,
-            v_head_size=self.v_head_dim,
-            sliding_window=sliding_window,
-            learnable_sink=has_sink,
-            # Full Attention can use FA3 when its wheel contains the asymmetric
-            # Q/K=192, V=128 instantiation. SWA remains on the MiMo-specific
-            # Triton/ring path because it also implements attention sinks.
-            allow_fa3=not is_swa,
-            enable_paged_multi_token_decode=enable_paged_multi_token_decode,
-        )
-        # MiMo verification reads the page table directly for both Full and
-        # SWA attention. This avoids a logical-KV-sized flatten workspace and
-        # remains valid when prefix caching shares physical cache blocks.
-        self.use_native_paged_verification = bool(
-            getattr(self.attn_fwd.impl, 'supports_paged_multi_token_decode', False)
-        )
+        if is_swa:
+            if use_paged_cache:
+                self.attn_fwd = Attention(
+                    num_heads,
+                    self.head_dim,
+                    num_kv_heads=num_kv_heads,
+                    v_head_size=self.v_head_dim,
+                    sliding_window=sliding_window,
+                    learnable_sink=has_sink,
+                )
+                # Paged SWA and Full attention both consume page tables.
+                self.use_native_paged_verification = True
+            else:
+                # State-ring SWA never uses paged speculative verification.
+                self.use_native_paged_verification = False
+                self.attn_fwd = SWAStateRingAttention(
+                    num_heads,
+                    self.head_dim,
+                    num_kv_heads=num_kv_heads,
+                    v_head_size=self.v_head_dim,
+                    sliding_window=sliding_window,
+                    learnable_sink=has_sink,
+                )
+        else:
+            self.attn_fwd = Attention(
+                num_heads,
+                self.head_dim,
+                num_kv_heads=num_kv_heads,
+                v_head_size=self.v_head_dim,
+                learnable_sink=has_sink,
+            )
+            # MiMo verification reads the page table directly. This avoids a
+            # logical-KV-sized flatten workspace and remains valid when prefix
+            # caching shares physical cache blocks.
+            self.use_native_paged_verification = True
         self.attention_sink_bias = None
         if has_sink:
             self.attention_sink_bias = nn.Parameter(
@@ -347,18 +367,15 @@ class MiMoV2SWAAttention(MiMoV2Attention):
     ) -> torch.Tensor:
         """Run varlen attention over chronological ring history and current
         KV."""
-        from lmdeploy.pytorch.backends.cuda.attention.swa_state_ring import swa_state_ring_attention
-
         query_states, key_states, value_states = self._project_qkv(hidden_states, rotary_pos_emb)
-        attn_output = swa_state_ring_attention(
-            self.attn_fwd,
+        attn_output = self.attn_fwd(
             query_states,
             key_states,
             value_states,
             state_cache[0],
             state_cache[1],
             swa_metadata,
-            sink=self.attention_sink_bias,
+            s_aux=self.attention_sink_bias,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
         return self._project_output(attn_output)
@@ -465,6 +482,7 @@ class MiMoV2DecoderLayer(nn.Module):
                 config,
                 is_swa=True,
                 block_cache_prefix='mimo_swa_paged',
+                use_paged_cache=True,
                 dtype=dtype,
                 device=device,
                 prefix=add_prefix('self_attn', prefix),
@@ -679,9 +697,9 @@ class MiMoV2FlashForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         'gate_up_proj': ['gate_proj', 'up_proj'],
     }
 
-    def supports_non_fa3_speculative_graph(self) -> bool:
-        """Allow MiMo verification to use native Triton paged attention."""
-        return True
+    def supports_multi_token_decode(self) -> bool:
+        """Return whether all selected attention paths support spec queries."""
+        return all(layer.self_attn.attn_fwd.supports_multi_token_decode for layer in self.layers)
 
     def _prefix_cache_graph_is_safe(self) -> bool:
         """Return whether this MiMo step can safely replay with shared blocks.

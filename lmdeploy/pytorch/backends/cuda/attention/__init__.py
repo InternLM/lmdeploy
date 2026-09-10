@@ -95,7 +95,7 @@ def _build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl
 
     Selection order:
     1. use_flash_mla: Use dense or sparse FlashMLA for MLA models
-    2. allow_fa3: Enable FA3Impl if FA3 is available and supported
+    2. enable_fa3: Select FA3Impl if FA3 is available and supported
     3. Default: Use TritonAttentionImpl as fallback
     """
     sliding_window = _normalize_sliding_window(spec.sliding_window)
@@ -109,9 +109,8 @@ def _build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl
         sliding_window=sliding_window,
         logit_softcapping=spec.logit_softcapping,
         causal=spec.causal,
-        enable_paged_multi_token_decode=spec.enable_paged_multi_token_decode,
     )
-    enable_fa3 = spec.allow_fa3 and _enable_fa3(
+    enable_fa3 = _enable_fa3(
         spec.alibi,
         spec.learnable_sink,
         spec.block_sparse_size,
@@ -120,8 +119,7 @@ def _build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl
     )
     # FlashMLA's FA3 prefill path uses its own split dimensions (rope/nope),
     # so the paged-attention head-shape capability check above does not apply.
-    # ``allow_fa3`` still provides the model-level opt-out used by MiMo SWA.
-    use_fa3_for_mla = spec.allow_fa3 and use_fa3
+    use_fa3_for_mla = use_fa3
 
     if spec.use_flash_mla is True:
         if spec.mla_index_topk is not None:

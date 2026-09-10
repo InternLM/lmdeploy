@@ -226,5 +226,17 @@ class PagedAttentionBuildSpec(BuildSpec[AttentionImpl[AttentionMetadata]]):
     mla_index_topk: int | None
     learnable_sink: bool
     block_sparse_size: int
-    allow_fa3: bool = True
-    enable_paged_multi_token_decode: bool = False
+
+
+@dataclass(frozen=True)
+class SWAStateRingAttentionBuildSpec(BuildSpec[AttentionImpl[AttentionMetadata]]):
+    """Requirements for sequence-scoped sliding-window state-ring attention."""
+
+    num_heads: int
+    head_dim: int
+    scale: float | None
+    num_kv_heads: int
+    v_head_dim: int
+    sliding_window: tuple[int, int]
+    learnable_sink: bool
+    block_sparse_size: int = 1

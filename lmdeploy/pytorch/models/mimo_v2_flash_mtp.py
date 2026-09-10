@@ -64,7 +64,7 @@ class MiMoV2FlashMTPLayer(nn.Module):
         self.self_attn = MiMoV2Attention(
             config,
             is_swa=True,
-            enable_paged_verification=True,
+            use_paged_cache=True,
             quantize_o_proj=False,
             dtype=dtype,
             device=device,
@@ -215,10 +215,6 @@ class MiMoV2FlashMTPModel(nn.Module, CudaGraphMixin):
         'qkv_proj': ['q_proj', 'k_proj', 'v_proj'],
         'gate_up_proj': ['gate_proj', 'up_proj'],
     }
-
-    def supports_non_fa3_speculative_graph(self) -> bool:
-        """Allow MiMo draft graphs to use native Triton paged attention."""
-        return True
 
     def get_cudagraph_capture_cache(self,
                                     past_key_values: list[list[torch.Tensor]],

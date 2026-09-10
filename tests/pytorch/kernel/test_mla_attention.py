@@ -52,8 +52,8 @@ def test_flash_mla_build_spec_selects_sparse_impl(monkeypatch):
     assert sparse_impl.call_args.kwargs['use_fa3'] is True
 
     assert CudaOpsBackend.build_op(
-        PagedAttentionBuildSpec(mla_index_topk=2048, allow_fa3=False, **spec_kwargs)) is sparse_output
-    assert sparse_impl.call_args.kwargs['use_fa3'] is False
+        PagedAttentionBuildSpec(mla_index_topk=2048, **spec_kwargs)) is sparse_output
+    assert sparse_impl.call_args.kwargs['use_fa3'] is True
 
 
 def test_builder_selects_tilelang_sparse_impl_from_env(monkeypatch):

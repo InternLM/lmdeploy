@@ -420,7 +420,6 @@ class TestPagedAttention(TestPagedAttentionBase):
             num_kv_heads=num_kv_heads,
             v_head_size=value_head_size,
             sliding_window=window_size,
-            enable_paged_multi_token_decode=True,
         )
         impl.bind_step_meta_group(1)
         output = impl.forward(

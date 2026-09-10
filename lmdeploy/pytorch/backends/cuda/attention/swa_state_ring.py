@@ -6,6 +6,8 @@ from typing import Any
 
 import torch
 
+from lmdeploy.pytorch.backends.attention import AttentionImpl, SWAStateRingAttentionBuildSpec
+
 
 @dataclass
 class SWAStateRingMetadata:
@@ -90,7 +92,7 @@ class SWAStateRingMetadata:
 
 
 def _decode_swa_state_ring(
-    attention,
+    impl: 'SWAStateRingAttentionImpl',
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
@@ -126,8 +128,6 @@ def _decode_swa_state_ring(
         max_q_seqlen=1,
     )
 
-    impl = attention.impl
-    attention._lazy_init(query.device)
     return impl.paged_attention_fwd(
         query,
         k_ring,
@@ -144,7 +144,7 @@ def _decode_swa_state_ring(
 
 
 def swa_state_ring_attention(
-    attention,
+    impl: 'SWAStateRingAttentionImpl',
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
@@ -162,7 +162,6 @@ def swa_state_ring_attention(
             f'SWA metadata window {metadata.window_size} does not match ring window {k_ring.size(1)}.'
         )
 
-    impl = attention.impl
     if not hasattr(impl, 'flash_attention_fwd'):
         raise RuntimeError(f'SWA state ring requires Triton varlen attention, got {type(impl).__name__}.')
     if getattr(impl, 'alibi', False):
@@ -170,7 +169,7 @@ def swa_state_ring_attention(
 
     if metadata.max_q_seqlen == 1:
         return _decode_swa_state_ring(
-            attention,
+            impl,
             query,
             key,
             value,
@@ -210,7 +209,6 @@ def swa_state_ring_attention(
         metadata.max_q_seqlen,
     )
 
-    attention._lazy_init(query.device)
     output = impl.flash_attention_fwd(
         query,
         flat_key,
@@ -250,3 +248,62 @@ def swa_state_ring_attention(
         max_q_seqlen=metadata.max_q_seqlen,
     )
     return output
+
+
+class SWAStateRingAttentionImpl(AttentionImpl):
+    """Own the kernel configuration for CUDA sliding-window state rings."""
+
+    supports_multi_token_decode = True
+
+    def __init__(self, spec: SWAStateRingAttentionBuildSpec):
+        super().__init__(
+            num_heads=spec.num_heads,
+            head_size=spec.head_dim,
+            scale=spec.scale,
+            num_kv_heads=spec.num_kv_heads,
+            v_head_size=spec.v_head_dim,
+            alibi=False,
+            sliding_window=spec.sliding_window,
+            logit_softcapping=0.0,
+            causal=True,
+        )
+        self.block_sparse_size = spec.block_sparse_size
+
+        self.flash_attention_fwd = None
+        self.paged_attention_fwd = None
+
+    def _lazy_init(self):
+        if self.flash_attention_fwd is None or self.paged_attention_fwd is None:
+            from lmdeploy.pytorch.kernels.cuda import (
+                flash_attn_varlen_func,
+                flash_attn_with_kvcache,
+            )
+            self.flash_attention_fwd = flash_attn_varlen_func
+            self.paged_attention_fwd = flash_attn_with_kvcache
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        k_cache: torch.Tensor,
+        v_cache: torch.Tensor,
+        metadata: SWAStateRingMetadata,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
+        learnable_sink: torch.Tensor = None,
+        nsa_indices: torch.Tensor = None,
+        inplace: bool = False,
+    ) -> torch.Tensor:
+        del k_scales_zeros, v_scales_zeros, nsa_indices, inplace
+        self._lazy_init()
+        return swa_state_ring_attention(
+            self,
+            query,
+            key,
+            value,
+            k_cache,
+            v_cache,
+            metadata,
+            sink=learnable_sink,
+        )

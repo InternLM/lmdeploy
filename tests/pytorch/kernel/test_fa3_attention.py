@@ -5,10 +5,12 @@ from types import SimpleNamespace
 import torch
 
 from lmdeploy.messages import QuantPolicy
-from lmdeploy.pytorch.backends.attention import PagedAttentionBuildSpec
+from lmdeploy.pytorch.backends.attention import PagedAttentionBuildSpec, SWAStateRingAttentionBuildSpec
 from lmdeploy.pytorch.backends.cuda.attention import _build_paged_attention
 from lmdeploy.pytorch.backends.cuda.attention.default import TritonAttentionImpl, TritonAttentionMetadata
 from lmdeploy.pytorch.backends.cuda.attention.fa3 import FA3Impl
+from lmdeploy.pytorch.backends.cuda.attention.swa_state_ring import SWAStateRingAttentionImpl
+from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
 
 _BLOCK_SIZE = 16
 _PREFILL_SEQLENS = (29, 18)
@@ -41,12 +43,31 @@ def test_attention_builder_falls_back_when_fa3_lacks_asymmetric_head_shape(monke
                 mla_index_topk=None,
                 learnable_sink=False,
                 block_sparse_size=1,
-                allow_fa3=True,
             ))
     finally:
         attention_mod._enable_fa3.cache_clear()
 
     assert type(impl) is TritonAttentionImpl
+
+
+def test_swa_state_ring_uses_dedicated_backend_implementation():
+    spec = SWAStateRingAttentionBuildSpec(
+        num_heads=8,
+        head_dim=192,
+        scale=None,
+        num_kv_heads=2,
+        v_head_dim=128,
+        sliding_window=(127, 0),
+        learnable_sink=True,
+    )
+
+    impl = CudaOpsBackend.build_op(spec)
+
+    assert type(impl) is SWAStateRingAttentionImpl
+    assert impl.supports_multi_token_decode is True
+    assert impl.scale == 1.0 / (192**0.5)
+    assert impl.flash_attention_fwd is None
+    assert impl.paged_attention_fwd is None
 
 
 def _make_prefill_metadata(q_seqlens, block_offsets):

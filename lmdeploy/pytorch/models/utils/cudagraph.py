@@ -62,8 +62,8 @@ class CudaGraphMixin:
         """
         return ((max_query_len, 0), (1, 0))
 
-    def supports_non_fa3_speculative_graph(self) -> bool:
-        """Return whether speculative CUDA Graph can use a non-FA3 backend."""
+    def supports_multi_token_decode(self) -> bool:
+        """Return whether attention supports multi-token decode queries."""
         return False
 
     def get_cudagraph_extra_key(self, **kwargs) -> tuple:

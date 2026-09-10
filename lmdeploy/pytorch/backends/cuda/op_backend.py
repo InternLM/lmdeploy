@@ -34,7 +34,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         """Build a typed CUDA operator implementation."""
         from ..activation import SiluAndMulBuildSpec
         from ..apply_rotary_emb import ApplyRotaryEmbBuildSpec
-        from ..attention import PagedAttentionBuildSpec, V4AttentionBuildSpec
+        from ..attention import PagedAttentionBuildSpec, SWAStateRingAttentionBuildSpec, V4AttentionBuildSpec
         from ..awq_modules import LinearW4A16BuildSpec
         from ..blockedf8_modules import LinearBlockedF8BuildSpec
         from ..causal_conv1d import CausalConv1dBuildSpec
@@ -198,6 +198,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         if isinstance(spec, PagedAttentionBuildSpec):
             from .attention import _build_paged_attention
             return cast(ImplT, _build_paged_attention(spec))
+        if isinstance(spec, SWAStateRingAttentionBuildSpec):
+            from .attention.swa_state_ring import SWAStateRingAttentionImpl
+            return cast(ImplT, SWAStateRingAttentionImpl(spec))
         if isinstance(spec, FlashAttentionBuildSpec):
             from .flash_attention import TritonFlashAttentionImpl
             return cast(

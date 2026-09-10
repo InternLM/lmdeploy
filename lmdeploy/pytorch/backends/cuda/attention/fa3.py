@@ -263,7 +263,7 @@ class FA3Impl(TritonAttentionImpl):
     - Standard single-token decoding with paged attention
     """
 
-    supports_paged_multi_token_decode = True
+    supports_multi_token_decode = True
 
     def __init__(
         self,
