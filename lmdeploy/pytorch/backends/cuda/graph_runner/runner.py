@@ -51,27 +51,6 @@ def _false(*args, **kwargs):
     return False
 
 
-def _validate_speculative_decoding(model: torch.nn.Module, model_config: ModelConfig) -> None:
-    """Validate the attention capability required by speculative decode."""
-    if model_config.model_paradigm != 'ar_spec' or model_config.use_flash_mla:
-        return
-
-    supports_multi_token = getattr(model, 'supports_multi_token_decode', lambda: False)
-    if callable(supports_multi_token) and supports_multi_token():
-        return
-
-    from ..attention import require_fa3_for_speculative_decoding
-    require_fa3_for_speculative_decoding()
-
-
-def _supports_multi_token_decode(model: torch.nn.Module) -> bool:
-    """Whether the selected attention implementations support speculative queries."""
-    handler = getattr(model, 'supports_multi_token_decode', None)
-    if not callable(handler):
-        return False
-    return bool(handler())
-
-
 def _make_piecewise_graph_manager(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                                   backend_config: BackendConfig) -> PiecewiseGraphManager | None:
     """Build the optional PCG runtime only for an eligible CUDA model."""
@@ -134,9 +113,6 @@ class CUDAGraphRunner(GraphRunner):
                  backend_config: BackendConfig, device: torch.device):
         super().__init__(model, model_config, cache_config, backend_config, device)
         self.num_blocks = cache_config.num_gpu_blocks
-        self._supports_multi_token_decode = _supports_multi_token_decode(self.model)
-        _validate_speculative_decoding(model, model_config)
-
         self.enable_graph = self.check_enable_graph()
         self._decode_model_forward: Callable[..., Any] | None = None
 
@@ -265,7 +241,6 @@ class CUDAGraphRunner(GraphRunner):
             decode_query_len=graph_key[3],
             pool=self._full_graph_pool_handle,
             model_config=self.model_config,
-            supports_multi_token_decode=self._supports_multi_token_decode,
             device=self.device,
         )
         capture_state = self.model.get_cudagraph_capture_state(

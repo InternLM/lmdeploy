@@ -223,7 +223,6 @@ def test_cudagraph_capture_rolls_back_state_before_semantic_forward(monkeypatch)
     runner.get_graph_key = lambda **kwargs: (2, True, False, 2)
     runner._get_max_tokens = lambda *args: 4
     runner._get_decode_model_forward = lambda: model
-    runner._supports_multi_token_decode = False
     runner._full_graph_runners = {}
     runner.num_blocks = 8
     runner._full_graph_pool_handle = None
