@@ -83,7 +83,7 @@ def test_deepgemm_prefill_scores_are_chunked_by_logits_budget(monkeypatch, dcp_s
     impl.dcp_rank = 0
     impl.topk = 2
     impl.fill = -1
-    impl.max_logits_bytes = 2 * (4 * 4 if dcp_size == 1 else 128 * 5 + 2 * (16 + 8 * dcp_size))
+    impl.max_logits_bytes = 2 * (4 * 4 if dcp_size == 1 else 128 * 4 + 2 * (16 + 8 * dcp_size))
     # Global selection itself is covered by test_dcp; record only score-row
     # chunking here, using the same candidate shapes as the production path.
     impl._merge_dcp_topk = lambda scores, indices: indices

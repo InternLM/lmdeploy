@@ -39,7 +39,7 @@ def _ordered_fp32_key(score):
                           T.bitwise_xor(bits, all_ones))
 
 
-def sparse_dcp_index_topk(scores: torch.Tensor,
+def sparse_dcp_local_topk(scores: torch.Tensor,
                           q_seqlens: torch.Tensor,
                           kv_seqlens: torch.Tensor,
                           k: int,
@@ -75,7 +75,8 @@ def _pack_dcp_topk_candidates_kernel(
     top_k: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
-    row = tl.program_id(0)
+    # Decode graph score buffers can exceed 2**31 elements with a large KV pool.
+    row = tl.program_id(0).to(tl.int64)
     columns = tl.program_id(1) * BLOCK + tl.arange(0, BLOCK)
     column_mask = columns < top_k
     local_indices = tl.load(LocalIndices + row * stride_ir +
@@ -88,7 +89,6 @@ def _pack_dcp_topk_candidates_kernel(
     scores = tl.load(Scores + row * stride_sr + safe_indices * stride_sc,
                      mask=column_mask & valid,
                      other=-float('inf')).to(tl.float32)
-    scores = tl.where(scores == scores, scores, -float('inf'))
     global_indices = safe_indices * dcp_size + dcp_rank
     global_indices = tl.where(valid, global_indices, -1).to(tl.int32)
 
@@ -130,7 +130,7 @@ def pack_dcp_topk_candidates(scores: torch.Tensor, local_indices: torch.Tensor,
 
 
 @tilelang.jit(pass_configs=_PASS_CONFIGS)
-def _sparse_dcp_candidate_topk_kernel(top_k: int,
+def _sparse_dcp_global_topk_kernel(top_k: int,
                                       dcp_size: int,
                                       fill: int = _FILL,
                                       threads: int = _THREADS):
@@ -138,7 +138,7 @@ def _sparse_dcp_candidate_topk_kernel(top_k: int,
     num_tokens = T.dynamic('num_tokens')
 
     @T.prim_func
-    def sparse_dcp_candidate_topk_kernel_(
+    def sparse_dcp_global_topk_kernel_(
         Candidates: T.Tensor[(dcp_size, num_tokens, top_k, 2), T.float32],
         Out: T.Tensor[(num_tokens, top_k), T.int32],
     ):
@@ -324,10 +324,10 @@ def _sparse_dcp_candidate_topk_kernel(top_k: int,
                         local_win_count += 1
                     candidate += 1
 
-    return sparse_dcp_candidate_topk_kernel_
+    return sparse_dcp_global_topk_kernel_
 
 
-def sparse_dcp_candidate_topk(gathered_candidates: torch.Tensor,
+def sparse_dcp_global_topk(gathered_candidates: torch.Tensor,
                               k: int,
                               fill: int = _FILL) -> torch.Tensor:
     """Select stable global top-k ids from packed DCP candidates."""
@@ -338,6 +338,6 @@ def sparse_dcp_candidate_topk(gathered_candidates: torch.Tensor,
     output = torch.empty((num_tokens, k),
                          dtype=torch.int32,
                          device=gathered_candidates.device)
-    _sparse_dcp_candidate_topk_kernel(k, dcp_size, fill,
+    _sparse_dcp_global_topk_kernel(k, dcp_size, fill,
                                       _THREADS)(gathered_candidates, output)
     return output

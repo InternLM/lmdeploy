@@ -54,10 +54,10 @@ def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int, *, topk: int 
     # allocation; limit M so its FP32 payload stays within the runtime budget.
     row_bytes = max_kv_seqlen * 4
     if dcp_size > 1:
-        # Include aligned logits, the NaN mask, local/global ids and both
+        # Include aligned logits, local/global ids and both
         # candidate buffers. Full-step output ids are reserved separately.
         score_width = (max_kv_seqlen + 127) // 128 * 128
-        row_bytes = score_width * 5 + get_dcp_topk_workspace_size(1, topk, dcp_size)
+        row_bytes = score_width * 4 + get_dcp_topk_workspace_size(1, topk, dcp_size)
         if row_bytes > max_logits_bytes:
             raise RuntimeError('One DCP score row exceeds LMDEPLOY_DSA_INDEXER_MAX_LOGITS_MB')
     return max(1, max_logits_bytes // row_bytes)
@@ -153,9 +153,9 @@ def _get_sparse_index_topk(topk: int, use_dcp: bool = False):
     if is_sparse_index_topk_supported(topk):
         if use_dcp:
             from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import (
-                sparse_dcp_index_topk,
+                sparse_dcp_local_topk,
             )
-            return sparse_dcp_index_topk
+            return sparse_dcp_local_topk
         return sparse_index_topk
     return None
 
@@ -470,8 +470,6 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
         # entry per request. DSA metadata already expands it to one entry per
         # score row, including for a query-row chunk.
         if self._sparse_index_topk is not None:
-            if self.dcp_world_size > 1:
-                scores.masked_fill_(torch.isnan(scores), -torch.inf)
             local_indices = self._sparse_index_topk(scores, meta.q_seqlens,
                                                     kv_seqlens, self.topk,
                                                     fill=self.fill,
@@ -498,7 +496,7 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
         from lmdeploy.pytorch.distributed import all_gather_into_tensor
         from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import (
             pack_dcp_topk_candidates,
-            sparse_dcp_candidate_topk,
+            sparse_dcp_global_topk,
         )
 
         num_rows = scores.size(0)
@@ -515,7 +513,7 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
         )
         all_gather_into_tensor(gathered, packed, group='dcp')
         gathered = gathered.view(self.dcp_world_size, num_rows, self.topk, 2)
-        return sparse_dcp_candidate_topk(gathered, k=self.topk, fill=self.fill)
+        return sparse_dcp_global_topk(gathered, k=self.topk, fill=self.fill)
 
     def _score_and_select_prefill(
             self, q: Tensor, q_s: Tensor, indexer_k_cache: Tensor,

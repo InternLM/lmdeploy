@@ -159,26 +159,99 @@ def test_bf16_sparse_flashmla_uses_third_return_value_as_lse(monkeypatch):
     assert not torch.equal(actual_lse, max_logits[:, :8])
 
 
-def test_dcp_query_all_gather_preserves_contiguous_head_order(monkeypatch):
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+@pytest.mark.parametrize('dcp_size', [1, 2, 4])
+@pytest.mark.parametrize('num_tokens', [1, 6, 32])
+@pytest.mark.parametrize('strided', [False, True])
+def test_dcp_query_all_gather_preserves_contiguous_head_order(monkeypatch, device, dcp_size, num_tokens, strided):
+    if device == 'cuda' and not torch.cuda.is_available():
+        pytest.skip('requires CUDA')
     from lmdeploy.pytorch import distributed
 
     impl = object.__new__(mla_module.FlashMLAImpl)
-    impl.dcp_world_size = 2
+    impl.dcp_world_size = dcp_size
     impl.dcp_rank = 0
-    rank0_query = torch.tensor([[[0.0, 1.0]], [[2.0, 3.0]]])
-    rank1_transposed = torch.tensor([[[10.0, 11.0], [12.0, 13.0]]])
+    queries = torch.arange(dcp_size * num_tokens * 3 * 8, device=device, dtype=torch.float32)
+    queries = queries.reshape(dcp_size, num_tokens, 3, 8)
+    if strided:
+        queries = queries[..., ::2]
+    rank0_query = queries[0]
 
     def fake_all_gather(output, input_tensor, group='tp', async_op=False):
         assert group == 'dcp'
-        output[:1].copy_(input_tensor)
-        output[1:].copy_(rank1_transposed)
+        assert input_tensor.is_contiguous()
+        if not strided:
+            assert input_tensor.data_ptr() == rank0_query.data_ptr()
+        for rank in range(dcp_size):
+            source = queries[rank].transpose(0, 1) if strided else queries[rank]
+            output[rank * source.size(0):(rank + 1) * source.size(0)].copy_(source)
 
     monkeypatch.setattr(distributed, 'all_gather_into_tensor', fake_all_gather)
     gathered = impl._gather_dcp_query(rank0_query)
 
-    expected = torch.tensor([[[0.0, 1.0], [10.0, 11.0]],
-                             [[2.0, 3.0], [12.0, 13.0]]])
+    expected = torch.cat(list(queries), dim=1)
     assert torch.equal(gathered, expected)
+    if dcp_size > 1:
+        assert gathered.is_contiguous()
+    else:
+        assert gathered is rank0_query
+    if device == 'cuda' and dcp_size > 1:
+        torch.cuda.synchronize()
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            graph_output = impl._gather_dcp_query(rank0_query)
+        queries.add_(1)
+        graph.replay()
+        torch.cuda.synchronize()
+        assert torch.equal(graph_output, expected + 1)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
+@pytest.mark.parametrize('k', [7, 512, 2048])
+@pytest.mark.parametrize('dcp_size', [1, 2, 4])
+@pytest.mark.parametrize('strided', [False, True])
+def test_dcp_compact_indices_preserves_order_and_counts(k, dcp_size, strided):
+    from lmdeploy.pytorch.kernels.cuda.dcp import filter_and_compact_dcp_indices
+
+    generator = torch.Generator(device='cuda').manual_seed(52)
+    storage = torch.randint(0, 2**25, (12, 2 * k), dtype=torch.int32, device='cuda', generator=generator)
+    indices = storage[::2, ::2] if strided else storage[:6, :k].contiguous()
+    indices[0] = -1
+    indices[1] = torch.arange(k, device='cuda') * dcp_size
+    indices[2, ::2] = -1
+    indices[3] = -1
+    indices[3, -1] = 1
+    # Prefill has a singleton KV-head axis; decode uses two-dimensional rows.
+    if strided:
+        indices = indices[:, None, :]
+
+    for rank in range(dcp_size):
+        expected = torch.full_like(indices, -1)
+        expected_counts = []
+        for row, out in zip(indices.reshape(-1, k), expected.reshape(-1, k)):
+            selected = row[(row >= 0) & (row % dcp_size == rank)] // dcp_size
+            out[:selected.numel()] = selected
+            expected_counts.append(selected.numel())
+        expected_counts = torch.tensor(expected_counts, dtype=torch.int32, device='cuda').reshape(indices.shape[:-1])
+        actual, counts = filter_and_compact_dcp_indices(indices, dcp_world_rank=(dcp_size, rank))
+        assert torch.equal(actual, expected)
+        assert torch.equal(counts, expected_counts)
+        assert actual.dtype == counts.dtype == torch.int32
+        torch.cuda.synchronize()
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            graph_output, graph_counts = filter_and_compact_dcp_indices(indices, dcp_world_rank=(dcp_size, rank))
+        graph.replay()
+        torch.cuda.synchronize()
+        assert torch.equal(graph_output, expected)
+        assert torch.equal(graph_counts, expected_counts)
+        saved = indices.clone()
+        indices.fill_(-1)
+        graph.replay()
+        torch.cuda.synchronize()
+        assert (graph_output == -1).all()
+        assert (graph_counts == 0).all()
+        indices.copy_(saved)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
@@ -397,7 +470,7 @@ def test_dcp_sparse_prefill_maps_partition_indices():
                             [5, 6, -1, -1]],
                            dtype=torch.int32)
 
-    mapped = impl._map_dcp_prefill_partition(
+    mapped = impl._map_dcp_prefill_indices(
         indices,
         metadata,
         partition_starts=torch.tensor([3, 5], dtype=torch.int32),
@@ -521,7 +594,7 @@ def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse,
 def test_dcp_attention_correction_kernel_matches_torch():
     if not torch.cuda.is_available():
         pytest.skip('requires CUDA')
-    from lmdeploy.pytorch.kernels.cuda.dcp import correct_dcp_attention_output, prepare_dcp_lse
+    from lmdeploy.pytorch.kernels.cuda.dcp import correct_dcp_attention_output, sanitize_dcp_lse
 
     generator = torch.Generator(device='cuda').manual_seed(20260902)
     local_output = torch.randn(5,
@@ -545,12 +618,12 @@ def test_dcp_attention_correction_kernel_matches_torch():
     # Empty shards may return non-finite outputs or even finite LSE values.
     local_output[:3] = torch.nan
     valid_rows = torch.tensor([False, True, False, True, True], device='cuda')
-    prepared = prepare_dcp_lse(all_lse[0], valid_rows)
+    sanitized = sanitize_dcp_lse(all_lse[0], valid_rows)
     expected_lse = torch.where(valid_rows[:, None] & torch.isfinite(all_lse[0]), all_lse[0], -torch.inf)
-    torch.testing.assert_close(prepared, expected_lse, rtol=0, atol=0)
-    assert prepared.is_contiguous()
+    torch.testing.assert_close(sanitized, expected_lse, rtol=0, atol=0)
+    assert sanitized.is_contiguous()
     gathered = all_lse.clone()
-    gathered[0].copy_(prepared)
+    gathered[0].copy_(sanitized)
 
     actual = correct_dcp_attention_output(local_output, gathered, dcp_rank=0)
     global_lse = torch.logsumexp(gathered, dim=0)
@@ -573,9 +646,9 @@ def test_dcp_attention_correction_kernel_matches_torch():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
 @pytest.mark.parametrize('dcp_size', [2, 4])
-def test_scatter_dcp_prefill_kv_handles_uneven_requests(monkeypatch, dcp_size):
+def test_reorder_dcp_prefill_kv_handles_uneven_requests(monkeypatch, dcp_size):
     from lmdeploy.pytorch.backends import cp_utils
-    from lmdeploy.pytorch.kernels.cuda.dcp import scatter_dcp_prefill_kv
+    from lmdeploy.pytorch.kernels.cuda.dcp import reorder_dcp_prefill_kv
 
     device = 'cuda'
     lengths = [0, 1, 2, 7, 8, 9]
@@ -599,9 +672,9 @@ def test_scatter_dcp_prefill_kv_handles_uneven_requests(monkeypatch, dcp_size):
         valid_values = torch.cat(values)
         expected[:valid_values.numel(), 0] = valid_values
         gathered = gathered.flatten(0, 1)
-        scatter_dcp_prefill_kv(gathered,
+        reorder_dcp_prefill_kv(gathered,
                                output,
-                               prefix_lens=chunk.kv_seqlens,
+                               chunk_kv_seqlens=chunk.kv_seqlens,
                                kv_start_loc=chunk.cu_seqlens[:-1],
                                local_lens=chunk.local_kv_seqlens)
         assert torch.equal(output, expected)

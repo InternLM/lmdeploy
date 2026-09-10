@@ -370,11 +370,21 @@ class FlashMLAImpl(TritonAttentionImpl):
             return query
         from lmdeploy.pytorch.distributed import all_gather_into_tensor
 
-        transposed = query.transpose(0, 1).contiguous()
-        gathered = transposed.new_empty(
-            self.dcp_world_size * transposed.size(0), *transposed.shape[1:])
-        all_gather_into_tensor(gathered, transposed, group='dcp')
-        return gathered.transpose(0, 1).contiguous()
+        # Keep the existing packing path for strided queries. Direct gather
+        # saves a copy only when the token-major input is already contiguous.
+        if not query.is_contiguous():
+            transposed = query.transpose(0, 1).contiguous()
+            gathered = transposed.new_empty(
+                self.dcp_world_size * transposed.size(0), *transposed.shape[1:])
+            all_gather_into_tensor(gathered, transposed, group='dcp')
+            return gathered.transpose(0, 1).contiguous()
+
+        gathered = query.new_empty(self.dcp_world_size * query.size(0), *query.shape[1:])
+        all_gather_into_tensor(gathered, query, group='dcp')
+        # Gather token-major queries directly, then join rank-local heads.
+        # Contiguous inputs need only this final layout conversion.
+        gathered = gathered.view(self.dcp_world_size, *query.shape)
+        return gathered.transpose(0, 1).reshape(query.size(0), -1, query.size(2)).contiguous()
 
     def _merge_dcp_attention(self, local_output: torch.Tensor,
                              local_lse: torch.Tensor,
@@ -383,9 +393,9 @@ class FlashMLAImpl(TritonAttentionImpl):
         if self.dcp_world_size == 1:
             return local_output
         from lmdeploy.pytorch.distributed import all_gather_into_tensor, reduce_scatter_tensor
-        from lmdeploy.pytorch.kernels.cuda.dcp import correct_dcp_attention_output, prepare_dcp_lse
+        from lmdeploy.pytorch.kernels.cuda.dcp import correct_dcp_attention_output, sanitize_dcp_lse
 
-        local_lse = prepare_dcp_lse(local_lse, valid_rows)
+        local_lse = sanitize_dcp_lse(local_lse, valid_rows)
         gathered_lse = local_lse.new_empty(
             self.dcp_world_size * local_lse.size(0), local_lse.size(1))
         all_gather_into_tensor(gathered_lse, local_lse, group='dcp')
@@ -556,7 +566,7 @@ class FlashMLAImpl(TritonAttentionImpl):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Gather one globally ordered cached-prefix chunk."""
         from lmdeploy.pytorch.distributed import all_gather_into_tensor
-        from lmdeploy.pytorch.kernels.cuda.dcp import scatter_dcp_prefill_kv
+        from lmdeploy.pytorch.kernels.cuda.dcp import reorder_dcp_prefill_kv
 
         dcp_world_size = self.dcp_world_size
         block_size = k_cache.size(1)
@@ -587,10 +597,10 @@ class FlashMLAImpl(TritonAttentionImpl):
         all_gather_into_tensor(gathered, local_k, group='dcp')
 
         context_k = local_k.new_empty(chunk.kv_seqlens.numel() * chunk.size, *local_k.shape[1:])
-        scatter_dcp_prefill_kv(
+        reorder_dcp_prefill_kv(
             gathered,
             context_k,
-            prefix_lens=chunk.kv_seqlens,
+            chunk_kv_seqlens=chunk.kv_seqlens,
             kv_start_loc=chunk.cu_seqlens[:-1],
             local_lens=chunk.local_kv_seqlens,
         )

@@ -7,7 +7,55 @@ import triton.language as tl
 
 
 @triton.jit
-def _prepare_dcp_lse_kernel(
+def _filter_and_compact_dcp_indices_kernel(
+    Indices,
+    Output,
+    Counts,
+    stride_ir,
+    stride_ic,
+    width: tl.constexpr,
+    dcp_size: tl.constexpr,
+    dcp_rank: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    row = tl.program_id(0)
+    columns = tl.arange(0, BLOCK)
+    indices = tl.load(Indices + row * stride_ir + columns * stride_ic,
+                      mask=columns < width, other=-1)
+    valid = indices >= 0
+    if dcp_size > 1:
+        valid &= indices % dcp_size == dcp_rank
+        indices = indices // dcp_size
+    positions = tl.cumsum(valid.to(tl.int32))
+    count = tl.sum(valid.to(tl.int32))
+    # Scatter both groups to disjoint destinations, avoiding a separate fill
+    # of the -1 tail and preserving the original order of valid indices.
+    destinations = tl.where(valid, positions - 1, count + columns - positions)
+    tl.store(Output + row * width + destinations, tl.where(valid, indices, -1),
+             mask=columns < width)
+    tl.store(Counts + row, count)
+
+
+def filter_and_compact_dcp_indices(indices: torch.Tensor, *,
+                                   dcp_world_rank: tuple[int, int] = (1, 0)) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compact valid indices in order, optionally mapping DCP-owned positions.
+
+    Return fixed-width INT32 indices with -1 padding and per-row valid counts.
+    """
+    assert indices.dim() >= 2 and indices.dtype == torch.int32
+    rows = indices.flatten(end_dim=-2)
+    output = torch.empty(indices.shape, dtype=indices.dtype, device=indices.device)
+    counts = torch.empty(indices.shape[:-1], dtype=torch.int32, device=indices.device)
+    dcp_size, dcp_rank = dcp_world_rank
+    _filter_and_compact_dcp_indices_kernel[(rows.size(0), )](
+        rows, output, counts, *rows.stride(), width=rows.size(1),
+        dcp_size=dcp_size, dcp_rank=dcp_rank,
+        BLOCK=triton.next_power_of_2(rows.size(1)), num_warps=4)
+    return output, counts
+
+
+@triton.jit
+def _sanitize_dcp_lse_kernel(
     Lse,
     ValidRows,
     Out,
@@ -147,13 +195,13 @@ def _merge_attention_states_kernel(
 
 
 @triton.jit
-def _scatter_dcp_prefill_kv_kernel(
+def _reorder_dcp_prefill_kv_kernel(
     Gathered,
     Output,
-    PrefixLens,
+    ChunkKvSeqLens,
     KvStartLoc,
     LocalLens,
-    chunk_rows,
+    local_capacity,
     num_sequences,
     row_width,
     stride_gs,
@@ -166,8 +214,9 @@ def _scatter_dcp_prefill_kv_kernel(
     BLOCK_D: tl.constexpr,
 ):
     source_row = tl.program_id(0)
-    rank = source_row // chunk_rows
-    local_position = source_row % chunk_rows
+    # Each rank contributes the same capacity, including trailing padding.
+    rank = source_row // local_capacity
+    local_position = source_row % local_capacity
 
     request = 0
     request_start = 0
@@ -188,9 +237,9 @@ def _scatter_dcp_prefill_kv_kernel(
         request += 1
 
     global_position = position_in_request * dcp_size + rank
-    prefix_len = tl.load(PrefixLens + request_id, mask=found, other=0)
+    chunk_kv_seqlen = tl.load(ChunkKvSeqLens + request_id, mask=found, other=0)
     output_start = tl.load(KvStartLoc + request_id, mask=found, other=0)
-    valid_row = found & (global_position < prefix_len)
+    valid_row = found & (global_position < chunk_kv_seqlen)
 
     dim_offsets = tl.arange(0, BLOCK_D)
     dim_mask = dim_offsets < row_width
@@ -204,9 +253,13 @@ def _scatter_dcp_prefill_kv_kernel(
              mask=valid_row & dim_mask)
 
 
-def prepare_dcp_lse(local_lse: torch.Tensor,
-                    valid_rows: torch.Tensor) -> torch.Tensor:
-    """Normalize and compact LSE for DCP collectives or partition merging."""
+def sanitize_dcp_lse(local_lse: torch.Tensor,
+                     valid_rows: torch.Tensor) -> torch.Tensor:
+    """Return contiguous FP32 LSE with invalid entries masked to -inf.
+
+    Mask rows where valid_rows is false, plus NaN and +inf entries. Finite values and existing -inf entries are
+    preserved for DCP merging.
+    """
     assert local_lse.dim() == 2
     assert valid_rows.shape == local_lse.shape[:1]
     output = torch.empty(local_lse.shape,
@@ -217,9 +270,9 @@ def prepare_dcp_lse(local_lse: torch.Tensor,
     # FlashMLA may pad the gathered query heads for kernel alignment and slice
     # its LSE result back to the original head count. The sliced tensor then
     # has the expected [tokens, heads] shape but retains the padded row stride.
-    # Pass both input strides so this normalization kernel can also compact the
+    # Pass both input strides so this sanitization kernel can also compact the
     # LSE for all-gather without an extra ``contiguous()`` copy.
-    _prepare_dcp_lse_kernel[(triton.cdiv(numel, block), )](
+    _sanitize_dcp_lse_kernel[(triton.cdiv(numel, block), )](
         local_lse,
         valid_rows,
         output,
@@ -239,7 +292,7 @@ def correct_dcp_attention_output(local_output: torch.Tensor,
 
     Args:
         local_output: Shard-local normalized output in ``[tokens, heads, dim]``.
-        gathered_lse: Prepared LSE values in ``[dcp, tokens, heads]``.
+        gathered_lse: Sanitized LSE values in ``[dcp, tokens, heads]``.
         dcp_rank: Rank of ``local_output`` within the DCP group.
 
     Returns:
@@ -302,31 +355,36 @@ def merge_attention_states(
     return output, output_lse
 
 
-def scatter_dcp_prefill_kv(gathered: torch.Tensor, output: torch.Tensor, *,
-                           prefix_lens: torch.Tensor,
+def reorder_dcp_prefill_kv(gathered: torch.Tensor, output: torch.Tensor, *,
+                           chunk_kv_seqlens: torch.Tensor,
                            kv_start_loc: torch.Tensor,
                            local_lens: torch.Tensor) -> None:
-    """Scatter rank-major KV into sequence order using chunk-relative
-    lengths."""
+    """Reorder an already-gathered KV chunk from rank-major to sequence order.
+
+    Each rank contributes the same row capacity, including padding. chunk_kv_seqlens contains per-request lengths within
+    this chunk, not full prefix lengths. kv_start_loc gives request offsets in output; local_lens contains chunk-local
+    lengths for every rank, shaped [dcp_size, requests]. Only valid KV rows are copied; padding in output is left
+    untouched.
+    """
     assert gathered.is_contiguous() and output.is_contiguous()
     assert gathered.dim() == output.dim()
     dcp_size, num_sequences = local_lens.shape
-    assert prefix_lens.numel() == num_sequences
+    assert chunk_kv_seqlens.numel() == num_sequences
     assert kv_start_loc.numel() == num_sequences
     assert gathered.size(0) % dcp_size == 0
-    chunk_rows = gathered.size(0) // dcp_size
+    local_capacity = gathered.size(0) // dcp_size
     gathered_rows = gathered.view(gathered.size(0), -1)
     output_rows = output.view(output.size(0), -1)
 
     row_width = gathered_rows.size(1)
     block_d = triton.next_power_of_2(row_width)
-    _scatter_dcp_prefill_kv_kernel[(gathered_rows.size(0), )](
+    _reorder_dcp_prefill_kv_kernel[(gathered_rows.size(0), )](
         gathered_rows,
         output_rows,
-        prefix_lens,
+        chunk_kv_seqlens,
         kv_start_loc,
         local_lens,
-        chunk_rows,
+        local_capacity,
         num_sequences,
         row_width,
         *gathered_rows.stride(),

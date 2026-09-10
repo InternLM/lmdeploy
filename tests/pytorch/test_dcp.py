@@ -6,10 +6,8 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.backends.cp_utils import (
-    compact_dcp_local_indices,
     get_dcp_local_causal_seq_lens,
     get_dcp_local_cu_seqlens,
-    get_dcp_local_indices,
     get_dcp_local_seq_lens,
 )
 from lmdeploy.pytorch.config import CacheConfig, DistConfig
@@ -72,9 +70,9 @@ def test_dcp_score_budget_includes_candidates_and_rejects_oversized_row():
 
     budget = 512 << 20
     rows = _get_max_score_rows(2048, budget, topk=2048, dcp_size=4)
-    # Independently count aligned scores + mask, local/global ids, packed
+    # Independently count aligned scores, local/global ids, packed
     # pairs, and gathered pairs; the original 8192-row call exceeds this cap.
-    row_bytes = 2048 * (5 + 4 + 4 + 8 + 4 * 8)
+    row_bytes = 2048 * (4 + 4 + 4 + 8 + 4 * 8)
     assert rows * row_bytes <= budget < (rows + 1) * row_bytes
     assert rows < 8192
     with pytest.raises(RuntimeError, match='One DCP score row'):
@@ -97,8 +95,6 @@ def test_dcp_interleaved_sequence_mapping():
     world_size = 4
     lengths = torch.tensor([0, 1, 3, 4, 5, 255, 256, 257],
                            dtype=torch.int32)
-    global_indices = torch.tensor([-1, 0, 1, 3, 4, 63, 64, 255],
-                                  dtype=torch.int32)
     for rank in range(world_size):
         dcp_world_rank = world_size, rank
         local = get_dcp_local_seq_lens(lengths, dcp_world_rank)
@@ -110,20 +106,6 @@ def test_dcp_interleaved_sequence_mapping():
         local, cu_local = get_dcp_local_cu_seqlens(lengths, dcp_world_rank)
         assert torch.equal(cu_local[1:] - cu_local[:-1], local)
         assert cu_local.dtype == torch.int32
-
-        local = get_dcp_local_indices(global_indices, dcp_world_rank)
-        owned = (global_indices >= 0) & (global_indices % world_size == rank)
-        assert torch.equal(local[owned], global_indices[owned] // world_size)
-        assert torch.all(local[~owned] == -1)
-
-
-def test_dcp_local_winners_are_compacted_with_valid_counts():
-    global_indices = torch.tensor(
-        [[1, 8, 3, -1, 6, 4], [5, 7, -1, -1, -1, -1]], dtype=torch.int32)
-    local, counts = compact_dcp_local_indices(global_indices, (2, 0))
-
-    assert counts.tolist() == [3, 0]
-    assert local.tolist() == [[4, 3, 2, -1, -1, -1], [-1, -1, -1, -1, -1, -1]]
 
 
 def test_dcp_block_allocation_uses_virtual_block_size():

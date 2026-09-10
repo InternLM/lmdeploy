@@ -166,7 +166,7 @@ class FlashMLASparseImpl(FlashMLAImpl):
                                                      attn_metadata.cu_seqlens_k)
         return self._flash_mla_sparse_forward(query, flatten_k, indices)
 
-    def _map_dcp_prefill_partition(
+    def _map_dcp_prefill_indices(
             self, nsa_indices: torch.Tensor,
             attn_metadata: TritonAttentionMetadata,
             partition_starts: torch.Tensor,
@@ -190,11 +190,10 @@ class FlashMLASparseImpl(FlashMLAImpl):
     def _prefill_sparse_partition(
             self, query: torch.Tensor, flatten_k: torch.Tensor,
             indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run one sparse partition and prepare its LSE for merging."""
-        from lmdeploy.pytorch.backends.cp_utils import compact_valid_indices
-        from lmdeploy.pytorch.kernels.cuda.dcp import prepare_dcp_lse
+        """Run one sparse partition and sanitize its LSE for merging."""
+        from lmdeploy.pytorch.kernels.cuda.dcp import filter_and_compact_dcp_indices, sanitize_dcp_lse
 
-        indices, valid_counts = compact_valid_indices(indices)
+        indices, valid_counts = filter_and_compact_dcp_indices(indices)
         valid_counts = valid_counts.flatten()
         output, lse = self._flash_mla_sparse_forward(query,
                                                      flatten_k,
@@ -203,7 +202,7 @@ class FlashMLASparseImpl(FlashMLAImpl):
                                                      topk_length=valid_counts)
         # The FP32 merge ignores zero-weight outputs, including NaNs from
         # empty partitions. Only their LSE needs to be neutralized here.
-        return output, prepare_dcp_lse(lse, valid_counts > 0)
+        return output, sanitize_dcp_lse(lse, valid_counts > 0)
 
     def _prefill_sparse_dcp(
         self,
@@ -220,7 +219,7 @@ class FlashMLASparseImpl(FlashMLAImpl):
         from lmdeploy.pytorch.kernels.cuda.dcp import merge_attention_states
 
         prefix_lens = attn_metadata.kv_seqlens - attn_metadata.q_seqlens
-        current_indices = self._map_dcp_prefill_partition(
+        current_indices = self._map_dcp_prefill_indices(
             nsa_indices,
             attn_metadata,
             prefix_lens,
@@ -240,7 +239,7 @@ class FlashMLASparseImpl(FlashMLAImpl):
                 v_scales_zeros=v_scales_zeros,
             )
             starts = torch.full_like(prefix_lens, chunk.start)
-            context_indices = self._map_dcp_prefill_partition(
+            context_indices = self._map_dcp_prefill_indices(
                 nsa_indices,
                 attn_metadata,
                 starts,
@@ -331,11 +330,11 @@ class FlashMLASparseImpl(FlashMLAImpl):
         if nsa_indices is None:
             raise RuntimeError('Sparse MLA requires DSA top-k indices.')
         if self.dcp_world_size > 1:
-            from lmdeploy.pytorch.backends.cp_utils import compact_dcp_local_indices
+            from lmdeploy.pytorch.kernels.cuda.dcp import filter_and_compact_dcp_indices
 
             dcp_world_rank = self.dcp_world_size, self.dcp_rank
-            local_indices, local_counts = compact_dcp_local_indices(
-                nsa_indices, dcp_world_rank)
+            local_indices, local_counts = filter_and_compact_dcp_indices(
+                nsa_indices, dcp_world_rank=dcp_world_rank)
             query = self._gather_dcp_query(query)
             if k_cache.dtype == torch.float8_e4m3fn:
                 # FlashMLA V3.2 masks -1 indices but rejects dynamic

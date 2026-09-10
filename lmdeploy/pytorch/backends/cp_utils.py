@@ -102,33 +102,3 @@ def fill_dcp_local_seq_lens(seq_lens: torch.Tensor,
               rounding_mode='floor',
               out=local_lens)
     local_lens.clamp_min_(0)
-
-
-def get_dcp_local_indices(indices: torch.Tensor,
-                          dcp_world_rank: tuple[int, int]) -> torch.Tensor:
-    """Map global token positions to this rank's local positions."""
-    dcp_world_size, dcp_rank = dcp_world_rank
-    if dcp_world_size == 1:
-        return indices
-    valid = (indices >= 0) & (indices % dcp_world_size == dcp_rank)
-    local_indices = torch.div(indices.clamp_min(0),
-                              dcp_world_size,
-                              rounding_mode='floor')
-    return torch.where(valid, local_indices, -1)
-
-
-def compact_dcp_local_indices(
-        indices: torch.Tensor,
-        dcp_world_rank: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor]:
-    """Filter global winners to this rank and compact valid local ids."""
-    local_indices = get_dcp_local_indices(indices, dcp_world_rank)
-    return compact_valid_indices(local_indices)
-
-
-def compact_valid_indices(
-        indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Move valid indices before ``-1`` padding, preserving their order."""
-    valid = indices >= 0
-    valid_counts = valid.sum(dim=-1, dtype=torch.int32)
-    order = torch.argsort((~valid).to(torch.int32), dim=-1, stable=True)
-    return indices.gather(-1, order), valid_counts
