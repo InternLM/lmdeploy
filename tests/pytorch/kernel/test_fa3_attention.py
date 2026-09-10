@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import torch
 
 from lmdeploy.messages import QuantPolicy
-from lmdeploy.pytorch.backends.cuda.attention import TritonAttentionBuilder
+from lmdeploy.pytorch.backends.attention import PagedAttentionBuildSpec
+from lmdeploy.pytorch.backends.cuda.attention import _build_paged_attention
 from lmdeploy.pytorch.backends.cuda.attention.default import TritonAttentionImpl, TritonAttentionMetadata
 from lmdeploy.pytorch.backends.cuda.attention.fa3 import FA3Impl
 
@@ -25,7 +26,23 @@ def test_attention_builder_falls_back_when_fa3_lacks_asymmetric_head_shape(monke
     monkeypatch.setattr(attention_mod, 'use_fa3_warning', lambda: True)
     attention_mod._enable_fa3.cache_clear()
     try:
-        impl = TritonAttentionBuilder.build(num_heads=8, head_size=192, num_kv_heads=2, v_head_size=128)
+        impl = _build_paged_attention(
+            PagedAttentionBuildSpec(
+                num_heads=8,
+                head_dim=192,
+                scale=None,
+                num_kv_heads=2,
+                v_head_dim=128,
+                alibi=False,
+                sliding_window=None,
+                logit_softcapping=0.0,
+                causal=True,
+                use_flash_mla=False,
+                mla_index_topk=None,
+                learnable_sink=False,
+                block_sparse_size=1,
+                allow_fa3=True,
+            ))
     finally:
         attention_mod._enable_fa3.cache_clear()
 

@@ -38,6 +38,8 @@ class Attention(nn.Module):
         mla_index_topk: int | None = None,
         learnable_sink: bool = False,
         block_sparse_size: int = 1,
+        allow_fa3: bool = True,
+        enable_paged_multi_token_decode: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -64,6 +66,8 @@ class Attention(nn.Module):
                 mla_index_topk=mla_index_topk,
                 learnable_sink=learnable_sink,
                 block_sparse_size=block_sparse_size,
+                allow_fa3=allow_fa3,
+                enable_paged_multi_token_decode=enable_paged_multi_token_decode,
             ),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )

@@ -226,3 +226,5 @@ class PagedAttentionBuildSpec(BuildSpec[AttentionImpl[AttentionMetadata]]):
     mla_index_topk: int | None
     learnable_sink: bool
     block_sparse_size: int
+    allow_fa3: bool = True
+    enable_paged_multi_token_decode: bool = False

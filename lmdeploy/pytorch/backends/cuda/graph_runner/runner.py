@@ -51,13 +51,25 @@ def _false(*args, **kwargs):
     return False
 
 
-def _validate_speculative_decoding(model_config: ModelConfig) -> None:
+def _validate_speculative_decoding(model: torch.nn.Module, model_config: ModelConfig) -> None:
     """Validate the CUDA attention backend required by speculative decode."""
     if model_config.model_paradigm != 'ar_spec' or model_config.use_flash_mla:
         return
 
+    supports_non_fa3 = getattr(model, 'supports_non_fa3_speculative_graph', lambda: False)
+    if callable(supports_non_fa3) and supports_non_fa3():
+        return
+
     from ..attention import require_fa3_for_speculative_decoding
     require_fa3_for_speculative_decoding()
+
+
+def _supports_non_fa3_speculative_graph(model: torch.nn.Module) -> bool:
+    """Whether model-level speculative decode can run without FA3."""
+    handler = getattr(model, 'supports_non_fa3_speculative_graph', None)
+    if not callable(handler):
+        return False
+    return bool(handler())
 
 
 def _make_piecewise_graph_manager(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
@@ -122,7 +134,8 @@ class CUDAGraphRunner(GraphRunner):
                  backend_config: BackendConfig, device: torch.device):
         super().__init__(model, model_config, cache_config, backend_config, device)
         self.num_blocks = cache_config.num_gpu_blocks
-        _validate_speculative_decoding(model_config)
+        self._supports_non_fa3_speculative_graph = _supports_non_fa3_speculative_graph(self.model)
+        _validate_speculative_decoding(model, model_config)
 
         self.enable_graph = self.check_enable_graph()
         self._decode_model_forward: Callable[..., Any] | None = None
@@ -252,12 +265,40 @@ class CUDAGraphRunner(GraphRunner):
             decode_query_len=graph_key[3],
             pool=self._full_graph_pool_handle,
             model_config=self.model_config,
+            supports_non_fa3_speculative_graph=self._supports_non_fa3_speculative_graph,
             device=self.device,
         )
-        output = runner.capture(**kwargs)
+        capture_cache = self.model.get_cudagraph_capture_cache(
+            kwargs['past_key_values'], spec_step_idx=int(kwargs.get('spec_step_idx', 0)))
+        block_ids: torch.Tensor | None = None
+        snapshot: list[torch.Tensor] | None = None
+        if capture_cache is not None:
+            attn_metadata = kwargs['attn_metadata']
+            batch_size = attn_metadata.q_seqlens.numel()
+            block_ids = torch.unique(attn_metadata.block_offsets[:batch_size]).long()
+            snapshot = [tensor.index_select(0, block_ids).clone() for tensor in capture_cache]
+
+        try:
+            output = runner.capture(**kwargs)
+        finally:
+            if snapshot is not None:
+                if len(capture_cache) != len(snapshot):
+                    raise RuntimeError('CUDA Graph capture cache changed '
+                                       f'from {len(snapshot)} to {len(capture_cache)} tensors.')
+                for tensor, saved in zip(capture_cache, snapshot):
+                    tensor.index_copy_(0, block_ids, saved)
+
+        if snapshot is not None:
+            try:
+                output = runner.forward(**kwargs)
+            except Exception:
+                for tensor, saved in zip(capture_cache, snapshot):
+                    tensor.index_copy_(0, block_ids, saved)
+                raise
+
         self._full_graph_runners[graph_key] = runner
         # SSM capture warmup updates state, so the first call returns that
-        # warmup output instead of replaying and applying the update twice.
+        # warmup output unless a stateful cache snapshot restored it first.
         return output
 
     def __call__(self, **kwargs):

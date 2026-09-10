@@ -88,6 +88,7 @@ def _make_graph_meta(
     is_decoding: bool,
     decode_query_len: int,
     device: torch.device,
+    supports_non_fa3_speculative_graph: bool = False,
 ) -> CudaGraphMeta:
     """Build the fixed metadata owned by one full CUDA graph."""
     step_meta_plan = ctx_mgr.backend_step_meta_plan
@@ -106,7 +107,9 @@ def _make_graph_meta(
         use_mla_fp8_cache=model_config.use_mla_fp8_cache,
         use_flash_mla=model_config.use_flash_mla,
         mla_index_topk=model_config.mla_index_topk,
-        use_fa3_decoding=(model_config.model_paradigm == 'ar_spec' and not model_config.use_flash_mla),
+        use_fa3_decoding=(model_config.model_paradigm == 'ar_spec'
+                          and not model_config.use_flash_mla
+                          and not supports_non_fa3_speculative_graph),
         is_ssm=bool(model_config.states_shapes),
         use_mrope=model_config.use_mrope,
         block_size=model_config.block_size,
@@ -130,6 +133,7 @@ class CUDASingleGraphRunner:
         model_config: ModelConfig,
         device: torch.device,
         model_forward: Callable[..., Any] | None = None,
+        supports_non_fa3_speculative_graph: bool = False,
     ):
         self.model = model
         self._model_forward = model if model_forward is None else model_forward
@@ -142,6 +146,7 @@ class CUDASingleGraphRunner:
             num_blocks=num_blocks,
             is_decoding=is_decoding,
             decode_query_len=decode_query_len,
+            supports_non_fa3_speculative_graph=supports_non_fa3_speculative_graph,
             device=device,
         )
         self._pool = pool

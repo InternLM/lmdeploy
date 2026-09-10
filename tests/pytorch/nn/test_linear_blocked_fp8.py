@@ -37,6 +37,7 @@ def _build_qkv(monkeypatch, *, tp, rank, num_kv_heads, num_replicas,
         self._tp_args_initialized = True
 
     backend = SimpleNamespace(
+        build_op=lambda *args, **kwargs: _ReferenceBlockedF8Impl(),
         get_layer_impl_builder=lambda op: SimpleNamespace(
             build=lambda *args, **kwargs: _ReferenceBlockedF8Impl()))
     monkeypatch.setattr(QKVBlockedF8Linear, 'init_tp_args', _init_tp_args)

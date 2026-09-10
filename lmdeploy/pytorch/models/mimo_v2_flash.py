@@ -184,7 +184,7 @@ class MiMoV2Attention(nn.Module):
             # Full Attention can use FA3 when its wheel contains the asymmetric
             # Q/K=192, V=128 instantiation. SWA remains on the MiMo-specific
             # Triton/ring path because it also implements attention sinks.
-            enable_fa3=not is_swa,
+            allow_fa3=not is_swa,
             enable_paged_multi_token_decode=enable_paged_multi_token_decode,
         )
         # MiMo verification reads the page table directly for both Full and

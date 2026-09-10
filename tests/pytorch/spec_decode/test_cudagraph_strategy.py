@@ -135,7 +135,7 @@ def test_cudagraph_capture_rolls_back_state_before_semantic_forward(monkeypatch)
 
     import torch
 
-    from lmdeploy.pytorch.backends.cuda import graph_runner as graph_runner_mod
+    from lmdeploy.pytorch.backends.cuda.graph_runner import runner as graph_runner_mod
 
     cache = [torch.arange(24).view(6, 4), torch.arange(24, 48).view(6, 4)]
     original = [tensor.clone() for tensor in cache]
@@ -179,9 +179,10 @@ def test_cudagraph_capture_rolls_back_state_before_semantic_forward(monkeypatch)
     runner.get_graph_key = lambda **kwargs: (2, True, False, 2)
     runner._get_max_tokens = lambda *args: 4
     runner._get_decode_model_forward = lambda: model
-    runner._runner_map = {}
+    runner._supports_non_fa3_speculative_graph = False
+    runner._full_graph_runners = {}
     runner.num_blocks = 8
-    runner.graph_pool_handle = None
+    runner._full_graph_pool_handle = None
     runner.model_config = SimpleNamespace()
     runner.device = torch.device('cpu')
 
@@ -198,7 +199,7 @@ def test_cudagraph_capture_rolls_back_state_before_semantic_forward(monkeypatch)
     )
 
     assert output == 'semantic-output'
-    assert (2, True, False, 2) in runner._runner_map
+    assert (2, True, False, 2) in runner._full_graph_runners
     for actual, expected in zip(cache, original):
         expected[block_ids] += 1
         torch.testing.assert_close(actual, expected)
