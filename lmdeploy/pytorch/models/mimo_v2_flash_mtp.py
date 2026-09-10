@@ -14,7 +14,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .mimo_v2_flash import MiMoV2Attention, MiMoV2MLP, _get_norm_eps, _load_native_qkv_shard
 from .patch import add_prefix
-from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin, GraphCaptureState
 
 
 class MiMoV2FlashMTPLayer(nn.Module):
@@ -216,12 +216,11 @@ class MiMoV2FlashMTPModel(nn.Module, CudaGraphMixin):
         'gate_up_proj': ['gate_proj', 'up_proj'],
     }
 
-    def get_cudagraph_capture_cache(self,
-                                    past_key_values: list[list[torch.Tensor]],
-                                    spec_step_idx: int = 0) -> list[torch.Tensor]:
+    def get_cudagraph_capture_state(self, past_key_values: list[list[torch.Tensor]],
+                                    spec_step_idx: int = 0) -> GraphCaptureState:
         """Return the active depth cache that Graph capture must preserve."""
         depth = spec_step_idx % self.model.num_mtp_layers
-        return past_key_values[depth]
+        return GraphCaptureState(tensors=tuple(past_key_values[depth]))
 
     def get_cudagraph_extra_key(
         self,

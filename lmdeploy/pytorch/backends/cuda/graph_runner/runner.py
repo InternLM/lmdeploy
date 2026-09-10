@@ -268,37 +268,25 @@ class CUDAGraphRunner(GraphRunner):
             supports_multi_token_decode=self._supports_multi_token_decode,
             device=self.device,
         )
-        capture_cache = self.model.get_cudagraph_capture_cache(
-            kwargs['past_key_values'], spec_step_idx=int(kwargs.get('spec_step_idx', 0)))
-        block_ids: torch.Tensor | None = None
-        snapshot: list[torch.Tensor] | None = None
-        if capture_cache is not None:
-            attn_metadata = kwargs['attn_metadata']
-            batch_size = attn_metadata.q_seqlens.numel()
-            candidate_ids = attn_metadata.block_offsets[:batch_size].flatten().long()
-            valid_ids = candidate_ids[(candidate_ids >= 0) & (candidate_ids < self.num_blocks)]
-            block_ids = torch.unique(valid_ids)
-            if block_ids.numel() > 0:
-                snapshot = [tensor.index_select(0, block_ids).clone() for tensor in capture_cache]
-            else:
-                block_ids = None
+        capture_state = self.model.get_cudagraph_capture_state(
+            kwargs['past_key_values'],
+            attn_metadata=kwargs['attn_metadata'],
+            num_blocks=self.num_blocks,
+            spec_step_idx=int(kwargs.get('spec_step_idx', 0)))
+        if capture_state is not None:
+            capture_state.snapshot()
 
         try:
             output = runner.capture(**kwargs)
         finally:
-            if snapshot is not None:
-                if len(capture_cache) != len(snapshot):
-                    raise RuntimeError('CUDA Graph capture cache changed '
-                                       f'from {len(snapshot)} to {len(capture_cache)} tensors.')
-                for tensor, saved in zip(capture_cache, snapshot):
-                    tensor.index_copy_(0, block_ids, saved)
+            if capture_state is not None:
+                capture_state.restore()
 
-        if snapshot is not None:
+        if capture_state is not None:
             try:
                 output = runner.forward(**kwargs)
             except Exception:
-                for tensor, saved in zip(capture_cache, snapshot):
-                    tensor.index_copy_(0, block_ids, saved)
+                capture_state.restore()
                 raise
 
         self._full_graph_runners[graph_key] = runner

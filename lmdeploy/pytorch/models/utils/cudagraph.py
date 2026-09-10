@@ -15,6 +15,58 @@ if TYPE_CHECKING:
 BuffType = dict[str, Tensor]
 
 
+@dataclass
+class GraphCaptureState:
+    """Own snapshot and restore semantics for mutable model state."""
+
+    tensors: tuple[Tensor, ...] = ()
+    block_ids: Tensor | None = None
+    saved_tensors: tuple[Tensor, ...] | None = None
+
+    @classmethod
+    def from_paged_tensors(
+        cls,
+        tensors: tuple[Tensor, ...] | list[Tensor],
+        *,
+        block_offsets: Tensor,
+        num_blocks: int,
+        num_requests: int | None = None,
+    ) -> 'GraphCaptureState | None':
+        """Snapshot only the paged rows visible to this capture request."""
+        if not tensors:
+            return None
+
+        if num_requests is not None:
+            block_offsets = block_offsets[:num_requests]
+        block_ids = block_offsets.flatten().long()
+        block_ids = block_ids[(block_ids >= 0) & (block_ids < num_blocks)]
+        block_ids = torch.unique(block_ids)
+        if block_ids.numel() == 0:
+            return None
+        return cls(tensors=tuple(tensors), block_ids=block_ids)
+
+    def snapshot(self) -> None:
+        """Save mutable tensors before graph warmup and capture."""
+        if self.block_ids is None:
+            self.saved_tensors = tuple(tensor.clone() for tensor in self.tensors)
+            return
+        self.saved_tensors = tuple(
+            tensor.index_select(0, self.block_ids).clone() for tensor in self.tensors)
+
+    def restore(self) -> None:
+        """Restore the pre-capture contents of mutable tensors."""
+        if self.saved_tensors is None:
+            return
+        if len(self.saved_tensors) != len(self.tensors):
+            raise RuntimeError('CUDA Graph capture state changed '
+                               f'from {len(self.saved_tensors)} to {len(self.tensors)} tensors.')
+        for tensor, saved in zip(self.tensors, self.saved_tensors):
+            if self.block_ids is None:
+                tensor.copy_(saved)
+            else:
+                tensor.index_copy_(0, self.block_ids, saved)
+
+
 def next_power_of_2(n: int):
     """Return the smallest power of 2 greater than or equal to n."""
     n -= 1
@@ -70,13 +122,13 @@ class CudaGraphMixin:
         """Get model-specific CUDA graph keys."""
         return ()
 
-    def get_cudagraph_capture_cache(self,
+    def get_cudagraph_capture_state(self,
                                     past_key_values: list[list[torch.Tensor]],
-                                    **kwargs) -> list[torch.Tensor] | None:
-        """Return mutable cache tensors that capture must preserve.
+                                    **kwargs) -> GraphCaptureState | None:
+        """Return mutable state that capture must preserve.
 
-        Stateful models may opt in by returning the cache tensors touched by Graph warmup and capture. The runner
-        snapshots only request-visible blocks and restores them before the first semantic replay.
+        Stateful models may opt in by returning a snapshot/restore adapter for state touched by graph warmup and
+        capture. The runner only owns the lifecycle; the adapter owns the storage layout.
         """
         del past_key_values, kwargs
         return None

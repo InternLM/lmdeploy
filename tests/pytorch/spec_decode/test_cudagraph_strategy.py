@@ -76,6 +76,46 @@ def test_cudagraph_fa3_metadata_uses_single_query_len_for_single_token_capture()
     assert model.max_seqlen_q_calls == [1, 1]
 
 
+def test_graph_capture_state_snapshots_request_visible_paged_rows():
+    import torch
+
+    from lmdeploy.pytorch.models.utils.cudagraph import GraphCaptureState
+
+    cache = torch.arange(40, dtype=torch.float32).reshape(8, 5)
+    state = GraphCaptureState.from_paged_tensors(
+        (cache, ),
+        block_offsets=torch.tensor([[-1, 1, 3], [3, 11, 5]]),
+        num_blocks=8,
+        num_requests=1,
+    )
+
+    state.snapshot()
+    captured = cache.clone()
+    cache[torch.tensor([1, 3, 5])] += 10
+
+    state.restore()
+    assert torch.equal(cache[[1, 3]], captured[[1, 3]])
+    assert torch.equal(cache[5], cache[5])
+
+
+def test_graph_capture_state_snapshots_full_tensors_without_block_ids():
+    import torch
+
+    from lmdeploy.pytorch.models.utils.cudagraph import GraphCaptureState
+
+    cache = [torch.arange(12).view(3, 4), torch.arange(12, 24).view(3, 4)]
+    original = [tensor.clone() for tensor in cache]
+    state = GraphCaptureState(tensors=tuple(cache))
+
+    state.snapshot()
+    for tensor in cache:
+        tensor.add_(1)
+
+    state.restore()
+    for actual, expected in zip(cache, original):
+        torch.testing.assert_close(actual, expected)
+
+
 def test_cudagraph_fill_preserves_runtime_attention_metadata():
     from types import SimpleNamespace
 
@@ -136,6 +176,7 @@ def test_cudagraph_capture_rolls_back_state_before_semantic_forward(monkeypatch)
     import torch
 
     from lmdeploy.pytorch.backends.cuda.graph_runner import runner as graph_runner_mod
+    from lmdeploy.pytorch.models.utils.cudagraph import GraphCaptureState
 
     cache = [torch.arange(24).view(6, 4), torch.arange(24, 48).view(6, 4)]
     original = [tensor.clone() for tensor in cache]
@@ -168,7 +209,10 @@ def test_cudagraph_capture_rolls_back_state_before_semantic_forward(monkeypatch)
     )
 
     model = SimpleNamespace(
-        get_cudagraph_capture_cache=lambda past_key_values, spec_step_idx: cache,
+        get_cudagraph_capture_state=lambda *args, **kwargs: GraphCaptureState(
+            tensors=tuple(cache),
+            block_ids=block_ids,
+        ),
         get_cudagraph_extra_key=lambda **kwargs: (),
     )
     runner = graph_runner_mod.CUDAGraphRunner.__new__(graph_runner_mod.CUDAGraphRunner)
