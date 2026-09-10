@@ -114,6 +114,7 @@ class Attention(nn.Module):
         s_aux: torch.Tensor = None,
         nsa_indices: torch.Tensor = None,
         inplace: bool = True,
+        decode_mode: str = 'block',
     ) -> torch.Tensor:
         """forward."""
         self._lazy_init(query.device)
@@ -143,6 +144,7 @@ class Attention(nn.Module):
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
             inplace=inplace,
+            decode_mode=decode_mode,
             **kwargs,
         )
 

@@ -589,6 +589,7 @@ class FA3Impl(TritonAttentionImpl):
         v_scales_zeros: torch.Tensor = None,
         learnable_sink: torch.Tensor = None,
         inplace: bool = True,
+        decode_mode: str = 'block',
     ) -> torch.Tensor:
         """Forward pass for FA3 attention computation.
 

@@ -11,6 +11,8 @@ from .base import SPEC_PROPOSERS, BaseSpecProposer
 class MiMoMTP(BaseSpecProposer):
     """MiMo same-position, multi-depth MTP proposer."""
 
+    supports_draft_depth_protocol = True
+
     def build_model(self, empty_init: bool, target_model: torch.nn.Module = None, build_model_ctx=None):
         """Build the MiMo draft and bind its target-owned TP embedding."""
         if target_model is None:

@@ -161,6 +161,7 @@ class _DummyDraftModel:
 
 
 class _DummyProposer:
+    supports_draft_depth_protocol = True
 
     def __init__(self):
         self.get_outputs_calls = 0
@@ -219,6 +220,13 @@ class _DummyProposer:
         if self.next_depth_dp_num_tokens is not None:
             return self.next_depth_dp_num_tokens
         return dp_meta.dp_batches
+
+
+class _LegacyDummyProposer(_DummyProposer):
+    supports_draft_depth_protocol = False
+
+    def get_draft_depth_token_counts(self, dp_meta):
+        raise AssertionError('legacy proposing must not require draft-depth DP metadata.')
 
 
 def test_guided_serial_bitmask_updates_inference_tensor():
@@ -568,6 +576,35 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
     assert forward_calls == 1
     assert agent.proposer.get_outputs_calls == 0
     assert agent.proposer.update_inputs_decoding_calls == 0
+    assert agent.proposer.advance_draft_depth_calls == 0
+
+
+def test_async_model_forward_dp1_uses_legacy_draft_depth_transition():
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    inputs, extra_inputs = _make_non_last_chunk_inputs()
+    inputs.is_chunk = False
+    inputs.is_last_chunk = True
+    agent = object.__new__(SpecModelAgent)
+    agent.num_spec_tokens = 3
+    agent.rank = 0
+    agent.proposer = _LegacyDummyProposer()
+    agent.guided_helper = GuidedSpecHelper()
+    forward_calls = 0
+
+    def _forward_impl(_inputs):
+        nonlocal forward_calls
+        forward_calls += 1
+        return {'call': forward_calls}
+
+    agent._forward_impl = _forward_impl
+
+    output = asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+
+    expected = torch.tensor([[0, 1, 2], [0, 1, 2]], dtype=torch.long)
+    assert torch.equal(output.output_draft_token_ids, expected)
+    assert forward_calls == agent.num_spec_tokens
+    assert agent.proposer.update_inputs_decoding_calls == 1
     assert agent.proposer.advance_draft_depth_calls == 0
 
 

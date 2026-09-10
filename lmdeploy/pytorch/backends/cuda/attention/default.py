@@ -313,6 +313,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
         learnable_sink: torch.Tensor = None,
+        decode_mode: str = 'block',
     ) -> torch.Tensor:
         """Forward pass for decoding stage.
 
@@ -349,9 +350,13 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             quant_policy=quant_policy,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
-            causal_multi_token=self.supports_multi_token_decode and max_q_seqlen > 1,
+            causal_multi_token=decode_mode == 'speculative' and max_q_seqlen > 1,
         )
         return attn_output
+
+    def decode_mode_uses_causal_mask(self, decode_mode: str) -> bool:
+        """Whether a semantic decode mode requires causal multi-token masking."""
+        return decode_mode == 'speculative'
 
     def _forward_prefill(
         self,
@@ -451,6 +456,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         v_scales_zeros: torch.Tensor = None,
         learnable_sink: torch.Tensor = None,
         inplace: bool = True,
+        decode_mode: str = 'block',
         **kwargs,
     ) -> torch.Tensor:
         """Forward pass for attention computation.
@@ -510,6 +516,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
                 learnable_sink=learnable_sink,
+                decode_mode=decode_mode,
             )
         else:
             return self._forward_prefill(

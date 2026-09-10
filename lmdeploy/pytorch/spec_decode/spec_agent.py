@@ -584,22 +584,6 @@ class SpecModelAgent(BaseSpecModelAgent):
         Args:
             inputs (dict): The input data comes from _make_inputs.
         """
-        def __build_dp_meta(inputs: ModelInputs):
-            """Prepare for dp."""
-            # update inputs for draft model
-            dp_meta = inputs.dp_meta
-            padding_batch_size = None
-            if dp_meta is None:
-                return dp_meta, None
-
-            padding_batch_size = max(dp_meta.dp_batches)
-            num_tokens = self.proposer.get_draft_depth_token_counts(dp_meta)
-            new_dpmeta = DPMeta.build(inputs.input_ids.numel(), num_tokens)
-            new_dpmeta.dp_batches = dp_meta.dp_batches
-            new_dpmeta.dp_is_decoding = dp_meta.dp_is_decoding
-            new_dpmeta.dp_draft_num_tokens = dp_meta.dp_draft_num_tokens
-            return new_dpmeta, padding_batch_size
-
         def _update_dp_model_inputs(inputs: ModelInputs, dp_meta: DPMeta, padding_batch_size: int | None):
             if dp_meta is None:
                 return inputs
@@ -634,15 +618,29 @@ class SpecModelAgent(BaseSpecModelAgent):
                 guided_processors=draft_guided_processors)
             draft_tokens_li = [draft_token_ids]
             if loop_count > 0:
-                inputs, draft_extra_inputs = self.proposer.advance_draft_depth(
-                    inputs,
-                    extra_inputs,
-                    draft_token_ids,
-                    target_hidden_states,
-                    model_metas,
-                    first_depth=True)
+                if not getattr(self.proposer, 'supports_draft_depth_protocol', False):
+                    advance_draft_depth = None
+                else:
+                    advance_draft_depth = self.proposer.advance_draft_depth
+                if advance_draft_depth is not None:
+                    inputs, draft_extra_inputs = advance_draft_depth(
+                        inputs,
+                        extra_inputs,
+                        draft_token_ids,
+                        target_hidden_states,
+                        model_metas,
+                        first_depth=True)
+                else:
+                    inputs = self.proposer.update_inputs_decoding(
+                        inputs,
+                        extra_inputs,
+                        draft_token_ids.transpose(0, 1),
+                        target_hidden_states,
+                        model_metas,
+                    )
+                    draft_extra_inputs = None
                 # for dp > 1, need to update dp_meta and model inputs for next loop
-                dp_meta, padding_batch_size = __build_dp_meta(inputs)
+                dp_meta, padding_batch_size = self._build_draft_depth_dp_meta(inputs)
                 # pad block_offsets for non-last chunks dummy run when dp>1
                 if dp_meta is not None and inputs.is_chunk and not inputs.is_last_chunk:
                     inputs.block_offsets = torch.nn.functional.pad(inputs.block_offsets, (0, 1), value=0)
@@ -654,13 +652,21 @@ class SpecModelAgent(BaseSpecModelAgent):
                         guided_processors=draft_guided_processors)
                     draft_tokens_li.append(draft_token_ids)
                     if loop_idx < loop_count - 1:
-                        inputs, draft_extra_inputs = self.proposer.advance_draft_depth(
-                            inputs,
-                            draft_extra_inputs,
-                            draft_token_ids,
-                            target_hidden_states,
-                            model_metas,
-                            first_depth=False)
+                        if advance_draft_depth is not None:
+                            inputs, draft_extra_inputs = advance_draft_depth(
+                                inputs,
+                                draft_extra_inputs,
+                                draft_token_ids,
+                                target_hidden_states,
+                                model_metas,
+                                first_depth=False)
+                        else:
+                            step_seqlens = inputs.seq_length.new_ones(inputs.seq_length.size(0))
+                            inputs = inputs.step(draft_token_ids.transpose(0, 1), step_seqlens)
+                            inputs.model_metas = model_metas
+                            inputs.target_hidden_states = target_hidden_states
+                            if inputs.target_position_ids is not None:
+                                inputs.target_position_ids += 1
 
             output_draft_ids = torch.cat(draft_tokens_li, dim=-1)
 
@@ -673,6 +679,22 @@ class SpecModelAgent(BaseSpecModelAgent):
             logprobs=extra_inputs.logprobs,
         )
         return extra_inputs
+
+    def _build_draft_depth_dp_meta(self, inputs: ModelInputs):
+        dp_meta = inputs.dp_meta
+        if dp_meta is None:
+            return None, None
+
+        padding_batch_size = max(dp_meta.dp_batches)
+        if getattr(self.proposer, 'supports_draft_depth_protocol', False):
+            num_tokens = self.proposer.get_draft_depth_token_counts(dp_meta)
+        else:
+            num_tokens = [inputs.input_ids.numel()] * len(dp_meta.dp_batches)
+        new_dpmeta = DPMeta.build(inputs.input_ids.numel(), num_tokens)
+        new_dpmeta.dp_batches = dp_meta.dp_batches
+        new_dpmeta.dp_is_decoding = dp_meta.dp_is_decoding
+        new_dpmeta.dp_draft_num_tokens = dp_meta.dp_draft_num_tokens
+        return new_dpmeta, padding_batch_size
 
     async def async_model_forward(
         self,

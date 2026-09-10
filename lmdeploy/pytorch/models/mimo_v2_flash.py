@@ -340,6 +340,7 @@ class MiMoV2Attention(nn.Module):
             attn_metadata,
             s_aux=self.attention_sink_bias,
             inplace=True,
+            decode_mode='speculative' if is_verification else 'block',
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
         return self._project_output(attn_output)

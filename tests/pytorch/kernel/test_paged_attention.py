@@ -424,7 +424,8 @@ class TestPagedAttention(TestPagedAttentionBase):
         impl.bind_step_meta_group(1)
         output = impl.forward(
             queries.flatten(0, 1), None, None, k_cache, v_cache, metadata,
-            learnable_sink=sinks).unflatten(0, (batch_size, query_len))
+            learnable_sink=sinks,
+            decode_mode='speculative').unflatten(0, (batch_size, query_len))
 
         reference = torch.empty_like(output)
         scale = head_size**-0.5
@@ -449,7 +450,7 @@ class TestPagedAttention(TestPagedAttentionBase):
             with torch.cuda.graph(graph):
                 graph_output = impl.forward(
                     queries.flatten(0, 1), None, None, k_cache, v_cache,
-                    metadata, learnable_sink=sinks)
+                    metadata, learnable_sink=sinks, decode_mode='speculative')
             queries.add_(0.125)
             kv_seqlens.sub_(3)
             graph.replay()
@@ -470,6 +471,7 @@ class TestPagedAttention(TestPagedAttentionBase):
                                                   blocked_kv, block_offsets,
                                                   kv_seqlens, layout, conti_gt):
         """Empty split-K partitions must not contribute stale values."""
+
         from lmdeploy.pytorch.kernels.cuda import pagedattention
 
         monkeypatch.setattr(pagedattention, '_get_split_k', lambda *args: 128)
@@ -483,6 +485,22 @@ class TestPagedAttention(TestPagedAttentionBase):
             kv_layout=layout,
         )
         torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
+
+    def test_decode_mode_selects_causal_speculative_mask(self):
+        """Triton decode keeps SDAR block masks unless spec opts in."""
+        from lmdeploy.pytorch.backends.cuda.attention.default import TritonAttentionImpl
+
+        impl = TritonAttentionImpl(num_heads=1, head_size=8)
+        captured_kwargs = {}
+
+        def fake_paged_attention(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return args[0]
+
+        impl.paged_attention_fwd = fake_paged_attention
+
+        assert impl.decode_mode_uses_causal_mask('block') is False
+        assert impl.decode_mode_uses_causal_mask('speculative') is True
 
     @pytest.mark.parametrize('feat_dim', [16], indirect=True)
     @pytest.mark.parametrize('feat_dim_v', [16], indirect=True)
