@@ -1,171 +1,119 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from types import SimpleNamespace
-
 import pytest
 import torch
 
-from lmdeploy.pytorch.config import BlockCacheSpec
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
+from lmdeploy.pytorch.engine.cache_engine.layout import (
+    CacheAllocation,
+    CachePool,
+    CompositeBlockCacheLayout,
+    ContiguousBlockCacheLayout,
+    PackedBlockCacheLayout,
+)
+from lmdeploy.pytorch.engine.cache_engine.schema import CacheDesc, CacheTensorSpec
 
 
-def _make_cache_engine(
-    full_gpu_cache: torch.Tensor | list[torch.Tensor],
-    *,
-    num_layers: int,
-    num_gpu_blocks: int,
-    block_size: int,
-    kernel_block_size: int,
-    use_standard_kv_cache: bool,
-    block_cache_specs: list[BlockCacheSpec] | None = None,
-):
+def _spec(name, *, consumer_rows=None, payload=(1, ), dtype=torch.uint8) -> CacheTensorSpec:
+    desc = CacheDesc(shape=list(payload), dtype=dtype)
+    return CacheTensorSpec(name=name, desc=desc, consumer_rows=consumer_rows)
+
+
+def _make_cache_engine(allocation: CacheAllocation) -> CacheEngine:
     cache_engine = object.__new__(CacheEngine)
-    cache_engine.full_gpu_cache = full_gpu_cache
-    cache_engine.model_config = SimpleNamespace(
-        num_layers=num_layers,
-        use_standard_kv_cache=use_standard_kv_cache,
-        block_cache_specs=block_cache_specs or [],
-    )
-    cache_engine.cache_config = SimpleNamespace(
-        num_gpu_blocks=num_gpu_blocks,
-        block_size=block_size,
-        kernel_block_size=kernel_block_size,
-    )
+    cache_engine.gpu_allocation = allocation
     return cache_engine
 
 
-def test_connector_kv_caches_standard_rows_are_ordered_raw_views():
-    pool = torch.arange(3 * 6 * 5, dtype=torch.uint8).view(3, 6, 5)
-    cache_engine = _make_cache_engine(
-        pool,
-        num_layers=3,
-        num_gpu_blocks=3,
-        block_size=4,
-        kernel_block_size=2,
-        use_standard_kv_cache=True,
+def test_connector_kv_caches_registers_packed_pool_rows_once():
+    specs = (
+        _spec('k_cache', payload=(5, )),
+        _spec('v_cache', payload=(4, )),
+        _spec('k_scales_zeros', payload=(2, ), dtype=torch.float16),
     )
+    allocation = PackedBlockCacheLayout(specs, num_layers=3).allocate(num_blocks=6, device='cpu')
+    cache_engine = _make_cache_engine(allocation)
 
     connector_caches = cache_engine.connector_kv_caches
 
-    assert list(connector_caches) == [
-        'standard_kv_cache.layer.0',
-        'standard_kv_cache.layer.1',
-        'standard_kv_cache.layer.2',
-    ]
-    for layer_id, row in enumerate(connector_caches.values()):
-        assert row.data_ptr() == pool[layer_id].data_ptr()
+    assert list(connector_caches) == [f'cache_pool.0.row.{row}' for row in range(3)]
+    pool = allocation.pools[0].tensor
+    for row_index in range(3):
+        row = connector_caches[f'cache_pool.0.row.{row_index}']
+        assert row.data_ptr() == pool[row_index].data_ptr()
         assert row.untyped_storage().data_ptr() == pool.untyped_storage().data_ptr()
-        assert tuple(row.shape) == (6, 5)
+        assert tuple(row.shape) == tuple(pool.shape[1:])
         assert row.is_contiguous()
 
     with pytest.raises(TypeError):
         connector_caches['new'] = pool[0]
 
 
-def test_connector_kv_caches_named_only_accepts_single_tensor_pool():
-    pool = torch.empty((2, 6, 7), dtype=torch.uint8)
-    cache_engine = _make_cache_engine(
-        pool,
-        num_layers=6,
-        num_gpu_blocks=3,
-        block_size=4,
-        kernel_block_size=2,
-        use_standard_kv_cache=False,
-        block_cache_specs=[BlockCacheSpec('indexer', [1, 4], (7, ), torch.uint8)],
+def test_connector_kv_caches_registers_independent_contiguous_pools():
+    specs = (
+        _spec('k_cache', payload=(3, ), dtype=torch.float16),
+        _spec('v_cache', payload=(5, ), dtype=torch.float32),
     )
+    allocation = ContiguousBlockCacheLayout(specs, num_layers=2).allocate(num_blocks=4, device='cpu')
+    cache_engine = _make_cache_engine(allocation)
 
     connector_caches = cache_engine.connector_kv_caches
 
     assert list(connector_caches) == [
-        'block_cache.indexer.layer.1',
-        'block_cache.indexer.layer.4',
+        'cache_pool.0.row.0',
+        'cache_pool.0.row.1',
+        'cache_pool.1.row.0',
+        'cache_pool.1.row.1',
     ]
-    assert connector_caches['block_cache.indexer.layer.1'].data_ptr() == pool[0].data_ptr()
-    assert connector_caches['block_cache.indexer.layer.4'].data_ptr() == pool[1].data_ptr()
+    for pool_index, pool in enumerate(allocation.pools):
+        for row_index in range(2):
+            row = connector_caches[f'cache_pool.{pool_index}.row.{row_index}']
+            assert row.data_ptr() == pool.tensor[row_index].data_ptr()
+            assert row.is_contiguous()
 
 
-def test_connector_kv_caches_glm_layout_has_99_stable_rows():
-    indexer_layer_ids = [0, 1, 2, *range(6, 78, 4)]
-    assert len(indexer_layer_ids) == 21
-
-    standard_pool = torch.empty((78, 2, 3), dtype=torch.uint8)
-    indexer_pool = torch.empty((21, 2, 4), dtype=torch.uint8)
-    cache_engine = _make_cache_engine(
-        [standard_pool, indexer_pool],
-        num_layers=78,
-        num_gpu_blocks=2,
-        block_size=64,
-        kernel_block_size=64,
-        use_standard_kv_cache=True,
-        block_cache_specs=[BlockCacheSpec('dsa_indexer_k', indexer_layer_ids, (64, 1, 132), torch.uint8)],
+def test_connector_kv_caches_registers_composite_layout_in_pool_order():
+    standard_specs = (
+        _spec('k_cache', payload=(3, )),
+        _spec('v_cache', payload=(4, )),
     )
+    indexer_spec = _spec(
+        'dsa_indexer_k',
+        consumer_rows=(0, 1),
+        payload=(7, ),
+    )
+    layout = CompositeBlockCacheLayout((
+        PackedBlockCacheLayout(standard_specs, num_layers=3),
+        ContiguousBlockCacheLayout((indexer_spec, ), num_layers=3),
+    ))
+    allocation = layout.allocate(num_blocks=2, device='cpu')
+    cache_engine = _make_cache_engine(allocation)
 
     connector_caches = cache_engine.connector_kv_caches
-    keys = list(connector_caches)
 
-    assert len(keys) == 99
-    assert keys[:2] == ['standard_kv_cache.layer.0', 'standard_kv_cache.layer.1']
-    assert keys[77] == 'standard_kv_cache.layer.77'
-    assert keys[78:] == [f'block_cache.dsa_indexer_k.layer.{layer_id}' for layer_id in indexer_layer_ids]
-    assert connector_caches['standard_kv_cache.layer.77'].data_ptr() == standard_pool[77].data_ptr()
-    assert connector_caches['block_cache.dsa_indexer_k.layer.74'].data_ptr() == indexer_pool[-1].data_ptr()
-
-
-def test_connector_kv_caches_rejects_pool_count_mismatch():
-    pool = torch.empty((2, 4, 3), dtype=torch.uint8)
-    cache_engine = _make_cache_engine(
-        [pool, pool],
-        num_layers=2,
-        num_gpu_blocks=2,
-        block_size=4,
-        kernel_block_size=2,
-        use_standard_kv_cache=True,
-    )
-
-    with pytest.raises(ValueError, match='expects 1 packed pools, got 2'):
-        _ = cache_engine.connector_kv_caches
-
-
-@pytest.mark.parametrize(
-    ('pool', 'error_type', 'match'),
-    [
-        (torch.empty((2, 4, 3), dtype=torch.float32), TypeError, 'must use torch.uint8'),
-        (torch.empty((2, 4), dtype=torch.uint8), ValueError, 'must have shape'),
-        (torch.empty((2, 4, 3), dtype=torch.uint8).transpose(1, 2), ValueError, 'must be contiguous'),
-        (torch.empty((3, 4, 3), dtype=torch.uint8), ValueError, 'has 3 rows, expected 2'),
-        (torch.empty((2, 5, 3), dtype=torch.uint8), ValueError, 'has 5 kernel blocks, expected 4'),
-    ],
-)
-def test_connector_kv_caches_validates_raw_pool_layout(pool, error_type, match):
-    cache_engine = _make_cache_engine(
-        pool,
-        num_layers=2,
-        num_gpu_blocks=2,
-        block_size=4,
-        kernel_block_size=2,
-        use_standard_kv_cache=True,
-    )
-
-    with pytest.raises(error_type, match=match):
-        _ = cache_engine.connector_kv_caches
-
-
-def test_connector_kv_caches_rejects_duplicate_named_cache_keys():
-    pools = [
-        torch.empty((1, 2, 3), dtype=torch.uint8),
-        torch.empty((1, 2, 5), dtype=torch.uint8),
+    assert list(connector_caches) == [
+        'cache_pool.0.row.0',
+        'cache_pool.0.row.1',
+        'cache_pool.0.row.2',
+        'cache_pool.1.row.0',
+        'cache_pool.1.row.1',
     ]
-    cache_engine = _make_cache_engine(
-        pools,
-        num_layers=2,
-        num_gpu_blocks=2,
-        block_size=2,
-        kernel_block_size=2,
-        use_standard_kv_cache=False,
-        block_cache_specs=[
-            BlockCacheSpec('duplicate', [1], (3, ), torch.uint8),
-            BlockCacheSpec('duplicate', [1], (5, ), torch.uint8),
-        ],
-    )
+    assert connector_caches['cache_pool.0.row.2'].data_ptr() == allocation.pools[0].tensor[2].data_ptr()
+    assert connector_caches['cache_pool.1.row.1'].data_ptr() == allocation.pools[1].tensor[1].data_ptr()
 
-    with pytest.raises(ValueError, match='duplicate connector cache key'):
+
+def test_connector_kv_caches_omits_empty_pools():
+    allocation = PackedBlockCacheLayout((), num_layers=2).allocate(num_blocks=3, device='cpu')
+    cache_engine = _make_cache_engine(allocation)
+
+    assert cache_engine.connector_kv_caches == {}
+
+
+def test_connector_kv_caches_rejects_non_row_major_pool():
+    allocation = CacheAllocation(
+        pools=(CachePool(torch.empty((4, 2, 3)), entry_axis=0), ),
+        tensor_views=(),
+    )
+    cache_engine = _make_cache_engine(allocation)
+
+    with pytest.raises(ValueError, match='entry_axis=1, got 0'):
         _ = cache_engine.connector_kv_caches

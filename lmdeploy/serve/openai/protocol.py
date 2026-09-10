@@ -172,7 +172,7 @@ class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
 
-    messages: str | list[dict[str, Any]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])
+    messages: list[dict[str, Any]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])
     temperature: float | None = None
     top_p: float | None = None
     tools: list[Tool] | None = Field(default=None, examples=[None])
@@ -204,7 +204,6 @@ class ChatCompletionRequest(BaseModel):
     reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None
     response_format: ResponseFormat | None = Field(default=None, examples=[None])
     # additional argument of lmdeploy
-    do_preprocess: bool | None = True
     repetition_penalty: float | None = None
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
@@ -238,7 +237,7 @@ class ChatCompletionRequest(BaseModel):
     )
     # Extended input fields from /generate endpoint.
     # input_ids and image_data are fallback inputs — they are only used when
-    # messages is empty/None/''. When messages is non-empty, it takes priority.
+    # messages is empty. When messages is non-empty, it takes priority.
     input_ids: list[int] | None = Field(
         default=None,
         description=('Token IDs as input. Only used when messages is empty. '
@@ -577,6 +576,8 @@ class GenerateReqInput(BaseModel):
     input_ids: list[int] | None = None
     image_data: ImageDataFormat | None = None
     return_logprob: bool | None = None
+    top_logprobs_num: int | None = None
+    logprob_start_len: int = Field(default=-1, ge=-1)
     max_tokens: int = 128
     stop: str | list[str] | None = None
     stop_token_ids: list[int] | None = None
@@ -610,6 +611,9 @@ class GenerateReqMetaOutput(BaseModel):
     completion_tokens: int | None = None
     finish_reason: dict[str, Any] | None = None
     output_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
+    input_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
+    output_top_logprobs: list[list[tuple[float, int]]] | None = None  # per-output-token top (logprob, token_id)
+    input_top_logprobs: list[list[tuple[float, int]]] | None = None  # per-input-token top (logprob, token_id)
     routed_experts: list[list[list[int]]] | str | None = None  # (num_token, num_layer, topk_expert)
 
 

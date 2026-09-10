@@ -1,7 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import torch
+
+from .base import BuildSpec
 
 PLACEHOLDER_TOKEN_ID = -1
 
@@ -41,11 +44,6 @@ class RejectionSamplingImpl(ABC):
         raise NotImplementedError
 
 
-class RejectionSamplingBuilder(ABC):
-    """Build a device-specific rejection-sampling implementation."""
-
-    @staticmethod
-    @abstractmethod
-    def build() -> RejectionSamplingImpl:
-        """Build the implementation."""
-        raise NotImplementedError
+@dataclass(frozen=True)
+class RejectionSamplingBuildSpec(BuildSpec[RejectionSamplingImpl]):
+    """Requirements for constructing speculative rejection sampling."""

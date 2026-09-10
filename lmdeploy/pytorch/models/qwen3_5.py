@@ -9,7 +9,6 @@ import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-import lmdeploy.pytorch.nn.gated_delta as gated_delta_util
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
@@ -21,7 +20,13 @@ from lmdeploy.pytorch.nn import (
     SiluAndMul,
     build_rotary_embedding_from_config,
 )
-from lmdeploy.pytorch.nn.gated_delta import CausalConv1d, GatedDelta, GatedDeltaMeta, build_rmsnorm_gated
+from lmdeploy.pytorch.nn.gated_delta import (
+    CausalConv1d,
+    GatedDelta,
+    GatedDeltaMeta,
+    GatedDeltaMetaBuilder,
+    build_rmsnorm_gated,
+)
 from lmdeploy.pytorch.nn.linear import (
     build_colwise_linear,
     build_merged_colwise_linear,
@@ -36,7 +41,7 @@ from .patch import add_prefix, get_build_model_context
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3_5VisionRotaryEmbedding
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3_5VisionAttention
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5InputProcessor
-from .utils.cudagraph import CudaGraphMixin
+from .utils.cudagraph import PiecewiseCudaGraphMixin
 from .utils.model import DeployModelMixinV1, vlm_model
 
 
@@ -529,20 +534,16 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         b, a = torch.split(mixed_ba, split_arg_list_ba, dim=-1)
         return b, a
 
-    def _load_state(self, past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
-        """Load states from cache."""
-        return gated_delta_util.load_state(past_key_value=past_key_value, gated_delta_meta=gated_delta_meta)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
         past_key_value: tuple[torch.Tensor, torch.Tensor],
         gated_delta_meta: GatedDeltaMeta,
-    ):
+    ) -> torch.Tensor:
         """forward."""
 
         # load states
-        conv_state, recurrent_state = self._load_state(past_key_value, gated_delta_meta)
+        conv_state, recurrent_state = past_key_value[:2]
 
         # inputs proj
         projected_states_qkv = self.in_proj_qkv(hidden_states)
@@ -553,7 +554,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         b, a = self.fix_ba_ordering(projected_states_ba)
 
         mixed_qkv = projected_states_qkv
-        mixed_qkv, conv_state = self.conv1d(mixed_qkv, conv_state, gated_delta_meta=gated_delta_meta)
+        mixed_qkv = self.conv1d(mixed_qkv, conv_state, gated_delta_meta)
 
         tp = (self.key_dim * 2 + self.value_dim) // mixed_qkv.size(-1)
         query, key, value = torch.split(
@@ -569,7 +570,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         key = key.unflatten(-1, (-1, self.head_k_dim))
         value = value.unflatten(-1, (-1, self.head_v_dim))
 
-        core_attn_out, recurrent_state = self.gated_delta(
+        core_attn_out = self.gated_delta(
             query,
             key,
             value,
@@ -843,6 +844,8 @@ class Qwen3_5TextModel(nn.Module):
         # build rotary embedding
         self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
 
+        self.gated_delta_meta_builder = GatedDeltaMetaBuilder()
+
     def forward(
         self,
         input_ids: torch.LongTensor,
@@ -872,9 +875,8 @@ class Qwen3_5TextModel(nn.Module):
         cos, sin = cos[0], sin[0]
         rotary_pos_emb = (cos, sin)
 
-        # make seq_idx
-        gated_delta_meta = GatedDeltaMeta(hidden_states.size(1), self.config.linear_conv_kernel_dim, state_ids,
-                                          attn_metadata)
+        gated_delta_meta = self.gated_delta_meta_builder(hidden_states.size(1),
+                                                         self.config.linear_conv_kernel_dim, state_ids, attn_metadata)
 
         # decoding
         residual = None
@@ -989,7 +991,7 @@ class Qwen3_5Model(nn.Module):
         return self.language_model.get_input_embeddings()
 
 
-class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
+class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, PiecewiseCudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {

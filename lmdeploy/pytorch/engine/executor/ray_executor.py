@@ -22,7 +22,7 @@ from lmdeploy.pytorch.ray import RayContext, get_device_str
 from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.utils import get_logger, try_import_deeplink
 
-from .base import ExecutorBase
+from .base import ExecutorBase, _WorkerCachePlanSizes
 from .base_worker import WorkerWrapperBase
 from .dist_utils import find_available_port
 
@@ -331,6 +331,18 @@ class RayExecutor(ExecutorBase):
                 logger.info('Warming up distribute environment, this might take long time, please waiting...')
                 ray.get([worker.warmup_dist.remote() for worker in self.workers])
 
+    def init(self):
+        """Initialize workers and abort all of them if initialization fails."""
+        try:
+            super().init()
+        except BaseException:
+            for worker in self.workers:
+                with contextlib.suppress(Exception):
+                    ray.kill(worker)
+            with contextlib.suppress(Exception):
+                self.ray_ctx.shutdown()
+            raise
+
     def collective_rpc(self,
                        method: str,
                        args: tuple[Any] = None,
@@ -370,6 +382,12 @@ class RayExecutor(ExecutorBase):
     def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig = None):
         """Set all model config."""
         self.collective_rpc('set_model_config', (model_config, spec_model_config))
+
+    def _prepare_worker_cache_plans(self, cache_config: CacheConfig,
+                                    spec_cache_config: CacheConfig | None = None) -> list[_WorkerCachePlanSizes]:
+        """Prepare and size rank-local cache plans on every worker."""
+        worker_sizes = self.collective_rpc('build_cache_plans', (cache_config, spec_cache_config))
+        return [_WorkerCachePlanSizes(*sizes) for sizes in worker_sizes]
 
     def build_graph_runner(self):
         """Build graph runner."""

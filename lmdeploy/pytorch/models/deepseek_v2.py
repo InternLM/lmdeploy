@@ -358,11 +358,6 @@ class DeepseekV2BMM(nn.Module):
 
     def _update_batch(self, batch: int):
         """Update out features."""
-        dist_config = get_dist_manager().current_config()
-        if dist_config.dp > 1:
-            # MLA Q projections use dp_disable_tp=True, so DP mode keeps
-            # q_nope full-head; absorb BMM weights must use the same layout.
-            return batch
         world_size, _ = get_tp_world_rank('attn')
         batch = batch // world_size
         return batch
@@ -373,10 +368,8 @@ class DeepseekV2BMM(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
         """Weight loader."""
-        dist_config = get_dist_manager().current_config()
-        if dist_config.dp == 1:
-            world_size, rank = get_tp_world_rank('attn')
-            weight = weight.chunk(world_size, 0)[rank]
+        world_size, rank = get_tp_world_rank('attn')
+        weight = weight.chunk(world_size, 0)[rank]
         param.data.copy_(weight)
 
     def forward(self, x: torch.Tensor, output: torch.Tensor):
@@ -411,7 +404,6 @@ class DeepseekV2Attention(nn.Module):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
-                dp_disable_tp=True,
             )
         else:
             self.q_a_proj = build_colwise_linear(
@@ -436,7 +428,6 @@ class DeepseekV2Attention(nn.Module):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
-                dp_disable_tp=True,
             )
 
         self.kv_a_proj_with_mqa = build_colwise_linear(
@@ -453,6 +444,15 @@ class DeepseekV2Attention(nn.Module):
                                       quant_config=quantization_config,
                                       dtype=dtype,
                                       device=device)
+        self.kv_b_proj = build_colwise_linear(
+            config.kv_lora_rank,
+            self.num_heads * (config.qk_nope_head_dim + self.v_head_dim),
+            bias=False,
+            dtype=dtype,
+            device=device,
+            is_tp=True,
+            quant_config=quantization_config,
+        )
         self.kc = DeepseekV2BMM(self.num_heads,
                                 config.qk_nope_head_dim,
                                 config.kv_lora_rank,
@@ -489,6 +489,18 @@ class DeepseekV2Attention(nn.Module):
             is_tp=True,
             quant_config=quantization_config,
         )
+
+    def process_weights_after_loading(self):
+        """Build the local MLA BMM weights from the effective KV-B weight."""
+        # MLA executes the absorbed kc/vc BMMs instead of kv_b_proj directly.
+        # With online FP8, the standard linear loader first quantizes the BF16
+        # checkpoint weight and creates its scales. Absorbing that effective
+        # post-quantization weight keeps the BMM path equivalent to the linear.
+        weight = self.kv_b_proj.get_unquantized_weight(self.kc.weight.dtype)
+        weight = weight.unflatten(0, (-1, self.qk_nope_head_dim + self.v_head_dim))
+        w_kc, w_vc = weight.split([self.qk_nope_head_dim, self.v_head_dim], dim=1)
+        self.kc.weight.copy_(w_kc)
+        self.vc.weight.copy_(w_vc.transpose(1, 2).contiguous())
 
     def _q_proj(self, hidden_states, num_heads: int, nope_size: int, pe_size: int):
         """Q proj."""
@@ -537,12 +549,7 @@ class DeepseekV2Attention(nn.Module):
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        dist_config = get_dist_manager().current_config()
-        if dist_config.dp > 1:
-            num_heads = self.num_heads
-        else:
-            world_size = dist_config.world_size
-            num_heads = self.num_heads // world_size
+        num_heads = self.attn_fwd.num_heads
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
 
@@ -804,8 +811,8 @@ class DeepseekV2MLP(nn.Module):
                 is_tp = True
                 all_reduce = False
             else:
-                # do not split weight on dp
-                # TODO: support dp+tp?
+                # TODO: support shared-expert TP under DP. Until shared-expert
+                # partials join the routed-expert reduction, keep the MLP replicated.
                 is_tp = False
                 all_reduce = False
         else:
@@ -1148,7 +1155,6 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                  device: torch.device = None):
         super().__init__()
         self.config = config
-        self.quantization_config = getattr(config, 'quantization_config', None)
         self.dtype = dtype
         self.ctx_mgr = ctx_mgr
         self.model = DeepseekV2Model(config, dtype=dtype, device=device)
@@ -1160,7 +1166,6 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                                       device=device)
         if config.tie_word_embeddings:
             self.lm_head.tie_weights(self.model.get_input_embeddings())
-        self._load_buffers = dict()
 
     def forward(
         self,
@@ -1248,53 +1253,6 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             weight = weight.flatten(0, 1)
             return weight
 
-        def __load_kcvc(name: str, weight: torch.Tensor):
-            """Load kc and vc from weight."""
-            config = self.config
-            v_head_dim = config.v_head_dim
-            qk_nope_head_dim = config.qk_nope_head_dim
-            w_kc, w_vc = weight.unflatten(0, (-1, qk_nope_head_dim + v_head_dim)).split([qk_nope_head_dim, v_head_dim],
-                                                                                        dim=1)
-            w_vc = w_vc.transpose(1, 2).contiguous()
-            kc_param_name = name.replace('.kv_b_proj', '.kc')
-            param_kc = params_dict[kc_param_name]
-            load_weight(param_kc, w_kc)
-            vc_param_name = name.replace('.kv_b_proj', '.vc')
-            param_vc = params_dict[vc_param_name]
-            load_weight(param_vc, w_vc)
-
-        def __dequant_weight(weight: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype):
-            """Dequant weight."""
-            dim_w0, dim_w1 = weight.shape
-            dim_s0, dim_s1 = scale.shape
-            assert dim_w0 % dim_s0 == 0
-            assert dim_w1 % dim_s1 == 0
-            group0 = dim_w0 // dim_s0
-            group1 = dim_w1 // dim_s1
-            weight = weight.reshape(dim_s0, group0, dim_s1, group1)
-            scale = scale.reshape(dim_s0, 1, dim_s1, 1)
-            weight = weight.to(scale.dtype) * scale
-            weight = weight.to(dtype)
-            weight = weight.reshape(dim_w0, dim_w1)
-            return weight
-
-        def __load_kcvc_blocked_fp8(name: str, loaded_weight: torch.Tensor):
-            """Dequant weight."""
-            if name.endswith('.weight'):
-                weight_name = name
-                scale_name = name.replace('.weight', '.scale')
-            elif name.endswith('.weight_scale_inv'):
-                weight_name = name.replace('.weight_scale_inv', '.weight')
-                scale_name = name
-            self._load_buffers[name] = loaded_weight
-            if (weight_name in self._load_buffers and scale_name in self._load_buffers):
-                weight = self._load_buffers.pop(weight_name)
-                scale = self._load_buffers.pop(scale_name)
-                kc_param_name = weight_name.replace('.kv_b_proj', '.kc')
-                dtype = params_dict[kc_param_name].dtype
-                weight = __dequant_weight(weight, scale, dtype)
-                __load_kcvc(weight_name, weight)
-
         for (mod_name, head_dim, pe_dim_offset) in update_pe_mapping:
             if mod_name not in name:
                 continue
@@ -1307,23 +1265,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             load_weight(param, weight)
             break
         else:
-            if '.kv_b_proj' in name:
-                quantization_config = self.quantization_config
-                quant_method = None
-                fp8_quant_scope = None
-                if quantization_config is not None:
-                    quant_method = quantization_config.get('quant_method')
-                    fp8_quant_scope = quantization_config.get('fp8_quant_scope')
-
-                loaded_weight = loaded_weight.to(device)
-                if quant_method == 'fp8' and fp8_quant_scope != 'moe_only':
-                    # update blocked fp8 weight
-                    __load_kcvc_blocked_fp8(name, loaded_weight)
-                else:
-                    __load_kcvc(name, loaded_weight)
-            else:
-                param = params_dict[name]
-                load_weight(param, loaded_weight)
+            param = params_dict[name]
+            load_weight(param, loaded_weight)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""

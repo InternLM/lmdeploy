@@ -8,8 +8,6 @@ from typing import Any, TypeVar
 
 import shortuuid
 
-from lmdeploy.messages import GenerationConfig
-from lmdeploy.serve.core.generation_config import build_generation_config
 from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
 
 from .protocol import (
@@ -53,15 +51,6 @@ def detect_inline_system_support(chat_template) -> bool:
     except Exception:
         return False
     return isinstance(prompt, str) and sentinel in prompt
-
-
-def ensure_tools_not_requested(request: MessagesRequest | CountTokensRequest) -> None:
-    """Reject tool-related fields while parser refactor is in progress."""
-
-    if getattr(request, 'tools', None):
-        raise NotImplementedError('Anthropic tool fields are temporarily unsupported.')
-    if getattr(request, 'tool_choice', None) is not None:
-        raise NotImplementedError('Anthropic tool_choice is temporarily unsupported.')
 
 
 def to_openai_tools(tools: list[ToolParam] | None) -> list[Tool] | None:
@@ -408,24 +397,6 @@ def to_lmdeploy_messages(
     if merge_inline_system:
         return _merge_system_messages(lm_messages)
     return lm_messages
-
-
-def to_generation_config(
-    request: MessagesRequest,
-    default_gen_config: dict | None = None,
-    **kwargs: Any,
-) -> GenerationConfig:
-    """Map Anthropic messages request to LMDeploy generation config."""
-    return build_generation_config(
-        request,
-        default_gen_config or {},
-        max_new_tokens=request.max_tokens,
-        stop_words=request.stop_sequences,
-        include_stop_str_in_output=request.include_stop_str_in_output or False,
-        return_routed_experts=request.return_routed_experts or False,
-        logprobs=1 if request.return_logprob else None,
-        **kwargs,
-    )
 
 
 def count_input_tokens(async_engine, messages: list[dict[str, str]]) -> int:

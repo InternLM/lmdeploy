@@ -169,6 +169,32 @@ for item in api_client.completions_v1(model=model_name, prompt='hi'):
 
 参考 [api_server_responses](./api_server_responses.md)。
 
+### 使用 `/generate` 计算输入 token 的 logprob
+
+使用 `--backend pytorch --logprobs-mode raw_logprobs` 启动服务，然后在直接
+`/generate` 请求中设置 `return_logprob` 和 `logprob_start_len`：
+
+```bash
+curl http://{server_ip}:{server_port}/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "input_ids": [1234, 5678, 9012],
+    "return_logprob": true,
+    "logprob_start_len": 0,
+    "max_tokens": 0
+  }'
+```
+
+`meta_info.input_token_logprobs` 只发送一次。对于
+`N=logprob_start_len`，返回行对应位置 `N` 之后的已处理源 token ids，每项为
+`[value, token_id]`。如果直接传入 `input_ids`，即对应
+`input_ids[N + 1:]`；如果传入 `prompt` 或图像输入，则在分词和 VLM 占位符扩展后
+检查边界。边界后必须至少有一个 token，否则端点会拒绝该请求。流式和非流式都只返回一个终止
+payload，流式随后发送 `[DONE]`。
+
+此直接接口要求设置 `max_tokens=0` 并禁用推测解码。TurboMind、DistServe、代理
+`/generate` 以及 OpenAI、Anthropic 和 Responses 协议暂不支持输入 logprob。
+
 ### 使用 Java/Golang/Rust
 
 可以使用代码生成工具 [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) 将 `http://{server_ip}:{server_port}/openapi.json` 转成 java/rust/golang 客户端。

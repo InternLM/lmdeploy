@@ -81,7 +81,7 @@ def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypat
 
     import torch
 
-    from lmdeploy.pytorch.backends.cuda import graph_runner as cuda_graph_runner
+    from lmdeploy.pytorch.backends.cuda.graph_runner import runner as cuda_graph_runner
     from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMixin
 
     context = SimpleNamespace(
@@ -141,7 +141,7 @@ def test_cuda_graph_key_separates_dsa_seed_and_reuse(monkeypatch):
 
     import torch
 
-    from lmdeploy.pytorch.backends.cuda import graph_runner as cuda_graph_runner
+    from lmdeploy.pytorch.backends.cuda.graph_runner import runner as cuda_graph_runner
     from lmdeploy.pytorch.models.glm_moe_dsa_mtp import GlmMoeDsaMTPModel
 
     runner = cuda_graph_runner.CUDAGraphRunner.__new__(cuda_graph_runner.CUDAGraphRunner)

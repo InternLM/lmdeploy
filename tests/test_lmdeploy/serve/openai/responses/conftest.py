@@ -37,6 +37,10 @@ class FakeAsyncEngine:
                 input_token_len=1,
                 generate_token_len=1,
                 finish_reason='stop',
+                cached_tokens=0,
+                logprobs=None,
+                routed_experts=None,
+                cache_block_ids=None,
             )
 
         return _generator()
@@ -62,6 +66,9 @@ class PassthroughResponseParser:
                        token_ids: list[int] | None = None,
                        **kwargs):
         return text, None, None
+
+    def validate_complete(self, text: str | None = None):
+        return True
 
 
 class FakeServerContext:

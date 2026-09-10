@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from lmdeploy.serve.anthropic.adapter import (
-    to_generation_config,
     to_lmdeploy_messages,
     to_openai_messages,
 )
@@ -16,19 +15,6 @@ def _make_request(*, messages, system=None):
             'messages': messages,
             'system': system,
         })
-
-
-def test_to_generation_config_maps_include_stop_str_in_output():
-    request = MessagesRequest.model_validate({
-        'model': 'fake-model',
-        'max_tokens': 32,
-        'messages': [{
-            'role': 'user',
-            'content': 'hello',
-        }],
-        'include_stop_str_in_output': True,
-    })
-    assert to_generation_config(request).include_stop_str_in_output is True
 
 
 def test_to_openai_messages_keeps_plain_text_messages():

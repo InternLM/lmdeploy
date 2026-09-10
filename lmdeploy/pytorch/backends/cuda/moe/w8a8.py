@@ -3,7 +3,7 @@
 
 import torch
 
-from lmdeploy.pytorch.backends.moe import FusedMoEW8A8Builder, FusedMoEW8A8Impl
+from lmdeploy.pytorch.backends.moe import FusedMoEW8A8BuildSpec, FusedMoEW8A8Impl
 from lmdeploy.pytorch.kernels.cuda import fused_moe_w8a8
 from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import per_token_quant_int8
 from lmdeploy.pytorch.models.q_modules import QTensor
@@ -73,20 +73,12 @@ class TritonFusedMoEW8A8Impl(FusedMoEW8A8Impl):
                               renormalize=self.renormalize)
 
 
-class TritonFusedMoEW8A8Builder(FusedMoEW8A8Builder):
-    """Triton fused moe w8a8 builder."""
-
-    @staticmethod
-    def build(
-        top_k: int,
-        num_experts: int,
-        renormalize: bool = False,
-        out_dtype: torch.dtype = torch.float16,
-        quant_dtype: torch.dtype = torch.int8,
-    ):
-        """Build from mlp."""
-        return TritonFusedMoEW8A8Impl(top_k=top_k,
-                                      num_experts=num_experts,
-                                      renormalize=renormalize,
-                                      out_dtype=out_dtype,
-                                      quant_dtype=quant_dtype)
+def _build_fused_moe_w8a8(spec: FusedMoEW8A8BuildSpec) -> FusedMoEW8A8Impl:
+    """Build a CUDA W8A8 fused MoE implementation."""
+    return TritonFusedMoEW8A8Impl(
+        top_k=spec.top_k,
+        num_experts=spec.num_experts,
+        renormalize=spec.renormalize,
+        out_dtype=spec.output_dtype,
+        quant_dtype=spec.quant_dtype,
+    )
