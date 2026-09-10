@@ -5,8 +5,9 @@ import torch
 
 from lmdeploy.pytorch.backends.cuda.attention.swa_state_ring import (
     SWAStateRingMetadata,
-    swa_state_ring_attention,
+    SWAStateRingAttentionImpl,
 )
+from lmdeploy.pytorch.backends.attention import SWAStateRingAttentionBuildSpec
 from lmdeploy.pytorch.kernels.cuda.swa_state_ring import flatten_swa_state_ring, scatter_swa_state_ring
 
 
@@ -120,23 +121,24 @@ def test_swa_state_ring_q1_paged_decode_matches_flatten():
         kv_layout='shd',
     )
 
-    impl = SimpleNamespace(
-        flash_attention_fwd=flash_attn_varlen_func,
-        paged_attention_fwd=flash_attn_with_kvcache,
-        alibi=False,
-        scale=scale,
-        logit_softcapping=None,
-    )
-    attention = SimpleNamespace(impl=impl, _lazy_init=lambda device: None)
-    actual = swa_state_ring_attention(
-        attention,
+    impl = SWAStateRingAttentionImpl(
+        SWAStateRingAttentionBuildSpec(
+            num_heads=num_q_heads,
+            head_dim=head_dim,
+            num_kv_heads=num_kv_heads,
+            v_head_dim=value_dim,
+            scale=scale,
+            sliding_window=(window_size - 1, 0),
+            learnable_sink=True,
+        ))
+    actual = impl.forward(
         query,
         current_k,
         current_v,
         k_ring,
         v_ring,
         metadata,
-        sink=sinks,
+        learnable_sink=sinks,
     )
 
     torch.testing.assert_close(actual, expected, atol=3e-3, rtol=3e-3)
