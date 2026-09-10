@@ -3,6 +3,7 @@ import functools
 
 import torch
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.attention import PagedAttentionBuildSpec
 from lmdeploy.utils import get_logger
 
@@ -22,6 +23,21 @@ try:
 except Exception:
     logger.debug('For higher performance, please install FlashAttention-3 '
                  'https://github.com/Dao-AILab/flash-attention')
+
+
+def require_fa3_for_speculative_decoding() -> None:
+    """Require the FA3 backend used by multi-token speculative decode."""
+    if use_fa3:
+        return
+
+    sm = torch.cuda.get_device_capability()
+    cuda_ver = torch.version.cuda or 'N/A'
+    raise RuntimeError(
+        f'Speculative decoding on CUDA requires FlashAttention-3 (FA3), '
+        f'which needs SM80+ (Ampere and above) with CUDA >= 12.3 and '
+        f'flash-attn installed. Detected: SM{sm[0]}.{sm[1]}, CUDA {cuda_ver}. '
+        f'Please ensure your GPU meets SM80+, CUDA >= 12.3, and flash-attn '
+        f'is installed, or disable speculative decoding.')
 
 
 @functools.lru_cache
@@ -92,6 +108,14 @@ def _build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl
 
     if spec.use_flash_mla is True:
         if spec.mla_index_topk is not None:
+            if _envs.sparse_mla_backend == 'tilelang':
+                logger.debug('Build TileLangSparseMLAImpl Attention')
+                from .sparse_mla import TileLangSparseMLAImpl
+                return TileLangSparseMLAImpl(
+                    mla_index_topk=spec.mla_index_topk,
+                    use_fa3=use_fa3,
+                    **common_args,
+                )
             logger.debug('Build FlashMLASparseImpl Attention')
             from .sparse_mla import FlashMLASparseImpl
             return FlashMLASparseImpl(

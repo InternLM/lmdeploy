@@ -106,6 +106,7 @@ When `dcp > 1`, the current implementation supports:
   or 2048. Model activations must use BF16.
 - Sparse MLA requires compatible DeepGEMM MQA-logits APIs, the TileLang
   sparse top-k selector, and FlashMLA support for per-row `topk_length`.
+  The alternative TileLang sparse attention backend does not support DCP.
 - `tp` is divisible by `dcp`, and `dcp` divides the replicated KV
   head count.
 - `dp=1`, `ep=1`, and the hybrid engine role.

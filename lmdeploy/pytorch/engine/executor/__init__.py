@@ -49,6 +49,8 @@ def _validate_dcp_config(model_config: ModelConfig, cache_config: CacheConfig,
     if model_config.dtype != torch.bfloat16:
         raise ValueError('DCP requires a bfloat16 MLA model')
     is_sparse_mla = model_config.mla_index_topk is not None
+    if is_sparse_mla and envs.sparse_mla_backend == 'tilelang':
+        raise ValueError('DCP sparse MLA requires the FlashMLA backend; TileLang does not support DCP')
     supported_cache_policies = ((QuantPolicy.NONE, QuantPolicy.FP8)
                                 if is_sparse_mla else (QuantPolicy.NONE, ))
     if cache_config.quant_policy not in supported_cache_policies:
