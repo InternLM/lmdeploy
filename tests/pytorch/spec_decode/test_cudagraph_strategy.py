@@ -2,19 +2,63 @@ from lmdeploy.pytorch.strategies.ar_spec.cudagraph import ARSpecCudagraphStrateg
 
 
 def test_arspec_cudagraph_uses_single_token_graph_for_all_methods():
-    strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, method='qwen3_5_mtp')
+    strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, draft_arch='Qwen3_5MTPModel')
 
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=8) == 8
 
 
 def test_arspec_cudagraph_uses_same_allocation_for_full_spec_capture():
-    strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, method='qwen3_5_mtp')
+    strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, draft_arch='Qwen3_5MTPModel')
 
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=40) == 40
 
 
+def test_arspec_cudagraph_uses_uniform_query_len_for_mimo_arch():
+    strategy = ARSpecCudagraphStrategy(num_spec_tokens=3, draft_arch='MiMoV2FlashMTPModel')
+
+    assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=24) == 24
+
+
+def test_ar_spec_factory_derives_uniform_query_len_capability_mimo():
+    from types import SimpleNamespace
+
+    from lmdeploy.pytorch.config import ModelConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
+
+    model_config = ModelConfig(
+        hidden_size=5120,
+        num_layers=48,
+        num_attention_heads=64,
+        num_key_value_heads=8,
+        bos_token_id=0,
+        eos_token_id=[0],
+        head_dim=192,
+        hf_config=SimpleNamespace(architectures=['MiMoV2FlashMTPModel']),
+        model_paradigm='ar_spec',
+    )
+    spec_config = SpecDecodeConfig(
+        model='mimo-draft',
+        method='arbitrary_method',
+        num_speculative_tokens=3,
+        model_config=ModelConfig(
+            hidden_size=5120,
+            num_layers=3,
+            num_attention_heads=64,
+            num_key_value_heads=8,
+            bos_token_id=0,
+            eos_token_id=[0],
+            head_dim=192,
+            hf_config=SimpleNamespace(architectures=['MiMoV2FlashMTPModel']),
+            model_paradigm='ar_spec',
+        ),
+    )
+    strategy = ARSpecStrategyFactory(model_config, spec_config).build_cudagraph_strategy()
+
+    assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=24) == 24
+
+
 def test_arspec_cudagraph_keeps_full_spec_capture_for_eagle3():
-    strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, method='eagle3')
+    strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, draft_arch='Eagle3DeepseekV2ForCausalLM')
 
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=8) == 8
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=40) == 40
