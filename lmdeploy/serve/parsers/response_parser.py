@@ -1,10 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Unified profile-driven streaming parser for reasoning/content/tool calls."""
+"""Unified streaming parser for reasoning/content/tool calls."""
 from __future__ import annotations
 
 import json
 from abc import abstractmethod
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from mmengine import Registry
@@ -15,7 +14,7 @@ from lmdeploy.utils import get_logger
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
-    from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall, ToolCall
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
 
     from .reasoning_parser import ReasoningParser
     from .tool_parser import ToolParser
@@ -23,6 +22,33 @@ if TYPE_CHECKING:
 logger = get_logger('lmdeploy')
 
 ResponseParserManager = Registry('response_parser', locations=['lmdeploy.serve.parsers.response_parser'])
+
+
+def validate_parser_names(
+    reasoning_parser_name: str | None = None,
+    tool_parser_name: str | None = None,
+    *,
+    warn_legacy: bool = True,
+) -> tuple[str | None, str | None]:
+    """Validate parser registry names before expensive engine startup."""
+    from .reasoning_parser import LEGACY_REASONING_PARSER_NAMES, ReasoningParserManager
+    from .tool_parser import ToolParserManager
+
+    if reasoning_parser_name in LEGACY_REASONING_PARSER_NAMES:
+        if warn_legacy:
+            logger.warning(f'The reasoning parser {reasoning_parser_name} is deprecated, '
+                           'please use the default reasoning parser instead.')
+        reasoning_parser_name = 'default'
+
+    if reasoning_parser_name is not None and reasoning_parser_name not in ReasoningParserManager.module_dict:
+        raise ValueError(f'The reasoning parser {reasoning_parser_name} is not in the parser list: '
+                         f'{ReasoningParserManager.module_dict.keys()}')
+
+    if tool_parser_name is not None and tool_parser_name not in ToolParserManager.module_dict:
+        raise ValueError(f'The tool parser {tool_parser_name} is not in the parser list: '
+                         f'{ToolParserManager.module_dict.keys()}')
+
+    return reasoning_parser_name, tool_parser_name
 
 
 def _parse_tool_call_arguments_dict(arguments: Any) -> dict[str, Any] | None:
@@ -143,6 +169,7 @@ class ResponseParser:
 
     def __init__(self, request: ChatCompletionRequest):
         self.request = request
+        self.reasoning_tokens = None
 
     @abstractmethod
     def stream_chunk(self,
@@ -154,7 +181,11 @@ class ResponseParser:
         Returns:
             A list of ``(delta_message, tool_calls_emitted)`` pairs. Return
             ``[]`` when this engine step produces no visible delta (for example
-            while buffering a partial protocol tag).
+            while buffering protocol syntax or tool-call payload). For every
+            accepted tool-call index, its first visible ``DeltaToolCall`` must
+            carry the call ID, type, and function name before any argument
+            fragments are exposed. A tool block nested in reasoning emits only
+            structured tool deltas, then resumes the reasoning channel.
         """
         raise NotImplementedError
 
@@ -164,33 +195,6 @@ class ResponseParser:
                        token_ids: list[int] | None = None,
                        **kwargs) -> tuple[str, list | None, str | None]:
         raise NotImplementedError
-
-    def validate_complete(self, text: str | None = None) -> bool:
-        return True
-
-
-@dataclass
-class ProtocolProfile:
-    """Protocol tags and startup mode used by :class:`ResponseParser`.
-
-    ``starts_in_reasoning_mode`` decides the initial parse mode before any tags are seen.
-    In ResponseParser, it controls whether the parser treats the beginning of generation as:
-    - reasoning (MODE_REASONING) -> text goes to reasoning_content, or
-    - plain (MODE_PLAIN) -> text goes to normal content.
-    Practically:
-    - If parser has reasoning support, ``enable_thinking`` is not False, and
-    ``starts_in_reasoning_mode=True``, first chunks are parsed as reasoning until ``</think>``.
-    - Otherwise it starts in plain mode and only enters reasoning when it sees ``<think>``.
-    It is only a profile default and can be customized by concrete reasoning
-    parsers (for example DeepSeek-V3).
-    """
-
-    reasoning_open_tag: str | None = None
-    reasoning_close_tag: str | None = None
-    tool_open_tag: str | None = None
-    tool_close_tag: str | None = None
-    tool_payload_format: str = 'json'
-    starts_in_reasoning_mode: bool = True
 
 
 @ResponseParserManager.register_module('default')
@@ -203,9 +207,12 @@ class BaseResponseParser(ResponseParser):
     - reasoning content
     - tool-call deltas
 
-    Parsing is protocol/profile-driven and supports mixed chunks where one
+    Parsing is protocol-driven and supports mixed chunks where one
     ``delta_text`` may contain multiple segments (for example reasoning close
-    plus plain text plus tool open tag).
+    plus plain text plus tool open tag). A tool block temporarily suspends its
+    containing channel: a block opened from reasoning resumes reasoning after
+    it closes, while a block opened from plain content resumes plain content.
+    Tool markup and payload are emitted only as structured tool-call deltas.
     """
 
     reasoning_parser_cls: ClassVar[type[ReasoningParser] | None] = None
@@ -227,29 +234,16 @@ class BaseResponseParser(ResponseParser):
         from .reasoning_parser import ReasoningParserManager
         from .tool_parser import ToolParserManager
 
+        reasoning_parser_name, tool_parser_name = validate_parser_names(reasoning_parser_name, tool_parser_name)
         cls.tokenizer = tokenizer
 
-        legacy_reasoning_parser_names = ['qwen-qwq', 'intern-s1', 'deepseek-r1']
-        if reasoning_parser_name in legacy_reasoning_parser_names:
-            logger.warning(f'The reasoning parser {reasoning_parser_name} is deprecated, '
-                           'please use the default reasoning parser instead.')
-            reasoning_parser_name = 'default'
-
         if reasoning_parser_name is not None:
-            if reasoning_parser_name in ReasoningParserManager.module_dict:
-                cls.reasoning_parser_cls = ReasoningParserManager.get(reasoning_parser_name)
-                if tokenizer is not None:
-                    cls.reasoning_parser_cls.validate_tokenizer(tokenizer)
-            else:
-                raise ValueError(f'The reasoning parser {reasoning_parser_name} is not in the parser list: '
-                                 f'{ReasoningParserManager.module_dict.keys()}')
+            cls.reasoning_parser_cls = ReasoningParserManager.get(reasoning_parser_name)
+            if tokenizer is not None:
+                cls.reasoning_parser_cls.validate_tokenizer(tokenizer)
 
         if tool_parser_name is not None:
-            if tool_parser_name in ToolParserManager.module_dict:
-                cls.tool_parser_cls = ToolParserManager.get(tool_parser_name)
-            else:
-                raise ValueError(f'The tool parser {tool_parser_name} is not in the parser list: '
-                                 f'{ToolParserManager.module_dict.keys()}')
+            cls.tool_parser_cls = ToolParserManager.get(tool_parser_name)
 
     @classmethod
     def chat_template_kwargs_from_request(cls, request: ChatCompletionRequest) -> dict:
@@ -259,7 +253,7 @@ class BaseResponseParser(ResponseParser):
         it into ``chat_template_kwargs`` so downstream parser behavior can rely
         on one normalized source.
         """
-        chat_template_kwargs = request.chat_template_kwargs or {}
+        chat_template_kwargs = dict(request.chat_template_kwargs or {})
         if request.enable_thinking is not None:
             logger.warning('`enable_thinking` will be deprecated in the future, '
                            'please use `chat_template_kwargs` instead.')
@@ -268,13 +262,18 @@ class BaseResponseParser(ResponseParser):
             else:
                 logger.warning(
                     '`enable_thinking` in `chat_template_kwargs` will override the value in request.')
+        if request.reasoning_effort in ('high', 'max'):
+            chat_template_kwargs.setdefault('reasoning_effort', request.reasoning_effort)
         return chat_template_kwargs
 
     def __init__(self, request: ChatCompletionRequest):
         rcls = type(self).reasoning_parser_cls
         tcls = type(self).tool_parser_cls
         self._kwargs = type(self).chat_template_kwargs_from_request(request)
-        self.enable_thinking: bool | None = self._kwargs.get('enable_thinking', None)
+        self.enable_thinking: bool | None = self._kwargs.get(
+            'enable_thinking', self._kwargs.get('thinking', None))
+        if self._kwargs.get('thinking') is True:
+            self.enable_thinking = True
         self.reasoning_parser: ReasoningParser | None = rcls(**self._kwargs) if rcls else None
         self.tool_parser: ToolParser | None = tcls() if tcls else None
         self.reasoning_enabled = bool(
@@ -299,14 +298,34 @@ class BaseResponseParser(ResponseParser):
             # an engine can apply only one guided-decoding constraint.
             self.request = self.request.model_copy(update={'response_format': required_response_format})
 
-        self._accumulated_text = ''
+        self._received_any_text = False
+        self._stream_final_received = False
 
-        self.profile = self._build_profile()
+        self._reasoning_open_tag: str | None = None
+        self._reasoning_close_tag: str | None = None
+        if self.reasoning_parser is not None:
+            self._reasoning_open_tag = self.reasoning_parser.get_reasoning_open_tag()
+            self._reasoning_close_tag = self.reasoning_parser.get_reasoning_close_tag()
+            if not self._reasoning_close_tag:
+                name = self.reasoning_parser.__class__.__name__
+                raise RuntimeError(f'Reasoning parser {name} must provide a reasoning end tag')
+
+        self._tool_open_tag: str | None = None
+        if self.tool_parser is not None and self.request.tool_choice != 'none':
+            self._tool_open_tag = self.tool_parser.get_tool_open_tag()
+            if not self._tool_open_tag:
+                name = self.tool_parser.__class__.__name__
+                raise RuntimeError(f'Tool parser {name} must provide a tool start tag')
+
         if self.reasoning_enabled:
             self._mode = self.MODE_REASONING
         else:
             self._mode = self.MODE_PLAIN
+        self._tool_return_mode: str = self._mode
         self._pending = ''
+        self._after_tool_block = False
+
+        self._initialize_reasoning_token_counter()
 
     def stream_chunk(
         self,
@@ -325,15 +344,21 @@ class BaseResponseParser(ResponseParser):
             from this stream step. Multiple entries may be returned when one
             engine chunk contains reasoning, content, and tool-call segments.
             Return ``[]`` when this engine step produces no visible delta (for
-            example while buffering a partial protocol tag).
+            example while buffering protocol syntax or tool-call payload).
+            Tool calls follow the identity-first contract documented by
+            :class:`ResponseParser`. Deltas preserve channel order, including
+            reasoning before and after a nested tool block.
         """
+        self._update_reasoning_tokens(delta_token_ids)
+        self._stream_final_received = bool(kwargs.get('final', False))
+
         # Special-case: some backends emit a leading empty delta (no text, no
         # tokens) before any actual content. Tests treat this as a visible empty
         # content delta.
         if (
             not delta_text
             and not delta_token_ids
-            and self._accumulated_text == ''
+            and not self._received_any_text
         ):
             return [(DeltaMessage(role='assistant', content=''), False)]
 
@@ -342,18 +367,20 @@ class BaseResponseParser(ResponseParser):
                 return []
             return [(DeltaMessage(role='assistant', content=delta_text), False)]
 
-        self._accumulated_text += delta_text
+        if delta_text:
+            self._received_any_text = True
         self._pending += delta_text
-        produced_any = False
         deltas: list[tuple[DeltaMessage, bool]] = []
 
         while True:
+            if self._after_tool_block and not self._resolve_tool_separator():
+                break
+
             progressed = False
             if self._mode == self.MODE_PLAIN:
                 emitted, progressed = self._consume_plain()
                 if emitted:
                     deltas.append((DeltaMessage(role='assistant', content=emitted), False))
-                    produced_any = True
             elif self._mode == self.MODE_REASONING:
                 emitted, progressed = self._consume_reasoning()
                 if emitted:
@@ -361,27 +388,17 @@ class BaseResponseParser(ResponseParser):
                         deltas.append((DeltaMessage(role='assistant', content=emitted), False))
                     else:
                         deltas.append((DeltaMessage(role='assistant', reasoning_content=emitted), False))
-                    produced_any = True
             if self._mode == self.MODE_TOOL:
-                # self._consume_plain() might change the mode to MODE_TOOL
-                # so we need to check the mode again
+                # The plain/reasoning consumer may enter tool mode, so dispatch
+                # the buffered payload without waiting for another engine chunk.
                 new_calls, progressed = self._consume_tool()
                 if new_calls:
                     deltas.append((DeltaMessage(role='assistant', tool_calls=new_calls), True))
-                    produced_any = True
-            if not progressed:
+            # A consumed chunk normally leaves tool mode waiting for the next
+            # engine delta.  Re-entering the state machine with an empty
+            # buffer only repeats parser dispatch on every streamed token.
+            if not progressed or not self._pending:
                 break
-
-        # 5. Special case: a trailing empty delta (delta_text == '') after non-empty
-        # output should be surfaced as an explicit empty content delta so that
-        # streaming clients see the final "no-op" chunk (some backends do this).
-        if (
-            delta_text == ''
-            and not produced_any
-            and self._accumulated_text != ''
-            and not deltas
-        ):
-            deltas.append((DeltaMessage(role='assistant', content=''), False))
         return deltas
 
     def _consume_plain(self) -> tuple[str | None, bool]:
@@ -402,7 +419,7 @@ class BaseResponseParser(ResponseParser):
             content produced in this step (or ``None``), and ``progressed``
             indicates whether parser state/input was consumed.
         """
-        tags = [t for t in (self.profile.reasoning_open_tag, self.profile.tool_open_tag) if t]
+        tags = [t for t in (self._reasoning_open_tag, self._tool_open_tag) if t]
         if not tags:
             if not self._pending:
                 return None, False
@@ -427,6 +444,10 @@ class BaseResponseParser(ResponseParser):
         if earliest_idx < 0:
             if not self._pending:
                 return None, False
+            if self._stream_final_received:
+                out = self._pending
+                self._pending = ''
+                return out, True
             keep = self._longest_open_tag_prefix_suffix(self._pending, tags)
             if keep > 0:
                 if keep >= len(self._pending):
@@ -441,12 +462,10 @@ class BaseResponseParser(ResponseParser):
         # Emit content before protocol open tag.
         prefix = self._pending[:earliest_idx]
         self._pending = self._pending[earliest_idx + len(earliest_tag):]
-        if earliest_tag == self.profile.reasoning_open_tag:
+        if earliest_tag == self._reasoning_open_tag:
             self._mode = self.MODE_REASONING
         else:
-            self._mode = self.MODE_TOOL
-            if self.tool_parser is not None:
-                self.tool_parser.start_tool_call()
+            self._enter_tool_mode()
         return (prefix if prefix else None), True
 
     def _consume_reasoning(self) -> tuple[str | None, bool]:
@@ -456,8 +475,10 @@ class BaseResponseParser(ResponseParser):
         - Drops the explicit open tag if model emits it.
         - If no close tag is present, emits only the safe reasoning-text prefix and
           preserves possible partial-tag suffix for the next chunk.
-        - If a close tag is found, emits text before the close tag as reasoning content,
-          consumes the close tag, and switches mode to ``MODE_PLAIN``.
+        - If a close tag is found, emits text before it and switches to plain
+          mode.
+        - If a tool-open tag is found, emits text before it and temporarily
+          suspends reasoning. Reasoning resumes after that tool block closes.
 
         Returns:
             ``(emitted_text, progressed)`` where ``emitted_text`` is the reasoning
@@ -465,103 +486,142 @@ class BaseResponseParser(ResponseParser):
             indicates whether parser state/input was consumed.
         """
 
-        open_tag = self.profile.reasoning_open_tag
+        open_tag = self._reasoning_open_tag
         # Drop explicit open tag if model emits it.
         if open_tag and self._pending.startswith(open_tag):
             self._pending = self._pending[len(open_tag):]
             return None, True
 
-        close_tag = self.profile.reasoning_close_tag
+        close_tag = self._reasoning_close_tag
         if not close_tag:
             raise RuntimeError('Invariant violated: MODE_REASONING requires a reasoning_close_tag.')
 
-        idx = self._pending.find(close_tag)
-        # No close tag found, treat the whole pending text as reasoning content.
+        # GLM-style outputs may start a tool call directly from reasoning.
+        tool_tag = self._tool_open_tag if self.tool_parser is not None else None
+        boundary_tags = [tag for tag in (close_tag, tool_tag) if tag]
+
+        idx = -1
+        matched_tag = ''
+        for tag in boundary_tags:
+            tag_idx = self._pending.find(tag)
+            if tag_idx >= 0 and (idx < 0 or tag_idx < idx):
+                idx = tag_idx
+                matched_tag = tag
+
         if idx < 0:
             if not self._pending:
                 return None, False
+            if self._stream_final_received:
+                out = self._pending
+                self._pending = ''
+                return out, True
+            keep = self._longest_open_tag_prefix_suffix(self._pending, boundary_tags)
+            if keep > 0:
+                if keep >= len(self._pending):
+                    return None, False
+                out = self._pending[:-keep]
+                self._pending = self._pending[-keep:]
+                return (out if out else None), bool(out)
             out = self._pending
             self._pending = ''
             return out, True
 
         reasoning_chunk = self._pending[:idx]
-        self._pending = self._pending[idx + len(close_tag):]
-        # reasoning part is done, switch to plain mode
-        self._mode = self.MODE_PLAIN
+        self._pending = self._pending[idx + len(matched_tag):]
+        if matched_tag == close_tag:
+            self._mode = self.MODE_PLAIN
+        else:
+            self._enter_tool_mode()
         return (reasoning_chunk if reasoning_chunk else None), True
 
-    def _consume_tool(self) -> tuple[list[DeltaToolCall], bool]:
-        """Consume buffered text while in tool mode.
+    def _enter_tool_mode(self) -> None:
+        """Start a tool block and remember which response mode it suspended."""
+        self._tool_return_mode = self._mode
+        self._mode = self.MODE_TOOL
+        self.tool_parser.begin_tool_block()
 
-        Behavior:
-        - Treats ``self._pending`` as tool payload bytes until ``tool_close_tag``
-          is found.
-        - For non-final payload chunks, forwards text to
-          ``tool_parser.decode_tool_incremental(..., final=False)``.
-        - For the final payload chunk (before close tag), forwards text with
-          ``final=True``, then calls ``tool_parser.finish_tool_call()`` and
-          switches mode back to ``MODE_PLAIN``.
-        - This method is format-agnostic: JSON/XML/other details are handled
-          entirely by the concrete tool parser implementation.
+    def _resolve_tool_separator(self) -> bool:
+        """Resolve possible newlines between consecutive tool blocks.
+
+        Newlines are discarded only after a following tool opening tag is
+        confirmed. Until then they remain buffered so they can be routed to
+        the mode that the preceding tool block suspended.
 
         Returns:
-            ``(tool_call_deltas, progressed)`` where ``tool_call_deltas`` is the
-            list emitted by the tool parser for this step (possibly empty), and
-            ``progressed`` indicates whether parser state/input was consumed.
+            Whether the pending input is ready for normal mode dispatch.
         """
+        newline_end = 0
+        pending_size = len(self._pending)
+        while newline_end < pending_size and self._pending[newline_end] == '\n':
+            newline_end += 1
+
+        if newline_end:
+            tool_tag = self._tool_open_tag
+            remaining = pending_size - newline_end
+            if not remaining:
+                if not self._stream_final_received:
+                    return False
+            elif self._pending.startswith(tool_tag, newline_end):
+                self._pending = self._pending[newline_end:]
+            elif (
+                remaining < len(tool_tag)
+                and not self._stream_final_received
+                and self._pending.startswith(tool_tag[:remaining], newline_end)
+            ):
+                return False
+
+        self._after_tool_block = False
+        return True
+
+    def _consume_tool(self) -> tuple[list[DeltaToolCall], bool]:
+        """Delegate a tool block and drop only its consumed input prefix."""
         if self.tool_parser is None:
             raise RuntimeError('Invariant violated: MODE_TOOL requires a tool_parser.')
 
-        close_tag = self.profile.tool_close_tag
-        if not close_tag:
-            if not self._pending:
-                return [], False
-            emit = self._pending
+        calls: list[DeltaToolCall] = []
+        consumed = self.tool_parser.feed_tool_block(
+            self._pending,
+            calls,
+            final=self._stream_final_received,
+        )
+        if consumed == len(self._pending):
             self._pending = ''
-            out = self.tool_parser.decode_tool_incremental(added_text=emit, final=False)
-            if (self.profile.tool_payload_format == 'json'
-                and self._is_complete_json_object(self.tool_parser._tool_payload)):
-                out.extend(self.tool_parser.decode_tool_incremental(added_text='', final=True))
-                self.tool_parser.finish_tool_call()
-                self._mode = self.MODE_PLAIN
-            return out, True
+        elif consumed:
+            self._pending = self._pending[consumed:]
+        if self.tool_parser.block_closed:
+            self._mode = self._tool_return_mode
+            self._after_tool_block = True
+        return calls, consumed > 0 or self.tool_parser.block_closed
 
-        idx = self._pending.find(close_tag)
+    def _initialize_reasoning_token_counter(self) -> None:
+        """Initialize token-based reasoning usage accounting."""
+        self.reasoning_tokens = None
+        self._counting_reasoning_tokens = self._mode == self.MODE_REASONING
+        self._reasoning_start_token_id: int | None = None
+        self._reasoning_end_token_id: int | None = None
 
-        if idx < 0:
-            if not self._pending:
-                return [], False
-            emit = self._pending
-            self._pending = ''
-            return self.tool_parser.decode_tool_incremental(added_text=emit, final=False), True
+        tokenizer = type(self).tokenizer
+        if self.reasoning_parser is None or tokenizer is None:
+            return
 
-        # Final chunk inside tool block.
-        inner = self._pending[:idx]
-        self._pending = self._pending[idx + len(close_tag):]
-        calls = self.tool_parser.decode_tool_incremental(added_text=inner, final=True)
-        self.tool_parser.finish_tool_call()
-        self._mode = self.MODE_PLAIN
-        return calls, True
+        self.reasoning_tokens = 0
+        vocab = tokenizer.get_vocab()
+        if self._reasoning_open_tag:
+            self._reasoning_start_token_id = vocab[self._reasoning_open_tag]
+        self._reasoning_end_token_id = vocab[self._reasoning_close_tag]
 
-    def _build_profile(self) -> ProtocolProfile:
-        profile = ProtocolProfile(starts_in_reasoning_mode=False)
-        rparser = self.reasoning_parser
-        tparser = self.tool_parser
+    def _update_reasoning_tokens(self, token_ids: list[int]) -> None:
+        """Count tokens inside the logical reasoning-tag interval."""
+        if self.reasoning_tokens is None or self.enable_thinking is False:
+            return
 
-        if rparser is not None:
-            profile.reasoning_open_tag = rparser.get_reasoning_open_tag()
-            profile.reasoning_close_tag = rparser.get_reasoning_close_tag()
-            profile.starts_in_reasoning_mode = bool(rparser.starts_in_reasoning_mode())
-            if not profile.reasoning_close_tag:
-                raise RuntimeError(f'Reasoning parser {rparser.__class__.__name__} must provide a reasoning end tag')
-
-        if tparser is not None and self.request.tool_choice != 'none':
-            profile.tool_open_tag = tparser.get_tool_open_tag()
-            profile.tool_close_tag = tparser.get_tool_close_tag()
-            profile.tool_payload_format = tparser.get_tool_payload_format()
-            if not profile.tool_open_tag:
-                raise RuntimeError(f'Tool parser {tparser.__class__.__name__} must provide a tool start tag')
-        return profile
+        for token_id in token_ids:
+            if token_id == self._reasoning_start_token_id:
+                self._counting_reasoning_tokens = True
+            elif token_id == self._reasoning_end_token_id:
+                self._counting_reasoning_tokens = False
+            elif self._counting_reasoning_tokens:
+                self.reasoning_tokens += 1
 
     def parse_complete(
         self,
@@ -569,7 +629,7 @@ class BaseResponseParser(ResponseParser):
         token_ids: list[int] | None = None,
         **kwargs,
     ) -> tuple[str, list | None, str | None]:
-        """Parse the final non-streaming text output.
+        """Parse a complete response through the streaming state machine.
 
         Args:
             text: Full generated output text.
@@ -580,104 +640,25 @@ class BaseResponseParser(ResponseParser):
             - ``tool_calls``: parsed tool calls, or ``None``
             - ``reasoning_content``: separated reasoning text, or ``None``
         """
+        if self.reasoning_tokens is not None:
+            self.reasoning_tokens = 0
+            self._counting_reasoning_tokens = self.reasoning_enabled
+        messages = self.stream_chunk(text, token_ids or [], final=True)
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
-        tool_calls: list[ToolCall] = []
-        pos = 0
-        mode = self.MODE_REASONING if self.reasoning_enabled else self.MODE_PLAIN
-        n = len(text)
-
-        while pos < n:
-            if mode == self.MODE_REASONING:
-                open_tag = self.profile.reasoning_open_tag
-                if open_tag and text.startswith(open_tag, pos):
-                    pos += len(open_tag)
-                    continue
-                close_tag = self.profile.reasoning_close_tag
-                close_idx = text.find(close_tag, pos) if close_tag else -1
-                if close_idx < 0:
-                    piece = text[pos:]
-                    if self.enable_thinking is False:
-                        content_parts.append(piece)
-                    else:
-                        reasoning_parts.append(piece)
-                    break
-                piece = text[pos:close_idx]
-                if piece:
-                    if self.enable_thinking is False:
-                        content_parts.append(piece)
-                    else:
-                        reasoning_parts.append(piece)
-                pos = close_idx + len(close_tag)
-                mode = self.MODE_PLAIN
-                continue
-
-            open_idx, open_tag = self._find_first(
-                text,
-                [t for t in (self.profile.reasoning_open_tag, self.profile.tool_open_tag) if t],
-                pos,
-            )
-            if open_idx < 0:
-                content_parts.append(text[pos:])
-                break
-
-            if open_idx > pos:
-                content_parts.append(text[pos:open_idx])
-
-            if open_tag == self.profile.reasoning_open_tag:
-                mode = self.MODE_REASONING
-                pos = open_idx + len(open_tag)
-                continue
-
-            # tool block
-            close_tag = self.profile.tool_close_tag
-            if close_tag:
-                close_idx = text.find(close_tag, open_idx + len(open_tag))
-                if close_idx < 0:
-                    # Unterminated tool block: keep as plain text.
-                    content_parts.append(text[open_idx:])
-                    break
-                tool_payload = text[open_idx + len(open_tag):close_idx].strip()
-            else:
-                close_idx = n
-                tool_payload = text[open_idx + len(open_tag):].strip()
-            parsed_call = self.tool_parser.parse_tool_call_complete(tool_payload) if self.tool_parser else None
-            if parsed_call is not None:
-                tool_calls.append(parsed_call)
-                pos = close_idx + len(close_tag) if close_tag else n
-            else:
-                # Tool call parsing failed — fall back to plain text.
-                content_parts.append(text[open_idx:])
-                break
+        tool_deltas: list[DeltaToolCall] = []
+        for message, _ in messages:
+            if message.content:
+                content_parts.append(message.content)
+            if message.reasoning_content:
+                reasoning_parts.append(message.reasoning_content)
+            if message.tool_calls:
+                tool_deltas.extend(message.tool_calls)
 
         content = ''.join(content_parts)
         reasoning_content = ''.join(reasoning_parts) if reasoning_parts else None
+        tool_calls = self.tool_parser.build_tool_calls(tool_deltas) if self.tool_parser is not None else []
         return content if content != '' else None, tool_calls or None, reasoning_content
-
-    def validate_complete(self, text: str | None = None) -> bool:
-        text = self._accumulated_text if text is None else text
-
-        if self.reasoning_enabled:
-            close_tag = self.profile.reasoning_close_tag
-            close_idx = text.find(close_tag) if close_tag else -1
-            if close_idx < 0:
-                return False
-
-        if self.tool_parser is None or self.request.tool_choice == 'none':
-            return True
-
-        return self.tool_parser.validate_complete(text)
-
-    @staticmethod
-    def _find_first(text: str, tags: list[str], start: int) -> tuple[int, str]:
-        best_idx = -1
-        best_tag = ''
-        for tag in tags:
-            idx = text.find(tag, start)
-            if idx >= 0 and (best_idx < 0 or idx < best_idx):
-                best_idx = idx
-                best_tag = tag
-        return best_idx, best_tag
 
     @staticmethod
     def _longest_open_tag_prefix_suffix(text: str, tags: list[str]) -> int:
@@ -692,15 +673,3 @@ class BaseResponseParser(ResponseParser):
                         best = k
                     break
         return best
-
-    @staticmethod
-    def _is_complete_json_object(payload: str) -> bool:
-        payload = payload.strip()
-        if not payload:
-            return False
-        decoder = json.JSONDecoder()
-        try:
-            obj, end = decoder.raw_decode(payload)
-        except json.JSONDecodeError:
-            return False
-        return isinstance(obj, dict) and end == len(payload)

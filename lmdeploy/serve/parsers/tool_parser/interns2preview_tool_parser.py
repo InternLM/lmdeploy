@@ -12,8 +12,9 @@ if TYPE_CHECKING:
 
 @ToolParserManager.register_module(['interns2-preview'])
 class InternS2PreviewToolParser(Qwen3CoderToolParser):
-    """Tool parser for InternS2-Preview XML-style tool calls."""
+    """Reuse the Qwen XML grammar with InternS2 request rendering policy."""
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
+        """Disable spaces between special tokens before common adjustments."""
         request.spaces_between_special_tokens = False
         return super().adjust_request(request)

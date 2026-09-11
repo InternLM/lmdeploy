@@ -215,7 +215,11 @@ async def stream_messages_response(result_generator,
                 for tok, tok_logprobs in zip(delta_token_ids, res.logprobs)
             ]
 
-        stream_deltas = response_parser.stream_chunk(text, delta_token_ids)
+        stream_deltas = response_parser.stream_chunk(
+            text,
+            delta_token_ids,
+            final=res.finish_reason is not None,
+        )
         if not stream_deltas:
             if res.finish_reason is None and not delta_token_ids:
                 continue
@@ -223,13 +227,6 @@ async def stream_messages_response(result_generator,
             # content. Keep a synthetic delta so token IDs/logprobs from that
             # backend chunk are still streamed as metadata.
             stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
-
-        should_validate_complete = (
-            res.finish_reason in ('stop', 'length')
-            and (return_token_ids or return_routed_experts)
-        )
-        if should_validate_complete and not response_parser.validate_complete():
-            res.finish_reason = 'parse_error'
 
         for delta_index, (delta_message, tool_emitted) in enumerate(stream_deltas):
             if tool_emitted:

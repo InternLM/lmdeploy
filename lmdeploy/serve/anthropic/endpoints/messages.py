@@ -258,16 +258,9 @@ def register(router: APIRouter, server_context) -> None:
         tool_calls = None
         reasoning_content = None
         try:
-            raw_text = text
             text, tool_calls, reasoning_content = response_parser.parse_complete(text, final_token_ids)
         except Exception as err:
             return create_error_response(HTTPStatus.BAD_REQUEST, f'Failed to parse output: {err}')
-        should_validate_complete = (
-            final_res.finish_reason in ('stop', 'length')
-            and (request.return_token_ids or request.return_routed_experts)
-        )
-        if should_validate_complete and not response_parser.validate_complete(raw_text):
-            final_res.finish_reason = 'parse_error'
         if tool_calls and final_res.finish_reason == 'stop':
             final_res.finish_reason = 'tool_calls'
 
