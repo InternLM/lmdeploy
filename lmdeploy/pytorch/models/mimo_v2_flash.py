@@ -10,6 +10,7 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
+from lmdeploy.pytorch.backends.attention import normalize_decode_mode
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheBinding, BlockCacheRequest, BlockCacheRequestContext
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
@@ -187,6 +188,7 @@ class MiMoV2Attention(nn.Module):
                     v_head_size=self.v_head_dim,
                     sliding_window=sliding_window,
                     learnable_sink=has_sink,
+                    dtype=dtype,
                 )
                 # Paged SWA and Full attention both consume page tables.
                 self.use_native_paged_verification = True
@@ -208,6 +210,7 @@ class MiMoV2Attention(nn.Module):
                 num_kv_heads=num_kv_heads,
                 v_head_size=self.v_head_dim,
                 learnable_sink=has_sink,
+                dtype=dtype,
             )
             # MiMo verification reads the page table directly. This avoids a
             # logical-KV-sized flatten workspace and remains valid when prefix
@@ -327,7 +330,9 @@ class MiMoV2Attention(nn.Module):
         # from paged KV; flattening would duplicate shared-prefix blocks and
         # make CUDA Graph workspace capacity depend on logical KV volume.
         batch_size = attn_metadata.block_offsets.size(0)
-        is_verification = attn_metadata.is_decoding and query_states.size(0) > batch_size
+        decode_mode = normalize_decode_mode(getattr(attn_metadata, 'decode_mode', 'block'))
+        is_verification = (attn_metadata.is_decoding and decode_mode == 'speculative'
+                           and query_states.size(0) > batch_size)
         if is_verification and not self.use_native_paged_verification:
             raise RuntimeError('MiMo verification requires native paged multi-token attention.')
 
@@ -340,7 +345,7 @@ class MiMoV2Attention(nn.Module):
             attn_metadata,
             s_aux=self.attention_sink_bias,
             inplace=True,
-            decode_mode='speculative' if is_verification else 'block',
+            decode_mode=decode_mode,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
         return self._project_output(attn_output)
@@ -699,7 +704,8 @@ class MiMoV2FlashForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     }
 
     def supports_multi_token_decode(self) -> bool:
-        """Return whether every selected attention path supports spec queries."""
+        """Return whether every selected attention path supports spec
+        queries."""
         return all(layer.self_attn.attn_fwd.supports_multi_token_decode for layer in self.model.layers)
 
     def _prefix_cache_graph_is_safe(self) -> bool:

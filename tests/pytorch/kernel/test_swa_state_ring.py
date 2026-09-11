@@ -3,11 +3,11 @@ from types import SimpleNamespace
 
 import torch
 
-from lmdeploy.pytorch.backends.cuda.attention.swa_state_ring import (
-    SWAStateRingMetadata,
-    SWAStateRingAttentionImpl,
-)
 from lmdeploy.pytorch.backends.attention import SWAStateRingAttentionBuildSpec
+from lmdeploy.pytorch.backends.cuda.attention.swa_state_ring import (
+    SWAStateRingAttentionImpl,
+    SWAStateRingMetadata,
+)
 from lmdeploy.pytorch.kernels.cuda.swa_state_ring import flatten_swa_state_ring, scatter_swa_state_ring
 
 
@@ -53,7 +53,7 @@ def test_swa_state_ring_flattens_history_then_updates_current_tokens():
 def test_swa_state_ring_q1_paged_decode_matches_flatten():
     """The q=1 ring-page fast path preserves pre-wrap and wrapped results."""
 
-    from lmdeploy.pytorch.kernels.cuda import flash_attn_varlen_func, flash_attn_with_kvcache
+    from lmdeploy.pytorch.kernels.cuda import flash_attn_varlen_func
 
     torch.manual_seed(7)
     batch_size = 2

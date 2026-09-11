@@ -27,11 +27,9 @@ class ARSpecStrategyFactory(StrategyFactoryBase):
     def build_cudagraph_strategy(self) -> 'CudagraphStrategy':
         """Build cudagraph strategy."""
         from .cudagraph import ARSpecCudagraphStrategy
-        draft_model_config = self.specdecode_config.model_config
-        architectures = getattr(draft_model_config.hf_config, 'architectures', None) or []
         return ARSpecCudagraphStrategy(
             self.specdecode_config.num_speculative_tokens,
-            architectures[0] if architectures else None,
+            self.specdecode_config.method,
         )
 
     def build_sampling_strategy(self) -> 'SamplingStrategy':

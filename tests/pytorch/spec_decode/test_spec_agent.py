@@ -649,6 +649,24 @@ def test_async_model_forward_dp1_uses_legacy_draft_depth_transition():
     assert agent.proposer.advance_draft_depth_calls == 0
 
 
+def test_legacy_base_transition_does_not_advance_draft_depth():
+    """The opt-in depth protocol must not alter legacy proposer state."""
+    from lmdeploy.pytorch.spec_decode.proposers.base import BaseSpecProposer
+
+    inputs, extra_inputs = _make_non_last_chunk_inputs()
+    inputs.spec_step_idx = 7
+    output = BaseSpecProposer.update_inputs_decoding(
+        object.__new__(BaseSpecProposer),
+        inputs,
+        extra_inputs,
+        torch.tensor([[3, 4]], dtype=torch.long),
+        torch.zeros(1, 2, 4),
+        [{}, {}],
+    )
+
+    assert output.spec_step_idx == inputs.spec_step_idx
+
+
 def test_build_draft_depth_dp_meta_legacy_uses_rank_batch_token_counts(monkeypatch):
     """Legacy recurrent depth uses one token per rank-local request."""
     import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod

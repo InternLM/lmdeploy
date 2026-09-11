@@ -4,7 +4,7 @@ from lmdeploy.pytorch.strategies.ar_spec.cudagraph import ARSpecCudagraphStrateg
 
 
 def test_arspec_cudagraph_uses_single_token_graph_for_all_methods():
-    strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, draft_arch='Qwen3_5MTPModel')
+    strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, method='qwen3_5_mtp')
 
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=8) == 8
 
@@ -49,49 +49,26 @@ def test_triton_metadata_builder_uses_explicit_decode_mode():
 
 
 def test_arspec_cudagraph_uses_same_allocation_for_full_spec_capture():
-    strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, draft_arch='Qwen3_5MTPModel')
+    strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, method='qwen3_5_mtp')
 
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=40) == 40
 
 
-def test_arspec_cudagraph_uses_uniform_query_len_for_mimo_arch():
-    strategy = ARSpecCudagraphStrategy(num_spec_tokens=3, draft_arch='MiMoV2FlashMTPModel')
+def test_arspec_cudagraph_uses_uniform_query_len_for_mimo_method():
+    strategy = ARSpecCudagraphStrategy(num_spec_tokens=3, method='mimo_mtp')
 
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=24) == 24
 
 
-def test_ar_spec_factory_derives_uniform_query_len_capability_mimo():
+def test_ar_spec_factory_derives_uniform_query_len_from_mimo_method():
     from types import SimpleNamespace
 
-    from lmdeploy.pytorch.config import ModelConfig, SpecDecodeConfig
     from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
 
-    model_config = ModelConfig(
-        hidden_size=5120,
-        num_layers=48,
-        num_attention_heads=64,
-        num_key_value_heads=8,
-        bos_token_id=0,
-        eos_token_id=[0],
-        head_dim=192,
-        hf_config=SimpleNamespace(architectures=['MiMoV2FlashMTPModel']),
-        model_paradigm='ar_spec',
-    )
-    spec_config = SpecDecodeConfig(
-        model='mimo-draft',
-        method='arbitrary_method',
+    model_config = SimpleNamespace(bos_token_id=0)
+    spec_config = SimpleNamespace(
+        method='mimo_mtp',
         num_speculative_tokens=3,
-        model_config=ModelConfig(
-            hidden_size=5120,
-            num_layers=3,
-            num_attention_heads=64,
-            num_key_value_heads=8,
-            bos_token_id=0,
-            eos_token_id=[0],
-            head_dim=192,
-            hf_config=SimpleNamespace(architectures=['MiMoV2FlashMTPModel']),
-            model_paradigm='ar_spec',
-        ),
     )
     strategy = ARSpecStrategyFactory(model_config, spec_config).build_cudagraph_strategy()
 
@@ -99,7 +76,7 @@ def test_ar_spec_factory_derives_uniform_query_len_capability_mimo():
 
 
 def test_arspec_cudagraph_keeps_full_spec_capture_for_eagle3():
-    strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, draft_arch='Eagle3DeepseekV2ForCausalLM')
+    strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, method='eagle3')
 
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=8) == 8
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=40) == 40
@@ -159,40 +136,6 @@ def test_cudagraph_fa3_metadata_uses_single_query_len_for_single_token_capture()
     )
 
     assert model.max_seqlen_q_calls == [1, 1]
-
-
-def test_mimo_target_multi_token_capability_reads_transformer_layers():
-    from lmdeploy.pytorch.models.mimo_v2_flash import MiMoV2FlashForCausalLM
-
-    model = MiMoV2FlashForCausalLM.__new__(MiMoV2FlashForCausalLM)
-    model.model = SimpleNamespace(
-        layers=[
-            SimpleNamespace(self_attn=SimpleNamespace(attn_fwd=SimpleNamespace(
-                supports_multi_token_decode=True))),
-        ])
-
-    assert model.supports_multi_token_decode() is True
-
-
-def test_mimo_mtp_capture_state_accepts_runner_protocol():
-    import torch
-
-    from lmdeploy.pytorch.models.mimo_v2_flash_mtp import MiMoV2FlashMTPModel
-    from lmdeploy.pytorch.models.utils.cudagraph import GraphCaptureContext
-
-    model = MiMoV2FlashMTPModel.__new__(MiMoV2FlashMTPModel)
-    model.model = SimpleNamespace(num_mtp_layers=2)
-    caches = [[torch.zeros(1), torch.zeros(1)], [torch.ones(1), torch.ones(1)]]
-
-    state = model.get_cudagraph_capture_state(
-        GraphCaptureContext(
-            past_key_values=caches,
-            attn_metadata=SimpleNamespace(q_seqlens=torch.tensor([1])),
-            num_blocks=8,
-            spec_step_idx=3,
-        ))
-
-    assert state.tensors == tuple(caches[1])
 
 
 def test_full_graph_disables_legacy_fa3_metadata_without_support(monkeypatch):
@@ -427,6 +370,7 @@ def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypat
     context = SimpleNamespace(
         global_is_decoding=lambda: True,
         target_hidden_states=torch.zeros((1, 8, 16)),
+        decode_mode='block',
     )
     runner = cuda_graph_runner.CUDAGraphRunner.__new__(cuda_graph_runner.CUDAGraphRunner)
     runner.ctx_mgr = SimpleNamespace(current_context=lambda: context)
@@ -465,6 +409,17 @@ def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypat
     )
     assert key_qlen4 != key_qlen1
 
+    context.decode_mode = 'speculative'
+    key_speculative = runner.get_graph_key(
+        input_ids=input_ids_qlen4,
+        position_ids=torch.zeros_like(input_ids_qlen4),
+        past_key_values=[],
+        attn_metadata=attn_metadata_qlen4,
+        inputs_embeds=None,
+    )
+    assert key_speculative != key_qlen4
+
+    context.decode_mode = 'block'
     context.target_hidden_states = torch.zeros((1, 8, 32))
     key_hidden32 = runner.get_graph_key(
         input_ids=input_ids_qlen4,

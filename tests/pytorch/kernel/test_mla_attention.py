@@ -245,6 +245,18 @@ def test_bf16_sparse_decode_skips_fp8_flashmla_metadata():
     assert not hasattr(metadata, 'tile_scheduler_metadata')
 
 
+def test_attention_preserves_flashmla_metadata_adapter(monkeypatch):
+    from lmdeploy.pytorch.nn import attention as attention_module
+
+    backend = Mock()
+    metadata = object()
+    monkeypatch.setattr(attention_module, 'get_backend', lambda: backend)
+
+    attention_module.Attention.update_meta_flashmla(metadata, 16)
+
+    backend.update_meta_flashmla.assert_called_once_with(metadata, 16)
+
+
 def test_bf16_mla_flatten_uses_shared_k_latent_as_value():
     impl = object.__new__(mla_module.FlashMLAImpl)
     impl.v_head_size = 512

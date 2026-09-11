@@ -304,9 +304,9 @@ def build_qkv_proj(in_features: int,
                    device: torch.device | None = None,
                    is_tp: bool = True,
                    num_replicate_kv_heads: int = 1,
+                   prefix: str = '',
                    checkpoint_output_shard_sizes: tuple[int, int, int] | None = None,
-                   continuous_qkv_scale_layout: bool = False,
-                   prefix: str = ''):
+                   continuous_qkv_scale_layout: bool = False):
     """Build a QKV projection, optionally preserving checkpoint FP8 grids."""
     dist_config = get_dist_manager().current_config()
     is_tp = is_tp if dist_config.attn_tp > 1 else False

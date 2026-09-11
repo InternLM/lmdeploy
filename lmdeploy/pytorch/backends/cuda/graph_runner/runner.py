@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.backends.attention import normalize_decode_mode
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.config import (
     BackendConfig,
@@ -176,7 +177,8 @@ class CUDAGraphRunner(GraphRunner):
             batch_size = self._get_capture_tokens(batch_size)
         else:
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
-        graph_key = (batch_size, is_decoding, enable_microbatch, query_len)
+        decode_mode = normalize_decode_mode(getattr(context, 'decode_mode', 'block'))
+        graph_key = (batch_size, is_decoding, enable_microbatch, query_len, decode_mode)
         graph_key += self.model.get_cudagraph_extra_key(**kwargs)
         return graph_key
 

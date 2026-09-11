@@ -2,13 +2,32 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar, cast
 
 import torch
 
 from lmdeploy.messages import QuantPolicy
 
 from .base import BuildSpec
+
+DecodeMode = Literal['block', 'speculative']
+_VALID_DECODE_MODES = frozenset(('block', 'speculative'))
+
+
+def normalize_decode_mode(decode_mode: str | None, *, default: DecodeMode = 'block') -> DecodeMode:
+    """Validate and normalize an attention decode semantic."""
+    if decode_mode is None:
+        decode_mode = default
+    if decode_mode not in _VALID_DECODE_MODES:
+        raise ValueError(
+            f'Unsupported attention decode mode {decode_mode!r}; '
+            f'expected one of {sorted(_VALID_DECODE_MODES)}.')
+    return cast(DecodeMode, decode_mode)
+
+
+def decode_mode_uses_causal_mask(decode_mode: str | None) -> bool:
+    """Return whether multi-token decoding requires a causal mask."""
+    return normalize_decode_mode(decode_mode) == 'speculative'
 
 
 @dataclass
@@ -204,7 +223,7 @@ class AttentionImpl(ABC, Generic[T]):
         learnable_sink: torch.Tensor = None,
         nsa_indices: torch.Tensor = None,
         inplace: bool = False,
-        decode_mode: str = 'block',
+        decode_mode: DecodeMode = 'block',
     ) -> torch.Tensor:
         """forward."""
         raise NotImplementedError
@@ -227,6 +246,7 @@ class PagedAttentionBuildSpec(BuildSpec[AttentionImpl[AttentionMetadata]]):
     mla_index_topk: int | None
     learnable_sink: bool
     block_sparse_size: int
+    dtype: torch.dtype | None = None
 
 
 @dataclass(frozen=True)

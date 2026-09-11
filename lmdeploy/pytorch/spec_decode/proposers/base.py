@@ -62,7 +62,6 @@ def draft_model_forward(
 class BaseSpecProposer:
     supports_draft_depth_protocol = False
 
-
     def __init__(self, specdecode_config: SpecDecodeConfig, device: torch.device = None):
         self.specdecode_config = specdecode_config
         self.model = None
@@ -137,7 +136,6 @@ class BaseSpecProposer:
             mrope_pos_ids=mrope_pos_ids,
             target_hidden_states=target_hidden_states,
             model_metas=model_metas,
-            spec_step_idx=model_inputs.spec_step_idx + 1,
         )
 
     def embed_input_ids(self, input_ids: torch.Tensor):

@@ -11,8 +11,10 @@ from lmdeploy.pytorch.models.patch import get_build_model_context
 from ..backends import get_backend
 from ..backends.attention import (
     AttentionMetadata,
+    DecodeMode,
     PagedAttentionBuildSpec,
     SWAStateRingAttentionBuildSpec,
+    normalize_decode_mode,
 )
 from ..backends.flash_attention import FlashAttentionBuildSpec
 from .utils import get_distribute_size
@@ -70,6 +72,7 @@ class Attention(nn.Module):
                 mla_index_topk=mla_index_topk,
                 learnable_sink=learnable_sink,
                 block_sparse_size=block_sparse_size,
+                dtype=kwargs.get('dtype'),
             ),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
@@ -114,12 +117,19 @@ class Attention(nn.Module):
         s_aux: torch.Tensor = None,
         nsa_indices: torch.Tensor = None,
         inplace: bool = True,
-        decode_mode: str | None = None,
+        decode_mode: DecodeMode | None = None,
     ) -> torch.Tensor:
         """forward."""
         self._lazy_init(query.device)
+        metadata_decode_mode = normalize_decode_mode(getattr(attn_metadata, 'decode_mode', 'block'))
         if decode_mode is None:
-            decode_mode = getattr(attn_metadata, 'decode_mode', 'block')
+            decode_mode = metadata_decode_mode
+        else:
+            decode_mode = normalize_decode_mode(decode_mode)
+            if hasattr(attn_metadata, 'decode_mode') and decode_mode != metadata_decode_mode:
+                raise ValueError(
+                    f'Attention decode mode {decode_mode!r} does not match '
+                    f'metadata mode {metadata_decode_mode!r}.')
 
         quant_policy = attn_metadata.quant_policy
         if quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
@@ -149,6 +159,11 @@ class Attention(nn.Module):
             decode_mode=decode_mode,
             **kwargs,
         )
+
+    @staticmethod
+    def update_meta_flashmla(attn_metadata: AttentionMetadata, num_attention_heads):
+        """Update FlashMLA metadata through the active backend."""
+        get_backend().update_meta_flashmla(attn_metadata, num_attention_heads)
 
 
 class SWAStateRingAttention(nn.Module):

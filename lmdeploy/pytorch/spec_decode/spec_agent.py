@@ -769,7 +769,11 @@ class SpecModelAgent(BaseSpecModelAgent):
             for batch_size in capture_batch_sizes:
                 max_query_len = self.num_spec_tokens + 1
                 protocol_model = self.proposer.model.get_model()
-                specs = protocol_model.get_cudagraph_warmup_specs(max_query_len)
+                get_warmup_specs = getattr(protocol_model, 'get_cudagraph_warmup_specs', None)
+                if not callable(get_warmup_specs):
+                    specs = ((max_query_len, 0), (1, 0))
+                else:
+                    specs = get_warmup_specs(max_query_len)
                 for query_len, spec_step_idx in specs:
                     inputs = self.inputs_strategy.make_dummy(
                         batch_size,

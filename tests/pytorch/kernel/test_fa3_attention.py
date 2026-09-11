@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import sys
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import torch
 
@@ -9,6 +10,7 @@ from lmdeploy.pytorch.backends.attention import PagedAttentionBuildSpec, SWAStat
 from lmdeploy.pytorch.backends.cuda.attention import _build_paged_attention
 from lmdeploy.pytorch.backends.cuda.attention.default import TritonAttentionImpl, TritonAttentionMetadata
 from lmdeploy.pytorch.backends.cuda.attention.fa3 import FA3Impl
+from lmdeploy.pytorch.backends.cuda.attention.fa3_capabilities import fa3_build_supports_operation
 from lmdeploy.pytorch.backends.cuda.attention.swa_state_ring import SWAStateRingAttentionImpl
 from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
 
@@ -26,28 +28,95 @@ def test_attention_builder_falls_back_when_fa3_lacks_asymmetric_head_shape(monke
     }
     monkeypatch.setitem(sys.modules, 'flash_attn_config', SimpleNamespace(CONFIG={'build_flags': flags}))
     monkeypatch.setattr(attention_mod, 'use_fa3_warning', lambda: True)
-    attention_mod._enable_fa3.cache_clear()
-    try:
-        impl = _build_paged_attention(
-            PagedAttentionBuildSpec(
-                num_heads=8,
-                head_dim=192,
-                scale=None,
-                num_kv_heads=2,
-                v_head_dim=128,
-                alibi=False,
-                sliding_window=None,
-                logit_softcapping=0.0,
-                causal=True,
-                use_flash_mla=False,
-                mla_index_topk=None,
-                learnable_sink=False,
-                block_sparse_size=1,
-            ))
-    finally:
-        attention_mod._enable_fa3.cache_clear()
+    monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda: (9, 0))
+    impl = _build_paged_attention(
+        PagedAttentionBuildSpec(
+            num_heads=8,
+            head_dim=192,
+            scale=None,
+            num_kv_heads=2,
+            v_head_dim=128,
+            alibi=False,
+            sliding_window=None,
+            logit_softcapping=0.0,
+            causal=True,
+            use_flash_mla=False,
+            mla_index_topk=None,
+            learnable_sink=False,
+            block_sparse_size=1,
+        ))
 
     assert type(impl) is TritonAttentionImpl
+
+
+def test_fa3_operation_capability_checks_arch_and_build_features(monkeypatch):
+    flags = {
+        'FLASHATTENTION_DISABLE_HDIM128': False,
+        'FLASHATTENTION_DISABLE_HDIM192': False,
+        'FLASH_ATTENTION_DISABLE_HDIMDIFF192': False,
+    }
+    monkeypatch.setitem(sys.modules, 'flash_attn_config', SimpleNamespace(CONFIG={'build_flags': flags}))
+
+    assert not fa3_build_supports_operation(
+        192,
+        128,
+        device_capability=(8, 0),
+        dtype=torch.bfloat16,
+        paged_kv=True,
+        varlen=True,
+    )
+    assert fa3_build_supports_operation(
+        192,
+        128,
+        device_capability=(9, 0),
+        dtype=torch.bfloat16,
+        paged_kv=True,
+        varlen=True,
+    )
+
+    requirements = {
+        'FLASHATTENTION_DISABLE_PAGEDKV': dict(paged_kv=True),
+        'FLASHATTENTION_DISABLE_VARLEN': dict(varlen=True),
+        'FLASHATTENTION_DISABLE_LOCAL': dict(local=True),
+        'FLASHATTENTION_DISABLE_SOFTCAP': dict(softcap=True),
+        'FLASHATTENTION_DISABLE_FP16': dict(dtype=torch.float16),
+    }
+    for flag, requirement in requirements.items():
+        flags[flag] = True
+        assert not fa3_build_supports_operation(
+            128,
+            128,
+            device_capability=(9, 0),
+            **requirement,
+        )
+        flags[flag] = False
+
+
+def test_legacy_spec_metadata_skips_fa3_when_fallback_is_selected(monkeypatch):
+    """Triton fallback must not retain a hidden FA3 metadata dependency."""
+    import lmdeploy.pytorch.backends.cuda.attention as attention_mod
+
+    update_meta = Mock()
+    monkeypatch.setattr(attention_mod, '_enable_fa3', lambda *args, **kwargs: False)
+    monkeypatch.setattr(CudaOpsBackend, 'update_meta_flashattn', update_meta)
+    step_context = SimpleNamespace(
+        is_decoding=True,
+        q_seqlens=torch.tensor([2]),
+        input_ids=torch.zeros((1, 2), dtype=torch.long),
+        model_config=SimpleNamespace(
+            use_flash_mla=False,
+            model_paradigm='ar_spec',
+            head_dim=192,
+            v_head_dim=128,
+            sliding_window=None,
+            dtype=torch.bfloat16,
+            is_gated_delta=False,
+        ),
+    )
+
+    metadata = object()
+    assert CudaOpsBackend._legacy_update_step_context(step_context, metadata) is metadata
+    update_meta.assert_not_called()
 
 
 def test_swa_state_ring_uses_dedicated_backend_implementation():
@@ -198,7 +267,7 @@ def test_fa3_prefill_uses_guarded_flatten_buffer_and_max_kv_seqlen():
     assert captured['flash_softcap'] == 0.0
 
 
-def test_fa3_speculative_decode_uses_normalized_disabled_softcap():
+def test_fa3_multi_token_decode_uses_mode_and_normalized_softcap():
     impl = FA3Impl.__new__(FA3Impl)
     impl.scale = 1.0
     impl.causal = True
@@ -211,6 +280,7 @@ def test_fa3_speculative_decode_uses_normalized_disabled_softcap():
 
     def fake_flash_attn_with_kvcache(query, k_cache, v_cache, **kwargs):
         captured['softcap'] = kwargs['softcap']
+        captured['causal'] = kwargs['causal']
         return torch.empty_like(query)
 
     impl.flash_attn_with_kvcache_v3 = fake_flash_attn_with_kvcache
@@ -225,7 +295,50 @@ def test_fa3_speculative_decode_uses_normalized_disabled_softcap():
     k_cache = torch.empty((2, _BLOCK_SIZE, 2, 8), dtype=torch.float16)
     v_cache = torch.empty_like(k_cache)
 
-    output = impl._decoding_speculative(query, k_cache, v_cache, metadata, max_q_seqlen=2)
+    for decode_mode, expected_causal in (('block', False), ('speculative', True)):
+        output = impl._decoding_speculative(
+            query,
+            k_cache,
+            v_cache,
+            metadata,
+            max_q_seqlen=2,
+            decode_mode=decode_mode,
+        )
 
-    assert output.shape == (2, 2, 2, 8)
-    assert captured['softcap'] == 0.0
+        assert output.shape == (2, 2, 2, 8)
+        assert captured['softcap'] == 0.0
+        assert captured['causal'] is expected_causal
+
+
+def test_fa3_scheduler_metadata_uses_decode_mode(monkeypatch):
+    from lmdeploy.pytorch.backends.cuda.attention import fa3 as fa3_module
+
+    causal_values = []
+
+    def fake_get_meta_flashattn(**kwargs):
+        causal_values.append(kwargs['causal'])
+        return torch.empty(1)
+
+    monkeypatch.setattr(fa3_module, '_get_meta_flashattn', fake_get_meta_flashattn)
+    step_context = SimpleNamespace(
+        decode_mode='block',
+        input_ids=torch.zeros((1, 2), dtype=torch.long),
+        model_config=SimpleNamespace(block_size=16, dtype=torch.bfloat16),
+    )
+    kwargs = dict(
+        batch_size=1,
+        kv_seqlens=torch.tensor([2]),
+        block_offsets=torch.tensor([[0]], dtype=torch.int32),
+        step_context=step_context,
+        num_heads_q=2,
+        num_heads_kv=1,
+        head_size=128,
+        v_head_size=128,
+        sliding_window=None,
+    )
+
+    fa3_module._build_fa3_metadata(**kwargs)
+    step_context.decode_mode = 'speculative'
+    fa3_module._build_fa3_metadata(**kwargs)
+
+    assert causal_values == [False, True]

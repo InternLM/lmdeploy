@@ -12,6 +12,7 @@ from torch.profiler import record_function
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.attention import DecodeMode, normalize_decode_mode
 from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig, QuantizationConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.utils import CtxMgrBase, singleton
@@ -238,7 +239,7 @@ class ModelInputs:
     # Attention decode semantic selected by the caller.  ``None`` keeps the
     # legacy model-level default while allowing mixed block/speculative paths
     # to override it explicitly.
-    decode_mode: str | None = None
+    decode_mode: DecodeMode | None = None
     is_chunk: bool = False
     is_first_chunk: bool = False
     is_last_chunk: bool = False
@@ -353,7 +354,7 @@ class StepContext:
     target_hidden_states: torch.Tensor | None = None
     target_inputs_embeds: torch.Tensor | None = None
     spec_step_idx: int = 0
-    decode_mode: str = 'block'
+    decode_mode: DecodeMode = 'block'
 
     # states for ssm
     state_caches: list | None = None
@@ -411,10 +412,9 @@ class StepContext:
         if cache_config.window_size > 0:
             kv_seqlens -= inputs.num_ignored_history
 
-        decode_mode = inputs.decode_mode
-        if decode_mode is None:
-            decode_mode = ('speculative'
-                           if getattr(model_config, 'model_paradigm', None) == 'ar_spec' else 'block')
+        default_decode_mode: DecodeMode = (
+            'speculative' if getattr(model_config, 'model_paradigm', None) == 'ar_spec' else 'block')
+        decode_mode = normalize_decode_mode(inputs.decode_mode, default=default_decode_mode)
 
         ret = StepContext(
             input_ids=inputs.input_ids,

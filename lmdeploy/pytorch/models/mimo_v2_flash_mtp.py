@@ -216,11 +216,45 @@ class MiMoV2FlashMTPModel(nn.Module, CudaGraphMixin):
         'gate_up_proj': ['gate_proj', 'up_proj'],
     }
 
+    def supports_multi_token_decode(self) -> bool:
+        """Return whether every prediction depth supports paged q>1."""
+        return all(
+            layer.self_attn.attn_fwd.supports_multi_token_decode
+            for layer in self.model.layers.values())
+
     def get_cudagraph_capture_state(self,
-                                    capture_context: GraphCaptureContext) -> GraphCaptureState:
+                                    capture_context: GraphCaptureContext) -> GraphCaptureState | None:
         """Return the active depth cache that Graph capture must preserve."""
         depth = capture_context.spec_step_idx % self.model.num_mtp_layers
-        return GraphCaptureState(tensors=tuple(capture_context.past_key_values[depth]))
+        return GraphCaptureState.from_paged_tensors(
+            tuple(capture_context.past_key_values[depth]),
+            block_offsets=capture_context.attn_metadata.block_offsets,
+            num_blocks=capture_context.num_blocks,
+            num_requests=capture_context.attn_metadata.q_seqlens.numel(),
+        )
+
+    def support_cuda_graph(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: list[list[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor | None = None,
+        **kwargs,
+    ) -> bool:
+        """Require implementation-owned metadata for multi-token graphs."""
+        batch_size = attn_metadata.block_offsets.size(0)
+        step_meta_plan = getattr(self.ctx_mgr, 'backend_step_meta_plan', None)
+        if input_ids.numel() > batch_size and not getattr(step_meta_plan, 'is_supported', False):
+            return False
+        return super().support_cuda_graph(
+            input_ids,
+            position_ids,
+            past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+            **kwargs,
+        )
 
     def get_cudagraph_extra_key(
         self,
