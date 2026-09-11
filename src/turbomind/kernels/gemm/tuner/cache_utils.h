@@ -12,10 +12,17 @@ public:
 
 private:
     CacheFlushing();
+    ~CacheFlushing() noexcept;
+
+    CacheFlushing(const CacheFlushing&)            = delete;
+    CacheFlushing& operator=(const CacheFlushing&) = delete;
+    CacheFlushing(CacheFlushing&&)                 = delete;
+    CacheFlushing& operator=(CacheFlushing&&)      = delete;
+
     void operator()(cudaStream_t stream) const;
 
-    uint32_t* buffer_;
-    size_t    size_;
+    uint32_t* buffer_{};
+    size_t    size_{};
 };
 
 }  // namespace turbomind::gemm
