@@ -9,6 +9,45 @@ def test_arspec_cudagraph_uses_single_token_graph_for_all_methods():
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=8) == 8
 
 
+def test_triton_metadata_builder_uses_explicit_decode_mode():
+    import torch
+
+    from lmdeploy.pytorch.backends.cuda.attention.default import (
+        TritonAttentionMetadata,
+        build_triton_attention_metadata,
+    )
+    from lmdeploy.pytorch.backends.cuda.step_metadata import CudaSequenceMetadata
+
+    class ModelConfig:
+
+        @property
+        def model_paradigm(self):
+            raise AssertionError('metadata builder must not inspect model paradigm')
+
+    step_context = SimpleNamespace(
+        is_decoding=True,
+        kv_quant_policy=None,
+        max_q_seqlen=2,
+        decode_mode='block',
+        model_config=ModelConfig(),
+    )
+    sequence_metadata = CudaSequenceMetadata(
+        block_offsets=torch.zeros((1, 1), dtype=torch.int32),
+        q_start_loc=torch.tensor([0, 2], dtype=torch.int32),
+        q_seqlens=torch.tensor([2], dtype=torch.int32),
+        kv_start_loc=None,
+        kv_seqlens=torch.tensor([2], dtype=torch.int32),
+        kv_flatten_size=None,
+        cu_seqlens_q=torch.tensor([0, 2], dtype=torch.int32),
+        cu_seqlens_k=torch.tensor([0, 2], dtype=torch.int32),
+        max_kv_seqlen=2,
+    )
+
+    metadata = build_triton_attention_metadata(TritonAttentionMetadata, step_context, sequence_metadata)
+
+    assert metadata.decode_mode == 'block'
+
+
 def test_arspec_cudagraph_uses_same_allocation_for_full_spec_capture():
     strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, draft_arch='Qwen3_5MTPModel')
 

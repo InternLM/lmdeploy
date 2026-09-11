@@ -235,6 +235,10 @@ class ModelInputs:
     seq_logit_length: torch.LongTensor | None = None
     # Prediction-depth index for multi-layer MTP draft models.
     spec_step_idx: int = 0
+    # Attention decode semantic selected by the caller.  ``None`` keeps the
+    # legacy model-level default while allowing mixed block/speculative paths
+    # to override it explicitly.
+    decode_mode: str | None = None
     is_chunk: bool = False
     is_first_chunk: bool = False
     is_last_chunk: bool = False
@@ -349,6 +353,7 @@ class StepContext:
     target_hidden_states: torch.Tensor | None = None
     target_inputs_embeds: torch.Tensor | None = None
     spec_step_idx: int = 0
+    decode_mode: str = 'block'
 
     # states for ssm
     state_caches: list | None = None
@@ -406,6 +411,11 @@ class StepContext:
         if cache_config.window_size > 0:
             kv_seqlens -= inputs.num_ignored_history
 
+        decode_mode = inputs.decode_mode
+        if decode_mode is None:
+            decode_mode = ('speculative'
+                           if getattr(model_config, 'model_paradigm', None) == 'ar_spec' else 'block')
+
         ret = StepContext(
             input_ids=inputs.input_ids,
             model_config=model_config,
@@ -435,6 +445,7 @@ class StepContext:
             target_hidden_states=inputs.target_hidden_states,
             target_inputs_embeds=inputs.target_inputs_embeds,
             spec_step_idx=inputs.spec_step_idx,
+            decode_mode=decode_mode,
             mrope_position_ids=inputs.mrope_pos_ids,
             is_chunk_multimodal=inputs.is_chunk_multimodal,
             is_dummy=inputs.is_dummy,

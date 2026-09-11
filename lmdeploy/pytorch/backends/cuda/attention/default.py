@@ -77,7 +77,7 @@ def build_triton_attention_metadata(attn_meta_cls, step_context,
         cu_seqlens_k=sequence_metadata.cu_seqlens_k,
         max_kv_seqlen=sequence_metadata.max_kv_seqlen,
         max_q_seqlen=step_context.max_q_seqlen,
-        decode_mode=('speculative' if step_context.model_config.model_paradigm == 'ar_spec' else 'block'),
+        decode_mode=getattr(step_context, 'decode_mode', 'block'),
     )
 
 
