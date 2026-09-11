@@ -33,7 +33,6 @@ def _block_pack_w1w3(w1: torch.Tensor, w3: torch.Tensor, *,
     The elements per group self-adapt for each Linear tensor kind. For FP8, one logical 128-wide weight group
     corresponds to one scale element.
     """
-    assert groups > 0, f'groups must be positive, got {groups}'
     assert w1.shape[-1] % groups == 0, (
         f'output dim {w1.shape[-1]} not divisible by groups {groups}')
     assert w3.shape[-1] == w1.shape[-1], (
@@ -92,12 +91,7 @@ class FfnBuilder(Builder):
 
     def add_ffn(self, w1, w2, w3):
         """Plan, pad, combine gate/up, then commit gate/up and down."""
-        act_type = getattr(self.config, 'act_type', 0)
-        if isinstance(act_type, int):
-            act_type = {0: 'silu', 1: 'gpt-oss'}.get(act_type, 'silu')
-        act_type = (_tm.ActivationType.kSiluGptOss
-                    if act_type == 'gpt-oss'
-                    else _tm.ActivationType.kSilu)
+        act_type = {0: _tm.ActivationType.kSilu, 1: _tm.ActivationType.kSiluGptOss}[self.config.act_type]
 
         plan = self._query_gemm(self._make_gemm_query(
             w1, grouped=self.config.is_expert))

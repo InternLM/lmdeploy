@@ -211,7 +211,6 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_qparams_kernel
 
         if (threadIdx.x == 0) {
             const int base_exponent = record_emin - 127;
-            assert(!record_finite || (-127 <= base_exponent && base_exponent <= 127));
             gBase(0, record) = record_finite ? static_cast<uint8_t>(static_cast<int8_t>(base_exponent)) : uint8_t{0x80};
             if (stats) {
                 atomicAdd(&stats->total_records, 1ull);

@@ -136,11 +136,7 @@ class Linear:
         self._impl = None
         self._context = None
         with self._activate():
-            try:
-                self._impl = _tm.LlamaLinear()
-            except Exception:
-                self._impl = None
-                raise
+            self._impl = _tm.LlamaLinear()
 
     def __del__(self):
         """Release the native executor when its last reference is dropped."""
@@ -319,7 +315,7 @@ class Linear:
         with self._activate() as stream:
             normalized_experts = [
                 self._normalize_params(weight_format, expert_weight, expert_scale, expert_zero, impl_plan.bridge)
-                for expert_weight, expert_scale, expert_zero in zip(weights, expert_scales, expert_zeros)
+                for expert_weight, expert_scale, expert_zero in zip(weights, expert_scales, expert_zeros, strict=True)
             ]
             return self._prepare_grouped(
                 normalized_experts,
@@ -379,7 +375,7 @@ class Linear:
         with self._activate() as stream:
             normalized_pairs = []
             for gate_weight, up_weight, gate_scale, up_scale, gate_zero, up_zero in zip(
-                gate_weights, up_weights, gate_scales, up_scales, gate_zeros, up_zeros
+                gate_weights, up_weights, gate_scales, up_scales, gate_zeros, up_zeros, strict=True
             ):
                 gate = self._normalize_params(weight_format, gate_weight, gate_scale, gate_zero, impl_plan.bridge)
                 up = self._normalize_params(weight_format, up_weight, up_scale, up_zero, impl_plan.bridge)

@@ -404,9 +404,7 @@ def read_packed_moe_expert(
     if trans:
         for lin in (gate_up, down):
             if lin.weight_format.name == 'trivial':
-                w = lin.tensors.get('weight')
-                if w is not None and w.dim() == 2:
-                    lin.tensors['weight'] = w.t().contiguous()
+                lin.tensors['weight'] = lin.tensors['weight'].t().contiguous()
 
     w1_t: dict[str, torch.Tensor] = {}
     w3_t: dict[str, torch.Tensor] = {}

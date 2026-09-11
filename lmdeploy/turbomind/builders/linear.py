@@ -6,10 +6,6 @@ Two weight types flow through the TurboMind weight loading pipeline:
 - ``Linear`` -- a bundle of tensors for a single linear layer (weight +
   optional scales, zeros, bias).
 - Raw ``torch.Tensor`` -- everything else (norms, embeddings, scalars).
-
-**concat_out_dim** joins ``Linear`` bundles along the output
-dimension, handling all component tensors correctly regardless of
-quantization-induced dimension scaling.
 """
 
 from __future__ import annotations
@@ -59,21 +55,6 @@ def _build_linear(fmt: WeightFormat, available: dict[str, Tensor]) -> Linear:
     if 'zeros' in tensors:
         tensors['zeros'] = tensors['zeros'].to(tensors['scales'].dtype)
     return Linear(tensors=tensors, weight_format=fmt)
-
-
-def concat_out_dim(xs: list[Linear]) -> Linear:
-    """Concatenate along output dim."""
-    first = xs[0]
-    result: dict[str, Tensor] = {}
-    for kind in first.tensors:
-        t = first.tensors[kind]
-        result[kind] = torch.cat([x.tensors[kind] for x in xs], dim=t.dim() - 1)
-    wfmts = {x.weight_format for x in xs}
-    assert len(wfmts) == 1, (
-        'concat_out_dim requires uniform weight_format; '
-        'call dequant_mixed first if formats differ.')
-    return Linear(tensors=result,
-                  weight_format=next(iter(wfmts)))
 
 
 # ---------------------------------------------------------------------------
@@ -223,8 +204,6 @@ def transform_input_dim(fn):
             for i, item in enumerate(result):
                 out_buckets[i][kind] = item
 
-        if out_buckets is None:
-            out_buckets = [{}]
         for kind in deferred_1d:
             for bucket in out_buckets:
                 bucket[kind] = first.tensors[kind]
@@ -274,12 +253,3 @@ def round_up_output_groups(linear: Linear, groups: int,
     if dst == groups:
         return linear
     return pad_output_groups(linear, src_groups=groups, dst_groups=dst)
-
-
-def round_up_input_groups(linear: Linear, groups: int,
-                          div: int) -> Linear:
-    """Pad input-dim groups to ``round_up(groups, div)``."""
-    dst = _round_up(groups, div)
-    if dst == groups:
-        return linear
-    return pad_input_groups(linear, src_groups=groups, dst_groups=dst)

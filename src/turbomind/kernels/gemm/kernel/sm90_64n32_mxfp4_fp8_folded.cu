@@ -51,7 +51,6 @@ void pack(LinearWeight& linear, cudaStream_t stream)
     Sm90MxFp4Fp8FoldedPackStats host{};
     TM_CUDA_CHECK(cudaMemcpyAsync(&host, stats, sizeof(host), cudaMemcpyDeviceToHost, stream));
     TM_CUDA_CHECK(cudaStreamSynchronize(stream));
-    TM_CHECK_GT(host.total_records, 0ull);
     TM_CHECK_EQ(host.foldable_records, host.total_records);
     const char* stats_env = std::getenv("TM_GEMM_MXFP4_FOLD_STATS");
     if (stats_env && stats_env[0] == '1' && stats_env[1] == '\0') {

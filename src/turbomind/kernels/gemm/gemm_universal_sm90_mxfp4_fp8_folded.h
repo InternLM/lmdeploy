@@ -523,9 +523,6 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
                                 int                M,
                                 cudaStream_t       stream)
     {
-        if constexpr (!is_grouped_gemm) {
-            return nullptr;
-        }
         int* offsets = reinterpret_cast<int*>(out + num_groups * kTmaDescNum);
         prepare_moe_tma_descs_sm90_mxfp4_fp8_folded<kAlignmentU, kStridingA><<<num_groups, 32, 0, stream>>>(tm_a,
                                                                                                             tm_b,
@@ -560,12 +557,6 @@ struct GemmUniversalSm90MxFp4Fp8Folded {
                                CUtensorMap*         tensormap_buf,
                                char*                smem_buf)
     {
-        if constexpr (kSupportsFusedSilu) {
-            assert(fuse_silu);
-        }
-        else {
-            assert(!fuse_silu);
-        }
         (void)param_W;
         SharedStorage& storage            = *reinterpret_cast<SharedStorage*>(smem_buf);
         const int      wg_idx             = cutlass::canonical_warp_group_idx();
@@ -1490,7 +1481,7 @@ private:
                                 group_m0 = tile->m0;
                                 row_end  = tile->m1;
                             }
-                            if (param_W.ptr && wg_idx == 0 && c_row_group == 0 && c_warp == 0) {
+                            if (wg_idx == 0 && c_row_group == 0 && c_warp == 0) {
                                 auto gW = cute::make_tensor(
                                     cute::make_gmem_ptr(static_cast<float*>(param_W.ptr)),
                                     cute::make_shape(row_end,

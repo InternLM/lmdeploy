@@ -61,7 +61,7 @@ _SPLIT_SIDE_TO_DIM: dict[SplitSide, int] = {SplitSide.OUTPUT: -1, SplitSide.INPU
 
 def _act_type_id(act_str: str) -> int:
     """Convert activation_type string to C++ ActivationType enum value."""
-    return {'silu': 0, 'gpt-oss': 1}.get(act_str, 0)
+    return {'silu': 0, 'gpt-oss': 1}[act_str]
 
 
 def _torch_dtype_to_cpp(dtype: torch.dtype):
@@ -300,9 +300,7 @@ class Builder:
         """
         assert not self._built, f"{type(self).__name__} is built; commit '{name}' rejected"
 
-        w = linear.tensors.get('weight')
-        if w is None:
-            return
+        w = linear.tensors['weight']
 
         family = plan.family
         fmt = linear.weight_format
@@ -324,7 +322,7 @@ class Builder:
             )
 
         # --- GPU-invariant preparation -------------------------------------
-        split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
+        split_dim = _SPLIT_SIDE_TO_DIM[split_side] if split_side else None
 
         in_dim, out_dim = w.shape[0], w.shape[-1]
         if split_side == SplitSide.OUTPUT:
@@ -336,7 +334,7 @@ class Builder:
         lin_cfg = _tm.LinearConfig()
         lin_cfg.input_dim = in_dim
         lin_cfg.output_dim = out_dim
-        lin_cfg.data_type = compute_dtype or _tm.DataType.TYPE_INVALID
+        lin_cfg.data_type = compute_dtype
         lin_cfg.format = linear.weight_format.make_data_format()
         lin_cfg.has_bias = 'bias' in linear.tensors
 
@@ -384,15 +382,14 @@ class Builder:
 
         self._add_child(name, handles)
 
-    def _add_tensor(self, name: str, tensor: torch.Tensor | None, split_side: SplitSide | None = None):
+    def _add_tensor(self, name: str, tensor: torch.Tensor, split_side: SplitSide | None = None):
         """Stage a raw-tensor commit under ``name``.
 
         Applied during
         ``build()`` in ``_commit_tensor``.
         """
         assert not self._built, f"{type(self).__name__} is built; commit '{name}' rejected"
-        if tensor is not None:
-            self._pending_tensors[name] = (tensor, split_side)
+        self._pending_tensors[name] = (tensor, split_side)
 
     # ------------------------------------------------------------------
     # Add helpers
@@ -480,7 +477,7 @@ class Builder:
             TP split semantics.  ``None`` means broadcast.
         """
         tp = self.tp.size if split_side else 1
-        split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
+        split_dim = _SPLIT_SIDE_TO_DIM[split_side] if split_side else None
 
         for i, handle in enumerate(self._handles):
             if handle is None:

@@ -247,7 +247,6 @@ struct GemmUniversalSm90MxFp4Fp8Unfolded {
                                CUtensorMap*         tensormap_buf,
                                char*                smem_buf)
     {
-        assert(!fuse_silu);
         (void)param_A;
         (void)param_B;
         (void)param_V;

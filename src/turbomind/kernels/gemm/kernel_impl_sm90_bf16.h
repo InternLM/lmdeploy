@@ -333,12 +333,6 @@ public:
 
         auto func = gemm_kernel_sm90_bf16<Gemm>;
 
-        [[maybe_unused]] static bool _ = [&] {
-            int max_cluster_size = 0;
-            cudaOccupancyMaxPotentialClusterSize(&max_cluster_size, func, &config);
-            return false;
-        }();
-
         cudaLaunchAttribute attrs[1];
 
         attrs[0].id               = cudaLaunchAttributeClusterDimension;
@@ -375,15 +369,8 @@ public:
 
     std::array<size_t, 2> GetWorkspaceSize(int tiles, int splits) const
     {
-        static constexpr bool kSerial = true;
-
         size_t barriers_size = sizeof(int) * tiles;
         size_t partials_size = sizeof(float) * TILE_M * TILE_N * tiles;
-
-        if constexpr (!kSerial) {
-            barriers_size *= splits;
-            partials_size *= splits;
-        }
 
         return {barriers_size, partials_size};
     }

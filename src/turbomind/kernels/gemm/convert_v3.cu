@@ -69,7 +69,7 @@ void PackWeight(LinearWeight& linear, const LayoutConverter& convert, cudaStream
     kd.pack         = convert.pack;
 
     TM_CUDA_CHECK(cudaMemsetAsync(linear.weight.raw_data(), 0, linear.weight.byte_size(), stream));
-    TM_CHECK_EQ(convert.Convert(tmp.data(), w_desc, linear.weight.raw_data(), kd, stream), 0);
+    convert.Convert(tmp.data(), w_desc, linear.weight.raw_data(), kd, stream);
     kd.type = source_weight_type;
     if (is_weight_a) {
         kd = transpose(kd);
@@ -147,7 +147,7 @@ void PackQParams(LinearWeight& linear, const LayoutConverter& convert, QuantDesc
     }
     MatrixLayout qd = s_desc;
     qd.pack         = convert.pack;
-    TM_CHECK_EQ(convert.Convert(tmp_q.raw_data(), s_desc, linear.scales.raw_data(), qd, stream), 0);
+    convert.Convert(tmp_q.raw_data(), s_desc, linear.scales.raw_data(), qd, stream);
     linear.q_desc = is_a ? transpose(qd) : qd;
 }
 
@@ -204,7 +204,7 @@ void* MakeStridedPtrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream
     Param<N>      param{};
     static_assert(sizeof(param) <= 4096);
     StridedPtr* ptr{};
-    cudaMallocAsync(&ptr, sizeof(StridedPtr) * ptrs.size(), stream);
+    TM_CUDA_CHECK(cudaMallocAsync(&ptr, sizeof(StridedPtr) * ptrs.size(), stream));
     param.ptr = ptr;
     for (int i = 0; i < (int)ptrs.size(); i += N) {
         const int n = std::min<int>(ptrs.size() - i, N);

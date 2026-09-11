@@ -1230,12 +1230,7 @@ private:
                                         SharedStorage&     storage,
                                         MainloopPipeline&  pipeline)
     {
-        if constexpr (kIndexedGather) {
-            cutlass::arch::warpgroup_reg_alloc<kMathRegs>();
-        }
-        else {
-            cutlass::arch::warpgroup_reg_alloc<kMathRegs>();
-        }
+        cutlass::arch::warpgroup_reg_alloc<kMathRegs>();
 
         const int mma_tid   = (int)threadIdx.x;
         const int wg_idx    = cutlass::canonical_warp_group_idx();

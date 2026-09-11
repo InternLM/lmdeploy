@@ -235,15 +235,8 @@ public:
 
     std::array<size_t, 2> GetWorkspaceSize(int tiles, int splits) const
     {
-        static constexpr bool kSerial = true;
-
         size_t barriers_size = sizeof(int) * tiles;
         size_t partials_size = sizeof(float) * CTA_M * CTA_N * tiles;
-
-        if constexpr (!kSerial) {
-            barriers_size *= splits;
-            partials_size *= splits;
-        }
 
         return {barriers_size, partials_size};
     }

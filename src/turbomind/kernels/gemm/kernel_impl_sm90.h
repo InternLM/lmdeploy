@@ -166,9 +166,7 @@ public:
             cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, info_.dynamic_smem_size);
         }
 
-        if (1) {
-            cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
-        }
+        cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
 
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(
             &info_.max_active_ctas, func, Gemm::CTA_SIZE, info_.dynamic_smem_size);
@@ -292,19 +290,11 @@ public:
 
         CUtensorMap tm_u{};
         // Indexed-A also gathers U by idxs; no U TMA template.
-        if (U && Gemm::kStridingA != Striding::kIndexed) {
-            // std::cout << "U: " << Udesc << "\n";
+        if (Gemm::kStridingA != Striding::kIndexed) {
             tm_u = make_2d_tma_desc((void*)U, Udesc, {Gemm::kBoxU / kMulticastU, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
-        CUtensorMap            tm_v{};
-        [[maybe_unused]] uint2 box_v{};
-        if (V) {
-            // std::cout << "V: " << Vdesc << "\n";
-            // box_v = {(uint32_t)round_up(cdiv(k, 128), 4), 2};
-            // std::cout << "V: " << Vdesc << ", box: " << box_v.x << "," << box_v.y << "\n";
-            // tm_v = make_2d_tma_desc((void*)V, Vdesc, {box_v.y, box_v.x}, CU_TENSOR_MAP_SWIZZLE_NONE);
-        }
+        CUtensorMap tm_v{};
 
         const auto param_A = to_param((void*)A, Adesc);
         const auto param_B = to_param((void*)B, Bdesc);
@@ -347,13 +337,6 @@ public:
 
         auto func = gemm_kernel_name<Gemm>;
 
-        [[maybe_unused]] static bool _ = [&] {
-            int max_cluster_size = 0;
-            cudaOccupancyMaxPotentialClusterSize(&max_cluster_size, func, &config);
-            // std::cout << "max cluster size: " << max_cluster_size << "\n";
-            return false;
-        }();
-
         cudaLaunchAttribute attrs[1];
 
         attrs[0].id               = cudaLaunchAttributeClusterDimension;
@@ -395,15 +378,8 @@ public:
 
     std::array<size_t, 2> GetWorkspaceSize(int tiles, int splits) const
     {
-        static constexpr bool kSerial = true;
-
         size_t barriers_size = sizeof(int) * tiles;
         size_t partials_size = sizeof(float) * TILE_M * TILE_N * tiles;
-
-        if constexpr (!kSerial) {
-            barriers_size *= splits;
-            partials_size *= splits;
-        }
 
         return {barriers_size, partials_size};
     }

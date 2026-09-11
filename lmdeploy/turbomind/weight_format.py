@@ -127,7 +127,7 @@ class WeightFormat(ABC):
     - ``make_data_format``: build the ``_tm.DataFormat`` descriptor.
 
     Equality / hashing cover the complete normalized format. This matters
-    for the set-based uniformity checks in ``concat_out_dim``.
+    for the set-based uniformity checks in ``dequant_mixed``.
     """
 
     name: ClassVar[str]
@@ -170,8 +170,6 @@ class WeightFormat(ABC):
         return (
             type(self) is type(other)
             and self.weight_dtype == other.weight_dtype
-            and self.scales_dtype == other.scales_dtype
-            and self.zeros_dtype == other.zeros_dtype
             and self.block_in == other.block_in
             and self.block_out == other.block_out
         )
@@ -206,7 +204,7 @@ class TrivialFormat(WeightFormat):
         if not (available.keys() <= {'.weight', '.bias'}):
             return False
         w = available.get('.weight')
-        return w is None or w.dtype.is_floating_point
+        return w is not None and w.dtype.is_floating_point
 
     def normalize(self, tensor: Tensor, kind: str) -> Tensor:
         tensor = tensor.to(_TRIVIAL_DTYPES[self.weight_dtype])
@@ -240,9 +238,7 @@ class AWQFormat(WeightFormat):
             return False
         if zeros is None or zeros.dtype != torch.int32:
             return False
-        if weight.ndim >= 2 and scales.ndim >= 2:
-            return weight.shape[-1] * 8 == scales.shape[-1]
-        return True
+        return weight.shape[-1] * 8 == scales.shape[-1]
 
     def normalize(self, x: Tensor, kind: str) -> Tensor:
         # AWQ checkpoints store weights in TM-native layout:
@@ -292,9 +288,7 @@ class GPTQFormat(WeightFormat):
         zeros = available.get('.qzeros')
         if zeros is not None and zeros.dtype != torch.int32:
             return False
-        if qw.ndim >= 2 and scales.ndim >= 2:
-            return qw.shape[-1] == scales.shape[-1]
-        return True
+        return qw.shape[-1] == scales.shape[-1]
 
     def normalize(self, x: Tensor, kind: str) -> Tensor:
         # GPTQ checkpoint stores weights in TM-native layout:

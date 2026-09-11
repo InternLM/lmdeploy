@@ -21,10 +21,7 @@ from .linear import Linear, dequant_mixed, transform_output_dim
 
 def _infer_heads(linear: Linear, head_dim: int) -> int:
     """Derive head count from the weight tensor's output dimension."""
-    w = linear.tensors.get('weight')
-    if w is None:
-        return 0
-    return w.size(-1) // head_dim
+    return linear.tensors['weight'].size(-1) // head_dim
 
 
 @transform_output_dim
@@ -116,5 +113,5 @@ class AttentionBuilder(Builder):
 
         Builder determines split side.
         """
-        split_side = self._PARAM_TP_RULES.get(name)
+        split_side = self._PARAM_TP_RULES[name]
         self._add_tensor(name, tensor, split_side)
