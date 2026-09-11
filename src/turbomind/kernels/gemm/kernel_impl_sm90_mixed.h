@@ -94,7 +94,7 @@ public:
         desc_.quant_b = QuantDesc{Gemm::Format::kQuantType, Gemm::kGroupSize};
 
         desc_.cta_tile    = {TILE_M, TILE_N, TILE_K};
-        desc_.mma_tile    = {64, TILE_M, 16};
+        desc_.mma_tile    = {Gemm::Traits::kOpM, Gemm::Traits::kOpN, Gemm::Traits::kOpK};
         desc_.atom_layout = {cute::size<0>(typename Gemm::AtomLayoutMNK{}),
                              cute::size<1>(typename Gemm::AtomLayoutMNK{}),
                              cute::size<2>(typename Gemm::AtomLayoutMNK{})};

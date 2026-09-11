@@ -74,6 +74,11 @@ struct GmmaMixedTraits {
     using WgTiledMma =
         decltype(cute::make_tiled_mma(MmaAtom{}, cute::Layout<cute::Shape<cute::_1, cute::_1, cute::_1>>{}));
 
+    static constexpr typename cute::MMA_Traits<MmaAtom>::Shape_MNK OpShape{};
+    static constexpr int                                           kOpM = cute::get<0>(OpShape);
+    static constexpr int                                           kOpN = cute::get<1>(OpShape);
+    static constexpr int                                           kOpK = cute::get<2>(OpShape);
+
     // Candidate atoms must consume the exact same per-thread operand-A
     // fragment as the immutable pack reference. WGLayout only changes
     // whether contiguous ranges of pack segments are assigned to separate WGs
