@@ -115,35 +115,37 @@ def _naive_attention(batched_q, batched_kv, bias, sinks=None):
 
 
 def _naive_window_attention(q, k, v, seqlens_q, seqlens_k, window_size):
-    try:
-        from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
-    except Exception:
-        try:
-            from flash_attn import flash_attn_varlen_func
-        except Exception:
-            pytest.skip('Skip window attention test since flash attention is not available.')
+    window_left, window_right = window_size
+    group = q.shape[1] // k.shape[1]
+    if group != 1:
+        k = k.repeat_interleave(group, dim=1)
+        v = v.repeat_interleave(group, dim=1)
 
-    def _make_cu_seqlens(seqlens):
-        cu_seqlens = seqlens.cumsum(0)
-        cu_zero = cu_seqlens.new_zeros(1)
-        cu_seqlens = torch.cat([cu_zero, cu_seqlens])
-        return cu_seqlens
+    scale = q.shape[-1]**-0.5
+    outputs = []
+    q_offset = 0
+    k_offset = 0
+    for q_len, kv_len in zip(seqlens_q.tolist(), seqlens_k.tolist()):
+        query = q[q_offset:q_offset + q_len]
+        key = k[k_offset:k_offset + kv_len]
+        value = v[k_offset:k_offset + kv_len]
+        q_offset += q_len
+        k_offset += kv_len
 
-    max_seqlen_q = seqlens_q.max().item()
-    max_seqlen_k = seqlens_k.max().item()
-    cu_seqlens_q = _make_cu_seqlens(seqlens_q).int()
-    cu_seqlens_k = _make_cu_seqlens(seqlens_k).int()
+        logits = query.transpose(0, 1).float() @ key.permute(1, 2, 0).float() * scale
+        query_pos = torch.arange(q_len, device=q.device) + kv_len - q_len
+        key_pos = torch.arange(kv_len, device=q.device)
+        window_mask = key_pos <= query_pos[:, None]
+        if window_left >= 0:
+            window_mask &= key_pos >= query_pos[:, None] - window_left
+        if window_right >= 0:
+            window_mask &= key_pos <= query_pos[:, None] + window_right
+        logits = logits.masked_fill(~window_mask[None], float('-inf'))
+        attn_weight = torch.softmax(logits, dim=-1, dtype=torch.float32)
+        output = attn_weight @ value.transpose(0, 1).float()
+        outputs.append(output.transpose(0, 1).to(v.dtype))
 
-    output = flash_attn_varlen_func(q,
-                                    k,
-                                    v,
-                                    cu_seqlens_q,
-                                    cu_seqlens_k,
-                                    max_seqlen_q=max_seqlen_q,
-                                    max_seqlen_k=max_seqlen_k,
-                                    causal=True,
-                                    window_size=window_size)
-    return output
+    return torch.cat(outputs, dim=0)
 
 
 def test_flash_attention_asymmetric_head_matches_reference():
