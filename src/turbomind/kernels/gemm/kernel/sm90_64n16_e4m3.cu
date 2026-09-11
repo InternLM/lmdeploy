@@ -96,43 +96,43 @@ template<template<class Config_,
 void register_kernels(Collector& c)
 {
     ////////////////////////////////// flat //////////////////////////////////
-    add<K<_8x128_1x2<80, 80>, 4, kColMajor, Striding::kFlat, true>>(c);
-    add<K<_16x128_1x2<80, 80>, 4, kColMajor, Striding::kFlat, true>>(c);
-    add<K<_32x128_1x2<80, 80>, 4, kColMajor, Striding::kFlat, true>>(c);
-    add<K<_64x128_1x2<80, 80>, 4, kColMajor, Striding::kFlat, true>>(c);
-    add<K<_96x128_1x2<80, 96>, 4, kColMajor, Striding::kFlat, true>>(c);
-    add<K<_128x128_1x2<80, 112>, 4, kColMajor, Striding::kFlat, true>>(c);
-    add<K<_192x128_1x2<80, 208>, 4, kColMajor, Striding::kFlat>>(c);
-    add<K<_224x128_1x2<80, 208>, 4, kColMajor, Striding::kFlat>>(c);
-    add<K<_256x128_1x2<80, 208>, 4, kColMajor, Striding::kFlat>>(c);
-    add<K<_384x128_1x2<40, 232>, 3, kColMajor, Striding::kFlat, false, Shape<1, 1>, 192>>(c);
+    add<K<_8x128_1x2<80, 80>, 4, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_16x128_1x2<80, 80>, 4, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_32x128_1x2<80, 80>, 4, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_64x128_1x2<80, 80>, 4, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_96x128_1x2<80, 96>, 4, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_128x128_1x2<80, 112>, 4, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_192x128_1x2<80, 208>, 4, kRowMajor, Striding::kFlat>>(c);
+    add<K<_224x128_1x2<80, 208>, 4, kRowMajor, Striding::kFlat>>(c);
+    add<K<_256x128_1x2<80, 208>, 4, kRowMajor, Striding::kFlat>>(c);
+    add<K<_384x128_1x2<40, 232>, 3, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 192>>(c);
 
     ////////////////////////////////// blocked //////////////////////////////////
-    add<K<_8x128_1x2<80, 80>, 4, kColMajor, Striding::kBlocked>>(c);
-    add<K<_16x128_1x2<80, 80>, 4, kColMajor, Striding::kBlocked>>(c);
-    add<K<_32x128_1x2<80, 80>, 4, kColMajor, Striding::kBlocked>>(c);
-    add<K<_64x128_1x2<80, 80>, 4, kColMajor, Striding::kBlocked>>(c);
-    add<K<_96x128_1x2<80, 96>, 4, kColMajor, Striding::kBlocked>>(c);
-    add<K<_128x128_1x2<80, 112>, 4, kColMajor, Striding::kBlocked>>(c);
-    add<K<_192x128_1x2<80, 208>, 4, kColMajor, Striding::kBlocked, true>>(c);
-    add<K<_224x128_1x2<80, 208>, 4, kColMajor, Striding::kBlocked, true>>(c);
-    add<K<_256x128_1x2<80, 208>, 4, kColMajor, Striding::kBlocked, true>>(c);
-    add<K<_384x128_1x2<40, 232>, 3, kColMajor, Striding::kBlocked, true, Shape<1, 1>, 192>>(c);
+    add<K<_8x128_1x2<80, 80>, 4, kRowMajor, Striding::kBlocked>>(c);
+    add<K<_16x128_1x2<80, 80>, 4, kRowMajor, Striding::kBlocked>>(c);
+    add<K<_32x128_1x2<80, 80>, 4, kRowMajor, Striding::kBlocked>>(c);
+    add<K<_64x128_1x2<80, 80>, 4, kRowMajor, Striding::kBlocked>>(c);
+    add<K<_96x128_1x2<80, 96>, 4, kRowMajor, Striding::kBlocked>>(c);
+    add<K<_128x128_1x2<80, 112>, 4, kRowMajor, Striding::kBlocked>>(c);
+    add<K<_192x128_1x2<80, 208>, 4, kRowMajor, Striding::kBlocked, true>>(c);
+    add<K<_224x128_1x2<80, 208>, 4, kRowMajor, Striding::kBlocked, true>>(c);
+    add<K<_256x128_1x2<80, 208>, 4, kRowMajor, Striding::kBlocked, true>>(c);
+    add<K<_384x128_1x2<40, 232>, 3, kRowMajor, Striding::kBlocked, true, Shape<1, 1>, 192>>(c);
 
     ////////////////////////////////// indexed //////////////////////////////////
-    add<K<_8x128_1x1<120, 128>, 4, kColMajor, Striding::kIndexed, true>>(c);
-    add<K<_16x128_1x2<80, 80>, 4, kColMajor, Striding::kIndexed, true>>(c);
-    add<K<_32x128_1x2<80, 80>, 4, kColMajor, Striding::kIndexed, true>>(c);
+    add<K<_8x128_1x1<120, 128>, 4, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_16x128_1x2<80, 80>, 4, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_32x128_1x2<80, 80>, 4, kRowMajor, Striding::kIndexed, true>>(c);
 
-    add<K<_64x128_1x2<120, 192>, 4, kColMajor, Striding::kIndexed, true>>(c);
-    add<K<_96x128_1x2<120, 192>, 4, kColMajor, Striding::kIndexed, true>>(c);
-    add<K<_192x128_1x2<120, 192>, 3, kColMajor, Striding::kIndexed, true>>(c);
-    add<K<_8x256_1x2<80, 80>, 3, kColMajor, Striding::kIndexed, true>>(c);
-    add<K<_16x256_1x2<80, 88>, 3, kColMajor, Striding::kIndexed, true>>(c);
-    add<K<_32x256_1x2<120, 192>, 3, kColMajor, Striding::kIndexed, true>>(c);
-    add<K<_64x256_1x2<120, 192>, 3, kColMajor, Striding::kIndexed, true>>(c);
-    add<K<_96x256_1x2<120, 192>, 3, kColMajor, Striding::kIndexed, true>>(c);
-    add<K<_128x256_1x2<120, 192>, 3, kColMajor, Striding::kIndexed, true>>(c);
+    add<K<_64x128_1x2<120, 192>, 4, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_96x128_1x2<120, 192>, 4, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_192x128_1x2<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_8x256_1x2<80, 80>, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_16x256_1x2<80, 88>, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_32x256_1x2<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_64x256_1x2<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_96x256_1x2<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_128x256_1x2<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);
 }
 
 using C = detail::C<Sm90Fp8E4M3Format>;
