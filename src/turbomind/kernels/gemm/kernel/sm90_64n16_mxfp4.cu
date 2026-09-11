@@ -37,7 +37,7 @@ void pack(LinearWeight& linear, cudaStream_t stream)
     linear.weight_format = DataFormat{kFloat4_e2m1, {Sm90MxFp4Format::kGroupSize, 1}, kUint8};
 }
 
-const Family mxfp4{30, 250, kBfloat16, kBfloat16, 64, 64, 128, 1, true, true, supports_mxfp4, pack, 64, kBfloat16};
+const Family mxfp4{30, 301, kBfloat16, kBfloat16, 64, 64, 128, 1, true, true, supports_mxfp4, pack, 64, kBfloat16};
 
 // NVCC requires defaults on the template-template parameter.
 template<template<class Config_,
