@@ -2,14 +2,14 @@
 
 // Run with compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99.
 // Leak checking must include thread-local destruction after main returns.
+#include "src/turbomind/kernels/gemm/tuner/cache_utils.h"
+
 #include <cuda_runtime.h>
 
 #include <exception>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
-
-#include "src/turbomind/kernels/gemm/tuner/cache_utils.h"
 
 namespace {
 
