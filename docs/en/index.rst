@@ -112,6 +112,7 @@ Documentation
    advance/chat_template.md
    advance/debug_turbomind.md
    advance/structed_output.md
+   advance/parser_design.md
    advance/pytorch_multinodes.md
    advance/pytorch_profiling.md
    advance/metrics.md
