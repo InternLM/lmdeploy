@@ -314,6 +314,18 @@ class RayExecutor(ExecutorBase):
                 logger.info('Warming up distribute environment, this might take long time, please waiting...')
                 ray.get([worker.warmup_dist.remote() for worker in self.workers])
 
+    def init(self):
+        """Initialize workers and abort all of them if initialization fails."""
+        try:
+            super().init()
+        except BaseException:
+            for worker in self.workers:
+                with contextlib.suppress(Exception):
+                    ray.kill(worker)
+            with contextlib.suppress(Exception):
+                self.ray_ctx.shutdown()
+            raise
+
     def collective_rpc(self,
                        method: str,
                        args: tuple[Any] = None,
@@ -371,6 +383,15 @@ class RayExecutor(ExecutorBase):
     def update_params(self, request: Any):
         """Update params."""
         self.collective_rpc('update_params', (request, ))
+
+    def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness from all workers."""
+        return self.collective_rpc('get_checkpoint_engine_status')
+
+    def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        results = self.collective_rpc('update_weights_from_ipc', (request, reject_reason))
+        return self._reduce_worker_status(results, 'update_weights_from_ipc')
 
     def _reduce_worker_status(self, results: list[tuple[bool, str]], op_name: str) -> tuple[bool, str]:
         """Reduce worker status results."""

@@ -109,10 +109,6 @@ class _Parser:
     def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
         return text, None, None
 
-    def validate_complete(self, text: str | None = None):
-        return True
-
-
 def _request(**kwargs):
     defaults = {
         'model': 'fake-model',
@@ -201,52 +197,6 @@ def test_runner_skips_preprocess_for_raw_input_ids():
     assert context.async_engine.preprocess_kwargs['input_ids'] == [1, 2, 3]
 
 
-@pytest.mark.parametrize(
-    ('request_kwargs', 'finish_reason', 'expected'),
-    [
-        ({'return_token_ids': True}, 'stop', 'parse_error'),
-        ({'return_token_ids': True}, 'length', 'parse_error'),
-        ({'return_routed_experts': True}, 'stop', 'parse_error'),
-        ({'tool_choice': 'required', 'tools': _tools()}, 'stop', 'stop'),
-        ({'tool_choice': 'required', 'tools': _tools()}, 'length', 'length'),
-        ({'tool_choice': 'required', 'tools': _tools(), 'return_token_ids': True}, 'stop', 'parse_error'),
-        ({'tool_choice': 'required', 'tools': _tools(), 'return_token_ids': True}, 'length', 'parse_error'),
-    ],
-)
-def test_runner_terminal_validation(request_kwargs, finish_reason, expected):
-    class _InvalidParser(_Parser):
-        supports_required_tool_choice = True
-
-        def validate_complete(self, text: str | None = None):
-            return False
-
-    outputs = [
-        SimpleNamespace(
-            response='plain',
-            token_ids=[1],
-            input_token_len=3,
-            generate_token_len=1,
-            finish_reason=finish_reason,
-            cached_tokens=0,
-            logprobs=None,
-            routed_experts=None,
-            cache_block_ids=None,
-        )
-    ]
-    context = _FakeServerContext(_InvalidParser, outputs)
-
-    async def _run():
-        chat_runner = await ChatRunner.prepare(
-            context,
-            _request(**request_kwargs),
-        )
-        return await chat_runner.collect()
-
-    result = asyncio.run(_run())
-
-    assert result.finish_reason == expected
-
-
 def test_runner_rejects_required_tool_choice_for_unsupported_response_parser():
     context = _FakeServerContext(_Parser)
 
@@ -266,7 +216,7 @@ def test_runner_stream_chunks_preserve_metadata():
     async def _run():
         chat_runner = await ChatRunner.prepare(
             context,
-            _request(return_token_ids=True, return_routed_experts=True),
+            _request(return_token_ids=True, return_routed_experts=True, return_logprob=True),
         )
         return [chunk async for chunk in chat_runner.stream()]
 

@@ -109,6 +109,7 @@ class SubCliServe:
         ArgumentHelper.adapters(pt_group)
         ArgumentHelper.device(pt_group)
         ArgumentHelper.eager_mode(pt_group)
+        ArgumentHelper.empty_init(pt_group)
         ArgumentHelper.logprobs_mode(pt_group)
         ArgumentHelper.dllm_block_length(pt_group)
         ArgumentHelper.dllm_unmasking_strategy(pt_group)
@@ -142,6 +143,7 @@ class SubCliServe:
         ArgumentHelper.role(pt_group)
         ArgumentHelper.migration_backend(pt_group)
         ArgumentHelper.cudagraph_capture_batch_sizes(pt_group)
+        ArgumentHelper.piecewise_cudagraph_max_tokens(pt_group)
         # multi-node serving args
         node_rank_act = ArgumentHelper.node_rank(pt_group)
         num_nodes_act = ArgumentHelper.num_nodes(pt_group)
@@ -263,7 +265,9 @@ class SubCliServe:
                 device_type=args.device,
                 quant_policy=args.quant_policy,
                 eager_mode=args.eager_mode,
+                empty_init=args.empty_init,
                 max_prefill_token_num=args.max_prefill_token_num,
+                piecewise_cudagraph_max_tokens=args.piecewise_cudagraph_max_tokens,
                 cudagraph_capture_batch_sizes=args.cudagraph_capture_batch_sizes,
                 enable_microbatch=args.enable_microbatch,
                 enable_eplb=args.enable_eplb,

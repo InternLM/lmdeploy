@@ -8,7 +8,6 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 import lmdeploy.pytorch.distributed as dist
-import lmdeploy.pytorch.nn.gated_delta as gated_delta_util
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
@@ -144,10 +143,6 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         b, a = mixed_ba.chunk(2, -1)
         return mixed_qkv, z, b, a
 
-    def _load_state(self, past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
-        """Load states from cache."""
-        return gated_delta_util.load_state(past_key_value=past_key_value, gated_delta_meta=gated_delta_meta)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -157,14 +152,14 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         """forward."""
 
         # load states
-        conv_state, recurrent_state = self._load_state(past_key_value, gated_delta_meta)
+        conv_state, recurrent_state = past_key_value[:2]
 
         # inputs proj
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)
         projected_states_ba = self.in_proj_ba(hidden_states)
         mixed_qkv, z, b, a = self.fix_query_key_value_ordering(projected_states_qkvz, projected_states_ba)
 
-        mixed_qkv, conv_state = self.conv1d(mixed_qkv, conv_state, gated_delta_meta=gated_delta_meta)
+        mixed_qkv = self.conv1d(mixed_qkv, conv_state, gated_delta_meta)
 
         tp = (self.key_dim * 2 + self.value_dim) // mixed_qkv.size(-1)
         query, key, value = torch.split(
@@ -180,7 +175,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         key = key.unflatten(-1, (-1, self.head_k_dim))
         value = value.unflatten(-1, (-1, self.head_v_dim))
 
-        core_attn_out, recurrent_state = self.gated_delta(
+        core_attn_out = self.gated_delta(
             query,
             key,
             value,
@@ -571,7 +566,6 @@ class Qwen3NextModel(nn.Module):
         cos, sin = cos[0], sin[0]
         rotary_pos_emb = (cos, sin)
 
-        # make seq_idx
         gated_delta_meta = GatedDeltaMeta(hidden_states.size(1), self.config.linear_conv_kernel_dim, state_ids,
                                           attn_metadata)
 

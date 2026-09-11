@@ -312,6 +312,8 @@ def parse_args():
     ArgumentHelper.dllm_unmasking_strategy(pt_group)
     ArgumentHelper.dllm_denoising_steps(pt_group)
     ArgumentHelper.dllm_confidence_threshold(pt_group)
+    ArgumentHelper.max_prefill_token_num(pt_group)
+    ArgumentHelper.piecewise_cudagraph_max_tokens(pt_group)
 
     # spec decode
     ArgumentHelper.add_spec_group(parser)
@@ -377,6 +379,8 @@ def main():
             quant_policy=args.quant_policy,
             dtype=args.dtype,
             distributed_executor_backend=args.distributed_executor_backend,
+            max_prefill_token_num=args.max_prefill_token_num,
+            piecewise_cudagraph_max_tokens=args.piecewise_cudagraph_max_tokens,
             dllm_block_length=args.dllm_block_length,
             dllm_unmasking_strategy=args.dllm_unmasking_strategy,
             dllm_denoising_steps=args.dllm_denoising_steps,

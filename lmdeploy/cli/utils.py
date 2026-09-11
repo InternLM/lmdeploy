@@ -656,6 +656,15 @@ class ArgumentHelper:
                                    help='the max number of tokens per iteration during prefill')
 
     @staticmethod
+    def piecewise_cudagraph_max_tokens(parser):
+        return parser.add_argument('--piecewise-cudagraph-max-tokens',
+                                   type=int,
+                                   default=None,
+                                   help='Enable piecewise CUDA graph in the PyTorch engine and capture prefill '
+                                   'token buckets up to this value. If not specified, piecewise CUDA graph is '
+                                   'disabled')
+
+    @staticmethod
     def cudagraph_capture_batch_sizes(parser):
         return parser.add_argument('--cudagraph-capture-batch-sizes',
                                    type=int,
@@ -694,6 +703,16 @@ class ArgumentHelper:
                                    default=False,
                                    help='Whether to enable eager mode. '
                                    'If True, cuda graph would be disabled')
+
+    @staticmethod
+    def empty_init(parser):
+        """Add the PyTorch empty-weight initialization argument."""
+        return parser.add_argument(
+            '--empty-init',
+            action='store_true',
+            default=False,
+            help='Build the PyTorch runtime without loading model weights or KV cache. '
+            'Use checkpoint-engine IPC to load weights, then wake kv_cache explicitly.')
 
     @staticmethod
     def communicator(parser):

@@ -28,6 +28,27 @@
 
 namespace turbomind {
 
+struct InternVitMicroBatchPlan {
+    core::ssize_t hidden_elements_per_tile{};
+    core::ssize_t projector_elements_per_tile{};
+    core::ssize_t workspace_elements_per_tile{};
+    core::ssize_t max_tiles_per_chunk{};
+};
+
+InternVitMicroBatchPlan PlanInternVitMicroBatch(core::ssize_t capacity_elements,
+                                                int           vision_seq_len,
+                                                int           vision_hidden_dim,
+                                                int           image_seq_len,
+                                                int           output_hidden_dim)
+{
+    const auto hidden_elements    = static_cast<core::ssize_t>(vision_seq_len) * vision_hidden_dim;
+    const auto projector_elements = static_cast<core::ssize_t>(image_seq_len) * output_hidden_dim;
+    const auto workspace_elements = std::max(hidden_elements, projector_elements);
+    const auto max_tiles          = workspace_elements > 0 ? capacity_elements / workspace_elements : 0;
+
+    return {hidden_elements, projector_elements, workspace_elements, max_tiles};
+}
+
 struct InternVit::Impl {
     const InternVitWeight&       weights_;
     const core::InternVitConfig& config_;
@@ -448,7 +469,7 @@ struct InternVit::Impl {
         AllReduceSum(output, stream);
     }
 
-    Tensor Projector(Tensor& hidden, Data& d, Buffer symm_buf)
+    void Projector(Tensor& hidden, Data& d, Buffer symm_buf, Tensor& result)
     {
         const auto& cfg    = config_;
         auto        stream = core::Context::stream().handle();
@@ -480,26 +501,28 @@ struct InternVit::Impl {
         TM_SCOPE_CALL(linear_.Forward(inter, *weights_.projector_fc2, output));
         AllReduceSum(output, stream);
 
-        Tensor result = empty_like(output);
+        TM_CHECK(result.shape() == output.shape());
+        TM_CHECK_EQ(result.dtype(), output.dtype());
         TM_SCOPE_CALL(ApplyBias(result, output, weights_.projector_fc2->bias, stream));
-
-        return result;
     }
 
-    void Forward(int phase, TensorMap& args)
+    Data MakeMicroBatchData(const Data& d, int tile_offset, int tile_count) const
     {
-        TM_FUNCTION_SCOPE();
+        Data micro;
+        micro.batch_input     = d.batch_input.slice(tile_offset, tile_count);
+        micro.batch_size      = tile_count;
+        micro.attn_cu_seqlens = d.attn_cu_seqlens.slice(0, tile_count + 1);
+        micro.attn_finished   = d.attn_finished.slice(0, tile_count);
+        micro.seq_len         = d.seq_len;
+        micro.token_num       = tile_count * d.seq_len;
+        return micro;
+    }
 
+    void ForwardMicroBatch(Data& d, Buffer symm_buf, Tensor& image_embeds)
+    {
         const auto& cfg = config_;
-        auto&       d   = data_.at(phase);
-        if (d.batch_size == 0) {
-            return;
-        }
 
-        auto stream   = core::Context::stream().handle();
         auto residual = PatchEmbedding(d);
-
-        Buffer symm_buf = args.contains("symm_buf") ? args.at("symm_buf").buffer() : Buffer{};
 
         Tensor hidden_states = [&]() {
             if (symm_buf) {
@@ -540,7 +563,57 @@ struct InternVit::Impl {
                               is_last_layer ? NormType::kNone : config_.norm_type);
         }
 
-        Tensor image_embeds = Projector(residual, d, symm_buf);
+        Projector(residual, d, symm_buf, image_embeds);
+    }
+
+    void Forward(int phase, TensorMap& args)
+    {
+        TM_FUNCTION_SCOPE();
+
+        const auto& cfg = config_;
+        auto&       d   = data_.at(phase);
+        if (d.batch_size == 0) {
+            return;
+        }
+
+        Buffer symm_buf = args.contains("symm_buf") ? args.at("symm_buf").buffer() : Buffer{};
+
+        int micro_batch_size = d.batch_size;
+        if (tp_size_ > 1) {
+            TM_CHECK(symm_buf) << "InternViT TP requires a symmetric communication buffer";
+
+            const auto plan = PlanInternVitMicroBatch(symm_buf.view(cfg.data_type).size(),
+                                                      d.seq_len,
+                                                      cfg.hidden_dim,
+                                                      cfg.image_seq_length,
+                                                      weights_.projector_fc2->output_dim);
+            TM_CHECK_GT(plan.max_tiles_per_chunk, 0)
+                << "InternViT symmetric buffer cannot hold one image tile: available_bytes=" << symm_buf.byte_size()
+                << ", required_bytes=" << byte_size(cfg.data_type, plan.workspace_elements_per_tile)
+                << ", vision_seq_len=" << d.seq_len << ", vision_hidden_dim=" << cfg.hidden_dim
+                << ", image_seq_len=" << cfg.image_seq_length
+                << ", output_hidden_dim=" << weights_.projector_fc2->output_dim;
+            micro_batch_size = static_cast<int>(std::min<core::ssize_t>(d.batch_size, plan.max_tiles_per_chunk));
+
+            if (micro_batch_size < d.batch_size && h_tp_group->rank() == 0) {
+                const int micro_batch_count = cdiv(d.batch_size, micro_batch_size);
+                TM_LOG_INFO("InternViT micro-batch: tiles={} chunk_tiles={} chunks={} symm_bytes={}",
+                            d.batch_size,
+                            micro_batch_size,
+                            micro_batch_count,
+                            symm_buf.byte_size());
+            }
+        }
+
+        Tensor image_embeds{
+            {d.batch_size * cfg.image_seq_length, weights_.projector_fc2->output_dim}, cfg.data_type, kDEVICE};
+        for (int tile_offset = 0; tile_offset < d.batch_size; tile_offset += micro_batch_size) {
+            const int tile_count = std::min(micro_batch_size, d.batch_size - tile_offset);
+            auto      micro      = MakeMicroBatchData(d, tile_offset, tile_count);
+            auto output = image_embeds.slice(tile_offset * cfg.image_seq_length, tile_count * cfg.image_seq_length);
+            ForwardMicroBatch(micro, symm_buf, output);
+        }
+
         EnsureFloatDtype(image_embeds, engine_data_type_);
 
         args.produce("multimodal",

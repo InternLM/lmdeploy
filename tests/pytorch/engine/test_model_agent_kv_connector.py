@@ -93,6 +93,7 @@ def _bare_model_agent():
     agent.block_cache_plan = object()
     agent.dist_config = SimpleNamespace(attn_tp=8)
     agent.memdecode_agent = None
+    agent._checkpoint_engine_zmq_ctx = None
     return agent
 
 

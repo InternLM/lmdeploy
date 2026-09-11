@@ -207,6 +207,7 @@ def _make_response_parser(thinking=True):
     request = ChatCompletionRequest(
         model='deepseek-ai/DeepSeek-V3.2',
         messages=[],
+        tools=[WEATHER_TOOL, {'type': 'function', 'function': {'name': 'search'}}],
         stream=True,
         chat_template_kwargs={'thinking': thinking},
     )
@@ -231,7 +232,6 @@ def test_deepseek_v32_response_parser_complete_dsml_function_calls():
     assert len(tool_calls) == 1
     assert tool_calls[0].function.name == 'get_weather'
     assert json.loads(tool_calls[0].function.arguments) == {'city': 'Paris'}
-    assert parser.validate_complete(completion)
 
 
 def test_deepseek_v32_response_parser_streaming_dsml_function_calls():
@@ -251,4 +251,5 @@ def test_deepseek_v32_response_parser_streaming_dsml_function_calls():
 
     assert reasoning == 'need data'
     assert tool_deltas[0].function.name == 'search'
-    assert json.loads(tool_deltas[1].function.arguments) == {'query': 'DeepSeek V3.2'}
+    arguments = ''.join(tool_call.function.arguments or '' for tool_call in tool_deltas)
+    assert json.loads(arguments) == {'query': 'DeepSeek V3.2'}
