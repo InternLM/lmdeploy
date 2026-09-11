@@ -56,6 +56,7 @@ logger = get_logger('lmdeploy')
 
 _H2D_TRANSFER_KEY = '_h2d_transfer'
 _H2D_INPUT_KEYS = ('inputs', 'delta', 'cache_inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs')
+_MTP_CACHE_PREFIX = 'mtp.'
 
 
 @dataclass
@@ -1027,12 +1028,12 @@ class BaseModelAgent:
             return_logits=return_logits or return_ce_loss,
             cache_inputs=cache_inputs,
         )
-        # The forward has now queued its KV writes on the current CUDA stream.
-        # The connector records a readiness event before its sender reads them.
-        start_kv_connector_save(self.kv_connector, connector_step)
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output
+            # There is no speculative forward on this path, so the target
+            # model's KV writes are the complete payload for this step.
+            start_kv_connector_save(self.kv_connector, connector_step)
             connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
             if connector_output is not None:
                 self._push_output(BatchedOutputs.connector_only(connector_output))
@@ -1042,6 +1043,10 @@ class BaseModelAgent:
         # logprob rows, and falling through would wrongly run sampling /
         # sequence-update on a max_tokens=0 request.
         if prefill_input_logprobs:
+            # Scoring-only forwards do not run the speculative model.  Record
+            # the target KV writes here instead of waiting for a postprocess
+            # hook that is intentionally skipped on this path.
+            start_kv_connector_save(self.kv_connector, connector_step)
             model_metas = output.get('model_metas')
             connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
             if self.need_output:
@@ -1107,6 +1112,11 @@ class BaseModelAgent:
                     sampling_inputs,
                     need_broadcast_next,
                 ))
+
+        # The speculative model writes the MTP cache during postprocess.  The
+        # readiness event must be recorded only after that work has been
+        # queued, otherwise Mooncake may read stale MTP rows.
+        start_kv_connector_save(self.kv_connector, connector_step)
 
         if inputs.is_dummy:
             # skip dummy forward output
@@ -1401,9 +1411,55 @@ class BaseModelAgent:
         self.kv_connector.shutdown()
         self.kv_connector = None
 
+    def _validate_mtp_parallel_config(self) -> None:
+        """Validate the target and MTP topology used by Mooncake Store."""
+        transfer_config = self.cache_config.kv_transfer_config
+        if (transfer_config is None
+                or transfer_config.kv_connector != 'MooncakeStoreConnector'
+                or not transfer_config.is_kv_transfer_instance):
+            return
+
+        specdecode_config = self.spec_agent.specdecode_config
+        if specdecode_config is None or specdecode_config.cache_config is None:
+            return
+
+        target_config = self.dist_config
+        mtp_config = specdecode_config.dist_config
+        target_parallel = (
+            target_config.attn_tp,
+            target_config.dp,
+            target_config.ep,
+            target_config.world_size,
+        )
+        mtp_parallel = (
+            mtp_config.attn_tp,
+            mtp_config.dp,
+            mtp_config.ep,
+            mtp_config.world_size,
+        )
+        if target_parallel != mtp_parallel:
+            raise ValueError(
+                'Mooncake Store requires target and MTP parallel configs to match: '
+                f'target=(attn_tp={target_parallel[0]}, dp={target_parallel[1]}, '
+                f'ep={target_parallel[2]}, world_size={target_parallel[3]}), '
+                f'mtp=(attn_tp={mtp_parallel[0]}, dp={mtp_parallel[1]}, '
+                f'ep={mtp_parallel[2]}, world_size={mtp_parallel[3]})')
+
+    def _get_connector_kv_caches(self) -> dict[str, torch.Tensor]:
+        """Collect target and MTP cache rows in registration order."""
+        connector_caches = dict(self.cache_engine.connector_kv_caches)
+        mtp_cache_engine = self.spec_agent.cache_engine
+        if mtp_cache_engine is None:
+            return connector_caches
+
+        for name, cache in mtp_cache_engine.connector_kv_caches.items():
+            connector_caches[f'{_MTP_CACHE_PREFIX}{name}'] = cache
+        return connector_caches
+
     def build_cache_engine(self):
         """Build cache engine."""
         with self.all_context():
+            self._validate_mtp_parallel_config()
             self._shutdown_kv_connector()
             dist_ctx = get_dist_manager().current_context()
             dist_cfg = self.dist_config
@@ -1417,6 +1473,7 @@ class BaseModelAgent:
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
             self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
+            self.spec_agent.build_cache_engine(self.cache_stream)
 
             self.kv_connector = build_kv_connector(
                 KVConnectorRole.WORKER,
@@ -1427,9 +1484,8 @@ class BaseModelAgent:
                 kv_head_replica_num=self.model_config.num_replicate_key_value_heads,
             )
             if self.kv_connector is not None:
-                self.kv_connector.register_kv_caches(self.cache_engine.connector_kv_caches)
+                self.kv_connector.register_kv_caches(self._get_connector_kv_caches())
 
-            self.spec_agent.build_cache_engine(self.cache_stream)
             if self.memdecode_agent is not None:
                 self.memdecode_agent.set_cache_config(self.cache_config)
                 self.memdecode_agent.build_cache_engine(self.cache_stream)
