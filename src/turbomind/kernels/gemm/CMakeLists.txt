@@ -160,3 +160,10 @@ target_compile_options(gemm2 PRIVATE
 )
 set_property(TARGET gemm2 PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+
+if (BUILD_TEST)
+    find_package(Threads REQUIRED)
+    # Link only the helper to keep leak checking independent of kernel registries.
+    add_executable(test_cache_flushing test/test_cache_flushing.cc tuner/cache_utils.cu)
+    target_link_libraries(test_cache_flushing PRIVATE CUDA::cudart Threads::Threads)
+endif ()

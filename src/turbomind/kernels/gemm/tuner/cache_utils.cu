@@ -14,6 +14,11 @@ CacheFlushing::CacheFlushing()
     cudaMalloc(&buffer_, size_);
 }
 
+CacheFlushing::~CacheFlushing() noexcept
+{
+    cudaFree(buffer_);
+}
+
 void CacheFlushing::flush(cudaStream_t stream)
 {
     thread_local CacheFlushing inst{};
