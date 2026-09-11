@@ -571,6 +571,18 @@ class SpecModelAgent(BaseSpecModelAgent):
             output = self.proposer._forward(inputs, cache_engine=self.cache_engine)
         return output
 
+    def _uses_draft_depth_protocol(self) -> bool:
+        """Validate and return the proposer's depth-transition capability."""
+        if not getattr(self.proposer, 'supports_draft_depth_protocol', False):
+            return False
+        required_hooks = ('advance_draft_depth', 'get_draft_depth_token_counts')
+        missing_hooks = [name for name in required_hooks if not callable(getattr(self.proposer, name, None))]
+        if missing_hooks:
+            raise TypeError(
+                f'{type(self.proposer).__name__} declares draft-depth protocol '
+                f'but is missing: {", ".join(missing_hooks)}')
+        return True
+
     async def async_sampling_logits(self, model_inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
                                     sampling_inputs: SamplingInputs):
         """Sample target logits and run rejection sampling."""
@@ -596,9 +608,10 @@ class SpecModelAgent(BaseSpecModelAgent):
             inputs = self.proposer.model.update_inputs(inputs)
             return inputs
 
+        uses_draft_depth_protocol = self._uses_draft_depth_protocol()
         outputs = self._forward_impl(inputs)
         if (inputs.dp_meta is None and inputs.is_chunk and not inputs.is_last_chunk
-                and not getattr(self.proposer, 'supports_draft_depth_protocol', False)):
+                and not uses_draft_depth_protocol):
             # Legacy proposers do not own a persistent per-depth cache, so
             # DP=1 non-last chunks can skip speculative outputs entirely.
             output_draft_ids = inputs.input_ids.new_zeros(inputs.seq_length.size(0), self.num_spec_tokens)
@@ -619,7 +632,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                 guided_processors=draft_guided_processors)
             draft_tokens_li = [draft_token_ids]
             if loop_count > 0:
-                if not getattr(self.proposer, 'supports_draft_depth_protocol', False):
+                if not uses_draft_depth_protocol:
                     advance_draft_depth = None
                 else:
                     advance_draft_depth = self.proposer.advance_draft_depth
@@ -687,7 +700,7 @@ class SpecModelAgent(BaseSpecModelAgent):
             return None, None
 
         padding_batch_size = max(dp_meta.dp_batches)
-        if getattr(self.proposer, 'supports_draft_depth_protocol', False):
+        if self._uses_draft_depth_protocol():
             num_tokens = self.proposer.get_draft_depth_token_counts(dp_meta)
         else:
             # Legacy depth transitions compact every request to one token;

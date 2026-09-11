@@ -229,6 +229,20 @@ class _LegacyDummyProposer(_DummyProposer):
         raise AssertionError('legacy proposing must not require draft-depth DP metadata.')
 
 
+def test_draft_depth_protocol_requires_both_transition_hooks():
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    class _MalformedProposer:
+        supports_draft_depth_protocol = True
+        advance_draft_depth = None
+
+    agent = object.__new__(SpecModelAgent)
+    agent.proposer = _MalformedProposer()
+
+    with pytest.raises(TypeError, match='get_draft_depth_token_counts'):
+        agent._uses_draft_depth_protocol()
+
+
 def test_guided_serial_bitmask_updates_inference_tensor():
     """Serial guided masking can update logits produced under inference
     mode."""
