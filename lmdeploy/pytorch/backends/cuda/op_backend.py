@@ -331,8 +331,9 @@ class CudaOpsBackend(DefaultOpsBackend):
                 decode_query_len = step_context.input_ids.size(1) // q_seqlens.size(0)
                 cls.update_meta_flashmla(attn_metadata, model_config, decode_query_len)
             elif use_flash_attn3_decoding:
-                from .attention import require_fa3_for_speculative_decoding
-                require_fa3_for_speculative_decoding()
+                # Metadata preparation is backend agnostic.  The attention
+                # factory may select FA3 or Triton, so do not impose an FA3
+                # dependency from this shared context update path.
                 cls.update_meta_flashattn(attn_metadata, step_context)
 
         if step_context.model_config.is_gated_delta and not step_context.is_decoding:
