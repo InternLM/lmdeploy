@@ -60,9 +60,6 @@ bool LinearWeight::is_graph_compatible() const
 
 void LinearWeight::prepare()
 {
-    if (!weight) {
-        return;
-    }
     if (prepared_) {
         return;
     }
