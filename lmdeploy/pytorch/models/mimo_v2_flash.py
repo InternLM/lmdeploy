@@ -27,7 +27,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_lo
 
 from .deepseek_v2 import DeepseekV2MoE
 from .patch import add_prefix, get_build_model_context
-from .utils.cudagraph import CudaGraphMixin, GraphCaptureState
+from .utils.cudagraph import CudaGraphMixin, GraphCaptureContext, GraphCaptureState
 from .utils.model import DeployModelMixinV1, build_embedding
 
 if TYPE_CHECKING:
@@ -740,17 +740,13 @@ class MiMoV2FlashForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         )
 
     def get_cudagraph_capture_state(self,
-                                    past_key_values: list[list[torch.Tensor]],
-                                    attn_metadata: Any = None,
-                                    num_blocks: int = 0,
-                                    **kwargs) -> GraphCaptureState | None:
+                                    capture_context: GraphCaptureContext) -> GraphCaptureState | None:
         """Return MiMo's paged target-cache state for capture rollback.
 
         MiMo keeps heterogeneous Full/SWA caches on ``StepContext`` instead
         of ``past_key_values``. The state adapter owns those paged-cache
         rows and their request-visible snapshot semantics.
         """
-        del past_key_values, kwargs
         if not getattr(self.config, '_lmdeploy_use_paged_swa', False):
             return None
         context = self.ctx_mgr.current_context()
@@ -761,9 +757,9 @@ class MiMoV2FlashForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             capture_caches += tuple(layer.self_attn.get_block_cache(context.block_caches))
         return GraphCaptureState.from_paged_tensors(
             capture_caches,
-            block_offsets=attn_metadata.block_offsets,
-            num_blocks=num_blocks,
-            num_requests=attn_metadata.q_seqlens.numel(),
+            block_offsets=capture_context.attn_metadata.block_offsets,
+            num_blocks=capture_context.num_blocks,
+            num_requests=capture_context.attn_metadata.q_seqlens.numel(),
         )
 
     def __init__(

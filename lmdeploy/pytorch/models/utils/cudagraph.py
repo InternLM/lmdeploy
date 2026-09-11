@@ -15,6 +15,16 @@ if TYPE_CHECKING:
 BuffType = dict[str, Tensor]
 
 
+@dataclass(frozen=True)
+class GraphCaptureContext:
+    """Inputs and static metadata for one CUDA Graph capture."""
+
+    past_key_values: list[list[Tensor]]
+    attn_metadata: Any
+    num_blocks: int
+    spec_step_idx: int = 0
+
+
 @dataclass
 class GraphCaptureState:
     """Own snapshot and restore semantics for mutable model state."""
@@ -123,14 +133,13 @@ class CudaGraphMixin:
         return ()
 
     def get_cudagraph_capture_state(self,
-                                    past_key_values: list[list[torch.Tensor]],
-                                    **kwargs) -> GraphCaptureState | None:
+                                    capture_context: GraphCaptureContext) -> GraphCaptureState | None:
         """Return mutable state that capture must preserve.
 
         Stateful models may opt in by returning a snapshot/restore adapter for state touched by graph warmup and
         capture. The runner only owns the lifecycle; the adapter owns the storage layout.
         """
-        del past_key_values, kwargs
+        del capture_context
         return None
 
     def support_cuda_graph(

@@ -17,6 +17,7 @@ from lmdeploy.pytorch.config import (
     normalize_cudagraph_capture_batch_sizes,
 )
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
+from lmdeploy.pytorch.models.utils.cudagraph import GraphCaptureContext
 from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
 
 from ...graph_runner import GraphRunner, is_preparing_prefill
@@ -253,11 +254,13 @@ class CUDAGraphRunner(GraphRunner):
             supports_multi_token_decode=self._supports_multi_token_decode,
             device=self.device,
         )
-        capture_state = self.model.get_cudagraph_capture_state(
-            kwargs['past_key_values'],
+        capture_context = GraphCaptureContext(
+            past_key_values=kwargs['past_key_values'],
             attn_metadata=kwargs['attn_metadata'],
             num_blocks=self.num_blocks,
-            spec_step_idx=int(kwargs.get('spec_step_idx', 0)))
+            spec_step_idx=int(kwargs.get('spec_step_idx', 0)),
+        )
+        capture_state = self.model.get_cudagraph_capture_state(capture_context)
         if capture_state is not None:
             capture_state.snapshot()
 

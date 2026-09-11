@@ -139,17 +139,19 @@ def test_mimo_mtp_capture_state_accepts_runner_protocol():
     import torch
 
     from lmdeploy.pytorch.models.mimo_v2_flash_mtp import MiMoV2FlashMTPModel
+    from lmdeploy.pytorch.models.utils.cudagraph import GraphCaptureContext
 
     model = MiMoV2FlashMTPModel.__new__(MiMoV2FlashMTPModel)
     model.model = SimpleNamespace(num_mtp_layers=2)
     caches = [[torch.zeros(1), torch.zeros(1)], [torch.ones(1), torch.ones(1)]]
 
     state = model.get_cudagraph_capture_state(
-        caches,
-        attn_metadata=SimpleNamespace(q_seqlens=torch.tensor([1])),
-        num_blocks=8,
-        spec_step_idx=3,
-    )
+        GraphCaptureContext(
+            past_key_values=caches,
+            attn_metadata=SimpleNamespace(q_seqlens=torch.tensor([1])),
+            num_blocks=8,
+            spec_step_idx=3,
+        ))
 
     assert state.tensors == tuple(caches[1])
 
@@ -323,11 +325,17 @@ def test_cudagraph_capture_rolls_back_state_before_semantic_forward(monkeypatch)
         lambda: SimpleNamespace(enabled=lambda: False),
     )
 
-    model = SimpleNamespace(
-        get_cudagraph_capture_state=lambda *args, **kwargs: GraphCaptureState(
+    capture_contexts = []
+
+    def get_cudagraph_capture_state(capture_context):
+        capture_contexts.append(capture_context)
+        return GraphCaptureState(
             tensors=tuple(cache),
             block_ids=block_ids,
-        ),
+        )
+
+    model = SimpleNamespace(
+        get_cudagraph_capture_state=get_cudagraph_capture_state,
         get_cudagraph_extra_key=lambda **kwargs: (),
     )
     runner = graph_runner_mod.CUDAGraphRunner.__new__(graph_runner_mod.CUDAGraphRunner)
@@ -358,6 +366,11 @@ def test_cudagraph_capture_rolls_back_state_before_semantic_forward(monkeypatch)
     )
 
     assert output == 'semantic-output'
+    assert len(capture_contexts) == 1
+    assert capture_contexts[0].past_key_values == []
+    assert capture_contexts[0].num_blocks == 8
+    assert capture_contexts[0].spec_step_idx == 0
+    assert capture_contexts[0].attn_metadata.q_seqlens.tolist() == [2, 2]
     assert (2, True, False, 2) in runner._full_graph_runners
     for actual, expected in zip(cache, original):
         expected[block_ids] += 1
