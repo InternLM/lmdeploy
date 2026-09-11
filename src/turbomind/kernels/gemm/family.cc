@@ -20,7 +20,7 @@ Family::Family(std::uint32_t id,
                bool          requires_packing,
                bool          grouped,
                std::optional<WeightBridge> (*supports)(const DataFormat&, bool),
-               void (*pack)(LinearWeight&, const WeightBridge&, cudaStream_t),
+               void (*pack)(LinearWeight&, cudaStream_t),
                int        gate_up_block,
                DataFormat fused_output,
                bool       is_graph_compatible,
@@ -94,9 +94,9 @@ Family::supports(const DataFormat& weight_format, DataType data_type, DataType o
     return supports_(weight_format, grouped);
 }
 
-void Family::Pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream) const
+void Family::Pack(LinearWeight& linear, cudaStream_t stream) const
 {
-    pack_(linear, bridge, stream);
+    pack_(linear, stream);
 }
 
 void Family::ConvertInput(Tensor& A,

@@ -1,7 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <cuda.h>
-#include <numeric>
 
 #include "src/turbomind/kernels/gemm/convert.h"
 #include "src/turbomind/kernels/gemm/kernel/geometry.h"
@@ -23,15 +22,20 @@ std::optional<WeightBridge> supports(const DataFormat& format, bool)
     return format == DataFormat{kFloat4_e2m1, {16, 1}, kFloat8_e4m3} ? std::optional{WeightBridge{}} : std::nullopt;
 }
 
-void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+void pack(LinearWeight& linear, cudaStream_t stream)
 {
-    ApplyWeightBridge(linear, bridge, stream);
-    TM_CHECK_EQ(linear.output_dim % kSm90MixedTileN, 0);
-    TM_CHECK_EQ(linear.input_dim % std::lcm(kSm90MixedTileK, Sm90NvFp4Format::kGroupSize), 0);
+    TM_CHECK_EQ(linear.output_dim % kSm90MixedFragmentN, 0);
+    TM_CHECK_EQ(linear.input_dim % kSm90MixedTileK, 0);
     TM_CHECK_GE(linear.input_dim, 128);
     TM_CHECK(linear.global_scale);
     TM_CHECK_EQ(linear.global_scale.dtype(), kFloat);
     TM_CHECK_EQ(linear.global_scale.size(), 1);
+    // The qparams must cover one row per K group and one column per output
+    // column; the packing below walks both dimensions.
+    TM_CHECK(linear.scales);
+    const int group_count = (linear.input_dim + Sm90NvFp4Format::kGroupSize - 1) / Sm90NvFp4Format::kGroupSize;
+    TM_CHECK_GE(linear.scales.shape(0), group_count);
+    TM_CHECK_GE(linear.scales.shape(1), linear.output_dim);
     PackWeight(linear, Sm90NvFp4Format::kWeightPack, PackSm90Fp4PrmtWeight, stream);
     PackQParams(linear,
                 QuantDesc{QuantType::kK, Sm90NvFp4Format::kGroupSize},
@@ -41,7 +45,7 @@ void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
     linear.weight_format = DataFormat{kFloat4_e2m1, {Sm90NvFp4Format::kGroupSize, 1}, kFloat8_e4m3};
 }
 
-const Family nvfp4{31, 250, kBfloat16, kBfloat16, 64, 128, 128, 1, true, true, supports, pack, 64, kBfloat16};
+const Family nvfp4{31, 250, kBfloat16, kBfloat16, 64, 64, 128, 1, true, true, supports, pack, 64, kBfloat16};
 
 // NVCC requires defaults on the template-template parameter.
 template<template<class Config_,

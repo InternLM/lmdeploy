@@ -23,9 +23,8 @@ namespace {
 using config::Shape;
 using namespace config::geometry;
 
-void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+void pack(LinearWeight& linear, cudaStream_t stream)
 {
-    ApplyWeightBridge(linear, bridge, stream);
     TM_CHECK_EQ(linear.output_dim % kSm90MixedFragmentN, 0);
     TM_CHECK_EQ(linear.input_dim % 128, 0);
     TM_CHECK_GE(linear.input_dim, 128);
@@ -46,6 +45,7 @@ void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
                                   static_cast<const uint8_t*>(tmp_q.raw_data()),
                                   linear.output_dim,
                                   linear.input_dim / Sm90MxFp4Fp8FoldedFormat::kGroupSize,
+                                  linear.scales.shape(1),
                                   stream,
                                   stats);
     Sm90MxFp4Fp8FoldedPackStats host{};

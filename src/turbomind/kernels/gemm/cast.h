@@ -44,6 +44,4 @@ void AdjustUe8m0ScaleForHalf(uint8_t* data, int n, cudaStream_t st);
 
 Tensor BlockscaleToGroupscale(const Tensor& scales, DataType data_type, int block_size);
 
-Tensor ReplicateQParams(const Tensor& src, int2 factors, cudaStream_t stream);
-
 }  // namespace turbomind

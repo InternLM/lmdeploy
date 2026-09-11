@@ -11,7 +11,6 @@ outputs from the plan when destinations are omitted.
 from __future__ import annotations
 
 import copy
-import math
 import os
 import weakref
 from collections.abc import Sequence
@@ -46,6 +45,24 @@ def _to_tm_dtype(dtype):
 def _to_torch_dtype(dtype):
     """Convert a TurboMind data type to its Torch dtype."""
     return next(torch_dtype for torch_dtype, name in _TORCH_TO_TM_NAME.items() if dtype == getattr(_tm.DataType, name))
+
+
+def _apply_bridge(tensor: torch.Tensor, kind: str, bridge, output_dim: int) -> torch.Tensor:
+    """Expand one weight component to the kernel's quantization blocking."""
+    if kind not in ('scales', 'zeros'):
+        return tensor
+    replicate_k, replicate_n, scale_dtype, zero_dtype = bridge
+    if replicate_k != 1 or replicate_n != 1:
+        tensor = tensor.repeat_interleave(replicate_k, dim=-2).repeat_interleave(replicate_n, dim=-1)
+        # Block replication rounds the last axis up to whole blocks; the columns
+        # past the weight's width are never read and would desync a TP output
+        # split, so clamp them off here (zeros go through the same branch).
+        if tensor.shape[-1] > output_dim:
+            tensor = tensor[..., :output_dim].contiguous()
+    dtype = scale_dtype if kind == 'scales' else zero_dtype
+    if dtype != _tm.DataType.TYPE_INVALID:
+        tensor = tensor.to(_to_torch_dtype(dtype))
+    return tensor
 
 
 class WeightPlan:
@@ -180,15 +197,9 @@ class Linear:
 
         minimum, alignment = impl.shape_constraints
         min_k, min_n = minimum
-        align_k, align_n = alignment
-        alignment = (align_k, math.lcm(align_n, weight_format.block_out or 1))
 
         if fusion_type == 'silu':
-            block_out = weight_format.block_out or 1
-            if block_out == 128 and (dtype if input_dtype is None else input_dtype) == torch.bfloat16:
-                raise NotImplementedError('BF16-input block-out-128 FP8 SiLU fusion is not supported')
             minimum = (min_k, (min_n + 1) // 2)
-            alignment = (align_k, math.lcm(block_out, align_n // math.gcd(align_n, 2)))
 
         result = WeightPlan()
         result._impl = impl
@@ -198,9 +209,9 @@ class Linear:
         result._shape_constraints = (minimum, alignment)
         return result
 
-    def _normalize_params(self, weight_format, weight, scales, zeros):
-        """Normalize source weight components into TurboMind logical
-        layouts."""
+    def _normalize_params(self, weight_format, weight, scales, zeros, bridge):
+        """Normalize source weight components into TurboMind logical layouts and
+        expand their quantization blocking to the kernel's."""
         raw = {'weight': weight, 'scales': scales, 'zeros': zeros}
         raw = {kind: tensor for kind, tensor in raw.items() if tensor is not None}
         normalized = {kind: weight_format.normalize(tensor, kind).contiguous() for kind, tensor in raw.items()}
@@ -208,7 +219,8 @@ class Linear:
             normalized['zeros'] = weight_format.synthesize_zeros(normalized['scales']).contiguous()
         if 'zeros' in normalized:
             normalized['zeros'] = normalized['zeros'].to(normalized['scales'].dtype).contiguous()
-        return normalized
+        output_dim = int(normalized['weight'].shape[-1])
+        return {kind: _apply_bridge(tensor, kind, bridge, output_dim) for kind, tensor in normalized.items()}
 
     def _copy_param(self, impl, name, src, *, logical_shape, logical_dtype, stream):
         """Allocate a native parameter and copy its source bytes on the active
@@ -290,7 +302,7 @@ class Linear:
 
         if not plan._grouped:
             with self._activate() as stream:
-                normalized = self._normalize_params(weight_format, weight, scales, zeros)
+                normalized = self._normalize_params(weight_format, weight, scales, zeros, impl_plan.bridge)
                 return self._prepare_one(
                     normalized,
                     weight_format=weight_format,
@@ -306,7 +318,7 @@ class Linear:
 
         with self._activate() as stream:
             normalized_experts = [
-                self._normalize_params(weight_format, expert_weight, expert_scale, expert_zero)
+                self._normalize_params(weight_format, expert_weight, expert_scale, expert_zero, impl_plan.bridge)
                 for expert_weight, expert_scale, expert_zero in zip(weights, expert_scales, expert_zeros)
             ]
             return self._prepare_grouped(
@@ -333,8 +345,8 @@ class Linear:
         scales: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None,
         zeros: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None,
     ) -> Weight:
-        """Normalize, interleave, and pack gate/up weights for fused SiLU
-        execution."""
+        """Normalize, bridge, interleave, and pack gate/up weights for fused
+        SiLU execution."""
         weight_format = plan._weight_format
         dtype = plan._dtype
         impl_plan = plan._impl
@@ -369,8 +381,8 @@ class Linear:
             for gate_weight, up_weight, gate_scale, up_scale, gate_zero, up_zero in zip(
                 gate_weights, up_weights, gate_scales, up_scales, gate_zeros, up_zeros
             ):
-                gate = self._normalize_params(weight_format, gate_weight, gate_scale, gate_zero)
-                up = self._normalize_params(weight_format, up_weight, up_scale, up_zero)
+                gate = self._normalize_params(weight_format, gate_weight, gate_scale, gate_zero, impl_plan.bridge)
+                up = self._normalize_params(weight_format, up_weight, up_scale, up_zero, impl_plan.bridge)
                 normalized_pairs.append((gate, up))
 
             projection_n = normalized_pairs[0][0]['weight'].shape[1]

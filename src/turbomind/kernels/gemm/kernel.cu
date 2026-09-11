@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <iostream>
-#include <numeric>
 #include <sstream>
 
 #include "src/turbomind/kernels/core/math.h"
@@ -136,10 +135,6 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
         printf("E\n");
 
     if (desc.quant_b.type != desc_.quant_b.type || desc.quant_b.group_size != desc_.quant_b.group_size) {
-        return false;
-    }
-
-    if (desc.quant_b && desc.k % desc.quant_b.group_size) {
         return false;
     }
 

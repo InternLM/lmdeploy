@@ -13,7 +13,7 @@ import math
 import torch
 
 from .. import _tm
-from ._base import Builder, ParallelGroup, SplitSide
+from ._base import Builder, ParallelGroup, SplitSide, _bridge_linear
 from .linear import Linear, pad_input_groups, pad_output_groups, transform_output_dim
 
 __all__ = [
@@ -41,6 +41,7 @@ def _block_pack_w1w3(w1: torch.Tensor, w3: torch.Tensor, *,
     w1g = w1.unflatten(-1, (groups, -1))
     w3g = w3.unflatten(-1, (groups, -1))
     return torch.stack([w1g, w3g], dim=-2).flatten(-3, -1).contiguous()
+
 
 # ---------------------------------------------------------------------------
 # TP padding
@@ -108,8 +109,15 @@ class FfnBuilder(Builder):
         self.config.fuse_silu = gate_up_block != 0
         groups = (proj // gate_up_block
                   if gate_up_block else self.tp.size)
-        w1w3 = _block_pack_w1w3(w1, w3, groups=groups)
-        self._add_linear('w1w3', w1w3, SplitSide.OUTPUT, plan)
+        if gate_up_block:
+            # the interleave uses the kernel's scale blocking, so bridge first
+            bridge = plan.bridge
+            w1, w3 = _bridge_linear(w1, bridge), _bridge_linear(w3, bridge)
+            w1w3 = _block_pack_w1w3(w1, w3, groups=groups)
+            self._commit_linear('w1w3', w1w3, SplitSide.OUTPUT, plan)
+        else:
+            w1w3 = _block_pack_w1w3(w1, w3, groups=groups)
+            self._add_linear('w1w3', w1w3, SplitSide.OUTPUT, plan)
 
         plan = self._query_gemm(self._make_gemm_query(
             w2, grouped=self.config.is_expert))

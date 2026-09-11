@@ -140,8 +140,8 @@ __device__ __forceinline__ void u4_unpack_dequant(uint32_t packed, uint32_t scal
 }
 
 // Decode two direct and two nibble-rotated E4M3 pair planes into the BF16 register fragment consumed by one
-// m64n*k16 RS WGMMA operand-A lane, then apply the B128 weight scale.
-__device__ __forceinline__ void fp8_e4m3_unpack_dequant(const uint32_t* packed, uint16_t scale_bits, nv_bfloat16* out)
+// m64n*k16 RS WGMMA operand-A lane, then apply the per-column weight scales of the two columns the lane covers.
+__device__ __forceinline__ void fp8_e4m3_unpack_dequant(const uint32_t* packed, uint32_t scale_pair, nv_bfloat16* out)
 {
     constexpr uint32_t kDirectPairMask = 0x87f087f0u;
     constexpr uint32_t kShiftLeftMask  = 0x080f080fu;
@@ -158,15 +158,18 @@ __device__ __forceinline__ void fp8_e4m3_unpack_dequant(const uint32_t* packed, 
         h[i + 2]         = ((x & kShiftLeftMask) << 4) | ((x & kShiftRightMask) >> 4);
     }
 
-    const auto& scale = reinterpret_cast<const nv_bfloat16&>(scale_bits);
+    const auto& scale = reinterpret_cast<const nv_bfloat162&>(scale_pair);
     auto*       h2    = reinterpret_cast<nv_bfloat162*>(out);
 
     // SM90 lowers the scalar BF16 broadcast to H0_H0 without materializing a BF16x2 scale pair.
     CUTE_UNROLL
     for (int i = 0; i < 4; ++i) {
         asm("mul.rn.bf16x2 %0, %1, %2;" : "=r"(h[i]) : "r"(h[i]), "r"(kNormalizePair));
-        h2[i] = __hmul2(h2[i], __bfloat162bfloat162(scale));
     }
+    h2[0] = __hmul2(h2[0], __bfloat162bfloat162(scale.x));
+    h2[1] = __hmul2(h2[1], __bfloat162bfloat162(scale.y));
+    h2[2] = __hmul2(h2[2], __bfloat162bfloat162(scale.x));
+    h2[3] = __hmul2(h2[3], __bfloat162bfloat162(scale.y));
 }
 
 template<int GroupSize, DataType Dtype>
@@ -285,9 +288,10 @@ struct Sm90MixedDequant<Sm90Fp8E4M3Format> {
         return local_tid;
     }
 
+    // Each quad owns the two columns whose scales share one BF16x2 word.
     template<int RestM>
     struct Registers {
-        uint16_t scale[RestM]{};
+        uint32_t scale[RestM]{};
     };
 
     template<int RestM, int AtomM, int TileOut>
@@ -296,14 +300,15 @@ struct Sm90MixedDequant<Sm90Fp8E4M3Format> {
                                 int               segment_base,
                                 int               segment_stride,
                                 int /*group*/,
-                                int /*local_tid*/)
+                                int               local_tid)
     {
         static_assert(TileOut == RestM * AtomM * 64);
-        const auto* scale = reinterpret_cast<const uint16_t*>(smem);
+        constexpr int kWordsPerFragment = Sm90Fp8E4M3Format::kQparamValuesFragment / 2;
+        const auto*   scale             = reinterpret_cast<const uint32_t*>(smem);
         CUTE_UNROLL
         for (int rest_m = 0; rest_m < RestM; ++rest_m) {
             const int segment  = segment_base + rest_m * segment_stride;
-            regs.scale[rest_m] = scale[segment * Sm90Fp8E4M3Format::kQparamValuesFragment];
+            regs.scale[rest_m] = scale[segment * kWordsPerFragment + local_tid / 4];
         }
     }
 
@@ -597,8 +602,6 @@ struct GemmUniversalSm90Mixed {
     static_assert(TILE_M % kMulticastA == 0);
     static_assert(TILE_M % (kMulticastA * kTmaCountM) == 0);
     static_assert(kTmaBoxM <= 256);
-    static_assert(Format::kQparamFragmentN == kSm90MixedFragmentN);
-    static_assert(Format::kQparamValuesTile == 2 * Format::kQparamValuesFragment);
     static_assert(kPackedWordsStage == Traits::kPackedWordsStage * Format::kWeightBits / 4);
     static_assert(kPackedWordsStage == TILE_N * TILE_K / (32 / Format::kWeightBits));
     static_assert(kQparamGroupBytes % 16 == 0);
@@ -638,7 +641,7 @@ struct GemmUniversalSm90Mixed {
     static auto MakeTmaQparam(void* ptr, int n, int k)
     {
         const int out_fragments = n / kSm90MixedFragmentN;
-        const int q_groups      = k / kGroupSize;
+        const int q_groups      = cute::ceil_div(k, kGroupSize);
         auto      layout =
             cute::make_layout(cute::make_shape(cute::Int<Format::kQparamValuesFragment>{}, out_fragments, q_groups),
                               cute::make_stride(cute::_1{},
@@ -865,7 +868,8 @@ private:
         auto      stile         = cute::make_tensor(cute::make_smem_ptr(smem), PackedSmemLayout{});
         auto      dst_partition = cta_tma.partition_D(stile);
         auto      dst           = cute::group_modes<1, cute::rank(dst_partition)>(dst_partition);
-        const int tile          = out_fragment / kOutputFragments + (out_fragments / kOutputFragments) * k_tile;
+        const int tile =
+            out_fragment / kOutputFragments + cute::ceil_div(out_fragments, cute::Int<kOutputFragments>{}) * k_tile;
         cute::copy(tma.with(desc, *bar, mcast_mask, cute::TMA::CacheHintSm90::EVICT_NORMAL),
                    src(cute::_, tile),
                    dst(cute::_, 0));
@@ -916,6 +920,7 @@ private:
 
         const int k_iters       = sched.k_iters_;
         const int out_fragments = sched.gemm_shape().y / kSm90MixedFragmentN;
+        const int output_tiles  = cute::ceil_div(out_fragments, cute::Int<kOutputFragments>{});
 
         auto packed_gmem = tm_b.get_tma_tensor(
             cute::make_shape(cute::Int<kPackedInnerWords>{}, out_fragments, k_iters * kKFragmentsPerTile));
@@ -924,7 +929,7 @@ private:
         auto packed_src_partition = packed_cta_tma.partition_S(packed_gtiles);
         auto packed_src           = cute::group_modes<1, cute::rank(packed_src_partition)>(packed_src_partition);
 
-        const int q_tile_count    = k_iters / kKTilesPerQGroup;
+        const int q_tile_count    = cute::ceil_div(k_iters, cute::Int<kKTilesPerQGroup>{});
         auto      qparam_gmem     = tm_v.get_tma_tensor(cute::make_shape(
             cute::Int<Format::kQparamValuesFragment>{}, out_fragments, q_tile_count * kQGroupsPerStage));
         auto      qparam_gtiles   = cute::flat_divide(qparam_gmem, QparamCtaTile{});
@@ -1045,8 +1050,8 @@ private:
                                                           QparamSmemLayout{});
                     auto      qparam_dst_part = qparam_cta_tma.partition_D(qparam_stile);
                     auto      qparam_dst      = cute::group_modes<1, cute::rank(qparam_dst_part)>(qparam_dst_part);
-                    const int qparam_tile     = out_fragment / kOutputFragments
-                                            + (out_fragments / kOutputFragments) * (k_tile / kKTilesPerQGroup);
+                    const int qparam_tile =
+                        out_fragment / kOutputFragments + output_tiles * (k_tile / kKTilesPerQGroup);
                     cute::copy(tm_v.with(Vdesc, *bar, mask_B, cute::TMA::CacheHintSm90::EVICT_LAST),
                                qparam_src(cute::_, qparam_tile),
                                qparam_dst(cute::_, 0));
@@ -1057,8 +1062,7 @@ private:
                         cute::make_smem_ptr(storage.A.data() + stage * kPackedWordsStage), PackedSmemLayout{});
                     auto      packed_dst_part = packed_cta_tma.partition_D(packed_stile);
                     auto      packed_dst      = cute::group_modes<1, cute::rank(packed_dst_part)>(packed_dst_part);
-                    const int packed_tile =
-                        out_fragment / kOutputFragments + (out_fragments / kOutputFragments) * k_tile;
+                    const int packed_tile     = out_fragment / kOutputFragments + output_tiles * k_tile;
                     cute::copy(tm_b.with(Bdesc, *bar, mask_B, cute::TMA::CacheHintSm90::EVICT_NORMAL),
                                packed_src(cute::_, packed_tile),
                                packed_dst(cute::_, 0));
@@ -1124,7 +1128,8 @@ private:
             const int     elected         = cute::elect_one_sync();
             const int     k_iters         = sched.k_iters_;
             const int     out_fragments   = sched.gemm_shape().y / kSm90MixedFragmentN;
-            const int     q_tile_count    = k_iters / kKTilesPerQGroup;
+            const int     output_tiles    = cute::ceil_div(out_fragments, cute::Int<kOutputFragments>{});
+            const int     q_tile_count    = cute::ceil_div(k_iters, cute::Int<kKTilesPerQGroup>{});
             auto          qparam_gmem     = tm_v.get_tma_tensor(cute::make_shape(
                 cute::Int<Format::kQparamValuesFragment>{}, out_fragments, q_tile_count * kQGroupsPerStage));
             auto          qparam_gtiles   = cute::flat_divide(qparam_gmem, QparamCtaTile{});
@@ -1149,10 +1154,11 @@ private:
                     const int out_fragment = tile->offset_n / kSm90MixedFragmentN;
 
                     for (int q_tile = 0; q_tile < q_tile_count; ++q_tile) {
-                        const int qparam_tile =
-                            out_fragment / kOutputFragments + (out_fragments / kOutputFragments) * q_tile;
+                        const int qparam_tile = out_fragment / kOutputFragments + output_tiles * q_tile;
                         CUTE_UNROLL
-                        for (int in_group = 0; in_group < kKTilesPerQGroup; ++in_group) {
+                        for (int in_group = 0;
+                             in_group < kKTilesPerQGroup && q_tile * kKTilesPerQGroup + in_group < k_iters;
+                             ++in_group) {
                             const int k_tile = q_tile * kKTilesPerQGroup + in_group;
                             pipeline.producer_acquire(write_state);
                             auto*     bar   = pipeline.producer_get_barrier(write_state);

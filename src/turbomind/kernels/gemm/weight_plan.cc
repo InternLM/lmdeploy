@@ -20,7 +20,7 @@ int WeightPlan::gate_up(ActivationType act_type, int projection_n)
 
 void WeightPlan::pack(LinearWeight& linear, cudaStream_t stream) const
 {
-    family_->Pack(linear, bridge_, stream);
+    family_->Pack(linear, stream);
     linear.family        = family_;
     linear.input_format  = family_->input_format();
     linear.epilogue      = epilogue_;

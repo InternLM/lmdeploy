@@ -20,9 +20,8 @@ namespace {
 using namespace config::geometry;
 
 template<int GroupSize>
-void pack_u4(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+void pack_u4(LinearWeight& linear, cudaStream_t stream)
 {
-    ApplyWeightBridge(linear, bridge, stream);
     PackWeight(linear, GetImpl<Sm70, kRowMajor, HMMA_884 | OPERAND_B | 1, uint16_t, uint4_t>(), stream);
     PackQParams(linear,
                 GetImpl<Sm70, kColMajor, HMMA_884 | OPERAND_V | 1, uint32_t, uint32_t>(),

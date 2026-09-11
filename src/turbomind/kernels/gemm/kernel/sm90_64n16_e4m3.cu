@@ -3,7 +3,7 @@
 #include <cuda.h>
 
 #include "src/turbomind/kernels/gemm/convert.h"
-#include "src/turbomind/kernels/gemm/kernel/e4m3.h"
+#include "src/turbomind/kernels/gemm/family.h"
 #include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
 #include "src/turbomind/models/linear_weight.h"
@@ -17,40 +17,60 @@ namespace {
 using config::Shape;
 using namespace config::geometry;
 
-void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+// The kernel scales one K64 group per TILE_K and one scale per output column,
+// so checkpoint blocking is expanded by the weight bridge instead of being
+// handled by the packing kernels.  Replication covers whole N128 blocks, so a
+// narrower source block would leave the last tile row short of its columns.
+std::optional<WeightBridge> supports(const DataFormat& format, bool)
 {
-    ApplyWeightBridge(linear, bridge, stream);
-    TM_CHECK_EQ(linear.output_dim % kSm90MixedTileN, 0);
-    TM_CHECK_EQ(linear.input_dim % Sm90Fp8E4M3Format::kGroupSize, 0);
+    if (format.dtype != kFloat8_e4m3 || format.block_sizes.size() != 2) {
+        return std::nullopt;
+    }
+    if (format.block_sizes[1] % kSm90MixedTileN || format.block_sizes[0] % Sm90Fp8E4M3Format::kGroupSize) {
+        return std::nullopt;
+    }
+    if (!IsFloatFormatType(format.scales.dtype) || format.zeros.present()) {
+        return std::nullopt;
+    }
+    WeightBridge bridge;
+    bridge.replicate_scales.x = format.block_sizes[0] / Sm90Fp8E4M3Format::kGroupSize;
+    bridge.replicate_scales.y = format.block_sizes[1] / Sm90Fp8E4M3Format::kScaleGroupN;
+    bridge.convert_scales     = kFloat;
+    return bridge;
+}
+
+void pack(LinearWeight& linear, cudaStream_t stream)
+{
+    TM_CHECK_EQ(linear.output_dim % kSm90MixedFragmentN, 0);
+    TM_CHECK_EQ(linear.input_dim % kSm90MixedTileK, 0);
     TM_CHECK_GE(linear.input_dim, 128);
     PackWeight(linear, Sm90Fp8E4M3Format::kWeightPack, PackSm90Fp8E4M3Weight, stream);
 
     TM_CHECK_EQ(linear.scales.dtype(), kFloat);
     TM_CHECK_EQ(linear.scales.ndim(), 2);
-    TM_CHECK_EQ(linear.scales.shape(0), linear.input_dim / Sm90Fp8E4M3Format::kGroupSize);
-    TM_CHECK_EQ(linear.scales.shape(1), linear.output_dim / Sm90Fp8E4M3Format::kScaleGroupN);
+    const int group_count = linear.input_dim / Sm90Fp8E4M3Format::kGroupSize;
+    // Bridge replication yields at least one K64 row per group and one column
+    // per weight column. Padding past the last K64 group or past the last
+    // output column is tolerated, but only columns < output_dim are read, so a
+    // row narrowed by the output split is as valid as a whole-block one.
+    const int scales_stride = linear.scales.shape(1);
+    TM_CHECK_GE(linear.scales.shape(0), group_count);
+    TM_CHECK_GE(scales_stride, linear.output_dim);
     TM_CHECK(linear.scales.is_contiguous());
-    MatrixLayout s_desc{kFloat,
-                        kRowMajor,
-                        (int)linear.scales.shape(0),
-                        (int)linear.scales.shape(1),
-                        (int)linear.scales.stride(0),
-                        0,
-                        0,
-                        nullptr,
-                        nullptr};
-    Tensor       packed_q{{linear.scales.size() * Sm90Fp8E4M3Format::kQparamValuesTile}, kBfloat16, kDEVICE};
+    const int fragments_n = (linear.output_dim + kSm90MixedFragmentN - 1) / kSm90MixedFragmentN;
+    Tensor    packed_q{{group_count * fragments_n * Sm90Fp8E4M3Format::kQparamValuesFragment}, kBfloat16, kDEVICE};
     PackSm90Fp8E4M3Scales(static_cast<bfloat16_t*>(packed_q.raw_data()),
                           static_cast<const float*>(linear.scales.raw_data()),
-                          s_desc.rows,
-                          s_desc.cols,
+                          group_count,
+                          linear.output_dim,
+                          scales_stride,
                           stream);
     linear.scales = std::move(packed_q);
     linear.q_desc = MatrixLayout{kBfloat16,
                                  kRowMajor,
-                                 s_desc.rows,
-                                 s_desc.cols,
-                                 s_desc.cols * Sm90Fp8E4M3Format::kQparamValuesTile,
+                                 group_count,
+                                 linear.output_dim,
+                                 fragments_n * Sm90Fp8E4M3Format::kQparamValuesFragment,
                                  Sm90Fp8E4M3Format::kQparamPack,
                                  0,
                                  nullptr,
@@ -63,13 +83,13 @@ const Family e4m3{32,
                   250,
                   kBfloat16,
                   kBfloat16,
-                  128,
-                  128,
+                  64,
+                  64,
                   128,
                   1,
                   true,
                   true,
-                  supports_e4m3<kFloat, Sm90Fp8E4M3Format::kScaleGroupN>,
+                  supports,
                   pack,
                   64,
                   kBfloat16};

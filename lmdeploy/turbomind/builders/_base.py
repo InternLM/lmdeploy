@@ -1,11 +1,23 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import enum
+from dataclasses import replace
 
 import torch
 
 from .. import _tm
+from ..linear import _apply_bridge
 from .linear import Linear
+
+
+def _bridge_linear(x: Linear, bridge) -> Linear:
+    """Expand the quantized tensors of a Linear to the kernel's blocking."""
+    output_dim = int(x.tensors['weight'].shape[-1])
+    return replace(
+        x,
+        tensors={kind: _apply_bridge(tensor, kind, bridge, output_dim) for kind, tensor in x.tensors.items()},
+    )
+
 
 # ---------------------------------------------------------------------------
 # SplitSide enum (internal -- not exposed to specs)
@@ -271,7 +283,16 @@ class Builder:
         return plan
 
     def _add_linear(self, name: str, linear: Linear, split_side: SplitSide | None = None, plan=None):
+        """Expand the weight to the kernel's quantization blocking, then commit
+        it under ``name``."""
+        if plan is None:
+            plan = self._query_gemm(self._make_gemm_query(linear))
+        self._commit_linear(name, _bridge_linear(linear, plan.bridge), split_side, plan)
+
+    def _commit_linear(self, name: str, linear: Linear, split_side: SplitSide | None, plan):
         """Create standalone LinearWeight modules and copy tensor data.
+
+        The weight must already be at the kernel's quantization blocking.
 
         Creates per-GPU LinearWeight modules via ``_tm.create_module``
         at commit time.  Attachment to the parent module is deferred to
@@ -282,9 +303,6 @@ class Builder:
         w = linear.tensors.get('weight')
         if w is None:
             return
-
-        if plan is None:
-            plan = self._query_gemm(self._make_gemm_query(linear))
 
         family = plan.family
         fmt = linear.weight_format

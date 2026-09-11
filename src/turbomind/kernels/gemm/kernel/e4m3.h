@@ -76,9 +76,8 @@ template<class Arch,
          Order    QParamOrder,
          uint32_t QParamPack,
          DataType ScaleDtype>
-void pack_e4m3(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+void pack_e4m3(LinearWeight& linear, cudaStream_t stream)
 {
-    ApplyWeightBridge(linear, bridge, stream);
     PackWeight(linear, GetImpl<Arch, WeightOrder, WeightPack, uint16_t, uint8_t>(), stream);
     PackQParams(
         linear, GetImpl<Arch, QParamOrder, QParamPack, uint16_t, uint16_t>(), QuantDesc{QuantType::kK, 128}, stream);

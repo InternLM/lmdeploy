@@ -104,8 +104,12 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_weight_kernel(
     }
 }
 
-__global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_qparams_kernel(
-    uint8_t* dst, const uint8_t* src, int output_dim, int total_records, Sm90MxFp4Fp8FoldedPackStats* stats)
+__global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_qparams_kernel(uint8_t*   dst,
+                                                                                const uint8_t* src,
+                                                                                int            output_dim,
+                                                                                int            src_stride,
+                                                                                int            total_records,
+                                                                                Sm90MxFp4Fp8FoldedPackStats* stats)
 {
     using namespace cute;
 
@@ -131,7 +135,7 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_qparams_kernel
     const int      k128_groups   = total_records / out_fragments;
 
     auto gSrc = make_tensor(
-        make_gmem_ptr(src), make_shape(output_dim, k128_groups * kGroupsPerRecord), make_stride(Int<1>{}, output_dim));
+        make_gmem_ptr(src), make_shape(output_dim, k128_groups * kGroupsPerRecord), make_stride(Int<1>{}, src_stride));
     auto gShift = make_tensor(make_gmem_ptr(dst), make_layout(make_shape(Int<kShiftValues>{}, total_records)));
     auto gBase  = make_tensor(make_gmem_ptr(dst + size_t(total_records) * kShiftValues),
                              make_layout(make_shape(Int<16>{}, total_records)));
@@ -223,6 +227,7 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_qparams_kernel
 __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_unfolded_qparams_kernel(uint8_t*       dst,
                                                                                    const uint8_t* src,
                                                                                    int            output_dim,
+                                                                                   int            src_stride,
                                                                                    int            total_records)
 {
     using namespace cute;
@@ -242,7 +247,7 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_unfolded_qparams_kern
     const int k128_groups   = total_records / out_fragments;
 
     auto gSrc = make_tensor(
-        make_gmem_ptr(src), make_shape(output_dim, k128_groups * kGroupsPerRecord), make_stride(Int<1>{}, output_dim));
+        make_gmem_ptr(src), make_shape(output_dim, k128_groups * kGroupsPerRecord), make_stride(Int<1>{}, src_stride));
     auto gDst =
         make_tensor(make_gmem_ptr(dst),
                     make_layout(make_shape(Int<kFragmentM>{}, Int<kQparamGroups>{}, total_records),
@@ -326,7 +331,17 @@ __global__ __launch_bounds__(256) void pack_sm90_u4_weight_kernel(
         const int lane = threadIdx.x % 128;
 
         if (fragment_n < fragments_n) {
-            copy(tiled_copy, tAgA, tArA_copy);
+            auto identity = make_identity_tensor(make_shape(Int<kSm90MixedTileN>{}, Int<kSm90MixedTileK>{}));
+            auto tAcA     = thr_copy.partition_S(identity);
+            for (int i = 0; i < size(tArA_copy); ++i) {
+                const auto coord = tAcA(i);
+                if (tile_n * kSm90MixedTileN + get<0>(coord) < output_dim) {
+                    tArA_copy(i) = cutlass::bfloat16_t(static_cast<float>(tAgA(i)));
+                }
+                else {
+                    tArA_copy(i) = cutlass::bfloat16_t(0.0f);
+                }
+            }
 #pragma unroll
             for (int kb = 0; kb < 4; ++kb) {
                 uint32_t packed = 0;
@@ -408,10 +423,29 @@ __global__ __launch_bounds__(256) void pack_sm90_fp8_e4m3_weight_kernel(
         static_assert(size<1>(tArA_copy) == Int<1>{});
         static_assert(size<2>(tArA_copy) == Int<4>{});
 
-        copy(tiled_copy, tAgA, tArA_copy);
+        // The final 128-column pack tile may contain only one 64-column
+        // fragment; the other one has no destination slot in the packed
+        // weight or the qparam buffer, so its whole warpgroup is skipped.
+        const int fragment_n = tile_n * (kSm90MixedTileN / kSm90MixedFragmentN) + threadIdx.x / 128;
+        if (fragment_n >= fragments_n) {
+            continue;
+        }
 
-        const int warpgroup = threadIdx.x / 128;
-        const int lane      = threadIdx.x % 128;
+        // Load through the copy layout with an explicit predicate so the
+        // unused source lanes are zero rather than reading past N.
+        auto identity = make_identity_tensor(make_shape(Int<kSm90MixedTileN>{}, Int<kSm90MixedTileK>{}));
+        auto tAcA     = thr_copy.partition_S(identity);
+        for (int i = 0; i < size(tArA_copy); ++i) {
+            const auto coord = tAcA(i);
+            if (tile_n * kSm90MixedTileN + get<0>(coord) < output_dim) {
+                tArA_copy(i) = cutlass::bfloat16_t(static_cast<float>(tAgA(i)));
+            }
+            else {
+                tArA_copy(i) = cutlass::bfloat16_t(0.0f);
+            }
+        }
+
+        const int lane = threadIdx.x % 128;
 
 #pragma unroll
         for (int kb = 0; kb < 4; ++kb) {
@@ -431,7 +465,6 @@ __global__ __launch_bounds__(256) void pack_sm90_fp8_e4m3_weight_kernel(
                 }
             }
 
-            const int     fragment_n = tile_n * (kSm90MixedTileN / kSm90MixedFragmentN) + warpgroup;
             const int     fragment_k = tile_k * (kSm90MixedTileK / kSm90MixedFragmentK) + kb;
             const int64_t dst_idx    = ((int64_t)fragment_k * fragments_n + fragment_n) * 256 + lane * 2;
             dst[dst_idx]             = packed[0];
@@ -441,7 +474,8 @@ __global__ __launch_bounds__(256) void pack_sm90_fp8_e4m3_weight_kernel(
 }
 
 template<int Offset, class D, class S>
-__global__ __launch_bounds__(256) void pack_sm90_qparams_kernel(D* dst, const S* src, int output_dim, int total_tiles)
+__global__ __launch_bounds__(256) void pack_sm90_qparams_kernel(
+    D* dst, const S* src, int output_dim, int src_stride, int total_tiles)
 {
     using namespace cute;
 
@@ -470,7 +504,7 @@ __global__ __launch_bounds__(256) void pack_sm90_qparams_kernel(D* dst, const S*
             const int m_lo = get<0>(tAcA(0));
             const int m_hi = get<0>(tAcA(2));
 
-            const S* tile_src = src + (int64_t)group * output_dim + tile_n * kSm90MixedTileN;
+            const S* tile_src = src + (int64_t)group * src_stride + tile_n * kSm90MixedTileN;
             D*       fragment = dst + ((int64_t)group * fragments_n + fragment_n) * kSm90MixedFragmentN;
             static_assert(std::is_same_v<D, S>);
             fragment[2 * pair]     = static_cast<D>(static_cast<int>(tile_src[m_lo]) + Offset);
@@ -481,7 +515,7 @@ __global__ __launch_bounds__(256) void pack_sm90_qparams_kernel(D* dst, const S*
 
 template<class T>
 __global__ __launch_bounds__(256) void pack_sm90_u4_qparams_kernel(
-    uint8_t* dst, const T* scales, const T* zeros, int output_dim, int total_tiles)
+    uint8_t* dst, const T* scales, const T* zeros, int output_dim, int src_stride, int total_tiles)
 {
     static_assert(std::is_same_v<T, half_t> || std::is_same_v<T, bfloat16_t>);
     using namespace cute;
@@ -511,8 +545,8 @@ __global__ __launch_bounds__(256) void pack_sm90_u4_qparams_kernel(
             const int m_lo = get<0>(tAcA(0));
             const int m_hi = get<0>(tAcA(2));
 
-            const auto* tile_scales = scales + (int64_t)group * output_dim + tile_n * kSm90MixedTileN;
-            const auto* tile_zeros  = zeros ? zeros + (int64_t)group * output_dim + tile_n * kSm90MixedTileN : nullptr;
+            const auto* tile_scales = scales + (int64_t)group * src_stride + tile_n * kSm90MixedTileN;
+            const auto* tile_zeros  = zeros ? zeros + (int64_t)group * src_stride + tile_n * kSm90MixedTileN : nullptr;
             auto*       fragment    = dst + ((int64_t)group * fragments_n + fragment_n) * kSm90U4QparamValuesFragment;
 
             reinterpret_cast<uint32_t*>(fragment)[pair] =
@@ -551,22 +585,45 @@ __global__ __launch_bounds__(256) void pack_sm90_u4_qparams_kernel(
     }
 }
 
-__global__ void
-pack_sm90_fp8_e4m3_scales_kernel(bfloat16_t* dst, const float* src, int group_count, int output_pack_count)
+// Gather the per-column scales of one K64 group into the OUT64 consumer order:
+// two adjacent columns per word, indexed by the quad that owns them.
+__global__ __launch_bounds__(256) void pack_sm90_fp8_e4m3_scales_kernel(
+    bfloat16_t* dst, const float* src, int output_dim, int src_stride, int total_tiles)
 {
-    const int idx = (int)blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < group_count * output_pack_count) {
-        const int        group       = idx / output_pack_count;
-        const int        output_pack = idx % output_pack_count;
-        const bfloat16_t scale       = __float2bfloat16_rn(src[idx]);
-#pragma unroll
-        for (int half = 0; half < 2; ++half) {
-#pragma unroll
-            for (int i = 0; i < Sm90Fp8E4M3Format::kQparamValuesFragment; ++i) {
-                const int fragment = output_pack * 2 + half;
-                dst[((int64_t)group * output_pack_count * 2 + fragment) * Sm90Fp8E4M3Format::kQparamValuesFragment
-                    + i]           = scale;
-            }
+    using namespace cute;
+
+    using TiledMma = GmmaMixedPackTraits::TiledMma;
+    static_assert(size(TiledMma{}) == Int<256>{});
+    static_assert(tile_size<0>(TiledMma{}) == Int<kSm90MixedTileN>{});
+
+    const int tiles_n     = (output_dim + kSm90MixedTileN - 1) / kSm90MixedTileN;
+    const int fragments_n = output_dim / kSm90MixedFragmentN;
+
+    for (int tile = blockIdx.x; tile < total_tiles; tile += gridDim.x) {
+        const int group  = tile / tiles_n;
+        const int tile_n = tile % tiles_n;
+
+        TiledMma tiled_mma;
+        auto     identity = make_identity_tensor(Shape<Int<kSm90MixedTileN>, Int<kSm90MixedFragmentK>>{});
+        auto     thr_mma  = tiled_mma.get_thread_slice(threadIdx.x);
+        auto     tAcA     = thr_mma.partition_A(identity);
+        static_assert(size(tAcA) == Int<8>{});
+
+        const int local_tid  = threadIdx.x % 128;
+        const int warpgroup  = threadIdx.x / 128;
+        const int fragment_n = tile_n * (kSm90MixedTileN / kSm90MixedFragmentN) + warpgroup;
+        if (fragment_n < fragments_n && local_tid % 4 == 0) {
+            const int pair = local_tid / 4;
+            const int m_lo = get<0>(tAcA(0));
+            const int m_hi = get<0>(tAcA(2));
+
+            const auto* tile_src = src + (int64_t)group * src_stride + tile_n * kSm90MixedTileN;
+            auto*       fragment = dst + ((int64_t)group * fragments_n + fragment_n) * kSm90MixedFragmentN;
+
+            const bfloat16_t lo = __float2bfloat16_rn(tile_src[m_lo]);
+            const bfloat16_t hi = __float2bfloat16_rn(tile_src[m_hi]);
+            reinterpret_cast<uint32_t*>(fragment)[pair] =
+                uint32_t(reinterpret_cast<const uint16_t&>(lo)) | (uint32_t(reinterpret_cast<const uint16_t&>(hi)) << 16);
         }
     }
 }
@@ -609,63 +666,69 @@ void PackSm90Fp8E4M3Weight(uint32_t* dst, const uint16_t* src, int output_dim, i
     TM_CHECK_NOTNULL(src);
     TM_CHECK_GT(output_dim, 0);
     TM_CHECK_GT(input_dim, 0);
-    TM_CHECK_EQ(output_dim % kSm90MixedTileN, 0);
+    TM_CHECK_EQ(output_dim % kSm90MixedFragmentN, 0);
     TM_CHECK_EQ(input_dim % kSm90MixedTileK, 0);
 
-    const int total_tiles = (output_dim / kSm90MixedTileN) * (input_dim / kSm90MixedTileK);
+    const int total_tiles = ((output_dim + kSm90MixedTileN - 1) / kSm90MixedTileN)
+                            * (input_dim / kSm90MixedTileK);
     const int grid        = std::min(total_tiles, 65535);
     pack_sm90_fp8_e4m3_weight_kernel<<<grid, 256, 0, stream>>>(dst, src, output_dim, input_dim, total_tiles);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int Offset = 0, class D, class S>
-void PackSm90QParams(D* dst, const S* src, int output_dim, int group_count, cudaStream_t stream)
+void PackSm90QParams(D* dst, const S* src, int output_dim, int group_count, int src_stride, cudaStream_t stream)
 {
     TM_CHECK_NOTNULL(dst);
     TM_CHECK_NOTNULL(src);
     TM_CHECK_GT(output_dim, 0);
     TM_CHECK_GT(group_count, 0);
     TM_CHECK_EQ(output_dim % kSm90MixedFragmentN, 0);
+    TM_CHECK_GE(src_stride, output_dim);
 
     const int total_tiles = group_count * ((output_dim + kSm90MixedTileN - 1) / kSm90MixedTileN);
     const int grid        = std::min(total_tiles, 65535);
-    pack_sm90_qparams_kernel<Offset><<<grid, 256, 0, stream>>>(dst, src, output_dim, total_tiles);
+    pack_sm90_qparams_kernel<Offset><<<grid, 256, 0, stream>>>(dst, src, output_dim, src_stride, total_tiles);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<class T>
 void PackSm90U4QParams(
-    uint8_t* dst, const T* scales, const T* zeros, int output_dim, int group_count, cudaStream_t stream)
+    uint8_t* dst, const T* scales, const T* zeros, int output_dim, int group_count, int src_stride, cudaStream_t stream)
 {
     TM_CHECK_NOTNULL(dst);
     TM_CHECK_NOTNULL(scales);
     TM_CHECK_GT(output_dim, 0);
     TM_CHECK_GT(group_count, 0);
     TM_CHECK_EQ(output_dim % kSm90MixedFragmentN, 0);
+    TM_CHECK_GE(src_stride, output_dim);
 
     const int total_tiles = group_count * ((output_dim + kSm90MixedTileN - 1) / kSm90MixedTileN);
     const int grid        = std::min(total_tiles, 65535);
-    pack_sm90_u4_qparams_kernel<<<grid, 256, 0, stream>>>(dst, scales, zeros, output_dim, total_tiles);
+    pack_sm90_u4_qparams_kernel<<<grid, 256, 0, stream>>>(dst, scales, zeros, output_dim, src_stride, total_tiles);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
-template void PackSm90U4QParams(uint8_t*, const half_t*, const half_t*, int, int, cudaStream_t);
-template void PackSm90U4QParams(uint8_t*, const bfloat16_t*, const bfloat16_t*, int, int, cudaStream_t);
+template void PackSm90U4QParams(uint8_t*, const half_t*, const half_t*, int, int, int, cudaStream_t);
+template void PackSm90U4QParams(uint8_t*, const bfloat16_t*, const bfloat16_t*, int, int, int, cudaStream_t);
 
-void PackSm90Fp4QParams(uint8_t* dst, const uint8_t* src, int output_dim, int group_count, cudaStream_t stream)
+void PackSm90Fp4QParams(
+    uint8_t* dst, const uint8_t* src, int output_dim, int group_count, int src_stride, cudaStream_t stream)
 {
-    PackSm90QParams(dst, src, output_dim, group_count, stream);
+    PackSm90QParams(dst, src, output_dim, group_count, src_stride, stream);
 }
 
-void PackSm90MxFp4QParams(uint8_t* dst, const uint8_t* src, int output_dim, int group_count, cudaStream_t stream)
+void PackSm90MxFp4QParams(
+    uint8_t* dst, const uint8_t* src, int output_dim, int group_count, int src_stride, cudaStream_t stream)
 {
-    PackSm90QParams<-127>(dst, src, output_dim, group_count, stream);
+    PackSm90QParams<-127>(dst, src, output_dim, group_count, src_stride, stream);
 }
 
 void PackSm90MxFp4Fp8FoldedQParams(uint8_t*                     dst,
                                    const uint8_t*               src,
                                    int                          output_dim,
                                    int                          group_count,
+                                   int                          src_stride,
                                    cudaStream_t                 stream,
                                    Sm90MxFp4Fp8FoldedPackStats* device_stats)
 {
@@ -675,16 +738,17 @@ void PackSm90MxFp4Fp8FoldedQParams(uint8_t*                     dst,
     TM_CHECK_GT(group_count, 0);
     TM_CHECK_EQ(output_dim % 64, 0);
     TM_CHECK_EQ(group_count % 4, 0);
+    TM_CHECK_GE(src_stride, output_dim);
 
     const int total_records = (group_count / 4) * (output_dim / 64);
     const int grid          = std::min(total_records, 65535);
     pack_sm90_mxfp4_fp8_folded_qparams_kernel<<<grid, 128, 0, stream>>>(
-        dst, src, output_dim, total_records, device_stats);
+        dst, src, output_dim, src_stride, total_records, device_stats);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void PackSm90MxFp4Fp8UnfoldedQParams(
-    uint8_t* dst, const uint8_t* src, int output_dim, int group_count, cudaStream_t stream)
+    uint8_t* dst, const uint8_t* src, int output_dim, int group_count, int src_stride, cudaStream_t stream)
 {
     TM_CHECK_NOTNULL(dst);
     TM_CHECK_NOTNULL(src);
@@ -692,10 +756,12 @@ void PackSm90MxFp4Fp8UnfoldedQParams(
     TM_CHECK_GT(group_count, 0);
     TM_CHECK_EQ(output_dim % 64, 0);
     TM_CHECK_EQ(group_count % 4, 0);
+    TM_CHECK_GE(src_stride, output_dim);
 
     const int total_records = (group_count / 4) * (output_dim / 64);
     const int grid          = std::min(total_records, 65535);
-    pack_sm90_mxfp4_fp8_unfolded_qparams_kernel<<<grid, 128, 0, stream>>>(dst, src, output_dim, total_records);
+    pack_sm90_mxfp4_fp8_unfolded_qparams_kernel<<<grid, 128, 0, stream>>>(
+        dst, src, output_dim, src_stride, total_records);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -733,17 +799,20 @@ void PackSm90MxFp4Fp8UnfoldedWeight(
 }
 
 void PackSm90Fp8E4M3Scales(
-    bfloat16_t* dst, const float* src, int group_count, int output_pack_count, cudaStream_t stream)
+    bfloat16_t* dst, const float* src, int group_count, int output_dim, int src_stride, cudaStream_t stream)
 {
     TM_CHECK_NOTNULL(dst);
     TM_CHECK_NOTNULL(src);
     TM_CHECK_GT(group_count, 0);
-    TM_CHECK_GT(output_pack_count, 0);
+    TM_CHECK_GT(output_dim, 0);
 
-    constexpr int block = 256;
-    const int     count = group_count * output_pack_count;
-    pack_sm90_fp8_e4m3_scales_kernel<<<(count + block - 1) / block, block, 0, stream>>>(
-        dst, src, group_count, output_pack_count);
+    TM_CHECK_EQ(output_dim % kSm90MixedFragmentN, 0);
+    TM_CHECK_EQ(src_stride % kSm90MixedFragmentN, 0);
+    TM_CHECK_GE(src_stride, output_dim);
+
+    const int total_tiles = group_count * ((output_dim + kSm90MixedTileN - 1) / kSm90MixedTileN);
+    const int grid        = std::min(total_tiles, 65535);
+    pack_sm90_fp8_e4m3_scales_kernel<<<grid, 256, 0, stream>>>(dst, src, output_dim, src_stride, total_tiles);
     TM_CUDA_CHECK(cudaGetLastError());
 }
 

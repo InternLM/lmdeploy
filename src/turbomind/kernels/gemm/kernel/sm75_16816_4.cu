@@ -21,9 +21,8 @@ namespace {
 using namespace config::geometry;
 
 template<int GroupSize, bool Grouped>
-void pack_u4(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+void pack_u4(LinearWeight& linear, cudaStream_t stream)
 {
-    ApplyWeightBridge(linear, bridge, stream);
     if constexpr (Grouped) {
         PackWeight(linear, GetImpl<Sm75, kRowMajor, HMMA_16816 | OPERAND_B | 2, uint16_t, uint4_t>(), stream);
     }

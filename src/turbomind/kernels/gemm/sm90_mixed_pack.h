@@ -25,12 +25,15 @@ namespace turbomind::gemm {
 
 inline constexpr Pack kSm90MixedWeightPack = GMMA_64x16_RS | OPERAND_A | 1;
 // Version 2 stores each OUT64 qparam fragment in the RS operand-A consumer
-// order. FP8's one-scale-per-OUT128 record retains its original layout.
+// order.
 inline constexpr Pack kSm90MixedQParamPack = GMMA_64x16_RS | OPERAND_U | 2;
 // Version 5 stores each MXFP4 scale as the signed unbiased exponent
 // (UE8M0 - 127) in one byte, in operand-A consumer order. The mixed mainloop
 // injects it into the constant BF16 E2M1 table before the PRMT lookup.
 inline constexpr Pack kSm90MxFp4QParamPack    = GMMA_64x16_RS | OPERAND_U | 5;
+// Version 1 stores one BF16 scale per K64 group and output column for the
+// blockwise FP8 format, as one OUT64 fragment of 64 columns in the same
+// consumer order.
 inline constexpr Pack kSm90MixedFp8QParamPack = GMMA_64x16_RS | OPERAND_U | 1;
 // Both FP8 x MXFP4 paths keep a compact E2M1 RS image.  The folded path also
 // stores one signed unbiased K128 base exponent and four relative K32 exponent
@@ -158,7 +161,9 @@ inline constexpr int kSm90MixedFragmentK         = 16;
 inline constexpr int kSm90U4WordsPerTile         = kSm90MixedTileN * kSm90MixedTileK / 8;
 inline constexpr int kSm90U4QparamValuesFragment = kSm90MixedFragmentN * sizeof(uint16_t) + kSm90MixedFragmentN / 2;
 
-inline constexpr int kSm90Fp8E4M3GroupSize    = 128;
+// The mixed FP8 kernel scales one K64 group per TILE_K, so checkpoint weights
+// with K128 blocks are expanded by the weight bridge instead.
+inline constexpr int kSm90Fp8E4M3GroupSize    = kSm90MixedTileK;
 inline constexpr int kSm90Fp8E4M3WordsPerTile = kSm90MixedTileN * kSm90MixedTileK / 4;
 
 template<int GroupSize, DataType Dtype = kBfloat16>
@@ -176,10 +181,7 @@ struct Sm90U4Format {
     static constexpr int      kGroupSize            = GroupSize;
     static constexpr int      kWeightBits           = 4;
     static constexpr int      kScaleGroupN          = 1;
-    static constexpr int      kQparamFragmentN      = kSm90MixedFragmentN;
     static constexpr int      kQparamValuesFragment = kSm90U4QparamValuesFragment;
-    static constexpr int      kQparamValuesTile     = 2 * kQparamValuesFragment;
-    static constexpr int      kFusedSiluBlock       = 64;
     static constexpr bool     kHasGlobalScale       = false;
     static constexpr auto     kQuantType            = QuantType::kK;
     static constexpr auto     kConverterOrder       = kRowMajor;
@@ -199,10 +201,7 @@ struct Sm90MxFp4Format {
     static constexpr int      kGroupSize            = 32;
     static constexpr int      kWeightBits           = 4;
     static constexpr int      kScaleGroupN          = 1;
-    static constexpr int      kQparamFragmentN      = kSm90MixedFragmentN;
     static constexpr int      kQparamValuesFragment = kSm90MixedFragmentN;
-    static constexpr int      kQparamValuesTile     = kSm90MixedTileN;
-    static constexpr int      kFusedSiluBlock       = 64;
     static constexpr bool     kHasGlobalScale       = false;
     static constexpr auto     kQuantType            = QuantType::kK;
     static constexpr auto     kConverterOrder       = kRowMajor;
@@ -223,10 +222,7 @@ struct Sm90MxFp4Fp8FoldedFormat {
     static constexpr int  kGroupSize            = 32;
     static constexpr int  kWeightBits           = 4;
     static constexpr int  kScaleGroupN          = 1;
-    static constexpr int  kQparamFragmentN      = 64;
     static constexpr int  kQparamValuesFragment = 272;
-    static constexpr int  kQparamValuesTile     = kQparamValuesFragment;
-    static constexpr int  kFusedSiluBlock       = 128;
     static constexpr bool kHasGlobalScale       = false;
     static constexpr bool kFolded               = true;
     static constexpr bool kUnfolded             = false;
@@ -247,9 +243,7 @@ struct Sm90MxFp4Fp8UnfoldedFormat {
     static constexpr int  kGroupSize            = 32;
     static constexpr int  kWeightBits           = 4;
     static constexpr int  kScaleGroupN          = 1;
-    static constexpr int  kQparamFragmentN      = 64;
-    static constexpr int  kQparamValuesFragment = 4 * kQparamFragmentN;
-    static constexpr int  kQparamValuesTile     = kQparamValuesFragment;
+    static constexpr int  kQparamValuesFragment = 4 * kSm90MixedFragmentN;
     static constexpr bool kHasGlobalScale       = false;
     static constexpr bool kFolded               = false;
     static constexpr bool kUnfolded             = true;
@@ -276,10 +270,7 @@ struct Sm90NvFp4Format {
     static constexpr int      kGroupSize            = 16;
     static constexpr int      kWeightBits           = 4;
     static constexpr int      kScaleGroupN          = 1;
-    static constexpr int      kQparamFragmentN      = kSm90MixedFragmentN;
     static constexpr int      kQparamValuesFragment = kSm90MixedFragmentN;
-    static constexpr int      kQparamValuesTile     = kSm90MixedTileN;
-    static constexpr int      kFusedSiluBlock       = 64;
     static constexpr bool     kHasGlobalScale       = true;
     static constexpr auto     kQuantType            = QuantType::kK;
     static constexpr auto     kConverterOrder       = kRowMajor;
@@ -288,8 +279,9 @@ struct Sm90NvFp4Format {
 
 // Each E4M3 K16 lane fragment stores two pair-plane words. The first two
 // BF16x2 pairs occupy their final bit positions directly; the last two occupy
-// the complementary positions with each byte's nibbles rotated. Each B128
-// scale record is one replicated 16-byte tensor-copy record.
+// the complementary positions with each byte's nibbles rotated. The K64 group
+// record of an OUT64 fragment holds one BF16 scale per output column, so the
+// K128/N128 blocking of a checkpoint is expanded by the weight bridge.
 struct Sm90Fp8E4M3Format {
     using WeightType = fp8_e4m3_t;
     using QparamType = bfloat16_t;
@@ -299,13 +291,10 @@ struct Sm90Fp8E4M3Format {
     static constexpr Pack     kQparamPack           = kSm90MixedFp8QParamPack;
     static constexpr int      kGroupSize            = kSm90Fp8E4M3GroupSize;
     static constexpr int      kWeightBits           = 8;
-    static constexpr int      kScaleGroupN          = kSm90MixedTileN;
-    static constexpr int      kQparamFragmentN      = kSm90MixedFragmentN;
-    static constexpr int      kQparamValuesFragment = 8;
-    static constexpr int      kQparamValuesTile     = 2 * kQparamValuesFragment;
-    static constexpr int      kFusedSiluBlock       = 64;
+    static constexpr int      kScaleGroupN          = 1;
+    static constexpr int      kQparamValuesFragment = kSm90MixedFragmentN;
     static constexpr bool     kHasGlobalScale       = false;
-    static constexpr auto     kQuantType            = QuantType::kB;
+    static constexpr auto     kQuantType            = QuantType::kK;
     static constexpr auto     kConverterOrder       = kRowMajor;
     static constexpr auto     kPublicWeightOrder    = kColMajor;
 };
@@ -329,14 +318,16 @@ void PackSm90Fp8E4M3Weight(uint32_t* dst, const uint16_t* src, int output_dim, i
 // followed by 64 U4 zero points packed two per byte.
 template<class T>
 void PackSm90U4QParams(
-    uint8_t* dst, const T* scales, const T* zeros, int output_dim, int group_count, cudaStream_t stream);
+    uint8_t* dst, const T* scales, const T* zeros, int output_dim, int group_count, int src_stride, cudaStream_t stream);
 
-void PackSm90Fp4QParams(uint8_t* dst, const uint8_t* src, int output_dim, int group_count, cudaStream_t stream);
+void PackSm90Fp4QParams(
+    uint8_t* dst, const uint8_t* src, int output_dim, int group_count, int src_stride, cudaStream_t stream);
 
 // Convert raw MXFP4 UE8M0 bytes to signed unbiased exponents and reorder them
 // into operand-A consumer order. The signed values retain uint8_t storage so
 // the persistent representation remains one byte per scale.
-void PackSm90MxFp4QParams(uint8_t* dst, const uint8_t* src, int output_dim, int group_count, cudaStream_t stream);
+void PackSm90MxFp4QParams(
+    uint8_t* dst, const uint8_t* src, int output_dim, int group_count, int src_stride, cudaStream_t stream);
 
 void PackSm90MxFp4Fp8FoldedWeight(
     uint32_t* dst, const uint16_t* src, int output_dim, int input_dim, cudaStream_t stream);
@@ -348,15 +339,18 @@ void PackSm90MxFp4Fp8FoldedQParams(uint8_t*                     dst,
                                    const uint8_t*               src,
                                    int                          output_dim,
                                    int                          group_count,
+                                   int                          src_stride,
                                    cudaStream_t                 stream,
                                    Sm90MxFp4Fp8FoldedPackStats* device_stats = nullptr);
 
 void PackSm90MxFp4Fp8UnfoldedQParams(
-    uint8_t* dst, const uint8_t* src, int output_dim, int group_count, cudaStream_t stream);
+    uint8_t* dst, const uint8_t* src, int output_dim, int group_count, int src_stride, cudaStream_t stream);
 
-// Convert compact FP32 B128 scales [K/128, N/128] into one replicated
-// 16-byte BF16 record per OUT64 fragment: [K/128, N/64, fragment].
+// Convert FP32 per-column group scales [K/64, src_stride] into the consumer
+// order of the OUT64 fragments: [K/64, N/64, fragment].  The source comes from
+// the weight bridge, which replicates whole N128 blocks and therefore pads the
+// row to ceil(N/128)*128 columns; only the leading `output_dim` are read.
 void PackSm90Fp8E4M3Scales(
-    bfloat16_t* dst, const float* src, int group_count, int output_pack_count, cudaStream_t stream);
+    bfloat16_t* dst, const float* src, int group_count, int output_dim, int src_stride, cudaStream_t stream);
 
 }  // namespace turbomind::gemm

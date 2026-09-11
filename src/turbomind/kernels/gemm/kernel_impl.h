@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <numeric>
+
 #include "src/turbomind/core/data_type.h"
 
 #include "src/turbomind/kernels/core/common.h"
@@ -77,7 +79,12 @@ public:
 
         desc_.align.x = OpA::kOrder == kColMajor ? IterA::ThreadMap::kAccessC : 1;
         desc_.align.y = OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
-        desc_.align.z = Gemm::CTA_K;
+        if constexpr (OpV::SmemLayout::kSize > 1) {
+            desc_.align.z = std::lcm(Gemm::CTA_K, OpV::kGroupSize);
+        }
+        else {
+            desc_.align.z = Gemm::CTA_K;
+        }
 
         desc_.policy_a = (int)IterA::Policy::kEvictPolicy;
         desc_.policy_b = (int)IterB::Policy::kEvictPolicy;

@@ -31,24 +31,6 @@ int WeightPackEnv()
     return v;
 }
 
-void ApplyWeightBridge(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
-{
-    if (linear.scales && bridge.convert_scales != kNull) {
-        EnsureFloatDtype(linear.scales, bridge.convert_scales);
-        TM_CHECK_EQ(linear.scales.dtype(), bridge.convert_scales);
-    }
-    if (linear.zeros && bridge.convert_zeros != kNull) {
-        EnsureFloatDtype(linear.zeros, bridge.convert_zeros);
-        TM_CHECK_EQ(linear.zeros.dtype(), bridge.convert_zeros);
-    }
-    if (linear.scales && (bridge.replicate_scales.x != 1 || bridge.replicate_scales.y != 1)) {
-        linear.scales = ReplicateQParams(linear.scales, bridge.replicate_scales, stream);
-    }
-    if (linear.zeros && (bridge.replicate_scales.x != 1 || bridge.replicate_scales.y != 1)) {
-        linear.zeros = ReplicateQParams(linear.zeros, bridge.replicate_scales, stream);
-    }
-}
-
 void PackWeight(LinearWeight& linear, const LayoutConverter& convert, cudaStream_t stream)
 {
     const DataType    source_weight_type = linear.weight_format.dtype;
@@ -125,6 +107,13 @@ void PackWeight(LinearWeight& linear,
 void PackQParams(LinearWeight& linear, const LayoutConverter& convert, QuantDesc quant, cudaStream_t stream)
 {
     TM_CHECK(linear.scales);
+    // The blockwise FP8 bridge pads each K-group row to a whole number of N128
+    // blocks, so the source row may be wider than output_dim; only the leading
+    // output_dim columns are read.
+    const int group_count   = (linear.input_dim + quant.group_size - 1) / quant.group_size;
+    const int scales_stride = (int)linear.scales.shape(1);
+    TM_CHECK_GE(linear.scales.shape(0), group_count);
+    TM_CHECK_GE(scales_stride, linear.output_dim);
     const DataType source_weight_type = linear.weight_format.dtype;
     const bool     is_a               = get_operand_tag(convert.pack) == OPERAND_U;
     Tensor         tmp_q;
@@ -151,8 +140,7 @@ void PackQParams(LinearWeight& linear, const LayoutConverter& convert, QuantDesc
         AdjustUe8m0ScaleForHalf(tmp_q.data<uint8_t>(), tmp_q.size(), stream);
     }
 
-    MatrixLayout s_desc{
-        scale_type, convert.order, linear.output_dim, linear.input_dim / quant.group_size, linear.output_dim};
+    MatrixLayout s_desc{scale_type, convert.order, linear.output_dim, group_count, scales_stride};
     if (!is_a) {
         std::swap(s_desc.rows, s_desc.cols);
         s_desc.order = ~s_desc.order;
@@ -166,7 +154,7 @@ void PackQParams(LinearWeight& linear, const LayoutConverter& convert, QuantDesc
 void PackQParams(LinearWeight& linear,
                  QuantDesc     quant,
                  Pack          pack,
-                 void (*convert)(uint8_t*, const uint8_t*, int, int, cudaStream_t),
+                 void (*convert)(uint8_t*, const uint8_t*, int, int, int, cudaStream_t),
                  cudaStream_t stream)
 {
     TM_CHECK(linear.scales);
@@ -178,11 +166,16 @@ void PackQParams(LinearWeight& linear,
     convert(static_cast<uint8_t*>(packed_q.raw_data()),
             static_cast<const uint8_t*>(tmp_q.raw_data()),
             linear.output_dim,
-            linear.input_dim / quant.group_size,
+            (linear.input_dim + quant.group_size - 1) / quant.group_size,
+            (int)linear.scales.shape(1),
             stream);
     linear.scales = std::move(packed_q);
-    linear.q_desc = transpose(MatrixLayout{
-        kUint8, kColMajor, linear.output_dim, linear.input_dim / quant.group_size, linear.output_dim, pack});
+    linear.q_desc = transpose(MatrixLayout{kUint8,
+                                           kColMajor,
+                                           linear.output_dim,
+                                           (linear.input_dim + quant.group_size - 1) / quant.group_size,
+                                           linear.output_dim,
+                                           pack});
 }
 
 namespace {

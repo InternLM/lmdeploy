@@ -21,9 +21,8 @@ namespace {
 using config::Shape;
 using namespace config::geometry;
 
-void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+void pack(LinearWeight& linear, cudaStream_t stream)
 {
-    ApplyWeightBridge(linear, bridge, stream);
     TM_CHECK_EQ(linear.weight.dtype(), kBfloat16);
     Tensor trans{{linear.weight.shape(1), linear.weight.shape(0)}, kBfloat16, kDEVICE};
     invokeTransposeAxis01(static_cast<nv_bfloat16*>(trans.raw_data()),

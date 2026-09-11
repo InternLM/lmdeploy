@@ -531,9 +531,8 @@ std::optional<WeightBridge> supports(const DataFormat& format, bool grouped)
 }
 
 template<DataType Dtype, bool Grouped>
-void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t)
+void pack(LinearWeight& linear, cudaStream_t)
 {
-    TM_CHECK(!bridge);
     TM_CHECK_EQ(linear.weight.dtype(), Dtype);
     linear.k_desc =
         MatrixLayout{Dtype, kRowMajor, linear.input_dim, linear.output_dim, linear.output_dim, 0, 0, nullptr, nullptr};

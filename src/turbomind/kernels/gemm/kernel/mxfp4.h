@@ -32,9 +32,8 @@ inline std::optional<WeightBridge> supports_mxfp4(const DataFormat& format, bool
 }
 
 template<class Arch, Order WeightOrder, uint32_t WeightPack, Order QParamOrder, uint32_t QParamPack>
-void pack_mxfp4(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+void pack_mxfp4(LinearWeight& linear, cudaStream_t stream)
 {
-    ApplyWeightBridge(linear, bridge, stream);
     PackWeight(linear, GetImpl<Arch, WeightOrder, WeightPack, uint16_t, uint4_t>(), stream);
     PackQParams(
         linear, GetImpl<Arch, QParamOrder, QParamPack, uint8_t, uint8_t>(), QuantDesc{QuantType::kK, 32}, stream);

@@ -100,7 +100,7 @@ public:
     std::optional<WeightBridge>
     supports(const DataFormat& weight_format, DataType data_type, DataType output_dtype, bool grouped) const;
 
-    void Pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream) const;
+    void Pack(LinearWeight& linear, cudaStream_t stream) const;
 
     void ConvertInput(Tensor&             A,
                       Tensor&             U,
@@ -122,7 +122,7 @@ public:
            bool          requires_packing,
            bool          grouped,
            std::optional<WeightBridge> (*supports)(const DataFormat&, bool),
-           void (*pack)(LinearWeight&, const WeightBridge&, cudaStream_t),
+           void (*pack)(LinearWeight&, cudaStream_t),
            int        gate_up_block                                             = 0,
            DataFormat fused_output                                              = {},
            bool       is_graph_compatible                                       = true,
@@ -138,7 +138,7 @@ private:
     bool       requires_packing_{};
     bool       grouped_{};
     std::optional<WeightBridge> (*supports_)(const DataFormat&, bool){};
-    void (*pack_)(LinearWeight&, const WeightBridge&, cudaStream_t){};
+    void (*pack_)(LinearWeight&, cudaStream_t){};
     int        gate_up_block_{};
     DataFormat fused_output_{};
     bool       is_graph_compatible_{};

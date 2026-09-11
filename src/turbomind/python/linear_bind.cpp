@@ -107,6 +107,14 @@ void bind_linear(py::module_& m)
                                    return py::make_tuple(py::make_tuple(values[0], values[1]),
                                                          py::make_tuple(values[2], values[3]));
                                })
+        .def_property_readonly("bridge",
+                               [](const gemm::WeightPlan& plan) {
+                                   const auto& bridge = plan.bridge();
+                                   return py::make_tuple(bridge.replicate_scales.x,
+                                                         bridge.replicate_scales.y,
+                                                         bridge.convert_scales,
+                                                         bridge.convert_zeros);
+                               })
         .def("gate_up", &gemm::WeightPlan::gate_up, py::arg("act_type"), py::arg("projection_n"))
         .def(
             "pack",

@@ -30,6 +30,11 @@ public:
         return {family_->min_k(), family_->min_n(), family_->align_k(), family_->align_n()};
     }
 
+    const WeightBridge& bridge() const noexcept
+    {
+        return bridge_;
+    }
+
     int  gate_up(ActivationType act_type, int projection_n);
     void pack(LinearWeight& linear, cudaStream_t stream) const;
 

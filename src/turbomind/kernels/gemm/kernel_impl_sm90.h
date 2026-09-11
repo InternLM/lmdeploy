@@ -131,7 +131,7 @@ public:
 
         desc_.align.x = 1;  // OpA::kOrder == kColMajor ? IterA::ThreadMap::kAccessC : 1;
         desc_.align.y = 1;  // OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
-        desc_.align.z = 1;  // Gemm::TILE_K;
+        desc_.align.z = 128;  // QuantType::kB, group size 128.
 
         desc_.policy_a = 0;                 // (int)IterA::Policy::kEvictPolicy;
         desc_.policy_b = 0;                 // (int)IterB::Policy::kEvictPolicy;

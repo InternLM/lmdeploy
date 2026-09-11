@@ -1,7 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <cuda.h>
-#include <numeric>
 
 #include "src/turbomind/kernels/gemm/convert.h"
 #include "src/turbomind/kernels/gemm/kernel/geometry.h"
@@ -21,18 +20,28 @@ using config::Shape;
 using namespace config::geometry;
 
 template<int GroupSize, DataType Dtype>
-void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+void pack(LinearWeight& linear, cudaStream_t stream)
 {
     TM_CHECK_EQ(linear.weight_format.block_sizes.size(), 2);
-
-    ApplyWeightBridge(linear, bridge, stream);
     TM_CHECK_EQ(linear.output_dim % kSm90MixedFragmentN, 0);
-    TM_CHECK_EQ(linear.input_dim % std::lcm(kSm90MixedTileK, GroupSize), 0);
+    TM_CHECK_EQ(linear.input_dim % kSm90MixedTileK, 0);
     TM_CHECK_GE(linear.input_dim, 128);
     PackWeight(linear, kSm90MixedWeightPack, PackSm90U4Weight, stream);
 
     TM_CHECK_EQ(linear.scales.dtype(), Dtype);
     TM_CHECK(!linear.zeros || linear.zeros.dtype() == Dtype);
+    // The weight bridge must have expanded the qparams to at least one row per
+    // K group and at least one column per output column; extra rows or a wider
+    // row are tolerated since only the leading group_count rows and output_dim
+    // columns are read.
+    const int group_count   = (linear.input_dim + GroupSize - 1) / GroupSize;
+    const int scales_stride = linear.scales.shape(1);
+    TM_CHECK_GE(linear.scales.shape(0), group_count);
+    TM_CHECK_GE(scales_stride, linear.output_dim);
+    if (linear.zeros) {
+        TM_CHECK_GE(linear.zeros.shape(0), group_count);
+        TM_CHECK_GE(linear.zeros.shape(1), linear.output_dim);
+    }
     Tensor scales = std::move(linear.scales);
     Tensor zeros  = std::move(linear.zeros);
     Tensor packed_q{{scales.size() / kSm90MixedFragmentN * kSm90U4QparamValuesFragment}, kUint8, kDEVICE};
@@ -40,14 +49,15 @@ void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
                       scales.data<data_type_t<Dtype>>(),
                       zeros ? zeros.data<data_type_t<Dtype>>() : nullptr,
                       linear.output_dim,
-                      linear.input_dim / GroupSize,
+                      group_count,
+                      scales_stride,
                       stream);
     linear.scales        = std::move(packed_q);
     linear.zeros         = {};
     linear.q_desc        = transpose(MatrixLayout{kUint8,
                                            kColMajor,
                                            linear.output_dim,
-                                           linear.input_dim / GroupSize,
+                                           group_count,
                                            linear.output_dim / kSm90MixedFragmentN * kSm90U4QparamValuesFragment,
                                            kSm90MixedQParamPack,
                                            0,
@@ -61,7 +71,7 @@ const Family bf16{29,
                   kBfloat16,
                   kBfloat16,
                   64,
-                  128,
+                  64,
                   128,
                   1,
                   true,
@@ -70,8 +80,7 @@ const Family bf16{29,
                   pack<32, kBfloat16>,
                   64,
                   kBfloat16};
-const Family f16{
-    35, 250, kHalf, kHalf, 64, 128, 128, 1, true, true, supports_u4<32, kHalf>, pack<32, kHalf>, 64, kHalf};
+const Family f16{35, 250, kHalf, kHalf, 64, 64, 128, 1, true, true, supports_u4<32, kHalf>, pack<32, kHalf>, 64, kHalf};
 
 // NVCC requires defaults on the template-template parameter.
 template<template<class Config_,

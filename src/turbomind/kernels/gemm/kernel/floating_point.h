@@ -15,9 +15,8 @@ std::optional<WeightBridge> supports_fp(const DataFormat& format, bool)
 }
 
 template<class Arch, Order WeightOrder, uint32_t WeightPack, DataType Dtype>
-void pack_fp(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+void pack_fp(LinearWeight& linear, cudaStream_t stream)
 {
-    ApplyWeightBridge(linear, bridge, stream);
     PackWeight(linear, GetImpl<Arch, WeightOrder, WeightPack, uint16_t, uint16_t>(), stream);
     linear.q_desc        = {};
     linear.weight_format = DataFormat{Dtype};

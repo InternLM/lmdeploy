@@ -266,37 +266,4 @@ Tensor BlockscaleToGroupscale(const Tensor& scales, DataType data_type, int bloc
     return ret;
 }
 
-template<class T>
-__global__ void ReplicateQParams_Kernel(T* dst, const T* src, int rows, int cols, int2 factors)
-{
-    const int64_t idx = threadIdx.x + (int64_t)blockIdx.x * blockDim.x;
-    const int64_t n   = (int64_t)rows * factors.x * cols * factors.y;
-    if (idx < n) {
-        const int dst_cols = cols * factors.y;
-        const int r        = idx / dst_cols;
-        const int c        = idx % dst_cols;
-        dst[idx]           = src[(r / factors.x) * cols + c / factors.y];
-    }
-}
-
-Tensor ReplicateQParams(const Tensor& src, int2 factors, cudaStream_t stream)
-{
-    TM_CHECK(src);
-    TM_CHECK_EQ(src.ndim(), 2);
-    if (factors.x == 1 && factors.y == 1) {
-        return src;
-    }
-    const int rows = src.shape(0);
-    const int cols = src.shape(1);
-    Tensor    dst{{rows * factors.x, cols * factors.y}, src.dtype(), kDEVICE};
-    auto      invoke = [&](auto value) {
-        using T = decltype(value);
-        ReplicateQParams_Kernel<<<(dst.size() + 255) / 256, 256, 0, stream>>>(
-            dst.data<T>(), src.data<T>(), rows, cols, factors);
-    };
-    TM_DISPATCH_DTYPES(src.dtype(), invoke, half_t, bfloat16_t, float);
-    TM_CUDA_CHECK(cudaGetLastError());
-    return dst;
-}
-
 }  // namespace turbomind

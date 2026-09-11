@@ -20,9 +20,8 @@ namespace {
 using config::Shape;
 using namespace config::geometry;
 
-void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+void pack(LinearWeight& linear, cudaStream_t stream)
 {
-    ApplyWeightBridge(linear, bridge, stream);
     TM_CHECK_EQ(linear.weight.dtype(), kFloat8_e4m3);
     TM_CHECK_EQ(linear.scales.dtype(), kFloat);
 

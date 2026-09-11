@@ -3,7 +3,6 @@
 #pragma once
 
 #include <cstring>
-#include <numeric>
 
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/kernels/core/common.h"
@@ -100,10 +99,10 @@ public:
                              cute::size<1>(typename Gemm::AtomLayoutMNK{}),
                              cute::size<2>(typename Gemm::AtomLayoutMNK{})};
 
-        // The packed format requires complete OUT128 tiles and complete K64 /
-        // quant-group units. Batch tails are zero-filled/clipped by TMA or
-        // indexed cp.async. Launch separately enforces at least two K stages.
-        desc_.align = {1, TILE_N, std::lcm(TILE_K, Gemm::kGroupSize)};
+        // The family specifies packed output alignment. TMA zero-fills/clips
+        // partial output tiles. Batch tails use TMA or indexed cp.async.
+        // Launch separately enforces complete K64 units and at least two stages.
+        desc_.align = {1, family.align_n(), TILE_K};
 
         desc_.policy_a = 0;
         desc_.policy_b = 0;
@@ -196,8 +195,8 @@ public:
         TM_CHECK_EQ(Adesc.rows, m);
         TM_CHECK_EQ(Bdesc.rows, k);
         TM_CHECK_EQ(Bdesc.cols, n);
-        TM_CHECK_EQ(Vdesc.rows, k / Gemm::kGroupSize);
-        TM_CHECK_EQ(Vdesc.cols, n / Gemm::Format::kScaleGroupN);
+        TM_CHECK_EQ(Vdesc.rows, cute::ceil_div(k, Gemm::kGroupSize));
+        TM_CHECK_EQ(Vdesc.cols, (n + Gemm::Format::kScaleGroupN - 1) / Gemm::Format::kScaleGroupN);
         TM_CHECK_EQ(Vdesc.ld % Gemm::Format::kQparamValuesFragment, 0);
         TM_CHECK_EQ(std::max(Bdesc.num, 1), std::max(Vdesc.num, 1));
         if constexpr (Gemm::Format::kHasGlobalScale) {
@@ -239,8 +238,7 @@ public:
             TM_CHECK_EQ(std::max(Bdesc.num, 1), 1);
             TM_CHECK_EQ(std::max(Vdesc.num, 1), 1);
         }
-        TM_CHECK_EQ(n % TILE_N, 0);
-        TM_CHECK_EQ(k % Gemm::kGroupSize, 0);
+        TM_CHECK_EQ(n % desc_.align.y, 0);
         TM_CHECK_EQ(k % TILE_K, 0);
         TM_CHECK_GE(k / TILE_K, 2);
 

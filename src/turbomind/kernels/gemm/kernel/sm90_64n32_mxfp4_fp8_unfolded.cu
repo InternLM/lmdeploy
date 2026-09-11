@@ -18,9 +18,8 @@ namespace turbomind::gemm {
 namespace {
 using namespace config::geometry;
 
-void pack(LinearWeight& linear, const WeightBridge& bridge, cudaStream_t stream)
+void pack(LinearWeight& linear, cudaStream_t stream)
 {
-    ApplyWeightBridge(linear, bridge, stream);
     TM_CHECK_EQ(linear.output_dim % kSm90MixedFragmentN, 0);
     TM_CHECK_EQ(linear.input_dim % 128, 0);
     TM_CHECK_GE(linear.input_dim, 128);
