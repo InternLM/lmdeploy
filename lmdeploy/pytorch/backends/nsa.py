@@ -19,12 +19,14 @@ class NSAIndexMeta:
     """Meta info of NSAIndex layer."""
     cu_seqlen_q: Tensor
     q_seqlens: Tensor
-    k_seqlens: Tensor
-    cu_seqlen_k: Tensor
+    k_seqlens: Tensor  # global lengths used by interleaved cache writes
+    dcp_local_kv_seqlens: Tensor
+    cu_seqlen_k: Tensor  # cumulative offsets for rank-local KV
     block_offset: Tensor
     indexer_kv_seqlens: Tensor = None
     max_q_seqlen: int = None
     max_kv_seqlen: int = None
+    global_max_kv_seqlen: int = None
     kv_flatten_size: int = None
     block_size: int = None
     is_decoding: bool = False
@@ -51,7 +53,9 @@ def _build_indexer_kv_seqlens(num_tokens: int, q_seqlens: Tensor,
 def build_nsa_index_meta(*, num_tokens: int, is_decoding: bool,
                          block_size: int, num_gpu_blocks: int,
                          sequence_metadata,
-                         indexer_kv_seqlens: Tensor | None = None) -> NSAIndexMeta:
+                         indexer_kv_seqlens: Tensor | None = None,
+                         dcp_local_indexer_kv_seqlens: Tensor | None = None,
+                         dcp_world_rank: tuple[int, int] | None = None) -> NSAIndexMeta:
     """Build layer-invariant DSA metadata from a sequence layout.
 
     Derive causal KV lengths with device-agnostic Torch operations unless the caller supplies them.
@@ -60,23 +64,48 @@ def build_nsa_index_meta(*, num_tokens: int, is_decoding: bool,
     batch_size = q_seqlens.size(0)
     is_decoding = is_decoding or num_tokens == batch_size
     max_q_seqlen = num_tokens // batch_size if is_decoding else num_tokens
-    max_kv_seqlen = (block_size * num_gpu_blocks
-                     if is_decoding else sequence_metadata.max_kv_seqlen)
-    kv_flatten_size = (None if is_decoding else
-                       sequence_metadata.kv_flatten_size)
     if indexer_kv_seqlens is None:
         indexer_kv_seqlens = _build_indexer_kv_seqlens(
             num_tokens, q_seqlens, sequence_metadata.kv_seqlens,
             sequence_metadata.cu_seqlens_q)
+    from lmdeploy.pytorch.backends.cp_utils import get_dcp_local_cu_seqlens, get_dcp_local_seq_lens
+    if dcp_world_rank is None:
+        from lmdeploy.pytorch.distributed import get_dcp_world_rank
+        dcp_world_rank = get_dcp_world_rank()
+    dcp_world_size, _ = dcp_world_rank
+    if dcp_world_size == 1:
+        dcp_local_kv_seqlens = sequence_metadata.kv_seqlens
+        dcp_local_cu_seqlens = sequence_metadata.cu_seqlens_k
+    else:
+        dcp_local_kv_seqlens, dcp_local_cu_seqlens = get_dcp_local_cu_seqlens(
+            sequence_metadata.kv_seqlens, dcp_world_rank)
+    if dcp_local_indexer_kv_seqlens is None:
+        indexer_kv_seqlens = get_dcp_local_seq_lens(
+            indexer_kv_seqlens, dcp_world_rank).to(torch.int32)
+    else:
+        indexer_kv_seqlens = dcp_local_indexer_kv_seqlens
+    # Scoring workspaces are rank-local, while sparse/dense dispatch is based
+    # on the global sequence length stored in ``global_max_kv_seqlen``.
+    max_kv_seqlen = (block_size * num_gpu_blocks if is_decoding else
+                     (sequence_metadata.max_kv_seqlen + dcp_world_size - 1)
+                     // dcp_world_size)
+    if is_decoding:
+        kv_flatten_size = None
+    else:
+        batch_padding = batch_size * (dcp_world_size - 1)
+        kv_flatten_size = (sequence_metadata.kv_flatten_size +
+                           batch_padding) // dcp_world_size
     return NSAIndexMeta(
         cu_seqlen_q=sequence_metadata.cu_seqlens_q,
         q_seqlens=q_seqlens,
         k_seqlens=sequence_metadata.kv_seqlens,
-        cu_seqlen_k=sequence_metadata.cu_seqlens_k,
+        dcp_local_kv_seqlens=dcp_local_kv_seqlens,
+        cu_seqlen_k=dcp_local_cu_seqlens,
         block_offset=sequence_metadata.block_offsets,
         indexer_kv_seqlens=indexer_kv_seqlens,
         max_q_seqlen=max_q_seqlen,
         max_kv_seqlen=max_kv_seqlen,
+        global_max_kv_seqlen=sequence_metadata.max_kv_seqlen,
         kv_flatten_size=kv_flatten_size,
         block_size=block_size,
         is_decoding=is_decoding,

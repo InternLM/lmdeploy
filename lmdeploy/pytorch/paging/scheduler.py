@@ -868,8 +868,10 @@ class Scheduler:
         # lookup latency from actual cache-allocation pressure.
         self.last_schedule_had_pending_lookup = False
         checkpoint_state_manager = self.state_manager if self.is_ssm else None
+        # Prefix hashes must align with the scheduler's DCP-wide blocks.
+        scheduler_block_size = self.cache_config.block_size * self.cache_config.dcp
         self.block_trie = BlockTrie(allocator=self.block_manager.allocator,
-                                   block_size=self.cache_config.block_size,
+                                   block_size=scheduler_block_size,
                                    enabled=self.cache_config.enable_prefix_caching,
                                    checkpoint_state_manager=checkpoint_state_manager)
 

@@ -175,6 +175,17 @@ class ArgumentHelper:
                                    help='GPU number used in tensor parallelism. Should be 2^n')
 
     @staticmethod
+    def dcp(parser):
+        """Add argument dcp to parser."""
+
+        return parser.add_argument(
+            '--dcp',
+            type=int,
+            default=1,
+            help='Decode context parallelism size for the PyTorch backend. '
+            'It reuses ranks inside each tensor-parallel group, and tp must be a multiple of dcp')
+
+    @staticmethod
     def dp(parser):
         """Add argument dp to parser."""
 

@@ -1,0 +1,263 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+from datetime import timedelta
+from types import SimpleNamespace
+
+import pytest
+import torch
+
+from lmdeploy.pytorch.backends.cp_utils import (
+    get_dcp_local_causal_seq_lens,
+    get_dcp_local_cu_seqlens,
+    get_dcp_local_seq_lens,
+)
+from lmdeploy.pytorch.config import CacheConfig, DistConfig
+
+
+@pytest.mark.parametrize('dcp', [1, 2, 4])
+def test_mtp_cache_inherits_draft_dcp_geometry(monkeypatch, dcp):
+    from lmdeploy.pytorch.config import ModelConfig, SpecDecodeConfig
+
+    monkeypatch.setattr(ModelConfig, 'from_pretrained', lambda *args, **kwargs: None)
+    target_cache = CacheConfig(max_batches=4, block_size=64,
+                               kernel_block_size=64, num_cpu_blocks=0, num_gpu_blocks=8, dcp=dcp)
+    spec = SpecDecodeConfig.from_config(
+        method='deepseek_mtp', num_speculative_tokens=5, model='unused',
+        target_cache_cfg=target_cache, dist_config=DistConfig(tp=4, dcp=dcp))
+    assert spec.cache_config.dcp == dcp
+    assert spec.cache_config.block_size == target_cache.block_size
+    assert spec.cache_config.kernel_block_size == target_cache.kernel_block_size
+
+
+def test_dcp_rejects_tilelang_sparse_backend(monkeypatch):
+    from lmdeploy.pytorch.engine import executor
+
+    monkeypatch.setattr(executor.envs, 'sparse_mla_backend', 'tilelang')
+    model = SimpleNamespace(use_flash_mla=True, dtype=torch.bfloat16, mla_index_topk=2048)
+    cache = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=8, dcp=2)
+    with pytest.raises(ValueError, match='TileLang does not support DCP'):
+        executor._validate_dcp_config(model, cache, DistConfig(tp=2, dcp=2), 'cuda')
+    executor._validate_dcp_config(model, cache, DistConfig(tp=2), 'cuda')
+
+
+def test_dcp_prefill_chunks_cover_uneven_prefixes_with_bounded_workspace():
+    from lmdeploy.pytorch.backends.cp_utils import build_dcp_prefill_chunks, get_dcp_prefill_workspace_size
+
+    prefix_lens = torch.tensor([131072, 259, 0], dtype=torch.int32)
+    plans = [
+        build_dcp_prefill_chunks(prefix_lens=prefix_lens,
+                                 prefix_limit=131072,
+                                 block_size=64,
+                                 head_dim=576,
+                                 dcp_world_rank=(4, rank)) for rank in range(4)
+    ]
+    budget = get_dcp_prefill_workspace_size(batch_size=3, head_dim=576, block_size=64, dcp_size=4)
+    # Incoming query length is deliberately absent from the planner. Short
+    # continuations must not fall back to hundreds of 256-token collectives.
+    assert len(plans[0]) < 64
+    for rank, chunks in enumerate(plans):
+        torch.testing.assert_close(sum(chunk.kv_seqlens for chunk in chunks), prefix_lens)
+        for chunk, reference in zip(chunks, plans[0], strict=True):
+            assert (chunk.start, chunk.size) == (reference.start, reference.size)
+            assert chunk.start % 256 == chunk.size % 256 == 0
+            assert 3 * (chunk.size // 4 + 2 * chunk.size) * 576 * 2 <= budget
+            torch.testing.assert_close(chunk.local_kv_seqlens.sum(0), chunk.kv_seqlens.long())
+            torch.testing.assert_close(chunk.local_cu_seqlens[1:] - chunk.local_cu_seqlens[:-1],
+                                       chunk.local_kv_seqlens[rank])
+
+
+def test_dcp_score_budget_includes_candidates_and_rejects_oversized_row():
+    from lmdeploy.pytorch.backends.cuda.nsa import _get_max_score_rows
+
+    budget = 512 << 20
+    rows = _get_max_score_rows(2048, budget, topk=2048, dcp_size=4)
+    # Independently count aligned scores, local/global ids, packed
+    # pairs, and gathered pairs; the original 8192-row call exceeds this cap.
+    row_bytes = 2048 * (4 + 4 + 4 + 8 + 4 * 8)
+    assert rows * row_bytes <= budget < (rows + 1) * row_bytes
+    assert rows < 8192
+    with pytest.raises(RuntimeError, match='One DCP score row'):
+        _get_max_score_rows(2048, 1024, topk=2048, dcp_size=4)
+
+
+@pytest.mark.parametrize('dcp_size', [2, 4])
+@pytest.mark.parametrize('query_len', [1, 2, 6])
+def test_dcp_local_causal_lengths_match_token_ownership(dcp_size, query_len):
+    lengths = [0, query_len, 64 * dcp_size - 1, 64 * dcp_size + 1]
+    kv_seqlens = torch.tensor(lengths, dtype=torch.int32)
+    for rank in range(dcp_size):
+        actual = get_dcp_local_causal_seq_lens(kv_seqlens, query_len, (dcp_size, rank))
+        expected = [len(range(rank, end - query_len + row + 1, dcp_size))
+                    for end in lengths for row in range(query_len)]
+        assert actual.tolist() == expected
+
+
+def test_dcp_interleaved_sequence_mapping():
+    world_size = 4
+    lengths = torch.tensor([0, 1, 3, 4, 5, 255, 256, 257],
+                           dtype=torch.int32)
+    for rank in range(world_size):
+        dcp_world_rank = world_size, rank
+        local = get_dcp_local_seq_lens(lengths, dcp_world_rank)
+        expected = torch.tensor(
+            [len(range(rank, int(length), world_size)) for length in lengths],
+            dtype=torch.int32)
+        assert torch.equal(local, expected)
+
+        local, cu_local = get_dcp_local_cu_seqlens(lengths, dcp_world_rank)
+        assert torch.equal(cu_local[1:] - cu_local[:-1], local)
+        assert cu_local.dtype == torch.int32
+
+
+def test_dcp_block_allocation_uses_virtual_block_size():
+    from lmdeploy.pytorch.engine.engine import _build_seq_meta
+    from lmdeploy.pytorch.paging.block_manager import build_block_manager
+    from lmdeploy.pytorch.strategies.ar.sequence import SchedulerSequenceDefault
+
+    cache_config = CacheConfig(max_batches=4,
+                               block_size=64,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=8,
+                               dcp=4)
+    seq_meta = _build_seq_meta(SimpleNamespace(use_mrope=False),
+                               cache_config,
+                               seq_strategy=None,
+                               sampling_strategy=None)
+    session = SimpleNamespace(seq_meta=seq_meta)
+    sequence = SchedulerSequenceDefault(seq_id=0, session=session)
+    sequence._num_token_ids = 256
+    block_manager = build_block_manager(cache_config)
+
+    assert seq_meta.block_size == 64
+    assert block_manager.num_required_blocks(sequence) == 1
+    sequence._num_token_ids += 1
+    assert block_manager.num_required_blocks(sequence) == 2
+
+
+def test_dcp_group_membership(monkeypatch):
+    from lmdeploy.pytorch import distributed
+
+    tp, dcp, rank = 8, 4, 6
+    expected = (4, 5, 6, 7)
+    created = []
+
+    def new_group(*, ranks, timeout, backend):
+        group = (backend, tuple(ranks))
+        created.append(group)
+        return group
+
+    monkeypatch.setattr(distributed.dist, 'new_group', new_group)
+    context = SimpleNamespace(rank=rank,
+                              dist_config=DistConfig(tp=tp, dcp=dcp),
+                              attn_tp_group=SimpleNamespace(rank=rank % tp))
+    distributed._build_dcp_group(context, timedelta(seconds=1))
+    monkeypatch.setattr(
+        distributed, 'get_dist_manager',
+        lambda: SimpleNamespace(current_context=lambda: context))
+
+    assert context.dcp_group.rank == rank % dcp
+    assert context.dcp_group.gpu_group == ('nccl', expected)
+    assert context.dcp_group.cpu_group == ('gloo', expected)
+    assert len(created) == 2 * (tp // dcp)
+    assert distributed.get_dcp_world_rank() == (dcp, rank % dcp)
+
+
+def test_nsa_metadata_localizes_each_causal_row():
+    from lmdeploy.pytorch.backends.nsa import build_nsa_index_meta
+
+    q_seqlens = torch.tensor([2, 3], dtype=torch.int32)
+    kv_seqlens = torch.tensor([5, 8], dtype=torch.int32)
+    cu_q = torch.nn.functional.pad(q_seqlens.cumsum(0), (1, 0))
+    sequence_metadata = SimpleNamespace(
+        q_seqlens=q_seqlens,
+        kv_seqlens=kv_seqlens,
+        cu_seqlens_q=cu_q,
+        block_offsets=torch.zeros(2, 1, dtype=torch.int32),
+        max_kv_seqlen=8,
+        kv_flatten_size=13,
+    )
+    meta = build_nsa_index_meta(num_tokens=5,
+                                is_decoding=False,
+                                block_size=64,
+                                num_gpu_blocks=4,
+                                sequence_metadata=sequence_metadata,
+                                dcp_world_rank=(2, 1))
+
+    assert meta.dcp_local_kv_seqlens.tolist() == [2, 4]
+    assert meta.indexer_kv_seqlens.tolist() == [2, 2, 3, 3, 4]
+
+
+def test_dcp_prefill_scoring_uses_global_sparse_boundary():
+    from lmdeploy.pytorch.backends.cuda.nsa import TritonNSAIndexFP8Impl
+    from lmdeploy.pytorch.backends.nsa import build_nsa_index_meta
+
+    q_seqlens = torch.tensor([2], dtype=torch.int32)
+    kv_seqlens = torch.tensor([3000], dtype=torch.int32)
+    sequence_metadata = SimpleNamespace(
+        q_seqlens=q_seqlens,
+        kv_seqlens=kv_seqlens,
+        cu_seqlens_q=torch.tensor([0, 2], dtype=torch.int32),
+        block_offsets=torch.zeros(1, 1, dtype=torch.int32),
+        max_kv_seqlen=3000,
+        kv_flatten_size=3000,
+    )
+    meta = build_nsa_index_meta(num_tokens=2,
+                                is_decoding=False,
+                                block_size=64,
+                                num_gpu_blocks=100,
+                                sequence_metadata=sequence_metadata,
+                                dcp_world_rank=(2, 0))
+    impl = object.__new__(TritonNSAIndexFP8Impl)
+    impl.topk = 2048
+    impl._allow_short_prefill_scoring_skip = True
+
+    assert meta.max_kv_seqlen == 1500
+    assert meta.global_max_kv_seqlen == 3000
+    assert not impl._should_skip_scoring(meta)
+
+
+def test_cudagraph_replay_refreshes_stable_dcp_lengths(monkeypatch):
+    from lmdeploy.pytorch.backends.cuda.attention.default import TritonAttentionMetadata
+    from lmdeploy.pytorch.models.utils import cudagraph as cudagraph_module
+    from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+
+    monkeypatch.setattr(cudagraph_module, 'get_dcp_world_rank', lambda: (2, 1))
+    model = CudaGraphMixin()
+    graph_meta = CudaGraphMeta(max_batchs=4,
+                               max_tokens=4,
+                               num_blocks=2,
+                               is_decoding=True,
+                               device=torch.device('cpu'))
+    metadata = TritonAttentionMetadata(
+        is_decoding=True,
+        block_offsets=torch.zeros(2, 2, dtype=torch.int32),
+        q_start_loc=torch.tensor([0, 1], dtype=torch.int32),
+        q_seqlens=torch.ones(2, dtype=torch.int32),
+        kv_seqlens=torch.tensor([5, 8], dtype=torch.int32),
+        cu_seqlens_q=torch.tensor([0, 1, 2], dtype=torch.int32),
+        cu_seqlens_k=torch.tensor([0, 5, 13], dtype=torch.int32),
+    )
+    input_ids = torch.tensor([[1, 2]])
+    position_ids = torch.tensor([[4, 7]])
+    graph_meta.input_buffers = model.make_buffers_cudagraph(
+        graph_meta, input_ids, position_ids, [], metadata)
+
+    model.fill_buffers_cudagraph(graph_meta,
+                                 input_ids,
+                                 position_ids, [],
+                                 metadata,
+                                 inputs_embeds=None)
+    local_buffer = graph_meta.input_buffers['dcp_local_kv_seqlens']
+    buffer_ptr = local_buffer.data_ptr()
+    assert local_buffer.tolist() == [2, 4, 0, 0]
+
+    metadata.block_offsets = torch.zeros(2, 2, dtype=torch.int32)
+    metadata.q_start_loc = torch.tensor([0, 1], dtype=torch.int32)
+    metadata.q_seqlens = torch.ones(2, dtype=torch.int32)
+    metadata.kv_seqlens = torch.tensor([6, 9], dtype=torch.int32)
+    model.fill_buffers_cudagraph(graph_meta,
+                                 input_ids,
+                                 position_ids, [],
+                                 metadata,
+                                 inputs_embeds=None)
+    assert metadata.dcp_local_kv_seqlens.data_ptr() == buffer_ptr
+    assert metadata.dcp_local_kv_seqlens.tolist() == [3, 4, 0, 0]

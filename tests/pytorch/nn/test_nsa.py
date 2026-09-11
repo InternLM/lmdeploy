@@ -55,8 +55,8 @@ def test_indexer_meta_builds_causal_rows():
     assert meta.max_kv_seqlen == 8
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA backend')
-def test_deepgemm_prefill_scores_are_chunked_by_logits_budget(monkeypatch):
+@pytest.mark.parametrize('dcp_size', [1, 4])
+def test_deepgemm_prefill_scores_are_chunked_by_logits_budget(monkeypatch, dcp_size):
     from lmdeploy.pytorch.backends.cuda import nsa as cuda_nsa
 
     class FakeDeepGemm:
@@ -69,18 +69,24 @@ def test_deepgemm_prefill_scores_are_chunked_by_logits_budget(monkeypatch):
             query = q[0]
             self.row_counts.append(query.size(0))
             assert kv == ('flat_k', 'flat_k_s')
-            assert weights.size(0) == query.size(0)
-            assert cu_seq_len_k_start.size(0) == query.size(0)
-            assert cu_seq_len_k_end.size(0) == query.size(0)
-            return query[:, :1] * 10 + torch.arange(4)
+            torch.testing.assert_close(weights, query[:, 0] + 1)
+            torch.testing.assert_close(cu_seq_len_k_start, query[:, 0].int())
+            torch.testing.assert_close(cu_seq_len_k_end, query[:, 0].int() + 4)
+            # Different winners per row expose misplaced or repeated chunks.
+            return -((torch.arange(4) - query) % 4)
 
     deep_gemm = FakeDeepGemm()
     monkeypatch.setattr(cuda_nsa, '_get_deep_gemm', lambda: deep_gemm)
 
     impl = object.__new__(cuda_nsa.TritonNSAIndexFP8Impl)
+    impl.dcp_world_size = dcp_size
+    impl.dcp_rank = 0
     impl.topk = 2
     impl.fill = -1
-    impl.max_logits_bytes = 2 * 4 * 4
+    impl.max_logits_bytes = 2 * (4 * 4 if dcp_size == 1 else 128 * 4 + 2 * (16 + 8 * dcp_size))
+    # Global selection itself is covered by test_dcp; record only score-row
+    # chunking here, using the same candidate shapes as the production path.
+    impl._merge_dcp_topk = lambda scores, indices: indices
     flatten_calls = []
 
     def fake_flatten(indexer_k_cache, head_dim, meta):
@@ -95,7 +101,7 @@ def test_deepgemm_prefill_scores_are_chunked_by_logits_budget(monkeypatch):
     impl._flatten_prefill_k = fake_flatten
     impl._sparse_index_topk = fake_topk
     q = torch.arange(5, dtype=torch.float32).unsqueeze(-1)
-    q_s = torch.ones(5)
+    q_s = torch.arange(1, 6, dtype=torch.float32)
     indexer_k_cache = object()
     score_meta = cuda_nsa._DeepGemmContiguousScoreMeta(
         k_starts=torch.arange(5, dtype=torch.int32),
@@ -110,11 +116,39 @@ def test_deepgemm_prefill_scores_are_chunked_by_logits_budget(monkeypatch):
 
     selected = impl._score_and_select(q, q_s, indexer_k_cache, meta)
 
-    assert cuda_nsa._get_max_score_rows(4, impl.max_logits_bytes) == 2
+    assert cuda_nsa._get_max_score_rows(4, impl.max_logits_bytes, topk=impl.topk, dcp_size=dcp_size) == 2
     assert deep_gemm.row_counts == [2, 2, 1]
     assert len(flatten_calls) == 1
     assert flatten_calls[0][:2] == (indexer_k_cache, 1)
-    assert torch.equal(selected, torch.tensor([[3, 2]] * 5, dtype=torch.int32))
+    expected = torch.tensor([[0, 1], [1, 2], [2, 3], [3, 0], [0, 1]], dtype=torch.int32)
+    assert torch.equal(selected, expected)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+    reason='requires CUDA device with cc>=9.0')
+def test_deepgemm_decode_metadata_handles_all_zero_lengths():
+    pytest.importorskip('deep_gemm')
+    from lmdeploy.pytorch.backends.cuda import nsa as cuda_nsa
+
+    batch_size = 64
+    meta = SimpleNamespace(
+        is_decoding=True,
+        block_size=64,
+        block_offset=torch.zeros(
+            batch_size, 1, dtype=torch.int32, device='cuda'),
+        indexer_kv_seqlens=torch.zeros(
+            batch_size, dtype=torch.int32, device='cuda'),
+        q_seqlens=torch.ones(
+            batch_size, dtype=torch.int32, device='cuda'),
+    )
+
+    score_meta = cuda_nsa._build_deep_gemm_score_meta(meta)
+    torch.cuda.synchronize()
+
+    assert torch.equal(score_meta.context_lens,
+                       torch.zeros_like(score_meta.context_lens))
+    assert score_meta.schedule.numel() > 0
 
 
 @pytest.mark.skipif(
@@ -211,6 +245,8 @@ def test_short_prefill_caches_indexer_k_before_optional_scoring(
                         prepare_k_cache)
 
     impl = object.__new__(cuda_nsa.TritonNSAIndexFP8Impl)
+    impl.dcp_world_size = 1
+    impl.dcp_rank = 0
     impl.topk = 2048
     impl.softmax_scale = 1.0
     impl._allow_short_prefill_scoring_skip = allow_skip
@@ -225,6 +261,7 @@ def test_short_prefill_caches_indexer_k_before_optional_scoring(
     meta = SimpleNamespace(
         is_decoding=is_decoding,
         max_kv_seqlen=max_kv_seqlen,
+        global_max_kv_seqlen=max_kv_seqlen,
         cu_seqlen_q=torch.tensor([0, 1]),
         k_seqlens=torch.tensor([1]),
         block_offset=torch.tensor([[0]]),
@@ -260,7 +297,7 @@ def test_sparse_index_topk_is_resolved_at_init(monkeypatch):
 
     selector = object()
     monkeypatch.setattr(cuda_nsa, '_get_sparse_index_topk',
-                        lambda topk: selector)
+                        lambda topk, use_dcp=False: selector)
 
     index_impl = cuda_nsa.TritonNSAIndexFP8Impl(
         topk=512, softmax_scale=1.0, block_size=128, fill=-1)

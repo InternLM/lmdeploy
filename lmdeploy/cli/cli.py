@@ -51,6 +51,7 @@ class CLI:
         pt_group = parser.add_argument_group('PyTorch engine arguments')
         ArgumentHelper.adapters(pt_group)
         ArgumentHelper.device(pt_group)
+        ArgumentHelper.dcp(pt_group)
         ArgumentHelper.eager_mode(pt_group)
         ArgumentHelper.dllm_block_length(pt_group)
         ArgumentHelper.prefix_cache_state_budget(pt_group)

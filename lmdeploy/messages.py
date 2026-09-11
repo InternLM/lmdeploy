@@ -453,6 +453,8 @@ class PytorchEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         tp: Tensor Parallelism. default 1.
+        dcp: Decode context parallelism size. It reuses ranks inside
+            each attention tensor-parallel group. Default 1.
         dp: Data Parallelism. default 1.
         dp_rank: rank of dp.
         ep: Expert Parallelism. default 1.
@@ -539,6 +541,7 @@ class PytorchEngineConfig:
     """
     dtype: str = 'auto'
     tp: int = 1
+    dcp: int = 1
     dp: int = 1
     dp_rank: int = 0
     ep: int = 1
@@ -598,6 +601,8 @@ class PytorchEngineConfig:
             self.kernel_block_size = self.block_size
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'invalid tp'
+        assert self.dcp >= 1, 'invalid dcp'
+        assert self.tp % self.dcp == 0, 'tp must be divisible by dcp'
         assert self.dp >= 1, 'invalid dp'
         assert self.ep >= 1, 'invalid ep'
         assert 0 < self.cache_max_entry_count < 1, \

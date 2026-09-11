@@ -52,6 +52,7 @@ def is_sparse_index_topk_supported(k: int) -> bool:
 @tilelang.jit(pass_configs=_PASS_CONFIGS)
 def _sparse_index_topk_byte_radix_kernel(top_k: int,
                                          fill: int = _FILL,
+                                         stable_ties: bool = False,
                                          threads: int = _THREADS):
     num_tokens = T.dynamic('num_tokens')
     score_width = T.dynamic('score_width')
@@ -68,6 +69,8 @@ def _sparse_index_topk_byte_radix_kernel(top_k: int,
             tidx = T.get_thread_binding(0)
             histogram = T.alloc_shared((_RADIX_SIZE,), T.int32)
             shared_state = T.alloc_shared((2,), T.int32)
+            if stable_ties:
+                emit_offsets = T.alloc_shared((2, threads), T.int32)
 
             raw_seqlen = Seqlens[row]
             seqlen = T.if_then_else(raw_seqlen < score_width, raw_seqlen, score_width)
@@ -134,52 +137,101 @@ def _sparse_index_topk_byte_radix_kernel(top_k: int,
                 T.sync_threads()
 
                 out_pos_buf = T.alloc_local((1,), T.int32)
-                # First emit all scores strictly greater than the threshold.
-                pos_emit_gt = T.alloc_var(T.int32)
-                pos_emit_gt = tidx
-                while pos_emit_gt < seqlen:
-                    key = _ordered_fp32_key(Scores[row, pos_emit_gt])
-                    if key > threshold_key:
-                        out_pos_buf[0] = T.atomic_add(
-                            shared_state[_STATE_EMIT_GT_COUNT], 1, return_prev=True)
-                        if out_pos_buf[0] < top_k:
-                            Out[row, out_pos_buf[0]] = pos_emit_gt
-                    pos_emit_gt += threads
+                if stable_ties:
+                    # Two scans produce deterministic position order for both
+                    # the greater-than and threshold groups.
+                    segment_start = seqlen * tidx // threads
+                    segment_end = seqlen * (tidx + 1) // threads
+                    local_gt_count = T.alloc_var(T.int32)
+                    local_eq_count = T.alloc_var(T.int32)
+                    local_gt_count = 0
+                    local_eq_count = 0
+                    pos_emit = T.alloc_var(T.int32)
+                    pos_emit = segment_start
+                    while pos_emit < segment_end:
+                        key = _ordered_fp32_key(Scores[row, pos_emit])
+                        if key > threshold_key:
+                            local_gt_count += 1
+                        if key == threshold_key:
+                            local_eq_count += 1
+                        pos_emit += 1
+                    emit_offsets[0, tidx] = local_gt_count
+                    emit_offsets[1, tidx] = local_eq_count
+                    T.sync_threads()
 
-                T.sync_threads()
+                    if tidx == 0:
+                        running_gt_count = T.alloc_var(T.int32)
+                        running_eq_count = T.alloc_var(T.int32)
+                        running_gt_count = 0
+                        running_eq_count = 0
+                        for thread_id in T.serial(0, threads):
+                            thread_gt_count = emit_offsets[0, thread_id]
+                            thread_eq_count = emit_offsets[1, thread_id]
+                            emit_offsets[0, thread_id] = running_gt_count
+                            emit_offsets[1, thread_id] = running_eq_count
+                            running_gt_count += thread_gt_count
+                            running_eq_count += thread_eq_count
+                        shared_state[_STATE_EMIT_GT_COUNT] = running_gt_count
+                    T.sync_threads()
 
-                gt_count = shared_state[_STATE_EMIT_GT_COUNT]
+                    local_gt_count = 0
+                    local_eq_count = 0
+                    pos_emit = segment_start
+                    while pos_emit < segment_end:
+                        key = _ordered_fp32_key(Scores[row, pos_emit])
+                        if key > threshold_key:
+                            Out[row, emit_offsets[0, tidx] +
+                                local_gt_count] = pos_emit
+                            local_gt_count += 1
+                        if key == threshold_key:
+                            out_pos_buf[0] = (shared_state[_STATE_EMIT_GT_COUNT] +
+                                              emit_offsets[1, tidx] +
+                                              local_eq_count)
+                            if out_pos_buf[0] < top_k:
+                                Out[row, out_pos_buf[0]] = pos_emit
+                            local_eq_count += 1
+                        pos_emit += 1
+                else:
+                    # The non-DCP path only needs a valid top-k set.
+                    pos_emit_gt = T.alloc_var(T.int32)
+                    pos_emit_gt = tidx
+                    while pos_emit_gt < seqlen:
+                        key = _ordered_fp32_key(Scores[row, pos_emit_gt])
+                        if key > threshold_key:
+                            out_pos_buf[0] = T.atomic_add(
+                                shared_state[_STATE_EMIT_GT_COUNT],
+                                1,
+                                return_prev=True)
+                            if out_pos_buf[0] < top_k:
+                                Out[row, out_pos_buf[0]] = pos_emit_gt
+                        pos_emit_gt += threads
 
-                # Then fill remaining slots from scores equal to the threshold.
-                # Tie order is intentionally unspecified; sparse attention needs
-                # a valid top-k set, not score-sorted ids.
-                pos_emit_eq = T.alloc_var(T.int32)
-                pos_emit_eq = tidx
-                while pos_emit_eq < seqlen:
-                    key = _ordered_fp32_key(Scores[row, pos_emit_eq])
-                    if key == threshold_key:
-                        out_pos_buf[0] = gt_count + T.atomic_add(
-                            shared_state[_STATE_EMIT_EQ_COUNT], 1, return_prev=True)
-                        if out_pos_buf[0] < top_k:
-                            Out[row, out_pos_buf[0]] = pos_emit_eq
-                    pos_emit_eq += threads
+                    T.sync_threads()
+                    gt_count = shared_state[_STATE_EMIT_GT_COUNT]
+                    pos_emit_eq = T.alloc_var(T.int32)
+                    pos_emit_eq = tidx
+                    while pos_emit_eq < seqlen:
+                        key = _ordered_fp32_key(Scores[row, pos_emit_eq])
+                        if key == threshold_key:
+                            out_pos_buf[0] = gt_count + T.atomic_add(
+                                shared_state[_STATE_EMIT_EQ_COUNT],
+                                1,
+                                return_prev=True)
+                            if out_pos_buf[0] < top_k:
+                                Out[row, out_pos_buf[0]] = pos_emit_eq
+                        pos_emit_eq += threads
 
     return sparse_index_topk_byte_radix_kernel_
 
 
-def sparse_index_topk(scores: torch.Tensor,
-                      q_seqlens: torch.Tensor,
-                      kv_seqlens: torch.Tensor,
-                      k: int,
-                      fill: int = _FILL,
-                      descending: bool = True,
-                      sorted: bool = False) -> torch.Tensor:
-    """Return top-k score indices for padded sparse-index score rows.
-
-    The returned ids are packed but not score-sorted.  Sparse attention
-    consumes them as a set of valid KV positions; avoiding final sorting is the
-    point of this selector. Rows shorter than ``k`` are padded with ``fill``.
-    """
+def _sparse_index_topk(scores: torch.Tensor,
+                       q_seqlens: torch.Tensor,
+                       kv_seqlens: torch.Tensor,
+                       k: int,
+                       fill: int = _FILL,
+                       descending: bool = True,
+                       sorted: bool = False,
+                       stable_ties: bool = False) -> torch.Tensor:
     if not descending:
         raise ValueError('sparse_index_topk only supports descending=True.')
     if sorted:
@@ -199,5 +251,28 @@ def sparse_index_topk(scores: torch.Tensor,
         kv_seqlens = kv_seqlens.contiguous()
 
     out = torch.empty((num_tokens, k), device=scores.device, dtype=torch.int32)
-    _sparse_index_topk_byte_radix_kernel(k, fill, _THREADS)(scores, kv_seqlens, out)
+    _sparse_index_topk_byte_radix_kernel(k, fill, stable_ties,
+                                         _THREADS)(scores, kv_seqlens, out)
     return out
+
+
+def sparse_index_topk(scores: torch.Tensor,
+                      q_seqlens: torch.Tensor,
+                      kv_seqlens: torch.Tensor,
+                      k: int,
+                      fill: int = _FILL,
+                      descending: bool = True,
+                      sorted: bool = False) -> torch.Tensor:
+    """Return top-k score indices for padded sparse-index score rows.
+
+    The returned ids are packed but not score-sorted. Sparse attention
+    consumes them as a set of valid KV positions; avoiding final sorting is the
+    point of this selector. Rows shorter than ``k`` are padded with ``fill``.
+    """
+    return _sparse_index_topk(scores,
+                              q_seqlens,
+                              kv_seqlens,
+                              k,
+                              fill=fill,
+                              descending=descending,
+                              sorted=sorted)

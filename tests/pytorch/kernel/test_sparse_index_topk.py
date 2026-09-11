@@ -104,6 +104,25 @@ def test_sparse_index_topk_expands_batch_kv_seqlens_for_prefill():
     _assert_topk_ids(scores, out, row_seqlens, k)
 
 
+@pytest.mark.parametrize('k', [512, 2048])
+def test_sparse_dcp_local_topk_stable_ties_choose_lower_positions(k):
+    from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import sparse_dcp_local_topk
+
+    device = 'cuda'
+    score_width = 3 * k
+    scores = torch.zeros(2, score_width, device=device, dtype=torch.float32)
+    scores[1, :256] = 1
+    q_seqlens = torch.ones(2, device=device, dtype=torch.int64)
+    kv_seqlens = torch.tensor([score_width, score_width],
+                              device=device,
+                              dtype=torch.int32)
+
+    out = sparse_dcp_local_topk(scores, q_seqlens, kv_seqlens, k=k)
+
+    expected = torch.arange(k, device=device, dtype=torch.int32).expand(2, -1)
+    assert torch.equal(out, expected)
+
+
 def test_sparse_index_topk_cuda_graph_capture():
     from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import sparse_index_topk
 
@@ -128,3 +147,95 @@ def test_sparse_index_topk_cuda_graph_capture():
     graph.replay()
     torch.cuda.synchronize()
     _assert_topk_ids(scores, out, seqlens, k)
+
+
+@pytest.mark.parametrize(('dcp_size', 'k', 'local_width'),
+                         [(2, 512, 700), (4, 2048, 2300)])
+def test_sparse_dcp_global_topk_matches_global_stable_topk(
+        dcp_size, k, local_width):
+    from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import (
+        pack_dcp_topk_candidates,
+        sparse_dcp_global_topk,
+    )
+
+    device = 'cuda'
+    num_rows = 2
+    generator = torch.Generator(device=device).manual_seed(20260902)
+    global_scores = torch.randn(num_rows,
+                                dcp_size * local_width,
+                                dtype=torch.float32,
+                                device=device,
+                                generator=generator)
+    # Exercise stable global-position ties at the selection threshold.
+    global_scores[1].zero_()
+    packed_by_rank = []
+    for rank in range(dcp_size):
+        local_scores = global_scores[:, rank::dcp_size].contiguous()
+        local_indices = torch.argsort(local_scores,
+                                      dim=1,
+                                      descending=True,
+                                      stable=True)[:, :k].to(torch.int32)
+        packed_by_rank.append(
+            pack_dcp_topk_candidates(
+                local_scores,
+                local_indices,
+                dcp_world_rank=(dcp_size, rank)))
+
+    gathered = torch.stack(packed_by_rank)
+    actual = sparse_dcp_global_topk(gathered, k)
+    if k == 512:
+        torch.cuda.synchronize()
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            actual = sparse_dcp_global_topk(gathered, k)
+        graph.replay()
+        torch.cuda.synchronize()
+    expected = torch.argsort(global_scores,
+                             dim=1,
+                             descending=True,
+                             stable=True)[:, :k].to(torch.int32)
+    candidate_ids = gathered.view(torch.int32)[..., 1]
+    candidate_ids = candidate_ids.permute(1, 0, 2).reshape(num_rows, -1)
+    expected_in_candidate_order = torch.stack([
+        row_ids[torch.isin(row_ids, selected_ids)]
+        for row_ids, selected_ids in zip(candidate_ids, expected)
+    ])
+    assert torch.equal(actual, expected_in_candidate_order)
+
+
+def test_pack_dcp_topk_candidates_large_score_stride():
+    from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import pack_dcp_topk_candidates
+
+    # Reach a row offset of 2**31 elements without filling the 8 GiB storage.
+    if torch.cuda.mem_get_info()[0] < 10 * 2**30:
+        pytest.skip('requires 10 GiB free GPU memory for large-stride addressing')
+    scores = torch.empty_strided((257, 8), (2**23, 1), dtype=torch.float32, device='cuda')
+    scores.copy_(torch.arange(8, dtype=torch.float32, device='cuda')[None])
+    indices = torch.full((257, 512), -1, dtype=torch.int32, device='cuda')
+    indices[:, :8] = torch.arange(8, dtype=torch.int32, device='cuda')
+
+    packed = pack_dcp_topk_candidates(scores, indices, dcp_world_rank=(2, 1))
+    torch.testing.assert_close(packed[..., 0][:, :8], scores)
+    assert torch.equal(packed.view(torch.int32)[..., 1][:, :8], indices[:, :8] * 2 + 1)
+    assert torch.isneginf(packed[..., 0][:, 8:]).all()
+    assert (packed.view(torch.int32)[..., 1][:, 8:] == -1).all()
+
+
+def test_sparse_dcp_global_topk_preserves_int32_ids_and_padding():
+    from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import sparse_dcp_global_topk
+
+    k = 512
+    gathered = torch.empty(2, 1, k, 2, dtype=torch.float32, device='cuda')
+    gathered[..., 0].fill_(-torch.inf)
+    gathered.view(torch.int32)[..., 1].fill_(-1)
+    ids = torch.tensor([2**24 + 1, 2**24 + 3, 7],
+                       dtype=torch.int32,
+                       device='cuda')
+    gathered[0, 0, :2, 0] = 1.0
+    gathered[1, 0, 0, 0] = 2.0
+    gathered.view(torch.int32)[0, 0, :2, 1].copy_(ids[:2])
+    gathered.view(torch.int32)[1, 0, 0, 1].copy_(ids[2])
+
+    actual = sparse_dcp_global_topk(gathered, k)
+    assert torch.equal(actual[0, :3], ids)
+    assert (actual[0, 3:] == -1).all()

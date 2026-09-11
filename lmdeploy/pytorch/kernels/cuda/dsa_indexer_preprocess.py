@@ -127,6 +127,8 @@ def _prepare_dsa_indexer_k_cache_kernel(
     stride_ksb: tl.constexpr,
     stride_kss: tl.constexpr,
     stride_boff,
+    dcp_size: tl.constexpr,
+    dcp_rank: tl.constexpr,
     block_size: tl.constexpr,
     head_dim: tl.constexpr,
     rope_dim: tl.constexpr,
@@ -145,8 +147,11 @@ def _prepare_dsa_indexer_k_cache_kernel(
     # The input contains only this step's tokens; append them after the cached
     # history and translate the logical position through the page table.
     kv_pos = history_seqlen + q_id
-    logical_block = kv_pos // block_size
-    page_off = kv_pos % block_size
+    if kv_pos % dcp_size != dcp_rank:
+        return
+    local_pos = kv_pos // dcp_size
+    logical_block = local_pos // block_size
+    page_off = local_pos % block_size
     physical_block = tl.load(BlockOffsets + batch_id * stride_boff + logical_block).to(tl.int64)
     token_id = q_start + q_id
 
@@ -304,6 +309,8 @@ def prepare_dsa_indexer_k_cache(
     max_q_seqlen: int,
     eps: float,
     rope_interleaved: bool,
+    dcp_size: int = 1,
+    dcp_rank: int = 0,
 ) -> None:
     """Fuse K LayerNorm, RoPE, FP8 quantization, and cache fill."""
     assert k.dtype == torch.bfloat16 and k.dim() == 2 and k.size(-1) == 128
@@ -339,6 +346,8 @@ def prepare_dsa_indexer_k_cache(
                                               stride_ksb=k_s_cache.stride(0),
                                               stride_kss=k_s_cache.stride(1),
                                               stride_boff=block_offsets.stride(0),
+                                              dcp_size=dcp_size,
+                                              dcp_rank=dcp_rank,
                                               block_size=k_cache.size(1),
                                               head_dim=128,
                                               rope_dim=64,

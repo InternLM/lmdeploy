@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 
 from lmdeploy.pytorch import envs as _envs
+from lmdeploy.pytorch.backends.cp_utils import get_dcp_topk_workspace_size
 from lmdeploy.pytorch.backends.cuda.step_metadata import (
     CudaAttentionMetaBuilder,
     CudaSequenceMetadata,
@@ -42,8 +43,8 @@ from ..nsa import (
 logger = get_logger('lmdeploy')
 
 
-def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int) -> int:
-    """Return the query rows fitting in a bounded FP32 score tensor."""
+def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int, *, topk: int = 0, dcp_size: int = 1) -> int:
+    """Bound scores and, under DCP, candidate selection temporaries."""
     if max_kv_seqlen <= 0:
         return 1
     # DeepGEMM materializes an aligned [query_rows, max_kv_seqlen] output
@@ -51,8 +52,15 @@ def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int) -> int:
     # https://github.com/deepseek-ai/DeepGEMM/blob/88965b078186ee7510ab9fc4f1d5ebc19adfa8d1/csrc/apis/attention.hpp#L155-L171
     # Bounding flattened KV alone therefore does not bound the M * N logits
     # allocation; limit M so its FP32 payload stays within the runtime budget.
-    _fp32_bytes = 4
-    return max(1, max_logits_bytes // (max_kv_seqlen * _fp32_bytes))
+    row_bytes = max_kv_seqlen * 4
+    if dcp_size > 1:
+        # Include aligned logits, local/global ids and both
+        # candidate buffers. Full-step output ids are reserved separately.
+        score_width = (max_kv_seqlen + 127) // 128 * 128
+        row_bytes = score_width * 4 + get_dcp_topk_workspace_size(1, topk, dcp_size)
+        if row_bytes > max_logits_bytes:
+            raise RuntimeError('One DCP score row exceeds LMDEPLOY_DSA_INDEXER_MAX_LOGITS_MB')
+    return max(1, max_logits_bytes // row_bytes)
 
 
 def _get_dsa_indexer_k_cache_views(indexer_k_cache: Tensor,
@@ -134,7 +142,7 @@ def _warn_triton_index_scoring():
 
 
 @functools.lru_cache
-def _get_sparse_index_topk(topk: int):
+def _get_sparse_index_topk(topk: int, use_dcp: bool = False):
     try:
         from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
             is_sparse_index_topk_supported,
@@ -143,6 +151,11 @@ def _get_sparse_index_topk(topk: int):
     except ImportError:
         return None
     if is_sparse_index_topk_supported(topk):
+        if use_dcp:
+            from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import (
+                sparse_dcp_local_topk,
+            )
+            return sparse_dcp_local_topk
         return sparse_index_topk
     return None
 
@@ -184,8 +197,13 @@ def _build_deep_gemm_score_meta(
     if block_offsets.dtype != torch.int32:
         block_offsets = block_offsets.to(torch.int32)
 
+    # DeepGEMM's scheduler cannot build metadata for an all-empty batch. DCP
+    # legitimately produces one on ranks that do not own the first token.
+    # Keep the real zero lengths for scoring, but give the scheduler a single
+    # masked token so it can construct a valid launch schedule.
+    schedule_context_lens = context_lens.clamp_min(1)
     schedule = deep_gemm.get_paged_mqa_logits_metadata(
-        context_lens, meta.block_size, deep_gemm.get_num_sms())
+        schedule_context_lens, meta.block_size, deep_gemm.get_num_sms())
     if schedule_buffer is not None:
         schedule_buffer.copy_(schedule)
         schedule = schedule_buffer
@@ -277,7 +295,8 @@ class DSAIndexerMetaBuilder(
                 device=graph_meta.device,
             )
         if graph_meta.decode_query_len == 1:
-            indexer_kv_seqlens = input_buffers['kv_seqlens']
+            indexer_kv_seqlens = input_buffers.get('dcp_local_kv_seqlens',
+                                                   input_buffers['kv_seqlens'])
         else:
             indexer_kv_seqlens = torch.empty(
                 graph_meta.max_tokens,
@@ -316,13 +335,23 @@ class DSAIndexerMetaBuilder(
                 graph_meta.max_tokens,
                 graph_meta.decode_query_len,
             )
+            from lmdeploy.pytorch.backends.cp_utils import fill_dcp_local_seq_lens
+            from lmdeploy.pytorch.distributed import get_dcp_world_rank
+
+            dcp_world_rank = get_dcp_world_rank()
+            if dcp_world_rank[0] > 1:
+                # The filler emits global causal lengths, whereas the graph
+                # buffer below is consumed as already rank-local metadata.
+                fill_dcp_local_seq_lens(buffer.indexer_kv_seqlens,
+                                        buffer.indexer_kv_seqlens,
+                                        dcp_world_rank)
         meta = build_nsa_index_meta(
             num_tokens=graph_meta.max_tokens,
             is_decoding=True,
             block_size=step_context.cache_config.block_size,
             num_gpu_blocks=step_context.cache_config.num_gpu_blocks,
             sequence_metadata=sequence_metadata,
-            indexer_kv_seqlens=buffer.indexer_kv_seqlens,
+            dcp_local_indexer_kv_seqlens=buffer.indexer_kv_seqlens,
         )
         meta.score_meta = _build_deep_gemm_score_meta(
             meta,
@@ -346,7 +375,10 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
         # TODO: configable scale fmt
         self.scale_fmt = 'ue8m0'
         self.max_logits_bytes = _envs.dsa_indexer_max_logits_mb * (1 << 20)
-        self._sparse_index_topk = _get_sparse_index_topk(topk)
+        from lmdeploy.pytorch.distributed import get_dcp_world_rank
+        self.dcp_world_size, self.dcp_rank = get_dcp_world_rank()
+        self._sparse_index_topk = _get_sparse_index_topk(
+            topk, use_dcp=self.dcp_world_size > 1)
         self._step_meta_group: int | None = None
         self._piecewise_forward: Callable[..., Tensor] | None = None
         self._piecewise_forward_fused: Callable[..., Tensor] | None = None
@@ -370,7 +402,7 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
     def _should_skip_scoring(self, meta: NSAIndexMeta) -> bool:
         """Whether dense prefill makes index scoring unnecessary."""
         return (self._allow_short_prefill_scoring_skip and not meta.is_decoding
-                and meta.max_kv_seqlen <= self.topk)
+                and meta.global_max_kv_seqlen <= self.topk)
 
     def _maybe_score_and_select(self, q: Tensor, q_s: Tensor,
                                 indexer_k_cache: Tensor,
@@ -405,7 +437,7 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
             k_cache,
             k_s_cache[..., 0],
             meta.cu_seqlen_k,
-            meta.k_seqlens,
+            meta.dcp_local_kv_seqlens,
             meta.block_offset,
             out_size=meta.kv_flatten_size,
         )
@@ -438,19 +470,50 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
         # entry per request. DSA metadata already expands it to one entry per
         # score row, including for a query-row chunk.
         if self._sparse_index_topk is not None:
-            return self._sparse_index_topk(scores,
-                                           meta.q_seqlens,
-                                           kv_seqlens,
-                                           self.topk,
-                                           fill=self.fill,
-                                           descending=True,
-                                           sorted=False)
+            local_indices = self._sparse_index_topk(scores, meta.q_seqlens,
+                                                    kv_seqlens, self.topk,
+                                                    fill=self.fill,
+                                                    descending=True,
+                                                    sorted=False)
+            if self.dcp_world_size == 1:
+                return local_indices
+            return self._merge_dcp_topk(scores, local_indices)
+        if self.dcp_world_size > 1:
+            raise RuntimeError(
+                'DCP requires the TileLang sparse index top-k kernel.')
         return bitonic_topk(scores,
                             meta.q_seqlens,
                             kv_seqlens,
                             self.topk,
                             fill=self.fill,
                             descending=True)
+
+    def _merge_dcp_topk(self, scores: Tensor, local_indices: Tensor) -> Tensor:
+        """Merge packed local candidate sets into an exact global top-k."""
+        if self.dcp_world_size == 1:
+            return local_indices
+
+        from lmdeploy.pytorch.distributed import all_gather_into_tensor
+        from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import (
+            pack_dcp_topk_candidates,
+            sparse_dcp_global_topk,
+        )
+
+        num_rows = scores.size(0)
+        packed = pack_dcp_topk_candidates(
+            scores,
+            local_indices,
+            dcp_world_rank=(self.dcp_world_size, self.dcp_rank))
+        gathered = torch.empty(
+            self.dcp_world_size * num_rows,
+            self.topk,
+            2,
+            dtype=packed.dtype,
+            device=scores.device,
+        )
+        all_gather_into_tensor(gathered, packed, group='dcp')
+        gathered = gathered.view(self.dcp_world_size, num_rows, self.topk, 2)
+        return sparse_dcp_global_topk(gathered, k=self.topk, fill=self.fill)
 
     def _score_and_select_prefill(
             self, q: Tensor, q_s: Tensor, indexer_k_cache: Tensor,
@@ -462,7 +525,9 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
         flat_k, flat_k_s = self._flatten_prefill_k(
             indexer_k_cache, q.size(-1), meta)
         max_rows = _get_max_score_rows(score_meta.max_kv_seqlen,
-                                       self.max_logits_bytes)
+                                       self.max_logits_bytes,
+                                       topk=self.topk,
+                                       dcp_size=self.dcp_world_size)
         num_rows = q.size(0)
         if num_rows <= max_rows:
             scores = self._compute_prefill_scores(
@@ -507,6 +572,10 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
                 logits_dtype=torch.float32,
             )
         else:
+            if self.dcp_world_size > 1:
+                raise RuntimeError(
+                    'DCP DSA scoring requires a compatible DeepGEMM installation.'
+                )
             _warn_triton_index_scoring()
             score_bytes = q.size(0) * meta.max_kv_seqlen * 4
             if score_bytes > self.max_logits_bytes:
@@ -520,7 +589,7 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
                                k_cache,
                                k_s_cache[..., 0],
                                meta.cu_seqlen_q,
-                               meta.k_seqlens,
+                               meta.dcp_local_kv_seqlens,
                                meta.block_offset,
                                max_q_seqlen=meta.max_q_seqlen,
                                max_k_seqlen=meta.max_kv_seqlen,
@@ -637,7 +706,9 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
                                   max_q_seqlen=meta.max_q_seqlen,
                                   block_offsets=meta.block_offset,
                                   group_size=self.block_size,
-                                  scale_fmt=self.scale_fmt)
+                                  scale_fmt=self.scale_fmt,
+                                  dcp_size=self.dcp_world_size,
+                                  dcp_rank=self.dcp_rank)
         return self._maybe_score_and_select(q, q_s, indexer_k_cache, meta, force_scoring)
 
     def _forward_indexer_fused(self, q: Tensor, k: Tensor, weights: Tensor, norm_weight: Tensor, norm_bias: Tensor,
@@ -667,7 +738,9 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
                                     block_offsets=meta.block_offset,
                                     max_q_seqlen=meta.max_q_seqlen,
                                     eps=norm_eps,
-                                    rope_interleaved=rope_interleaved)
+                                    rope_interleaved=rope_interleaved,
+                                    dcp_size=self.dcp_world_size,
+                                    dcp_rank=self.dcp_rank)
         return self._maybe_score_and_select(q, q_s, indexer_k_cache, meta, force_scoring)
 
     def forward(self, q: Tensor, k: Tensor, weights: Tensor,

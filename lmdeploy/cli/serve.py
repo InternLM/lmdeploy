@@ -136,6 +136,7 @@ class SubCliServe:
         disable_metrics = ArgumentHelper.disable_metrics(pt_group)
         dp = ArgumentHelper.dp(pt_group)
         ep_act = ArgumentHelper.ep(pt_group)
+        ArgumentHelper.dcp(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
         ArgumentHelper.enable_eplb(pt_group)
         ArgumentHelper.role(pt_group)
@@ -248,6 +249,7 @@ class SubCliServe:
             backend_config = PytorchEngineConfig(
                 dtype=args.dtype,
                 tp=args.tp,
+                dcp=args.dcp,
                 dp=args.dp,
                 ep=args.ep,
                 max_batch_size=max_batch_size,
