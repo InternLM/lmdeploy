@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from lmdeploy.pytorch.kv_connector.base import (
     KVConnectorOutput,
     KVConnectorResult,
+    KVConnectorStepInput,
     KVLoadResult,
     RequestId,
 )
@@ -25,7 +26,6 @@ from .lookup import LookupKeyClient
 if TYPE_CHECKING:
     from lmdeploy.pytorch.config import CacheConfig
     from lmdeploy.pytorch.messages import SchedulerSequence
-    from lmdeploy.pytorch.paging.scheduler import SchedulerOutput
 
 
 @dataclass
@@ -229,16 +229,16 @@ class MooncakeStoreScheduler:
 
     def _build_save_requests(
         self,
-        scheduler_output: SchedulerOutput,
+        step_input: KVConnectorStepInput,
     ) -> tuple[MooncakeStoreSaveRequest, ...]:
         """Build newly completed full-block suffixes for prefill work."""
-        token_lens = scheduler_output.connector_token_lens
+        token_lens = step_input.connector_token_lens
         if not self._kv_transfer_config.is_kv_producer or not token_lens:
             return ()
 
-        running = scheduler_output.running
-        block_ids = scheduler_output.connector_block_ids
-        logical_block_ids = scheduler_output.connector_logical_block_ids
+        running = step_input.running
+        block_ids = step_input.connector_block_ids
+        logical_block_ids = step_input.connector_logical_block_ids
         if not (len(running) == len(token_lens) == len(block_ids) == len(logical_block_ids)):
             raise ValueError('connector save fields must contain one value per running request')
 
@@ -283,10 +283,10 @@ class MooncakeStoreScheduler:
 
     def build_connector_meta(
         self,
-        scheduler_output: SchedulerOutput,
+        step_input: KVConnectorStepInput,
     ) -> MooncakeStoreConnectorMetadata | None:
         """Dispatch new work and keep emitting polling steps while I/O runs."""
-        save_requests = self._build_save_requests(scheduler_output)
+        save_requests = self._build_save_requests(step_input)
         if (not save_requests and not self._pending_loads
                 and not self._inflight_loads and not self._inflight_save_ids):
             return None
