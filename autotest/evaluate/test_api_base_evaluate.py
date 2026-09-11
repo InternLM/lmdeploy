@@ -3,47 +3,14 @@ import utils.constant as constant
 from utils.config_utils import (
     get_case_str_by_config,
     get_eval_preset_config,
-    get_func_config_list,
     get_model_path_from_config,
     get_workerid,
 )
 from utils.evaluate_utils import eval_test
+from utils.pytest_layout_utils import BASE_TP_LAYOUTS, build_eval_stage_params
 from utils.run_restful_chat import start_openai_service, terminate_restful_api
 
 _BASE_EVAL = 'base'
-
-_BASE_EVAL_LAYOUTS: tuple[tuple[dict[str, int], pytest.MarkDecorator], ...] = (
-    ({'tp': 1}, pytest.mark.gpu_num_1),
-    ({'tp': 2}, pytest.mark.gpu_num_2),
-    ({'tp': 4}, pytest.mark.gpu_num_4),
-)
-
-
-def _build_base_eval_params() -> list:
-    rows: list = []
-    for layout, gpu_mark in _BASE_EVAL_LAYOUTS:
-        for backend in ('turbomind', 'pytorch'):
-            backend_mark = getattr(pytest.mark, backend)
-            for test_type in ('infer', 'eval'):
-                stage_mark = pytest.mark.infer if test_type == 'infer' else pytest.mark.eval
-                configs = get_func_config_list(
-                    backend,
-                    layout,
-                    model_type='base_model',
-                    func_type='evaluate',
-                )
-                for run_config in configs:
-                    rows.append(
-                        pytest.param(
-                            test_type,
-                            run_config,
-                            marks=[stage_mark, backend_mark, gpu_mark, pytest.mark.flaky(reruns=0)],
-                            id=f'{test_type}-{get_case_str_by_config(run_config)}',
-                        ))
-    return rows
-
-
-_BASE_EVAL_PARAMS = _build_base_eval_params()
 
 
 def run_base_eval_test(config, run_config, worker_id, test_type='infer'):
@@ -85,6 +52,22 @@ def run_base_eval_test(config, run_config, worker_id, test_type='infer'):
                   **preset_config)
 
 
+_BASE_EVAL_PARAMS = (
+    build_eval_stage_params(
+        'turbomind',
+        BASE_TP_LAYOUTS,
+        model_type='base_model',
+        func_type='evaluate',
+    )
+    + build_eval_stage_params(
+        'pytorch',
+        BASE_TP_LAYOUTS,
+        model_type='base_model',
+        func_type='evaluate',
+    )
+)
+
+
 @pytest.mark.parametrize('test_type, run_config', _BASE_EVAL_PARAMS)
-def test_api_base_evaluate(config, run_config, worker_id, test_type):
+def test_api_base_evaluate_local(config, run_config, worker_id, test_type):
     run_base_eval_test(config, run_config, worker_id, test_type)

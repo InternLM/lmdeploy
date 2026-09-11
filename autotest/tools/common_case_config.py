@@ -184,15 +184,13 @@ PYTORCH_LORA_TEST_LLM_GPU1 = [{
             'default': 'lora/Llama2-Chinese-7b-Chat-LoRA'
         }
     }
-}]
-
-PYTORCH_LORA_TEST_LLM_GPU2 = [{
+}, {
     'model': 'meta-llama/Llama-2-7b-chat-hf',
     'backend': 'pytorch',
     'communicator': 'nccl',
     'quant_policy': 0,
     'parallel_config': {
-        'tp': 2
+        'tp': 1
     },
     'extra_params': {
         'adapters': {

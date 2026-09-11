@@ -9,6 +9,7 @@ from utils.config_utils import (
     get_cuda_prefix_by_workerid,
     get_quantization_model_list,
 )
+from utils.pytest_layout_utils import layout_mark
 from utils.quantization_utils import quantization
 
 _QUANT_SUFFIX = {
@@ -45,7 +46,7 @@ def test_quantization(config, model, quantization_type, quantization_model_name,
 
 @pytest.mark.order(3)
 @pytest.mark.pr_test
-@pytest.mark.gpu_num_2
+@layout_mark({'tp': 2})
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize('model', ['Qwen/Qwen3-0.6B'])

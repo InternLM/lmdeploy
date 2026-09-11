@@ -1081,7 +1081,7 @@ def _build_run_config_entry(
         'parallel_config': copy.deepcopy(parallel_config),
         'extra_params': merged_extra,
     }
-    if dtype and backend == 'pytorch':
+    if dtype and backend == 'pytorch' and 'dtype' not in run_config['extra_params']:
         run_config['extra_params']['dtype'] = dtype
     if device != 'cuda':
         run_config['extra_params']['device'] = device
