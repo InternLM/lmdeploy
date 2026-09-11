@@ -8,7 +8,6 @@ import shortuuid
 from mmengine import Registry
 
 from lmdeploy.serve.openai.protocol import (
-    DeltaFunctionCall,
     DeltaToolCall,
     FunctionCall,
     ToolCall,
@@ -241,6 +240,9 @@ class ToolParser:
         every buffered argument is released in its original order. Rejected
         calls and their buffered arguments are discarded. ``_begin_call`` must
         be called before the first fragment of every logical tool call.
+
+        Nested function mappings are validated by ``DeltaToolCall`` so each
+        fragment needs only one Python-level model constructor call.
         """
         if name is None and arguments is None:
             return
@@ -270,7 +272,7 @@ class ToolParser:
                     id=self._active_tool_call_id,
                     index=output_index,
                     type='function',
-                    function=DeltaFunctionCall(name=name),
+                    function={'name': name},
                 ))
             if arguments is not None:
                 self._pending_arguments.append(arguments)
@@ -280,7 +282,7 @@ class ToolParser:
                         id=None,
                         index=output_index,
                         type=None,
-                        function=DeltaFunctionCall(arguments=pending_arguments),
+                        function={'arguments': pending_arguments},
                     ))
             self._pending_arguments.clear()
             return
@@ -290,7 +292,7 @@ class ToolParser:
                 id=None,
                 index=output_index,
                 type=None,
-                function=DeltaFunctionCall(name=name, arguments=arguments),
+                function={'name': name, 'arguments': arguments},
             ))
 
     @staticmethod

@@ -118,7 +118,68 @@ class JsonToolParser(ToolParser):
         close_tag = self._close_tag
 
         while pos < size and not self._payload_closed:
-            if self._phase not in ('arguments', 'skip_value') and close_tag and text.startswith(close_tag, pos):
+            # Most chunks continue a value; handle that before dispatching
+            # envelope syntax at field boundaries.
+            if self._phase in ('arguments', 'skip_value'):
+                if self._value_scanner.in_string and text.find('"', pos) < 0:
+                    start = pos
+                    pos = self._value_scanner.feed(text, pos)
+                    if self._phase == 'arguments' and pos > start:
+                        self._emit_delta(
+                            deltas,
+                            arguments=text[start:pos],
+                        )
+                    break
+
+                marker_at = text.find(close_tag, pos) if close_tag else -1
+                if marker_at >= 0:
+                    scan_limit = marker_at
+                elif self.tool_close_prefixes:
+                    scan_limit = self._stable_prefix_end(text, self.tool_close_prefixes, pos)
+                else:
+                    scan_limit = size
+                start = pos
+                pos = self._value_scanner.feed(text, pos, scan_limit)
+                if self._phase == 'arguments' and pos > start:
+                    self._emit_delta(
+                        deltas,
+                        arguments=text[start:pos],
+                    )
+                if self._value_scanner.complete:
+                    self._json_key = None
+                    self._phase = 'after_value'
+                    continue
+
+                if marker_at >= 0 and pos == marker_at:
+                    if not self._value_scanner.in_string:
+                        self._value_scanner.finish()
+                        self._finish_envelope(deltas)
+                        continue
+                    marker_end = marker_at + len(close_tag)
+                    start = pos
+                    pos = self._value_scanner.feed(text, pos, marker_end)
+                    if self._phase == 'arguments':
+                        self._emit_delta(
+                            deltas,
+                            arguments=text[start:pos],
+                        )
+                    continue
+
+                if scan_limit < size and pos == scan_limit and self._value_scanner.in_string:
+                    start = pos
+                    pos = self._value_scanner.feed(text, pos)
+                    if self._phase == 'arguments' and pos > start:
+                        self._emit_delta(
+                            deltas,
+                            arguments=text[start:pos],
+                        )
+                    if self._value_scanner.complete:
+                        self._json_key = None
+                        self._phase = 'after_value'
+                        continue
+                break
+
+            if close_tag and text.startswith(close_tag, pos):
                 self._finish_envelope(deltas)
                 break
 
@@ -193,65 +254,6 @@ class JsonToolParser(ToolParser):
                     else:
                         self._phase = 'skip_value'
                 continue
-
-            if self._phase in ('arguments', 'skip_value'):
-                if self._value_scanner.in_string and text.find('"', pos) < 0:
-                    start = pos
-                    pos = self._value_scanner.feed(text, pos)
-                    if self._phase == 'arguments' and pos > start:
-                        self._emit_delta(
-                            deltas,
-                            arguments=text[start:pos],
-                        )
-                    break
-
-                marker_at = text.find(close_tag, pos) if close_tag else -1
-                if marker_at >= 0:
-                    scan_limit = marker_at
-                elif self.tool_close_prefixes:
-                    scan_limit = self._stable_prefix_end(text, self.tool_close_prefixes, pos)
-                else:
-                    scan_limit = size
-                start = pos
-                pos = self._value_scanner.feed(text, pos, scan_limit)
-                if self._phase == 'arguments' and pos > start:
-                    self._emit_delta(
-                        deltas,
-                        arguments=text[start:pos],
-                    )
-                if self._value_scanner.complete:
-                    self._json_key = None
-                    self._phase = 'after_value'
-                    continue
-
-                if marker_at >= 0 and pos == marker_at:
-                    if not self._value_scanner.in_string:
-                        self._value_scanner.finish()
-                        self._finish_envelope(deltas)
-                        continue
-                    marker_end = marker_at + len(close_tag)
-                    start = pos
-                    pos = self._value_scanner.feed(text, pos, marker_end)
-                    if self._phase == 'arguments':
-                        self._emit_delta(
-                            deltas,
-                            arguments=text[start:pos],
-                        )
-                    continue
-
-                if scan_limit < size and pos == scan_limit and self._value_scanner.in_string:
-                    start = pos
-                    pos = self._value_scanner.feed(text, pos)
-                    if self._phase == 'arguments' and pos > start:
-                        self._emit_delta(
-                            deltas,
-                            arguments=text[start:pos],
-                        )
-                    if self._value_scanner.complete:
-                        self._json_key = None
-                        self._phase = 'after_value'
-                        continue
-                break
 
             if self._phase == 'after_value':
                 pos = self._skip_ws(text, pos)
