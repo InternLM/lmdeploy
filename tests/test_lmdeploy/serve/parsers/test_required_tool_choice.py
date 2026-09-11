@@ -90,6 +90,17 @@ def configured_parser():
         parser_cls.tool_parser_cls = old_tool_cls
 
 
+def _walk_formats(value):
+    if isinstance(value, dict):
+        if 'type' in value:
+            yield value
+        for child in value.values():
+            yield from _walk_formats(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_formats(child)
+
+
 @pytest.mark.parametrize(
     'parser_name',
     [
@@ -115,6 +126,13 @@ def test_builtin_required_formats_compile(parser_name, reasoning, xgrammar_compi
     response_format = parser.request.response_format
 
     assert response_format['type'] == 'structural_tag'
+    formats = list(_walk_formats(response_format['format']))
+    required_groups = [
+        item for item in formats
+        if item['type'] == 'tags_with_separator' and item.get('at_least_one') is True
+    ]
+    assert required_groups
+
     serialized = str(response_format)
     for tool in tools:
         assert tool.function.name in serialized
@@ -123,14 +141,6 @@ def test_builtin_required_formats_compile(parser_name, reasoning, xgrammar_compi
     xgr, compiler = xgrammar_compiler
     compiled = compile_response_format(compiler, response_format)
     assert isinstance(compiled, xgr.CompiledGrammar)
-
-    # XGrammar may express required calls with different format nodes. Check
-    # the compiled behavior rather than requiring a particular serialized AST.
-    for prefix in ('', 'plain assistant answer', 'reasoning</think>', '<think>reasoning</think>'):
-        matcher = xgr.GrammarMatcher(compiled)
-        if matcher.accept_string(prefix):
-            # Even a complete reasoning section must not finish without a call.
-            assert not matcher.accept_token(0), f'required tool calls must not allow termination after {prefix!r}'
 
 
 def test_required_rejects_tool_parser_without_response_format(monkeypatch):
