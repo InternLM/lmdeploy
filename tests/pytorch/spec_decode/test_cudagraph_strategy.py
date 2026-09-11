@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from lmdeploy.pytorch.strategies.ar_spec.cudagraph import ARSpecCudagraphStrategy
 
 
@@ -7,10 +9,70 @@ def test_arspec_cudagraph_uses_single_token_graph_for_all_methods():
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=8) == 8
 
 
+def test_triton_metadata_builder_uses_explicit_decode_mode():
+    import torch
+
+    from lmdeploy.pytorch.backends.cuda.attention.default import (
+        TritonAttentionMetadata,
+        build_triton_attention_metadata,
+    )
+    from lmdeploy.pytorch.backends.cuda.step_metadata import CudaSequenceMetadata
+
+    class ModelConfig:
+
+        @property
+        def model_paradigm(self):
+            raise AssertionError('metadata builder must not inspect model paradigm')
+
+    step_context = SimpleNamespace(
+        is_decoding=True,
+        kv_quant_policy=None,
+        max_q_seqlen=2,
+        decode_mode='block',
+        model_config=ModelConfig(),
+    )
+    sequence_metadata = CudaSequenceMetadata(
+        block_offsets=torch.zeros((1, 1), dtype=torch.int32),
+        q_start_loc=torch.tensor([0, 2], dtype=torch.int32),
+        q_seqlens=torch.tensor([2], dtype=torch.int32),
+        kv_start_loc=None,
+        kv_seqlens=torch.tensor([2], dtype=torch.int32),
+        kv_flatten_size=None,
+        cu_seqlens_q=torch.tensor([0, 2], dtype=torch.int32),
+        cu_seqlens_k=torch.tensor([0, 2], dtype=torch.int32),
+        max_kv_seqlen=2,
+    )
+
+    metadata = build_triton_attention_metadata(TritonAttentionMetadata, step_context, sequence_metadata)
+
+    assert metadata.decode_mode == 'block'
+
+
 def test_arspec_cudagraph_uses_same_allocation_for_full_spec_capture():
     strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, method='qwen3_5_mtp')
 
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=40) == 40
+
+
+def test_arspec_cudagraph_uses_uniform_query_len_for_mimo_method():
+    strategy = ARSpecCudagraphStrategy(num_spec_tokens=3, method='mimo_mtp')
+
+    assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=24) == 24
+
+
+def test_ar_spec_factory_derives_uniform_query_len_from_mimo_method():
+    from types import SimpleNamespace
+
+    from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
+
+    model_config = SimpleNamespace(bos_token_id=0)
+    spec_config = SimpleNamespace(
+        method='mimo_mtp',
+        num_speculative_tokens=3,
+    )
+    strategy = ARSpecStrategyFactory(model_config, spec_config).build_cudagraph_strategy()
+
+    assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=24) == 24
 
 
 def test_arspec_cudagraph_keeps_full_spec_capture_for_eagle3():
@@ -76,6 +138,227 @@ def test_cudagraph_fa3_metadata_uses_single_query_len_for_single_token_capture()
     assert model.max_seqlen_q_calls == [1, 1]
 
 
+def test_full_graph_disables_legacy_fa3_metadata_without_support(monkeypatch):
+    from types import SimpleNamespace
+
+    from lmdeploy.pytorch.backends.cuda.graph_runner.full_graph import _make_graph_meta
+
+    ctx_mgr = SimpleNamespace(backend_step_meta_plan=None)
+    model_config = SimpleNamespace(
+        vocab_size=100,
+        use_mla_fp8_cache=False,
+        use_flash_mla=False,
+        mla_index_topk=None,
+        model_paradigm='ar',
+        states_shapes=None,
+        use_mrope=False,
+        block_size=64,
+    )
+    common_kwargs = dict(
+        max_batches=1,
+        max_tokens=1,
+        num_blocks=1,
+        is_decoding=True,
+        decode_query_len=1,
+        device='cpu',
+    )
+
+    meta = _make_graph_meta(model_config, ctx_mgr, **common_kwargs)
+    assert meta.use_fa3_decoding is False
+
+    model_config.model_paradigm = 'ar_spec'
+    meta = _make_graph_meta(model_config, ctx_mgr, **common_kwargs)
+    assert meta.use_fa3_decoding is True
+
+    meta = _make_graph_meta(
+        model_config, ctx_mgr, supports_multi_token_decode=True, **common_kwargs)
+    assert meta.use_fa3_decoding is False
+
+
+def test_graph_capture_state_snapshots_request_visible_paged_rows():
+    import torch
+
+    from lmdeploy.pytorch.models.utils.cudagraph import GraphCaptureState
+
+    cache = torch.arange(40, dtype=torch.float32).reshape(8, 5)
+    state = GraphCaptureState.from_paged_tensors(
+        (cache, ),
+        block_offsets=torch.tensor([[-1, 1, 3], [3, 11, 5]]),
+        num_blocks=8,
+        num_requests=1,
+    )
+
+    state.snapshot()
+    captured = cache.clone()
+    cache[torch.tensor([1, 3, 5])] += 10
+
+    state.restore()
+    assert torch.equal(cache[[1, 3]], captured[[1, 3]])
+    assert torch.equal(cache[5], cache[5])
+
+
+def test_graph_capture_state_snapshots_full_tensors_without_block_ids():
+    import torch
+
+    from lmdeploy.pytorch.models.utils.cudagraph import GraphCaptureState
+
+    cache = [torch.arange(12).view(3, 4), torch.arange(12, 24).view(3, 4)]
+    original = [tensor.clone() for tensor in cache]
+    state = GraphCaptureState(tensors=tuple(cache))
+
+    state.snapshot()
+    for tensor in cache:
+        tensor.add_(1)
+
+    state.restore()
+    for actual, expected in zip(cache, original):
+        torch.testing.assert_close(actual, expected)
+
+
+def test_cudagraph_fill_preserves_runtime_attention_metadata():
+    from types import SimpleNamespace
+
+    import torch
+
+    from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+
+    model = CudaGraphMixin()
+    graph_meta = CudaGraphMeta(
+        max_batchs=2,
+        max_tokens=4,
+        num_blocks=2,
+        is_decoding=True,
+        device=torch.device('cpu'),
+        input_buffers={},
+        output_buffers={},
+        decode_query_len=2,
+    )
+    input_ids = torch.arange(4).view(1, 4)
+    position_ids = input_ids.clone()
+    attn_metadata = SimpleNamespace(
+        q_seqlens=torch.tensor([2, 2]),
+        block_offsets=torch.tensor([[3, 4], [5, 6]]),
+        q_start_loc=torch.tensor([0, 2]),
+        kv_seqlens=torch.tensor([7, 11]),
+    )
+    original_fields = {
+        name: getattr(attn_metadata, name).clone()
+        for name in ('q_seqlens', 'block_offsets', 'q_start_loc', 'kv_seqlens')
+    }
+    graph_meta.input_buffers = model.make_buffers_cudagraph(
+        graph_meta,
+        input_ids=input_ids,
+        position_ids=position_ids,
+        past_key_values=[],
+        attn_metadata=attn_metadata,
+    )
+
+    for _ in range(2):
+        graph_inputs = model.fill_buffers_cudagraph(
+            graph_meta,
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=[],
+            attn_metadata=attn_metadata,
+            inputs_embeds=None,
+        )
+        for name, expected in original_fields.items():
+            assert torch.equal(getattr(attn_metadata, name), expected)
+        assert torch.equal(graph_inputs['attn_metadata'].q_seqlens[:2], original_fields['q_seqlens'])
+        assert torch.equal(graph_inputs['attn_metadata'].kv_seqlens[:2], original_fields['kv_seqlens'])
+        assert torch.equal(graph_inputs['attn_metadata'].block_offsets[:2], original_fields['block_offsets'])
+
+
+def test_cudagraph_capture_rolls_back_state_before_semantic_forward(monkeypatch):
+    from types import SimpleNamespace
+
+    import torch
+
+    from lmdeploy.pytorch.backends.cuda.graph_runner import runner as graph_runner_mod
+    from lmdeploy.pytorch.models.utils.cudagraph import GraphCaptureState
+
+    cache = [torch.arange(24).view(6, 4), torch.arange(24, 48).view(6, 4)]
+    original = [tensor.clone() for tensor in cache]
+    block_offsets = torch.tensor([[-1, 1, 3], [3, 4, 8]])
+    block_ids = torch.tensor([1, 3, 4])
+
+    class FakeSingleGraphRunner:
+
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        def capture(self, **kwargs):
+            del kwargs
+            for tensor in cache:
+                tensor[block_ids] += 10
+            return 'capture-output'
+
+        def forward(self, **kwargs):
+            del kwargs
+            for tensor, expected in zip(cache, original):
+                torch.testing.assert_close(tensor, expected)
+                tensor[block_ids] += 1
+            return 'semantic-output'
+
+    monkeypatch.setattr(graph_runner_mod, 'CUDASingleGraphRunner', FakeSingleGraphRunner)
+    monkeypatch.setattr(
+        graph_runner_mod,
+        'get_deepep_state',
+        lambda: SimpleNamespace(enabled=lambda: False),
+    )
+
+    capture_contexts = []
+
+    def get_cudagraph_capture_state(capture_context):
+        capture_contexts.append(capture_context)
+        return GraphCaptureState(
+            tensors=tuple(cache),
+            block_ids=block_ids,
+        )
+
+    model = SimpleNamespace(
+        get_cudagraph_capture_state=get_cudagraph_capture_state,
+        get_cudagraph_extra_key=lambda **kwargs: (),
+    )
+    runner = graph_runner_mod.CUDAGraphRunner.__new__(graph_runner_mod.CUDAGraphRunner)
+    runner.model = model
+    runner.ctx_mgr = SimpleNamespace(
+        current_context=lambda: SimpleNamespace(global_is_decoding=lambda: True))
+    runner.enable_graph = lambda **kwargs: True
+    runner.get_graph_key = lambda **kwargs: (2, True, False, 2)
+    runner._get_max_tokens = lambda *args: 4
+    runner._get_decode_model_forward = lambda: model
+    runner._supports_multi_token_decode = False
+    runner._full_graph_runners = {}
+    runner.num_blocks = 8
+    runner._full_graph_pool_handle = None
+    runner.model_config = SimpleNamespace()
+    runner.device = torch.device('cpu')
+
+    output = runner(
+        input_ids=torch.zeros((1, 4), dtype=torch.long),
+        position_ids=torch.zeros((1, 4), dtype=torch.long),
+        past_key_values=[],
+        attn_metadata=SimpleNamespace(
+            q_seqlens=torch.tensor([2, 2]),
+            block_offsets=block_offsets.to(torch.int32),
+        ),
+        inputs_embeds=None,
+        spec_step_idx=0,
+    )
+
+    assert output == 'semantic-output'
+    assert len(capture_contexts) == 1
+    assert capture_contexts[0].past_key_values == []
+    assert capture_contexts[0].num_blocks == 8
+    assert capture_contexts[0].spec_step_idx == 0
+    assert capture_contexts[0].attn_metadata.q_seqlens.tolist() == [2, 2]
+    assert (2, True, False, 2) in runner._full_graph_runners
+    for actual, expected in zip(cache, original):
+        expected[block_ids] += 1
+        torch.testing.assert_close(actual, expected)
+
+
 def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypatch):
     from types import SimpleNamespace
 
@@ -87,6 +370,7 @@ def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypat
     context = SimpleNamespace(
         global_is_decoding=lambda: True,
         target_hidden_states=torch.zeros((1, 8, 16)),
+        decode_mode='block',
     )
     runner = cuda_graph_runner.CUDAGraphRunner.__new__(cuda_graph_runner.CUDAGraphRunner)
     runner.ctx_mgr = SimpleNamespace(current_context=lambda: context)
@@ -125,6 +409,17 @@ def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypat
     )
     assert key_qlen4 != key_qlen1
 
+    context.decode_mode = 'speculative'
+    key_speculative = runner.get_graph_key(
+        input_ids=input_ids_qlen4,
+        position_ids=torch.zeros_like(input_ids_qlen4),
+        past_key_values=[],
+        attn_metadata=attn_metadata_qlen4,
+        inputs_embeds=None,
+    )
+    assert key_speculative != key_qlen4
+
+    context.decode_mode = 'block'
     context.target_hidden_states = torch.zeros((1, 8, 32))
     key_hidden32 = runner.get_graph_key(
         input_ids=input_ids_qlen4,

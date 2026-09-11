@@ -152,6 +152,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>DeepSeek-V3 (685B)</li>
   <li>DeepSeek-V3.2 (685B)</li>
   <li>DeepSeek-V4 (284B, 1.6T)</li>
+  <li>MiMo-V2-Flash (309B-A15B)</li>
   <li>Hy3 (295B-A21B)</li>
   <li>Mixtral (8x7B, 8x22B)</li>
   <li>Gemma (2B - 7B)</li>

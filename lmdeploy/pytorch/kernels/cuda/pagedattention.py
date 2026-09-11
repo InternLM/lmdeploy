@@ -60,6 +60,7 @@ def _fwd_grouped_split_kernel(
     stride_boffb,
     kv_group_num: tl.constexpr,
     seq_len: tl.constexpr,
+    causal_multi_token: tl.constexpr,
     window_size: tl.constexpr,
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,
@@ -91,11 +92,15 @@ def _fwd_grouped_split_kernel(
     mask_h = mask_h & (cur_token < cur_batch * seq_len + seq_len)
     mask_h = mask_h & (cur_head < num_heads_q)
 
-    q_seqlen = 1
     kv_seqlen = tl.load(cache_seqlens_ptr + cur_batch)
     if kv_seqlen <= 0:
         return
-    history_len = kv_seqlen - q_seqlen
+    if causal_multi_token:
+        history_len = kv_seqlen - seq_len
+        query_pos = history_len + cur_token - cur_batch * seq_len
+    else:
+        history_len = kv_seqlen - 1
+        query_pos = history_len
     if alibi_slopes_ptr is not None:
         alibi_slopes = tl.load(alibi_slopes_ptr + cur_head, mask=mask_h, other=1.0) * tl_log2(math.e)
     else:
@@ -134,18 +139,30 @@ def _fwd_grouped_split_kernel(
     l_i = tl.zeros([BLOCK_H], dtype=tl.float32)
     acc = tl.zeros([BLOCK_H, BLOCK_DV], dtype=tl.float32)
 
-    num_total_blocks = tl.cdiv(kv_seqlen, BLOCK_N)
+    first_range_block = 0
+    if causal_multi_token and window_size > 0:
+        # Partition only the union of keys visible to this q-token group.
+        # Splitting the complete context would leave almost every CTA empty
+        # for short sliding-attention windows.
+        first_range_block = tl.maximum(history_len - window_size, 0) // BLOCK_N
+    num_total_blocks = tl.cdiv(kv_seqlen, BLOCK_N) - first_range_block
     BLOCK_PER_CTA = tl.cdiv(num_total_blocks, SPLIT_K)
     kv_len_per_prog = BLOCK_PER_CTA * BLOCK_N
-    loop_start = kv_len_per_prog * split_k_id
+    loop_start = first_range_block * BLOCK_N + kv_len_per_prog * split_k_id
     loop_end = tl.minimum(loop_start + kv_len_per_prog, kv_seqlen)
 
     # load block offset
     # dirty
     start_block_id = loop_start // BLOCK_N
     if window_size > 0:
+        # Every query in a verification group has a different causal/window
+        # boundary. Start from the earliest query's window and apply the exact
+        # per-query lower bound below.
         start_block_id = tl.maximum(history_len - window_size, loop_start) // BLOCK_N
-        kv_min_loc = tl.maximum(history_len - window_size, 0)
+        if causal_multi_token:
+            kv_min_loc = tl.maximum(query_pos - window_size, 0)
+        else:
+            kv_min_loc = tl.maximum(history_len - window_size, 0)
 
     loop_start = start_block_id * BLOCK_N
     block_offset_ptrs += start_block_id
@@ -175,15 +192,16 @@ def _fwd_grouped_split_kernel(
             qk = qk * logit_softcapping
         qk = qk * tl_log2(math.e)
         # NOTE: inf - inf = nan, and nan will leads to error
-        if start_n + BLOCK_N > history_len or window_size > 0:
+        if causal_multi_token:
+            qk_mask = query_pos[:, None] >= (start_n + offs_n[None, :])
+            if window_size > 0:
+                qk_mask = qk_mask & ((start_n + offs_n[None, :]) >= kv_min_loc[:, None])
+            qk = tl.where(qk_mask, qk, -float('inf'))
+        elif start_n + BLOCK_N > history_len or window_size > 0:
             qk_mask = history_len >= (start_n + offs_n)
             if window_size > 0:
                 qk_mask = qk_mask & ((start_n + offs_n) >= kv_min_loc)
-            qk = tl.where(
-                qk_mask[None, :],
-                qk,
-                -float('inf'),
-            )
+            qk = tl.where(qk_mask[None, :], qk, -float('inf'))
 
         if alibi_slopes_ptr is not None:
             relative_pos = kv_seqlen - start_n - offs_n[None, :]
@@ -192,8 +210,11 @@ def _fwd_grouped_split_kernel(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = tl_exp2(qk - m_i_new[:, None])
-        alpha = tl_exp2(m_i - m_i_new)
+        # A causal q>1 tile can be entirely to the right of an early query.
+        # Keep an empty row neutral instead of evaluating -inf - -inf.
+        has_valid_key = m_i_new != -float('inf')
+        p = tl.where(has_valid_key[:, None], tl_exp2(qk - m_i_new[:, None]), 0.0)
+        alpha = tl.where(has_valid_key, tl_exp2(m_i - m_i_new), 1.0)
         l_i_new = alpha * l_i + tl.sum(p, 1)
 
         # -- update output accumulator --
@@ -213,10 +234,11 @@ def _fwd_grouped_split_kernel(
         tl.extra.cuda.gdc_launch_dependents()
 
     # initialize pointers to output
-    if loop_end > loop_start:
-        off_acc = (cur_token[:, None] * stride_obs + split_k_id * stride_ok + cur_head[:, None] * stride_oh +
-                   offs_dv[None, :] * stride_od)
-        tl.store(acc_out_ptr + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
+    # Empty split-K partitions still participate in the reduction. Store the
+    # zero accumulator rather than leaving the workspace uninitialized.
+    off_acc = (cur_token[:, None] * stride_obs + split_k_id * stride_ok + cur_head[:, None] * stride_oh +
+               offs_dv[None, :] * stride_od)
+    tl.store(acc_out_ptr + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
 
     off_meta = (cur_token * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v)
     tl.store(acc_out_ptr + off_meta, m_i, mask=mask_h)
@@ -794,10 +816,13 @@ def flash_attn_with_kvcache(
     quant_policy: QuantPolicy = QuantPolicy.NONE,
     sinks: Tensor = None,
     kv_layout: str = 'bshd',
+    causal_multi_token: bool = False,
 ):
     """Paged Attention forward.
 
-    Note that this kernel is decoding-only
+    By default, multiple query tokens retain the historical block-decoding
+    mask. ``causal_multi_token`` opts into ordinary causal verification, where
+    token ``i`` attends through ``history_len + i``.
 
     Args:
         k_scales_zeros: Per-token scale/zero metadata for int KV cache, or
@@ -883,6 +908,11 @@ def flash_attn_with_kvcache(
     seq_len = num_tokens // batch
     if max_seqlen_q is not None:
         assert max_seqlen_q == seq_len, 'we only support decoding paged attention.'
+    if causal_multi_token and seq_len > 1:
+        if quant_policy != QuantPolicy.NONE:
+            raise NotImplementedError('Causal multi-token paged attention does not support quantized KV cache.')
+        if alibi_slopes is not None:
+            raise NotImplementedError('Causal multi-token paged attention does not support ALiBi.')
 
     BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lq, Lv)
     HEADS_PER_REQ = kv_group_num * seq_len
@@ -1014,6 +1044,7 @@ def flash_attn_with_kvcache(
                                         stride_boffb=page_table.stride(0),
                                         kv_group_num=kv_group_num,
                                         seq_len=seq_len,
+                                        causal_multi_token=causal_multi_token,
                                         window_size=window_size,
                                         head_size=Lk,
                                         head_size_v=Lv,

@@ -92,6 +92,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |          DeepSeek-V3           |      685B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |         DeepSeek-V3.2          |      685B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |          DeepSeek-V4           |   284B, 1.6T    | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+| MiMo-V2-Flash<sup>\[2\]</sup>  |    309B-A15B    | LLM  |   BF16    |   No    |   No    | Yes  |  No   |
 |              Hy3               |    295B-A21B    | LLM  |    Yes    |   No    |   No    | Yes  |  No   |
 |          DeepSeek-VL2          |    3B - 27B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |            MiniCPM3            |       4B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
@@ -128,6 +129,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 
 ```{note}
 * [1] PyTorch engine removes the support of original llava models after v0.6.4. Please use their corresponding transformers models instead, which can be found in https://huggingface.co/llava-hf
+* [2] MiMo-V2-Flash is supported with attention TP 4 and TP 8. The checkpoint uses FP8 weights; runtime activations and KV caches require BF16 and the PyTorch CUDA backend.
 Starting from version 0.11.1, PytorchEngine no longer provides support for mllama.
 ```
 

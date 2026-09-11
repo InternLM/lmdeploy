@@ -93,6 +93,7 @@
 |          DeepSeek-V3           |      685B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |         DeepSeek-V3.2          |      685B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |          DeepSeek-V4           |   284B, 1.6T    | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+| MiMo-V2-Flash<sup>\[2\]</sup>  |    309B-A15B    | LLM  |   BF16    |   No    |   No    | Yes  |  No   |
 |              Hy3               |    295B-A21B    | LLM  |    Yes    |   No    |   No    | Yes  |  No   |
 |          DeepSeek-VL2          |    3B - 27B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |            MiniCPM3            |       4B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
@@ -129,6 +130,7 @@
 
 ```{note}
 * [1] 自 0.6.4 之后，PyTorch 引擎移除了对 llava 模型原始格式的支持。我们建议使用它们对应的 transformers 格式的模型。这些模型可以在 https://huggingface.co/llava-hf 中找到
+* [2] MiMo-V2-Flash 已验证支持 attention TP 4 和 TP 8。该 checkpoint 使用 FP8 权重；运行时激活和 KV cache 必须使用 BF16，且仅支持 PyTorch CUDA 后端。
 自 0.11.1 起，PytorchEngine 移除了 mllama 的支持
 ```
 
