@@ -558,7 +558,7 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
     agent = object.__new__(SpecModelAgent)
     agent.num_spec_tokens = 3
     agent.rank = 0
-    agent.proposer = _DummyProposer()
+    agent.proposer = _LegacyDummyProposer()
     agent.guided_helper = GuidedSpecHelper()
     forward_calls = 0
 
@@ -577,6 +577,33 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
     assert agent.proposer.get_outputs_calls == 0
     assert agent.proposer.update_inputs_decoding_calls == 0
     assert agent.proposer.advance_draft_depth_calls == 0
+
+
+def test_async_model_forward_dp1_non_last_chunk_runs_draft_depth_protocol():
+    """Protocol proposers must retain draft outputs for non-last chunks."""
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    inputs, extra_inputs = _make_non_last_chunk_inputs()
+    agent = object.__new__(SpecModelAgent)
+    agent.num_spec_tokens = 3
+    agent.rank = 0
+    agent.proposer = _DummyProposer()
+    agent.guided_helper = GuidedSpecHelper()
+    forward_calls = 0
+
+    def _forward_impl(_inputs):
+        nonlocal forward_calls
+        forward_calls += 1
+        return {'call': forward_calls}
+
+    agent._forward_impl = _forward_impl
+
+    output = asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+
+    expected = torch.tensor([[0, 1, 2], [0, 1, 2]], dtype=torch.long)
+    torch.testing.assert_close(output.output_draft_token_ids, expected)
+    assert forward_calls == agent.num_spec_tokens
+    assert agent.proposer.advance_draft_depth_calls == agent.num_spec_tokens - 1
 
 
 def test_async_model_forward_dp1_uses_legacy_draft_depth_transition():
@@ -606,6 +633,28 @@ def test_async_model_forward_dp1_uses_legacy_draft_depth_transition():
     assert forward_calls == agent.num_spec_tokens
     assert agent.proposer.update_inputs_decoding_calls == 1
     assert agent.proposer.advance_draft_depth_calls == 0
+
+
+def test_build_draft_depth_dp_meta_legacy_uses_rank_batch_token_counts(monkeypatch):
+    """Legacy recurrent depth uses one token per rank-local request."""
+    import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
+    from lmdeploy.pytorch.model_inputs import DPMeta
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    build_num_tokens = []
+
+    def _build(seqlen, num_tokens):
+        build_num_tokens.append(list(num_tokens))
+        return DPMeta()
+
+    monkeypatch.setattr(spec_agent_mod.DPMeta, 'build', staticmethod(_build))
+    inputs, _ = _make_non_last_chunk_inputs(dp_meta=DPMeta(dp_batches=[2, 5]))
+    agent = object.__new__(SpecModelAgent)
+    agent.proposer = _LegacyDummyProposer()
+
+    agent._build_draft_depth_dp_meta(inputs)
+
+    assert build_num_tokens == [[2, 5]]
 
 
 def test_async_model_forward_dp_non_last_chunk_pads_block_offsets(monkeypatch):

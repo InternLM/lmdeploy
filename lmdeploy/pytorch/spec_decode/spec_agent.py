@@ -597,9 +597,10 @@ class SpecModelAgent(BaseSpecModelAgent):
             return inputs
 
         outputs = self._forward_impl(inputs)
-        if inputs.dp_meta is None and inputs.is_chunk and not inputs.is_last_chunk:
-            # DP=1 non-last chunks do not consume draft tokens, so skip the
-            # remaining speculative forwards.
+        if (inputs.dp_meta is None and inputs.is_chunk and not inputs.is_last_chunk
+                and not getattr(self.proposer, 'supports_draft_depth_protocol', False)):
+            # Legacy proposers do not own a persistent per-depth cache, so
+            # DP=1 non-last chunks can skip speculative outputs entirely.
             output_draft_ids = inputs.input_ids.new_zeros(inputs.seq_length.size(0), self.num_spec_tokens)
         else:
             # Fork guided processors for draft model.
@@ -689,7 +690,11 @@ class SpecModelAgent(BaseSpecModelAgent):
         if getattr(self.proposer, 'supports_draft_depth_protocol', False):
             num_tokens = self.proposer.get_draft_depth_token_counts(dp_meta)
         else:
-            num_tokens = [inputs.input_ids.numel()] * len(dp_meta.dp_batches)
+            # Legacy depth transitions compact every request to one token;
+            # therefore the rank-global batch layout is also the token layout.
+            # Reusing the local flattened count for every rank would make TP
+            # collectives disagree when DP ranks have different batch sizes.
+            num_tokens = list(dp_meta.dp_batches)
         new_dpmeta = DPMeta.build(inputs.input_ids.numel(), num_tokens)
         new_dpmeta.dp_batches = dp_meta.dp_batches
         new_dpmeta.dp_is_decoding = dp_meta.dp_is_decoding
