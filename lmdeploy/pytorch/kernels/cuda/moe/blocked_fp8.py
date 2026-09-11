@@ -8,7 +8,7 @@ import triton.language as tl
 
 from lmdeploy.pytorch import envs as _envs
 
-from ..activation import silu_and_mul
+from ..activation import silu_and_mul_post_quant
 from ..blocked_gemm_fp8 import quant_fp8
 from .fused_moe import _get_sorted_idx, _get_sorted_idx_blocks, _make_intermediate, _renormalize, moe_reduce
 
@@ -860,14 +860,16 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
             **gate_moe_cfg,
         )
 
-    # activate
+    # Activate and directly emit the block-quantized down-projection input.
     intermediate_cache1 = intermediate_cache1.flatten(0, -2)
     if act_func is None:
-        gate_cache = silu_and_mul(intermediate_cache1)
+        gate_cache, gate_scale = silu_and_mul_post_quant(intermediate_cache1,
+                                                         group_size,
+                                                         dtype=input.dtype)
     else:
         gate_cache = act_func(intermediate_cache1)
+        gate_cache, gate_scale = quant_fp8(gate_cache, group_size, dtype=input.dtype)
     del intermediate_cache1
-    gate_cache, gate_scale = quant_fp8(gate_cache, group_size, dtype=input.dtype)
 
     intermediate_cache2 = _make_intermediate((M, topk, w2.shape[1]), dtype=out_dtype, device=device, zeros=not full_exp)
     # down
