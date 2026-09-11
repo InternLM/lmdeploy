@@ -6,6 +6,7 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/data_format.h"
 #include "src/turbomind/core/module.h"
+#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/weight_plan.h"
 
@@ -99,5 +100,15 @@ private:
     bool                            prepared_ = false;
     std::optional<gemm::WeightPlan> plan_;
 };
+
+/// Create the GEMM output of `weight` with `rows` rows, its row stride padded to
+/// a multiple of 16 / sizeof(T). Some consumers, e.g. the fused conv1d kernel,
+/// read the output with 16-byte vector loads.
+inline Tensor MakePaddedOutput(int rows, const LinearWeight& weight, core::Device device)
+{
+    const auto dtype = weight.output_dtype();
+    const int  ld    = round_up(weight.output_dim, static_cast<int>(16 / byte_size(dtype)));
+    return Tensor{core::Layout{{rows, weight.output_dim}, {ld, 1}}, dtype, device};
+}
 
 }  // namespace turbomind
