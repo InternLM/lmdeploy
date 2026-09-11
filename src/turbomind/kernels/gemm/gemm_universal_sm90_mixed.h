@@ -295,12 +295,8 @@ struct Sm90MixedDequant<Sm90Fp8E4M3Format> {
     };
 
     template<int RestM, int AtomM, int TileOut>
-    __device__ static void load(Registers<RestM>& regs,
-                                const uint8_t*    smem,
-                                int               segment_base,
-                                int               segment_stride,
-                                int /*group*/,
-                                int               local_tid)
+    __device__ static void load(
+        Registers<RestM>& regs, const uint8_t* smem, int segment_base, int segment_stride, int /*group*/, int local_tid)
     {
         static_assert(TileOut == RestM * AtomM * 64);
         constexpr int kWordsPerFragment = Sm90Fp8E4M3Format::kQparamValuesFragment / 2;

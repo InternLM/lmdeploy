@@ -30,7 +30,7 @@ inline constexpr Pack kSm90MixedQParamPack = GMMA_64x16_RS | OPERAND_U | 2;
 // Version 5 stores each MXFP4 scale as the signed unbiased exponent
 // (UE8M0 - 127) in one byte, in operand-A consumer order. The mixed mainloop
 // injects it into the constant BF16 E2M1 table before the PRMT lookup.
-inline constexpr Pack kSm90MxFp4QParamPack    = GMMA_64x16_RS | OPERAND_U | 5;
+inline constexpr Pack kSm90MxFp4QParamPack = GMMA_64x16_RS | OPERAND_U | 5;
 // Version 1 stores one BF16 scale per K64 group and output column for the
 // blockwise FP8 format, as one OUT64 fragment of 64 columns in the same
 // consumer order.
@@ -317,8 +317,13 @@ void PackSm90Fp8E4M3Weight(uint32_t* dst, const uint16_t* src, int output_dim, i
 // [K/group, N/64, RS qparam fragment] order. Each fragment stores 64 scales
 // followed by 64 U4 zero points packed two per byte.
 template<class T>
-void PackSm90U4QParams(
-    uint8_t* dst, const T* scales, const T* zeros, int output_dim, int group_count, int src_stride, cudaStream_t stream);
+void PackSm90U4QParams(uint8_t*     dst,
+                       const T*     scales,
+                       const T*     zeros,
+                       int          output_dim,
+                       int          group_count,
+                       int          src_stride,
+                       cudaStream_t stream);
 
 void PackSm90Fp4QParams(
     uint8_t* dst, const uint8_t* src, int output_dim, int group_count, int src_stride, cudaStream_t stream);

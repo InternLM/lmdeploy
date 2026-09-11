@@ -206,8 +206,8 @@ class Linear:
         return result
 
     def _normalize_params(self, weight_format, weight, scales, zeros, bridge):
-        """Normalize source weight components into TurboMind logical layouts and
-        expand their quantization blocking to the kernel's."""
+        """Normalize source weight components into TurboMind logical layouts
+        and expand their quantization blocking to the kernel's."""
         raw = {'weight': weight, 'scales': scales, 'zeros': zeros}
         raw = {kind: tensor for kind, tensor in raw.items() if tensor is not None}
         normalized = {kind: weight_format.normalize(tensor, kind).contiguous() for kind, tensor in raw.items()}

@@ -79,20 +79,7 @@ void pack(LinearWeight& linear, cudaStream_t stream)
         DataFormat{kFloat8_e4m3, {Sm90Fp8E4M3Format::kGroupSize, Sm90Fp8E4M3Format::kScaleGroupN}, kBfloat16};
 }
 
-const Family e4m3{32,
-                  250,
-                  kBfloat16,
-                  kBfloat16,
-                  64,
-                  64,
-                  128,
-                  1,
-                  true,
-                  true,
-                  supports,
-                  pack,
-                  64,
-                  kBfloat16};
+const Family e4m3{32, 250, kBfloat16, kBfloat16, 64, 64, 128, 1, true, true, supports, pack, 64, kBfloat16};
 
 // NVCC requires defaults on the template-template parameter.
 template<template<class Config_,

@@ -104,12 +104,12 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_weight_kernel(
     }
 }
 
-__global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_qparams_kernel(uint8_t*   dst,
-                                                                                const uint8_t* src,
-                                                                                int            output_dim,
-                                                                                int            src_stride,
-                                                                                int            total_records,
-                                                                                Sm90MxFp4Fp8FoldedPackStats* stats)
+__global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_qparams_kernel(uint8_t*       dst,
+                                                                                 const uint8_t* src,
+                                                                                 int            output_dim,
+                                                                                 int            src_stride,
+                                                                                 int            total_records,
+                                                                                 Sm90MxFp4Fp8FoldedPackStats* stats)
 {
     using namespace cute;
 
@@ -223,11 +223,8 @@ __global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_folded_qparams_kernel
     }
 }
 
-__global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_unfolded_qparams_kernel(uint8_t*       dst,
-                                                                                   const uint8_t* src,
-                                                                                   int            output_dim,
-                                                                                   int            src_stride,
-                                                                                   int            total_records)
+__global__ __launch_bounds__(128) void pack_sm90_mxfp4_fp8_unfolded_qparams_kernel(
+    uint8_t* dst, const uint8_t* src, int output_dim, int src_stride, int total_records)
 {
     using namespace cute;
 
@@ -619,10 +616,10 @@ __global__ __launch_bounds__(256) void pack_sm90_fp8_e4m3_scales_kernel(
             const auto* tile_src = src + (int64_t)group * src_stride + tile_n * kSm90MixedTileN;
             auto*       fragment = dst + ((int64_t)group * fragments_n + fragment_n) * kSm90MixedFragmentN;
 
-            const bfloat16_t lo = __float2bfloat16_rn(tile_src[m_lo]);
-            const bfloat16_t hi = __float2bfloat16_rn(tile_src[m_hi]);
-            reinterpret_cast<uint32_t*>(fragment)[pair] =
-                uint32_t(reinterpret_cast<const uint16_t&>(lo)) | (uint32_t(reinterpret_cast<const uint16_t&>(hi)) << 16);
+            const bfloat16_t lo                         = __float2bfloat16_rn(tile_src[m_lo]);
+            const bfloat16_t hi                         = __float2bfloat16_rn(tile_src[m_hi]);
+            reinterpret_cast<uint32_t*>(fragment)[pair] = uint32_t(reinterpret_cast<const uint16_t&>(lo))
+                                                          | (uint32_t(reinterpret_cast<const uint16_t&>(hi)) << 16);
         }
     }
 }
@@ -668,8 +665,7 @@ void PackSm90Fp8E4M3Weight(uint32_t* dst, const uint16_t* src, int output_dim, i
     TM_CHECK_EQ(output_dim % kSm90MixedFragmentN, 0);
     TM_CHECK_EQ(input_dim % kSm90MixedTileK, 0);
 
-    const int total_tiles = ((output_dim + kSm90MixedTileN - 1) / kSm90MixedTileN)
-                            * (input_dim / kSm90MixedTileK);
+    const int total_tiles = ((output_dim + kSm90MixedTileN - 1) / kSm90MixedTileN) * (input_dim / kSm90MixedTileK);
     const int grid        = std::min(total_tiles, 65535);
     pack_sm90_fp8_e4m3_weight_kernel<<<grid, 256, 0, stream>>>(dst, src, output_dim, input_dim, total_tiles);
     TM_CUDA_CHECK(cudaGetLastError());

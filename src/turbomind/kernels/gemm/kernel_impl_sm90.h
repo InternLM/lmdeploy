@@ -129,8 +129,8 @@ public:
 
         info_.chunk_size_k = Gemm::TILE_K;
 
-        desc_.align.x = 1;  // OpA::kOrder == kColMajor ? IterA::ThreadMap::kAccessC : 1;
-        desc_.align.y = 1;  // OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
+        desc_.align.x = 1;    // OpA::kOrder == kColMajor ? IterA::ThreadMap::kAccessC : 1;
+        desc_.align.y = 1;    // OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
         desc_.align.z = 128;  // QuantType::kB, group size 128.
 
         desc_.policy_a = 0;                 // (int)IterA::Policy::kEvictPolicy;
