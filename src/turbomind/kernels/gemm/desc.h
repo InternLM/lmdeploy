@@ -14,29 +14,30 @@ namespace turbomind::gemm {
 
 // aggregate that uniquely identifies a GEMM problem
 struct GemmDesc {
-    int       arch;
-    DataType  type_a;
-    DataType  type_b;
-    DataType  type_c;
-    Order     order_a;
-    Order     order_b;
-    Order     order_c;
-    Striding  striding_a;
-    Striding  striding_b;
-    Striding  striding_c;
-    Pack      pack_a;
-    Pack      pack_b;
-    Pack      pack_u;
-    Pack      pack_v;
-    QuantDesc quant_a;
-    QuantDesc quant_b;
-    Epilogue  epilogue;
-    int       batch_dim;
-    int       group_axis;
-    int       m;
-    int       n;
-    int       k;
-    int       num;
+    std::uint32_t family{};
+    int           arch;
+    DataType      type_a;
+    DataType      type_b;
+    DataType      type_c;
+    Order         order_a;
+    Order         order_b;
+    Order         order_c;
+    Striding      striding_a;
+    Striding      striding_b;
+    Striding      striding_c;
+    Pack          pack_a;
+    Pack          pack_b;
+    Pack          pack_u;
+    Pack          pack_v;
+    QuantDesc     quant_a;
+    QuantDesc     quant_b;
+    Epilogue      epilogue;
+    int           batch_dim;
+    int           group_axis;
+    int           m;
+    int           n;
+    int           k;
+    int           num;
 };
 
 static_assert(std::is_trivially_copyable_v<GemmDesc>);
@@ -116,6 +117,7 @@ inline const char* to_string(OpClass op)
 // aggregate that uniquely identifies a kernel
 struct KernelDesc {
     int       arch;
+    uint32_t  family;
     OpClass   op_class;
     uint32_t  algo;    // opaque; each KernelImpl defines its own bit-field layout (0 = default)
     Order     raster;  // tile-scheduler raster order
@@ -144,7 +146,7 @@ struct KernelDesc {
     int2      c_tile;
     int       stages;
     bool      split_k;
-    bool      supports_fused_silu;
+    Epilogue  supported_epilogues;
     int       group_axis;
     int       backend;
     bool      transpose;

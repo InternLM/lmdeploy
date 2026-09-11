@@ -33,5 +33,5 @@ add_library(attention_kernels STATIC
 set_property(TARGET attention_kernels PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET attention_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_compile_options(attention_kernels PRIVATE -O3
-    $<$<COMPILE_LANGUAGE:CUDA>:-use_fast_math --expt-relaxed-constexpr  -Xptxas=-v --threads 8>)
+    $<$<COMPILE_LANGUAGE:CUDA>:-use_fast_math --expt-relaxed-constexpr  -Xptxas=-v --threads=${NVCC_THREADS}>)
 target_link_libraries(attention_kernels PRIVATE nvidia::cutlass::cutlass)

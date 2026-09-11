@@ -84,6 +84,7 @@ enum class DataType: int {
     kE3m2        = kFloat6_e3m2,
     kE4m3        = kFloat8_e4m3,
     kE5m2        = kFloat8_e5m2,
+    kGenericFloat = -1,
 };
 
 inline constexpr DataType kNull = DataType::kNull;
@@ -104,6 +105,7 @@ inline constexpr DataType kBfloat16 = DataType::kBfloat16;
 inline constexpr DataType kFloat8_e4m3 = DataType::kFloat8_e4m3;
 inline constexpr DataType kFloat8_e5m2 = DataType::kFloat8_e5m2;
 inline constexpr DataType kFloat4_e2m1 = DataType::kFloat4_e2m1;
+inline constexpr DataType kGenericFloat = DataType::kGenericFloat;
 inline constexpr DataType kUint2  = DataType::kUint2;
 inline constexpr DataType kUint4  = DataType::kUint4;
 inline constexpr DataType kUint6  = DataType::kUint6;
@@ -256,6 +258,7 @@ constexpr const char* to_string(DataType type) {
         case kUint4: return "u4";
         case kUint6: return "u8";
         case kPointer: return "pointer";
+        case kGenericFloat: return "generic_float";
         default:
             return "unknown";
     }

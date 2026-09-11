@@ -82,45 +82,54 @@ void MoeWeight::AliasRouted(const MoeWeight& meta_pack)
     // never touch shared_gate
 }
 
-// Adapted from LinkExperts for LinearWeight
-static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, LinearWeight& d)
+void LinkLinearExperts(const std::vector<LinearWeight*>& experts, LinearWeight& destination)
 {
-    const auto& e0 = *experts(0);
+    const auto& e0 = *experts.front();
 
-    e0.copy_metadata_to(d);
+    e0.copy_metadata_to(destination);
 
-    d.k_desc.num = d.q_desc.num = n;
+    const int n            = experts.size();
+    destination.k_desc.num = destination.q_desc.num = n;
 
     if (e0.bias) {
-        d.bias = Tensor{{n, e0.output_dim}, e0.bias.dtype(), kDEVICE};
+        destination.bias = Tensor{{n, e0.output_dim}, e0.bias.dtype(), kDEVICE};
     }
 
     std::vector<std::pair<void*, int>> weights;
     std::vector<std::pair<void*, int>> scales;
+    std::vector<std::pair<void*, int>> global_scales;
+    weights.reserve(n);
+    scales.reserve(n);
+    global_scales.reserve(n);
 
     for (int i = 0; i < n; ++i) {
-        auto& e = *experts(i);
-        weights.emplace_back(e.weight.raw_data(), e.k_desc.ld);
-        if (e.scales) {
-            scales.emplace_back(e.scales.raw_data(), e.q_desc.ld);
+        auto& expert = *experts[i];
+        weights.emplace_back(expert.weight.raw_data(), expert.k_desc.ld);
+        if (expert.scales) {
+            scales.emplace_back(expert.scales.raw_data(), expert.q_desc.ld);
         }
-        if (e.bias) {
-            Copy(e.bias, d.bias.slice(i, 1).squeeze(0));
+        if (expert.global_scale) {
+            global_scales.emplace_back(expert.global_scale.raw_data(), 1);
+        }
+        if (expert.bias) {
+            Copy(expert.bias, destination.bias.slice(i, 1).squeeze(0));
         }
     }
 
-    auto stream = core::Context::stream().handle();
-
-    auto make_strided_ptr = [&](const auto& ptrs) {
-        return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
+    auto stream           = core::Context::stream();
+    auto make_strided_ptr = [stream](const auto& ptrs) {
+        return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream.handle()),
+                                     [stream](void* p) { TM_CUDA_CHECK(cudaFreeAsync(p, stream.handle())); }};
     };
-    d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_format.dtype, kDEVICE};
+    destination.weight = Tensor{make_strided_ptr(weights), {n}, destination.weight_format.dtype, kDEVICE};
     if (e0.scales) {
-        d.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
+        destination.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
     }
-    // MatrixLayout.ld == 0 identifies the StridedPtr expert table.
-    d.k_desc.ld = d.q_desc.ld = 0;
-    d.k_desc.offsets = d.q_desc.offsets = nullptr;
+    if (e0.global_scale) {
+        destination.global_scale = Tensor{make_strided_ptr(global_scales), {n}, e0.global_scale.dtype(), kDEVICE};
+    }
+    destination.k_desc.ld = destination.q_desc.ld = 0;
+    destination.k_desc.offsets = destination.q_desc.offsets = nullptr;
 }
 
 FfnWeight* MoeWeight::expert(int i) const
@@ -184,26 +193,35 @@ void MoeWeight::link_block()
         return exp ? exp->w2.get() : nullptr;
     };
 
+    auto link = [local_expert_num](const auto& get_expert, LinearWeight& destination) {
+        std::vector<LinearWeight*> linears;
+        linears.reserve(local_expert_num);
+        for (int i = 0; i < local_expert_num; ++i) {
+            linears.push_back(get_expert(i));
+        }
+        LinkLinearExperts(linears, destination);
+    };
+
     if (get_expert_w1w3(0)) {
         // Fused w1w3 path: experts have a single fused gate+up projection
         block_->add_child("w1w3", std::make_unique<LinearWeight>());
-        LinkLinearExperts(get_expert_w1w3, local_expert_num, *block_->w1w3);
+        link(get_expert_w1w3, *block_->w1w3);
     }
     else {
         // Separate w1/w3 path: link individually
         block_->add_child("w1", std::make_unique<LinearWeight>());
         block_->add_child("w3", std::make_unique<LinearWeight>());
         if (get_expert_w1(0)) {
-            LinkLinearExperts(get_expert_w1, local_expert_num, *block_->w1);
+            link(get_expert_w1, *block_->w1);
         }
         if (get_expert_w3(0)) {
-            LinkLinearExperts(get_expert_w3, local_expert_num, *block_->w3);
+            link(get_expert_w3, *block_->w3);
         }
     }
 
     block_->add_child("w2", std::make_unique<LinearWeight>());
     if (get_expert_w2(0)) {
-        LinkLinearExperts(get_expert_w2, local_expert_num, *block_->w2);
+        link(get_expert_w2, *block_->w2);
     }
 
     // Propagate the actual fused-silu state from the first expert to

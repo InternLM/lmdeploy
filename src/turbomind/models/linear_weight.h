@@ -1,10 +1,14 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 #pragma once
 
+#include <optional>
+
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/data_format.h"
 #include "src/turbomind/core/module.h"
+#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/gemm/weight_plan.h"
 
 namespace turbomind::core {
 
@@ -31,10 +35,6 @@ namespace turbomind {
 using gemm::Epilogue;
 using gemm::MatrixLayout;
 
-/// Derive (input_format, output_format) for a GEMM whose weight uses
-/// `weight_format`, given the model's activation dtype and hardware SM.
-std::pair<DataFormat, DataFormat> DeriveActivationFormats(const DataFormat& weight_format, DataType data_type, int sm);
-
 /// Derive GEMM QuantDesc for an operand described by DataFormat.
 /// For unquantized formats, returns {QuantType::kNone, 0}.
 gemm::QuantDesc MakeQuantDesc(const DataFormat& fmt);
@@ -51,20 +51,8 @@ public:
 
     void prepare() override;
     void copy_metadata_to(LinearWeight& dst) const;
-
-    /// Set grouped-GEMM mode (for MoE expert weights that need row-major layout).
-    void set_grouped(bool grouped)
-    {
-        is_grouped_ = grouped;
-    }
-
-    /// SM90 FP8 fused-SiLU: output is e4m3 with dynamic group-128 scales.
-    void set_fp8_fused_silu_output()
-    {
-        output_format.dtype        = kFloat8_e4m3;
-        output_format.block_sizes  = {128, 1};
-        output_format.scales.dtype = kFloat;
-    }
+    void set_plan(gemm::WeightPlan plan);
+    bool is_graph_compatible() const;
 
     explicit operator bool() const noexcept
     {
@@ -72,9 +60,10 @@ public:
     }
 
     // --- three DataFormats fully describe the GEMM ---
-    DataFormat weight_format{};  // from cfg.format
-    DataFormat input_format{};   // derived in ctor
-    DataFormat output_format{};  // derived in ctor
+    const gemm::Family* family{};
+    DataFormat          weight_format{};  // from cfg.format
+    DataFormat          input_format{};   // derived in ctor
+    DataFormat          output_format{};  // derived in ctor
 
     DataType input_dtype() const
     {
@@ -101,14 +90,25 @@ public:
     X(weight)                                                                                                          \
     X(bias)                                                                                                            \
     X(scales)                                                                                                          \
+    X(global_scale)                                                                                                    \
     X(zeros)
 
     TM_MODULE_DECLARE(LinearWeight, LINEAR_WEIGHT_CHILDREN, LINEAR_WEIGHT_PARAMS)
 
 private:
-    bool has_bias_   = false;
-    bool is_grouped_ = false;
-    bool prepared_   = false;
+    bool                            has_bias_ = false;
+    bool                            prepared_ = false;
+    std::optional<gemm::WeightPlan> plan_;
 };
+
+/// Create the GEMM output of `weight` with `rows` rows, its row stride padded to
+/// a multiple of 16 / sizeof(T). Some consumers, e.g. the fused conv1d kernel,
+/// read the output with 16-byte vector loads.
+inline Tensor MakePaddedOutput(int rows, const LinearWeight& weight, core::Device device)
+{
+    const auto dtype = weight.output_dtype();
+    const int  ld    = round_up(weight.output_dim, static_cast<int>(16 / byte_size(dtype)));
+    return Tensor{core::Layout{{rows, weight.output_dim}, {ld, 1}}, dtype, device};
+}
 
 }  // namespace turbomind

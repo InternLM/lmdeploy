@@ -17,9 +17,15 @@ set(GEMM2_KERNELS_SM80
 )
 set(GEMM2_KERNELS_SM90
     tma.cu
-    kernel/sm90_16816_4.cu
-    kernel/sm90_16816_8.cu
+    # kernel/sm90_16816_4.cu
+    # kernel/sm90_16816_8.cu
     kernel/sm90_64n32_8.cu
+    kernel/sm90_64n16_4.cu
+    kernel/sm90_64n16_mxfp4.cu
+    kernel/sm90_64n32_mxfp4_fp8_folded.cu
+    # kernel/sm90_64n32_mxfp4_fp8_unfolded.cu
+    kernel/sm90_64n16_nvfp4.cu
+    kernel/sm90_64n16_e4m3.cu
     kernel/sm90_64n16_16.cu
 )
 
@@ -62,14 +68,19 @@ message(STATUS "GEMM SM75 CUDA archs: ${GEMM2_SM75_ARCHS}")
 message(STATUS "GEMM SM80 CUDA archs: ${GEMM2_SM80_ARCHS}")
 message(STATUS "GEMM SM90 CUDA archs: ${GEMM2_SM90_ARCHS}")
 
+set(GEMM2_HAS_SM90_MIXED 0)
+if(GEMM2_SM90_ARCHS AND CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL "12.3")
+    set(GEMM2_HAS_SM90_MIXED 1)
+endif()
+message(STATUS "GEMM native SM90 mixed precision: ${GEMM2_HAS_SM90_MIXED}")
+
 function(configure_gemm2_kernel_target target)
     set_property(TARGET ${target} PROPERTY POSITION_INDEPENDENT_CODE ON)
     set_property(TARGET ${target} PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
     target_compile_options(${target} PRIVATE
             $<$<COMPILE_LANGUAGE:CUDA>:
                     -Xptxas=-v
-                    --generate-line-info
-                    --threads 16>
+                    --generate-line-info>
     )
     target_link_libraries(${target} PRIVATE parser nvidia::cutlass::cutlass CUDA::cuda_driver)
 endfunction()
@@ -110,18 +121,27 @@ if(GEMM2_SM90_ARCHS)
     set_target_properties(gemm2_sm90 PROPERTIES
         CUDA_ARCHITECTURES "${GEMM2_SM90_ARCHS}"
     )
-    target_compile_definitions(gemm2_sm90 PRIVATE -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED)
+    target_compile_definitions(gemm2_sm90 PRIVATE
+        CUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED
+        TM_GEMM_HAS_SM90_MIXED=${GEMM2_HAS_SM90_MIXED}
+    )
     configure_gemm2_kernel_target(gemm2_sm90)
+    target_compile_options(gemm2_sm90 PRIVATE
+            $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-Werror>
+    )
     list(APPEND GEMM2_KERNEL_TARGETS gemm2_sm90)
 endif()
 
-add_library(gemm2
+add_library(gemm2_core
+        family.cc
+        weight_plan.cc
         gemm.cu
         kernel.cu
         registry.cu
         dispatch_cache.cu
         gpu_metric.cu
         convert_v3.cu
+        sm90_mixed_pack.cu
         cast.cu
         unpack.cu
         context.cu
@@ -134,29 +154,30 @@ add_library(gemm2
         test/test_utils.cu
 )
 
-target_link_libraries(gemm2 PRIVATE parser nvidia::cutlass::cutlass CUDA::cuda_driver)
+target_link_libraries(gemm2_core PRIVATE parser nvidia::cutlass::cutlass CUDA::cuda_driver)
+target_compile_definitions(gemm2_core PRIVATE TM_GEMM_HAS_SM90_MIXED=${GEMM2_HAS_SM90_MIXED})
 
-# Registry/kernel TUs are static plugins: they must be linked before libgemm2.a so
-# Kernel base symbols (vtable/GetName) resolve when consumers link executables.
-# INTERFACE_LINK_LIBRARIES_DIRECT places them ahead of gemm2 (same as linear_attn).
-# Keep every archive in one WHOLE_ARCHIVE expression.
+# Keep all registrations and place their archives before gemm2_core so the
+# kernel implementations' core symbols resolve in link order.
 list(JOIN GEMM2_KERNEL_TARGETS "," GEMM2_KERNEL_TARGET_LIST)
-set_property(TARGET gemm2 PROPERTY INTERFACE_LINK_LIBRARIES_DIRECT
+set_property(TARGET gemm2_core PROPERTY INTERFACE_LINK_LIBRARIES_DIRECT
         "$<LINK_LIBRARY:WHOLE_ARCHIVE,${GEMM2_KERNEL_TARGET_LIST}>")
+add_library(gemm2 INTERFACE)
+target_link_libraries(gemm2 INTERFACE gemm2_core)
 
-# cublasGemmGroupedBatchedEx (CUDA 12.5+): grouped batched GEMM for MoE on SM100
-set(_archs_100 "${CMAKE_CUDA_ARCHITECTURES}")
-list(FILTER _archs_100 INCLUDE REGEX "^100")
-if(_archs_100 AND CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL "12.5")
+# cublasGemmGroupedBatchedEx (CUDA 12.5+): grouped batched GEMM for MoE
+if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL "12.5")
     target_compile_definitions(gemm2_kernels PRIVATE ENABLE_CUBLAS_GROUPED=1)
-    message(STATUS "GEMM: ENABLE_CUBLAS_GROUPED=1 (cublasGemmGroupedBatchedEx for MoE on SM100)")
+    message(STATUS "GEMM: ENABLE_CUBLAS_GROUPED=1 (cublasGemmGroupedBatchedEx for MoE)")
 endif()
 
-target_compile_options(gemm2 PRIVATE
+target_compile_options(gemm2_core PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:
                 -Xptxas=-v
                 --generate-line-info
-                --threads 16>
+                --threads=${NVCC_THREADS}>
 )
-set_property(TARGET gemm2 PROPERTY POSITION_INDEPENDENT_CODE ON)
-set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+set_target_properties(gemm2_core PROPERTIES
+        OUTPUT_NAME gemm2
+        POSITION_INDEPENDENT_CODE ON
+        CUDA_RESOLVE_DEVICE_SYMBOLS ON)

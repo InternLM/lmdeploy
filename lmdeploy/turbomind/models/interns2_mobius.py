@@ -190,6 +190,7 @@ class InternS2MobiusModel(Qwen3_5Model):
     """Intern-S2-Mobius aggregate (text + vision), qwen3_5 topology."""
 
     def __init__(self, cfg, *, resolver, vision_resolver=None,
+                 vision_data_type=None,
                  language_model_only: bool = False):
         text_cfg = getattr(cfg, 'text_config', cfg)
         if text_cfg is None:
@@ -200,6 +201,8 @@ class InternS2MobiusModel(Qwen3_5Model):
         vision_cfg = getattr(cfg, 'vision_config', None)
         if language_model_only or vision_cfg is None:
             self.vision_model = None
+            self._vision_data_type = None
         else:
             self.vision_model = Qwen3_5VisionModel(
-                vision_cfg, resolver=vision_resolver or resolver)
+                vision_cfg, resolver=vision_resolver)
+            self._vision_data_type = vision_data_type

@@ -5,11 +5,13 @@ from __future__ import annotations
 from abc import ABC
 from typing import TYPE_CHECKING, Any
 
+from .builders.linear import _build_linear
+
 if TYPE_CHECKING:
     from transformers import PretrainedConfig
 
+    from .builders.linear import Linear
     from .checkpoint import Prefix
-    from .linear import Linear
 
 
 class VisionModel(ABC):
@@ -33,12 +35,10 @@ class VisionModel(ABC):
 
     def _linear(self, pfx: Prefix, *,
                 optional: bool = False) -> Linear | None:
-        return self._resolver.resolve(pfx, optional=optional)
-
-    def _restore_dtype(self, builder):
-        """Restore the vision-native dtype overwritten by Builder."""
-        builder.config.data_type = self._resolver.data_type
-        return builder
+        resolved = self._resolver.resolve(pfx, optional=optional)
+        if resolved is None:
+            return None
+        return _build_linear(*resolved)
 
     def model(self, pfx: Prefix) -> None:
         raise NotImplementedError(

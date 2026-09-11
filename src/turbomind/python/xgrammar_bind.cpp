@@ -72,7 +72,9 @@ std::vector<py::bytes> TokenizerInfo_GetDecodedVocab(const TokenizerInfo& tokeni
 
 }  // namespace
 
-PYBIND11_MODULE(_xgrammar, m)
+namespace turbomind::python {
+
+void bind_xgrammar(py::module_& m)
 {
     py::class_<TokenizerInfo, std::shared_ptr<TokenizerInfo>>(m, "TokenizerInfo")
         .def(py::init([](const py::typing::List<std::variant<std::string, py::bytes>>& encoded_vocab,
@@ -136,3 +138,5 @@ PYBIND11_MODULE(_xgrammar, m)
              py::call_guard<py::gil_scoped_release>(),
              py::arg("structural_tag_json"));
 }
+
+}  // namespace turbomind::python

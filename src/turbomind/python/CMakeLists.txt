@@ -15,39 +15,29 @@ endif()
 pybind11_add_module(${PROJECT_NAME}
     bind.cpp
     linear_bind.cpp
+    xgrammar_bind.cpp
     ../kernels/linear_attn/python_bind.cpp
     ../kernels/gemm/moe_gate_python_bind.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE turbomind xgrammar)
 
-pybind11_add_module(_xgrammar xgrammar_bind.cpp)
-target_link_libraries(_xgrammar PRIVATE core xgrammar)
+string(REPLACE "." ";" _cuda_version ${CMAKE_CUDA_COMPILER_VERSION})
+list(GET _cuda_version 0 CUDA_MAJOR)
 
-if (CALL_FROM_SETUP_PY)
-  string(REPLACE "." ";" _ver ${CMAKE_CUDA_COMPILER_VERSION})
-  list(GET _ver 0 CUDA_MAJOR)
-
-  if(CUDA_MAJOR GREATER_EQUAL "13")
-    set(_INSTALL_CUDA_RPATH
-        "\$ORIGIN"
-        "\$ORIGIN/../../nvidia/nccl/lib/"
-        "\$ORIGIN/../../nvidia/cu${CUDA_MAJOR}/lib/"
-    )
-  else()
-    set(_INSTALL_CUDA_RPATH
-        "\$ORIGIN"
-        "\$ORIGIN/../../nvidia/nccl/lib/"
-        "\$ORIGIN/../../nvidia/cuda_runtime/lib/"
-        "\$ORIGIN/../../nvidia/cublas/lib/"
-        "\$ORIGIN/../../nvidia/curand/lib/"
-    )
-  endif()
-  set_target_properties(${PROJECT_NAME} PROPERTIES
-      BUILD_RPATH "\$ORIGIN"
-      INSTALL_RPATH "${_INSTALL_CUDA_RPATH}"
-  )
+if(CUDA_MAJOR GREATER_EQUAL 13)
+  set(_INSTALL_CUDA_RPATH
+      "\$ORIGIN/lib"
+      "\$ORIGIN/../../nvidia/nccl/lib"
+      "\$ORIGIN/../../nvidia/cu${CUDA_MAJOR}/lib")
 else()
-  set_target_properties(${PROJECT_NAME} PROPERTIES
-      BUILD_RPATH "\$ORIGIN"
-      INSTALL_RPATH "\$ORIGIN"
-  )
-endif ()
+  set(_INSTALL_CUDA_RPATH
+      "\$ORIGIN/lib"
+      "\$ORIGIN/../../nvidia/nccl/lib"
+      "\$ORIGIN/../../nvidia/cuda_runtime/lib"
+      "\$ORIGIN/../../nvidia/cublas/lib"
+      "\$ORIGIN/../../nvidia/curand/lib")
+endif()
+
+# Use the final RPATH when building so installation can target the in-tree module itself.
+set_target_properties(_turbomind PROPERTIES
+    BUILD_WITH_INSTALL_RPATH ON
+    INSTALL_RPATH "${_INSTALL_CUDA_RPATH}")
