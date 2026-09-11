@@ -209,6 +209,12 @@ with set_envs():
         'LMDEPLOY_MOE_STATIC_FP8_USE_COMPILED_QUANT',
         False,
     )
+    # Use measured active-expert block schedules for supported Block-FP8 MoE
+    # decode shapes. Unknown shapes retain the established dense schedule.
+    moe_active_block_decode = env_to_bool(
+        'LMDEPLOY_MOE_ACTIVE_BLOCK_DECODE',
+        False,
+    )
 
     # Hy3
     hy3_shared_expert_overlap = env_to_bool(
