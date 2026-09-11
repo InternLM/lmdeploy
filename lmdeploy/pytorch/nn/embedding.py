@@ -4,6 +4,7 @@ import torch.distributed as dist
 from torch import nn
 
 from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.cuda.comm.symm_mem_allgather import MultimemAllGatherer
 from lmdeploy.pytorch.backends.embedding import EmbeddingBuildSpec
 from lmdeploy.pytorch.backends.linear import LinearBuildSpec
 from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_tp_world_rank
@@ -50,6 +51,7 @@ class ParallelEmbedding(nn.Module):
 
         dist_group = get_dist_group(layer_type=layer_type)
         self.tp_group = dist_group.gpu_group
+        self.tp_rank = dist_group.rank
 
         if is_tp and self.tp > 1:
             self.vocab_size_padded = pad_vocab_size(self.vocab_size, self.padding_size)
@@ -152,9 +154,22 @@ class ParallelLMHead(ParallelEmbedding):
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
+        self._symm_mem_gatherer = (
+            MultimemAllGatherer(self.tp_group, self.tp_rank,
+                               self.tp * self.vocab_size_padded,
+                               self.weight.device, self.weight.dtype)
+            if self.all_reduce else None)
+
     def tie_weights(self, embedding: ParallelEmbedding):
         """Tie the local LM-head shard to a parallel embedding shard."""
         self.weight = embedding.weight
+
+    def _apply(self, fn, recurse=True):
+        """Notify the provider after coordinated model device/dtype moves."""
+        result = super()._apply(fn, recurse=recurse)
+        if self._symm_mem_gatherer is not None:
+            self._symm_mem_gatherer.reset_for_weight(self.weight)
+        return result
 
     def get_local_logits(self, hidden_states: torch.Tensor):
         """Compute logits for the vocabulary shard owned by this rank."""
@@ -166,6 +181,12 @@ class ParallelLMHead(ParallelEmbedding):
         """All-gather full logits on every TP rank."""
         if not self.all_reduce:
             return local_logits[..., :self.vocab_size]
+
+        if self._symm_mem_gatherer is not None:
+            gathered = self._symm_mem_gatherer(local_logits.reshape(-1, local_logits.shape[-1]))
+            if gathered is not None:
+                output_shape = local_logits.shape[:-1] + (self.tp * local_logits.shape[-1], )
+                return gathered.reshape(output_shape)[..., :self.vocab_size]
 
         input_size = local_logits.size()
         output_size = (input_size[0] * self.tp, ) + input_size[1:]
