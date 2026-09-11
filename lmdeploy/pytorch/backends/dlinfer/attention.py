@@ -73,8 +73,15 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         learnable_sink: Tensor = None,
         nsa_indices: Tensor = None,
         inplace: bool = True,
+        decode_mode: str = 'block',
     ) -> Tensor:
         """forward."""
+
+        # dlinfer owns its mask selection in attention metadata.  Accept the
+        # common protocol argument so the public Attention wrapper remains
+        # backend compatible; speculative mask semantics are represented by
+        # ``is_multi_token_decoding`` on DlinferAttentionMetadata.
+        del decode_mode
 
         block_offsets = attn_metadata.block_offsets
         q_start_loc = attn_metadata.q_start_loc

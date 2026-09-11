@@ -114,10 +114,12 @@ class Attention(nn.Module):
         s_aux: torch.Tensor = None,
         nsa_indices: torch.Tensor = None,
         inplace: bool = True,
-        decode_mode: str = 'block',
+        decode_mode: str | None = None,
     ) -> torch.Tensor:
         """forward."""
         self._lazy_init(query.device)
+        if decode_mode is None:
+            decode_mode = getattr(attn_metadata, 'decode_mode', 'block')
 
         quant_policy = attn_metadata.quant_policy
         if quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):

@@ -204,6 +204,7 @@ class AttentionImpl(ABC, Generic[T]):
         learnable_sink: torch.Tensor = None,
         nsa_indices: torch.Tensor = None,
         inplace: bool = False,
+        decode_mode: str = 'block',
     ) -> torch.Tensor:
         """forward."""
         raise NotImplementedError

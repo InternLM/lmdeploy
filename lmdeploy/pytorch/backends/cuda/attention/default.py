@@ -56,6 +56,9 @@ class TritonAttentionMetadata(AttentionMetadata):
     max_kv_seqlen: int = None
     max_q_seqlen: int = None
     kernel_metadata: tuple[Any, ...] = ()
+    # Semantic mode is selected by the step context, while MiMo may override
+    # it at the individual attention call for mixed target/draft paths.
+    decode_mode: str = 'block'
 
 
 def build_triton_attention_metadata(attn_meta_cls, step_context,
@@ -74,6 +77,7 @@ def build_triton_attention_metadata(attn_meta_cls, step_context,
         cu_seqlens_k=sequence_metadata.cu_seqlens_k,
         max_kv_seqlen=sequence_metadata.max_kv_seqlen,
         max_q_seqlen=step_context.max_q_seqlen,
+        decode_mode=('speculative' if step_context.model_config.model_paradigm == 'ar_spec' else 'block'),
     )
 
 
