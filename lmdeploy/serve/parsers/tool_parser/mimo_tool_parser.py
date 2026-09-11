@@ -19,7 +19,9 @@ class MiMoToolParser(Qwen3CoderToolParser):
     """
 
     strip_value_newlines = False
-    _incomplete_entity = re.compile(r'&(?:#[xX][0-9A-Fa-f]*|#\d*|[A-Za-z][A-Za-z0-9]*)?$')
+    # Keep at most one bounded, potentially incomplete entity between chunks.
+    _incomplete_entity = re.compile(
+        r'&(?:#[xX][0-9A-Fa-f]{0,8}|#\d{0,10}|[A-Za-z][A-Za-z0-9]{0,31})?$')
 
     def __init__(self):
         super().__init__()
@@ -31,7 +33,7 @@ class MiMoToolParser(Qwen3CoderToolParser):
         self._html_entity_suffix = ''
 
     def _stream_string_delta(self, text: str, json_fragments: list[str]) -> None:
-        """Decode complete HTML entities while retaining a split suffix."""
+        """Decode complete entities while retaining a split entity suffix."""
         text = self._html_entity_suffix + text
         self._html_entity_suffix = ''
         match = self._incomplete_entity.search(text)
@@ -42,8 +44,8 @@ class MiMoToolParser(Qwen3CoderToolParser):
             super()._stream_string_delta(html.unescape(text), json_fragments)
 
     def _finish_arg(self, json_fragments: list[str]) -> None:
-        """Flush a trailing entity and finish the active argument."""
-        if self._arg_state.mode == 'streaming' and self._html_entity_suffix:
+        """Flush a trailing entity candidate before closing the value."""
+        if self._html_entity_suffix:
             XmlToolParser._stream_string_delta(
                 self,
                 html.unescape(self._html_entity_suffix),
