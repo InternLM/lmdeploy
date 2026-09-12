@@ -7,7 +7,10 @@ import pytest
 
 pytest.importorskip('anthropic')
 
-from utils.anthropic_messages import get_async_anthropic_client_and_model
+from utils.anthropic_messages import (
+    anthropic_extra_body,
+    get_async_anthropic_client_and_model,
+)
 from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
 
 
@@ -33,7 +36,7 @@ async def _sdk_simple_non_stream() -> object:
     return await client.messages.create(
         model=model_name,
         max_tokens=1024,
-        temperature=0.01,
+        extra_body=anthropic_extra_body(temperature=0.01),
         messages=[{'role': 'user', 'content': 'how are you!'}],
     )
 
@@ -43,7 +46,7 @@ async def _sdk_system_non_stream() -> object:
     return await client.messages.create(
         model=model_name,
         max_tokens=1024,
-        temperature=0.01,
+        extra_body=anthropic_extra_body(temperature=0.01),
         system=[{'type': 'text', 'text': 'you are a helpful assistant'}],
         messages=[{'role': 'user', 'content': 'how are you!'}],
     )
@@ -54,7 +57,7 @@ async def _sdk_stream_events_and_final() -> tuple[list, object | None]:
     stream = await client.messages.create(
         model=model_name,
         max_tokens=1024,
-        temperature=0.01,
+        extra_body=anthropic_extra_body(temperature=0.01),
         messages=[{'role': 'user', 'content': 'how are you!'}],
         stream=True,
     )

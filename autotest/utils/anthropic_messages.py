@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 
 from utils.constant import BASE_URL
 
@@ -363,19 +364,32 @@ def assert_parallel_weather_tool_inputs(
 # -- Client / message helpers -----------------------------------------------
 
 
+def anthropic_extra_body(
+    *parts: Mapping[str, object] | None,
+    **fields: object,
+) -> dict[str, object]:
+    """Build ``extra_body`` for Anthropic SDK >=1.0 (fields not on
+    ``messages.create()``)."""
+
+    body: dict[str, object] = {}
+    for part in parts:
+        if part:
+            body.update(part)
+    for key, value in fields.items():
+        if value is not None:
+            body[key] = value
+    return body
+
+
 def get_async_anthropic_client_and_model(base_url: str | None = None):
     """Return ``(AsyncAnthropic, model_name)`` for LMDeploy Anthropic
     routes."""
 
     import anthropic
-
-    from lmdeploy.serve.openai.api_client import get_model_list
+    from utils.restful_return_check import get_client_and_model
 
     url = base_url or BASE_URL
-    model_names = get_model_list(f'{url}/v1/models')
-    if not model_names:
-        raise RuntimeError(f'No models returned from {url}/v1/models')
-    model_name = model_names[0]
+    _, model_name = get_client_and_model(url)
     client = anthropic.AsyncAnthropic(
         api_key=os.getenv('ANTHROPIC_API_KEY', 'YOUR_API_KEY'),
         base_url=url,
