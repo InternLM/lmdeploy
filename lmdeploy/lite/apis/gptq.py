@@ -1,10 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
+from pathlib import Path
 from typing import Literal
 
 import torch
 from transformers import AutoConfig, AutoTokenizer
 
+from lmdeploy.lite.apis.auto_awq import copy_others
 from lmdeploy.lite.utils.calib_dataloader import get_calib_loaders
 
 
@@ -61,6 +63,8 @@ def auto_gptq(model: str,
 
     pretrained_model_dir = model
     quantized_model_dir = work_dir
+
+    copy_others(Path(pretrained_model_dir), Path(quantized_model_dir))
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, trust_remote_code=trust_remote_code)
     print('Loading calibrate dataset ...')
