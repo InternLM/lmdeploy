@@ -29,6 +29,12 @@ _REPO_ROOT = _AUTOTEST_ROOT.parent
 # Matches historical daily/pr restful ``-n 20``; override via env.
 INTERFACE_SUITE_WORKERS_ENV = 'INTERFACE_SUITE_WORKERS'
 _DEFAULT_SUITE_WORKERS = 20
+HARD_SCHEMA_SUITE_WORKERS_ENV = 'HARD_SCHEMA_SUITE_WORKERS'
+_DEFAULT_HARD_SCHEMA_SUITE_WORKERS = 4
+HARD_SCHEMA_SUITE_RERUNS = 2
+_HARD_SCHEMA_IGNORE = (
+    'autotest/interface/restful/tool_parser/test_tool_call_json_schema.py'
+)
 
 
 def _suite_workers() -> int:
@@ -43,6 +49,21 @@ def _suite_workers() -> int:
         ) from exc
     if value < 0:
         raise ValueError(f'{INTERFACE_SUITE_WORKERS_ENV} must be >= 0, got {value}')
+    return value
+
+
+def _hard_schema_workers(default: int) -> int:
+    raw = os.environ.get(HARD_SCHEMA_SUITE_WORKERS_ENV, '').strip()
+    if not raw:
+        return min(default, _DEFAULT_HARD_SCHEMA_SUITE_WORKERS)
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f'{HARD_SCHEMA_SUITE_WORKERS_ENV} must be an int, got {raw!r}',
+        ) from exc
+    if value < 0:
+        raise ValueError(f'{HARD_SCHEMA_SUITE_WORKERS_ENV} must be >= 0, got {value}')
     return value
 
 
@@ -129,6 +150,7 @@ def _pytest_cmd(
     n_workers: int,
     log_path: str,
     reruns: int = 5,
+    ignore: str | None = None,
 ) -> int:
     """Run a nested pytest against one interface suite file."""
     cmd = [
@@ -145,6 +167,8 @@ def _pytest_cmd(
         '-p',
         'no:cacheprovider',
     ]
+    if ignore:
+        cmd.extend(['--ignore', ignore])
     if m_expr:
         cmd.extend(['-m', m_expr])
     # Concurrent HTTP load against the worker-local api_server (fills GPU).
@@ -216,11 +240,12 @@ def _run_interface_suites(
     k_expr = _pytest_k_expr(model, backend)
     failures: list[str] = []
 
-    toolcall_marker = f'tool_call and not not_{backend}'
+    toolcall_marker = f'tool_call and not not_{backend} and not anthropic'
     if via_proxy:
         # Exclude return_token_ids / routed_experts / encode(input_ids) cases.
-        # Exclude Anthropic /v1/messages toolcall cases (proxy returns 404).
-        toolcall_marker += ' and not experts and not anthropic'
+        toolcall_marker += ' and not experts'
+
+    hard_schema_marker = f'hard_schema and not not_{backend}'
 
     anthropic_marker = f'anthropic and not not_{backend}'
 
@@ -256,6 +281,11 @@ def _run_interface_suites(
             toolcall_marker,
         ),
         (
+            'hard_schema',
+            'autotest/interface/restful/tool_parser/test_tool_call_json_schema.py',
+            hard_schema_marker,
+        ),
+        (
             'reasoning',
             'autotest/interface/restful/reasoning_parser/',
             f'reasoning and not not_{backend}',
@@ -265,14 +295,23 @@ def _run_interface_suites(
         if case_name not in case_info:
             continue
         log_path = os.path.join(log_dir, f'log_interface_{case_name}_{case_str}_{port}_{timestamp}.log')
+        suite_workers = n_workers
+        suite_reruns = 5
+        suite_ignore = None
+        if case_name == 'toolcall':
+            suite_ignore = _HARD_SCHEMA_IGNORE
+        elif case_name == 'hard_schema':
+            suite_workers = _hard_schema_workers(n_workers)
+            suite_reruns = HARD_SCHEMA_SUITE_RERUNS
         rc = _pytest_cmd(
             rel_path,
             k_expr=k_expr,
             m_expr=marker,
             env=env,
-            n_workers=n_workers,
+            n_workers=suite_workers,
             log_path=log_path,
-            reruns=5,
+            reruns=suite_reruns,
+            ignore=suite_ignore,
         )
         if rc != 0:
             tail = _read_log_tail(log_path)

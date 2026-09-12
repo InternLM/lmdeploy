@@ -23,6 +23,7 @@ a100:
       - logprob
       - experts
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
@@ -39,6 +40,7 @@ a100:
       - base
       - logprob
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
@@ -48,6 +50,13 @@ a100:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
+  gen_config:
+    temperature: 1.0
+    top-k: 20
+    repetition-penalty: 1.0
+    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
   quantization:
     turbomind:
     - kvint8
@@ -98,6 +107,7 @@ h:
       - logprob
       - experts
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
@@ -114,6 +124,7 @@ h:
       - base
       - logprob
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
