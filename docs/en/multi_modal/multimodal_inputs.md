@@ -348,12 +348,12 @@ ______________________________________________________________________
 
 ## Time Series
 
-> **Note:** Time series input is currently supported for the **InternS1-Pro** model only.
+> **Note:** Time series understanding is supported for **InternS1-Pro** and **Intern-S2-Preview** models.
 
-The `time_series_url` content item requires a `sampling_rate` field (in Hz) alongside the URL.
+The `time_series_url` content item requires a URL. Include `sampling_rate` in Hz when it is known.
 
 <details>
-<summary>Complete example</summary>
+<summary>Time series understanding example</summary>
 
 ```python
 from openai import OpenAI

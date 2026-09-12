@@ -348,12 +348,12 @@ ______________________________________________________________________
 
 ## 时序数据
 
-> **注意：** 时序数据输入目前仅支持 **InternS1-Pro** 模型。
+> **注意：** 时序理解目前支持 **InternS1-Pro** 和 **Intern-S2-Preview** 模型。
 
-`time_series_url` 内容项需要在 URL 之外额外提供 `sampling_rate` 字段（单位：Hz）。
+`time_series_url` 内容项需要提供 URL。已知采样率时，可以通过 `sampling_rate` 字段传入，单位为 Hz。
 
 <details>
-<summary>完整示例</summary>
+<summary>时序理解示例</summary>
 
 ```python
 from openai import OpenAI
