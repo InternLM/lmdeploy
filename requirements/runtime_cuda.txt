@@ -3,7 +3,7 @@
 accelerate>=0.29.3
 aiohttp
 apache-tvm-ffi==0.1.11; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine
-flash-linear-attention
+flash-linear-attention>=0.4.2
 opencv-python-headless
 peft<=0.14.0
 prometheus_client

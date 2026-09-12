@@ -104,6 +104,47 @@ deepseek-ai/DeepSeek-V3 \
 --max-batch-size 128
 ```
 
+### DFlash
+
+For DFlash, the block size is the complete draft query/target verification
+window. It includes one current target token, so a block size of 8 proposes
+seven new draft tokens. The block size must not exceed the maximum declared by
+the draft checkpoint.
+
+#### pipeline
+
+```python
+from lmdeploy import PytorchEngineConfig, pipeline
+from lmdeploy.messages import SpeculativeConfig
+
+spec_cfg = SpeculativeConfig(
+    method='dflash',
+    model='z-lab/Qwen3.5-35B-A3B-DFlash',
+    dflash_block_size=8,
+)
+pipe = pipeline(
+    'Qwen/Qwen3.5-35B-A3B',
+    backend_config=PytorchEngineConfig(tp=2),
+    speculative_config=spec_cfg,
+)
+```
+
+#### serving
+
+```shell
+lmdeploy serve api_server \
+Qwen/Qwen3.5-35B-A3B \
+--backend pytorch \
+--tp 2 \
+--speculative-algorithm dflash \
+--speculative-draft-model z-lab/Qwen3.5-35B-A3B-DFlash \
+--speculative-dflash-block-size 8
+```
+
+When a DFlash block size is provided, it overrides
+`--speculative-num-draft-tokens` by setting the number of newly proposed
+tokens to `block_size - 1`.
+
 ## Guided Decoding with Speculative Decoding
 
 Speculative decoding (MTP) can be combined with [structured output](./structed_output.md) so that the draft tokens proposed by the spec model also respect the grammar constraints (e.g. JSON schema, regex). This significantly improves the acceptance rate compared to running spec decoding without grammar masks.

@@ -102,7 +102,7 @@ class GuidedSpecHelper:
         """Accept draft tokens on the provided (forked) grammar matchers.
 
         In speculative decoding the matchers are typically forked from the
-        originals (created in :meth:`SpecModelAgent._async_model_forward`),
+        originals (created in :meth:`SpecModelAgent.async_model_forward`),
         so this method accepts on whichever matchers are passed in.
         """
         if not processors or self._mgr is None:
