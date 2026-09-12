@@ -26,7 +26,7 @@ def start_kv_connector_save(
     connector: KVConnectorBase | None,
     connector_step: bool,
 ) -> None:
-    """Submit saves immediately after model work has been queued."""
+    """Submit saves after all cache-writing model work has been queued."""
     if not connector_step:
         return
     assert connector is not None
