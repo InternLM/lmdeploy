@@ -39,6 +39,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         from ..blockedf8_modules import LinearBlockedF8BuildSpec
         from ..causal_conv1d import CausalConv1dBuildSpec
         from ..compressor import V4CompressorBuildSpec
+        from ..conceptlm import ConceptLMRuntimeOpsBuildSpec
         from ..flash_attention import FlashAttentionBuildSpec
         from ..gated_delta_rule import GatedDeltaMetaBuildSpec, GatedDeltaRuleBuildSpec
         from ..hc_prepost import HCPrePostBuildSpec
@@ -213,6 +214,9 @@ class CudaOpsBackend(DefaultOpsBackend):
                     logit_softcapping=spec.logit_softcapping,
                 ),
             )
+        if isinstance(spec, ConceptLMRuntimeOpsBuildSpec):
+            from .conceptlm import TritonConceptLMRuntimeOpsImpl
+            return cast(ImplT, TritonConceptLMRuntimeOpsImpl(spec.config))
         return super().build_op(spec, enable_deterministic=enable_deterministic)
 
     @staticmethod
