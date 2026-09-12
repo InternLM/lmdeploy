@@ -4,7 +4,12 @@ import pytest
 
 from lmdeploy.messages import EngineOutput, RequestMetrics, ResponseType
 from lmdeploy.metrics.loggers import PrometheusStatLogger
-from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDecodingStats
+from lmdeploy.metrics.stats import (
+    IterationStats,
+    RequestStats,
+    SchedulerStats,
+    SpeculativeDecodingStats,
+)
 
 prometheus_client = pytest.importorskip('prometheus_client')
 
@@ -62,3 +67,15 @@ def test_zero_token_finish_records_request_reason():
     assert req_stats.decode_time_interval == 0
     assert iteration_stats.prompt_tokens == 4
     assert iteration_stats.ttft is None
+def test_evicted_blocks_counter_increments_by_delta():
+    """The eviction counter must track the cumulative eviction total by its
+    delta, not by re-adding the cumulative value on every poll."""
+    logger = PrometheusStatLogger('test-model', max_model_len=16, dp_rank=0)
+    labels = {'model_name': 'test-model', 'engine': '0'}
+
+    # schedule_metrics is polled with the cumulative eviction total; the
+    # counter must equal that total, not the sum of every polled value.
+    for cumulative in (0, 5, 12, 12):
+        stats = SchedulerStats(num_evicted_blocks=cumulative)
+        logger.record_schedule(stats)
+        assert _get_sample_value('lmdeploy:evicted_blocks_total', labels) == cumulative
