@@ -17,7 +17,7 @@ from .static_fp8 import (
     QKVStaticF8Linear,
     StaticF8Linear,
 )
-from .w8a8 import MergedW8A8Linear, QKVW8A8Linear, W8A8Linear
+from .w8a8 import MergedW8A8Linear, QKVW8A8Linear, StaticW8A8Linear, W8A8Linear
 
 
 def _is_static_per_tensor_fp8(quant_config):
@@ -92,6 +92,17 @@ def build_linear(
                           all_reduce=all_reduce,
                           quant_dtype=quant_config.quant_dtype,
                           layer_type=layer_type)
+    if quant_method == 'modelslim_w8a8_static':
+        return StaticW8A8Linear(in_features,
+                                out_features,
+                                bias=bias,
+                                dtype=dtype,
+                                device=device,
+                                colwise=colwise,
+                                is_tp=is_tp,
+                                all_reduce=all_reduce,
+                                quant_dtype=quant_config.quant_dtype,
+                                layer_type=layer_type)
     elif quant_method == 'fp8':
         if _is_static_per_tensor_fp8(quant_config):
             return StaticF8Linear(
