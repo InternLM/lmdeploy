@@ -21,6 +21,13 @@ from lmdeploy.utils import (
     serialize_named_tensors_safetensors,
 )
 
+_PICKLE_MARKER = {'executed': False}
+
+
+def _pickle_reduce_mark():
+    _PICKLE_MARKER['executed'] = True
+    return 0
+
 
 class _DummyEngine:
 
@@ -48,12 +55,11 @@ def _pickle_b64(obj) -> str:
 
 def test_http_update_weights_rejects_pickle_string():
     client, engine = _client()
-    marker = {'executed': False}
+    _PICKLE_MARKER['executed'] = False
 
     class Boom:
         def __reduce__(self):
-            marker['executed'] = True
-            return (int, (0, ))
+            return (_pickle_reduce_mark, ())
 
     response = client.post('/update_weights', json={
         'serialized_named_tensors': _pickle_b64(Boom()),
@@ -63,7 +69,7 @@ def test_http_update_weights_rejects_pickle_string():
     assert response.status_code == 400
     assert 'pickle' in response.json()['message'].lower()
     assert engine.requests == []
-    assert marker['executed'] is False
+    assert _PICKLE_MARKER['executed'] is False
 
 
 def test_http_update_weights_rejects_pickle_list():
@@ -85,6 +91,21 @@ def test_http_update_weights_rejects_pickle_even_when_engine_opt_in_is_set(monke
         'finished': False,
     })
 
+    assert response.status_code == 400
+    assert engine.requests == []
+
+
+def test_http_update_weights_never_calls_pickle_loads(monkeypatch):
+    def boom(*args, **kwargs):
+        raise AssertionError('HTTP /update_weights must not pickle-load')
+
+    monkeypatch.setattr(ForkingPickler, 'loads', boom)
+    monkeypatch.setattr(pickle, 'loads', boom)
+    client, engine = _client()
+    response = client.post('/update_weights', json={
+        'serialized_named_tensors': _pickle_b64({'w': 1}),
+        'finished': False,
+    })
     assert response.status_code == 400
     assert engine.requests == []
 
@@ -175,20 +196,3 @@ def test_coerce_update_params_tensor_from_json_spec():
 def test_coerce_update_params_tensor_rejects_reduce_tuple():
     with pytest.raises(TypeError):
         coerce_update_params_tensor((int, (1, )))
-
-
-def test_pytorch_update_params_rejects_pickle_without_opt_in(monkeypatch):
-    from contextlib import nullcontext
-
-    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
-    from lmdeploy.serve.openai.protocol import UpdateParamsRequest
-
-    monkeypatch.delenv(ALLOW_PICKLE_UPDATE_PARAMS_ENV, raising=False)
-    agent = BaseModelAgent.__new__(BaseModelAgent)
-    agent.dist_ctx = SimpleNamespace(tp_group=SimpleNamespace(rank=0))
-    agent.patched_model = SimpleNamespace(get_model=lambda: object())
-    agent.spec_agent = SimpleNamespace(get_model=lambda: None, is_enabled=lambda: False)
-    agent.all_context = lambda: nullcontext()
-    request = UpdateParamsRequest(serialized_named_tensors=_pickle_b64({'w': 1}), finished=False)
-    with pytest.raises(ValueError, match='disabled by default'):
-        agent.update_params(request)

@@ -488,7 +488,8 @@ ALLOW_PICKLE_UPDATE_PARAMS_ENV = 'LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS'
 
 
 def is_pickle_serialized_named_tensors(payload: object, load_format: str | None = None) -> bool:
-    """Return whether ``payload`` is a pickle blob historically used by update_params.
+    """Return whether ``payload`` is a pickle blob historically used by
+    update_params.
 
     ``load_format='safetensors'`` is never treated as pickle, even when the wire type is a
     base64 string or a list of per-rank strings. HTTP ``/update_weights`` must reject pickle
@@ -528,7 +529,8 @@ def load_pickled_serialized_named_tensors(serialized_data: str):
 
 
 def serialize_named_tensors_safetensors(state_dict: dict) -> str:
-    """Serialize named tensors to a base64 safetensors string for HTTP ``/update_weights``.
+    """Serialize named tensors to a base64 safetensors string for HTTP
+    ``/update_weights``.
 
     Args:
         state_dict (dict[str, torch.Tensor]): named tensors to serialize.
