@@ -247,6 +247,9 @@ with set_envs():
     # cuda communicator
     enable_flashinfer_allreduce = env_to_bool('LMDEPLOY_ENABLE_FLASHINFER_ALLREDUCE', False)
     enable_symm_mem_allreduce = env_to_bool('LMDEPLOY_ENABLE_SYMM_MEM_ALLREDUCE', False)
+    # NCCL remains the default; launch and small-token policies are internal.
+    enable_symm_mem_lmhead = env_to_bool('LMDEPLOY_ENABLE_SYMM_MEM_LMHEAD', False)
+    symm_mem_lmhead_max_mb = max(1, env_to_int('LMDEPLOY_SYMM_MEM_LMHEAD_MAX_MB', 64))
 
     # opt-ttft
     opt_ttft_policy = env_to_choice('LMDEPLOY_PT_TTFT_POLICY', 'size', {'fifo', 'size'})

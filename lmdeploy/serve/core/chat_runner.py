@@ -16,15 +16,6 @@ from lmdeploy.serve.utils.request_cleanup import cleanup_result_generators
 from .exceptions import ErrorCode, RequestError
 
 
-def should_validate_complete(
-    request: ChatCompletionRequest,
-    finish_reason: str | None,
-) -> bool:
-    """Whether parser validity may change this terminal finish reason."""
-    return finish_reason in ('stop', 'length') and (
-        bool(request.return_token_ids) or bool(request.return_routed_experts))
-
-
 @dataclass
 class ChatRunnerOptions:
     """Endpoint-specific runtime knobs for the shared chat runner."""
@@ -160,6 +151,11 @@ class ChatRunner:
         """Yield parser-normalized streaming chunks and clean up the
         session."""
         streaming_tools = False
+        return_token_metadata = bool(
+            self.request.return_token_ids
+            or self.request.logprobs
+            or self.request.return_logprob
+        )
         try:
             async for res in self.result_generator:
                 delta_text = res.response or ''
@@ -171,16 +167,17 @@ class ChatRunner:
                         final=res.finish_reason is not None,
                     )
                     if not stream_deltas:
-                        # Parser may buffer partial protocol tags and emit no visible delta
-                        # while the engine still produced new tokens. Keep metadata attached.
-                        if res.finish_reason is None and not delta_token_ids:
+                        # With no visible parser output, emit only when this
+                        # engine result still carries transport-level data.
+                        has_token_metadata = return_token_metadata and bool(delta_token_ids)
+                        if (
+                            res.finish_reason is None
+                            and not has_token_metadata
+                            and res.cache_block_ids is None
+                        ):
                             continue
                         stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
 
-                    if (
-                            should_validate_complete(self.request, res.finish_reason)
-                            and not self.response_parser.validate_complete()):
-                        res.finish_reason = 'parse_error'
                 except Exception as err:
                     raise RequestError(ErrorCode.INVALID_REQUEST, f'Failed to parse output: {err}') from err
 
@@ -201,8 +198,8 @@ class ChatRunner:
                         delta_message=delta_message,
                         tool_emitted=tool_emitted,
                         finish_reason=finish_reason,
-                        token_ids=delta_token_ids,
-                        logprobs=res.logprobs,
+                        token_ids=delta_token_ids if is_last_delta else [],
+                        logprobs=res.logprobs if is_last_delta else None,
                         input_token_len=res.input_token_len,
                         generate_token_len=res.generate_token_len,
                         cached_tokens=res.cached_tokens,
@@ -215,8 +212,7 @@ class ChatRunner:
             await self.close()
 
     async def collect(self, raw_request=None) -> ChatResult:
-        """Collect, parse, validate, and clean up a non-streaming
-        generation."""
+        """Collect, parse, and clean up a non-streaming generation."""
         final_res = None
         text = ''
         final_token_ids: list[int] = []
@@ -243,12 +239,7 @@ class ChatRunner:
             raise RequestError(ErrorCode.INTERNAL_ERROR, 'No generation output from engine.')
 
         try:
-            raw_text = text
             text, tool_calls, reasoning_content = self.response_parser.parse_complete(text, final_token_ids)
-            if (
-                    should_validate_complete(self.request, final_res.finish_reason)
-                    and not self.response_parser.validate_complete(raw_text)):
-                final_res.finish_reason = 'parse_error'
             if isinstance(tool_calls, list) and len(tool_calls) and final_res.finish_reason == 'stop':
                 final_res.finish_reason = 'tool_calls'
         except Exception as err:

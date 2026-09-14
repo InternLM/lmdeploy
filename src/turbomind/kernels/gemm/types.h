@@ -41,10 +41,12 @@ using Pack = uint32_t;
 
 typedef enum MMA_Tag
 {
-    HMMA_16816 = 0x100,  // sm80+
-    HMMA_1688  = 0x200,  // sm75
-    HMMA_884   = 0x300,  // sm70
-    HMMA_SIMT  = 0x400,  // sm75-
+    HMMA_16816    = 0x100,  // sm80+
+    HMMA_1688     = 0x200,  // sm75
+    HMMA_884      = 0x300,  // sm70
+    HMMA_SIMT     = 0x400,  // sm75-
+    GMMA_64x16_RS = 0x500,  // sm90, register-source A fragment
+    GMMA_64x32_RS = 0x600,  // sm90, native FP8 register-source A fragment
 } MMA_Tag;
 
 typedef enum Op_Tag
@@ -128,6 +130,16 @@ enum class Epilogue : int
     kGatedSilu          = 0x2,
 };
 
+constexpr Epilogue operator|(Epilogue a, Epilogue b)
+{
+    return static_cast<Epilogue>(static_cast<int>(a) | static_cast<int>(b));
+}
+
+constexpr Epilogue operator&(Epilogue a, Epilogue b)
+{
+    return static_cast<Epilogue>(static_cast<int>(a) & static_cast<int>(b));
+}
+
 struct QuantDesc {
     QuantType type;
     int       group_size;
@@ -182,6 +194,7 @@ struct Operation {
     QuantDesc      quant_a;
     QuantDesc      quant_b;
     int            batch_dim;
+    std::uint32_t  family{};
     // void*          reserved;
 };
 
