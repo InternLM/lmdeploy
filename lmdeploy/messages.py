@@ -282,6 +282,9 @@ class TurbomindEngineConfig:
             one of the following values, ['auto', 'float16', 'bfloat16']
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
+        gemm_input_dtype: preferred GEMM input dtype. It can be None,
+            'float16', 'bfloat16', or 'float8_e4m3'. This reorders eligible
+            kernel families without changing the model dtype contract.
         model_format: the layout of the deployed model. It can be one
             of the following values [hf, awq, gptq, compressed-tensors,
             fp8, mxfp4]. `hf` means a Hugging Face model (.bin,
@@ -373,6 +376,7 @@ class TurbomindEngineConfig:
     """
 
     dtype: str = 'auto'
+    gemm_input_dtype: str | None = None
     model_format: str | None = None
     tp: int = 1
     dp: int = 1
@@ -419,6 +423,7 @@ class TurbomindEngineConfig:
     def __post_init__(self):
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
+        assert self.gemm_input_dtype in (None, 'float16', 'bfloat16', 'float8_e4m3')
         assert self.tp >= 1, 'tp must be a positive integer'
         assert self.ep >= 1, 'ep must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
@@ -475,6 +480,9 @@ class PytorchEngineConfig:
             would be allocate according to current environment.
         adapters: The path configs to lora adapters.
         max_prefill_token_num: tokens per iteration.
+        piecewise_cudagraph_max_tokens: Enable piecewise CUDA graph and set its
+            maximum captured prefill token bucket. If not specified, piecewise
+            CUDA graph is disabled.
         cudagraph_capture_batch_sizes: Batch sizes to capture CUDA graphs for.
             If not specified, the engine will infer them from max_batch_size.
             max_batch_size is always captured.
@@ -587,6 +595,7 @@ class PytorchEngineConfig:
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
     kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
+    piecewise_cudagraph_max_tokens: int | None = None
 
     def __post_init__(self):
         """Check input validation."""
@@ -601,6 +610,8 @@ class PytorchEngineConfig:
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
+        assert (self.piecewise_cudagraph_max_tokens is None
+                or self.piecewise_cudagraph_max_tokens > 0), 'invalid piecewise_cudagraph_max_tokens'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'

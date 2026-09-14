@@ -124,6 +124,7 @@ def test_fa3_speculative_decode_uses_normalized_disabled_softcap():
     impl.sliding_window = None
     # Match the state of an initialized FA3Impl.
     impl.logit_softcapping = 0.0
+    impl._step_meta_group = None
 
     captured = {}
 
@@ -137,6 +138,7 @@ def test_fa3_speculative_decode_uses_normalized_disabled_softcap():
         block_offsets=torch.tensor([[0], [1]], dtype=torch.int32),
         kv_seqlens=torch.tensor([5, 7], dtype=torch.int32),
         scheduler_metadata=None,
+        kernel_metadata=(),
     )
     query = torch.empty((4, 2, 8), dtype=torch.float16)
     k_cache = torch.empty((2, _BLOCK_SIZE, 2, 8), dtype=torch.float16)

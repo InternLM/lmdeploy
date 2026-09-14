@@ -3,7 +3,9 @@ from typing import Any
 
 import torch
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.qmodules import LinearW8A8BuildSpec
+from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
 from ..utils import get_distribute_size
@@ -33,13 +35,18 @@ class W8A8Linear(LinearBase):
                          layer_type=layer_type)
         if self.is_tp:
             in_features, out_features = self._get_io_features(in_features, out_features, colwise)
-        impl_builder = get_backend().get_layer_impl_builder(OpType.LinearW8A8)
+        backend = get_backend()
         self.quant_dtype = quant_dtype
-        self.impl = impl_builder.build(in_features,
-                                       out_features,
-                                       bias is not None,
-                                       dtype=self.dtype,
-                                       quant_dtype=quant_dtype)
+        self.impl = backend.build_op(
+            LinearW8A8BuildSpec(
+                in_features=in_features,
+                out_features=out_features,
+                bias=bias,
+                output_dtype=self.dtype,
+                quant_dtype=quant_dtype,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
         weight, scale, bias = self.create_weights(in_features, out_features, bias, self.dtype, self.device)
         self.register_all_parameters(weight, scale, bias)
 

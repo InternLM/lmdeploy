@@ -84,7 +84,7 @@ public:
         }
     };
 
-    KernelImplSm90Bf16()
+    explicit KernelImplSm90Bf16(const Family& family): Kernel{family}
     {
         // After SM90 BF16 prepare: B is (K, N) ColMajor view of physical (N, K).
         desc_.order_a = kRowMajor;  // A: (M, K)
@@ -113,7 +113,7 @@ public:
         desc_.atom_layout         = {cute::size<0>(typename Gemm::AtomLayoutMNK{}),
                              cute::size<1>(typename Gemm::AtomLayoutMNK{}),
                              cute::size<2>(typename Gemm::AtomLayoutMNK{})};
-        desc_.supports_fused_silu = Gemm::kSupportsFusedSilu;
+        desc_.supported_epilogues = Gemm::kSupportsFusedSilu ? Epilogue::kGatedSilu : Epilogue::kNone;
 
         info_.chunk_size_k = Gemm::TILE_K;
 
@@ -143,6 +143,10 @@ public:
 
         desc_.arch = Gemm::Arch::value;
 
+        if (!CheckArch()) {
+            return;
+        }
+
         auto func = gemm_kernel_sm90_bf16<Gemm>;
 
         cudaFuncGetAttributes(&info_.attr, func);
@@ -171,6 +175,8 @@ public:
                const MatrixLayout& _Bdesc,
                const void*         V,
                const MatrixLayout& _Vdesc,
+               const void*         global_scale,
+               const MatrixLayout& global_scale_desc,
                float               beta,
                const void*         C,
                const MatrixLayout& Cdesc,
@@ -183,8 +189,17 @@ public:
                Workspace&          workspace,
                cudaStream_t        stream) override
     {
+        (void)U;
+        (void)Udesc;
+        (void)V;
+        (void)_Vdesc;
+        (void)C;
+        (void)Cdesc;
         (void)W;
         (void)Wdesc;
+        (void)global_scale;
+        (void)global_scale_desc;
+        (void)splits;
         using Sched = typename Gemm::Scheduler;
 
         MatrixLayout Adesc = _Adesc;
@@ -195,6 +210,28 @@ public:
         const int  num_groups = std::max(Adesc.num, 1);
         const bool fuse_silu  = ((int)operation.epilogue & (int)Epilogue::kGatedSilu) != 0;
 
+        TM_CHECK(!fuse_silu || Gemm::kSupportsFusedSilu);
+        TM_CHECK_NOTNULL(A);
+        TM_CHECK_NOTNULL(B);
+        TM_CHECK_NOTNULL(D);
+        TM_CHECK_EQ((int)operation.epilogue & ~(int)Epilogue::kGatedSilu, 0);
+        TM_CHECK_EQ(alpha, 1.f);
+        TM_CHECK_EQ(beta, 0.f);
+        TM_CHECK_EQ(Adesc.type, data_type_v<typename Gemm::Ta>);
+        TM_CHECK_EQ(_Bdesc.type, data_type_v<typename Gemm::Tb>);
+        TM_CHECK_EQ(Ddesc.type, data_type_v<typename Gemm::Tc>);
+        TM_CHECK_EQ(Adesc.rows, m);
+        TM_CHECK_EQ(_Bdesc.rows, k);
+        TM_CHECK_EQ(_Bdesc.cols, n);
+        if constexpr (is_grouped_gemm) {
+            TM_CHECK_EQ(std::max(_Bdesc.num, 1), num_groups);
+            TM_CHECK_EQ(std::max(Ddesc.num, 1), num_groups);
+        }
+        else {
+            TM_CHECK_EQ(num_groups, 1);
+            TM_CHECK_EQ(std::max(_Bdesc.num, 1), 1);
+            TM_CHECK_EQ(std::max(Ddesc.num, 1), 1);
+        }
         TM_CHECK_GE(cdiv(k, TILE_K), 2) << "The kernel requires at least 2 k-tiles to work";
 
         auto transpose = [](MatrixLayout x) {
@@ -205,7 +242,6 @@ public:
 
         // (K, N) ColMajor → (N, K) RowMajor for TMA (K-contiguous, SW128)
         MatrixLayout Bdesc = transpose(_Bdesc);
-        MatrixLayout Vdesc = transpose(_Vdesc);
 
         auto sched = [&] {
             const int2 tiles = get_tiled_shape(m, n, TILE_M, TILE_N);
@@ -223,10 +259,8 @@ public:
             return sched;
         }();
 
-        constexpr int kMulticastA = Gemm::kMulticastA;
         constexpr int kMulticastB = Gemm::kMulticastB;
 
-        constexpr int kTileM = Gemm::TILE_M;
         constexpr int kTileN = Gemm::TILE_N;
 
         if (Gemm::Scheduler::is_dynamic) {
@@ -237,7 +271,7 @@ public:
         // Grouped: the prepare kernel rebases TMA maps and materializes scheduler offsets.
         auto tm_a = make_2d_tma_desc(Gemm::kStridingA == Striding::kIndexed ? nullptr : (void*)A,
                                      Adesc,
-                                     {kTileM / kMulticastA, TILE_K},
+                                     {Gemm::kTmaBoxM, TILE_K},
                                      CU_TENSOR_MAP_SWIZZLE_128B);
 
         // Grouped B: nullptr template + prepare-kernel rebase.
@@ -247,24 +281,27 @@ public:
         using LayoutC = typename Gemm::LayoutC;
         // Fused SiLU: scheduler walks full weight N; C TMA / output are half-width.
         // LlamaLinear: Ddesc.cols = weight.output_dim (full), ld = output.stride (half).
-        MatrixLayout Cdesc_tma = Cdesc;
+        MatrixLayout Cdesc_tma = Ddesc;
         if (fuse_silu) {
             TM_CHECK_EQ(Cdesc_tma.cols % 2, 0);
             Cdesc_tma.cols /= 2;
         }
-        auto tm_c = make_2d_tma_desc((void*)C, Cdesc_tma, {LayoutC::S0, LayoutC::C0}, get_tma_swizzle(Gemm::kSwizzleC));
+        auto tm_c = make_2d_tma_desc((void*)D, Cdesc_tma, {LayoutC::S0, LayoutC::C0}, get_tma_swizzle(Gemm::kSwizzleC));
 
         // BF16: no scale tensors
         CUtensorMap tm_u{};
         CUtensorMap tm_v{};
 
-        const auto param_A = to_param((void*)A, Adesc);
-        const auto param_B = to_param((void*)B, Bdesc);
-        const auto param_U = to_param((void*)U, Udesc);
-        const auto param_V = to_param((void*)V, Vdesc);
-        const auto param_C = to_param((void*)D, Ddesc);
+        const auto        param_A = to_param((void*)A, Adesc);
+        const auto        param_B = to_param((void*)B, Bdesc);
+        const MatrixParam param_U{};
+        const MatrixParam param_V{};
+        const auto        param_C = to_param((void*)D, Ddesc);
 
         if constexpr (is_grouped_gemm) {
+            const size_t tma_workspace_bytes =
+                (size_t)num_groups * Gemm::kTmaDescNum * sizeof(CUtensorMap) + (size_t)(num_groups + 1) * sizeof(int);
+            TM_CHECK_LE(tma_workspace_bytes, workspace.tensormaps_size);
             sched.offsets_ = Gemm::PrepareTmaDescs(tm_a,
                                                    tm_b,
                                                    tm_c,
@@ -295,12 +332,6 @@ public:
         config.stream           = stream;
 
         auto func = gemm_kernel_sm90_bf16<Gemm>;
-
-        [[maybe_unused]] static bool _ = [&] {
-            int max_cluster_size = 0;
-            cudaOccupancyMaxPotentialClusterSize(&max_cluster_size, func, &config);
-            return false;
-        }();
 
         cudaLaunchAttribute attrs[1];
 
@@ -338,15 +369,8 @@ public:
 
     std::array<size_t, 2> GetWorkspaceSize(int tiles, int splits) const
     {
-        static constexpr bool kSerial = true;
-
         size_t barriers_size = sizeof(int) * tiles;
         size_t partials_size = sizeof(float) * TILE_M * TILE_N * tiles;
-
-        if constexpr (!kSerial) {
-            barriers_size *= splits;
-            partials_size *= splits;
-        }
 
         return {barriers_size, partials_size};
     }
@@ -365,6 +389,9 @@ public:
 
     bool is_feasible(const GemmDesc& desc) const noexcept override
     {
+        if ((int)desc.epilogue & ~(int)Epilogue::kGatedSilu) {
+            return false;
+        }
         const bool want_fused = ((int)desc.epilogue & (int)Epilogue::kGatedSilu) != 0;
         if (want_fused && !Gemm::kSupportsFusedSilu) {
             return false;

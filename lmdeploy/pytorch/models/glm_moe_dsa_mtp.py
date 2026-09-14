@@ -46,7 +46,6 @@ class GlmMoeDsaMultiTokenPredictorLayer(nn.Module):
         device: torch.device = None,
     ) -> None:
         super().__init__()
-        quantization_config = getattr(config, 'quantization_config', None)
         self.enorm = RMSNorm(config.hidden_size,
                              config.rms_norm_eps,
                              dtype=dtype,
@@ -55,7 +54,8 @@ class GlmMoeDsaMultiTokenPredictorLayer(nn.Module):
                              config.rms_norm_eps,
                              dtype=dtype,
                              device=device)
-        # Keep the recurrent MTP projection replicated across TP ranks.
+        # Keep the recurrent MTP projection unquantized and replicated across
+        # TP ranks.
         self.eh_proj = build_colwise_linear(
             config.hidden_size * 2,
             config.hidden_size,
@@ -63,7 +63,6 @@ class GlmMoeDsaMultiTokenPredictorLayer(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=False,
-            quant_config=quantization_config,
         )
         self.shared_head = GlmMoeDsaSharedHead(config,
                                                dtype=dtype,

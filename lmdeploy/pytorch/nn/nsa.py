@@ -1,11 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from torch import Tensor, nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.attention import AttentionMetadata
+from lmdeploy.pytorch.backends.nsa import NSAIndexFP8BuildSpec
 from lmdeploy.pytorch.consts import DSA_INDEXER_K_CACHE_NAME
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheBinding, BlockCacheRequestContext
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
 class IndexerTopKFP8(nn.Module):
@@ -14,14 +16,15 @@ class IndexerTopKFP8(nn.Module):
                  fill: int = -1,
                  allow_short_prefill_scoring_skip: bool = False):
         super().__init__()
-        backend = get_backend()
-        index_builder = backend.get_layer_impl_builder(OpType.NSAIndexFP8)
-        self.index_impl = index_builder.build(
-            topk,
-            softmax_scale,
-            block_size,
-            fill,
-            allow_short_prefill_scoring_skip=allow_short_prefill_scoring_skip,
+        self.index_impl = get_backend().build_op(
+            NSAIndexFP8BuildSpec(
+                top_k=topk,
+                softmax_scale=softmax_scale,
+                block_size=block_size,
+                fill=fill,
+                allow_short_prefill_scoring_skip=allow_short_prefill_scoring_skip,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
         )
         self.head_dim = head_dim
         self._block_cache_binding: BlockCacheBinding | None = None
@@ -54,15 +57,19 @@ class IndexerTopKFP8(nn.Module):
         weights: Tensor,
         attn_metadata: AttentionMetadata = None,
     ):
-        """forward."""
+        """forward.
+
+        ``attn_metadata`` is threaded instead of a precomputed ``meta`` so a
+        piecewise CUDA graph eager boundary can recompute per-request metadata
+        at replay time from the live frame input (the captured ``meta`` object
+        would otherwise go stale across requests).
+        """
         indexer_k_cache = self._get_block_cache()
-        meta = self.index_impl.get_step_metadata(attn_metadata)
-        ret = self.index_impl.forward(q,
-                                      k,
-                                      weights,
-                                      indexer_k_cache,
-                                      meta=meta)
-        return ret
+        return self.index_impl.forward(q,
+                                       k,
+                                       weights,
+                                       indexer_k_cache,
+                                       attn_metadata=attn_metadata)
 
     def forward_fused(self,
                       q: Tensor,
@@ -78,7 +85,6 @@ class IndexerTopKFP8(nn.Module):
                       attn_metadata: AttentionMetadata = None):
         """Forward with fused DSA indexer preparation."""
         indexer_k_cache = self._get_block_cache()
-        meta = self.index_impl.get_step_metadata(attn_metadata)
         return self.index_impl.forward_fused(q,
                                              k,
                                              weights,
@@ -90,4 +96,4 @@ class IndexerTopKFP8(nn.Module):
                                              norm_eps=norm_eps,
                                              head_gate_scale=head_gate_scale,
                                              rope_interleaved=rope_interleaved,
-                                             meta=meta)
+                                             attn_metadata=attn_metadata)

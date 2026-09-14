@@ -2,7 +2,7 @@
 import torch
 from torch import Tensor
 
-from ..apply_rotary_emb import ApplyRotaryEmbBuilder, ApplyRotaryEmbImpl
+from ..apply_rotary_emb import ApplyRotaryEmbImpl
 
 
 def rotate_half(x):
@@ -74,12 +74,3 @@ class DefaultApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
             q_embed = (query * cos) + (rotate_fn(query) * sin)
             k_embed = (key * cos) + (rotate_fn(key) * sin)
         return q_embed, k_embed
-
-
-class DefaultApplyRotaryEmbBuilder(ApplyRotaryEmbBuilder):
-    """Apply rotary embedding implementation builder."""
-
-    @staticmethod
-    def build():
-        """Build implementation."""
-        return DefaultApplyRotaryEmbImpl()

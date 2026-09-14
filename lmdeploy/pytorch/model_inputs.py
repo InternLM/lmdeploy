@@ -357,8 +357,6 @@ class StepContext:
     # mrope
     mrope_position_ids: torch.Tensor | None = None
 
-    _outputs: dict = field(default_factory=dict)
-
     # chunk with multimodal
     is_chunk_multimodal: bool = False
     is_dummy: bool = False
@@ -517,6 +515,7 @@ class StepContext:
 class BuildModelContext:
     """Context for building model."""
     language_model_only: bool = False
+    enable_deterministic: bool = False
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False

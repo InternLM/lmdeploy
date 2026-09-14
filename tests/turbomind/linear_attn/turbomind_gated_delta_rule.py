@@ -4,6 +4,8 @@ from dataclasses import dataclass, replace
 
 import torch
 
+from lmdeploy import turbomind
+
 from .benchmark import (
     BenchmarkRequest,
     BenchmarkTask,
@@ -25,17 +27,15 @@ from .reference import (
 REQUIRED_NATIVE_BRIDGE_SYMBOLS = (
     'delta_rule_plan',
     'delta_rule_run',
-    'from_dlpack_with_strides',
+    'from_dlpack',
     'delta_rule_prepare_state_tma_descs',
 )
 
 
 def _load_native_bridge(required_symbols=REQUIRED_NATIVE_BRIDGE_SYMBOLS):
-    try:
-        import _turbomind as tm
-    except ImportError:
+    if not turbomind.is_available():
         return None
-    return tm if all(hasattr(tm, symbol) for symbol in required_symbols) else None
+    return turbomind._tm if all(hasattr(turbomind._tm, symbol) for symbol in required_symbols) else None
 
 
 def _require_native_bridge(required_symbols=REQUIRED_NATIVE_BRIDGE_SYMBOLS):
@@ -55,7 +55,7 @@ class NativeBridge:
     tm: object
 
     def tensor(self, x: torch.Tensor | None):
-        return None if x is None else self.tm.from_dlpack_with_strides(x)
+        return None if x is None else self.tm.from_dlpack(x)
 
     def plan(
         self,
@@ -274,16 +274,11 @@ def chunk_gated_delta_rule_fwd(
         )
 
     execution_state_ptrs = state_ptrs[:, None] if recurrent and state_ptrs.ndim == 1 else state_ptrs
-    if recurrent and state_tma_descs is None:
-        optimized_recurrent = plan['kernel']['arch'] != 'pre_sm90'
-        prepared_descs = (
-            torch.empty(
-                (layer_groups, execution_state_ptrs.shape[-2], plan['problem']['num_head_groups'], 128),
-                device=q.device,
-                dtype=torch.uint8,
-            )
-            if optimized_recurrent
-            else torch.empty(0, device=q.device, dtype=torch.uint8)
+    if recurrent and state_tma_descs is None and plan['kernel']['arch'] != 'pre_sm90':
+        prepared_descs = torch.empty(
+            (layer_groups, execution_state_ptrs.shape[-2], plan['problem']['num_head_groups'], 128),
+            device=q.device,
+            dtype=torch.uint8,
         )
         bridge.tm.delta_rule_prepare_state_tma_descs(
             bridge.tensor(execution_state_ptrs),
@@ -293,7 +288,7 @@ def chunk_gated_delta_rule_fwd(
             layers_per_block=layers_per_block,
             stream_ptr=_current_stream_ptr(q),
         )
-        state_tma_descs = prepared_descs if optimized_recurrent else None
+        state_tma_descs = prepared_descs
 
     if out is None:
         out = _empty_from_plan(plan['out'], device=q.device, dtype=q.dtype)
@@ -366,16 +361,11 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
         )
         run_inputs.g.copy_(controlled_inputs.g)
         inputs = controlled_inputs
-    if recurrent:
-        optimized_recurrent = plan['kernel']['arch'] != 'pre_sm90'
-        prepared_descs = (
-            torch.empty(
-                (1, run.input.real_batch_size, 1, 128),
-                device=device,
-                dtype=torch.uint8,
-            )
-            if optimized_recurrent
-            else torch.empty(0, device=device, dtype=torch.uint8)
+    if recurrent and plan['kernel']['arch'] != 'pre_sm90':
+        prepared_descs = torch.empty(
+            (1, run.input.real_batch_size, 1, 128),
+            device=device,
+            dtype=torch.uint8,
         )
         bridge.tm.delta_rule_prepare_state_tma_descs(
             bridge.tensor(kwargs['state_ptrs']),
@@ -385,9 +375,8 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
             layers_per_block=1,
             stream_ptr=_current_stream_ptr(native_inputs.q),
         )
-        if optimized_recurrent:
-            state.tma_descs = prepared_descs
-            kwargs['state_tma_descs'] = state.tma_descs
+        state.tma_descs = prepared_descs
+        kwargs['state_tma_descs'] = state.tma_descs
     planned_chunk_size = int(plan['problem']['chunk_size'])
     if recurrent:
         if planned_chunk_size != 1:

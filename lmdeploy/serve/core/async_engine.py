@@ -205,11 +205,14 @@ class AsyncEngine:
                          trust_remote_code: bool = False,
                          **kwargs):
         """Inner build method for turbomind backend."""
-        from lmdeploy import turbomind as tm
-        return tm.TurboMind.from_pretrained(model_path,
-                                            engine_config=backend_config,
-                                            trust_remote_code=trust_remote_code,
-                                            **kwargs)
+        from lmdeploy import turbomind
+        if not turbomind.is_available():
+            raise RuntimeError(
+                'TurboMind was requested but its native module is unavailable.'
+            ) from turbomind._import_error
+        return turbomind.TurboMind.from_pretrained(
+            model_path, engine_config=backend_config, trust_remote_code=trust_remote_code, **kwargs
+        )
 
     def _build_pytorch(self,
                        model_path: str,
@@ -416,6 +419,16 @@ class AsyncEngine:
         if self.backend == 'turbomind' and 'kv_cache' in tags:
             self.session_mgr.build_request_handle_pool(self.engine, self.backend_config.max_batch_size)
         self.sleeping_tags = self.sleeping_tags - set(tags)
+        self.is_sleeping = bool(self.sleeping_tags)
+
+    def complete_weights_update(self):
+        """Record that externally supplied weights are ready.
+
+        This does not wake the KV cache or enable inference. The caller must
+        explicitly wake ``kv_cache`` after the weight update succeeds.
+        """
+        self.engine.complete_weights_update()
+        self.sleeping_tags.discard('weights')
         self.is_sleeping = bool(self.sleeping_tags)
 
     def _determine_gen_config(self, input_ids, gen_config: GenerationConfig | None = None) -> GenerationConfig:

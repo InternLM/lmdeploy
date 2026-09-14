@@ -1,7 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import torch
+
+from .base import BuildSpec
 
 
 class RMSNormW8A8Impl(ABC):
@@ -23,14 +26,13 @@ class RMSNormW8A8Impl(ABC):
         raise NotImplementedError
 
 
-class RMSNormW8A8Builder(ABC):
-    """RMS norm w8a8 implementation builder."""
+@dataclass(frozen=True)
+class RMSNormW8A8BuildSpec(BuildSpec[RMSNormW8A8Impl]):
+    """Immutable requirements for constructing a W8A8 RMS norm operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(hidden_size: int, eps: float = 1e-6, quant_dtype: torch.dtype = torch.int8):
-        """build."""
-        raise NotImplementedError
+    hidden_size: int
+    eps: float = 1e-6
+    quant_dtype: torch.dtype = torch.int8
 
 
 class LinearW8A8Impl(ABC):
@@ -52,15 +54,12 @@ class LinearW8A8Impl(ABC):
         raise NotImplementedError
 
 
-class LinearW8A8Builder(ABC):
-    """Linear w8a8 implementation builder."""
+@dataclass(frozen=True)
+class LinearW8A8BuildSpec(BuildSpec[LinearW8A8Impl]):
+    """Immutable requirements for constructing a W8A8 linear operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(in_features: int,
-              out_features: int,
-              bias: bool = True,
-              dtype: torch.dtype = None,
-              quant_dtype: torch.dtype = torch.int8):
-        """build."""
-        raise NotImplementedError
+    in_features: int
+    out_features: int
+    bias: bool
+    output_dtype: torch.dtype | None
+    quant_dtype: torch.dtype | None

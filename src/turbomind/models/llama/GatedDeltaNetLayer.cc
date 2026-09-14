@@ -371,7 +371,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam param)
     const int value_dim = num_v_heads_ * head_dim_;
     const int conv_dim  = key_dim * 2 + value_dim;
 
-    Tensor all_proj;
+    Tensor all_proj = MakePaddedOutput(token_num, *weights.in_proj_all, device);
     TM_SCOPE_CALL(linear_.Forward(param.input, *weights.in_proj_all, all_proj));
 
     const int value_heads       = num_v_heads_;

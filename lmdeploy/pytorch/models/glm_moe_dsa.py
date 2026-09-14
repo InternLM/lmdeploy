@@ -21,6 +21,7 @@ from .deepseek_v32 import (
     rotate_activation,
 )
 from .patch import get_build_model_context
+from .utils.cudagraph import PiecewiseCudaGraphMixin
 
 
 def _get_layer_indexer_type(config: Any, layer_idx: int | None) -> str:
@@ -91,8 +92,9 @@ class GlmMoeDsaIndexer(nn.Module):
                                            block_size=128,
                                            fill=-1,
                                            # MTP may reuse its first iteration's indices in later drafts.
-                                           allow_short_prefill_scoring_skip=layer_idx
-                                           < config.num_hidden_layers)
+                                           allow_short_prefill_scoring_skip=(
+                                               layer_idx < config.num_hidden_layers
+                                               and _envs.sparse_mla_backend != 'tilelang'))
 
     def _apply_rotary_pos_emb(self, q_pe: torch.Tensor, k_pe: torch.Tensor,
                               freqs_cis: tuple[torch.Tensor, torch.Tensor]):
@@ -342,7 +344,7 @@ class GlmMoeDsaModel(DeepseekV32Model):
                             all_routed_experts=all_routed_experts)
 
 
-class GlmMoeDsaForCausalLM(DeepseekV32ForCausalLM):
+class GlmMoeDsaForCausalLM(DeepseekV32ForCausalLM, PiecewiseCudaGraphMixin):
     model_cls = GlmMoeDsaModel
 
     def __init__(self,

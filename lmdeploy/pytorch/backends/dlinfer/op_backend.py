@@ -1,13 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from typing import cast
+
 import torch
 
-from lmdeploy.utils import get_logger
-
-from ..base import OpType
+from ..base import BuildSpec, ImplT
 from ..default import DefaultOpsBackend
-
-logger = get_logger('lmdeploy')
 
 
 class DlinferOpsBackend(DefaultOpsBackend):
@@ -17,6 +15,99 @@ class DlinferOpsBackend(DefaultOpsBackend):
     def get_name() -> str:
         """Backend name."""
         return 'dlinfer'
+
+    @classmethod
+    def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
+        """Build a typed dlinfer operator implementation."""
+        from ..activation import SiluAndMulBuildSpec
+        from ..apply_rotary_emb import ApplyRotaryEmbBuildSpec
+        from ..attention import PagedAttentionBuildSpec
+        from ..awq_modules import LinearW4A16BuildSpec
+        from ..flash_attention import FlashAttentionBuildSpec
+        from ..linear import LinearBuildSpec
+        from ..moe import FusedMoEBuildSpec, SoftmaxTopKBuildSpec
+        from ..norm import RMSNormBuildSpec
+        from ..qmodules import LinearW8A8BuildSpec, RMSNormW8A8BuildSpec
+        from ..rotary_embedding import RotaryEmbeddingBuildSpec
+        if isinstance(spec, SiluAndMulBuildSpec):
+            from .activation import DlinferSiluAndMulImpl
+            return cast(ImplT, DlinferSiluAndMulImpl())
+        if isinstance(spec, ApplyRotaryEmbBuildSpec):
+            from .apply_rotary_emb import DlinferApplyRotaryEmbImpl
+            return cast(ImplT, DlinferApplyRotaryEmbImpl())
+        if isinstance(spec, RMSNormBuildSpec):
+            from .norm import DlinferRMSNormImpl
+            return cast(ImplT, DlinferRMSNormImpl(spec.hidden_size, spec.eps))
+        if isinstance(spec, RMSNormW8A8BuildSpec):
+            from .qmodules import DlinferRMSNormW8A8Impl
+            return cast(ImplT, DlinferRMSNormW8A8Impl(spec.hidden_size, spec.eps, spec.quant_dtype))
+        if isinstance(spec, SoftmaxTopKBuildSpec):
+            from .moe import DlinferSoftmaxTopKImpl
+            return cast(ImplT, DlinferSoftmaxTopKImpl(spec.top_k, spec.dim, spec.n_groups))
+        if isinstance(spec, RotaryEmbeddingBuildSpec):
+            from .rotary_embedding import _build_rotary_embedding
+            return cast(ImplT, _build_rotary_embedding(spec))
+        if isinstance(spec, LinearW4A16BuildSpec):
+            from .awq_modules import AwqLinearW4A16Impl
+            return cast(
+                ImplT,
+                AwqLinearW4A16Impl(
+                    spec.in_features,
+                    spec.out_features,
+                    spec.w_bit,
+                    spec.group_size,
+                ),
+            )
+        if isinstance(spec, LinearW8A8BuildSpec):
+            from .qmodules import DlinferLinearW8A8Impl
+            return cast(
+                ImplT,
+                DlinferLinearW8A8Impl(
+                    spec.in_features,
+                    spec.out_features,
+                    spec.output_dtype,
+                    spec.quant_dtype,
+                ),
+            )
+        if isinstance(spec, PagedAttentionBuildSpec):
+            from .attention import DlinferAttentionImpl
+            return cast(
+                ImplT,
+                DlinferAttentionImpl(
+                    num_heads=spec.num_heads,
+                    head_size=spec.head_dim,
+                    scale=spec.scale,
+                    num_kv_heads=spec.num_kv_heads,
+                    v_head_size=spec.v_head_dim,
+                    alibi=spec.alibi,
+                    sliding_window=spec.sliding_window,
+                    logit_softcapping=spec.logit_softcapping,
+                    causal=spec.causal,
+                    use_flash_mla=spec.use_flash_mla,
+                ),
+            )
+        if isinstance(spec, FlashAttentionBuildSpec):
+            from .flash_attention import DlinferFlashAttentionImpl
+            return cast(
+                ImplT,
+                DlinferFlashAttentionImpl(
+                    num_heads=spec.num_heads,
+                    head_dim=spec.head_dim,
+                    scale=spec.scale,
+                    num_kv_heads=spec.num_kv_heads,
+                    v_head_dim=spec.v_head_dim,
+                    causal=spec.causal,
+                    sliding_window=spec.sliding_window,
+                    logit_softcapping=spec.logit_softcapping,
+                ),
+            )
+        if isinstance(spec, LinearBuildSpec):
+            from .linear import DlinferLinearImpl
+            return cast(ImplT, DlinferLinearImpl())
+        if isinstance(spec, FusedMoEBuildSpec):
+            from .moe import _build_fused_moe
+            return cast(ImplT, _build_fused_moe(spec))
+        return super().build_op(spec, enable_deterministic=enable_deterministic)
 
     @classmethod
     def get_cache_backend(cls):
@@ -35,49 +126,6 @@ class DlinferOpsBackend(DefaultOpsBackend):
             device_group=device_group,
             dist_config=dist_config,
         )
-
-    @classmethod
-    def get_layer_impl_builder(cls, layer_type: OpType):
-        """Get dlinfer layer builder."""
-        if layer_type == OpType.PagedAttention:
-            from .attention import DlinferAttentionBuilder
-            return DlinferAttentionBuilder
-        elif layer_type == OpType.FlashAttention:
-            from .flash_attention import DlinferFlashAttentionBuilder
-            return DlinferFlashAttentionBuilder
-        elif layer_type == OpType.ApplyRotaryEmb:
-            from .apply_rotary_emb import DlinferApplyRotaryEmbBuilder
-            return DlinferApplyRotaryEmbBuilder
-        elif layer_type == OpType.SiluAndMul:
-            from .activation import DlinferSiluAndMulBuilder
-            return DlinferSiluAndMulBuilder
-        elif layer_type == OpType.RMSNorm:
-            from .norm import DlinferRMSNormBuilder
-            return DlinferRMSNormBuilder
-        elif layer_type == OpType.LinearW8A8:
-            from .qmodules import DlinferLinearW8A8Builder
-            return DlinferLinearW8A8Builder
-        elif layer_type == OpType.RMSNormW8A8:
-            from .qmodules import DlinferRMSNormW8A8Builder
-            return DlinferRMSNormW8A8Builder
-        elif layer_type == OpType.SoftmaxTopK:
-            from .moe import DlinferSoftmaxTopKBuilder
-            return DlinferSoftmaxTopKBuilder
-        elif layer_type == OpType.FusedMoE:
-            from .moe import DlinferFusedMoEBuilder
-            return DlinferFusedMoEBuilder
-        elif layer_type == OpType.Linear:
-            from .linear import DlinferLinearBuilder
-            return DlinferLinearBuilder
-        elif layer_type == OpType.LinearW4A16:
-            from .awq_modules import AwqLinearW4A16Builder
-            return AwqLinearW4A16Builder
-        elif layer_type == OpType.RotaryEmbedding:
-            from .rotary_embedding import DlinferRotaryEmbeddingBuilder
-            return DlinferRotaryEmbeddingBuilder
-        else:
-            logger.debug(f'Op {layer_type} fallback to default implementation.')
-            return super().get_layer_impl_builder(layer_type)
 
     @staticmethod
     def get_attention_metadata_cls():

@@ -1,7 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import torch
+
+from .base import BuildSpec
 
 
 class RMSNormImpl(ABC):
@@ -13,14 +16,12 @@ class RMSNormImpl(ABC):
         raise NotImplementedError
 
 
-class RMSNormBuilder(ABC):
-    """RMS norm implementation builder."""
+@dataclass(frozen=True)
+class RMSNormBuildSpec(BuildSpec[RMSNormImpl]):
+    """Immutable requirements for constructing an RMS norm operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(hidden_size: int, eps: float = 1e-6):
-        """build."""
-        raise NotImplementedError
+    hidden_size: int
+    eps: float = 1e-6
 
 
 class LayerNormImpl(ABC):
@@ -32,11 +33,9 @@ class LayerNormImpl(ABC):
         raise NotImplementedError
 
 
-class LayerNormBuilder(ABC):
-    """Layer norm implementation builder."""
+@dataclass(frozen=True)
+class LayerNormBuildSpec(BuildSpec[LayerNormImpl]):
+    """Immutable requirements for constructing a layer norm operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(normalized_shape: int, eps: float = 1e-6):
-        """build."""
-        raise NotImplementedError
+    normalized_shape: int
+    eps: float = 1e-6

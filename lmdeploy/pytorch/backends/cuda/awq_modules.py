@@ -6,7 +6,7 @@ import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.utils import get_logger
 
-from ..awq_modules import LinearW4A16Builder, LinearW4A16Impl
+from ..awq_modules import LinearW4A16BuildSpec, LinearW4A16Impl
 
 logger = get_logger('lmdeploy')
 
@@ -39,11 +39,9 @@ def _turbomind_support_reason(in_features: int,
     if not _is_turbomind_gemm_capability_supported(capability):
         return f'CUDA capability {capability} is unsupported'
 
-    from .turbomind_awq_modules import _load_turbomind
-    try:
-        _load_turbomind()
-    except RuntimeError as error:
-        return str(error)
+    from lmdeploy import turbomind
+    if not turbomind.is_available():
+        return 'TurboMind native modules are not built'
     return None
 
 
@@ -104,38 +102,26 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
         return out
 
 
-class AwqLinearW4A16Builder(LinearW4A16Builder):
-    """Awq linear builder."""
+def _build_linear_w4a16(spec: LinearW4A16BuildSpec) -> LinearW4A16Impl:
+    """Build the selected CUDA W4A16 linear implementation."""
+    provider = _envs.w4a16_gemm_backend
 
-    @staticmethod
-    def build(in_features: int,
-              out_features: int,
-              w_bit: int,
-              group_size: int,
-              bias: bool = False,
-              dtype: torch.dtype = None):
-        """build."""
-        provider = _envs.w4a16_gemm_backend
-
-        if provider == 'auto':
-            reason = _turbomind_support_reason(in_features, out_features,
-                                               w_bit, group_size, dtype)
-            if reason is None:
-                from .turbomind_awq_modules import TurbomindAwqLinearW4A16Impl
-                impl_cls = TurbomindAwqLinearW4A16Impl
-            else:
-                impl_cls = AwqLinearW4A16Impl
-        elif provider == 'turbomind':
-            reason = _turbomind_support_reason(in_features, out_features,
-                                               w_bit, group_size, dtype)
-            if reason is not None:
-                raise RuntimeError(
-                    'TurboMind W4A16 linear was requested but is unavailable '
-                    f'or incompatible: {reason}.')
+    if provider in ('auto', 'turbomind'):
+        reason = _turbomind_support_reason(spec.in_features, spec.out_features,
+                                           spec.w_bit, spec.group_size, spec.output_dtype)
+        if reason is None:
             from .turbomind_awq_modules import TurbomindAwqLinearW4A16Impl
             impl_cls = TurbomindAwqLinearW4A16Impl
+        elif provider == 'turbomind':
+            from lmdeploy import turbomind
+
+            raise RuntimeError(
+                f'TurboMind W4A16 linear was requested but is unavailable or incompatible: {reason}.'
+            ) from turbomind._import_error
         else:
             impl_cls = AwqLinearW4A16Impl
+    else:
+        impl_cls = AwqLinearW4A16Impl
 
-        logger.debug('Build LinearW4A16 with %s.', impl_cls.__name__)
-        return impl_cls(in_features, out_features, w_bit, group_size)
+    logger.debug('Build LinearW4A16 with %s.', impl_cls.__name__)
+    return impl_cls(spec.in_features, spec.out_features, spec.w_bit, spec.group_size)

@@ -1,5 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from types import SimpleNamespace
+
 import pytest
+import torch
 
 from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
@@ -57,14 +60,35 @@ def test_graph_runner_defensively_normalizes_capture_batch_sizes():
 
 
 def test_graph_runner_reset_clears_padding_batch_size(monkeypatch):
-    from lmdeploy.pytorch.backends.cuda import graph_runner as cuda_graph_runner
+    from lmdeploy.pytorch.backends.cuda.graph_runner import runner as cuda_graph_runner
 
     runner = object.__new__(CUDAGraphRunner)
     runner._runner_meta = GraphRunnerMeta(padding_batch_size=1)
-    runner._runner_map = {'stale': object()}
+    runner._full_graph_runners = {'stale': object()}
+    runner._piecewise_graph_manager = None
     monkeypatch.setattr(cuda_graph_runner.get_deepep_state(), 'enabled', lambda: False)
 
     runner.reset()
 
     assert runner.get_meta().padding_batch_size is None
-    assert runner._runner_map == {}
+    assert runner._full_graph_runners == {}
+
+
+def test_model_context_kwarg_does_not_collide_with_graph_routing(monkeypatch):
+    from lmdeploy.pytorch.backends.cuda.graph_runner import runner as cuda_graph_runner
+
+    step_context = SimpleNamespace(global_is_decoding=lambda: False)
+    runner = object.__new__(CUDAGraphRunner)
+    runner.ctx_mgr = SimpleNamespace(current_context=lambda: step_context)
+    runner.enable_graph = lambda **kwargs: False
+    runner._piecewise_graph_manager = None
+    monkeypatch.setattr(cuda_graph_runner.get_deepep_state(), 'enabled', lambda: False)
+
+    model_context = object()
+    runner._forward_eager = lambda **kwargs: kwargs['context']
+    output = runner(
+        attn_metadata=SimpleNamespace(block_offsets=torch.zeros(1, 1, dtype=torch.int32)),
+        context=model_context,
+    )
+
+    assert output is model_context
