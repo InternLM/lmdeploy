@@ -587,6 +587,17 @@ class ArgumentHelper:
                                    help='Enable cache and match prefix')
 
     @staticmethod
+    def lmcache_addr(parser):
+        """Add the LMCache multiprocess-server endpoint argument."""
+
+        return parser.add_argument('--lmcache-addr',
+                                   type=str,
+                                   default=None,
+                                   help='LMCache multiprocess-server ZeroMQ endpoint for the '
+                                   'TurboMind backend, for example tcp://127.0.0.1:5555. '
+                                   'LMCache is disabled when this option is omitted.')
+
+    @staticmethod
     def prefix_cache_state_budget(parser):
         """Add argument prefix_cache_state_budget to parser."""
 

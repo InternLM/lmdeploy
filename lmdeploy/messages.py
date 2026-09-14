@@ -370,6 +370,8 @@ class TurbomindEngineConfig:
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model
         enable_metrics: enable metrics system
+        lmcache_addr: LMCache multiprocess-server endpoint. A non-empty value
+            enables LMCache LOOKUP for the TurboMind backend.
     """
 
     dtype: str = 'auto'
@@ -415,6 +417,7 @@ class TurbomindEngineConfig:
     moe_a2a_backend: str = 'auto'
     hf_overrides: dict[str, Any] | None = None
     enable_metrics: bool = True
+    lmcache_addr: str | None = None
 
     def __post_init__(self):
         """Check input validation."""

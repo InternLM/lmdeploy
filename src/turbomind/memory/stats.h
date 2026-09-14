@@ -7,6 +7,7 @@
 namespace turbomind {
 
 struct PageStats {
+    void*            base;   // page-aligned base address of the managed region
     int              pages;  // real pages in the region
     size_t           page_size;
     int              free_pages;  // sum over orders of (count << order)

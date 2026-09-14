@@ -15,8 +15,10 @@
 #include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/engine.h"
 #include "src/turbomind/engine/gateway.h"
+#include "src/turbomind/engine/lmcache.h"
 #include "src/turbomind/engine/model_executor.h"
 #include "src/turbomind/engine/model_request.h"
+#include "src/turbomind/models/llama/object_cache_plan.h"
 
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/context.h"
@@ -157,7 +159,7 @@ TurboMind::Impl::~Impl()
 }
 
 TurboMind::Impl::Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_ctx_factory):
-    data_type_{}, engine_param_{}, ffi_ctx_factory_{ffi_ctx_factory}
+    data_type_{}, engine_param_{}, ffi_ctx_factory_{ffi_ctx_factory}, model_dir_{std::move(model_dir)}
 {
     data_type_ = config.data_type;
     TM_CHECK(data_type_ == kBfloat16 || data_type_ == kHalf);
@@ -321,13 +323,23 @@ void TurboMind::Impl::CreateEngine(int index)
                 free_bytes / (1024. * 1024.),
                 cache_ratio);
 
-    Buffer cache_region{static_cast<core::ssize_t>(cache_bytes), data_type_v<int8_t>, core::Context::device_alloc()};
-    ObjectAllocator alloc{std::move(cache_region)};
+    const bool use_lmcache = !param.lmcache_addr.empty();
+    const auto cache_plan  = [&]() {
+        const auto& weight = *TM_CHECK_NOTNULL(weights_[index]->text_model_ptr());
+        return use_lmcache ? TuneObjectCacheLayout(weight, param) : CreateDefaultObjectCachePlan(weight, param);
+    }();
+    // cudaMallocAsync allocations cannot be exported with cudaIpcGetMemHandle.
+    Allocator  cache_allocator = use_lmcache ? Allocator{kDEVICE} : core::Context::device_alloc();
+    Buffer     cache_region{static_cast<core::ssize_t>(cache_bytes), data_type_v<int8_t>, cache_allocator};
+    void*      cache_base  = cache_region.raw_data();
+    const auto common_size = CommonCacheRegionSize(ctx.comm.h_tp_group, cache_base, cache_bytes, cache_plan.page_size);
+    cache_region           = cache_region.slice(0, common_size);
+    ObjectAllocator alloc{std::move(cache_region), cache_plan.page_size};
     CacheRegistry   cache_registry;
     cache_registry.set_checkpoint_min_interval(param.cache_checkpoint_interval);
 
     // create model
-    LanguageModel model{cache_registry, param, ctx, *weights_[index]->text_model_ptr(), phases_};
+    LanguageModel model{cache_registry, cache_plan, param, ctx, *weights_[index]->text_model_ptr(), phases_};
 
     // create vision model for VLM checkpoints; null for text-only (no vision sub-tree attached)
     std::unique_ptr<VisionModel> vision_model;
@@ -337,10 +349,19 @@ void TurboMind::Impl::CreateEngine(int index)
 
     cache_registry.RegisterObjectIds(alloc);
 
+    LmCache lmcache = LmCache::Create(param.lmcache_addr,
+                                      model_dir_,
+                                      ctx.comm.h_tp_group,
+                                      *ctx.is_warm_up,
+                                      param.cache_block_seq_len * param.attn_cp_size,
+                                      phases_);
+    lmcache.Register(cache_base, alloc, cache_registry);
+
     // create engine
     engines_[index] = Engine{param,
                              std::move(alloc),
                              std::move(cache_registry),
+                             std::move(lmcache),
                              std::move(model),
                              std::move(vision_model),
                              ctx,

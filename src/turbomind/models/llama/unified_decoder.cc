@@ -15,6 +15,7 @@
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
+#include "src/turbomind/models/llama/object_cache_plan.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/models/model_weight.h"
@@ -35,11 +36,12 @@ void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
     }
 }
 
-UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
-                               const EngineParam& engine,
-                               const Context&     ctx,
-                               int                phases,
-                               const ModelWeight& model_weight):
+UnifiedDecoder::UnifiedDecoder(CacheRegistry&         registry,
+                               const ObjectCachePlan& cache_plan,
+                               const EngineParam&     engine,
+                               const Context&         ctx,
+                               int                    phases,
+                               const ModelWeight&     model_weight):
     layer_num_(model_weight.num_layer),
     hidden_units_(model_weight.hidden_units),
     output_norm_zero_centered_(model_weight.norm->zero_centered_),
@@ -83,16 +85,20 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
     }
 
     if (!attn_weights.empty()) {
+        TM_CHECK(cache_plan.attention.has_value());
         attn_layer_ = std::make_unique<UnifiedAttentionLayer>(attn_weights,  //
                                                               registry,
+                                                              *cache_plan.attention,
                                                               engine,
                                                               ctx,
                                                               phases);
     }
 
     if (!gdn_weights.empty()) {
+        TM_CHECK(cache_plan.gdn.has_value());
         linear_attn_layer_ = std::make_unique<GatedDeltaNetLayer>(gdn_weights,  //
                                                                   registry,
+                                                                  *cache_plan.gdn,
                                                                   engine,
                                                                   ctx,
                                                                   phases);
