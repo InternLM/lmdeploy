@@ -2,8 +2,6 @@
 from collections.abc import Sequence
 from logging import Logger
 
-import torch
-
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
@@ -29,28 +27,6 @@ def _finalize_sparse_mla_cache_policy(model_configs: Sequence[ModelConfig], cach
     for model_config in sparse_mla_configs:
         model_config.mla_kv_cache_dtype = 'fp8_ds_mla'
     cache_config.quant_policy = QuantPolicy.NONE
-
-
-def _validate_dcp_config(model_config: ModelConfig, cache_config: CacheConfig, dist_config: DistConfig,
-                         device_type: str) -> None:
-    """Validate model/backend DCP support after individual config
-    validation."""
-    dcp = dist_config.dcp
-    if dcp == 1:
-        return
-
-    if device_type != 'cuda':
-        raise ValueError('DCP is supported only by the CUDA PyTorch backend')
-    if not model_config.use_flash_mla:
-        raise ValueError('DCP requires a FlashMLA-backed MLA model')
-    if model_config.dtype != torch.bfloat16:
-        raise ValueError('DCP requires a bfloat16 MLA model')
-    if model_config.mla_index_topk is None and cache_config.quant_policy != QuantPolicy.NONE:
-        raise ValueError('DCP dense MLA requires unquantized KV cache')
-    replica_count = model_config.num_replicate_key_value_heads
-    if dcp > replica_count or replica_count % dcp != 0:
-        raise ValueError(
-            f'dcp {dcp} must divide KV-head replica count {replica_count}')
 
 
 def get_distributed_executor_backend(world_size: int, dp: int, device_type: str, logger: Logger = None):
@@ -128,8 +104,6 @@ def build_executor(
         device_type=device_type,
         block_size=cache_config.block_size,
     )
-
-    _validate_dcp_config(model_config, cache_config, dist_config, device_type)
 
     # Finalize cache policy before any executor copies configs to workers or
     # builds backend operators. Target and memory models share CacheConfig.
