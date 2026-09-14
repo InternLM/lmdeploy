@@ -216,61 +216,6 @@ MLLM_EVAL_CONFIGS = {
 
 BACKEND_LIST = ['turbomind', 'pytorch']
 
-RESTFUL_MODEL_LIST_LATEST = [
-    'Qwen/Qwen3.5-27B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B-FP8', 'Qwen/Qwen3.5-122B-A10B',
-    'Qwen/Qwen3-32B', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-0.6B', 'OpenGVLab/InternVL3_5-30B-A3B',
-    'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'internlm/Intern-S1',
-    'internlm/Intern-S1-Pro', 'meta-llama/Llama-3.2-3B-Instruct',
-    'Qwen/Qwen3-VL-30B-A3B-Instruct', 'internlm/internlm3-8b-instruct', 'internlm/Intern-S2-Preview',
-    'internlm/Intern-S2-Preview-FP8', 'internlm/Intern-S2-Preview-397B', 'internlm/Intern-S2-Preview-397B-FP8'
-]
-
-RESTFUL_MODEL_LIST_LEGACY = ['internlm/internlm2_5-20b']
-
-def _deps_profile_is_legacy() -> bool:
-    """True when ``DEPS_PROFILE`` selects pinned-deps matrix rows
-    (``pkg==ver``)."""
-    raw = os.getenv('DEPS_PROFILE', '').strip()
-    return bool(raw) and raw != 'all' and '==' in raw
-
-
-_IS_LEGACY = _deps_profile_is_legacy()
-
-RESTFUL_MODEL_LIST = RESTFUL_MODEL_LIST_LEGACY if _IS_LEGACY else RESTFUL_MODEL_LIST_LATEST
-
-TOOL_REASONING_MODEL_LIST_LATEST = [
-    'Qwen/Qwen3-8B-FP8',
-    'Qwen/Qwen3.5-35B-A3B',
-    'Qwen/Qwen3.5-35B-A3B-FP8',
-    'Qwen/Qwen3.5-122B-A10B',
-    'Qwen/Qwen3.5-397B-A17B',
-    'Qwen/Qwen3.5-397B-A17B-FP8',
-    'meta-llama/Llama-3.1-70B-Instruct',
-    'deepseek-ai/DeepSeek-V3',
-    'openai/gpt-oss-20b',
-    'Qwen/Qwen2.5-7B-Instruct',
-    'internlm/Intern-S1',
-    'internlm/Intern-S1-Pro',
-    'internlm/Intern-S2-Preview',
-    'internlm/Intern-S2-Preview-FP8',
-    'internlm/Intern-S2-Preview-397B',
-    'internlm/Intern-S2-Preview-397B-FP8',
-    'zai-org/GLM-4.7-Flash',
-]
-
-TOOL_REASONING_MODEL_LIST_LEGACY = [
-    'moonshotai/Kimi-K2-Instruct-0905',
-    'internlm/internlm2_5-7b-chat',
-]
-
-TOOL_REASONING_MODEL_LIST = TOOL_REASONING_MODEL_LIST_LEGACY if _IS_LEGACY else TOOL_REASONING_MODEL_LIST_LATEST
-
-RESTFUL_BASE_MODEL_LIST = [
-    'Qwen/Qwen3-0.6B-Base', 'Qwen/Qwen3.5-2B-Base', 'Qwen/Qwen3.5-35B-A3B-Base',
-    'Qwen/Qwen3-8B-Base', 'internlm/internlm2_5-20b', 'Qwen/Qwen3-4B',
-    'internlm/internlm3-8b-instruct',
-]
-
 SUFFIX_INNER_AWQ = '-inner-4bits'
 SUFFIX_INNER_GPTQ = '-inner-gptq'
 SUFFIX_INNER_W8A8 = '-inner-w8a8'

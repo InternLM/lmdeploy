@@ -10,14 +10,12 @@ import time
 from pathlib import Path
 
 import allure
-from utils.config_utils import get_case_str_by_config, get_workerid
-from utils.constant import (
-    DEFAULT_PORT,
-    PROXY_PORT,
-    RESTFUL_BASE_MODEL_LIST,
-    RESTFUL_MODEL_LIST,
-    TOOL_REASONING_MODEL_LIST,
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_restful_protocol_model_candidates,
+    get_workerid,
 )
+from utils.constant import DEFAULT_PORT, PROXY_PORT
 from utils.proxy_distributed_utils import ApiServerPerTest, is_port_open
 from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import start_openai_service, terminate_restful_api
@@ -50,7 +48,7 @@ def _protocol_model_candidates() -> list[str]:
     """Model ids used as pytest params in interface protocol suites."""
     seen: set[str] = set()
     out: list[str] = []
-    for name in (*RESTFUL_MODEL_LIST, *RESTFUL_BASE_MODEL_LIST, *TOOL_REASONING_MODEL_LIST):
+    for name in get_restful_protocol_model_candidates():
         if name not in seen:
             seen.add(name)
             out.append(name)

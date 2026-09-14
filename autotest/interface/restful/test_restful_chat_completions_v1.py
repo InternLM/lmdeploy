@@ -2,7 +2,8 @@ from typing import Literal
 
 import pytest
 from openai import BadRequestError, OpenAI
-from utils.constant import BACKEND_LIST, BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
+from utils.config_utils import get_restful_chat_model_list
+from utils.constant import BACKEND_LIST, BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS
 from utils.restful_return_check import (
     assert_chat_completions_batch_return,
     assert_chat_completions_stream_return,
@@ -20,7 +21,7 @@ _OVERSIZE_CHAT_PROMPT = 'Hi, pls intro yourself' * 60000
 @pytest.mark.order(8)
 @pytest.mark.flaky(reruns=2)
 @pytest.mark.parametrize('backend', BACKEND_LIST)
-@pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
+@pytest.mark.parametrize('model_case', get_restful_chat_model_list())
 class TestRestfulInterfaceChatCompletions:
 
     def test_return_info_with_prompt(self, backend, model_case):
@@ -635,7 +636,7 @@ class TestRestfulInterfaceChatCompletions:
 @pytest.mark.order(8)
 @pytest.mark.flaky(reruns=2)
 @pytest.mark.parametrize('backend', BACKEND_LIST)
-@pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
+@pytest.mark.parametrize('model_case', get_restful_chat_model_list())
 class TestRestfulOpenAI:
 
     @pytest.mark.pr_test

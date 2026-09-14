@@ -782,6 +782,98 @@ def derive_interface_server_extra(
     return get_cli_str(extra).strip()
 
 
+_RESTFUL_CHAT_PROTOCOL_CASES = frozenset({
+    'chat_completions_v1',
+    'generate',
+    'anthropic_v1',
+    'anthropic_sdk',
+})
+_RESTFUL_BASE_PROTOCOL_CASES = frozenset({'completions_v1'})
+_TOOL_REASONING_PROTOCOL_CASES = frozenset({'toolcall', 'reasoning'})
+
+
+def _interface_case_info_for_entry(entry: dict[str, Any]) -> set[str]:
+    """Union of nested REST protocol case groups from yaml ``interface``."""
+    model_profiles = list(_normalize_profiles(entry.get('model_type', 'chat')))
+    case_info: set[str] = set()
+    for backend in get_interface_backend_list():
+        for prof in get_interface_profiles(entry, backend):
+            suites = prof.get('suites') or []
+            if not suites:
+                continue
+            case_info.update(derive_interface_case_info(model_profiles, suites))
+    return case_info
+
+
+def _interface_protocol_model_list(
+    required_cases: frozenset[str],
+    *,
+    deps_profile: DepsProfileSelector | None = None,
+) -> list[str]:
+    """Model ids whose yaml ``interface`` maps to nested REST protocol suites."""
+    config = get_config()
+    matrix_env = _model_matrix_env_key(config)
+    profile = deps_profile if deps_profile is not None else get_deps_profile_selector()
+    out: list[str] = []
+    seen: set[str] = set()
+    for model_id, entry in _iter_per_model_entries(matrix_env, deps_profile=profile):
+        case_info = _interface_case_info_for_entry(entry)
+        if not case_info or not (case_info & required_cases):
+            continue
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        out.append(model_id)
+    return sorted(out)
+
+
+def get_restful_chat_model_list(
+    deps_profile: DepsProfileSelector | None = None,
+) -> list[str]:
+    """Chat/VL models for chat-completions / generate / anthropic protocol files."""
+    return _interface_protocol_model_list(
+        _RESTFUL_CHAT_PROTOCOL_CASES,
+        deps_profile=deps_profile,
+    )
+
+
+def get_restful_base_model_list(
+    deps_profile: DepsProfileSelector | None = None,
+) -> list[str]:
+    """Base models for ``/v1/completions`` protocol file."""
+    return _interface_protocol_model_list(
+        _RESTFUL_BASE_PROTOCOL_CASES,
+        deps_profile=deps_profile,
+    )
+
+
+def get_tool_reasoning_model_list(
+    deps_profile: DepsProfileSelector | None = None,
+) -> list[str]:
+    """Models with tool-call or reasoning parser interface suites."""
+    return _interface_protocol_model_list(
+        _TOOL_REASONING_PROTOCOL_CASES,
+        deps_profile=deps_profile,
+    )
+
+
+def get_restful_protocol_model_candidates(
+    deps_profile: DepsProfileSelector | None = None,
+) -> list[str]:
+    """All model ids referenced by nested interface REST protocol tests."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for model_id in (
+        *get_restful_chat_model_list(deps_profile=deps_profile),
+        *get_restful_base_model_list(deps_profile=deps_profile),
+        *get_tool_reasoning_model_list(deps_profile=deps_profile),
+    ):
+        if model_id not in seen:
+            seen.add(model_id)
+            out.append(model_id)
+    return out
+
+
 def derive_interface_case_info(profiles: list[str], suites: list[str] | set[str]) -> list[str]:
     """Derive REST case groups from model profiles + interface suites.
 
