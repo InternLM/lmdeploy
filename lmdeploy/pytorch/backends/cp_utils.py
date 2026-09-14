@@ -89,16 +89,36 @@ def get_dcp_local_cu_seqlens(
     return local_lens, cu_lens
 
 
-def fill_dcp_local_seq_lens(seq_lens: torch.Tensor,
-                            local_lens: torch.Tensor,
-                            dcp_world_rank: tuple[int, int]) -> None:
-    """Refresh a graph-stable local-length buffer without allocations."""
-    dcp_world_size, dcp_rank = dcp_world_rank
-    if local_lens.shape != seq_lens.shape:
-        raise ValueError('local_lens and seq_lens must have identical shapes')
-    torch.add(seq_lens, dcp_world_size - 1 - dcp_rank, out=local_lens)
-    torch.div(local_lens,
-              dcp_world_size,
-              rounding_mode='floor',
-              out=local_lens)
-    local_lens.clamp_min_(0)
+def update_dcp_metadata(attn_metadata, step_context) -> None:
+    """Populate DCP lengths and shared prefill metadata from common sequence
+    fields.
+
+    Without DCP, local lengths alias global lengths. Decode needs only local lengths; cached prefill additionally plans
+    bounded KV chunks and, for sparse MLA, a request mapping shared across partitions and layers.
+    """
+    from lmdeploy.pytorch.distributed import get_dcp_world_rank
+
+    dcp_world_rank = get_dcp_world_rank()
+    attn_metadata.dcp_local_kv_seqlens = get_dcp_local_seq_lens(attn_metadata.kv_seqlens, dcp_world_rank)
+    attn_metadata.dcp_prefill_chunks = ()
+    attn_metadata.dcp_prefill_request_ids = None
+    if dcp_world_rank[0] == 1 or attn_metadata.is_decoding:
+        return
+
+    num_tokens = step_context.input_ids.numel()
+    prefix_total = attn_metadata.kv_flatten_size - num_tokens
+    prefix_limit = min(prefix_total, max(0, attn_metadata.max_kv_seqlen - 1))
+    attn_metadata.dcp_prefill_chunks = build_dcp_prefill_chunks(
+        prefix_lens=attn_metadata.kv_seqlens - attn_metadata.q_seqlens,
+        prefix_limit=prefix_limit,
+        block_size=step_context.cache_config.block_size,
+        head_dim=step_context.model_config.head_dim,
+        dcp_world_rank=dcp_world_rank,
+    )
+    topk = step_context.model_config.mla_index_topk
+    # Short-context sparse MLA uses dense attention and needs no index mapping.
+    if attn_metadata.dcp_prefill_chunks and topk is not None and attn_metadata.max_kv_seqlen > topk:
+        attn_metadata.dcp_prefill_request_ids = torch.repeat_interleave(
+            torch.arange(attn_metadata.q_seqlens.numel(), dtype=torch.int32, device=attn_metadata.q_seqlens.device),
+            attn_metadata.q_seqlens,
+            output_size=num_tokens)

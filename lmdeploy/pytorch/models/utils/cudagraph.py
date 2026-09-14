@@ -187,6 +187,7 @@ class CudaGraphMixin:
 
         num_tokens = input_ids.size(-1)
         decode_query_len = graph_meta.decode_query_len
+        dcp_world_size, dcp_rank = get_dcp_world_rank()
         # fill buffer
         # Random padding balances MoE routing; the fused deterministic fill
         # below overwrites only the real token prefix.
@@ -207,6 +208,9 @@ class CudaGraphMixin:
             input_buffers['qkv_lens'],
             input_buffers['cu_seqlens'],
             decode_query_len,
+            dcp_local_kv_seqlens=input_buffers.get('dcp_local_kv_seqlens'),
+            dcp_size=dcp_world_size,
+            dcp_rank=dcp_rank,
         )
         if inputs_embeds is not None:
             emb_size = inputs_embeds.size(-1)
@@ -224,15 +228,7 @@ class CudaGraphMixin:
         attn_metadata.cu_seqlens_q = input_buffers['cu_seqlens_q']
         attn_metadata.cu_seqlens_k = input_buffers['cu_seqlens_k']
 
-        dcp_world_rank = get_dcp_world_rank()
-        dcp_world_size, _ = dcp_world_rank
         if dcp_world_size > 1:
-            from lmdeploy.pytorch.backends.cp_utils import fill_dcp_local_seq_lens
-            fill_dcp_local_seq_lens(
-                input_buffers['kv_seqlens'],
-                input_buffers['dcp_local_kv_seqlens'],
-                dcp_world_rank,
-            )
             attn_metadata.dcp_local_kv_seqlens = input_buffers['dcp_local_kv_seqlens']
         else:
             attn_metadata.dcp_local_kv_seqlens = input_buffers['kv_seqlens']

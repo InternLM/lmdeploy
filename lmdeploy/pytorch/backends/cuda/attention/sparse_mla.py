@@ -166,35 +166,12 @@ class FlashMLASparseImpl(FlashMLAImpl):
                                                      attn_metadata.cu_seqlens_k)
         return self._flash_mla_sparse_forward(query, flatten_k, indices)
 
-    def _map_dcp_prefill_indices(
-            self, nsa_indices: torch.Tensor,
-            attn_metadata: TritonAttentionMetadata,
-            partition_starts: torch.Tensor,
-            partition_cu_lens: torch.Tensor) -> torch.Tensor:
-        """Map request-local global indices into one flattened partition."""
-        num_tokens = nsa_indices.size(0)
-        request_ids = torch.repeat_interleave(
-            torch.arange(attn_metadata.q_seqlens.numel(),
-                         device=nsa_indices.device,
-                         dtype=attn_metadata.q_start_loc.dtype),
-            attn_metadata.q_seqlens,
-            output_size=num_tokens)
-        starts = partition_starts[request_ids]
-        ends = starts + (partition_cu_lens[1:] -
-                         partition_cu_lens[:-1])[request_ids]
-        valid = (nsa_indices >= starts[:, None]) & (nsa_indices < ends[:, None])
-        mapped = (nsa_indices - starts[:, None] +
-                  partition_cu_lens[:-1][request_ids, None])
-        return torch.where(valid, mapped, -1).to(torch.int32)[:, None]
-
     def _prefill_sparse_partition(
             self, query: torch.Tensor, flatten_k: torch.Tensor,
-            indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            indices: torch.Tensor, valid_counts: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Run one sparse partition and sanitize its LSE for merging."""
-        from lmdeploy.pytorch.kernels.cuda.dcp import filter_and_compact_dcp_indices, sanitize_dcp_lse
+        from lmdeploy.pytorch.kernels.cuda.dcp import sanitize_dcp_lse
 
-        indices, valid_counts = filter_and_compact_dcp_indices(indices)
-        valid_counts = valid_counts.flatten()
         output, lse = self._flash_mla_sparse_forward(query,
                                                      flatten_k,
                                                      indices,
@@ -216,17 +193,17 @@ class FlashMLASparseImpl(FlashMLAImpl):
         v_scales_zeros: torch.Tensor = None,
     ) -> torch.Tensor:
         """Run sparse prefill over bounded current and cached partitions."""
-        from lmdeploy.pytorch.kernels.cuda.dcp import merge_attention_states
+        from lmdeploy.pytorch.kernels.cuda.dcp import map_and_compact_dcp_prefill_indices, merge_attention_states
 
         prefix_lens = attn_metadata.kv_seqlens - attn_metadata.q_seqlens
-        current_indices = self._map_dcp_prefill_indices(
+        current_indices, current_counts = map_and_compact_dcp_prefill_indices(
             nsa_indices,
-            attn_metadata,
-            prefix_lens,
-            attn_metadata.cu_seqlens_q,
+            request_ids=attn_metadata.dcp_prefill_request_ids,
+            partition_starts=prefix_lens,
+            partition_cu_lens=attn_metadata.cu_seqlens_q,
         )
         output, output_lse = self._prefill_sparse_partition(
-            query, current_key, current_indices)
+            query, current_key, current_indices, current_counts)
 
         for chunk in attn_metadata.dcp_prefill_chunks:
             context_k, context_cu_lens = self._gather_dcp_prefill_context_chunk(
@@ -238,15 +215,14 @@ class FlashMLASparseImpl(FlashMLAImpl):
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
             )
-            starts = torch.full_like(prefix_lens, chunk.start)
-            context_indices = self._map_dcp_prefill_indices(
+            context_indices, context_counts = map_and_compact_dcp_prefill_indices(
                 nsa_indices,
-                attn_metadata,
-                starts,
-                context_cu_lens,
+                request_ids=attn_metadata.dcp_prefill_request_ids,
+                partition_starts=chunk.start,
+                partition_cu_lens=context_cu_lens,
             )
             context_output, context_lse = self._prefill_sparse_partition(
-                query, context_k, context_indices)
+                query, context_k, context_indices, context_counts)
             output, output_lse = merge_attention_states(
                 output, output_lse, context_output, context_lse)
             del context_k, context_indices, context_output, context_lse

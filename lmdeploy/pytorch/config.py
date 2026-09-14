@@ -184,6 +184,8 @@ class CacheConfig:
     def __post_init__(self):
         """Post init."""
         assert self.dcp >= 1, 'invalid dcp'
+        if self.dcp > 1 and (self.role != EngineRole.Hybrid or self.kv_transfer_config is not None):
+            raise ValueError('DCP does not support disaggregation or KV-cache connectors')
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
         if self.window_size > 1 and self.enable_prefix_caching:
@@ -229,6 +231,8 @@ class DistConfig:
         assert self.dp_rank < self.dp
         assert self.dp >= 1
         assert self.dcp >= 1
+        if self.dcp > 1 and (self.dp != 1 or self.ep != 1):
+            raise ValueError('DCP currently requires dp=1 and ep=1')
 
         dp = self.dp
         tp = self.tp

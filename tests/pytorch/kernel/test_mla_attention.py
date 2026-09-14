@@ -460,33 +460,57 @@ def test_sparse_mla_prefill_routes_by_kv_length(monkeypatch):
     assert dense_prefill.call_args.kwargs['nsa_indices'] is None
 
 
-def test_dcp_sparse_prefill_maps_partition_indices():
-    impl = object.__new__(FlashMLASparseImpl)
-    metadata = SimpleNamespace(
-        q_seqlens=torch.tensor([2, 1], dtype=torch.int32),
-        q_start_loc=torch.tensor([0, 2], dtype=torch.int32),
-    )
-    indices = torch.tensor([[2, 3, 4, 5], [4, 1, -1, -1],
-                            [5, 6, -1, -1]],
-                           dtype=torch.int32)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
+@pytest.mark.parametrize('topk', [7, 512, 2048])
+@pytest.mark.parametrize('strided', [False, True])
+@pytest.mark.parametrize('partition_start', [0, 128, 'per_request'])
+def test_dcp_sparse_prefill_maps_and_compacts_partition_indices(topk, strided, partition_start):
+    from lmdeploy.pytorch.kernels.cuda.dcp import map_and_compact_dcp_prefill_indices
 
-    mapped = impl._map_dcp_prefill_indices(
-        indices,
-        metadata,
-        partition_starts=torch.tensor([3, 5], dtype=torch.int32),
-        partition_cu_lens=torch.tensor([0, 2, 3], dtype=torch.int32),
-    )
+    stride = 2 if strided else 1
+    request_ids = torch.tensor([0, 0, 2, 3, 3, 3], dtype=torch.int32, device='cuda')
+    starts = torch.tensor([128, 0, 200, 0], dtype=torch.int64, device='cuda')
+    if partition_start != 'per_request':
+        starts.fill_(partition_start)
+    cu_lens = torch.tensor([0, 2, 2, 2, 5], dtype=torch.int64, device='cuda')
+    torch.manual_seed(51)
+    indices = torch.randint(-2, 6, (6, topk), dtype=torch.int32, device='cuda')
+    indices += starts[request_ids, None].int()
+    indices[0] = starts[0] + torch.arange(topk, device='cuda') % 2  # all valid, stable duplicates
+    indices[1].fill_(-1)  # no selected tokens
+    indices[3, ::2] = -1  # interior gaps
+    original = indices.clone()
+    indices = indices.repeat_interleave(stride, dim=1)[:, ::stride]
+    request_ids = request_ids.repeat_interleave(stride)[::stride]
+    starts = starts.repeat_interleave(stride)[::stride]
+    cu_lens = cu_lens.repeat_interleave(stride)[::stride]
 
-    assert mapped.dtype == torch.int32
-    assert mapped[:, 0].tolist() == [[-1, 0, 1, -1], [1, -1, -1, -1],
-                                    [2, -1, -1, -1]]
+    mapped, counts = map_and_compact_dcp_prefill_indices(
+        indices, request_ids=request_ids,
+        partition_starts=starts if partition_start == 'per_request' else partition_start,
+        partition_cu_lens=cu_lens)
+
+    expected, expected_counts = [], []
+    starts_cpu, cu_cpu = starts.tolist(), cu_lens.tolist()
+    for row, request in zip(original.tolist(), request_ids.tolist()):
+        start, base = starts_cpu[request], cu_cpu[request]
+        end = start + cu_cpu[request + 1] - base
+        valid = [index - start + base for index in row if index >= 0 and start <= index < end]
+        expected.append(valid + [-1] * (topk - len(valid)))
+        expected_counts.append(len(valid))
+    assert mapped.shape == (6, 1, topk)
+    assert mapped.dtype == counts.dtype == torch.int32
+    assert mapped[:, 0].tolist() == expected
+    assert counts.tolist() == expected_counts
+    torch.testing.assert_close(indices, original)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
 @pytest.mark.parametrize('sparse', [False, True])
 @pytest.mark.parametrize('fp8_cache', [False, True])
 @pytest.mark.parametrize('dcp_size', [2, 4])
-def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse, fp8_cache, dcp_size):
+@pytest.mark.parametrize('kv_length', [512, 513])
+def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse, fp8_cache, dcp_size, kv_length):
     pytest.importorskip('flash_mla')
     if sparse and torch.cuda.get_device_capability()[0] != 9:
         pytest.skip('FlashMLA BF16 sparse attention requires an SM90 GPU')
@@ -499,36 +523,43 @@ def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse,
     )
     torch.manual_seed(51)
     device = 'cuda'
-    lengths = torch.tensor([259, 3], dtype=torch.int32, device=device)
+    prefix_length = kv_length - 2
+    use_sparse = sparse and kv_length > 512
+    lengths = torch.tensor([kv_length, 3], dtype=torch.int32, device=device)
     q_lengths = torch.tensor([2, 3], dtype=torch.int32, device=device)
-    keys = torch.randn(262, 1, 576, dtype=torch.bfloat16, device=device)
+    keys = torch.randn(kv_length + 3, 1, 576, dtype=torch.bfloat16, device=device)
     query = torch.randn(5, 8, 576, dtype=torch.bfloat16, device=device)
-    current_key = torch.cat([keys[257:259], keys[259:]])
-    blocks = torch.tensor([[0, 1, 2], [3, 0, 0]], dtype=torch.int32, device=device)
-    cu_k = torch.tensor([0, 259, 262], dtype=torch.int32, device=device)
+    current_key = keys[prefix_length:]
+    blocks = torch.tensor([[0, 1, 2, 3, 4], [5, 0, 0, 0, 0]], dtype=torch.int32, device=device)
+    cu_k = torch.tensor([0, kv_length, kv_length + 3], dtype=torch.int32, device=device)
     cu_q = torch.tensor([0, 2, 5], dtype=torch.int32, device=device)
     layout = SimpleNamespace(block_offsets=blocks,
                              q_start_loc=cu_q[:-1],
                              q_seqlens=q_lengths,
                              kv_start_loc=cu_k[:-1],
                              kv_seqlens=lengths,
-                             kv_flatten_size=262,
+                             kv_flatten_size=kv_length + 3,
                              cu_seqlens_q=cu_q,
                              cu_seqlens_k=cu_k,
-                             max_kv_seqlen=259)
+                             max_kv_seqlen=kv_length)
     step = SimpleNamespace(is_decoding=False,
                            max_q_seqlen=3,
                            input_ids=torch.zeros(1, 5),
                            cache_config=SimpleNamespace(block_size=64),
-                           model_config=SimpleNamespace(head_dim=576),
+                           model_config=SimpleNamespace(head_dim=576, mla_index_topk=512 if sparse else None),
                            kv_quant_policy=0)
     monkeypatch.setattr(distributed, 'get_dcp_world_rank', lambda: (dcp_size, 0))
     # One virtual block per chunk, with an empty second request in every chunk.
     monkeypatch.setattr(cp_utils, 'get_dcp_prefill_workspace_size',
                         lambda **kwargs: 2 * 64 * (1 + 2 * dcp_size) * 576 * 2)
     metadata = build_triton_attention_metadata(TritonAttentionMetadata, step, layout)
-    num_chunks = (257 + 64 * dcp_size - 1) // (64 * dcp_size)
+    num_chunks = (prefix_length + 64 * dcp_size - 1) // (64 * dcp_size)
     assert len(metadata.dcp_prefill_chunks) == num_chunks
+    if use_sparse:
+        assert metadata.dcp_prefill_request_ids.dtype == torch.int32
+        assert metadata.dcp_prefill_request_ids.tolist() == [0, 0, 1, 1, 1]
+    else:
+        assert metadata.dcp_prefill_request_ids is None
     impl_cls = FlashMLASparseImpl if sparse else mla_module.FlashMLAImpl
     kwargs = dict(mla_index_topk=512) if sparse else {}
     impl = impl_cls(num_heads=8,
@@ -538,28 +569,28 @@ def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse,
                     scale=576**-0.5,
                     use_fa3=False,
                     **kwargs)
-    cache = torch.zeros(4, 64, 1, 656 if fp8_cache else 576,
+    cache = torch.zeros(6, 64, 1, 656 if fp8_cache else 576,
                         dtype=torch.float8_e4m3fn if fp8_cache else torch.bfloat16, device=device)
     value_cache = cache[..., :0] if fp8_cache else cache[..., :512]
     fill_metadata = TritonAttentionMetadata(
         is_decoding=False, block_offsets=blocks, q_start_loc=cu_k[:-1],
         q_seqlens=lengths, kv_seqlens=lengths, cu_seqlens_q=cu_k)
-    impl._fill_kv_cache_impl(keys, keys[..., :512], cache, value_cache, fill_metadata, 259)
+    impl._fill_kv_cache_impl(keys, keys[..., :512], cache, value_cache, fill_metadata, kv_length)
     reference_keys = keys.clone()
     if fp8_cache:
         # Independent token-wise UE8M0 scale / FP8 round trip. Only cached
         # history is quantized in DCP prefill; current keys remain BF16.
-        latent = keys[:257, :, :512].float().unflatten(-1, (4, 128))
+        latent = keys[:prefix_length, :, :512].float().unflatten(-1, (4, 128))
         scales = (latent.abs().amax(-1, keepdim=True).clamp_min(1e-6) / 448).log2().ceil().exp2()
         latent = (latent / scales).to(torch.float8_e4m3fn).float() * scales
-        reference_keys[:257, :, :512] = latent.flatten(-2).to(torch.bfloat16)
+        reference_keys[:prefix_length, :, :512] = latent.flatten(-2).to(torch.bfloat16)
     gather_calls = 0
 
     def gather(output, local, group='tp'):
         nonlocal gather_calls
         assert group == 'dcp'
         chunk = metadata.dcp_prefill_chunks[gather_calls]
-        prefix = reference_keys[chunk.start:min(chunk.start + chunk.size, 257)]
+        prefix = reference_keys[chunk.start:min(chunk.start + chunk.size, prefix_length)]
         torch.testing.assert_close(local[:prefix[::dcp_size].size(0)], prefix[::dcp_size], atol=0, rtol=0)
         output[:local.size(0)].copy_(local)
         for rank in range(1, dcp_size):
@@ -569,20 +600,20 @@ def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse,
         gather_calls += 1
 
     monkeypatch.setattr(distributed, 'all_gather_into_tensor', gather)
-    if sparse:
+    indices = None
+    if use_sparse:
         # Non-contiguous selections span cached chunks and current tokens.
         # The two long-query rows intentionally select different positions.
-        selected_positions = [[7, 128, 256, 257], [0, 127, 200, 258], [0], [1], [0, 2]]
+        selected_positions = [[7, 128, 256, prefix_length], [0, 127, 200, kv_length - 1], [0], [1], [0, 2]]
         indices = torch.full((5, 512), -1, dtype=torch.int32, device=device)
         for row, positions in enumerate(selected_positions):
             indices[row, :len(positions)] = torch.tensor(positions, dtype=torch.int32, device=device)
-        actual = impl._prefill_sparse_dcp(query, current_key, cache, value_cache, indices, metadata)
-    else:
-        actual = impl._prefill_dcp_context(query, current_key, cache, value_cache, metadata)
+    actual = impl._forward_prefill(query, cache, value_cache, metadata, nsa_indices=indices, current_key=current_key)
     expected = []
-    for row, (start, end) in enumerate([(0, 258), (0, 259), (259, 260), (259, 261), (259, 262)]):
+    ranges = [(0, kv_length - 1), (0, kv_length)] + [(kv_length, kv_length + i) for i in (1, 2, 3)]
+    for row, (start, end) in enumerate(ranges):
         kv = reference_keys[start:end, 0].float()
-        if sparse:
+        if use_sparse:
             kv = kv[selected_positions[row]]
         scores = query[row].float() @ kv.T * 576**-0.5
         expected.append(scores.softmax(-1) @ kv[:, :512])

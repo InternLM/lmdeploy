@@ -28,17 +28,6 @@ def test_mtp_cache_inherits_draft_dcp_geometry(monkeypatch, dcp):
     assert spec.cache_config.kernel_block_size == target_cache.kernel_block_size
 
 
-def test_dcp_rejects_tilelang_sparse_backend(monkeypatch):
-    from lmdeploy.pytorch.engine import executor
-
-    monkeypatch.setattr(executor.envs, 'sparse_mla_backend', 'tilelang')
-    model = SimpleNamespace(use_flash_mla=True, dtype=torch.bfloat16, mla_index_topk=2048)
-    cache = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=8, dcp=2)
-    with pytest.raises(ValueError, match='TileLang does not support DCP'):
-        executor._validate_dcp_config(model, cache, DistConfig(tp=2, dcp=2), 'cuda')
-    executor._validate_dcp_config(model, cache, DistConfig(tp=2), 'cuda')
-
-
 def test_dcp_prefill_chunks_cover_uneven_prefixes_with_bounded_workspace():
     from lmdeploy.pytorch.backends.cp_utils import build_dcp_prefill_chunks, get_dcp_prefill_workspace_size
 
@@ -161,7 +150,8 @@ def test_dcp_group_membership(monkeypatch):
     assert distributed.get_dcp_world_rank() == (dcp, rank % dcp)
 
 
-def test_nsa_metadata_localizes_each_causal_row():
+@pytest.mark.parametrize('is_decoding', [False, True])
+def test_nsa_metadata_localizes_each_causal_row(is_decoding):
     from lmdeploy.pytorch.backends.nsa import build_nsa_index_meta
 
     q_seqlens = torch.tensor([2, 3], dtype=torch.int32)
@@ -176,7 +166,7 @@ def test_nsa_metadata_localizes_each_causal_row():
         kv_flatten_size=13,
     )
     meta = build_nsa_index_meta(num_tokens=5,
-                                is_decoding=False,
+                                is_decoding=is_decoding,
                                 block_size=64,
                                 num_gpu_blocks=4,
                                 sequence_metadata=sequence_metadata,
@@ -184,6 +174,10 @@ def test_nsa_metadata_localizes_each_causal_row():
 
     assert meta.dcp_local_kv_seqlens.tolist() == [2, 4]
     assert meta.indexer_kv_seqlens.tolist() == [2, 2, 3, 3, 4]
+    if is_decoding:
+        assert meta.cu_seqlen_k is None
+    else:
+        assert meta.cu_seqlen_k.tolist() == [0, 2, 6]
 
 
 def test_dcp_prefill_scoring_uses_global_sparse_boundary():

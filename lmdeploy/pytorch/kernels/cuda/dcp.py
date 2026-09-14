@@ -55,6 +55,59 @@ def filter_and_compact_dcp_indices(indices: torch.Tensor, *,
 
 
 @triton.jit
+def _map_and_compact_dcp_prefill_indices_kernel(
+    Indices, RequestIds, PartitionStarts, PartitionCuLens, Output, Counts,
+    stride_ir, stride_ic, stride_req, stride_start, stride_cu,
+    width: tl.constexpr, PER_REQUEST_START: tl.constexpr, BLOCK: tl.constexpr,
+):
+    row = tl.program_id(0)
+    request = tl.load(RequestIds + row * stride_req)
+    if PER_REQUEST_START:
+        start = tl.load(PartitionStarts + request * stride_start)
+    else:
+        start = PartitionStarts
+    base = tl.load(PartitionCuLens + request * stride_cu)
+    length = tl.load(PartitionCuLens + (request + 1) * stride_cu) - base
+    columns = tl.arange(0, BLOCK)
+    indices = tl.load(Indices + row * stride_ir + columns * stride_ic,
+                      mask=columns < width, other=-1)
+    # This partition contains gathered global KV, not a rank-local cache.
+    valid = (columns < width) & (indices >= 0) & (indices >= start) & (indices < start + length)
+    mapped = indices - start + base
+    positions = tl.cumsum(valid.to(tl.int32))
+    count = tl.sum(valid.to(tl.int32))
+    # Stable compaction and -1 padding in one pass, as in the decode helper.
+    destinations = tl.where(valid, positions - 1, count + columns - positions)
+    tl.store(Output + row * width + destinations, tl.where(valid, mapped, -1), mask=columns < width)
+    tl.store(Counts + row, count)
+
+
+def map_and_compact_dcp_prefill_indices(indices: torch.Tensor, *, request_ids: torch.Tensor,
+                                        partition_starts: torch.Tensor | int,
+                                        partition_cu_lens: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Map global request-local top-k indices into one gathered prefill
+    partition.
+
+    ``request_ids`` is shared step metadata with one request index per query row. ``partition_starts`` is a
+    per-request tensor for current tokens or a scalar cached-chunk start. Return stable compacted INT32 indices
+    shaped [tokens, 1, topk], padded with -1, and valid counts shaped [tokens]. No DCP ownership filtering is applied.
+    """
+    assert indices.dim() == 2 and indices.dtype == torch.int32
+    assert request_ids.shape == indices.shape[:1]
+    num_tokens, width = indices.shape
+    output = torch.empty((num_tokens, 1, width), dtype=torch.int32, device=indices.device)
+    counts = torch.empty(num_tokens, dtype=torch.int32, device=indices.device)
+    per_request_start = isinstance(partition_starts, torch.Tensor)
+    _map_and_compact_dcp_prefill_indices_kernel[(num_tokens, )](
+        indices, request_ids, partition_starts, partition_cu_lens, output, counts,
+        *indices.stride(), request_ids.stride(0),
+        partition_starts.stride(0) if per_request_start else 0, partition_cu_lens.stride(0),
+        width=width, PER_REQUEST_START=per_request_start,
+        BLOCK=triton.next_power_of_2(width), num_warps=4)
+    return output, counts
+
+
+@triton.jit
 def _sanitize_dcp_lse_kernel(
     Lse,
     ValidRows,

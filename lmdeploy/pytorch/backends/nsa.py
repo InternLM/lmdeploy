@@ -21,7 +21,7 @@ class NSAIndexMeta:
     q_seqlens: Tensor
     k_seqlens: Tensor  # global lengths used by interleaved cache writes
     dcp_local_kv_seqlens: Tensor
-    cu_seqlen_k: Tensor  # cumulative offsets for rank-local KV
+    cu_seqlen_k: Tensor | None  # rank-local KV offsets; unused in DCP paged decode
     block_offset: Tensor
     indexer_kv_seqlens: Tensor = None
     max_q_seqlen: int = None
@@ -76,6 +76,10 @@ def build_nsa_index_meta(*, num_tokens: int, is_decoding: bool,
     if dcp_world_size == 1:
         dcp_local_kv_seqlens = sequence_metadata.kv_seqlens
         dcp_local_cu_seqlens = sequence_metadata.cu_seqlens_k
+    elif is_decoding:
+        # Paged decode reads block tables directly; cumulative KV offsets are only needed for prefill.
+        dcp_local_kv_seqlens = get_dcp_local_seq_lens(sequence_metadata.kv_seqlens, dcp_world_rank)
+        dcp_local_cu_seqlens = None
     else:
         dcp_local_kv_seqlens, dcp_local_cu_seqlens = get_dcp_local_cu_seqlens(
             sequence_metadata.kv_seqlens, dcp_world_rank)

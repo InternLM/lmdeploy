@@ -325,6 +325,9 @@ class DSAIndexerMetaBuilder(
             max_kv_seqlen=graph_meta.num_blocks * graph_meta.block_size,
         )
         if graph_meta.decode_query_len > 1:
+            from lmdeploy.pytorch.distributed import get_dcp_world_rank
+
+            dcp_size, dcp_rank = get_dcp_world_rank()
             fill_dsa_indexer_metadata(
                 sequence_metadata.q_seqlens,
                 sequence_metadata.kv_seqlens,
@@ -334,17 +337,9 @@ class DSAIndexerMetaBuilder(
                 buffer.expanded_block_offsets,
                 graph_meta.max_tokens,
                 graph_meta.decode_query_len,
+                dcp_size=dcp_size,
+                dcp_rank=dcp_rank,
             )
-            from lmdeploy.pytorch.backends.cp_utils import fill_dcp_local_seq_lens
-            from lmdeploy.pytorch.distributed import get_dcp_world_rank
-
-            dcp_world_rank = get_dcp_world_rank()
-            if dcp_world_rank[0] > 1:
-                # The filler emits global causal lengths, whereas the graph
-                # buffer below is consumed as already rank-local metadata.
-                fill_dcp_local_seq_lens(buffer.indexer_kv_seqlens,
-                                        buffer.indexer_kv_seqlens,
-                                        dcp_world_rank)
         meta = build_nsa_index_meta(
             num_tokens=graph_meta.max_tokens,
             is_decoding=True,
