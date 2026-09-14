@@ -36,7 +36,7 @@ def execute_command_with_logging(cmd,
                                      start_new_session=True)
 
             if process.stdout:
-                if should_print:
+                if should_print or process.returncode != 0:
                     print(process.stdout, end='')
                 log_file.write(process.stdout)
 

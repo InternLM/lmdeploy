@@ -7,6 +7,7 @@ __pycache__/
 .vscode/
 .idea/
 .cursor/
+.zed/
 # C extensions
 *.so
 
@@ -53,6 +54,9 @@ htmlcov/
 !.claude/skills/docker-build/
 lmdeploy/lib/
 lmdeploy/bin/
+lmdeploy/turbomind/_turbomind*.so
+lmdeploy/turbomind/_turbomind*.pyd
+lmdeploy/turbomind/lib/
 dist/
 examples/cpp/llama/*.csv
 *.npy
