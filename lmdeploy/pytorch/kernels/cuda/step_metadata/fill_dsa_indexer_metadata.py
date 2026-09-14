@@ -55,9 +55,8 @@ def _fill_dsa_indexer_metadata_kernel(
 
     query_mask = offsets < q_len
     visible_kv_len = kv_len - q_len + offsets + 1
-    if DCP_SIZE > 1:
-        # Apply global causality before converting to interleaved rank-local lengths.
-        visible_kv_len = tl.maximum((visible_kv_len + DCP_SIZE - 1 - DCP_RANK) // DCP_SIZE, 0)
+    # Apply global causality before converting to interleaved rank-local lengths.
+    visible_kv_len = tl.maximum((visible_kv_len + DCP_SIZE - 1 - DCP_RANK) // DCP_SIZE, 0)
     tl.store(indexer_kv_seqlens + q_start + offsets,
              visible_kv_len,
              mask=query_mask)

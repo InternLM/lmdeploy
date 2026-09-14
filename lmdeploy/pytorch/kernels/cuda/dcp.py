@@ -13,26 +13,24 @@ def _filter_and_compact_dcp_indices_kernel(
     Counts,
     stride_ir,
     stride_ic,
-    width: tl.constexpr,
-    dcp_size: tl.constexpr,
-    dcp_rank: tl.constexpr,
+    WIDTH: tl.constexpr,
+    DCP_SIZE: tl.constexpr,
+    DCP_RANK: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
     row = tl.program_id(0)
     columns = tl.arange(0, BLOCK)
     indices = tl.load(Indices + row * stride_ir + columns * stride_ic,
-                      mask=columns < width, other=-1)
-    valid = indices >= 0
-    if dcp_size > 1:
-        valid &= indices % dcp_size == dcp_rank
-        indices = indices // dcp_size
+                      mask=columns < WIDTH, other=-1)
+    valid = (indices >= 0) & (indices % DCP_SIZE == DCP_RANK)
+    indices = indices // DCP_SIZE
     positions = tl.cumsum(valid.to(tl.int32))
     count = tl.sum(valid.to(tl.int32))
     # Scatter both groups to disjoint destinations, avoiding a separate fill
     # of the -1 tail and preserving the original order of valid indices.
     destinations = tl.where(valid, positions - 1, count + columns - positions)
-    tl.store(Output + row * width + destinations, tl.where(valid, indices, -1),
-             mask=columns < width)
+    tl.store(Output + row * WIDTH + destinations, tl.where(valid, indices, -1),
+             mask=columns < WIDTH)
     tl.store(Counts + row, count)
 
 
@@ -48,8 +46,8 @@ def filter_and_compact_dcp_indices(indices: torch.Tensor, *,
     counts = torch.empty(indices.shape[:-1], dtype=torch.int32, device=indices.device)
     dcp_size, dcp_rank = dcp_world_rank
     _filter_and_compact_dcp_indices_kernel[(rows.size(0), )](
-        rows, output, counts, *rows.stride(), width=rows.size(1),
-        dcp_size=dcp_size, dcp_rank=dcp_rank,
+        rows, output, counts, *rows.stride(), WIDTH=rows.size(1),
+        DCP_SIZE=dcp_size, DCP_RANK=dcp_rank,
         BLOCK=triton.next_power_of_2(rows.size(1)), num_warps=4)
     return output, counts
 
@@ -58,7 +56,7 @@ def filter_and_compact_dcp_indices(indices: torch.Tensor, *,
 def _map_and_compact_dcp_prefill_indices_kernel(
     Indices, RequestIds, PartitionStarts, PartitionCuLens, Output, Counts,
     stride_ir, stride_ic, stride_req, stride_start, stride_cu,
-    width: tl.constexpr, PER_REQUEST_START: tl.constexpr, BLOCK: tl.constexpr,
+    WIDTH: tl.constexpr, PER_REQUEST_START: tl.constexpr, BLOCK: tl.constexpr,
 ):
     row = tl.program_id(0)
     request = tl.load(RequestIds + row * stride_req)
@@ -70,15 +68,15 @@ def _map_and_compact_dcp_prefill_indices_kernel(
     length = tl.load(PartitionCuLens + (request + 1) * stride_cu) - base
     columns = tl.arange(0, BLOCK)
     indices = tl.load(Indices + row * stride_ir + columns * stride_ic,
-                      mask=columns < width, other=-1)
+                      mask=columns < WIDTH, other=-1)
     # This partition contains gathered global KV, not a rank-local cache.
-    valid = (columns < width) & (indices >= 0) & (indices >= start) & (indices < start + length)
+    valid = (columns < WIDTH) & (indices >= 0) & (indices >= start) & (indices < start + length)
     mapped = indices - start + base
     positions = tl.cumsum(valid.to(tl.int32))
     count = tl.sum(valid.to(tl.int32))
     # Stable compaction and -1 padding in one pass, as in the decode helper.
     destinations = tl.where(valid, positions - 1, count + columns - positions)
-    tl.store(Output + row * width + destinations, tl.where(valid, mapped, -1), mask=columns < width)
+    tl.store(Output + row * WIDTH + destinations, tl.where(valid, mapped, -1), mask=columns < WIDTH)
     tl.store(Counts + row, count)
 
 
@@ -102,7 +100,7 @@ def map_and_compact_dcp_prefill_indices(indices: torch.Tensor, *, request_ids: t
         indices, request_ids, partition_starts, partition_cu_lens, output, counts,
         *indices.stride(), request_ids.stride(0),
         partition_starts.stride(0) if per_request_start else 0, partition_cu_lens.stride(0),
-        width=width, PER_REQUEST_START=per_request_start,
+        WIDTH=width, PER_REQUEST_START=per_request_start,
         BLOCK=triton.next_power_of_2(width), num_warps=4)
     return output, counts
 
@@ -115,16 +113,16 @@ def _sanitize_dcp_lse_kernel(
     numel,
     stride_lr,
     stride_lh,
-    num_heads: tl.constexpr,
+    NUM_HEADS: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
     # ``offsets`` indexes the dense output, while ``Lse`` may be a view whose
-    # physical row width is larger than ``num_heads``. Recover the logical
+    # physical row width is larger than ``NUM_HEADS``. Recover the logical
     # [row, head] coordinates and address the input with its actual strides.
     offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = offsets < numel
-    rows = offsets // num_heads
-    heads = offsets % num_heads
+    rows = offsets // NUM_HEADS
+    heads = offsets % NUM_HEADS
     lse = tl.load(Lse + rows * stride_lr + heads * stride_lh,
                   mask=mask).to(tl.float32)
     valid = tl.load(ValidRows + rows, mask=mask, other=0)
@@ -147,16 +145,16 @@ def _correct_dcp_attention_output_kernel(
     stride_ch,
     stride_cb,
     stride_cd,
-    dcp_rank: tl.constexpr,
-    dcp_size: tl.constexpr,
-    head_dim: tl.constexpr,
+    DCP_RANK: tl.constexpr,
+    DCP_SIZE: tl.constexpr,
+    HEAD_DIM: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_D: tl.constexpr,
 ):
     row = tl.program_id(0)
     head = tl.program_id(1)
     rank_offsets = tl.arange(0, BLOCK_N)
-    rank_mask = rank_offsets < dcp_size
+    rank_mask = rank_offsets < DCP_SIZE
     lse_offsets = (rank_offsets * stride_ln + row * stride_lb +
                    head * stride_lh)
     lse = tl.load(GatheredLse + lse_offsets,
@@ -167,12 +165,12 @@ def _correct_dcp_attention_output_kernel(
     safe_max_lse = tl.where(max_lse == -float('inf'), 0.0, max_lse)
     exp_lse = tl.exp(lse - safe_max_lse)
     denominator = tl.sum(exp_lse, axis=0)
-    numerator = tl.sum(tl.where(rank_offsets == dcp_rank, exp_lse, 0.0),
+    numerator = tl.sum(tl.where(rank_offsets == DCP_RANK, exp_lse, 0.0),
                        axis=0)
     correction = tl.where(denominator > 0.0, numerator / denominator, 0.0)
 
     dim_offsets = tl.arange(0, BLOCK_D)
-    dim_mask = dim_offsets < head_dim
+    dim_mask = dim_offsets < HEAD_DIM
     input_offsets = (row * stride_ob + head * stride_oh +
                      dim_offsets * stride_od)
     output_offsets = (head * stride_ch + row * stride_cb +
@@ -206,7 +204,7 @@ def _merge_attention_states_kernel(
     stride_od,
     stride_olb,
     stride_olh,
-    head_dim: tl.constexpr,
+    HEAD_DIM: tl.constexpr,
     BLOCK_D: tl.constexpr,
 ):
     row = tl.program_id(0)
@@ -231,7 +229,7 @@ def _merge_attention_states_kernel(
     suffix_scale = tl.where(valid, suffix_exp / denominator, 0.0)
 
     dims = tl.arange(0, BLOCK_D)
-    mask = dims < head_dim
+    mask = dims < HEAD_DIM
     prefix_offset = (row * stride_pob + head * stride_poh +
                      dims * stride_pod)
     suffix_offset = (row * stride_sob + head * stride_soh +
@@ -263,7 +261,7 @@ def _reorder_dcp_prefill_kv_kernel(
     stride_od,
     stride_lr,
     stride_ls,
-    dcp_size: tl.constexpr,
+    DCP_SIZE: tl.constexpr,
     BLOCK_D: tl.constexpr,
 ):
     source_row = tl.program_id(0)
@@ -289,7 +287,7 @@ def _reorder_dcp_prefill_kv_kernel(
         request_start += request_len
         request += 1
 
-    global_position = position_in_request * dcp_size + rank
+    global_position = position_in_request * DCP_SIZE + rank
     chunk_kv_seqlen = tl.load(ChunkKvSeqLens + request_id, mask=found, other=0)
     output_start = tl.load(KvStartLoc + request_id, mask=found, other=0)
     valid_row = found & (global_position < chunk_kv_seqlen)
@@ -332,7 +330,7 @@ def sanitize_dcp_lse(local_lse: torch.Tensor,
         numel,
         local_lse.stride(0),
         local_lse.stride(1),
-        num_heads=local_lse.size(1),
+        NUM_HEADS=local_lse.size(1),
         BLOCK=block,
     )
     return output
@@ -368,9 +366,9 @@ def correct_dcp_attention_output(local_output: torch.Tensor,
         *local_output.stride(),
         *gathered_lse.stride(),
         *corrected.stride(),
-        dcp_rank=dcp_rank,
-        dcp_size=dcp_size,
-        head_dim=local_output.size(2),
+        DCP_RANK=dcp_rank,
+        DCP_SIZE=dcp_size,
+        HEAD_DIM=local_output.size(2),
         BLOCK_N=block_n,
         BLOCK_D=block_d,
         num_warps=4,
@@ -401,7 +399,7 @@ def merge_attention_states(
         *suffix_lse.stride(),
         *output.stride(),
         *output_lse.stride(),
-        head_dim=prefix_output.size(2),
+        HEAD_DIM=prefix_output.size(2),
         BLOCK_D=block_d,
         num_warps=4,
     )
@@ -443,7 +441,7 @@ def reorder_dcp_prefill_kv(gathered: torch.Tensor, output: torch.Tensor, *,
         *gathered_rows.stride(),
         *output_rows.stride(),
         *local_lens.stride(),
-        dcp_size=dcp_size,
+        DCP_SIZE=dcp_size,
         BLOCK_D=block_d,
         num_warps=8,
     )

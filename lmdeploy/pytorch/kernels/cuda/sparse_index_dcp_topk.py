@@ -60,15 +60,15 @@ def _pack_dcp_topk_candidates_kernel(
     stride_pr,
     stride_pc,
     stride_pp,
-    dcp_size: tl.constexpr,
-    dcp_rank: tl.constexpr,
-    top_k: tl.constexpr,
+    DCP_SIZE: tl.constexpr,
+    DCP_RANK: tl.constexpr,
+    TOP_K: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
     # Decode graph score buffers can exceed 2**31 elements with a large KV pool.
     row = tl.program_id(0).to(tl.int64)
     columns = tl.program_id(1) * BLOCK + tl.arange(0, BLOCK)
-    column_mask = columns < top_k
+    column_mask = columns < TOP_K
     local_indices = tl.load(LocalIndices + row * stride_ir +
                             columns * stride_ic,
                             mask=column_mask,
@@ -80,7 +80,7 @@ def _pack_dcp_topk_candidates_kernel(
                      mask=column_mask & valid,
                      other=-float('inf')).to(tl.float32)
     # Undo token-interleaved ownership before candidates cross rank boundaries.
-    global_indices = safe_indices * dcp_size + dcp_rank
+    global_indices = safe_indices * DCP_SIZE + DCP_RANK
     global_indices = tl.where(valid, global_indices, -1).to(tl.int32)
 
     packed = Packed + row * stride_pr + columns * stride_pc
@@ -118,9 +118,9 @@ def pack_dcp_topk_candidates(scores: torch.Tensor, local_indices: torch.Tensor,
         *scores.stride(),
         *local_indices.stride(),
         *packed.stride(),
-        dcp_size=dcp_size,
-        dcp_rank=dcp_rank,
-        top_k=local_indices.size(1),
+        DCP_SIZE=dcp_size,
+        DCP_RANK=dcp_rank,
+        TOP_K=local_indices.size(1),
         BLOCK=block,
         num_warps=8,
     )
