@@ -25,9 +25,9 @@ PARALLEL_LAYOUT_KEYS = ('tp', 'dp', 'ep', 'cp')
 ENGINE_CONFIG_KEY = 'engine_config'
 TEST_COVERAGE_KEY = 'test_coverage'
 INTERFACE_KEY = 'interface'
-INTERFACE_SUITES = frozenset({'base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning'})
+INTERFACE_SUITES = frozenset({'base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning', 'hard_schema'})
 GENERATE_SUITES = frozenset({'base', 'logprob', 'experts'})
-INTERFACE_SUITE_ORDER = ('base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning')
+INTERFACE_SUITE_ORDER = ('base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning', 'hard_schema')
 INTERFACE_BACKENDS_ENV = 'INTERFACE_BACKENDS'
 
 
@@ -92,8 +92,8 @@ PROFILE_TO_MODEL_TYPE_KEY = {
 # ``all``: disable filtering (tests / debug).
 DEPS_PROFILE_ENV = 'DEPS_PROFILE'
 EMPTY_DEPS_SELECTOR = '__empty__'
-# Autotest-only keys in engine_config.extra (not forwarded to lmdeploy CLI).
-CLI_SKIP_EXTRA_KEYS = frozenset()
+
+CLI_SKIP_EXTRA_KEYS = frozenset({'enable-thinking', 'chat-template-kwargs'})
 
 
 def get_model_path_from_config(config: dict[str, Any], model_id: str) -> str:
@@ -803,6 +803,8 @@ def derive_interface_case_info(profiles: list[str], suites: list[str] | set[str]
         case_info.append('anthropic_sdk')
     if 'toolcall' in suite_set:
         case_info.append('toolcall')
+    if 'hard_schema' in suite_set:
+        case_info.append('hard_schema')
     if 'reasoning' in suite_set:
         case_info.append('reasoning')
     return case_info

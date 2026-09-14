@@ -97,6 +97,17 @@ THINKING_SCRATCHPAD = '(internal scratchpad)'
 ASSISTANT_GREETING_AFTER_THINKING = 'Hello — how can I help?'
 USER_HI = 'Hi.'
 USER_REPLY_ACK = 'Reply with exactly: ACK'
+USER_ACKNOWLEDGE = 'Acknowledge.'
+USER_ASK_REQUIRED_REPLY = 'Acknowledge with your required reply.'
+
+ANTHROPIC_SYSTEM_REPLY_OK = 'Reply with one word: OK.'
+ANTHROPIC_SYSTEM_REPLY_CONFIRMED = (
+    'You reply only with the single word: Confirmed.'
+)
+ANTHROPIC_SYSTEM_REPLY_ACKNOWLEDGED = (
+    'You reply only with the single word: Acknowledged.'
+)
+ANTHROPIC_SYSTEM_REPLY_BRIEFLY = 'Reply briefly.'
 
 ANTHROPIC_SYSTEM_WEATHER = (
     'You are a helpful assistant that can use tools. '
@@ -136,6 +147,30 @@ ANTHROPIC_MESSAGES_PARALLEL_MIXED = [
         'Also calculate 1234 * 5678.',
     },
 ]
+
+
+def build_anthropic_messages_inline_system_history() -> list[dict]:
+    """Mid-turn ``messages[].role == system`` (Claude Code / beta history)."""
+
+    return [
+        {'role': 'user', 'content': 'Say hello in one word.'},
+        {'role': 'assistant', 'content': 'Hello.'},
+        {'role': 'system', 'content': ANTHROPIC_SYSTEM_REPLY_CONFIRMED},
+        {'role': 'user', 'content': USER_ASK_REQUIRED_REPLY},
+    ]
+
+
+def build_anthropic_messages_merged_system_prompt() -> tuple[str, list[dict]]:
+    """Top-level ``system`` plus inline ``messages[].role == system``."""
+
+    return (
+        ANTHROPIC_SYSTEM_REPLY_ACKNOWLEDGED,
+        [
+            {'role': 'user', 'content': 'First question.'},
+            {'role': 'system', 'content': ANTHROPIC_SYSTEM_REPLY_CONFIRMED},
+            {'role': 'user', 'content': USER_ASK_REQUIRED_REPLY},
+        ],
+    )
 
 
 def build_anthropic_messages_history_tool_result(

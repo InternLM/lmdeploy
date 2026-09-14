@@ -8,6 +8,12 @@ import pytest
 import requests
 from utils.anthropic_messages import (
     ANTHROPIC_MESSAGES_HISTORY_THINKING_REPLAY,
+    ANTHROPIC_SYSTEM_REPLY_ACKNOWLEDGED,
+    ANTHROPIC_SYSTEM_REPLY_BRIEFLY,
+    ANTHROPIC_SYSTEM_REPLY_CONFIRMED,
+    ANTHROPIC_SYSTEM_REPLY_OK,
+    USER_ACKNOWLEDGE,
+    USER_ASK_REQUIRED_REPLY,
     USER_ASK_WEATHER_DALLAS,
     WEATHER_TOOL_ANTHROPIC,
     assert_stream_stop_sequence_lifecycle,
@@ -15,6 +21,8 @@ from utils.anthropic_messages import (
     assert_success_message_json,
     assert_warm_yes_answer,
     build_anthropic_messages_history_tool_result,
+    build_anthropic_messages_inline_system_history,
+    build_anthropic_messages_merged_system_prompt,
 )
 from utils.config_utils import get_config
 from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_MODEL_LIST
@@ -282,7 +290,7 @@ class TestRestfulAnthropicV1:
                 'model': deployed_model_name,
                 'max_tokens': 2048,
                 'temperature': 0.01,
-                'system': 'You reply only with the single word: Acknowledged.',
+                'system': ANTHROPIC_SYSTEM_REPLY_ACKNOWLEDGED,
                 'messages': [{'role': 'user', 'content': 'What is your instruction?'}],
             },
             timeout=120,
@@ -333,10 +341,10 @@ class TestRestfulAnthropicV1:
                 'max_tokens': 256,
                 'temperature': 0.01,
                 'system': [
-                    {'type': 'text', 'text': 'You reply only with the single word: Confirmed.'},
+                    {'type': 'text', 'text': ANTHROPIC_SYSTEM_REPLY_CONFIRMED},
                     {'type': 'text', 'text': ' No extra words.'},
                 ],
-                'messages': [{'role': 'user', 'content': 'Acknowledge with your required reply.'}],
+                'messages': [{'role': 'user', 'content': USER_ASK_REQUIRED_REPLY}],
             },
             timeout=120,
         )
@@ -795,7 +803,7 @@ class TestRestfulAnthropicV1:
 
         count_json = {
             'model': deployed_model_name,
-            'system': 'Reply briefly.',
+            'system': ANTHROPIC_SYSTEM_REPLY_BRIEFLY,
             'messages': [{'role': 'user', 'content': 'Say hello in one word.'}],
         }
         r_count = requests.post(
@@ -884,18 +892,95 @@ class TestRestfulAnthropicV1:
             headers=_anthropic_headers(),
             json={
                 'model': deployed_model_name,
-                'max_tokens': 32,
+                'max_tokens': 256,
                 'temperature': 0.01,
                 'messages': [
-                    {'role': 'system', 'content': 'Reply with one word: OK.'},
-                    {'role': 'user', 'content': 'Acknowledge.'},
+                    {'role': 'system', 'content': ANTHROPIC_SYSTEM_REPLY_OK},
+                    {'role': 'user', 'content': USER_ACKNOWLEDGE},
                 ],
             },
             timeout=120,
         )
         assert resp.status_code == 200, resp.text
         data = assert_success_message_json(resp.json())
-        assert len(_assistant_text_from_message_payload(data).strip()) > 0
+        text = _assistant_text_from_message_payload(data).lower()
+        assert 'ok' in text, text[:500]
+
+    def test_messages_inline_system_in_history(self, backend, model_case, deployed_model_name: str):
+        """Inline ``messages[].role == system`` mid-conversation (merged to
+        front when the chat template requires system-first)."""
+
+        resp = requests.post(
+            _MESSAGES_URL,
+            headers=_anthropic_headers(),
+            json={
+                'model': deployed_model_name,
+                'max_tokens': 256,
+                'temperature': 0.01,
+                'messages': build_anthropic_messages_inline_system_history(),
+            },
+            timeout=120,
+        )
+        assert resp.status_code == 200, resp.text
+        data = assert_success_message_json(resp.json())
+        text = _assistant_text_from_message_payload(data).lower()
+        assert 'confirmed' in text, text[:500]
+
+    def test_messages_top_level_and_inline_system(self, backend, model_case, deployed_model_name: str):
+        """Top-level ``system`` plus inline system messages are accepted
+        together."""
+
+        top_level_system, messages = build_anthropic_messages_merged_system_prompt()
+        resp = requests.post(
+            _MESSAGES_URL,
+            headers=_anthropic_headers(),
+            json={
+                'model': deployed_model_name,
+                'max_tokens': 256,
+                'temperature': 0.01,
+                'system': top_level_system,
+                'messages': messages,
+            },
+            timeout=120,
+        )
+        assert resp.status_code == 200, resp.text
+        data = assert_success_message_json(resp.json())
+        text = _assistant_text_from_message_payload(data).lower()
+        assert 'confirmed' in text or 'acknowledge' in text, text[:500]
+
+    def test_count_tokens_matches_messages_with_inline_system(
+            self, backend, model_case, deployed_model_name: str):
+        """``count_tokens`` matches ``/messages`` when system is split across
+        top-level and ``messages[].role``."""
+
+        top_level_system, messages = build_anthropic_messages_merged_system_prompt()
+        count_json = {
+            'model': deployed_model_name,
+            'system': top_level_system,
+            'messages': messages,
+        }
+        r_count = requests.post(
+            _COUNT_TOKENS_URL,
+            headers=_anthropic_headers(),
+            json=count_json,
+            timeout=60,
+        )
+        assert r_count.status_code == 200, r_count.text
+        counted = _assert_count_tokens_json(r_count.json())
+
+        r_msg = requests.post(
+            _MESSAGES_URL,
+            headers=_anthropic_headers(),
+            json={
+                **count_json,
+                'max_tokens': 32,
+                'temperature': 0.01,
+            },
+            timeout=120,
+        )
+        assert r_msg.status_code == 200, r_msg.text
+        data = assert_success_message_json(r_msg.json())
+        assert data['usage']['input_tokens'] == counted, (data['usage']['input_tokens'], counted)
 
     def test_messages_message_missing_role(self, backend, model_case, deployed_model_name: str):
         resp = requests.post(

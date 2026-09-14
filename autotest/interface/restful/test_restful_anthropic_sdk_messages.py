@@ -7,7 +7,11 @@ import pytest
 
 pytest.importorskip('anthropic')
 
-from utils.anthropic_messages import get_async_anthropic_client_and_model
+from utils.anthropic_messages import (
+    ANTHROPIC_SYSTEM_REPLY_OK,
+    USER_ACKNOWLEDGE,
+    get_async_anthropic_client_and_model,
+)
 from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
 
 
@@ -46,6 +50,19 @@ async def _sdk_system_non_stream() -> object:
         temperature=0.01,
         system=[{'type': 'text', 'text': 'you are a helpful assistant'}],
         messages=[{'role': 'user', 'content': 'how are you!'}],
+    )
+
+
+async def _sdk_inline_system_non_stream() -> object:
+    client, model_name = get_async_anthropic_client_and_model()
+    return await client.messages.create(
+        model=model_name,
+        max_tokens=256,
+        temperature=0.01,
+        messages=[
+            {'role': 'system', 'content': ANTHROPIC_SYSTEM_REPLY_OK},
+            {'role': 'user', 'content': USER_ACKNOWLEDGE},
+        ],
     )
 
 
@@ -95,6 +112,13 @@ class TestRestfulAnthropicSdkMessages:
         assert msg.stop_reason in ('end_turn', 'max_tokens')
         text = _text_from_message(msg)
         assert len(text) > 0
+
+    def test_sdk_inline_system_message_non_stream(self, backend, model_case):
+        msg = asyncio.run(_sdk_inline_system_non_stream())
+        assert msg.role == 'assistant'
+        assert msg.stop_reason in ('end_turn', 'max_tokens')
+        text = _text_from_message(msg).lower()
+        assert 'ok' in text
 
     def test_sdk_streaming(self, backend, model_case):
         events, final_msg = asyncio.run(_sdk_stream_events_and_final())
