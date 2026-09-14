@@ -25,6 +25,7 @@ from lmdeploy.pytorch.disagg.config import DistServeRDMAConfig, EngineRole, RDMA
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.disagg.conn.proxy_conn import PDConnectionPool
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
+from lmdeploy.serve.openai.distserve_fields import distserve_proxy_headers
 from lmdeploy.serve.openai.errors import create_error_response
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
@@ -356,7 +357,10 @@ class NodeManager:
         """
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
+                async with session.post(node_url + endpoint,
+                                        json=request,
+                                        headers=distserve_proxy_headers(),
+                                        timeout=self.aiotimeout) as response:
                     async for line in response.content:
                         if line.strip():
                             yield line + b'\n\n'
@@ -375,7 +379,10 @@ class NodeManager:
         """
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
+                async with session.post(node_url + endpoint,
+                                        json=request,
+                                        headers=distserve_proxy_headers(),
+                                        timeout=self.aiotimeout) as response:
                     return await response.text()
         except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
             logger.error(f'caught an exception: {e}')
