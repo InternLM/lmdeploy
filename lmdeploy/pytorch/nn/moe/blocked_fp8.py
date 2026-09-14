@@ -156,7 +156,10 @@ class FusedMoEBlockedF8(FusedMoEBase):
                  device: torch.device | None = None,
                  all_reduce: bool = True,
                  layer_idx: int = 0,
-                 act_func: Callable = None):
+                 act_func: Callable = None,
+                 fp32_acc: bool = False,
+                 output_scale: float = 1.0,
+                 use_deep_gemm: bool = False):
 
         device = device or torch.device('cpu')
         dtype = dtype or torch.float16
@@ -186,7 +189,10 @@ class FusedMoEBlockedF8(FusedMoEBase):
                                        fp8_dtype=fp8_dtype,
                                        num_max_dispatch_tokens_per_rank=deep_ep_max_tokens_per_rank,
                                        layer_idx=layer_idx,
-                                       custom_gateup_act=act_func is not None)
+                                       custom_gateup_act=act_func is not None,
+                                       fp32_acc=fp32_acc,
+                                       output_scale=output_scale,
+                                       use_deep_gemm=use_deep_gemm)
         self.impl.set_scale_fmt(scale_fmt)
 
         if self.ep_size > 1:

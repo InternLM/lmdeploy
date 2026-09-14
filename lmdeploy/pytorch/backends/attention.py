@@ -160,6 +160,18 @@ class AttentionImpl(ABC, Generic[T]):
     def set_alibi_slopes(self, slopes: torch.Tensor):
         self.alibi_slopes = slopes
 
+    def fill_and_flatten_latent_kv_cache(
+        self,
+        key: torch.Tensor,
+        k_cache: torch.Tensor,
+        attn_metadata: T,
+        out_dtype: torch.dtype = None,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """Append latent KV and return the request-major prefill view."""
+        raise NotImplementedError(f'{type(self).__name__} does not support latent KV cache flattening.')
+
     @abstractmethod
     def forward(
         self,

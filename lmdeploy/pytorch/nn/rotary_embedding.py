@@ -238,6 +238,30 @@ def build_rotary_embedding_from_config(config: PretrainedConfig, device: torch.d
     return build_rotary_embedding(**rope_params, device=device)
 
 
+def _rotate_half(x: Tensor) -> Tensor:
+    """Rotate the two contiguous halves used by NeoX-style RoPE."""
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat((-x2, x1), dim=-1)
+
+
+@torch.compile(dynamic=True)
+def apply_rotary_pos_emb_fp32(query: Tensor,
+                              key: Tensor,
+                              cos: Tensor,
+                              sin: Tensor,
+                              unsqueeze_dim: int = 1) -> tuple[Tensor, Tensor]:
+    """Apply NeoX-style RoPE with FP32 arithmetic and dtype-preserving output."""
+    query_dtype = query.dtype
+    key_dtype = key.dtype
+    query = query.float()
+    key = key.float()
+    cos = cos.unsqueeze(unsqueeze_dim).float()
+    sin = sin.unsqueeze(unsqueeze_dim).float()
+    query = query * cos + _rotate_half(query) * sin
+    key = key * cos + _rotate_half(key) * sin
+    return query.to(query_dtype), key.to(key_dtype)
+
+
 class ApplyRotaryEmb(nn.Module):
     """Apply rotary embedding."""
 

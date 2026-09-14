@@ -5,11 +5,14 @@ from .activation import GeluAndMul, SiluAndMul  # noqa: F401
 from .attention import Attention, FlashAttention  # noqa: F401
 from .embedding import ParallelEmbedding, ParallelLMHead  # noqa: F401
 from .hc_prepost import HcPrePost  # noqa: F401
-from .norm import LayerNorm, RMSNorm, rms_scale  # noqa: F401
+from .kda import Kda  # noqa: F401
+from .kpool import KPoolIndexer  # noqa: F401
+from .norm import FP32LayerNorm, LayerNorm, RMSNorm, rms_scale  # noqa: F401
 from .rotary_embedding import (
     ApplyRotaryEmb,  # noqa: F401
     RopeType,  # noqa: F401
     YarnParameters,  # noqa: F401
+    apply_rotary_pos_emb_fp32,  # noqa: F401
     build_rotary_embedding,  # noqa: F401
     build_rotary_embedding_from_config,  # noqa: F401
     build_rotary_params,  # noqa: F401

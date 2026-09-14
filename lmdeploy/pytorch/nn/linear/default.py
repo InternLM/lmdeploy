@@ -117,17 +117,20 @@ class BaseLinear(LinearBase):
 
     def _forward_default(self, x, all_reduce, tp_sizes):
         """Default forward implement."""
+        bias = self.bias
+        if self.is_tp and not self.colwise and self.tp_rank != 0:
+            bias = None
         if self.tp_mode == TPMode.DP_TP:
             rank = self.tp_rank
             return self.impl.forward(x,
                                      self.weight,
-                                     self.bias,
+                                     bias,
                                      all_reduce,
                                      group=self.tp_group,
                                      rank=rank,
                                      scatter_size=tp_sizes)
         else:
-            return self.impl.forward(x, self.weight, self.bias, all_reduce, group=self.tp_group)
+            return self.impl.forward(x, self.weight, bias, all_reduce, group=self.tp_group)
 
 
 class MergedBaseLinear(BaseLinear):

@@ -64,6 +64,12 @@ MODULE_MAP.update({
 # glm5
 MODULE_MAP.update({'GlmMoeDsaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm_moe_dsa.GlmMoeDsaForCausalLM'})
 
+# glm5.3 flash
+MODULE_MAP.update({
+    'Glm5NextForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm5_next.Glm5NextForConditionalGeneration'
+})
+
 # glm5 mtp
 MODULE_MAP.update({'GlmMoeDsaMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm_moe_dsa_mtp.GlmMoeDsaMTPModel'})
 

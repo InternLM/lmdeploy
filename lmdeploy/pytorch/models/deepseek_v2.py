@@ -597,12 +597,15 @@ class MoEGate(nn.Module):
                  config: Any,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 info: EPLBDispatchInfo = None):
+                 info: EPLBDispatchInfo = None,
+                 routed_scaling_factor: float | None = None):
         super().__init__()
         self.config = config
         self.top_k = config.num_experts_per_tok
         self.n_routed_experts = config.n_routed_experts
-        self.routed_scaling_factor = config.routed_scaling_factor
+        if routed_scaling_factor is None:
+            routed_scaling_factor = config.routed_scaling_factor
+        self.routed_scaling_factor = routed_scaling_factor
         self.scoring_func = config.scoring_func
         self.topk_method = config.topk_method
         self.n_group = config.n_group
@@ -696,6 +699,13 @@ class MoEGate(nn.Module):
 class DeepseekV2MoE(nn.Module):
     """Deepseek v2 MoE."""
 
+    fused_moe_act_func = None
+    fused_moe_fp32_acc = False
+    fused_moe_output_scale = 1.0
+    fused_moe_use_deep_gemm = False
+    router_routed_scaling_factor = None
+    shared_expert_cls = None
+
     def __init__(self,
                  config: Any,
                  layer_idx,
@@ -727,9 +737,21 @@ class DeepseekV2MoE(nn.Module):
                 layer_idx=layer_idx,
             )
             self.num_experts = EPLBManager.num_physical_experts()
-            self.gate = MoEGate(config, dtype=dtype, device=device, info=eplb_dispatch_info)
+            self.gate = MoEGate(
+                config,
+                dtype=dtype,
+                device=device,
+                info=eplb_dispatch_info,
+                routed_scaling_factor=type(self).router_routed_scaling_factor,
+            )
         else:
-            self.gate = MoEGate(config, dtype=dtype, device=device, info=None)
+            self.gate = MoEGate(
+                config,
+                dtype=dtype,
+                device=device,
+                info=None,
+                routed_scaling_factor=type(self).router_routed_scaling_factor,
+            )
         self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
@@ -741,11 +763,16 @@ class DeepseekV2MoE(nn.Module):
             all_reduce=moe_all_reduce,
             quant_config=quantization_config,
             layer_idx=layer_idx,
+            act_func=type(self).fused_moe_act_func,
+            fp32_acc=type(self).fused_moe_fp32_acc,
+            output_scale=type(self).fused_moe_output_scale,
+            use_deep_gemm=type(self).fused_moe_use_deep_gemm,
         )
         self.shared_experts = None
         if config.n_shared_experts is not None:
             intermediate_size = (config.moe_intermediate_size * config.n_shared_experts)
-            self.shared_experts = DeepseekV2MLP(
+            shared_expert_cls = type(self).shared_expert_cls or DeepseekV2MLP
+            self.shared_experts = shared_expert_cls(
                 config=config,
                 intermediate_size=intermediate_size,
                 dtype=dtype,
@@ -1282,9 +1309,9 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             """Dequant weight."""
             if name.endswith('.weight'):
                 weight_name = name
-                scale_name = name.replace('.weight', '.scale')
+                scale_name = name.removesuffix('.weight') + '.weight_scale_inv'
             elif name.endswith('.weight_scale_inv'):
-                weight_name = name.replace('.weight_scale_inv', '.weight')
+                weight_name = name.removesuffix('.weight_scale_inv') + '.weight'
                 scale_name = name
             self._load_buffers[name] = loaded_weight
             if (weight_name in self._load_buffers and scale_name in self._load_buffers):
@@ -1316,7 +1343,11 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                     fp8_quant_scope = quantization_config.get('fp8_quant_scope')
 
                 loaded_weight = loaded_weight.to(device)
-                if quant_method == 'fp8' and fp8_quant_scope != 'moe_only':
+                is_blocked_fp8_tensor = (name.endswith('.weight_scale_inv')
+                                         or loaded_weight.dtype == torch.float8_e4m3fn)
+                if (quant_method == 'fp8'
+                        and fp8_quant_scope != 'moe_only'
+                        and is_blocked_fp8_tensor):
                     # update blocked fp8 weight
                     __load_kcvc_blocked_fp8(name, loaded_weight)
                 else:

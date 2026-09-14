@@ -510,6 +510,53 @@ class FlashMLAImpl(TritonAttentionImpl):
             block_offsets=block_offsets,
         )
 
+    def fill_and_flatten_latent_kv_cache(
+        self,
+        key: torch.Tensor,
+        k_cache: torch.Tensor,
+        attn_metadata: TritonAttentionMetadata,
+        out_dtype: torch.dtype = None,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """Append latent KV and flatten the complete prefill cache.
+
+        ``key`` contains only the current tokens. The paged cache may already
+        contain a prefix; ``attn_metadata`` determines where current tokens are
+        appended and how every request is flattened into ``shd`` layout.
+        """
+        if attn_metadata.is_decoding:
+            raise RuntimeError('Latent KV cache flattening is only supported during prefill.')
+        if out_dtype is None:
+            out_dtype = key.dtype
+
+        # MLA carries its latent value payload in the leading K dimensions.
+        # Aliased views keep the existing fill/flatten kernels on their
+        # shared-KV fast path without a duplicate value store.
+        value = key[..., :self.v_head_size]
+        v_cache = k_cache[..., :self.v_head_size]
+        max_q_seqlen = self._get_max_q_seqlen(key, attn_metadata)
+        self._fill_kv_cache_impl(
+            key,
+            value,
+            k_cache,
+            v_cache,
+            attn_metadata,
+            max_q_seqlen,
+            k_scales_zeros=k_scales_zeros,
+            v_scales_zeros=v_scales_zeros,
+        )
+        flatten_k, _ = self._flatten_prefill_kv_cache(
+            k_cache,
+            v_cache,
+            attn_metadata,
+            out_dtype=out_dtype,
+            kv_layout='shd',
+            k_scales_zeros=k_scales_zeros,
+            v_scales_zeros=v_scales_zeros,
+        )
+        return flatten_k
+
     def _forward_decoding(
         self,
         query: torch.Tensor,

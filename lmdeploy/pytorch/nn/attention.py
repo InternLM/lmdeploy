@@ -90,6 +90,36 @@ class Attention(nn.Module):
             self.impl.set_alibi_slopes(alibi_slopes)
             self.alibi_ready = True
 
+    def fill_and_flatten_latent_kv_cache(
+        self,
+        key: torch.Tensor,
+        k_cache: torch.Tensor,
+        attn_metadata: AttentionMetadata,
+        out_dtype: torch.dtype = None,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """Append latent KV and return the complete request-major prefill KV."""
+        self._lazy_init(key.device)
+
+        quant_policy = attn_metadata.quant_policy
+        if quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
+            if self.k_scale.device != key.device:
+                self.k_scale = self.k_scale.to(device=key.device, non_blocking=True)
+            if self.v_scale.device != key.device:
+                self.v_scale = self.v_scale.to(device=key.device, non_blocking=True)
+            k_scales_zeros = self.k_scale
+            v_scales_zeros = self.v_scale
+
+        return self.impl.fill_and_flatten_latent_kv_cache(
+            key,
+            k_cache,
+            attn_metadata,
+            out_dtype=out_dtype,
+            k_scales_zeros=k_scales_zeros,
+            v_scales_zeros=v_scales_zeros,
+        )
+
     def forward(
         self,
         query: torch.Tensor,

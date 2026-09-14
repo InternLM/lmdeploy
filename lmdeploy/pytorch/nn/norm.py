@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 from lmdeploy.pytorch.distributed import get_dist_group, get_tp_world_rank
@@ -23,6 +24,44 @@ def rms_scale(a: torch.Tensor, b: torch.Tensor, dim: int = -1, eps: float = 1e-6
         b = b.float()
     out = a * torch.rsqrt(b.square().mean(dim, keepdim=True) + eps)
     return out.to(result_dtype)
+
+
+class FP32LayerNorm(nn.Module):
+    """LayerNorm with FP32 parameters and accumulation.
+
+    Some model components keep LayerNorm weights in FP32 even when the model
+    activation dtype is BF16.  Keep that numerical contract in one reusable
+    module and cast only the returned activation back to its input dtype.
+    """
+
+    def __init__(self,
+                 hidden_size: int,
+                 eps: float = 1e-6,
+                 bias: bool = True,
+                 device: torch.device | str | None = None):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(hidden_size,
+                                              dtype=torch.float32,
+                                              device=device),
+                                   requires_grad=False)
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(hidden_size,
+                                                 dtype=torch.float32,
+                                                 device=device),
+                                     requires_grad=False)
+        else:
+            self.register_parameter('bias', None)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Normalize in FP32 and preserve the activation dtype."""
+        output = F.layer_norm(hidden_states.float(),
+                              (self.hidden_size, ),
+                              self.weight,
+                              self.bias,
+                              self.eps)
+        return output.to(hidden_states.dtype)
 
 
 class RMSNorm(nn.Module):

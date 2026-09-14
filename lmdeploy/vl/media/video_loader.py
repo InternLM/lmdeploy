@@ -18,6 +18,70 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
+def glm_sample_frame_indices(
+    total_frames: int,
+    source_fps: float,
+    duration: float,
+    *,
+    target_fps: float | None = None,
+    max_frame_count: int | None = None,
+) -> list[int]:
+    """Sample the deterministic temporal pairs expected by GLM video models.
+
+    GLM constructs one visual unit from every two sampled source frames.  Its
+    serving contract therefore differs from the generic uniform sampler in two
+    ways: the default is 2 FPS with at most 2048 frames, and an odd result
+    repeats its final frame to keep temporal pairs complete.
+    """
+    if total_frames <= 0:
+        return []
+    target_fps = 2.0 if target_fps is None else float(target_fps)
+    max_frame_count = (2048 if max_frame_count is None else
+                       int(max_frame_count))
+    if target_fps <= 0 or max_frame_count <= 0:
+        return []
+
+    max_frame_idx = total_frames - 1
+    if not duration:
+        duration = (round(max_frame_idx / source_fps) + 1
+                    if source_fps else 0)
+    extract_t = min(int(duration * target_fps), max_frame_count)
+    extract_t = max(1, extract_t)
+
+    if source_fps:
+        duration_per_frame = 1 / source_fps
+        max_second = int(duration)
+        indices = []
+        current_second = 0.0
+        interval = 1 / target_fps
+        for frame_index in range(total_frames):
+            timestamp = frame_index * duration_per_frame
+            if timestamp >= current_second:
+                current_second += interval
+                indices.append(frame_index)
+                if current_second >= max_second:
+                    break
+    else:
+        indices = []
+
+    if len(indices) < extract_t:
+        start = indices[0] if indices else 0
+        end = indices[-1] if indices else max(total_frames - 1, 0)
+        indices = np.linspace(start, end, extract_t, dtype=int).tolist()
+    elif len(indices) > extract_t:
+        indices = np.linspace(0,
+                              total_frames - 1,
+                              extract_t,
+                              dtype=int).tolist()
+
+    # np.linspace can repeat indices for very small inputs.  GLM first removes
+    # those repeats, then pads an odd number of frames with the final sample.
+    unique_indices = list(dict.fromkeys(int(index) for index in indices))
+    if len(unique_indices) & 1:
+        unique_indices.append(unique_indices[-1])
+    return unique_indices
+
+
 class VideoLoader:
 
     @classmethod
@@ -26,9 +90,27 @@ class VideoLoader:
         raise NotImplementedError
 
     @classmethod
-    def smart_nframes(self, total_frames_num: int, num_frames: int, fps: int, duration: int) -> tuple[int, list[int]]:
+    def smart_nframes(self,
+                      total_frames_num: int,
+                      num_frames: int,
+                      fps: float,
+                      duration: float,
+                      sampling_strategy: str = 'uniform',
+                      source_fps: float | None = None) -> tuple[int, list[int]]:
         # resample video to target num_frames and fps
         # - the minimum of the two will be used
+        if sampling_strategy == 'glm':
+            frame_idx = glm_sample_frame_indices(
+                total_frames_num,
+                source_fps=source_fps or 0,
+                duration=duration,
+                target_fps=None if fps <= 0 else fps,
+                max_frame_count=None if num_frames <= 0 else num_frames,
+            )
+            return len(frame_idx), frame_idx
+        if sampling_strategy != 'uniform':
+            raise ValueError(
+                f'Unknown video sampling strategy: {sampling_strategy!r}')
         num_frames_to_sample = total_frames_num
         if num_frames > 0:
             num_frames_to_sample = min(num_frames, total_frames_num)
@@ -118,21 +200,28 @@ class OpenCVVideoLoader(VideoLoader):
         self,
         filepath: Path,
         num_frames: int = -1,
-        fps: int = -1,
+        fps: float = -1,
         max_duration: int = 300,
+        sampling_strategy: str = 'uniform',
         **kwargs,
     ) -> tuple[npt.NDArray, dict[str, Any]]:
         with open(filepath, 'rb') as f:
             data = f.read()
-        return self.load_bytes(data, num_frames=num_frames, fps=fps, max_duration=max_duration, **kwargs)
+        return self.load_bytes(data,
+                               num_frames=num_frames,
+                               fps=fps,
+                               max_duration=max_duration,
+                               sampling_strategy=sampling_strategy,
+                               **kwargs)
 
     @classmethod
     def load_bytes(
         cls,
         data: bytes,
         num_frames: int = -1,
-        fps: int = -1,
+        fps: float = -1,
         max_duration: int = 300,
+        sampling_strategy: str = 'uniform',
         **kwargs,
     ) -> tuple[npt.NDArray, dict[str, Any]]:
         """Load video frames from bytes.
@@ -157,11 +246,35 @@ class OpenCVVideoLoader(VideoLoader):
         original_fps = cap.get(cv2.CAP_PROP_FPS)
         duration = total_frames_num / original_fps if original_fps > 0 else 0
 
-        num_frames_to_sample, frame_idx = cls.smart_nframes(total_frames_num, num_frames, fps, duration)
+        _, frame_idx = cls.smart_nframes(
+            total_frames_num,
+            num_frames,
+            fps,
+            duration,
+            sampling_strategy=sampling_strategy,
+            source_fps=original_fps,
+        )
+        if not frame_idx:
+            raise ValueError('Video sampling produced no frame indices.')
 
-        frame_idx_set = set(frame_idx)
-        frames, valid_num_frames, valid_frame_indices = cls._read_frames(cap, frame_idx_set, num_frames_to_sample,
-                                                                         max(frame_idx))
+        unique_frame_indices = list(dict.fromkeys(frame_idx))
+        frame_idx_set = set(unique_frame_indices)
+        frames, _, valid_frame_indices = cls._read_frames(
+            cap,
+            frame_idx_set,
+            len(unique_frame_indices),
+            max(frame_idx),
+        )
+        # The GLM sampler may repeat the final frame to complete a temporal
+        # pair.  OpenCV decodes each source index once, so restore the requested
+        # order (including repeats) after decoding.
+        decoded = dict(zip(valid_frame_indices, frames))
+        ordered_indices = [index for index in frame_idx if index in decoded]
+        if ordered_indices:
+            frames = np.stack([decoded[index] for index in ordered_indices])
+        else:
+            frames = frames[:0]
+        valid_frame_indices = ordered_indices
 
         # Use transformers transformers.video_utils.VideoMetadata format
         # For models like Qwen3-VL/GLM4.5V, this metadata
@@ -186,8 +299,9 @@ class DecordVideoLoader(VideoLoader):
     def load_file(self,
                   filepath: Path,
                   num_frames: int = -1,
-                  fps: int = -1,
+                  fps: float = -1,
                   max_duration: int = 300,
+                  sampling_strategy: str = 'uniform',
                   **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
         import decord
         vr = decord.VideoReader(str(filepath))
@@ -195,7 +309,16 @@ class DecordVideoLoader(VideoLoader):
         original_fps = vr.get_avg_fps()
         duration = total_frames_num / original_fps if original_fps > 0 else 0
 
-        num_frames_to_sample, frame_idx = self.smart_nframes(total_frames_num, num_frames, fps, duration)
+        _, frame_idx = self.smart_nframes(
+            total_frames_num,
+            num_frames,
+            fps,
+            duration,
+            sampling_strategy=sampling_strategy,
+            source_fps=original_fps,
+        )
+        if not frame_idx:
+            raise ValueError('Video sampling produced no frame indices.')
 
         video = vr.get_batch(frame_idx).asnumpy()  # THWC
         metadata = {
@@ -211,8 +334,9 @@ class DecordVideoLoader(VideoLoader):
     def load_bytes(self,
                    data: bytes,
                    num_frames: int = -1,
-                   fps: int = -1,
+                   fps: float = -1,
                    max_duration: int = 300,
+                   sampling_strategy: str = 'uniform',
                    **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         try:
@@ -222,6 +346,7 @@ class DecordVideoLoader(VideoLoader):
                                   num_frames=num_frames,
                                   fps=fps,
                                   max_duration=max_duration,
+                                  sampling_strategy=sampling_strategy,
                                   **kwargs)
         finally:
             # always cleanup, even if load_file crashes
@@ -237,8 +362,9 @@ class TorchCodecVideoLoader(VideoLoader):
     def load_file(self,
                   filepath: Path,
                   num_frames: int = -1,
-                  fps: int = -1,
+                  fps: float = -1,
                   max_duration: int = 300,
+                  sampling_strategy: str = 'uniform',
                   **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
         # torchcodec requires matched ffmpeg, torchcodec, and torch versions
         # ffmpeg 5.1.2, torch 2.8.0, torchcodec 0.7.0 are verified to work together
@@ -250,7 +376,16 @@ class TorchCodecVideoLoader(VideoLoader):
         original_fps = decoder.metadata.average_fps
         duration = total_frames_num / original_fps if original_fps > 0 else 0
 
-        num_frames_to_sample, frame_idx = self.smart_nframes(total_frames_num, num_frames, fps, duration)
+        _, frame_idx = self.smart_nframes(
+            total_frames_num,
+            num_frames,
+            fps,
+            duration,
+            sampling_strategy=sampling_strategy,
+            source_fps=original_fps,
+        )
+        if not frame_idx:
+            raise ValueError('Video sampling produced no frame indices.')
 
         video = decoder.get_frames_at(frame_idx).data
         metadata = {
@@ -266,8 +401,9 @@ class TorchCodecVideoLoader(VideoLoader):
     def load_bytes(self,
                    data: bytes,
                    num_frames: int = -1,
-                   fps: int = -1,
+                   fps: float = -1,
                    max_duration: int = 300,
+                   sampling_strategy: str = 'uniform',
                    **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         try:
@@ -277,6 +413,7 @@ class TorchCodecVideoLoader(VideoLoader):
                                   num_frames=num_frames,
                                   fps=fps,
                                   max_duration=max_duration,
+                                  sampling_strategy=sampling_strategy,
                                   **kwargs)
         finally:
             # always cleanup, even if load_file crashes
@@ -292,8 +429,9 @@ class TorchVisionVideoLoader(VideoLoader):
     def load_file(self,
                   filepath: Path,
                   num_frames: int = -1,
-                  fps: int = -1,
+                  fps: float = -1,
                   max_duration: int = 300,
+                  sampling_strategy: str = 'uniform',
                   **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
         import torchvision
 
@@ -306,7 +444,16 @@ class TorchVisionVideoLoader(VideoLoader):
         original_fps = info['video_fps']
         duration = total_frames_num / original_fps if original_fps > 0 else 0
 
-        num_frames_to_sample, frame_idx = self.smart_nframes(total_frames_num, num_frames, fps, duration)
+        _, frame_idx = self.smart_nframes(
+            total_frames_num,
+            num_frames,
+            fps,
+            duration,
+            sampling_strategy=sampling_strategy,
+            source_fps=original_fps,
+        )
+        if not frame_idx:
+            raise ValueError('Video sampling produced no frame indices.')
 
         video = video[frame_idx]
         metadata = {
@@ -322,8 +469,9 @@ class TorchVisionVideoLoader(VideoLoader):
     def load_bytes(self,
                    data: bytes,
                    num_frames: int = -1,
-                   fps: int = -1,
+                   fps: float = -1,
                    max_duration: int = 300,
+                   sampling_strategy: str = 'uniform',
                    **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         try:
@@ -333,6 +481,7 @@ class TorchVisionVideoLoader(VideoLoader):
                                   num_frames=num_frames,
                                   fps=fps,
                                   max_duration=max_duration,
+                                  sampling_strategy=sampling_strategy,
                                   **kwargs)
         finally:
             # always cleanup, even if load_file crashes

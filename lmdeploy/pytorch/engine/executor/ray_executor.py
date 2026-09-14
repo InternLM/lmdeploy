@@ -73,11 +73,16 @@ def _update_env_cuda_alloc_conf(env_vars: dict):
     env_vars['PYTORCH_CUDA_ALLOC_CONF'] = cuda_alloc_conf
 
 
-def _update_runtime_envs(runtime_env: dict):
+def _update_runtime_envs(
+    runtime_env: dict,
+    process_group_env_defaults: dict[str, str] | None = None,
+):
     """Update runtime envs."""
     new_envs = _envs.get_all_envs()
     env_vars: dict = runtime_env.get('env_vars', {})
     env_vars.update(new_envs)
+    for key, default in (process_group_env_defaults or {}).items():
+        env_vars.setdefault(key, os.environ.get(key, default))
     _update_env_cuda_alloc_conf(env_vars)
     runtime_env['env_vars'] = env_vars
     return runtime_env
@@ -661,6 +666,8 @@ class RayExecutor(ExecutorBase):
     def _init_workers_ray(self, placement_group: PlacementGroup, worker_kwargs: dict):
         """Init worker ray."""
         device_str = get_device_str()
+        process_group_env_defaults = (
+            worker_kwargs['model_config'].process_group_env_defaults)
         bundle_indices = []
         if not _envs.ray_external_pg_bundles:
             for bundle_id, bundle in enumerate(placement_group.bundle_specs):
@@ -697,7 +704,8 @@ class RayExecutor(ExecutorBase):
 
             if device_str == 'GPU':
                 runtime_env = dict()
-                runtime_env = _update_runtime_envs(runtime_env)
+                runtime_env = _update_runtime_envs(
+                    runtime_env, process_group_env_defaults)
                 if self._try_symm_mem:
                     # Symmetric-memory IPC needs peer TP GPUs to stay visible.
                     # Keep the inherited visibility and bind each actor below.
@@ -712,7 +720,8 @@ class RayExecutor(ExecutorBase):
                 )(RayWorkerWrapper).remote(**worker_kwargs)
             else:
                 runtime_env = dict()
-                runtime_env = _update_runtime_envs(runtime_env)
+                runtime_env = _update_runtime_envs(
+                    runtime_env, process_group_env_defaults)
                 worker = ray.remote(
                     num_cpus=0,
                     num_gpus=0,

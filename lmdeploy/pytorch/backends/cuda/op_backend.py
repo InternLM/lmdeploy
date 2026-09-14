@@ -111,6 +111,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.GatedDeltaRule:
             from .gated_delta_rule import CudaGatedDeltaRuleBuilder
             return CudaGatedDeltaRuleBuilder
+        elif layer_type == OpType.Kda:
+            from .kda import CudaKdaBuilder
+            return CudaKdaBuilder
         elif layer_type == OpType.CacheBlockCopy:
             from .cache_block_copy import CudaCacheBlockCopyBuilder
             return CudaCacheBlockCopyBuilder

@@ -2,6 +2,7 @@
 import torch
 import triton
 import triton.language as tl
+from triton.language.extra import libdevice
 
 from .utils import get_device_props
 
@@ -19,6 +20,8 @@ def _silu_and_mul_kernel(
     stride_om: tl.constexpr,
     stride_on: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
+    SWIGLU_LIMIT: tl.constexpr,
+    PRECISE_MUL: tl.constexpr,
 ):
     """Silu and mul kernel."""
     n_block_id = tl.program_id(0)
@@ -40,11 +43,19 @@ def _silu_and_mul_kernel(
     for _ in tl.range(m_id_start, M, m_id_stride):
         gate = tl.load(gate_ptrs, mask=mask)
         up = tl.load(up_ptrs, mask=mask)
+        if SWIGLU_LIMIT is not None:
+            gate = tl.minimum(gate, SWIGLU_LIMIT)
+            up = tl.maximum(tl.minimum(up, SWIGLU_LIMIT), -SWIGLU_LIMIT)
         # exp expect fp32
         gate = gate.to(tl.float32)
 
-        gate = gate / (1 + fast_expf(-gate))
-        gate = gate.to(gateup_ptr.dtype.element_ty)
+        if PRECISE_MUL:
+            exp_neg_gate = libdevice.exp(-gate)
+        else:
+            exp_neg_gate = fast_expf(-gate)
+        gate = gate / (1 + exp_neg_gate)
+        if not PRECISE_MUL:
+            gate = gate.to(gateup_ptr.dtype.element_ty)
         out = gate * up
 
         tl.store(out_ptrs, out, mask=mask)
@@ -54,7 +65,10 @@ def _silu_and_mul_kernel(
         out_ptrs += m_id_stride * stride_om
 
 
-def silu_and_mul(gate_up: torch.Tensor, out: torch.Tensor = None):
+def silu_and_mul(gate_up: torch.Tensor,
+                 out: torch.Tensor = None,
+                 swiglu_limit: float | None = None,
+                 precise_mul: bool = False):
     """Silu and mul."""
     assert gate_up.dim() == 2
 
@@ -85,6 +99,8 @@ def silu_and_mul(gate_up: torch.Tensor, out: torch.Tensor = None):
                                stride_om=out.stride(0),
                                stride_on=out.stride(1),
                                BLOCK_SIZE_N=BLOCK_SIZE_N,
+                               SWIGLU_LIMIT=swiglu_limit,
+                               PRECISE_MUL=precise_mul,
                                num_warps=num_warps,
                                num_stages=num_stages)
 

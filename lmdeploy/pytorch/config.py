@@ -474,6 +474,12 @@ class ModelConfig:
     use_standard_kv_cache: bool = True
     post_build_func: Callable[['ModelConfig', int], None] | None = None
 
+    # A model can reject generic prefix-cache reuse when its auxiliary state
+    # cannot be restored at scheduler block boundaries.  ``None`` keeps the
+    # default supported behavior; a non-empty reason is surfaced before model
+    # weights are built.
+    prefix_caching_unsupported_reason: str | None = None
+
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
 
@@ -492,6 +498,10 @@ class ModelConfig:
 
     # Number of contiguous TP ranks that own the same logical KV-head shard.
     num_replicate_key_value_heads: int = 1
+
+    # Model-specific defaults that must be present before the distributed
+    # process group is initialized. Explicit process environment values win.
+    process_group_env_defaults: dict[str, str] = field(default_factory=dict)
 
     @property
     def use_mla_fp8_cache(self):
