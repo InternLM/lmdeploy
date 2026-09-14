@@ -142,7 +142,7 @@ def _warn_triton_index_scoring():
 
 
 @functools.lru_cache
-def _get_sparse_index_topk(topk: int, use_dcp: bool = False):
+def _get_sparse_index_topk(topk: int):
     try:
         from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
             is_sparse_index_topk_supported,
@@ -151,11 +151,6 @@ def _get_sparse_index_topk(topk: int, use_dcp: bool = False):
     except ImportError:
         return None
     if is_sparse_index_topk_supported(topk):
-        if use_dcp:
-            from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import (
-                sparse_dcp_local_topk,
-            )
-            return sparse_dcp_local_topk
         return sparse_index_topk
     return None
 
@@ -372,8 +367,7 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
         self.max_logits_bytes = _envs.dsa_indexer_max_logits_mb * (1 << 20)
         from lmdeploy.pytorch.distributed import get_dcp_world_rank
         self.dcp_world_size, self.dcp_rank = get_dcp_world_rank()
-        self._sparse_index_topk = _get_sparse_index_topk(
-            topk, use_dcp=self.dcp_world_size > 1)
+        self._sparse_index_topk = _get_sparse_index_topk(topk)
         self._step_meta_group: int | None = None
         self._piecewise_forward: Callable[..., Tensor] | None = None
         self._piecewise_forward_fused: Callable[..., Tensor] | None = None

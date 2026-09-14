@@ -156,7 +156,7 @@ class CacheConfig:
     """Config of key value cache."""
 
     max_batches: int
-    block_size: int  # physical tokens per cache block on each DCP rank
+    block_size: int  # Physical tokens per rank; logical block size is block_size * dcp.
     num_cpu_blocks: int
     num_gpu_blocks: int
     kernel_block_size: int = -1

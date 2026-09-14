@@ -132,13 +132,13 @@ def test_sparse_index_topk_cuda_graph_capture():
 
 @pytest.mark.parametrize(('dcp_size', 'k', 'local_width'),
                          [(2, 512, 700), (4, 2048, 2300)])
-def test_sparse_dcp_global_topk_matches_global_stable_topk(
+def test_sparse_dcp_global_topk_matches_global_scores_and_candidate_ties(
         dcp_size, k, local_width):
     from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import (
         pack_dcp_topk_candidates,
         sparse_dcp_global_topk,
-        sparse_dcp_local_topk,
     )
+    from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import sparse_index_topk
 
     device = 'cuda'
     num_rows = 2
@@ -148,12 +148,13 @@ def test_sparse_dcp_global_topk_matches_global_stable_topk(
                                 dtype=torch.float32,
                                 device=device,
                                 generator=generator)
-    # Exercise stable global-position ties at the selection threshold.
+    # Local boundary ties may select any ids; the merge breaks ties among
+    # gathered candidates by global position.
     global_scores[1].zero_()
     packed_by_rank = []
     for rank in range(dcp_size):
         local_scores = global_scores[:, rank::dcp_size].contiguous()
-        local_indices = sparse_dcp_local_topk(
+        local_indices = sparse_index_topk(
             local_scores,
             torch.ones(num_rows, dtype=torch.int32, device=device),
             torch.full((num_rows,), local_width, dtype=torch.int32, device=device),
@@ -173,12 +174,20 @@ def test_sparse_dcp_global_topk_matches_global_stable_topk(
             actual = sparse_dcp_global_topk(gathered, k)
         graph.replay()
         torch.cuda.synchronize()
-    expected = torch.argsort(global_scores,
-                             dim=1,
-                             descending=True,
-                             stable=True)[:, :k].to(torch.int32)
+    # The end-to-end result must contain K distinct tokens with top-k scores,
+    # without imposing a local tie policy or an output order.
+    sorted_ids = actual.sort(dim=1).values
+    assert (sorted_ids[:, 1:] != sorted_ids[:, :-1]).all()
+    selected_scores = global_scores.gather(1, actual.long())
+    torch.testing.assert_close(selected_scores.sort(dim=1, descending=True).values,
+                               global_scores.topk(k, dim=1).values, rtol=0, atol=0)
+
     candidate_ids = gathered.view(torch.int32)[..., 1]
     candidate_ids = candidate_ids.permute(1, 0, 2).reshape(num_rows, -1)
+    ids_by_position = candidate_ids.sort(dim=1).values
+    candidate_scores = global_scores.gather(1, ids_by_position.long())
+    score_order = torch.argsort(candidate_scores, dim=1, descending=True, stable=True)
+    expected = ids_by_position.gather(1, score_order[:, :k])
     expected_in_candidate_order = torch.stack([
         row_ids[torch.isin(row_ids, selected_ids)]
         for row_ids, selected_ids in zip(candidate_ids, expected)

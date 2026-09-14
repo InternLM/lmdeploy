@@ -297,7 +297,7 @@ def test_sparse_index_topk_is_resolved_at_init(monkeypatch):
 
     selector = object()
     monkeypatch.setattr(cuda_nsa, '_get_sparse_index_topk',
-                        lambda topk, use_dcp=False: selector)
+                        lambda topk: selector)
 
     index_impl = cuda_nsa.TritonNSAIndexFP8Impl(
         topk=512, softmax_scale=1.0, block_size=128, fill=-1)

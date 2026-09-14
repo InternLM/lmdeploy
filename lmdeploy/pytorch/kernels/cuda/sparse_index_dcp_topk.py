@@ -1,5 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""DCP top-k kernels for token-sharded sparse indexers."""
+"""Merge token-sharded sparse-indexer candidates without gathering full scores.
+
+With DCP, ordinary ``sparse_index_topk`` sees only one rank's KV shard. Each
+rank must contribute up to K candidates, not K / DCP: the best tokens may all
+belong to one shard. A locally discarded token has at least K local tokens
+with no lower score, so the candidate union suffices for a valid global top-k.
+
+The caller packs local scores and global token ids, all-gathers these pairs,
+then selects K ids from DCP * K candidates here. Collectives stay in the
+backend; these kernels handle packing and selection only.
+"""
 
 from __future__ import annotations
 
@@ -8,8 +18,6 @@ import tilelang.language as T
 import torch
 import triton
 import triton.language as tl
-
-from .sparse_index_topk import _sparse_index_topk
 
 tilelang.set_log_level('WARNING')
 
@@ -37,24 +45,6 @@ def _ordered_fp32_key(score):
     return T.if_then_else(T.bitwise_and(bits, sign_mask) == T.cast(0, T.uint32),
                           T.bitwise_xor(bits, sign_mask),
                           T.bitwise_xor(bits, all_ones))
-
-
-def sparse_dcp_local_topk(scores: torch.Tensor,
-                          q_seqlens: torch.Tensor,
-                          kv_seqlens: torch.Tensor,
-                          k: int,
-                          fill: int = _FILL,
-                          descending: bool = True,
-                          sorted: bool = False) -> torch.Tensor:
-    """Select deterministic local candidates for an exact DCP merge."""
-    return _sparse_index_topk(scores,
-                              q_seqlens,
-                              kv_seqlens,
-                              k,
-                              fill=fill,
-                              descending=descending,
-                              sorted=sorted,
-                              stable_ties=True)
 
 
 @triton.jit
@@ -89,11 +79,14 @@ def _pack_dcp_topk_candidates_kernel(
     scores = tl.load(Scores + row * stride_sr + safe_indices * stride_sc,
                      mask=column_mask & valid,
                      other=-float('inf')).to(tl.float32)
+    # Undo token-interleaved ownership before candidates cross rank boundaries.
     global_indices = safe_indices * dcp_size + dcp_rank
     global_indices = tl.where(valid, global_indices, -1).to(tl.int32)
 
     packed = Packed + row * stride_pr + columns * stride_pc
     tl.store(packed, scores, mask=column_mask)
+    # Share one FP32 collective buffer without rounding INT32 ids above 2**24.
+    # The receiver reinterprets the id lane; it must not numerically cast it.
     tl.store(packed + stride_pp,
              tl.cast(global_indices, tl.float32, bitcast=True),
              mask=column_mask)
@@ -101,7 +94,12 @@ def _pack_dcp_topk_candidates_kernel(
 
 def pack_dcp_topk_candidates(scores: torch.Tensor, local_indices: torch.Tensor,
                              *, dcp_world_rank: tuple[int, int]) -> torch.Tensor:
-    """Pack FP32 scores and bit-preserved INT32 global ids together."""
+    """Pack FP32 scores and bit-preserved INT32 global ids for one all-gather.
+
+    Local ids are request-relative positions in this rank's interleaved shard.
+    Return ``[rows, K, 2]`` FP32 storage; invalid candidates carry ``(-inf, -1)``
+    with the id lane stored as INT32 bits, not as a floating-point number.
+    """
     assert scores.dim() == 2 and local_indices.dim() == 2
     assert scores.size(0) == local_indices.size(0)
     assert scores.dtype == torch.float32
@@ -134,7 +132,7 @@ def _sparse_dcp_global_topk_kernel(top_k: int,
                                       dcp_size: int,
                                       fill: int = _FILL,
                                       threads: int = _THREADS):
-    """Select exact stable top-k global ids from rank-major candidates."""
+    """Select stable top-k global ids among the gathered candidates."""
     num_tokens = T.dynamic('num_tokens')
 
     @T.prim_func
@@ -193,7 +191,9 @@ def _sparse_dcp_global_topk_kernel(top_k: int,
                         Out[row, rank_offsets[rank] + slot] = global_id
                     candidate += threads
             else:
-                # The composite (score, -global_id) key makes ties exact.
+                # Find the K-th composite (score, -global_id) key without
+                # sorting all candidates. Four radix passes resolve the score,
+                # then four resolve ties by smaller global id.
                 score_prefix = T.alloc_var(T.uint32)
                 score_mask = T.alloc_var(T.uint32)
                 id_prefix = T.alloc_var(T.uint32)
@@ -269,7 +269,9 @@ def _sparse_dcp_global_topk_kernel(top_k: int,
                         id_mask = T.bitwise_or(id_mask, byte_mask)
                     selected_rank -= state[_STATE_COUNT_PRIOR]
 
-                # Emit in candidate order so equal input rows remain identical.
+                # Emit in candidate order, not score order: sparse attention
+                # needs a set, while identical gathered inputs across DCP ranks
+                # must produce the same index layout.
                 segment_start = num_candidates * tidx // threads
                 segment_end = num_candidates * (tidx + 1) // threads
                 local_win_count = T.alloc_var(T.int32)
@@ -330,7 +332,15 @@ def _sparse_dcp_global_topk_kernel(top_k: int,
 def sparse_dcp_global_topk(gathered_candidates: torch.Tensor,
                               k: int,
                               fill: int = _FILL) -> torch.Tensor:
-    """Select stable global top-k ids from packed DCP candidates."""
+    """Select stable global top-k ids from packed DCP candidates.
+
+    Input is rank-major ``[dcp_size, rows, K, 2]``, with each rank's valid
+    candidates packed before its invalid tail. Output is ``[rows, K]`` INT32
+    global ids in candidate order, padded with ``fill`` when fewer than K exist.
+
+    Score ties prefer smaller global ids among these candidates. Local
+    selection may already have discarded other tokens with the same score.
+    """
     assert gathered_candidates.dim() == 4
     dcp_size, num_tokens, local_k, pair_width = gathered_candidates.shape
     assert local_k == k and pair_width == 2
