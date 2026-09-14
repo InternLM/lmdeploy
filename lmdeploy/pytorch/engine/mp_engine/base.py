@@ -69,6 +69,18 @@ class MPEngine(EngineBase):
         """Update params."""
         return self._collective_rpc('update_params', request)
 
+    async def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness."""
+        return await self._collective_rpc_async('get_checkpoint_engine_status')
+
+    async def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        return await self._collective_rpc_async('update_weights_from_ipc', request, reject_reason)
+
+    def complete_weights_update(self):
+        """Record a successful external weights update."""
+        return self._collective_rpc('complete_weights_update')
+
     async def init_weights_update_group(self, request: Any):
         """Init disaggregated weights-update process group."""
         return await self._collective_rpc_async('init_weights_update_group', request)

@@ -2,6 +2,9 @@
 
 LMDeploy支持在线权重更新，方便RL训练等场景下的使用。以下是权重更新的步骤：
 
+checkpoint-engine Broadcast 和 Mooncake P2P 的使用方法请参考
+[使用 checkpoint-engine 更新 PyTorch 权重](./checkpoint_engine.md)。
+
 ## 步骤 1: 启动服务
 
 For pytorch backend you have to add `--distributed-executor-backend ray`.

@@ -7,7 +7,7 @@ import json
 import logging
 from enum import Enum
 
-import _xgrammar as _xgr  # noqa: E402
+from . import _tm
 
 try:
     import sentencepiece
@@ -55,7 +55,7 @@ class VocabType(Enum):
     """
 
 
-class TokenizerInfo(_xgr.TokenizerInfo):
+class TokenizerInfo(_tm.TokenizerInfo):
     """The tokenizer info contains the vocabulary, the type of the vocabulary,
     and necessary information for the grammar-guided generation.
 

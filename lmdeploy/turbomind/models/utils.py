@@ -5,13 +5,13 @@ from __future__ import annotations
 import math
 from types import SimpleNamespace
 
-import _turbomind as _tm
 import torch
 
 from lmdeploy.archs import get_model_arch
 
+from .. import _tm
 from ..builders import _act_type_id
-from ..linear import Linear, _dequant_linear
+from ..builders.linear import Linear, _build_linear, _dequant_linear
 
 
 def source_model_config(model_config):
@@ -324,32 +324,26 @@ def _reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
         return x.view(-1, head_num, 2, head_dim // 2).transpose(2, 3).reshape(x.shape)
 
 
-def reorder_rotary_emb(x, head_dim: int, rope_dim: int, *, resolver=None):
+def reorder_rotary_emb(x, head_dim: int, rope_dim: int, *, dtype: torch.dtype):
     """Apply RoPE layout permutation.
 
     Accepts either a ``Linear`` or a raw ``torch.Tensor``.
 
     For ``Linear`` inputs the permutation is applied to every tensor in the
     bundle with quantization awareness (block-alignment check, dequant
-    fallback, block-level shuffling for scales/zeros). ``resolver`` is
-    required and must not be ``None`` — it supplies the compute dtype
-    threaded into ``_dequant_linear``.
+    fallback, block-level shuffling for scales/zeros). ``dtype`` is the
+    computation dtype used by the dequantization fallback.
 
     For ``torch.Tensor`` inputs the element-level interleave-transpose is
-    applied directly. ``resolver`` is ignored.
+    applied directly.
     """
     if isinstance(x, Linear):
-        if resolver is None:
-            raise TypeError(
-                'resolver is required when passing a Linear to reorder_rotary_emb'
-            )
-        data_type = resolver.data_type
         wfmt = x.weight_format
         block_out = wfmt.block_out or 0
 
         # If blocks don't align with heads, dequant first
         if block_out and block_out % head_dim != 0:
-            x = _dequant_linear(x, data_type=data_type)
+            x = _dequant_linear(x, dtype=dtype)
             block_out = 0
 
         new_tensors = {}
@@ -404,15 +398,13 @@ def read_packed_moe_expert(
         ``TrivialFormat.normalize``. Only affects the ``weight`` kind on
         trivial-format linears; quantized formats use their own normalizers.
     """
-    gate_up = resolver.resolve(gate_up_pfx, index=expert_idx)
-    down    = resolver.resolve(down_pfx,    index=expert_idx)
+    gate_up = _build_linear(*resolver.resolve(gate_up_pfx, index=expert_idx))
+    down = _build_linear(*resolver.resolve(down_pfx, index=expert_idx))
 
     if trans:
         for lin in (gate_up, down):
             if lin.weight_format.name == 'trivial':
-                w = lin.tensors.get('weight')
-                if w is not None and w.dim() == 2:
-                    lin.tensors['weight'] = w.t().contiguous()
+                lin.tensors['weight'] = lin.tensors['weight'].t().contiguous()
 
     w1_t: dict[str, torch.Tensor] = {}
     w3_t: dict[str, torch.Tensor] = {}
