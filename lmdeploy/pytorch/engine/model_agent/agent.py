@@ -7,12 +7,10 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from functools import partial
-from multiprocessing.reduction import ForkingPickler
 from os import getenv
 from typing import Any
 
 import numpy as np
-import pybase64
 import torch
 import torch.distributed as dist
 from torch.profiler import record_function
@@ -51,7 +49,16 @@ from lmdeploy.serve.openai.protocol import (
     UpdateWeightsFromIPCRequest,
 )
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_logger, init_custom_process_group
+from lmdeploy.utils import (
+    FlattenedTensorBucket,
+    FlattenedTensorMetadata,
+    coerce_update_params_tensor,
+    get_logger,
+    init_custom_process_group,
+    is_pickle_serialized_named_tensors,
+    load_pickled_serialized_named_tensors,
+    load_safetensors_serialized_named_tensors,
+)
 
 from .dp_utils import DistGatherScalar, DPForwardMeta, GatheredDPForwardMeta
 from .inputs_maker import build_inputs_maker
@@ -1672,35 +1679,61 @@ class BaseModelAgent:
             ipc_tensor = func(*args)
             return ipc_tensor.clone() if require_clone else ipc_tensor
 
-        def _deserialize_weights(serialized_data):
-            weights = ForkingPickler.loads(pybase64.b64decode(serialized_data))
-            if request.load_format == 'flattened_bucket':
-                metadata: list[FlattenedTensorMetadata] = weights['metadata']
-                if not metadata:
-                    return []
-                if 'flattened_tensor' in weights:
+        def _deserialize_flattened_bucket(weights, *, from_pickle: bool):
+            metadata: list[FlattenedTensorMetadata] = weights['metadata']
+            if not metadata:
+                return []
+            if 'flattened_tensor' in weights:
+                flattened = weights['flattened_tensor']
+                if from_pickle:
                     # Determine if clone is required
                     require_clone = weights.get('require_clone', True)
                     if 'event_ipc_handle' in weights and not hasattr(torch.cuda.Event, 'from_ipc_handle'):
                         # Force clone when IPC event is provided but cannot be used
                         require_clone = True
-                    self._update_params_ipc_tensor = _construct(weights['flattened_tensor'],
-                                                                require_clone=require_clone)
-                elif self._update_params_ipc_tensor is None:
-                    raise ValueError(
-                        'flattened_tensor is not provided in weights and no cached ipc tensor is available. '
-                        'Please provide flattened_tensor on the first update_params call.')
-                if 'event_ipc_handle' in weights and hasattr(torch.cuda.Event, 'from_ipc_handle'):
-                    self._update_params_ipc_event = torch.cuda.Event.from_ipc_handle(
-                        device=torch.cuda.current_device(),
-                        handle=weights['event_ipc_handle'],
-                    )
-                flattened_tensor: torch.Tensor = self._update_params_ipc_tensor
-                if self._update_params_ipc_event is not None:
-                    self._update_params_ipc_event.wait()
-                bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
-                return list(bucket.reconstruct_tensors())
-            return [(k, _construct(v)) for k, v in weights]
+                    self._update_params_ipc_tensor = _construct(flattened, require_clone=require_clone)
+                else:
+                    self._update_params_ipc_tensor = coerce_update_params_tensor(flattened)
+            elif self._update_params_ipc_tensor is None:
+                raise ValueError(
+                    'flattened_tensor is not provided in weights and no cached ipc tensor is available. '
+                    'Please provide flattened_tensor on the first update_params call.')
+            if from_pickle and 'event_ipc_handle' in weights and hasattr(torch.cuda.Event, 'from_ipc_handle'):
+                self._update_params_ipc_event = torch.cuda.Event.from_ipc_handle(
+                    device=torch.cuda.current_device(),
+                    handle=weights['event_ipc_handle'],
+                )
+            flattened_tensor: torch.Tensor = self._update_params_ipc_tensor
+            if self._update_params_ipc_event is not None:
+                self._update_params_ipc_event.wait()
+            bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
+            return list(bucket.reconstruct_tensors())
+
+        def _deserialize_weights(serialized_data):
+            load_format = request.load_format
+            if load_format == 'safetensors':
+                if isinstance(serialized_data, dict):
+                    return [(k, coerce_update_params_tensor(v)) for k, v in serialized_data.items()]
+                weights = load_safetensors_serialized_named_tensors(serialized_data)
+                return list(weights.items())
+            if is_pickle_serialized_named_tensors(serialized_data, load_format):
+                weights = load_pickled_serialized_named_tensors(serialized_data)
+                if load_format == 'flattened_bucket':
+                    return _deserialize_flattened_bucket(weights, from_pickle=True)
+                return [(k, _construct(v)) for k, v in weights]
+            if isinstance(serialized_data, dict):
+                if load_format == 'flattened_bucket' or 'metadata' in serialized_data:
+                    return _deserialize_flattened_bucket(serialized_data, from_pickle=False)
+                return [(k, coerce_update_params_tensor(v)) for k, v in serialized_data.items()]
+            if isinstance(serialized_data, list):
+                named_tensors = []
+                for item in serialized_data:
+                    if not isinstance(item, (tuple, list)) or len(item) != 2:
+                        raise TypeError('structured serialized_named_tensors list items must be (name, tensor) pairs')
+                    named_tensors.append((item[0], coerce_update_params_tensor(item[1])))
+                return named_tensors
+            raise TypeError('serialized_named_tensors must be safetensors, structured tensors, '
+                            'or an opt-in pickle payload for trusted local IPC.')
 
         def _split_main_and_draft(weights):
             # TODO, zhouxinyu, support split and update weights for other mtp methods

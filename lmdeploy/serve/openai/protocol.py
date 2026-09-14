@@ -536,9 +536,14 @@ class GenerateResponse(BaseModel):
 
 
 class UpdateParamsRequest(BaseModel):
-    """Update weights request."""
+    """Update weights request.
+
+    HTTP ``POST /update_weights`` rejects pickle strings (``str`` / ``list[str]`` without
+    ``load_format='safetensors'``). Send safetensors or a structured dict of tensors. Pickle
+    payloads are only for trusted local IPC when ``LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1``.
+    """
     serialized_named_tensors: str | list[str] | dict
-    load_format: str | None = None  # 'flattened_bucket' or None
+    load_format: str | None = None  # 'safetensors', 'flattened_bucket', or None
     finished: bool = False
 
 
