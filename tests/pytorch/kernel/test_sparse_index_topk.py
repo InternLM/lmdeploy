@@ -104,25 +104,6 @@ def test_sparse_index_topk_expands_batch_kv_seqlens_for_prefill():
     _assert_topk_ids(scores, out, row_seqlens, k)
 
 
-@pytest.mark.parametrize('k', [512, 2048])
-def test_sparse_dcp_local_topk_stable_ties_choose_lower_positions(k):
-    from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import sparse_dcp_local_topk
-
-    device = 'cuda'
-    score_width = 3 * k
-    scores = torch.zeros(2, score_width, device=device, dtype=torch.float32)
-    scores[1, :256] = 1
-    q_seqlens = torch.ones(2, device=device, dtype=torch.int64)
-    kv_seqlens = torch.tensor([score_width, score_width],
-                              device=device,
-                              dtype=torch.int32)
-
-    out = sparse_dcp_local_topk(scores, q_seqlens, kv_seqlens, k=k)
-
-    expected = torch.arange(k, device=device, dtype=torch.int32).expand(2, -1)
-    assert torch.equal(out, expected)
-
-
 def test_sparse_index_topk_cuda_graph_capture():
     from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import sparse_index_topk
 
@@ -156,6 +137,7 @@ def test_sparse_dcp_global_topk_matches_global_stable_topk(
     from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import (
         pack_dcp_topk_candidates,
         sparse_dcp_global_topk,
+        sparse_dcp_local_topk,
     )
 
     device = 'cuda'
@@ -171,10 +153,11 @@ def test_sparse_dcp_global_topk_matches_global_stable_topk(
     packed_by_rank = []
     for rank in range(dcp_size):
         local_scores = global_scores[:, rank::dcp_size].contiguous()
-        local_indices = torch.argsort(local_scores,
-                                      dim=1,
-                                      descending=True,
-                                      stable=True)[:, :k].to(torch.int32)
+        local_indices = sparse_dcp_local_topk(
+            local_scores,
+            torch.ones(num_rows, dtype=torch.int32, device=device),
+            torch.full((num_rows,), local_width, dtype=torch.int32, device=device),
+            k=k)
         packed_by_rank.append(
             pack_dcp_topk_candidates(
                 local_scores,

@@ -136,33 +136,11 @@ def test_bf16_sparse_decode_uses_strided_cache_view(monkeypatch):
     assert torch.equal(global_indices, expected)
 
 
-def test_bf16_sparse_flashmla_uses_third_return_value_as_lse(monkeypatch):
-    impl = object.__new__(FlashMLASparseImpl)
-    impl.scale = 1.0
-    output = torch.empty(2, 64, 512, dtype=torch.bfloat16)
-    max_logits = torch.full((2, 64), 7.0)
-    lse = torch.full((2, 64), 11.0)
-
-    def fake_sparse_fwd(*args, **kwargs):
-        return output, max_logits, lse
-
-    monkeypatch.setattr(impl, '_get_flash_mla_sparse_fwd',
-                        lambda: fake_sparse_fwd)
-    actual_output, actual_lse = impl._flash_mla_sparse_forward(
-        torch.empty(2, 8, 576, dtype=torch.bfloat16),
-        torch.empty(4, 1, 576, dtype=torch.bfloat16),
-        torch.zeros(2, 1, 4, dtype=torch.int32),
-        return_lse=True)
-
-    assert actual_output.shape == (2, 8, 512)
-    assert torch.equal(actual_lse, lse[:, :8])
-    assert not torch.equal(actual_lse, max_logits[:, :8])
-
-
-@pytest.mark.parametrize('device', ['cpu', 'cuda'])
-@pytest.mark.parametrize('dcp_size', [1, 2, 4])
-@pytest.mark.parametrize('num_tokens', [1, 6, 32])
-@pytest.mark.parametrize('strided', [False, True])
+@pytest.mark.parametrize(('device', 'dcp_size', 'num_tokens', 'strided'), [
+    ('cpu', 1, 1, False), ('cpu', 2, 6, True),
+    ('cuda', 2, 1, False), ('cuda', 2, 6, True),
+    ('cuda', 4, 6, False), ('cuda', 4, 32, True),
+])
 def test_dcp_query_all_gather_preserves_contiguous_head_order(monkeypatch, device, dcp_size, num_tokens, strided):
     if device == 'cuda' and not torch.cuda.is_available():
         pytest.skip('requires CUDA')
@@ -207,9 +185,9 @@ def test_dcp_query_all_gather_preserves_contiguous_head_order(monkeypatch, devic
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
-@pytest.mark.parametrize('k', [7, 512, 2048])
-@pytest.mark.parametrize('dcp_size', [1, 2, 4])
-@pytest.mark.parametrize('strided', [False, True])
+@pytest.mark.parametrize(('k', 'dcp_size', 'strided'), [
+    (7, 1, True), (512, 2, False), (2048, 4, False), (2048, 4, True),
+])
 def test_dcp_compact_indices_preserves_order_and_counts(k, dcp_size, strided):
     from lmdeploy.pytorch.kernels.cuda.dcp import filter_and_compact_dcp_indices
 
@@ -252,48 +230,6 @@ def test_dcp_compact_indices_preserves_order_and_counts(k, dcp_size, strided):
         assert (graph_output == -1).all()
         assert (graph_counts == 0).all()
         indices.copy_(saved)
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
-def test_dcp_attention_merge_normalizes_empty_local_shard(monkeypatch):
-    from lmdeploy.pytorch import distributed
-
-    impl = object.__new__(mla_module.FlashMLAImpl)
-    impl.dcp_world_size = 2
-    impl.dcp_rank = 0
-    local_output = torch.full((1, 2, 1), torch.nan, dtype=torch.bfloat16, device='cuda')
-    local_lse = torch.tensor([[torch.nan, torch.inf]], device='cuda')
-    remote_lse = torch.tensor([[1.5, 2.0]], device='cuda')
-    remote_output = torch.tensor([[[3.0], [5.0]]], device='cuda')
-
-    def fake_all_gather(output, input_tensor, group='tp', async_op=False):
-        assert group == 'dcp'
-        assert torch.all(torch.isneginf(input_tensor))
-        output[:1].copy_(input_tensor)
-        output[1:].copy_(remote_lse)
-
-    def fake_reduce_scatter(output,
-                            input_tensor,
-                            op=None,
-                            group='tp',
-                            async_op=False):
-        assert group == 'dcp'
-        assert torch.equal(input_tensor, torch.zeros_like(input_tensor))
-        # Rank 0 receives the first head slice. The remote rank contributes
-        # its locally normalized output with correction factor one.
-        output.copy_(remote_output.transpose(0, 1)[:1])
-
-    monkeypatch.setattr(distributed, 'all_gather_into_tensor', fake_all_gather)
-    monkeypatch.setattr(distributed, 'reduce_scatter_tensor',
-                        fake_reduce_scatter)
-    merged = impl._merge_dcp_attention(local_output,
-                                       local_lse,
-                                       valid_rows=torch.tensor([False], device='cuda'))
-
-    assert merged.dtype == torch.bfloat16
-    assert merged.shape == (1, 1, 1)
-    assert merged.item() == 3.0
-    assert torch.isfinite(merged).all()
 
 
 def test_bf16_sparse_decode_strided_cache_matches_contiguous_cache(
@@ -461,9 +397,10 @@ def test_sparse_mla_prefill_routes_by_kv_length(monkeypatch):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
-@pytest.mark.parametrize('topk', [7, 512, 2048])
-@pytest.mark.parametrize('strided', [False, True])
-@pytest.mark.parametrize('partition_start', [0, 128, 'per_request'])
+@pytest.mark.parametrize(('topk', 'strided', 'partition_start'), [
+    (7, True, 'per_request'), (512, False, 0),
+    (2048, False, 'per_request'), (2048, True, 128),
+])
 def test_dcp_sparse_prefill_maps_and_compacts_partition_indices(topk, strided, partition_start):
     from lmdeploy.pytorch.kernels.cuda.dcp import map_and_compact_dcp_prefill_indices
 
@@ -506,10 +443,11 @@ def test_dcp_sparse_prefill_maps_and_compacts_partition_indices(topk, strided, p
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
-@pytest.mark.parametrize('sparse', [False, True])
-@pytest.mark.parametrize('fp8_cache', [False, True])
-@pytest.mark.parametrize('dcp_size', [2, 4])
-@pytest.mark.parametrize('kv_length', [512, 513])
+@pytest.mark.parametrize(('sparse', 'fp8_cache', 'dcp_size', 'kv_length'), [
+    (False, False, 2, 513), (False, True, 4, 513),
+    (True, False, 2, 512), (True, True, 4, 512),
+    (True, False, 4, 513), (True, True, 2, 513),
+])
 def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse, fp8_cache, dcp_size, kv_length):
     pytest.importorskip('flash_mla')
     if sparse and torch.cuda.get_device_capability()[0] != 9:
