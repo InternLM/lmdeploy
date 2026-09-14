@@ -9,15 +9,19 @@ namespace turbomind::core {
 
 class StreamImpl {
 public:
-    StreamImpl(int priority): stream_{}
+    StreamImpl(int priority): stream_{}, owns_stream_{true}
     {
         TM_CUDA_CHECK(cudaStreamCreateWithPriority(&stream_, cudaStreamNonBlocking, priority));
     }
 
+    explicit StreamImpl(cudaStream_t stream): stream_{stream}, owns_stream_{false} {}
+
     ~StreamImpl()
     {
-        if (auto ec = cudaStreamDestroy(stream_); ec != cudaSuccess) {
-            TM_LOG_ERROR("{}", cudaGetErrorString(ec));
+        if (owns_stream_) {
+            if (auto ec = cudaStreamDestroy(stream_); ec != cudaSuccess) {
+                TM_LOG_ERROR("{}", cudaGetErrorString(ec));
+            }
         }
         stream_ = {};
     }
@@ -36,6 +40,7 @@ public:
 
 public:
     cudaStream_t stream_;
+    bool         owns_stream_;
 };
 
 class Stream {
@@ -43,6 +48,14 @@ public:
     Stream() = default;
 
     static Stream create(int priority = 0);
+
+    /// Wrap an externally owned CUDA stream without taking ownership.
+    static Stream borrow(cudaStream_t stream)
+    {
+        Stream ret;
+        ret.impl_ = std::make_shared<StreamImpl>(stream);
+        return ret;
+    }
 
     void Sync()
     {

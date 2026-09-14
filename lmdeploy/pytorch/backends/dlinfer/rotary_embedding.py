@@ -11,11 +11,8 @@ from ..default.rotary_embedding import (
     YarnRotaryEmbeddingImpl,
 )
 from ..rotary_embedding import (
-    FopeParameters,
-    Llama3Parameters,
-    LongRoPEScalingParameters,
     RopeType,
-    RotaryEmbeddingBuilder,
+    RotaryEmbeddingBuildSpec,
     RotaryEmbeddingImpl,
     YarnParameters,
 )
@@ -155,41 +152,28 @@ class DlinferYarnRotaryEmbeddingImpl(YarnRotaryEmbeddingImpl):
         return _rotary_embedding_fwd(position_ids, self.inv_freq, scaling_factor=1.0, mscale=self.mscale, dtype=dtype)
 
 
-class DlinferRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
-    """Rotary embedding dlinfer builder."""
-
-    @staticmethod
-    def build(
-        dim: int,
-        max_position_embeddings: int = 2048,
-        base: int = 10000,
-        scaling_factor: float = 1.0,
-        yarn_params: YarnParameters = None,
-        longrope_params: LongRoPEScalingParameters = None,
-        llama3_params: Llama3Parameters = None,
-        fope_params: FopeParameters = None,
-        emb_type: RopeType = RopeType.Default,
-    ):
-        """build."""
-        if emb_type in (RopeType.Default, RopeType.LinearScaling):
-            return DlinferRotaryEmbeddingImpl(dim, base, scaling_factor)
-        elif emb_type == RopeType.DynamicNTKScaling:
-            return DlinferLlamaDynamicNTKScalingRotaryEmbedding(dim, base, scaling_factor, max_position_embeddings)
-        elif emb_type == RopeType.Llama3:
-            return DlinferLlama3RotaryEmbeddingImpl(dim, base, scaling_factor, llama3_params.low_freq_factor,
-                                                    llama3_params.high_freq_factor, max_position_embeddings)
-        elif emb_type == RopeType.Yarn:
-            return DlinferYarnRotaryEmbeddingImpl(dim,
-                                                  base,
-                                                  scaling_factor,
-                                                  max_position_embeddings,
-                                                  yarn_params=yarn_params)
-        elif emb_type == RopeType.Fope:
-            return FopeRotaryEmbeddingImpl(
-                dim,
-                max_position_embeddings=max_position_embeddings,
-                scaling_factor=scaling_factor,
-                params=fope_params,
-            )
-        else:
-            raise NotImplementedError(f'Unsupported embedding type: {emb_type}')
+def _build_rotary_embedding(spec: RotaryEmbeddingBuildSpec) -> RotaryEmbeddingImpl:
+    """Build the selected DLINFER rotary-embedding implementation."""
+    if spec.emb_type in (RopeType.Default, RopeType.LinearScaling):
+        return DlinferRotaryEmbeddingImpl(spec.dim, spec.base, spec.scaling_factor)
+    if spec.emb_type == RopeType.DynamicNTKScaling:
+        return DlinferLlamaDynamicNTKScalingRotaryEmbedding(spec.dim, spec.base, spec.scaling_factor,
+                                                             spec.max_position_embeddings)
+    if spec.emb_type == RopeType.Llama3:
+        params = spec.llama3_params
+        return DlinferLlama3RotaryEmbeddingImpl(spec.dim, spec.base, spec.scaling_factor, params.low_freq_factor,
+                                                params.high_freq_factor, spec.max_position_embeddings)
+    if spec.emb_type == RopeType.Yarn:
+        return DlinferYarnRotaryEmbeddingImpl(spec.dim,
+                                              spec.base,
+                                              spec.scaling_factor,
+                                              spec.max_position_embeddings,
+                                              yarn_params=spec.yarn_params)
+    if spec.emb_type == RopeType.Fope:
+        return FopeRotaryEmbeddingImpl(
+            spec.dim,
+            max_position_embeddings=spec.max_position_embeddings,
+            scaling_factor=spec.scaling_factor,
+            params=spec.fope_params,
+        )
+    raise NotImplementedError(f'Unsupported embedding type: {spec.emb_type}')

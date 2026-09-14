@@ -9,10 +9,7 @@ from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import (
     per_tensor_quant_fp8,
 )
 
-from ..static_fp8_modules import (
-    LinearStaticF8Builder,
-    LinearStaticF8Impl,
-)
+from ..static_fp8_modules import LinearStaticF8Impl
 
 
 @torch.compile(
@@ -145,21 +142,3 @@ class TritonLinearStaticF8Impl(LinearStaticF8Impl):
                 dist.all_reduce(output, group=group)
 
         return output
-
-
-class TritonLinearStaticF8Builder(LinearStaticF8Builder):
-    """Triton static per-tensor FP8 linear builder."""
-
-    @staticmethod
-    def build(
-        in_features: int,
-        out_features: int,
-        bias: bool = True,
-        dtype: torch.dtype | None = None,
-    ):
-        """Build static FP8 linear implementation."""
-        return TritonLinearStaticF8Impl(
-            in_features,
-            out_features,
-            out_dtype=dtype,
-        )

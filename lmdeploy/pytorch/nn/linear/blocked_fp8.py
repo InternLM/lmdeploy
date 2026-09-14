@@ -3,8 +3,10 @@ from typing import Any
 
 import torch
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.blockedf8_modules import LinearBlockedF8BuildSpec
 from lmdeploy.pytorch.config import TPMode
+from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
 from ..quant_utils import quant_blocked_fp8
@@ -43,14 +45,18 @@ class BlockedF8Linear(LinearBase):
         self.scale_fmt = scale_fmt
         if self.is_tp:
             in_features, out_features = self._get_io_features(in_features, out_features, colwise)
-        impl_builder = get_backend().get_layer_impl_builder(OpType.LinearBlockedF8)
-        self.impl = impl_builder.build(in_features,
-                                       out_features,
-                                       block_size=self.block_size,
-                                       bias=bias,
-                                       dtype=self.dtype,
-                                       fp8_dtype=self.fp8_dtype)
-        self.impl.set_scale_fmt(scale_fmt)
+        self.impl = get_backend().build_op(
+            LinearBlockedF8BuildSpec(
+                in_features=in_features,
+                out_features=out_features,
+                block_size=self.block_size,
+                bias=bias,
+                output_dtype=self.dtype,
+                fp8_dtype=self.fp8_dtype,
+                scale_fmt=scale_fmt,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
         weight, weight_scale_inv, bias = self.create_weights(in_features, out_features, bias, self.dtype, self.device)
         self.register_all_parameters(weight, weight_scale_inv, bias)
 
@@ -146,6 +152,20 @@ class BlockedF8Linear(LinearBase):
         """Update weights."""
         weight, weight_scale_inv, bias = self.impl.update_weights(self.weight, self.weight_scale_inv, self.bias)
         self.register_all_parameters(weight, weight_scale_inv, bias)
+
+    def get_unquantized_weight(self, out_dtype: torch.dtype) -> torch.Tensor:
+        """Return the local dequantized weight."""
+        out_features, in_features = self.weight.shape
+        scale_rows, scale_cols = self.weight_scale_inv.shape
+        aligned_shape = (scale_rows * self.block_size, scale_cols * self.block_size)
+        weight = self.weight
+        if weight.shape != aligned_shape:
+            weight = weight.new_zeros(aligned_shape)
+            weight[:out_features, :in_features].copy_(self.weight)
+        weight = weight.reshape(scale_rows, self.block_size, scale_cols, self.block_size)
+        scale = self.weight_scale_inv[:, None, :, None]
+        weight = (weight.to(scale.dtype) * scale).to(out_dtype).reshape(aligned_shape)
+        return weight[:out_features, :in_features]
 
     def _forward_default(self, x, all_reduce, tp_sizes):
         """Default forward implement."""

@@ -332,3 +332,11 @@ class CudaGraphMixin:
         if output_buffers.get('all_routed_experts', None) is not None:
             outputs['all_routed_experts'] = output_buffers['all_routed_experts'][:num_tokens, ...].clone()
         return outputs
+
+
+class PiecewiseCudaGraphMixin(CudaGraphMixin):
+    """Opt a standard decoder model into the shared piecewise graph path.
+
+    Models using this mixin must expose the conventional decoder forward inputs, an input embedding, and the existing
+    CUDA graph output-buffer contract. Selected CUDA operators own any required eager boundaries.
+    """

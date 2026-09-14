@@ -62,6 +62,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 from torch.profiler import record_function
 
 from lmdeploy.messages import EventType, ScheduleMetrics
@@ -1526,11 +1527,56 @@ class Scheduler:
         for seq in self.migration_done:
             seq.state.activate()
 
+    def _get_request_cache_usage(self, total_blocks: int):
+        """Return GPU KV blocks referenced by requests, counted once."""
+        if total_blocks == 0:
+            return 0.0
+
+        num_logical_blocks = total_blocks + self.block_manager.num_cpu_blocks
+        request_block_mask = np.zeros(num_logical_blocks, dtype=np.bool_)
+        seen_prefix_anchors = set()
+        block_size = self.cache_config.block_size
+
+        for seq in self.seq_manager.get_all_sequences():
+            if seq.status == MessageStatus.STOPPED or seq.num_blocks == 0:
+                continue
+
+            logical_blocks = seq.logical_blocks.get_real_blocks()
+            prefix_cache = seq.prefix_cache
+            match_start = prefix_cache.match_start_step
+            matched_end = match_start + seq.cached_tokens
+            num_matched_blocks = matched_end // block_size
+            can_group_prefix = (
+                seq.cached_tokens > 0
+                and match_start == seq.input_start_pos
+                and match_start % block_size == 0
+                and matched_end % block_size == 0
+                and matched_end <= seq.num_history_ids
+                and 0 < num_matched_blocks <= len(logical_blocks)
+                and not prefix_cache.recompute_overlap.trie_block_map
+            )
+            if can_group_prefix:
+                # A matched endpoint block identifies its canonical trie path.
+                # Mark that path once, then only each request's private suffix.
+                anchor = (num_matched_blocks, int(logical_blocks[num_matched_blocks - 1]))
+                if anchor in seen_prefix_anchors:
+                    logical_blocks = logical_blocks[num_matched_blocks:]
+                else:
+                    seen_prefix_anchors.add(anchor)
+
+            request_block_mask[logical_blocks] = True
+
+        logical_block_ids = np.flatnonzero(request_block_mask)
+        num_request_gpu_blocks = self.block_manager.allocator.count_gpu_blocks(logical_block_ids)
+        return float(num_request_gpu_blocks) / total_blocks
+
     @property
     def schedule_metrics(self):
         total_blocks = self.block_manager.num_gpu_blocks
         free_blocks = self.block_manager.get_num_free_gpu_blocks()
         cache_usage = 1.0 - free_blocks / total_blocks if total_blocks else 0.0
+        if _envs.enable_request_cache_usage_metric:
+            cache_usage = self._get_request_cache_usage(total_blocks)
         return ScheduleMetrics(
             active_seqs=self.num_running(),
             waiting_seqs=self.num_waiting() + self.num_ready() + self.num_remote_loading(),

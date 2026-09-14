@@ -17,13 +17,18 @@ from dataclasses import dataclass
 from typing import Any
 
 import lmdeploy.serve.parsers.reasoning_parser  # noqa: F401
-
-# Ensure tool/reasoning parser modules are registered.
-import lmdeploy.serve.parsers.tool_parser  # noqa: F401
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Function, Tool
 from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
-from lmdeploy.serve.parsers.tool_parser import ToolParserManager
+from lmdeploy.serve.parsers.tool_parser import (
+    DeepSeekV32ToolParser,
+    Glm47ToolParser,
+    JsonToolParser,
+    KimiK2ToolParser,
+    Qwen3CoderToolParser,
+    ToolParser,
+    ToolParserManager,
+)
 
 
 @dataclass(frozen=True)
@@ -55,58 +60,124 @@ def pick_size(rng: random.Random, lo: int, hi: int) -> int:
     return rng.randint(lo, hi) if lo != hi else lo
 
 
-def _json_tool_inner(fn_index: int, param_count: int, payload_size: int, rng: random.Random) -> str:
-    args = {f'param_{j}': random_text(rng, payload_size) for j in range(param_count)}
-    return json.dumps({'name': f'bench_fn_{fn_index}', 'arguments': args}, ensure_ascii=False)
+def _random_arguments(param_count: int, payload_size: int, rng: random.Random) -> dict[str, str]:
+    return {f'param_{j}': random_text(rng, payload_size) for j in range(param_count)}
 
 
-def _glm47_tool_inner(fn_index: int, param_count: int, payload_size: int, rng: random.Random) -> str:
-    parts = [f'bench_fn_{fn_index}']
-    for j in range(param_count):
-        parts.append(f'<arg_key>param_{j}</arg_key>')
-        parts.append(f'<arg_value>{random_text(rng, payload_size)}</arg_value>')
-    return ''.join(parts)
+def _json_tool_inner(function_name: str, arguments: dict[str, str], argument_field: str) -> tuple[str, list[str]]:
+    return json.dumps({'name': function_name, argument_field: arguments}, ensure_ascii=False), []
 
 
-def _qwen3coder_tool_inner(fn_index: int, param_count: int, payload_size: int, rng: random.Random) -> str:
-    parts = [f'<function=bench_fn_{fn_index}>']
-    for j in range(param_count):
-        parts.append(f'<parameter=param_{j}>')
-        parts.append(random_text(rng, payload_size))
-        parts.append('</parameter>')
-    parts.append('</function>')
-    return ''.join(parts)
+def _glm47_tool_inner(function_name: str, arguments: dict[str, str]) -> tuple[str, list[str]]:
+    parts = [function_name]
+    # Supported GLM tokenizers emit this value terminator atomically.
+    markers = ['</arg_value>']
+    for name, value in arguments.items():
+        arg_key = f'<arg_key>{name}</arg_key>'
+        arg_value_open = '<arg_value>'
+        arg_value_close = '</arg_value>'
+        parts.extend((arg_key, arg_value_open, value, arg_value_close))
+    return ''.join(parts), markers
+
+
+def _qwen3coder_tool_inner(function_name: str, arguments: dict[str, str]) -> tuple[str, list[str]]:
+    function_open = f'<function={function_name}>'
+    function_close = '</function>'
+    parts = [function_open]
+    # Preserve the token boundaries used by _stable_arg_value_end.
+    markers = ['</', 'parameter', '>']
+    for name, value in arguments.items():
+        parameter_open = f'<parameter={name}>'
+        parameter_close = '</parameter>'
+        parts.extend((parameter_open, value, parameter_close))
+    parts.append(function_close)
+    return ''.join(parts), markers
+
+
+def _kimi_tool_inner(
+    parser_cls: type[KimiK2ToolParser],
+    function_name: str,
+    call_index: int,
+    arguments: dict[str, str],
+) -> tuple[str, list[str]]:
+    raw_id = f'functions.{function_name}:{call_index}'
+    inner = (
+        f'{parser_cls.call_begin}{raw_id}'
+        f'{parser_cls.argument_begin}{json.dumps(arguments, ensure_ascii=False)}'
+        f'{parser_cls.call_end}'
+    )
+    return inner, [parser_cls.call_begin, parser_cls.argument_begin, parser_cls.call_end]
+
+
+def _deepseek_tool_inner(
+    parser_cls: type[DeepSeekV32ToolParser],
+    function_name: str,
+    arguments: dict[str, str],
+) -> tuple[str, list[str]]:
+    token = parser_cls.dsml_token
+    invoke_start = f'<{token}invoke'
+    parameter_start = f'<{token}parameter'
+    invoke_open = f'{invoke_start} name="{function_name}">'
+    invoke_close = f'</{token}invoke>'
+    parts = [invoke_open, '\n']
+    markers = [invoke_start, parameter_start, invoke_close]
+    for name, value in arguments.items():
+        parameter_open = f'{parameter_start} name="{name}" string="true">'
+        parameter_close = f'</{token}parameter>'
+        parts.extend((parameter_open, value, parameter_close, '\n'))
+        markers.append(parameter_close)
+    parts.append(invoke_close)
+    return ''.join(parts), markers
+
+
+def _synthesize_tool_inner(
+    parser_cls: type[ToolParser],
+    function_name: str,
+    call_index: int,
+    arguments: dict[str, str],
+) -> tuple[str, list[str]]:
+    """Build one valid payload and markers random character chunks must not
+    split."""
+    if issubclass(parser_cls, JsonToolParser):
+        return _json_tool_inner(function_name, arguments, parser_cls.argument_field)
+    if issubclass(parser_cls, Glm47ToolParser):
+        return _glm47_tool_inner(function_name, arguments)
+    if issubclass(parser_cls, Qwen3CoderToolParser):
+        return _qwen3coder_tool_inner(function_name, arguments)
+    if issubclass(parser_cls, KimiK2ToolParser):
+        return _kimi_tool_inner(parser_cls, function_name, call_index, arguments)
+    if issubclass(parser_cls, DeepSeekV32ToolParser):
+        return _deepseek_tool_inner(parser_cls, function_name, arguments)
+    raise ValueError(f'No benchmark payload generator for tool parser {parser_cls.__name__!r}.')
 
 
 def synthesize_tool_blocks(
     cfg: SynthConfig,
     rng: random.Random,
-    tool_open: str,
-    tool_close: str | None,
-    payload_format: str,
-) -> tuple[str, list[str]]:
-    if cfg.tool_call_parser is None or cfg.tool_call_count <= 0:
-        return '', []
+    parser_cls: type[ToolParser] | None,
+) -> tuple[str, list[str], list[tuple[str, dict[str, str]]]]:
+    if parser_cls is None or cfg.tool_call_count <= 0:
+        return '', [], []
 
-    if cfg.tool_call_parser == 'llama3' and cfg.tool_call_count != 1:
-        raise ValueError('llama3 tool parser supports only one tool call block (no close tag)')
+    tool_open = parser_cls.get_tool_open_tag() or ''
+    tool_close = parser_cls.get_tool_close_tag()
+    if tool_close is None and cfg.tool_call_count != 1:
+        raise ValueError(f'{parser_cls.__name__} supports only one benchmark tool call block (no close tag).')
 
     blocks: list[str] = []
     tags: list[str] = []
+    expected_calls: list[tuple[str, dict[str, str]]] = []
     if tool_open:
         tags.append(tool_open)
     if tool_close:
         tags.append(tool_close)
 
     for i in range(cfg.tool_call_count):
-        if payload_format == 'json':
-            inner = _json_tool_inner(i, cfg.tool_param_count, cfg.tool_payload_size, rng)
-        elif payload_format == 'xml' and cfg.tool_call_parser == 'glm47':
-            inner = _glm47_tool_inner(i, cfg.tool_param_count, cfg.tool_payload_size, rng)
-        elif payload_format == 'xml' and cfg.tool_call_parser in ('qwen3coder',):
-            inner = _qwen3coder_tool_inner(i, cfg.tool_param_count, cfg.tool_payload_size, rng)
-        else:
-            inner = _json_tool_inner(i, cfg.tool_param_count, cfg.tool_payload_size, rng)
+        function_name = f'bench_fn_{i}'
+        arguments = _random_arguments(cfg.tool_param_count, cfg.tool_payload_size, rng)
+        inner, inner_tags = _synthesize_tool_inner(parser_cls, function_name, i, arguments)
+        tags.extend(inner_tags)
+        expected_calls.append((function_name, arguments))
 
         if tool_close:
             block = f'{tool_open}{inner}{tool_close}'
@@ -114,10 +185,13 @@ def synthesize_tool_blocks(
             block = f'{tool_open}{inner}'
         blocks.append(block)
 
-    return ''.join(blocks), tags
+    return ''.join(blocks), tags, expected_calls
 
 
-def synthesize_response(cfg: SynthConfig, rng: random.Random) -> tuple[str, list[str]]:
+def synthesize_response(
+    cfg: SynthConfig,
+    rng: random.Random,
+) -> tuple[str, list[str], list[tuple[str, dict[str, str]]]]:
     reasoning_open = reasoning_close = None
     starts_in_reasoning = False
     if cfg.reasoning_parser:
@@ -127,13 +201,9 @@ def synthesize_response(cfg: SynthConfig, rng: random.Random) -> tuple[str, list
         rparser = rcls(enable_thinking=cfg.enable_thinking if cfg.enable_thinking else None)
         starts_in_reasoning = bool(rparser.starts_in_reasoning_mode())
 
-    tool_open = tool_close = None
-    payload_format = 'json'
+    tool_parser_cls = None
     if cfg.tool_call_parser:
-        tcls = ToolParserManager.get(cfg.tool_call_parser)
-        tool_open = tcls.get_tool_open_tag()
-        tool_close = tcls.get_tool_close_tag()
-        payload_format = tcls.get_tool_payload_format()
+        tool_parser_cls = ToolParserManager.get(cfg.tool_call_parser)
 
     reasoning_body = random_text(rng, cfg.reasoning_size) if cfg.reasoning_size > 0 else ''
     content_body = random_text(rng, cfg.content_size) if cfg.content_size > 0 else ''
@@ -144,7 +214,7 @@ def synthesize_response(cfg: SynthConfig, rng: random.Random) -> tuple[str, list
         rc = reasoning_close or ''
         reasoning_seg = f'{ro}{reasoning_body}{rc}'
 
-    tool_seg, tool_tags = synthesize_tool_blocks(cfg, rng, tool_open or '', tool_close, payload_format)
+    tool_seg, tool_tags, expected_calls = synthesize_tool_blocks(cfg, rng, tool_parser_cls)
 
     protected_tags: list[str] = []
     if reasoning_open:
@@ -158,7 +228,7 @@ def synthesize_response(cfg: SynthConfig, rng: random.Random) -> tuple[str, list
     else:
         full = content_body + reasoning_seg + tool_seg
 
-    return full, protected_tags
+    return full, protected_tags, expected_calls
 
 
 def segment_text(text: str, tags: list[str]) -> list[tuple[str, bool]]:
@@ -266,19 +336,84 @@ def build_parser(cfg: SynthConfig):
     return cls(request=request)
 
 
+def _normalize_output(content, tool_calls, reasoning_content):
+    normalized_calls = []
+    for call in tool_calls or []:
+        try:
+            arguments = json.loads(call.function.arguments)
+        except json.JSONDecodeError as err:
+            raise RuntimeError(
+                f'Parser produced invalid arguments for {call.function.name!r}: {err.msg}.'
+            ) from err
+        normalized_calls.append((call.function.name, arguments))
+    return content, normalized_calls, reasoning_content
+
+
+def _parse_stream_sample(cfg: SynthConfig, chunks: list[str]):
+    parser = build_parser(cfg)
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    tool_deltas = []
+    if not chunks:
+        parsed_chunks = parser.stream_chunk('', [], final=True)
+        chunks_with_output = (parsed_chunks, )
+    else:
+        chunks_with_output = (
+            parser.stream_chunk(chunk, [], final=index == len(chunks) - 1)
+            for index, chunk in enumerate(chunks)
+        )
+
+    for parsed_chunks in chunks_with_output:
+        for message, _ in parsed_chunks:
+            if message.content:
+                content_parts.append(message.content)
+            if message.reasoning_content:
+                reasoning_parts.append(message.reasoning_content)
+            if message.tool_calls:
+                tool_deltas.extend(message.tool_calls)
+
+    tool_calls = parser.tool_parser.build_tool_calls(tool_deltas) if parser.tool_parser is not None else None
+    content = ''.join(content_parts) or None
+    reasoning_content = ''.join(reasoning_parts) or None
+    return _normalize_output(content, tool_calls, reasoning_content)
+
+
+def validate_sample(
+    cfg: SynthConfig,
+    full_text: str,
+    chunks: list[str],
+    expected_calls: list[tuple[str, dict[str, str]]],
+) -> None:
+    """Reject malformed benchmark fixtures before recording timings."""
+    streamed = _parse_stream_sample(cfg, chunks)
+    complete = _normalize_output(*build_parser(cfg).parse_complete(full_text))
+    if streamed != complete:
+        raise RuntimeError('Streaming and complete parsing produced different normalized outputs.')
+    if streamed[1] != expected_calls:
+        expected_names = [name for name, _ in expected_calls]
+        actual_names = [name for name, _ in streamed[1]]
+        raise RuntimeError(
+            'Benchmark payload did not produce the expected tool calls: '
+            f'expected names {expected_names}, got {actual_names}; arguments may also differ.'
+        )
+
+
 def run_stream_benchmark(cfg: SynthConfig, chunks: list[str], iterations: int) -> float:
+    streamed_chunks = chunks[:-1]
+    final_chunk = chunks[-1] if chunks else ''
     start = time.perf_counter()
     for _ in range(iterations):
         parser = build_parser(cfg)
-        for chunk in chunks:
-            parser.stream_chunk(chunk, [])
+        for chunk in streamed_chunks:
+            parser.stream_chunk(chunk, [], final=False)
+        parser.stream_chunk(final_chunk, [], final=True)
     return time.perf_counter() - start
 
 
 def run_complete_benchmark(cfg: SynthConfig, full_text: str, iterations: int) -> float:
     start = time.perf_counter()
-    parser = build_parser(cfg)
     for _ in range(iterations):
+        parser = build_parser(cfg)
         parser.parse_complete(full_text)
     return time.perf_counter() - start
 
@@ -320,10 +455,13 @@ def main() -> None:
         tool_payload_size=pick_size(rng, ps_lo, ps_hi),
     )
 
-    full_text, protected_tags = synthesize_response(cfg, rng)
+    full_text, protected_tags, expected_calls = synthesize_response(cfg, rng)
     segments = segment_text(full_text, protected_tags)
     chunks = chunk_segments(segments, args.chunk_min, args.chunk_max, rng)
-    assert ''.join(chunks) == full_text, 'chunk reassembly mismatch'
+    if ''.join(chunks) != full_text:
+        raise RuntimeError('Chunk reassembly mismatch.')
+    validate_sample(cfg, full_text, chunks, expected_calls)
+    del expected_calls
 
     stream_s = run_stream_benchmark(cfg, chunks, args.iterations)
     complete_s = run_complete_benchmark(cfg, full_text, max(1, args.iterations // 10))

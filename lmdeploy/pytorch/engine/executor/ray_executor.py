@@ -22,7 +22,7 @@ from lmdeploy.pytorch.ray import RayContext, get_device_str
 from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.utils import get_logger, try_import_deeplink
 
-from .base import ExecutorBase
+from .base import ExecutorBase, _WorkerCachePlanSizes
 from .base_worker import WorkerWrapperBase
 from .dist_utils import find_available_port
 
@@ -102,6 +102,18 @@ def _update_runtime_env_nsys(runtime_env: dict):
     return runtime_env
 
 
+def _needs_symm_mem_device_setup(dist_config: DistConfig) -> bool:
+    """Whether Ray workers must preserve peer CUDA-device visibility.
+
+    Ray normally narrows every actor to one visible GPU, which remaps that device to local ordinal zero. CUDA symmetric-
+    memory rendezvous identifies allocations by the process-local device ordinal, so TP actors on one host must instead
+    inherit the full visibility and select their assigned GPU.
+    """
+    from lmdeploy.pytorch.backends.cuda.comm.communicator import should_try_symm_mem
+    return (should_try_symm_mem(dist_config)
+            or (_envs.enable_symm_mem_lmhead and dist_config.attn_tp > 1))
+
+
 class RemoteLogger:
     """Remote logger."""
 
@@ -177,6 +189,12 @@ class RayWorkerWrapper(WorkerWrapperBase):
         local_rank = (visible_devices.split(',').index(physical_device_id)
                       if visible_devices else int(physical_device_id))
         self.set_device(local_rank)
+        return {
+            'node_ip': self.node_ip,
+            'ray_gpu_ids': [str(gpu_id) for gpu_id in gpu_ids],
+            'cuda_visible_devices': visible_devices,
+            'current_device': torch.cuda.current_device(),
+        }
 
     def set_env(self, envs: dict[str, str]):
         for key, value in envs.items():
@@ -258,10 +276,9 @@ class RayExecutor(ExecutorBase):
 
         device_ctx = DeviceContext(device_type)
         with get_device_manager().context(device_ctx):
-            self._try_symm_mem = False
+            self._needs_symm_mem_device_setup = False
             if device_type == 'cuda':
-                from lmdeploy.pytorch.backends.cuda.comm.communicator import should_try_symm_mem
-                self._try_symm_mem = should_try_symm_mem(dist_config)
+                self._needs_symm_mem_device_setup = _needs_symm_mem_device_setup(dist_config)
             logger.info('Init ray cluster.')
             attn_tp = dist_config.attn_tp
             self.ray_ctx = RayContext(attn_tp, dp=dist_config.dp, device_type=device_type)
@@ -319,6 +336,18 @@ class RayExecutor(ExecutorBase):
                 logger.info('Warming up distribute environment, this might take long time, please waiting...')
                 ray.get([worker.warmup_dist.remote() for worker in self.workers])
 
+    def init(self):
+        """Initialize workers and abort all of them if initialization fails."""
+        try:
+            super().init()
+        except BaseException:
+            for worker in self.workers:
+                with contextlib.suppress(Exception):
+                    ray.kill(worker)
+            with contextlib.suppress(Exception):
+                self.ray_ctx.shutdown()
+            raise
+
     def collective_rpc(self,
                        method: str,
                        args: tuple[Any] = None,
@@ -359,6 +388,12 @@ class RayExecutor(ExecutorBase):
         """Set all model config."""
         self.collective_rpc('set_model_config', (model_config, spec_model_config))
 
+    def _prepare_worker_cache_plans(self, cache_config: CacheConfig,
+                                    spec_cache_config: CacheConfig | None = None) -> list[_WorkerCachePlanSizes]:
+        """Prepare and size rank-local cache plans on every worker."""
+        worker_sizes = self.collective_rpc('build_cache_plans', (cache_config, spec_cache_config))
+        return [_WorkerCachePlanSizes(*sizes) for sizes in worker_sizes]
+
     def build_graph_runner(self):
         """Build graph runner."""
         self.collective_rpc('build_graph_runner')
@@ -370,6 +405,15 @@ class RayExecutor(ExecutorBase):
     def update_params(self, request: Any):
         """Update params."""
         self.collective_rpc('update_params', (request, ))
+
+    def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness from all workers."""
+        return self.collective_rpc('get_checkpoint_engine_status')
+
+    def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        results = self.collective_rpc('update_weights_from_ipc', (request, reject_reason))
+        return self._reduce_worker_status(results, 'update_weights_from_ipc')
 
     def _reduce_worker_status(self, results: list[tuple[bool, str]], op_name: str) -> tuple[bool, str]:
         """Reduce worker status results."""
@@ -704,9 +748,8 @@ class RayExecutor(ExecutorBase):
 
             if device_str == 'GPU':
                 runtime_env = dict()
-                runtime_env = _update_runtime_envs(
-                    runtime_env, process_group_env_defaults)
-                if self._try_symm_mem:
+                runtime_env = _update_runtime_envs(runtime_env, process_group_env_defaults)
+                if self._needs_symm_mem_device_setup:
                     # Symmetric-memory IPC needs peer TP GPUs to stay visible.
                     # Keep the inherited visibility and bind each actor below.
                     runtime_env['env_vars']['RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES'] = '1'
@@ -737,10 +780,20 @@ class RayExecutor(ExecutorBase):
         driver_ip = _get_master_addr()
         if device_str == 'cuda':
             self.workers = self._sort_workers(driver_ip, self.workers)
-            if self._try_symm_mem:
+            if self._needs_symm_mem_device_setup:
                 # Ray did not narrow CUDA visibility, so select each actor's
                 # placement-group assignment before distributed initialization.
-                ray.get([worker.set_assigned_cuda_device.remote() for worker in self.workers])
+                bindings = ray.get([
+                    worker.set_assigned_cuda_device.remote()
+                    for worker in self.workers
+                ])
+                device_keys = {
+                    (binding['node_ip'], binding['current_device'])
+                    for binding in bindings
+                }
+                if len(device_keys) != len(bindings):
+                    raise RuntimeError('Ray symmetric-memory workers must bind unique CUDA '
+                                       f'devices on each node, got: {bindings}')
 
         elif device_str == 'ascend':
             self._init_ascend_distributed_environment(driver_ip)

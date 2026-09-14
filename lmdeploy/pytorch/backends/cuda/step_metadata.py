@@ -4,7 +4,7 @@ from collections.abc import Hashable, Iterable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Protocol, TypeVar, runtime_checkable
 
 import torch
 
@@ -120,6 +120,17 @@ class CudaStepMetaUpdater(ABC):
         raise NotImplementedError
 
 
+@runtime_checkable
+class CudaPiecewiseGraphImpl(Protocol):
+    """Operator capability required by the CUDA piecewise runtime."""
+
+    def supports_piecewise_cuda_graph(self) -> bool:
+        ...
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        ...
+
+
 @dataclass(frozen=True)
 class CudaStepMetaGraphBuffers:
     """Runner-owned graph buffers paired with one resolved metadata plan."""
@@ -136,25 +147,48 @@ class CudaStepMetaPlan:
     attention_builders: tuple[CudaAttentionMetaBuilder[Any, Any], ...]
     step_updaters: tuple[CudaStepMetaUpdater, ...]
     fallback_reason: str | None = None
+    implementations: tuple[Any, ...] = ()
 
     @property
     def is_supported(self) -> bool:
         """Whether every discovered CUDA metadata contract is understood."""
         return self.fallback_reason is None
 
+    def enable_piecewise_cuda_graph(self) -> bool:
+        """Install eager boundaries when every collected operator supports
+        PCG."""
+        if not self.is_supported or not self.implementations:
+            return False
+
+        installers = []
+        for impl in self.implementations:
+            if not isinstance(impl, CudaPiecewiseGraphImpl) or not impl.supports_piecewise_cuda_graph():
+                return False
+            installers.append(impl.enable_piecewise_cuda_graph)
+
+        for install in installers:
+            install()
+        return True
+
     @classmethod
-    def from_implementations(cls, implementations: Iterable[Any]) -> 'CudaStepMetaPlan':
+    def from_implementations(
+        cls,
+        implementations: Iterable[Any],
+        piecewise_implementations: Iterable[Any] = (),
+    ) -> 'CudaStepMetaPlan':
         """Resolve builders registered while constructing one CUDA model."""
         attention_owners: list[tuple[Any, CudaAttentionMetaBuilder[Any, Any]]] = []
         step_updaters: list[CudaStepMetaUpdater] = []
         updater_keys: set[Hashable] = set()
         output_keys: dict[str, Hashable] = {}
         visited_impls: set[int] = set()
+        unique_implementations: list[Any] = []
 
         for impl in implementations:
             if id(impl) in visited_impls:
                 continue
             visited_impls.add(id(impl))
+            unique_implementations.append(impl)
 
             get_provider = getattr(impl, 'get_step_metadata_provider', None)
             if get_provider is None:
@@ -189,6 +223,11 @@ class CudaStepMetaPlan:
             updater_keys.add(provider.key)
             step_updaters.append(provider)
 
+        for impl in piecewise_implementations:
+            if id(impl) not in visited_impls:
+                visited_impls.add(id(impl))
+                unique_implementations.append(impl)
+
         if not attention_owners:
             return cls(tuple(), tuple(), fallback_reason='no implementation-selected attention metadata contract')
 
@@ -209,7 +248,11 @@ class CudaStepMetaPlan:
             impl.bind_step_meta_group(group_id)
 
         step_updaters.sort(key=lambda builder: builder.priority)
-        return cls(tuple(attention_builders), tuple(step_updaters))
+        return cls(
+            tuple(attention_builders),
+            tuple(step_updaters),
+            implementations=tuple(unique_implementations),
+        )
 
     def _attach_attention_metadata(self, attn_metadata, metadata: tuple[Any, ...]) -> None:
         """Attach grouped results and expose the legacy single-group view."""
@@ -262,6 +305,8 @@ class CudaStepMetaPlan:
 
 _active_implementations: ContextVar[list[Any] | None] = ContextVar(
     'cuda_step_meta_implementations', default=None)
+_active_piecewise_implementations: ContextVar[list[Any] | None] = ContextVar(
+    'cuda_piecewise_graph_implementations', default=None)
 
 
 def register_step_metadata_impl(impl: Any) -> None:
@@ -274,15 +319,28 @@ def register_step_metadata_impl(impl: Any) -> None:
     implementations.append(impl)
 
 
+def register_piecewise_graph_impl(impl: Any) -> None:
+    """Register a PCG operator that does not own step metadata."""
+    implementations = _active_piecewise_implementations.get()
+    if implementations is not None:
+        implementations.append(impl)
+
+
 @contextmanager
 def collect_step_metadata(ctx_mgr: 'StepContextManager'):
     """Collect one model's CUDA implementations and attach its resolved
     plan."""
     ctx_mgr.backend_step_meta_plan = None
     implementations: list[Any] = []
-    token = _active_implementations.set(implementations)
+    piecewise_implementations: list[Any] = []
+    metadata_token = _active_implementations.set(implementations)
+    piecewise_token = _active_piecewise_implementations.set(piecewise_implementations)
     try:
         yield
-        ctx_mgr.backend_step_meta_plan = CudaStepMetaPlan.from_implementations(implementations)
+        ctx_mgr.backend_step_meta_plan = CudaStepMetaPlan.from_implementations(
+            implementations,
+            piecewise_implementations,
+        )
     finally:
-        _active_implementations.reset(token)
+        _active_piecewise_implementations.reset(piecewise_token)
+        _active_implementations.reset(metadata_token)

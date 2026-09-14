@@ -440,7 +440,7 @@ class NodeManager:
         """To create a background task.
 
         Args:
-            node_url (str): the node url.
+            url (str): the node url.
             start (int): the start time point. time.time()
         """
         background_tasks = BackgroundTasks()
@@ -580,8 +580,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     The request should be a JSON object with the following fields:
 
     - **model**: model name. Available from /v1/models.
-    - **messages**: string prompt or chat history in OpenAI format. Chat history
-      example: `[{"role": "user", "content": "hi"}]`.
+    - **messages**: chat history in OpenAI format. Example:
+      `[{"role": "user", "content": "hi"}]`.
     - **temperature** (float): to modulate the next token probability
     - **top_p** (float): If set to float < 1, only the smallest set of most
       probable tokens with probabilities that add up to top_p or higher

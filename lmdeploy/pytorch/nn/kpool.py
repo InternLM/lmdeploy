@@ -20,7 +20,9 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from lmdeploy.pytorch.consts import DSA_INDEX_SCALE_BYTES
+from lmdeploy.pytorch.consts import DSA_INDEX_SCALE_BYTES, DSA_INDEXER_K_CACHE_NAME, dsa_packed_indexer_k_cache_shape
+from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheBinding, BlockCacheRequest, BlockCacheRequestContext
+from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
 from lmdeploy.pytorch.nn.norm import FP32LayerNorm
 
@@ -123,6 +125,7 @@ class KPoolIndexer(nn.Module):
         self.index_kpool = index_kpool
         self.softmax_scale = index_head_dim**-0.5
         self.scale_fmt = scale_fmt
+        self._block_cache_binding: BlockCacheBinding | None = None
 
         def add_prefix(name: str) -> str:
             return f'{prefix}.{name}' if prefix else name
@@ -177,6 +180,34 @@ class KPoolIndexer(nn.Module):
             torch.empty(index_head_dim, hidden_size, dtype=dtype, device=device),
             requires_grad=False,
         )
+
+    def get_block_cache_requests(self, context: BlockCacheRequestContext):
+        """Declare the pooled index cache through the shared cache planner."""
+        geometry = context.geometry
+        if geometry.logical_block_size != 64 or geometry.kernel_block_size != 64:
+            raise ValueError('GLM-5.3 KPool requires logical and kernel block_size=64.')
+        return (BlockCacheRequest(
+            name=DSA_INDEXER_K_CACHE_NAME,
+            shape=dsa_packed_indexer_k_cache_shape(64, self.head_dim),
+            dtype=torch.uint8,
+            per_row_contiguous=True,
+        ), )
+
+    def bind_block_cache(self, binding: BlockCacheBinding):
+        """Retain the compact consumer row assigned by the cache planner."""
+        if binding.cache_name != DSA_INDEXER_K_CACHE_NAME:
+            raise ValueError(f'Unexpected KPool cache name: {binding.cache_name}.')
+        self._block_cache_binding = binding
+
+    def get_block_cache(self) -> Tensor:
+        """Resolve this indexer's row from the live request context."""
+        binding = self._block_cache_binding
+        if binding is None:
+            raise RuntimeError('The KPool index cache has not been bound.')
+        caches = get_step_ctx_manager().current_context().block_caches
+        if hasattr(caches, 'row'):
+            return caches.row(binding.cache_name, binding.consumer_row)
+        return caches[binding.cache_name][binding.consumer_row]
 
     def project_query(self, q_lora: Tensor) -> Tensor:
         """Project the latent query to ``[..., index_n_heads, head_dim]``."""

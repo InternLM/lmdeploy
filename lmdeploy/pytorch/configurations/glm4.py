@@ -59,7 +59,6 @@ class Glm4MoeModelConfigBuilder(DefaultModelConfigBuilder):
                             is_draft_model=is_draft_model,
                             spec_method=spec_method,
                             **kwargs)
-        cfg.use_mrope = True
         cfg.model_paradigm = model_paradigm
         cfg.num_layers = num_layers
         return cfg

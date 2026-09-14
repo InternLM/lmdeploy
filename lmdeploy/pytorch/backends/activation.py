@@ -1,5 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+from .base import BuildSpec
 
 
 class SiluAndMulImpl(ABC):
@@ -11,14 +14,11 @@ class SiluAndMulImpl(ABC):
         raise NotImplementedError
 
 
-class SiluAndMulBuilder(ABC):
-    """Silu and mul implementation builder."""
+@dataclass(frozen=True)
+class SiluAndMulBuildSpec(BuildSpec[SiluAndMulImpl]):
+    """Immutable requirements for constructing a SiLU-and-multiply operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(inplace: bool = False):
-        """build."""
-        raise NotImplementedError
+    inplace: bool
 
 
 class GeluAndMulImpl(ABC):
@@ -30,11 +30,8 @@ class GeluAndMulImpl(ABC):
         raise NotImplementedError
 
 
-class GeluAndMulBuilder(ABC):
-    """Gelu and mul implementation builder."""
+@dataclass(frozen=True)
+class GeluAndMulBuildSpec(BuildSpec[GeluAndMulImpl]):
+    """Immutable requirements for constructing a GELU-and-multiply operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(approximate: str = 'none'):
-        """build."""
-        raise NotImplementedError
+    approximate: str

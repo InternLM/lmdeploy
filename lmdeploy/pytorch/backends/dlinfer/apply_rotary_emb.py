@@ -3,7 +3,7 @@ from torch import Tensor
 
 from lmdeploy.pytorch.kernels.dlinfer import apply_rotary_pos_emb
 
-from ..apply_rotary_emb import ApplyRotaryEmbBuilder, ApplyRotaryEmbImpl
+from ..apply_rotary_emb import ApplyRotaryEmbImpl
 
 
 class DlinferApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
@@ -25,12 +25,3 @@ class DlinferApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
             q_embed = query.new_empty(query.shape)
             k_embed = key.new_empty(key.shape)
         return apply_rotary_pos_emb(query, key, cos, sin, q_embed, k_embed)
-
-
-class DlinferApplyRotaryEmbBuilder(ApplyRotaryEmbBuilder):
-    """Apply rotary embedding implementation builder."""
-
-    @staticmethod
-    def build():
-        """Build implementation."""
-        return DlinferApplyRotaryEmbImpl()

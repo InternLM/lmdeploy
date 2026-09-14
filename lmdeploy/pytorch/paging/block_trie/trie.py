@@ -420,7 +420,7 @@ class BlockTrie:
 
         recompute_blocks = max(0, seq.prefix_cache.recompute_overlap.recompute_blocks)
         overlap_end_step = -1
-        max_step = seq.num_valid_ids - 1
+        max_step = seq.get_prefix_cache_max_candidate_step()
         candidate_steps = self._checkpoint_index.candidate_steps(seq.adapter_name, initial_step, max_step)
         for step in candidate_steps:
             if not seq.is_prefix_cache_boundary_safe(step):

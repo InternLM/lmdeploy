@@ -10,7 +10,10 @@ from typing import Any
 
 import torch
 
-from lmdeploy.pytorch.backends.kda import KdaBuilder, KdaImpl
+from lmdeploy.pytorch.backends.kda import KdaImpl
+
+from .gated_delta_rule import GatedDeltaStepMetaUpdater
+from .step_metadata import register_step_metadata_impl
 
 
 def _select_state(state: torch.Tensor, metadata: Any) -> torch.Tensor:
@@ -50,6 +53,11 @@ class CudaKdaImpl(KdaImpl):
         self.causal_conv1d_update = causal_conv1d_update
         self.chunk_kda = chunk_kda
         self.fused_recurrent_kda = fused_recurrent_kda
+        register_step_metadata_impl(self)
+
+    def get_step_metadata_provider(self):
+        """Reuse FLA chunk-index preparation outside model forward."""
+        return GatedDeltaStepMetaUpdater()
 
     def _conv(
         self,
@@ -169,11 +177,3 @@ class CudaKdaImpl(KdaImpl):
             )
         _store_state(recurrent_state, final_state, metadata)
         return output
-
-
-class CudaKdaBuilder(KdaBuilder):
-    """Build the CUDA KDA implementation."""
-
-    @staticmethod
-    def build() -> KdaImpl:
-        return CudaKdaImpl()

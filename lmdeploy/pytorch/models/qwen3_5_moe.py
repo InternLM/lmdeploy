@@ -10,6 +10,7 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.model_inputs import StepContextManager
 from lmdeploy.pytorch.nn import RMSNorm, build_rotary_embedding_from_config
+from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMetaBuilder
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -212,6 +213,8 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
 
         # build rotary embedding
         self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
+
+        self.gated_delta_meta_builder = GatedDeltaMetaBuilder()
 
 
 class Qwen3_5MoeModel(Qwen3_5Model):

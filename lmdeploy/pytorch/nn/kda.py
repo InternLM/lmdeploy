@@ -4,7 +4,9 @@ from typing import Any
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.kda import KdaBuildSpec
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
 class Kda(nn.Module):
@@ -12,8 +14,10 @@ class Kda(nn.Module):
 
     def __init__(self):
         super().__init__()
-        builder = get_backend().get_layer_impl_builder(OpType.Kda)
-        self.impl = builder.build()
+        self.impl = get_backend().build_op(
+            KdaBuildSpec(),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     def forward(
         self,

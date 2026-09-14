@@ -41,7 +41,6 @@ def draft_model_forward(
             cache_config=cache_engine.cache_config,
             kv_caches=kv_caches,
         )
-        # Attach named cache views for models that declare block_cache_specs.
         context.block_caches = cache_engine.block_caches
         with ctx_mgr.context(context):
             model_metas = None

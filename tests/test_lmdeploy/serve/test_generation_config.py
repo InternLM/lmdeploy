@@ -60,7 +60,7 @@ def test_merge_gen_config_uses_server_defaults():
 
 
 def test_extract_request_gen_config_only_explicit_fields():
-    request = ChatCompletionRequest(model='test', messages='hi', temperature=0.3)
+    request = ChatCompletionRequest(model='test', messages=[{'role': 'user', 'content': 'hi'}], temperature=0.3)
     values = extract_request_gen_config(request)
     assert values == {'temperature': 0.3}
 
@@ -84,7 +84,7 @@ def test_responses_request_ignores_unknown_generation_fields():
 
 
 def test_build_generation_config_from_merged_values():
-    request = ChatCompletionRequest(model='test', messages='hi', temperature=0.2)
+    request = ChatCompletionRequest(model='test', messages=[{'role': 'user', 'content': 'hi'}], temperature=0.2)
     gen_config = build_generation_config(
         request,
         {'top_k': 5},
@@ -131,7 +131,7 @@ def test_completion_request_max_tokens_is_optional():
 
 
 def test_generate_request_sampling_defaults_match_chat_request():
-    chat_request = ChatCompletionRequest(model='test', messages='hello')
+    chat_request = ChatCompletionRequest(model='test', messages=[{'role': 'user', 'content': 'hello'}])
     generate_request = GenerateReqInput(prompt='hello')
     for name in ('temperature', 'top_p', 'top_k', 'min_p'):
         assert getattr(generate_request, name) == getattr(chat_request, name)

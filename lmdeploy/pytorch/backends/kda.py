@@ -1,8 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any
 
 import torch
+
+from .base import BuildSpec
 
 
 class KdaImpl(ABC):
@@ -29,11 +32,6 @@ class KdaImpl(ABC):
         raise NotImplementedError
 
 
-class KdaBuilder:
-    """Build a device-specific KDA implementation."""
-
-    @staticmethod
-    @abstractmethod
-    def build() -> KdaImpl:
-        """Build implementation."""
-        raise NotImplementedError
+@dataclass(frozen=True)
+class KdaBuildSpec(BuildSpec[KdaImpl]):
+    """Request a device-specific KDA implementation."""

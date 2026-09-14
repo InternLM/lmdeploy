@@ -3,7 +3,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+from tqdm.auto import tqdm
 
+from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.utils import singleton
 from lmdeploy.utils import get_logger
 
@@ -43,9 +45,10 @@ class WarmupManager:
             return
         import random
         logger.info('Warming up ops.')
+        _, rank = get_world_rank()
         funcs = list(self._warmup_calls.values())
         random.shuffle(funcs)
-        for func in funcs:
+        for func in tqdm(funcs, desc='Warming up ops', disable=rank != 0):
             func(warmup_meta)
 
 

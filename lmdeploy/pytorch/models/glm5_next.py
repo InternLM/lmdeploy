@@ -41,7 +41,7 @@ from lmdeploy.pytorch.nn import (
     RMSNorm,
     apply_rotary_pos_emb_fp32,
 )
-from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMeta, build_rmsnorm_gated
+from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMeta, GatedDeltaMetaBuilder, build_rmsnorm_gated
 from lmdeploy.pytorch.nn.kpool import (
     kpool_decode_update,
     kpool_expand_selected_groups,
@@ -59,7 +59,6 @@ from lmdeploy.pytorch.nn.linear import (
     build_qkv_proj,
     build_rowwise_linear,
 )
-from lmdeploy.pytorch.nn.nsa import get_dsa_indexer_k_cache
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.vl.constants import Modality
 
@@ -856,7 +855,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             raise RuntimeError('GLM-5.3 KPool requires stable state cache ids.')
 
         tail_k_state, tail_score_state = tail_state
-        indexer_k_cache = get_dsa_indexer_k_cache(self.cache_layer_idx)
+        indexer_k_cache = self.indexer.get_block_cache()
         key = self.indexer.project_key(hidden_states)[0]
         score = self.indexer.project_compress_score(hidden_states)[0]
         if attn_metadata.is_decoding:
@@ -1391,6 +1390,7 @@ class Glm5NextModel(nn.Module):
                  device: torch.device | None = None):
         super().__init__()
         self.config = config
+        self.gated_delta_meta_builder = GatedDeltaMetaBuilder()
         self.embed_tokens = build_embedding(config.vocab_size,
                                             config.hidden_size,
                                             config.pad_token_id,
@@ -1427,7 +1427,7 @@ class Glm5NextModel(nn.Module):
 
         hidden_states = inputs_embeds.unsqueeze(2).repeat(
             1, 1, self.config.hc_mult, 1)
-        kda_metadata = GatedDeltaMeta(hidden_states.size(1),
+        kda_metadata = self.gated_delta_meta_builder(hidden_states.size(1),
                                       self.config.linear_conv_kernel_dim,
                                       state_ids, attn_metadata)
         if len(past_key_values) != len(self.layers):
@@ -1749,15 +1749,6 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM):
     def _layer_idx(name: str) -> int | None:
         match = re.search(r'\.layers\.(\d+)\.', name)
         return None if match is None else int(match.group(1))
-
-    def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor,
-                               params_dict: dict[str, nn.Parameter],
-                               update_pe_mapping: list):
-        """Retain KV-B while deriving the absorbed KC/VC views from it."""
-        if name.endswith('.kv_b_proj.weight'):
-            load_weight(params_dict[name], loaded_weight)
-        return super()._load_weight_attention(name, loaded_weight, params_dict,
-                                              update_pe_mapping)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load both towers through LMDeploy's TP-aware weight loaders."""

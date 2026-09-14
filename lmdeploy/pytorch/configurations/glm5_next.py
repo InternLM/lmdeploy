@@ -3,14 +3,12 @@
 
 import torch
 
-from lmdeploy.pytorch.config import BlockCacheSpec, ModelConfig, StateCacheSpec
+from lmdeploy.pytorch.config import StateCacheSpec
 from lmdeploy.pytorch.consts import (
-    DSA_INDEXER_K_CACHE_NAME,
     GLM5_KDA_CONV_STATE,
     GLM5_KDA_RECURRENT_STATE,
     GLM5_KPOOL_TAIL_K_STATE,
     GLM5_KPOOL_TAIL_SCORE_STATE,
-    dsa_packed_indexer_k_cache_shape,
 )
 
 from .builder import AutoModelConfigBuilder
@@ -196,29 +194,6 @@ def _check_env_glm5_next(device: str):
             'K=512 and K=2048.')
 
 
-def _finalize_glm5_cache_specs(model_config: ModelConfig,
-                               block_size: int) -> None:
-    """Materialize the independent pooled-index cache at page size 64."""
-    text_config = model_config.llm_config
-    if block_size != 64:
-        raise ValueError(
-            'GLM-5.3 KPool requires block_size=64, '
-            f'got block_size={block_size}.')
-    model_config.cache_shapes = []
-    model_config.block_cache_specs = [
-        BlockCacheSpec(
-            DSA_INDEXER_K_CACHE_NAME,
-            # Standard MLA caches are already compacted to the 11 full
-            # attention layers.  Named cache rows use that same local id
-            # space; global decoder ids are translated by the model.
-            list(range(model_config.num_layers)),
-            dsa_packed_indexer_k_cache_shape(
-                block_size, text_config.index_head_dim),
-            torch.uint8,
-        )
-    ]
-
-
 class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
     """Combine sparse-MLA KV cache and KDA recurrent-state resources."""
 
@@ -264,9 +239,6 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         # unset also preserves the BF16 latent MLA cache policy.
         config.mla_index_topk = None
         config.k_head_dim = text_config.kv_lora_rank + 64
-        config.cache_shapes = []
-        config.block_cache_specs = []
-        config.post_build_func = _finalize_glm5_cache_specs
         config.state_cache_specs = [
             StateCacheSpec(
                 GLM5_KDA_CONV_STATE,
