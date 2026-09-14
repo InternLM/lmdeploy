@@ -810,7 +810,8 @@ def _interface_protocol_model_list(
     *,
     deps_profile: DepsProfileSelector | None = None,
 ) -> list[str]:
-    """Model ids whose yaml ``interface`` maps to nested REST protocol suites."""
+    """Model ids whose yaml ``interface`` maps to nested REST protocol
+    suites."""
     config = get_config()
     matrix_env = _model_matrix_env_key(config)
     profile = deps_profile if deps_profile is not None else get_deps_profile_selector()
@@ -830,7 +831,8 @@ def _interface_protocol_model_list(
 def get_restful_chat_model_list(
     deps_profile: DepsProfileSelector | None = None,
 ) -> list[str]:
-    """Chat/VL models for chat-completions / generate / anthropic protocol files."""
+    """Chat/VL models for chat-completions / generate / anthropic protocol
+    files."""
     return _interface_protocol_model_list(
         _RESTFUL_CHAT_PROTOCOL_CASES,
         deps_profile=deps_profile,

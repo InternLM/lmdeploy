@@ -16,8 +16,7 @@ from utils.anthropic_messages import (
     assert_warm_yes_answer,
     build_anthropic_messages_history_tool_result,
 )
-from utils.config_utils import get_config
-from utils.config_utils import get_restful_chat_model_list
+from utils.config_utils import get_config, get_restful_chat_model_list
 from utils.constant import BACKEND_LIST, BASE_URL
 
 from lmdeploy.serve.openai.api_client import APIClient

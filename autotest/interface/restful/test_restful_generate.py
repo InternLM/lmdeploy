@@ -12,9 +12,9 @@ from transformers import AutoTokenizer
 from utils.config_utils import (
     ROUTED_EXPERTS_UNSUPPORTED_SKIP,
     get_model_path_from_config,
+    get_restful_chat_model_list,
     model_enables_return_routed_experts,
 )
-from utils.config_utils import get_restful_chat_model_list
 from utils.constant import BACKEND_LIST, BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS
 from utils.toolkit import encode_text, parse_sse_stream
 
