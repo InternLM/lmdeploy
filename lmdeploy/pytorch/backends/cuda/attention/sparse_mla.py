@@ -4,6 +4,7 @@ import functools
 
 import torch
 
+from lmdeploy.pytorch.backends.cp_utils import gather_dcp_query, merge_dcp_attention
 from lmdeploy.utils import get_logger
 
 from .default import TritonAttentionMetadata
@@ -311,7 +312,7 @@ class FlashMLASparseImpl(FlashMLAImpl):
             dcp_world_rank = self.dcp_world_size, self.dcp_rank
             local_indices, local_counts = filter_and_compact_dcp_indices(
                 nsa_indices, dcp_world_rank=dcp_world_rank)
-            query = self._gather_dcp_query(query)
+            query = gather_dcp_query(query, dcp_world_size=self.dcp_world_size)
             if k_cache.dtype == torch.float8_e4m3fn:
                 # FlashMLA V3.2 masks -1 indices but rejects dynamic
                 # topk_length. The compacted indices retain their fixed width
@@ -331,9 +332,10 @@ class FlashMLASparseImpl(FlashMLAImpl):
                     attn_metadata,
                     return_lse=True,
                     topk_length=local_counts)
-            return self._merge_dcp_attention(local_output,
-                                             local_lse,
-                                             valid_rows=local_counts > 0)
+            return merge_dcp_attention(local_output,
+                                       local_lse,
+                                       valid_rows=local_counts > 0,
+                                       dcp_world_rank=dcp_world_rank)
         if k_cache.dtype == torch.float8_e4m3fn:
             return self._decoding_sparse_fp8(query, k_cache, nsa_indices, attn_metadata)
         return self._decoding_sparse_bf16(query, k_cache, nsa_indices, attn_metadata)

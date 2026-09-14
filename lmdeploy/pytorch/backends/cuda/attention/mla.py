@@ -7,7 +7,12 @@ from typing import Any
 import torch
 
 from lmdeploy.messages import QuantPolicy
-from lmdeploy.pytorch.backends.cp_utils import DcpPrefillChunk, get_dcp_local_causal_seq_lens
+from lmdeploy.pytorch.backends.cp_utils import (
+    DcpPrefillChunk,
+    gather_dcp_query,
+    get_dcp_local_causal_seq_lens,
+    merge_dcp_attention,
+)
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import CudaAttentionMetaBuilder
@@ -363,57 +368,6 @@ class FlashMLAImpl(TritonAttentionImpl):
             softmax_lse = softmax_lse.flatten(0, 1)
             return attn_output, softmax_lse
         return attn_output
-
-    def _gather_dcp_query(self, query: torch.Tensor) -> torch.Tensor:
-        """Gather TP-sharded query heads within the DCP subgroup."""
-        if self.dcp_world_size == 1:
-            return query
-        from lmdeploy.pytorch.distributed import all_gather_into_tensor
-
-        # Keep the existing packing path for strided queries. Direct gather
-        # saves a copy only when the token-major input is already contiguous.
-        if not query.is_contiguous():
-            transposed = query.transpose(0, 1).contiguous()
-            gathered = transposed.new_empty(
-                self.dcp_world_size * transposed.size(0), *transposed.shape[1:])
-            all_gather_into_tensor(gathered, transposed, group='dcp')
-            return gathered.transpose(0, 1).contiguous()
-
-        gathered = query.new_empty(self.dcp_world_size * query.size(0), *query.shape[1:])
-        all_gather_into_tensor(gathered, query, group='dcp')
-        # Gather token-major queries directly, then join rank-local heads.
-        # Contiguous inputs need only this final layout conversion.
-        gathered = gathered.view(self.dcp_world_size, *query.shape)
-        return gathered.transpose(0, 1).reshape(query.size(0), -1, query.size(2)).contiguous()
-
-    def _merge_dcp_attention(self, local_output: torch.Tensor,
-                             local_lse: torch.Tensor,
-                             valid_rows: torch.Tensor) -> torch.Tensor:
-        """Merge shard-local normalized attention with LSE correction."""
-        if self.dcp_world_size == 1:
-            return local_output
-        from lmdeploy.pytorch.distributed import all_gather_into_tensor, reduce_scatter_tensor
-        from lmdeploy.pytorch.kernels.cuda.dcp import correct_dcp_attention_output, sanitize_dcp_lse
-
-        local_lse = sanitize_dcp_lse(local_lse, valid_rows)
-        gathered_lse = local_lse.new_empty(
-            self.dcp_world_size * local_lse.size(0), local_lse.size(1))
-        all_gather_into_tensor(gathered_lse, local_lse, group='dcp')
-        gathered_lse = gathered_lse.view(self.dcp_world_size,
-                                         *local_lse.shape)
-        contribution = correct_dcp_attention_output(
-            local_output, gathered_lse, dcp_rank=self.dcp_rank)
-
-        num_heads = contribution.size(0)
-        # The correction kernel writes [heads, tokens, dim] directly so the
-        # head-sharded reduce-scatter needs no separate transpose/copy.
-        assert num_heads % self.dcp_world_size == 0
-        local_heads = num_heads // self.dcp_world_size
-        reduce_output = contribution.new_empty(local_heads,
-                                               contribution.size(1),
-                                               contribution.size(2))
-        reduce_scatter_tensor(reduce_output, contribution, group='dcp')
-        return reduce_output.transpose(0, 1).to(local_output.dtype)
 
     def _prefill_triton(
         self,
@@ -772,7 +726,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         if self.dcp_world_size == 1:
             return self._decoding_paged(query, k_cache, attn_metadata)
 
-        query = self._gather_dcp_query(query)
+        query = gather_dcp_query(query, dcp_world_size=self.dcp_world_size)
         query_len = query.size(0) // attn_metadata.q_seqlens.numel()
         if query_len > 1:
             # Consecutive global queries do not advance each interleaved
@@ -787,10 +741,11 @@ class FlashMLAImpl(TritonAttentionImpl):
             )
         local_output, local_lse = self._decoding_paged(
             query, k_cache, attn_metadata, causal=False, return_lse=True)
-        return self._merge_dcp_attention(
+        return merge_dcp_attention(
             local_output,
             local_lse,
-            valid_rows=attn_metadata.dcp_local_kv_seqlens > 0)
+            valid_rows=attn_metadata.dcp_local_kv_seqlens > 0,
+            dcp_world_rank=(self.dcp_world_size, self.dcp_rank))
 
     def _forward_prefill(
         self,

@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.backends.attention import PagedAttentionBuildSpec
+from lmdeploy.pytorch.backends.cp_utils import gather_dcp_query
 from lmdeploy.pytorch.backends.cuda import attention as attention_module
 from lmdeploy.pytorch.backends.cuda.attention import mla as mla_module
 from lmdeploy.pytorch.backends.cuda.attention import sparse_mla as sparse_mla_module
@@ -146,9 +147,6 @@ def test_dcp_query_all_gather_preserves_contiguous_head_order(monkeypatch, devic
         pytest.skip('requires CUDA')
     from lmdeploy.pytorch import distributed
 
-    impl = object.__new__(mla_module.FlashMLAImpl)
-    impl.dcp_world_size = dcp_size
-    impl.dcp_rank = 0
     queries = torch.arange(dcp_size * num_tokens * 3 * 8, device=device, dtype=torch.float32)
     queries = queries.reshape(dcp_size, num_tokens, 3, 8)
     if strided:
@@ -165,7 +163,7 @@ def test_dcp_query_all_gather_preserves_contiguous_head_order(monkeypatch, devic
             output[rank * source.size(0):(rank + 1) * source.size(0)].copy_(source)
 
     monkeypatch.setattr(distributed, 'all_gather_into_tensor', fake_all_gather)
-    gathered = impl._gather_dcp_query(rank0_query)
+    gathered = gather_dcp_query(rank0_query, dcp_world_size=dcp_size)
 
     expected = torch.cat(list(queries), dim=1)
     assert torch.equal(gathered, expected)
@@ -177,7 +175,7 @@ def test_dcp_query_all_gather_preserves_contiguous_head_order(monkeypatch, devic
         torch.cuda.synchronize()
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph):
-            graph_output = impl._gather_dcp_query(rank0_query)
+            graph_output = gather_dcp_query(rank0_query, dcp_world_size=dcp_size)
         queries.add_(1)
         graph.replay()
         torch.cuda.synchronize()
