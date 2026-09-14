@@ -10,7 +10,7 @@ class _FakeAsyncEngine:
         self.results = list(results)
         self.calls = 0
 
-    async def health_probe(self, timeout: float, scheduler_stall_timeout: float) -> dict:
+    async def health_probe(self, scheduler_stall_timeout: float) -> dict:
         self.calls += 1
         return self.results.pop(0)
 
@@ -45,7 +45,7 @@ async def _run_concurrent_refresh_snapshot_serializes_probes():
         def __init__(self):
             self.calls = 0
 
-        async def health_probe(self, timeout: float, scheduler_stall_timeout: float) -> dict:
+        async def health_probe(self, scheduler_stall_timeout: float) -> dict:
             self.calls += 1
             probe_started.set()
             await allow_probe_to_finish.wait()
@@ -67,6 +67,45 @@ async def _run_concurrent_refresh_snapshot_serializes_probes():
 
 def test_concurrent_refresh_snapshot_serializes_probes():
     asyncio.run(_run_concurrent_refresh_snapshot_serializes_probes())
+
+
+async def _run_late_health_probe_result_is_reused():
+    allow_probe_to_finish = asyncio.Event()
+    probe_finished = asyncio.Event()
+
+    class _SlowAsyncEngine:
+
+        def __init__(self):
+            self.calls = 0
+
+        async def health_probe(self, scheduler_stall_timeout: float) -> dict:
+            self.calls += 1
+            await allow_probe_to_finish.wait()
+            probe_finished.set()
+            return dict(status='healthy', message='Late probe succeeded.')
+
+    engine = _SlowAsyncEngine()
+    monitor = EngineHealthMonitor(engine, probe_timeout=0.01)
+
+    await monitor.probe_once()
+    assert monitor.snapshot()['status'] == 'unhealthy'
+    assert 'timed out' in monitor.snapshot()['message']
+    assert engine.calls == 1
+
+    await monitor.probe_once()
+    assert engine.calls == 1
+    assert monitor.snapshot()['status'] == 'unhealthy'
+
+    allow_probe_to_finish.set()
+    await probe_finished.wait()
+    await monitor.probe_once()
+
+    assert monitor.snapshot() == dict(status='healthy', message='Late probe succeeded.')
+    assert engine.calls == 1
+
+
+def test_late_health_probe_result_is_reused():
+    asyncio.run(_run_late_health_probe_result_is_reused())
 
 
 async def _run_health_endpoint_refreshes_cached_unhealthy_snapshot():
