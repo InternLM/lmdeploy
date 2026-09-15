@@ -255,6 +255,9 @@ class FusedMoEBlockedF8BuildSpec(BuildSpec[FusedMoEBlockedF8Impl]):
     layer_idx: int
     custom_gateup_act: bool
     scale_fmt: str | None
+    fp32_acc: bool = False
+    output_scale: float = 1.0
+    use_deep_gemm: bool = False
 
 
 class FusedMoEV4FP4Impl(ABC):
