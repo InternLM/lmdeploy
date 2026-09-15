@@ -749,8 +749,8 @@ class Engine(EngineBase):
                 done_tasks.append(task.get_name())
         return len(done_tasks) == 0, done_tasks
 
-    async def get_health_status(self) -> dict:
-        """Get lightweight health status.
+    def get_local_health_status(self) -> dict:
+        """Get a synchronous lightweight health snapshot.
 
         Scheduler metrics alone can still be readable after runtime failure, so this also checks Engine-owned loop tasks
         before returning metrics.
@@ -776,3 +776,7 @@ class Engine(EngineBase):
         return dict(alive=True,
                     message='PyTorch engine is healthy.',
                     schedule_metrics=self.get_schedule_metrics())
+
+    async def get_health_status(self) -> dict:
+        """Get backend health status."""
+        return self.get_local_health_status()
