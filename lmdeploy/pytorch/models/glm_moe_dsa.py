@@ -105,6 +105,10 @@ class GlmMoeDsaIndexer(nn.Module):
     def _apply_rotary_pos_emb(self, q_pe: torch.Tensor, k_pe: torch.Tensor,
                               freqs_cis: tuple[torch.Tensor, torch.Tensor]):
         cos, sin = freqs_cis
+        if self.rope_interleave:
+            half_size = cos.size(-1) // 2
+            cos = cos[..., :half_size]
+            sin = sin[..., :half_size]
         return self.apply_rotary_pos_emb(q_pe,
                                          k_pe[..., None, :],
                                          cos,
