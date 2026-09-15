@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# Copyright (c) OpenMMLab. All rights reserved.
 
 from .deepseek_mtp import DeepseekMTP  # noqa F401
 from .eagle import Eagle  # noqa F401
 from .eagle3 import Eagle3  # noqa F401
 from .hy3_mtp import Hy3MTP  # noqa F401
+from .mimo_mtp import MiMoMTP  # noqa F401
 from .qwen3_5_mtp import Qwen3_5MTP  # noqa F401

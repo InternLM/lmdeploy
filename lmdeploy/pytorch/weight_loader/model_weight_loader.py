@@ -167,6 +167,13 @@ class ModelWeightLoader:
         """Load model weights implementation."""
         assert hasattr(model, 'load_weights')
         paths = self._shard_paths
+        select_paths = getattr(model, 'select_weight_paths', None)
+        if select_paths is not None:
+            if not callable(select_paths):
+                raise TypeError(f'{type(model).__name__}.select_weight_paths must be callable.')
+            paths = tuple(select_paths(self.model_path, paths))
+            if not paths:
+                raise RuntimeError(f'{type(model).__name__}.select_weight_paths returned no checkpoint files.')
         _, rank = get_world_rank()
         disable_tqdm = rank != 0
 

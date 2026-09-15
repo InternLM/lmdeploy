@@ -154,35 +154,37 @@ def _naive_attention(batched_q, batched_kv, bias, sinks=None):
 
 
 def _naive_window_attention(q, k, v, seqlens_q, seqlens_k, window_size):
-    try:
-        from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
-    except Exception:
-        try:
-            from flash_attn import flash_attn_varlen_func
-        except Exception:
-            pytest.skip('Skip window attention test since flash attention is not available.')
+    window_left, window_right = window_size
+    group = q.shape[1] // k.shape[1]
+    if group != 1:
+        k = k.repeat_interleave(group, dim=1)
+        v = v.repeat_interleave(group, dim=1)
 
-    def _make_cu_seqlens(seqlens):
-        cu_seqlens = seqlens.cumsum(0)
-        cu_zero = cu_seqlens.new_zeros(1)
-        cu_seqlens = torch.cat([cu_zero, cu_seqlens])
-        return cu_seqlens
+    scale = q.shape[-1]**-0.5
+    outputs = []
+    q_offset = 0
+    k_offset = 0
+    for q_len, kv_len in zip(seqlens_q.tolist(), seqlens_k.tolist()):
+        query = q[q_offset:q_offset + q_len]
+        key = k[k_offset:k_offset + kv_len]
+        value = v[k_offset:k_offset + kv_len]
+        q_offset += q_len
+        k_offset += kv_len
 
-    max_seqlen_q = seqlens_q.max().item()
-    max_seqlen_k = seqlens_k.max().item()
-    cu_seqlens_q = _make_cu_seqlens(seqlens_q).int()
-    cu_seqlens_k = _make_cu_seqlens(seqlens_k).int()
+        logits = query.transpose(0, 1).float() @ key.permute(1, 2, 0).float() * scale
+        query_pos = torch.arange(q_len, device=q.device) + kv_len - q_len
+        key_pos = torch.arange(kv_len, device=q.device)
+        window_mask = key_pos <= query_pos[:, None]
+        if window_left >= 0:
+            window_mask &= key_pos >= query_pos[:, None] - window_left
+        if window_right >= 0:
+            window_mask &= key_pos <= query_pos[:, None] + window_right
+        logits = logits.masked_fill(~window_mask[None], float('-inf'))
+        attn_weight = torch.softmax(logits, dim=-1, dtype=torch.float32)
+        output = attn_weight @ value.transpose(0, 1).float()
+        outputs.append(output.transpose(0, 1).to(v.dtype))
 
-    output = flash_attn_varlen_func(q,
-                                    k,
-                                    v,
-                                    cu_seqlens_q,
-                                    cu_seqlens_k,
-                                    max_seqlen_q=max_seqlen_q,
-                                    max_seqlen_k=max_seqlen_k,
-                                    causal=True,
-                                    window_size=window_size)
-    return output
+    return torch.cat(outputs, dim=0)
 
 
 class TestPagedAttentionBase:
@@ -294,6 +296,20 @@ class TestPagedAttentionBase:
     def conti_gt(self, gt, seq_lens):
         yield _conti_input(gt, seq_lens)
 
+    @pytest.fixture
+    def win_size(self, request):
+        yield request.param
+
+    @pytest.fixture
+    def window_gt(self, conti_q, conti_kv, seq_lens, history_lens, win_size):
+        kv_lens = seq_lens + history_lens
+        yield _naive_window_attention(conti_q,
+                                      conti_kv[0],
+                                      conti_kv[1],
+                                      seq_lens,
+                                      kv_lens,
+                                      window_size=(win_size, win_size))
+
 
 class TestPagedAttention(TestPagedAttentionBase):
 
@@ -315,19 +331,178 @@ class TestPagedAttention(TestPagedAttentionBase):
                                       kv_layout=layout)
         torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
 
-    @pytest.fixture
-    def win_size(self, request):
-        yield request.param
+    @pytest.mark.parametrize(
+        ('window_size', 'use_sinks'),
+        [(None, False), ((127, 0), True)],
+    )
+    def test_causal_multi_token_with_shared_prefix(self, window_size, use_sinks):
+        """Multi-token attention reads causal full/windowed KV from shared
+        pages."""
+        from lmdeploy.pytorch.backends.cuda.attention.default import (
+            TritonAttentionImpl,
+            TritonAttentionMetadata,
+        )
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
-    @pytest.fixture
-    def window_gt(self, conti_q, conti_kv, seq_lens, history_lens, win_size):
-        kv_lens = seq_lens + history_lens
-        yield _naive_window_attention(conti_q,
-                                      conti_kv[0],
-                                      conti_kv[1],
-                                      seq_lens,
-                                      kv_lens,
-                                      window_size=(win_size, win_size))
+        torch.manual_seed(123)
+        device = 'cuda'
+        dtype = torch.bfloat16
+        batch_size, query_len = 2, 4
+        num_q_heads, num_kv_heads = 8, 1
+        head_size, value_head_size, block_size = 192, 128, 16
+        history_lens = torch.tensor([141, 155], device=device)
+        kv_seqlens = history_lens + query_len
+        max_blocks = int((kv_seqlens.max().item() + block_size - 1) // block_size)
+
+        queries = torch.randn(
+            batch_size, query_len, num_q_heads, head_size, device=device, dtype=dtype
+        )
+        keys = [
+            torch.randn(int(length), num_kv_heads, head_size, device=device, dtype=dtype)
+            for length in kv_seqlens
+        ]
+        values = [
+            torch.randn(int(length), num_kv_heads, value_head_size, device=device, dtype=dtype)
+            for length in kv_seqlens
+        ]
+        # Model a real prefix-cache hit: both requests reference the same first
+        # physical page and therefore have identical KV for that prefix.
+        keys[1][:block_size].copy_(keys[0][:block_size])
+        values[1][:block_size].copy_(values[0][:block_size])
+
+        page_table = torch.zeros(batch_size, max_blocks, dtype=torch.long, device=device)
+        page_table[:, 0] = 0
+        next_page = 1
+        for batch_id, length in enumerate(kv_seqlens.tolist()):
+            num_blocks = (length + block_size - 1) // block_size
+            page_table[batch_id, 1:num_blocks] = torch.arange(
+                next_page, next_page + num_blocks - 1, device=device
+            )
+            next_page += num_blocks - 1
+
+        k_cache = torch.zeros(next_page, block_size, num_kv_heads, head_size, device=device, dtype=dtype)
+        v_cache = torch.zeros(
+            next_page, block_size, num_kv_heads, value_head_size, device=device, dtype=dtype
+        )
+        for batch_id, length in enumerate(kv_seqlens.tolist()):
+            for logical_block in range((length + block_size - 1) // block_size):
+                physical_block = int(page_table[batch_id, logical_block])
+                start = logical_block * block_size
+                end = min(start + block_size, length)
+                k_cache[physical_block, :end - start].copy_(keys[batch_id][start:end])
+                v_cache[physical_block, :end - start].copy_(values[batch_id][start:end])
+
+        sinks = (
+            torch.randn(num_q_heads, device=device, dtype=dtype)
+            if use_sinks
+            else None
+        )
+        cu_seqlens_q = torch.arange(
+            0, (batch_size + 1) * query_len, query_len,
+            dtype=torch.int32, device=device)
+        kernel_metadata = TritonAttentionMetadata(
+            is_decoding=True,
+            block_offsets=page_table,
+            q_start_loc=cu_seqlens_q[:-1],
+            q_seqlens=torch.full(
+                (batch_size, ), query_len, dtype=torch.int32, device=device),
+            kv_seqlens=kv_seqlens,
+            cu_seqlens_q=cu_seqlens_q,
+        )
+        # The outer metadata intentionally describes a different route. The
+        # bound group metadata must be authoritative for this implementation.
+        metadata = TritonAttentionMetadata(
+            is_decoding=False,
+            block_offsets=torch.zeros_like(page_table),
+            kernel_metadata=(None, kernel_metadata),
+        )
+        impl = TritonAttentionImpl(
+            num_heads=num_q_heads,
+            head_size=head_size,
+            num_kv_heads=num_kv_heads,
+            v_head_size=value_head_size,
+            sliding_window=window_size,
+        )
+        impl.bind_step_meta_group(1)
+        output = impl.forward(
+            queries.flatten(0, 1), None, None, k_cache, v_cache, metadata,
+            learnable_sink=sinks,
+            decode_mode='speculative').unflatten(0, (batch_size, query_len))
+
+        reference = torch.empty_like(output)
+        scale = head_size**-0.5
+        for batch_id in range(batch_size):
+            for query_id in range(query_len):
+                query_pos = int(history_lens[batch_id]) + query_id
+                start = 0 if window_size is None else max(query_pos - window_size[0], 0)
+                key = keys[batch_id][start:query_pos + 1, 0].float()
+                value = values[batch_id][start:query_pos + 1, 0].float()
+                logits = queries[batch_id, query_id].float() @ key.T * scale
+                if sinks is not None:
+                    logits = torch.cat((logits, sinks[:, None].float()), dim=-1)
+                probs = logits.softmax(dim=-1)
+                if sinks is not None:
+                    probs = probs[:, :-1]
+                reference[batch_id, query_id] = (probs @ value).to(dtype)
+
+        torch.testing.assert_close(output, reference, atol=2e-2, rtol=2e-2)
+
+        if use_sinks:
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                graph_output = impl.forward(
+                    queries.flatten(0, 1), None, None, k_cache, v_cache,
+                    metadata, learnable_sink=sinks, decode_mode='speculative')
+            queries.add_(0.125)
+            kv_seqlens.sub_(3)
+            graph.replay()
+            replay_reference = flash_attn_with_kvcache(
+                queries.flatten(0, 1), k_cache, v_cache,
+                cache_seqlens=kv_seqlens, page_table=page_table,
+                max_seqlen_q=query_len, window_size=window_size,
+                sinks=sinks, causal_multi_token=True)
+            torch.testing.assert_close(graph_output, replay_reference, atol=2e-2, rtol=2e-2)
+
+    @pytest.mark.parametrize('feat_dim', [192], indirect=True)
+    @pytest.mark.parametrize('feat_dim_v', [128], indirect=True)
+    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(16, 1)], indirect=True)
+    @pytest.mark.parametrize('history_lens', [(1370, )], indirect=True)
+    @pytest.mark.parametrize('block_size', [64], indirect=True)
+    @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
+    def test_empty_split_k_partitions_are_neutral(self, monkeypatch, conti_q,
+                                                  blocked_kv, block_offsets,
+                                                  kv_seqlens, layout, conti_gt):
+        """Empty split-K partitions must not contribute stale values."""
+
+        from lmdeploy.pytorch.kernels.cuda import pagedattention
+
+        monkeypatch.setattr(pagedattention, '_get_split_k', lambda *args: 128)
+        blocked_k, blocked_v = blocked_kv
+        out = pagedattention.flash_attn_with_kvcache(
+            conti_q,
+            blocked_k,
+            blocked_v,
+            page_table=block_offsets,
+            cache_seqlens=kv_seqlens,
+            kv_layout=layout,
+        )
+        torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
+
+    def test_decode_mode_selects_causal_speculative_mask(self):
+        """Triton decode keeps SDAR block masks unless spec opts in."""
+        from lmdeploy.pytorch.backends.cuda.attention.default import TritonAttentionImpl
+
+        impl = TritonAttentionImpl(num_heads=1, head_size=8)
+        captured_kwargs = {}
+
+        def fake_paged_attention(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return args[0]
+
+        impl.paged_attention_fwd = fake_paged_attention
+
+        assert impl.decode_mode_uses_causal_mask('block') is False
+        assert impl.decode_mode_uses_causal_mask('speculative') is True
 
     @pytest.mark.parametrize('feat_dim', [16], indirect=True)
     @pytest.mark.parametrize('feat_dim_v', [16], indirect=True)
@@ -519,7 +694,7 @@ def _make_blocked_cache_fp8_scalar(batched_k, batched_v, seq_lens, history_lens,
     return blocked_k, blocked_v, k_scale, v_scale, dequant_k, dequant_v
 
 
-class TestPagedAttentionInt8(TestPagedAttention):
+class TestPagedAttentionInt8(TestPagedAttentionBase):
 
     @pytest.fixture
     def nbits(self):

@@ -5,6 +5,11 @@ from dataclasses import dataclass
 import torch
 
 from lmdeploy.messages import QuantPolicy
+from lmdeploy.pytorch.backends.attention import (
+    DecodeMode,
+    decode_mode_uses_causal_mask,
+    normalize_decode_mode,
+)
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import CudaAttentionMetaBuilder
@@ -95,6 +100,7 @@ def _build_fa3_metadata(batch_size: int,
         assert block_offsets is not None
         max_seqlen_k = block_offsets.size(1) * block_size
 
+    decode_mode = normalize_decode_mode(getattr(step_context, 'decode_mode', 'block'))
     scheduler_metadata = _get_meta_flashattn(
         batch_size=batch_size,
         max_seqlen_q=max_seqlen_q,
@@ -106,7 +112,7 @@ def _build_fa3_metadata(batch_size: int,
         cache_seqlens=kv_seqlens.to(torch.int32),
         qkv_dtype=step_context.model_config.dtype,
         page_size=block_size,
-        causal=causal,
+        causal=causal and decode_mode_uses_causal_mask(decode_mode),
         window_size=_normalize_sliding_window(sliding_window),
         has_softcap=has_softcap,
     )
@@ -263,6 +269,8 @@ class FA3Impl(TritonAttentionImpl):
     - Standard single-token decoding with paged attention
     """
 
+    supports_multi_token_decode = True
+
     def __init__(
         self,
         num_heads: int,
@@ -353,6 +361,7 @@ class FA3Impl(TritonAttentionImpl):
         v_cache: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
         max_q_seqlen: int,
+        decode_mode: DecodeMode = 'speculative',
     ) -> torch.Tensor:
         """Speculative decoding with multi-token queries.
 
@@ -398,7 +407,7 @@ class FA3Impl(TritonAttentionImpl):
             scheduler_metadata=self._get_scheduler_metadata(attn_metadata),
             page_table=block_offsets,
             softmax_scale=self.scale,
-            causal=self.causal,
+            causal=self.causal and decode_mode_uses_causal_mask(decode_mode),
             window_size=sliding_window,
             softcap=self.logit_softcapping,
         )
@@ -463,6 +472,7 @@ class FA3Impl(TritonAttentionImpl):
         max_q_seqlen: int,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        decode_mode: DecodeMode = 'block',
     ) -> torch.Tensor:
         """Forward pass for decoding stage.
 
@@ -483,7 +493,14 @@ class FA3Impl(TritonAttentionImpl):
             Attention output tensor.
         """
         if max_q_seqlen > 1:
-            return self._decoding_speculative(query, k_cache, v_cache, attn_metadata, max_q_seqlen)
+            return self._decoding_speculative(
+                query,
+                k_cache,
+                v_cache,
+                attn_metadata,
+                max_q_seqlen,
+                decode_mode=decode_mode,
+            )
         return self._decoding_standard(
             query,
             k_cache,
@@ -587,6 +604,7 @@ class FA3Impl(TritonAttentionImpl):
         v_scales_zeros: torch.Tensor = None,
         learnable_sink: torch.Tensor = None,
         inplace: bool = True,
+        decode_mode: DecodeMode = 'block',
     ) -> torch.Tensor:
         """Forward pass for FA3 attention computation.
 
@@ -614,6 +632,8 @@ class FA3Impl(TritonAttentionImpl):
         Returns:
             Attention output tensor.
         """
+        decode_mode = normalize_decode_mode(decode_mode)
+
         # Shared preparation
         max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
 
@@ -640,6 +660,7 @@ class FA3Impl(TritonAttentionImpl):
                 max_q_seqlen,
                 k_scales_zeros,
                 v_scales_zeros,
+                decode_mode,
             )
         else:
             return self._forward_prefill(

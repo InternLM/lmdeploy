@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import copy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -12,6 +13,68 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.backends.cuda.step_metadata import CudaStepMetaGraphBuffers, CudaStepMetaPlan
 
 BuffType = dict[str, Tensor]
+
+
+@dataclass(frozen=True)
+class GraphCaptureContext:
+    """Inputs and static metadata for one CUDA Graph capture."""
+
+    past_key_values: list[list[Tensor]]
+    attn_metadata: Any
+    num_blocks: int
+    spec_step_idx: int = 0
+
+
+@dataclass
+class GraphCaptureState:
+    """Own snapshot and restore semantics for mutable model state."""
+
+    tensors: tuple[Tensor, ...] = ()
+    block_ids: Tensor | None = None
+    saved_tensors: tuple[Tensor, ...] | None = None
+
+    @classmethod
+    def from_paged_tensors(
+        cls,
+        tensors: tuple[Tensor, ...] | list[Tensor],
+        *,
+        block_offsets: Tensor,
+        num_blocks: int,
+        num_requests: int | None = None,
+    ) -> 'GraphCaptureState | None':
+        """Snapshot only the paged rows visible to this capture request."""
+        if not tensors:
+            return None
+
+        if num_requests is not None:
+            block_offsets = block_offsets[:num_requests]
+        block_ids = block_offsets.flatten().long()
+        block_ids = block_ids[(block_ids >= 0) & (block_ids < num_blocks)]
+        block_ids = torch.unique(block_ids)
+        if block_ids.numel() == 0:
+            return None
+        return cls(tensors=tuple(tensors), block_ids=block_ids)
+
+    def snapshot(self) -> None:
+        """Save mutable tensors before graph warmup and capture."""
+        if self.block_ids is None:
+            self.saved_tensors = tuple(tensor.clone() for tensor in self.tensors)
+            return
+        self.saved_tensors = tuple(
+            tensor.index_select(0, self.block_ids).clone() for tensor in self.tensors)
+
+    def restore(self) -> None:
+        """Restore the pre-capture contents of mutable tensors."""
+        if self.saved_tensors is None:
+            return
+        if len(self.saved_tensors) != len(self.tensors):
+            raise RuntimeError('CUDA Graph capture state changed '
+                               f'from {len(self.saved_tensors)} to {len(self.tensors)} tensors.')
+        for tensor, saved in zip(self.tensors, self.saved_tensors):
+            if self.block_ids is None:
+                tensor.copy_(saved)
+            else:
+                tensor.index_copy_(0, self.block_ids, saved)
 
 
 def next_power_of_2(n: int):
@@ -53,9 +116,31 @@ class CudaGraphMeta:
 class CudaGraphMixin:
     """Mixin class to support cudagraph."""
 
+    def get_cudagraph_warmup_specs(self, max_query_len: int) -> tuple[tuple[int, int], ...]:
+        """Return query-length and speculative-depth pairs to pre-capture.
+
+        Recurrent draft models use one graph for multi-token verification and one graph for single-token drafting.
+        Models with depth-specific graph state may override this method to enumerate every runtime pair.
+        """
+        return ((max_query_len, 0), (1, 0))
+
+    def supports_multi_token_decode(self) -> bool:
+        """Return whether all attention paths support multi-token decode."""
+        return False
+
     def get_cudagraph_extra_key(self, **kwargs) -> tuple:
         """Get model-specific CUDA graph keys."""
         return ()
+
+    def get_cudagraph_capture_state(self,
+                                    capture_context: GraphCaptureContext) -> GraphCaptureState | None:
+        """Return mutable state that capture must preserve.
+
+        Stateful models may opt in by returning a snapshot/restore adapter for state touched by graph warmup and
+        capture. The runner only owns the lifecycle; the adapter owns the storage layout.
+        """
+        del capture_context
+        return None
 
     def support_cuda_graph(
         self,
@@ -176,6 +261,11 @@ class CudaGraphMixin:
         q_start_loc: Tensor = attn_metadata.q_start_loc
         q_seqlens: Tensor = attn_metadata.q_seqlens
         kv_seqlens: Tensor = attn_metadata.kv_seqlens
+        # Redirect only the metadata view passed to the captured model.  A
+        # graph is replayed once immediately after capture; mutating the
+        # caller-owned object here would make that replay read graph buffers
+        # as its source, then erase them with the zero_ calls below.
+        attn_metadata = copy.copy(attn_metadata)
         input_buffers: BuffType = graph_meta.input_buffers
 
         num_tokens = input_ids.size(-1)

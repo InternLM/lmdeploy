@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Any
+
 import torch
 from torch import nn
 
@@ -7,7 +9,13 @@ from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from ..backends import get_backend
-from ..backends.attention import AttentionMetadata, PagedAttentionBuildSpec
+from ..backends.attention import (
+    AttentionMetadata,
+    DecodeMode,
+    PagedAttentionBuildSpec,
+    SWAStateRingAttentionBuildSpec,
+    normalize_decode_mode,
+)
 from ..backends.flash_attention import FlashAttentionBuildSpec
 from .utils import get_distribute_size
 
@@ -64,9 +72,12 @@ class Attention(nn.Module):
                 mla_index_topk=mla_index_topk,
                 learnable_sink=learnable_sink,
                 block_sparse_size=block_sparse_size,
+                dtype=kwargs.get('dtype'),
             ),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
+        self.supports_multi_token_decode = bool(
+            getattr(self.impl, 'supports_multi_token_decode', False))
 
         if alibi:
             self.alibi_ready = False
@@ -106,9 +117,19 @@ class Attention(nn.Module):
         s_aux: torch.Tensor = None,
         nsa_indices: torch.Tensor = None,
         inplace: bool = True,
+        decode_mode: DecodeMode | None = None,
     ) -> torch.Tensor:
         """forward."""
         self._lazy_init(query.device)
+        metadata_decode_mode = normalize_decode_mode(getattr(attn_metadata, 'decode_mode', 'block'))
+        if decode_mode is None:
+            decode_mode = metadata_decode_mode
+        else:
+            decode_mode = normalize_decode_mode(decode_mode)
+            if hasattr(attn_metadata, 'decode_mode') and decode_mode != metadata_decode_mode:
+                raise ValueError(
+                    f'Attention decode mode {decode_mode!r} does not match '
+                    f'metadata mode {metadata_decode_mode!r}.')
 
         quant_policy = attn_metadata.quant_policy
         if quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
@@ -135,12 +156,76 @@ class Attention(nn.Module):
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
             inplace=inplace,
+            decode_mode=decode_mode,
             **kwargs,
         )
 
     @staticmethod
     def update_meta_flashmla(attn_metadata: AttentionMetadata, num_attention_heads):
+        """Update FlashMLA metadata through the active backend."""
         get_backend().update_meta_flashmla(attn_metadata, num_attention_heads)
+
+
+class SWAStateRingAttention(nn.Module):
+    """Sequence-scoped sliding-window attention backed by a state ring."""
+
+    def __init__(
+        self,
+        num_heads: int,
+        head_size: int,
+        scale: float = None,
+        num_kv_heads: int = None,
+        v_head_size: int = None,
+        sliding_window: tuple[int, int] = (-1, -1),
+        learnable_sink: bool = False,
+        block_sparse_size: int = 1,
+        **kwargs,
+    ):
+        super().__init__()
+        if num_kv_heads is None:
+            num_kv_heads = num_heads
+        if v_head_size is None:
+            v_head_size = head_size
+        num_heads, num_kv_heads = _update_num_heads(num_heads, num_kv_heads)
+
+        self.impl = get_backend().build_op(
+            SWAStateRingAttentionBuildSpec(
+                num_heads=num_heads,
+                head_dim=head_size,
+                scale=scale,
+                num_kv_heads=num_kv_heads,
+                v_head_dim=v_head_size,
+                sliding_window=sliding_window,
+                learnable_sink=learnable_sink,
+                block_sparse_size=block_sparse_size,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
+        self.supports_multi_token_decode = bool(
+            getattr(self.impl, 'supports_multi_token_decode', False))
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        k_cache: torch.Tensor,
+        v_cache: torch.Tensor,
+        attn_metadata: Any,
+        s_aux: torch.Tensor = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Run state-ring sliding-window attention."""
+        del kwargs
+        return self.impl.forward(
+            query,
+            key,
+            value,
+            k_cache,
+            v_cache,
+            metadata=attn_metadata,
+            learnable_sink=s_aux,
+        )
 
 
 class FlashAttention(nn.Module):

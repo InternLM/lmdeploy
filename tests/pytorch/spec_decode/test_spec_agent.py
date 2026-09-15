@@ -161,10 +161,15 @@ class _DummyDraftModel:
 
 
 class _DummyProposer:
+    supports_draft_depth_protocol = True
 
     def __init__(self):
         self.get_outputs_calls = 0
         self.update_inputs_decoding_calls = 0
+        self.advance_draft_depth_calls = 0
+        self.advance_extra_inputs = []
+        self.next_extra_inputs = object()
+        self.next_depth_dp_num_tokens = None
         self.model = _DummyDraftModel()
 
     async def get_outputs(self, outputs, inputs, extra_inputs=None, guided_processors=None):
@@ -187,6 +192,55 @@ class _DummyProposer:
             target_hidden_states=target_hidden_states,
             model_metas=model_metas,
         )
+
+    def advance_draft_depth(self,
+                            inputs,
+                            extra_inputs,
+                            draft_token_ids,
+                            target_hidden_states,
+                            model_metas,
+                            *,
+                            first_depth):
+        """Mirror the default recurrent draft transition for agent tests."""
+        self.advance_draft_depth_calls += 1
+        self.advance_extra_inputs.append(extra_inputs)
+        if first_depth:
+            inputs = self.update_inputs_decoding(inputs, extra_inputs, draft_token_ids.transpose(0, 1),
+                                                 target_hidden_states, model_metas)
+            extra_inputs.last_token_indices = None
+        else:
+            step_seqlens = inputs.seq_length.new_ones(inputs.seq_length.size(0))
+            inputs = inputs.step(draft_token_ids.transpose(0, 1), step_seqlens)
+            inputs.model_metas = model_metas
+            inputs.target_hidden_states = target_hidden_states
+        return inputs, self.next_extra_inputs
+
+    def get_draft_depth_token_counts(self, dp_meta):
+        """Return the configured depth layout or the recurrent default."""
+        if self.next_depth_dp_num_tokens is not None:
+            return self.next_depth_dp_num_tokens
+        return dp_meta.dp_batches
+
+
+class _LegacyDummyProposer(_DummyProposer):
+    supports_draft_depth_protocol = False
+
+    def get_draft_depth_token_counts(self, dp_meta):
+        raise AssertionError('legacy proposing must not require draft-depth DP metadata.')
+
+
+def test_draft_depth_protocol_requires_both_transition_hooks():
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    class _MalformedProposer:
+        supports_draft_depth_protocol = True
+        advance_draft_depth = None
+
+    agent = object.__new__(SpecModelAgent)
+    agent.proposer = _MalformedProposer()
+
+    with pytest.raises(TypeError, match='get_draft_depth_token_counts'):
+        agent._uses_draft_depth_protocol()
 
 
 def test_guided_serial_bitmask_updates_inference_tensor():
@@ -518,7 +572,7 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
     agent = object.__new__(SpecModelAgent)
     agent.num_spec_tokens = 3
     agent.rank = 0
-    agent.proposer = _DummyProposer()
+    agent.proposer = _LegacyDummyProposer()
     agent.guided_helper = GuidedSpecHelper()
     forward_calls = 0
 
@@ -536,6 +590,103 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
     assert forward_calls == 1
     assert agent.proposer.get_outputs_calls == 0
     assert agent.proposer.update_inputs_decoding_calls == 0
+    assert agent.proposer.advance_draft_depth_calls == 0
+
+
+def test_async_model_forward_dp1_non_last_chunk_runs_draft_depth_protocol():
+    """Protocol proposers must retain draft outputs for non-last chunks."""
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    inputs, extra_inputs = _make_non_last_chunk_inputs()
+    agent = object.__new__(SpecModelAgent)
+    agent.num_spec_tokens = 3
+    agent.rank = 0
+    agent.proposer = _DummyProposer()
+    agent.guided_helper = GuidedSpecHelper()
+    forward_calls = 0
+
+    def _forward_impl(_inputs):
+        nonlocal forward_calls
+        forward_calls += 1
+        return {'call': forward_calls}
+
+    agent._forward_impl = _forward_impl
+
+    output = asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+
+    expected = torch.tensor([[0, 1, 2], [0, 1, 2]], dtype=torch.long)
+    torch.testing.assert_close(output.output_draft_token_ids, expected)
+    assert forward_calls == agent.num_spec_tokens
+    assert agent.proposer.advance_draft_depth_calls == agent.num_spec_tokens - 1
+
+
+def test_async_model_forward_dp1_uses_legacy_draft_depth_transition():
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    inputs, extra_inputs = _make_non_last_chunk_inputs()
+    inputs.is_chunk = False
+    inputs.is_last_chunk = True
+    agent = object.__new__(SpecModelAgent)
+    agent.num_spec_tokens = 3
+    agent.rank = 0
+    agent.proposer = _LegacyDummyProposer()
+    agent.guided_helper = GuidedSpecHelper()
+    forward_calls = 0
+
+    def _forward_impl(_inputs):
+        nonlocal forward_calls
+        forward_calls += 1
+        return {'call': forward_calls}
+
+    agent._forward_impl = _forward_impl
+
+    output = asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+
+    expected = torch.tensor([[0, 1, 2], [0, 1, 2]], dtype=torch.long)
+    assert torch.equal(output.output_draft_token_ids, expected)
+    assert forward_calls == agent.num_spec_tokens
+    assert agent.proposer.update_inputs_decoding_calls == 1
+    assert agent.proposer.advance_draft_depth_calls == 0
+
+
+def test_legacy_base_transition_does_not_advance_draft_depth():
+    """The opt-in depth protocol must not alter legacy proposer state."""
+    from lmdeploy.pytorch.spec_decode.proposers.base import BaseSpecProposer
+
+    inputs, extra_inputs = _make_non_last_chunk_inputs()
+    inputs.spec_step_idx = 7
+    output = BaseSpecProposer.update_inputs_decoding(
+        object.__new__(BaseSpecProposer),
+        inputs,
+        extra_inputs,
+        torch.tensor([[3, 4]], dtype=torch.long),
+        torch.zeros(1, 2, 4),
+        [{}, {}],
+    )
+
+    assert output.spec_step_idx == inputs.spec_step_idx
+
+
+def test_build_draft_depth_dp_meta_legacy_uses_rank_batch_token_counts(monkeypatch):
+    """Legacy recurrent depth uses one token per rank-local request."""
+    import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
+    from lmdeploy.pytorch.model_inputs import DPMeta
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    build_num_tokens = []
+
+    def _build(seqlen, num_tokens):
+        build_num_tokens.append(list(num_tokens))
+        return DPMeta()
+
+    monkeypatch.setattr(spec_agent_mod.DPMeta, 'build', staticmethod(_build))
+    inputs, _ = _make_non_last_chunk_inputs(dp_meta=DPMeta(dp_batches=[2, 5]))
+    agent = object.__new__(SpecModelAgent)
+    agent.proposer = _LegacyDummyProposer()
+
+    agent._build_draft_depth_dp_meta(inputs)
+
+    assert build_num_tokens == [[2, 5]]
 
 
 def test_async_model_forward_dp_non_last_chunk_pads_block_offsets(monkeypatch):
@@ -571,6 +722,8 @@ def test_async_model_forward_dp_non_last_chunk_pads_block_offsets(monkeypatch):
     assert forward_calls == agent.num_spec_tokens
     assert agent.proposer.get_outputs_calls == agent.num_spec_tokens
     assert agent.proposer.update_inputs_decoding_calls == 1
+    assert agent.proposer.advance_draft_depth_calls == agent.num_spec_tokens - 1
+    assert agent.proposer.advance_extra_inputs == [extra_inputs, agent.proposer.next_extra_inputs]
     assert agent.proposer.model.update_inputs_calls == agent.num_spec_tokens - 1
     assert forwarded_inputs[0] is inputs
     assert [inp.block_offsets.size(1) for inp in forwarded_inputs] == [1, 2, 2]
@@ -607,6 +760,40 @@ def test_async_model_forward_preserves_dp_global_decoding_in_draft_loop(monkeypa
     asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
 
     assert agent.proposer.model.update_inputs_dp_is_decoding == [True, True]
+
+
+def test_async_model_forward_uses_proposer_dp_token_layout(monkeypatch):
+    """Draft architectures may preserve varlen tokens across MTP depths."""
+    import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
+    from lmdeploy.pytorch.model_inputs import DPMeta
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    build_num_tokens = []
+
+    def _build(seqlen, num_tokens):
+        build_num_tokens.append(list(num_tokens))
+        return DPMeta()
+
+    monkeypatch.setattr(spec_agent_mod.DPMeta, 'build', staticmethod(_build))
+    dp_meta = DPMeta(
+        dp_batches=[1, 1],
+        dp_is_decoding=False,
+        dp_draft_num_tokens=[5, 9],
+    )
+    inputs, extra_inputs = _make_non_last_chunk_inputs(dp_meta=dp_meta)
+    inputs.is_chunk = False
+
+    agent = object.__new__(SpecModelAgent)
+    agent.num_spec_tokens = 3
+    agent.rank = 0
+    agent.proposer = _DummyProposer()
+    agent.proposer.next_depth_dp_num_tokens = [5, 9]
+    agent.guided_helper = GuidedSpecHelper()
+    agent._forward_impl = lambda _inputs: {}
+
+    asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+
+    assert build_num_tokens == [[5, 9]]
 
 
 def test_spec_model_agent_warmup_adds_dp_meta_for_draft_capture(monkeypatch):
@@ -648,6 +835,12 @@ def test_spec_model_agent_warmup_adds_dp_meta_for_draft_capture(monkeypatch):
 
         def get_capture_batch_sizes(self):
             return [2]
+
+        def get_model(self):
+            return self
+
+        def get_cudagraph_warmup_specs(self, max_query_len):
+            return ((max_query_len, 0), (1, 0))
 
     class DummyProposer:
 

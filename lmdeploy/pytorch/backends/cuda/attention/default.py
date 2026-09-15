@@ -6,7 +6,13 @@ from typing import Any
 import torch
 
 from lmdeploy.messages import QuantPolicy
-from lmdeploy.pytorch.backends.attention import AttentionImpl, AttentionMetadata
+from lmdeploy.pytorch.backends.attention import (
+    AttentionImpl,
+    AttentionMetadata,
+    DecodeMode,
+    decode_mode_uses_causal_mask,
+    normalize_decode_mode,
+)
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import CudaAttentionMetaBuilder, CudaSequenceMetadata, register_step_metadata_impl
@@ -56,6 +62,9 @@ class TritonAttentionMetadata(AttentionMetadata):
     max_kv_seqlen: int = None
     max_q_seqlen: int = None
     kernel_metadata: tuple[Any, ...] = ()
+    # Semantic mode is selected once by the step context. Attention calls must
+    # agree with it so scheduler metadata and kernel masking cannot diverge.
+    decode_mode: DecodeMode = 'block'
 
 
 def build_triton_attention_metadata(attn_meta_cls, step_context,
@@ -74,6 +83,7 @@ def build_triton_attention_metadata(attn_meta_cls, step_context,
         cu_seqlens_k=sequence_metadata.cu_seqlens_k,
         max_kv_seqlen=sequence_metadata.max_kv_seqlen,
         max_q_seqlen=step_context.max_q_seqlen,
+        decode_mode=normalize_decode_mode(getattr(step_context, 'decode_mode', 'block')),
     )
 
 
@@ -114,6 +124,8 @@ class TritonAttentionMetaBuilder(CudaAttentionMetaBuilder[None, None]):
 
 class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
     """Triton attention implementation."""
+
+    supports_multi_token_decode = True
 
     def __init__(
         self,
@@ -239,6 +251,9 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
     ) -> int:
         """Get max q seqlen."""
         if attn_metadata.is_decoding:
+            if self.supports_multi_token_decode:
+                batch_size = attn_metadata.block_offsets.size(0)
+                return query.size(0) // batch_size
             max_q_seqlen = self.block_sparse_size
         else:
             if attn_metadata.max_q_seqlen is not None:
@@ -308,6 +323,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
         learnable_sink: torch.Tensor = None,
+        decode_mode: DecodeMode = 'block',
     ) -> torch.Tensor:
         """Forward pass for decoding stage.
 
@@ -344,8 +360,14 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             quant_policy=quant_policy,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
+            causal_multi_token=(decode_mode_uses_causal_mask(decode_mode) and max_q_seqlen > 1),
         )
         return attn_output
+
+    def decode_mode_uses_causal_mask(self, decode_mode: DecodeMode) -> bool:
+        """Whether a semantic decode mode requires causal multi-token
+        masking."""
+        return decode_mode_uses_causal_mask(decode_mode)
 
     def _forward_prefill(
         self,
@@ -445,6 +467,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         v_scales_zeros: torch.Tensor = None,
         learnable_sink: torch.Tensor = None,
         inplace: bool = True,
+        decode_mode: DecodeMode = 'block',
         **kwargs,
     ) -> torch.Tensor:
         """Forward pass for attention computation.
@@ -469,6 +492,11 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         Returns:
             Attention output tensor.
         """
+        decode_mode = normalize_decode_mode(decode_mode)
+        kernel_metadata = self.get_step_kernel_metadata(attn_metadata)
+        if kernel_metadata is not None:
+            attn_metadata = kernel_metadata
+
         # Shared preparation
         max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
 
@@ -500,6 +528,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
                 learnable_sink=learnable_sink,
+                decode_mode=decode_mode,
             )
         else:
             return self._forward_prefill(

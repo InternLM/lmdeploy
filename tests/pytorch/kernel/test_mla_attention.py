@@ -51,6 +51,10 @@ def test_flash_mla_build_spec_selects_sparse_impl(monkeypatch):
         PagedAttentionBuildSpec(mla_index_topk=2048, **spec_kwargs)) is sparse_output
     assert sparse_impl.call_args.kwargs['use_fa3'] is True
 
+    assert CudaOpsBackend.build_op(
+        PagedAttentionBuildSpec(mla_index_topk=2048, **spec_kwargs)) is sparse_output
+    assert sparse_impl.call_args.kwargs['use_fa3'] is True
+
 
 def test_builder_selects_tilelang_sparse_impl_from_env(monkeypatch):
     output = object()
@@ -239,6 +243,18 @@ def test_bf16_sparse_decode_skips_fp8_flashmla_metadata():
 
     assert metadata.block_offsets.dtype == torch.int32
     assert not hasattr(metadata, 'tile_scheduler_metadata')
+
+
+def test_attention_preserves_flashmla_metadata_adapter(monkeypatch):
+    from lmdeploy.pytorch.nn import attention as attention_module
+
+    backend = Mock()
+    metadata = object()
+    monkeypatch.setattr(attention_module, 'get_backend', lambda: backend)
+
+    attention_module.Attention.update_meta_flashmla(metadata, 16)
+
+    backend.update_meta_flashmla.assert_called_once_with(metadata, 16)
 
 
 def test_bf16_mla_flatten_uses_shared_k_latent_as_value():

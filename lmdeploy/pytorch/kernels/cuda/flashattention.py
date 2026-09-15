@@ -535,26 +535,33 @@ def flash_attn_varlen_func(
         assert sinks.numel() == num_heads
 
     BLOCK_DK, BLOCK_DK1, BLOCK_DV = _get_block_d(head_dim_k, head_dim_v)
+    # Kernel resource tuning must account for both Q/K tiles. For a
+    # non-power-of-two head such as MiMo's 192, computation is split into
+    # BLOCK_DK=128 and BLOCK_DK1=64. Tuning from BLOCK_DK alone incorrectly
+    # selects the aggressive 128-dim SM90 config and exceeds shared memory.
+    # Use the padded complete dimension for launch metadata while
+    # retaining the split tiles for the actual computation.
+    meta_block_dk = triton.next_power_of_2(head_dim_k)
 
     shared_kv = k.data_ptr() == v.data_ptr() and BLOCK_DK == BLOCK_DV
 
     num_warps = 4
     hip_mode = getattr(torch.version, 'hip', None) is not None
     if hip_mode:
-        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_rocm(BLOCK_DK, shared_kv)
+        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_rocm(meta_block_dk, shared_kv)
     else:
         nv_cap = get_device_props(q.device.index)['compute_capability']
         if nv_cap[0] < 8:
-            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm7x(BLOCK_DK)
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm7x(meta_block_dk)
         elif nv_cap[0] < 9:
             if nv_cap[1] in [6, 9]:
-                BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm86(BLOCK_DK, shared_kv)
+                BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm86(meta_block_dk, shared_kv)
             else:
-                BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
+                BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(meta_block_dk, shared_kv)
         elif nv_cap[0] < 10:
-            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK, shared_kv)
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(meta_block_dk, shared_kv)
         else:
-            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm12x(BLOCK_DK, shared_kv)
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm12x(meta_block_dk, shared_kv)
 
     BLOCK_M = min(128, BLOCK_M)
     _flash_prefill_fwd_kernel[grid](

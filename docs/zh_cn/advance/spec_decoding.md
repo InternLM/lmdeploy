@@ -103,6 +103,29 @@ deepseek-ai/DeepSeek-V3 \
 --max-batch-size 128
 ```
 
+### MiMo-V2-Flash MTP
+
+MiMo-V2-Flash 的 target checkpoint 内含三层 MTP 预测层，因此不需要单独的 draft model。下面是可直接运行的 TP 4 配置：
+
+```shell
+lmdeploy serve api_server \
+XiaomiMiMo/MiMo-V2-Flash \
+--backend pytorch \
+--trust-remote-code \
+--tp 4 \
+--session-len 262144 \
+--cache-max-entry-count 0.6 \
+--max-batch-size 128 \
+--speculative-algorithm mimo_mtp \
+--speculative-num-draft-tokens 3
+```
+
+MiMo MTP 每步支持 1 至 3 个 draft token，TP 4 和 TP 8 均已验证。CUDA Graph 默认启用；可通过 `--enable-prefix-caching` 开启 prefix cache，此组合使用 paged verification，不会展开复制完整的逻辑 KV 序列。
+
+只有已安装的 FlashAttention 3 实现支持 MiMo 非对称的 Q/K 和 V head dimension（分别为 192 和 128）时，Full Attention 才会选择 FA3；否则 LMDeploy 会在执行前选择 Triton 实现。
+
+八卡生产部署如需同时使用 data-parallel attention 和 expert parallelism，请在 LMDeploy proxy 下配置 `--tp 8 --dp 2 --ep 8 --distributed-executor-backend ray`。此拓扑包含两个 attention TP 4 group，MoE 层使用 EP 8。
+
 ## 投机解码与结构化输出
 
 投机解码（MTP）可以与[结构化输出](./structed_output.md)结合使用，使草稿模型提出的 token 也遵循语法约束（如 JSON Schema、正则表达式），从而显著提高接受率。

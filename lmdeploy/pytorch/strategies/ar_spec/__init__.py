@@ -27,7 +27,10 @@ class ARSpecStrategyFactory(StrategyFactoryBase):
     def build_cudagraph_strategy(self) -> 'CudagraphStrategy':
         """Build cudagraph strategy."""
         from .cudagraph import ARSpecCudagraphStrategy
-        return ARSpecCudagraphStrategy(self.specdecode_config.num_speculative_tokens, self.specdecode_config.method)
+        return ARSpecCudagraphStrategy(
+            self.specdecode_config.num_speculative_tokens,
+            self.specdecode_config.method,
+        )
 
     def build_sampling_strategy(self) -> 'SamplingStrategy':
         """Build sampling strategy."""

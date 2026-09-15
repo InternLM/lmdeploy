@@ -1,11 +1,26 @@
 # Tools Calling
 
-LMDeploy supports tools for InternLM2, InternLM2.5, llama3.1 and Qwen2.5 models. Please use `--tool-call-parser` to specify
-which parser to use when launching the api_server. Supported names are:
+LMDeploy supports tool calling for multiple model families. Use `--tool-call-parser` to select the parser that matches the model when launching `api_server`. Common parser names include:
 
 1. internlm
 2. qwen
 3. llama3
+4. mimo
+
+## MiMo-V2-Flash
+
+Start MiMo-V2-Flash with its dedicated parser. The parser converts the model's `<tool_call>` output into the OpenAI-compatible `tool_calls` field and supports complete, streaming and multi-round responses.
+
+```shell
+lmdeploy serve api_server XiaomiMiMo/MiMo-V2-Flash \
+  --backend pytorch \
+  --trust-remote-code \
+  --tp 4 \
+  --reasoning-parser default \
+  --tool-call-parser mimo
+```
+
+The parser is also compatible with `mimo_mtp`; add `--speculative-algorithm mimo_mtp --speculative-num-draft-tokens 3` to enable MTP.
 
 ## Single Round Invocation
 

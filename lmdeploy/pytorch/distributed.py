@@ -493,6 +493,6 @@ def reduce_scatter_by_tp_sizes(out: torch.Tensor, rank: int, tp_sizes: list[int]
     attn_tp = get_dist_manager().current_config().attn_tp
     outs = list(out.split(tp_sizes, -2))
     outs = [item for item in outs for _ in range(attn_tp)]
-    out = outs[rank]
-    dist.reduce_scatter(out, outs, group=group)
-    return out
+    output = torch.empty_like(outs[rank])
+    dist.reduce_scatter(output, outs, group=group)
+    return output

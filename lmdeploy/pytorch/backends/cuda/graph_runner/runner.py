@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.backends.attention import normalize_decode_mode
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.config import (
     BackendConfig,
@@ -17,6 +18,7 @@ from lmdeploy.pytorch.config import (
     normalize_cudagraph_capture_batch_sizes,
 )
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
+from lmdeploy.pytorch.models.utils.cudagraph import GraphCaptureContext
 from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
 
 from ...graph_runner import GraphRunner, is_preparing_prefill
@@ -51,13 +53,12 @@ def _false(*args, **kwargs):
     return False
 
 
-def _validate_speculative_decoding(model_config: ModelConfig) -> None:
-    """Validate the CUDA attention backend required by speculative decode."""
-    if model_config.model_paradigm != 'ar_spec' or model_config.use_flash_mla:
-        return
-
-    from ..attention import require_fa3_for_speculative_decoding
-    require_fa3_for_speculative_decoding()
+def _supports_multi_token_decode(model: torch.nn.Module) -> bool:
+    """Whether the selected model paths support multi-token decode."""
+    handler = getattr(model, 'supports_multi_token_decode', None)
+    if not callable(handler):
+        return False
+    return bool(handler())
 
 
 def _make_piecewise_graph_manager(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
@@ -122,8 +123,7 @@ class CUDAGraphRunner(GraphRunner):
                  backend_config: BackendConfig, device: torch.device):
         super().__init__(model, model_config, cache_config, backend_config, device)
         self.num_blocks = cache_config.num_gpu_blocks
-        _validate_speculative_decoding(model_config)
-
+        self._supports_multi_token_decode = _supports_multi_token_decode(self.model)
         self.enable_graph = self.check_enable_graph()
         self._decode_model_forward: Callable[..., Any] | None = None
 
@@ -177,7 +177,8 @@ class CUDAGraphRunner(GraphRunner):
             batch_size = self._get_capture_tokens(batch_size)
         else:
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
-        graph_key = (batch_size, is_decoding, enable_microbatch, query_len)
+        decode_mode = normalize_decode_mode(getattr(context, 'decode_mode', 'block'))
+        graph_key = (batch_size, is_decoding, enable_microbatch, query_len, decode_mode)
         graph_key += self.model.get_cudagraph_extra_key(**kwargs)
         return graph_key
 
@@ -252,12 +253,35 @@ class CUDAGraphRunner(GraphRunner):
             decode_query_len=graph_key[3],
             pool=self._full_graph_pool_handle,
             model_config=self.model_config,
+            supports_multi_token_decode=self._supports_multi_token_decode,
             device=self.device,
         )
-        output = runner.capture(**kwargs)
+        capture_context = GraphCaptureContext(
+            past_key_values=kwargs['past_key_values'],
+            attn_metadata=kwargs['attn_metadata'],
+            num_blocks=self.num_blocks,
+            spec_step_idx=int(kwargs.get('spec_step_idx', 0)),
+        )
+        capture_state = self.model.get_cudagraph_capture_state(capture_context)
+        if capture_state is not None:
+            capture_state.snapshot()
+
+        try:
+            output = runner.capture(**kwargs)
+        finally:
+            if capture_state is not None:
+                capture_state.restore()
+
+        if capture_state is not None:
+            try:
+                output = runner.forward(**kwargs)
+            except Exception:
+                capture_state.restore()
+                raise
+
         self._full_graph_runners[graph_key] = runner
         # SSM capture warmup updates state, so the first call returns that
-        # warmup output instead of replaying and applying the update twice.
+        # warmup output unless a stateful cache snapshot restored it first.
         return output
 
     def __call__(self, **kwargs):
