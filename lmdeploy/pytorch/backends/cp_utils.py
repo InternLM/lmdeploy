@@ -5,16 +5,17 @@ import torch
 
 
 def get_dcp_topk_workspace_size(num_rows: int, topk: int, dcp_size: int) -> int:
-    """Bytes for local/global INT32 ids and packed/gathered FP32 pairs."""
+    """Per-rank candidate bytes for cache sizing, not a top-k chunk limit."""
+    # Two INT32 index buffers (8 bytes), local pairs (8), gathered pairs (8 * D).
     return num_rows * topk * (16 + 8 * dcp_size)
 
 
 def get_dcp_prefill_workspace_size(*, batch_size: int, head_dim: int, block_size: int, dcp_size: int) -> int:
-    """Bound BF16 local, gathered, and reordered prefix KV buffers.
+    """Per-rank prefix KV budget shared by chunk planning and cache sizing.
 
-    Allow at least one virtual block per request. The same bound is reserved during cache sizing and used to plan
-    context chunks, independently of Q.
+    Target 64 MiB, enlarged if one virtual block per request needs more. FP8 caches also gather dequantized BF16 KV.
     """
+    # Simultaneous BF16 buffers: one local block, D gathered, D reordered.
     minimum = batch_size * block_size * (1 + 2 * dcp_size) * head_dim * 2
     return max(64 << 20, minimum)
 
@@ -44,6 +45,7 @@ def build_dcp_prefill_chunks(*, prefix_lens: torch.Tensor, prefix_limit: int, bl
                                                      dcp_size=dcp_size)
     virtual_block_size = block_size * dcp_size
     bytes_per_block = batch_size * block_size * (1 + 2 * dcp_size) * head_dim * 2
+    # Longer prefixes add chunks rather than enlarge the gather buffers.
     chunk_size = (workspace_bytes // bytes_per_block) * virtual_block_size
     ranks = torch.arange(dcp_size, device=prefix_lens.device, dtype=prefix_lens.dtype)[:, None]
     chunks = []
@@ -118,6 +120,8 @@ def update_dcp_metadata(attn_metadata, step_context) -> None:
     topk = step_context.model_config.mla_index_topk
     # Short-context sparse MLA uses dense attention and needs no index mapping.
     if attn_metadata.dcp_prefill_chunks and topk is not None and attn_metadata.max_kv_seqlen > topk:
+        # Map query rows to requests once, reused across chunks and layers.
+        # E.g. q_seqlens=[2, 3] -> request_ids=[0, 0, 1, 1, 1].
         attn_metadata.dcp_prefill_request_ids = torch.repeat_interleave(
             torch.arange(attn_metadata.q_seqlens.numel(), dtype=torch.int32, device=attn_metadata.q_seqlens.device),
             attn_metadata.q_seqlens,

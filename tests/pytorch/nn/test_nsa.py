@@ -83,9 +83,8 @@ def test_deepgemm_prefill_scores_are_chunked_by_logits_budget(monkeypatch, dcp_s
     impl.dcp_rank = 0
     impl.topk = 2
     impl.fill = -1
-    impl.max_logits_bytes = 2 * (4 * 4 if dcp_size == 1 else 128 * 4 + 2 * (16 + 8 * dcp_size))
-    # Global selection itself is covered by test_dcp; record only score-row
-    # chunking here, using the same candidate shapes as the production path.
+    impl.max_logits_bytes = 2 * 4 * 4
+    # DCP and non-DCP use the same score-row budget, excluding candidates.
     impl._merge_dcp_topk = lambda scores, indices: indices
     flatten_calls = []
 
@@ -116,7 +115,7 @@ def test_deepgemm_prefill_scores_are_chunked_by_logits_budget(monkeypatch, dcp_s
 
     selected = impl._score_and_select(q, q_s, indexer_k_cache, meta)
 
-    assert cuda_nsa._get_max_score_rows(4, impl.max_logits_bytes, topk=impl.topk, dcp_size=dcp_size) == 2
+    assert cuda_nsa._get_max_score_rows(4, impl.max_logits_bytes) == 2
     assert deep_gemm.row_counts == [2, 2, 1]
     assert len(flatten_calls) == 1
     assert flatten_calls[0][:2] == (indexer_k_cache, 1)

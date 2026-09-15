@@ -186,10 +186,11 @@ def test_get_min_num_gpu_blocks_rejects_worker_count_mismatch():
 
 
 @pytest.mark.parametrize('draft_tokens', [0, 5, 9])
-def test_runtime_size_reserves_dcp_gather_accumulator_and_candidates(monkeypatch, draft_tokens):
-    monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', 1)
+@pytest.mark.parametrize(('topk', 'score_mb'), [(None, 1), (2048, 1), (2048, 128)])
+def test_runtime_size_reserves_dcp_peak_phase(monkeypatch, draft_tokens, topk, score_mb):
+    monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', score_mb)
     executor = object.__new__(ExecutorBase)
-    executor.model_config = SimpleNamespace(mla_index_topk=2048, head_dim=576, v_head_dim=0, num_attention_heads=64)
+    executor.model_config = SimpleNamespace(mla_index_topk=topk, head_dim=576, v_head_dim=0, num_attention_heads=64)
     executor.specdecode_config = SimpleNamespace(num_speculative_tokens=draft_tokens) if draft_tokens else None
     executor.dist_config = SimpleNamespace(attn_tp=8)
     executor.cache_config = SimpleNamespace(cache_max_entry_count=1.0,
@@ -201,8 +202,15 @@ def test_runtime_size_reserves_dcp_gather_accumulator_and_candidates(monkeypatch
                                                           vocab_size=100)
     # Explicitly include MLA accumulators despite its empty standalone V cache.
     decode_rows = 2 * (draft_tokens + 1)
-    expected = ((1 << 20) + (64 << 20) + (16 + 4) * 100 * 2 + 16 * 8 * (576 * 12 + 12) +
-                max(16, decode_rows) * 2048 * 4 + decode_rows * 2048 * (16 + 8 * 4))
+    attention_bytes = (64 << 20) + 16 * 8 * (576 * 12 + 12)
+    workspace = attention_bytes
+    if topk is not None:
+        rows = max(16, decode_rows)
+        indexer_bytes = (score_mb << 20) + rows * topk * (16 + 8 * 4)
+        # Scores count once; phase-local buffers overlap in the reservation,
+        # while final indices remain live through attention.
+        workspace = rows * topk * 4 + max(indexer_bytes, attention_bytes)
+    expected = (16 + 4) * 100 * 2 + workspace
     assert runtime_size == expected
     assert num_tokens == 16
 

@@ -39,7 +39,7 @@ class TritonAttentionMetadata(AttentionMetadata):
         max_kv_seqlen: Maximum KV sequence length in the batch.
         max_q_seqlen: Maximum query sequence length in the batch.
         dcp_local_kv_seqlens: Rank-local KV sequence lengths under DCP.
-        dcp_prefill_request_ids: Request index per query row, shared across sparse prefix partitions and layers.
+        dcp_prefill_request_ids: Request index per query row for mapping top-k indices into packed prefill KV.
     """
     is_decoding: bool
     block_offsets: torch.Tensor

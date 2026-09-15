@@ -71,6 +71,7 @@ def _map_and_compact_dcp_prefill_indices_kernel(
                       mask=columns < WIDTH, other=-1)
     # This partition contains gathered global KV, not a rank-local cache.
     valid = (columns < WIDTH) & (indices >= 0) & (indices >= start) & (indices < start + length)
+    # Convert request-relative indices to packed partition offsets.
     mapped = indices - start + base
     positions = tl.cumsum(valid.to(tl.int32))
     count = tl.sum(valid.to(tl.int32))

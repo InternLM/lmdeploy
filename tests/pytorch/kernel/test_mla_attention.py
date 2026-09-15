@@ -257,7 +257,7 @@ def test_bf16_sparse_decode_strided_cache_matches_contiguous_cache(
                                q_seqlens=torch.full((batch_size, ), query_len, dtype=torch.int32, device='cuda'),
                                block_offsets=block_offsets)
 
-    output = impl._decoding_sparse_bf16(query, k_cache, nsa_indices, metadata)
+    output = impl._decoding_sparse(query, k_cache, nsa_indices, metadata)
 
     contiguous_k = k_cache.flatten(0, 1)
     contiguous_indices = impl.index_mapper.map_paged_decode(nsa_indices, block_offsets, query_len, block_size)
@@ -297,7 +297,8 @@ def test_tilelang_sparse_decode_uses_flat_bf16_cache_view(monkeypatch):
     assert output.shape == (2, 8, 512)
 
 
-def test_fp8_sparse_decode_pads_tp_query_heads_for_aligned_kernel():
+@pytest.mark.parametrize('return_lse', [False, True])
+def test_fp8_sparse_decode_pads_tp_query_heads_for_aligned_kernel(return_lse):
     impl = object.__new__(FlashMLASparseImpl)
     impl.dcp_world_size = 1
     impl.dcp_rank = 0
@@ -307,11 +308,11 @@ def test_fp8_sparse_decode_pads_tp_query_heads_for_aligned_kernel():
     impl.index_mapper = Mock()
     impl.index_mapper.map_paged_decode.return_value = torch.zeros(2, 3, 4, dtype=torch.int32)
     impl.flash_mla_with_kvcache = Mock(
-        return_value=(torch.empty(2, 3, 64, 512, dtype=torch.bfloat16), None))
+        return_value=(torch.empty(2, 3, 64, 512, dtype=torch.bfloat16), torch.empty(2, 64, 3)))
     impl._step_meta_group = None
 
     query = torch.empty(6, 8, 576, dtype=torch.bfloat16)
-    k_cache = torch.empty(2, 16, 1, 656, dtype=torch.uint8)
+    k_cache = torch.empty(2, 16, 1, 656, dtype=torch.float8_e4m3fn)
     metadata = SimpleNamespace(
         q_seqlens=torch.tensor([3, 3]),
         kv_seqlens=torch.tensor([16, 16]),
@@ -321,11 +322,16 @@ def test_fp8_sparse_decode_pads_tp_query_heads_for_aligned_kernel():
         kernel_metadata=(),
     )
 
-    output = impl._decoding_sparse_fp8(query, k_cache, torch.zeros(6, 4, dtype=torch.int32), metadata)
+    output = impl._decoding_sparse(
+        query, k_cache, torch.zeros(6, 4, dtype=torch.int32), metadata,
+        return_lse=return_lse, topk_length=torch.full((6,), 4, dtype=torch.int32))
 
     padded_query = impl.flash_mla_with_kvcache.call_args.args[0]
     assert padded_query.shape == (2, 3, 64, 576)
     assert 'topk_length' not in impl.flash_mla_with_kvcache.call_args.kwargs
+    if return_lse:
+        output, lse = output
+        assert lse.shape == (6, 8)
     assert output.shape == (6, 8, 512)
 
 

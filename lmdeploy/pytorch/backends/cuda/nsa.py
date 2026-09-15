@@ -7,7 +7,6 @@ import torch
 from torch import Tensor
 
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.pytorch.backends.cp_utils import get_dcp_topk_workspace_size
 from lmdeploy.pytorch.backends.cuda.step_metadata import (
     CudaAttentionMetaBuilder,
     CudaSequenceMetadata,
@@ -43,8 +42,8 @@ from ..nsa import (
 logger = get_logger('lmdeploy')
 
 
-def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int, *, topk: int = 0, dcp_size: int = 1) -> int:
-    """Bound scores and, under DCP, candidate selection temporaries."""
+def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int) -> int:
+    """Limit query rows by the FP32 score payload, independently of top-k."""
     if max_kv_seqlen <= 0:
         return 1
     # DeepGEMM materializes an aligned [query_rows, max_kv_seqlen] output
@@ -53,13 +52,6 @@ def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int, *, topk: int 
     # Bounding flattened KV alone therefore does not bound the M * N logits
     # allocation; limit M so its FP32 payload stays within the runtime budget.
     row_bytes = max_kv_seqlen * 4
-    if dcp_size > 1:
-        # Include aligned logits, local/global ids and both
-        # candidate buffers. Full-step output ids are reserved separately.
-        score_width = (max_kv_seqlen + 127) // 128 * 128
-        row_bytes = score_width * 4 + get_dcp_topk_workspace_size(1, topk, dcp_size)
-        if row_bytes > max_logits_bytes:
-            raise RuntimeError('One DCP score row exceeds LMDEPLOY_DSA_INDEXER_MAX_LOGITS_MB')
     return max(1, max_logits_bytes // row_bytes)
 
 
@@ -513,10 +505,7 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
         # avoids the alignment failures caused by per-request KV views.
         flat_k, flat_k_s = self._flatten_prefill_k(
             indexer_k_cache, q.size(-1), meta)
-        max_rows = _get_max_score_rows(score_meta.max_kv_seqlen,
-                                       self.max_logits_bytes,
-                                       topk=self.topk,
-                                       dcp_size=self.dcp_world_size)
+        max_rows = _get_max_score_rows(score_meta.max_kv_seqlen, self.max_logits_bytes)
         num_rows = q.size(0)
         if num_rows <= max_rows:
             scores = self._compute_prefill_scores(
