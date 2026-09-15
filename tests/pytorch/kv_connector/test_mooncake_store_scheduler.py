@@ -6,11 +6,14 @@ import numpy as np
 import pytest
 
 from lmdeploy.messages import KVTransferConfig
-from lmdeploy.pytorch.config import CacheConfig
+from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVConnectorResult, KVLoadResult
 from lmdeploy.pytorch.kv_connector.mooncake.store import scheduler as scheduler_module
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import build_prefix_block_hashes
 from lmdeploy.pytorch.kv_connector.mooncake.store.scheduler import MooncakeStoreScheduler
+from lmdeploy.pytorch.messages import SequenceMeta
+from lmdeploy.pytorch.paging.scheduler import Scheduler
+from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
 
 
 def _cache_config(role='kv_both'):
@@ -113,6 +116,43 @@ def test_scheduler_extends_hashes_and_reports_pending_miss_and_hit(monkeypatch):
     assert lookup_calls[0][3] is True
     assert lookup_calls[2][2][:2] == lookup_calls[0][2]
     scheduler.shutdown()
+
+
+def test_spec_external_lookup_uses_existing_safe_prompt_boundary():
+    block_size = 4
+    paging_scheduler = Scheduler(
+        scheduler_config=SchedulerConfig(
+            max_batches=1,
+            max_session_len=64,
+            max_request_output_len=16,
+            eviction_type='recompute',
+        ),
+        cache_config=CacheConfig(
+            max_batches=1,
+            block_size=block_size,
+            num_cpu_blocks=0,
+            num_gpu_blocks=8,
+            enable_prefix_caching=True,
+        ),
+        seq_meta=SequenceMeta(block_size, strategy=ARSpecSequenceStrategy()),
+    )
+    request = paging_scheduler.add_session(0).add_sequence(range(13))
+    mooncake_scheduler = MooncakeStoreScheduler(_cache_config())
+    mooncake_scheduler.client.lookup = Mock(return_value=8)
+
+    # ARSpec's existing request boundary excludes the final unsafe token and
+    # keeps one overlap block for recomputation. Mooncake lookup must use that
+    # same public boundary; MTP does not require another lookup or offset.
+    assert request.get_prefix_cache_max_match_step() == 8
+    assert mooncake_scheduler.get_num_new_matched_tokens(request, 0) == (8, True)
+
+    mooncake_scheduler.client.lookup.assert_called_once_with(
+        request.seq_id,
+        8,
+        build_prefix_block_hashes(request.all_ids[:8], block_size),
+        non_block=True,
+    )
+    mooncake_scheduler.shutdown()
 
 
 @pytest.mark.parametrize(

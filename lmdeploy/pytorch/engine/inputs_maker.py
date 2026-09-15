@@ -403,10 +403,7 @@ class _ForwardInputsTask:
         connector_enabled = maker.scheduler.kv_connector is not None
         if (connector_enabled and result.inputs is not None
                 and not result.inputs.is_decoding and not result.inputs.is_dummy):
-            # A prefill writes KV through the end of its query. The connector
-            # uses this post-forward boundary to save newly completed blocks.
-            token_lens = result.inputs.history_lengths + result.inputs.seq_length
-            connector_token_lens = tuple(token_lens.tolist())
+            connector_token_lens = self._get_connector_token_lens(result.inputs)
         # Build metadata even without model work: a pending load/save still
         # needs executor steps to submit work and poll asynchronous completion.
         result.kv_connector_metadata = self.scheduler.build_connector_meta(
@@ -418,6 +415,25 @@ class _ForwardInputsTask:
         if result.is_empty():
             return None
         return self._build_payload()
+
+    def _get_connector_token_lens(self, inputs: ModelInputs):
+        """Get the safe prefill boundary for connector saves.
+
+        Target and MTP forwards have different effective query lengths for a
+        non-final chunk: the MTP cache is one row behind the target cache.  A
+        common boundary keeps the corresponding target and MTP rows in every
+        saved block.  The Mooncake scheduler still rounds this boundary down
+        to complete blocks.
+        """
+        if (self.maker.spec_decoding and inputs.logits_indices is not None
+                and inputs.seq_logit_length is not None):
+            # Input-logprob forwards intentionally skip the speculative model;
+            # do not send an MTP-inclusive save with stale draft rows.
+            return ()
+        token_lens = inputs.history_lengths + inputs.seq_length
+        if (self.maker.spec_decoding and inputs.is_chunk and not inputs.is_last_chunk):
+            token_lens = token_lens.sub(1).clamp_min(0)
+        return tuple(token_lens.tolist())
 
     def _select_active_chunk_work(self):
         if self._should_defer_active_chunk():

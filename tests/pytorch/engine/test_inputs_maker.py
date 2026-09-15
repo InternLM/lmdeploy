@@ -655,6 +655,8 @@ def test_prefill_passes_actual_computed_token_boundaries_to_kv_connector():
         is_chunk_multimodal=False,
         history_lengths=torch.tensor([4]),
         seq_length=torch.tensor([4]),
+        logits_indices=None,
+        seq_logit_length=None,
     )
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
     maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
@@ -675,6 +677,95 @@ def test_prefill_passes_actual_computed_token_boundaries_to_kv_connector():
     maker._make_forward_inputs(prefill=True)
 
     assert maker.scheduler.connector_meta_calls == [(8, )]
+
+
+@pytest.mark.parametrize(
+    ('is_chunk', 'is_last_chunk', 'expected'),
+    [
+        pytest.param(False, False, (24, ), id='regular-prefill'),
+        pytest.param(True, False, (23, ), id='non-final-chunk'),
+        pytest.param(True, True, (24, ), id='final-chunk'),
+    ],
+)
+def test_spec_decoding_connector_boundary_uses_common_chunk_length(
+        is_chunk, is_last_chunk, expected):
+    seq = _DummySeq(
+        history_ids=8,
+        token_ids=16,
+        all_multimodals={},
+        input_multimodals={},
+    )
+    model_inputs = SimpleNamespace(
+        is_decoding=False,
+        is_dummy=False,
+        is_chunk=is_chunk,
+        is_first_chunk=is_chunk,
+        is_last_chunk=is_last_chunk,
+        is_chunk_multimodal=False,
+        history_lengths=torch.tensor([8]),
+        seq_length=torch.tensor([16]),
+        logits_indices=None,
+        seq_logit_length=None,
+    )
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
+    maker.spec_decoding = True
+    maker.scheduler = _FakeScheduler([seq])
+    maker.scheduler.kv_connector = object()
+    maker.engine_strategy = _FakeEngineStrategy()
+    maker.sampling_strategy = _FakeSamplingStrategy()
+    maker.model_agent_strategy = _FakeModelAgentStrategy()
+    maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
+    maker.running_seqs = []
+    maker.to_evict_seqs = []
+    maker._decode_count = 0
+    maker.create_model_inputs = lambda seqs, is_prefill: model_inputs
+    maker._prepare_prefill_cache_inputs = lambda seqs: None
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [], [])
+
+    maker._make_forward_inputs(prefill=True)
+
+    assert maker.scheduler.connector_meta_calls == [expected]
+
+
+def test_spec_decoding_input_logprobs_do_not_save_stale_mtp_rows():
+    seq = _DummySeq(
+        history_ids=8,
+        token_ids=16,
+        all_multimodals={},
+        input_multimodals={},
+    )
+    model_inputs = SimpleNamespace(
+        is_decoding=False,
+        is_dummy=False,
+        is_chunk=False,
+        is_first_chunk=False,
+        is_last_chunk=False,
+        is_chunk_multimodal=False,
+        history_lengths=torch.tensor([8]),
+        seq_length=torch.tensor([16]),
+        logits_indices=torch.tensor([0]),
+        seq_logit_length=torch.tensor([1]),
+    )
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
+    maker.spec_decoding = True
+    maker.scheduler = _FakeScheduler([seq])
+    maker.scheduler.kv_connector = object()
+    maker.engine_strategy = _FakeEngineStrategy()
+    maker.sampling_strategy = _FakeSamplingStrategy()
+    maker.model_agent_strategy = _FakeModelAgentStrategy()
+    maker.long_context_chunker = LongContextChunker(max_prefill_token_num=512)
+    maker.running_seqs = []
+    maker.to_evict_seqs = []
+    maker._decode_count = 0
+    maker.create_model_inputs = lambda seqs, is_prefill: model_inputs
+    maker._prepare_prefill_cache_inputs = lambda seqs: None
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [], [])
+
+    maker._make_forward_inputs(prefill=True)
+
+    assert maker.scheduler.connector_meta_calls == [()]
 
 
 def test_spec_decoding_text_turn_ignores_previous_multimodal_chunk_limit():
