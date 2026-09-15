@@ -14,7 +14,10 @@ class CacheCheckpointInputs:
     KV plans contain physical GPU block-offset pairs at scheduler-block
     granularity with shape ``[2, N]``. They move to the cache device with the
     other forward payloads. State plans remain compact host integer sequences
-    because ``StateCacheEngine`` schedules those copies from the host.
+    because ``StateCacheEngine`` schedules those copies from the host. The
+    input maker resolves logical state IDs to physical offsets before
+    attaching a plan in shared-arena mode; standalone mode keeps the IDs
+    unchanged.
 
     Checkpoint operations deliberately do not belong to ``ModelInputs``:
     retained model inputs participate in decode-step merge, reindex, and

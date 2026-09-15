@@ -383,6 +383,80 @@ def test_update_num_gpu_blocks_can_be_limited_by_non_spec_rank():
     assert spec_cache_config.num_gpu_blocks == 3
 
 
+def _make_shared_executor(*, group_size=1, num_gpu_blocks=0, states_shapes=None):
+    executor = object.__new__(ExecutorBase)
+    executor.device_type = 'cuda'
+    executor.model_config = SimpleNamespace(state_cache_specs=None)
+    executor.misc_config = SimpleNamespace(memdecode_config=None)
+    executor.specdecode_config = None
+    executor.cache_config = CacheConfig(
+        max_batches=2,
+        block_size=64,
+        num_cpu_blocks=0,
+        num_gpu_blocks=num_gpu_blocks,
+        cache_max_entry_count=1.0,
+        states_shapes=states_shapes or [],
+        enable_kv_state_cache_sharing=True,
+        arena_units_per_group=group_size,
+    )
+    return executor
+
+
+def test_shared_cache_reserves_padding_and_protected_groups():
+    executor = _make_shared_executor(group_size=2, states_shapes=[])
+    plans = [_WorkerCachePlanSizes(target=100), _WorkerCachePlanSizes(target=120)]
+
+    executor._finalize_shared_arena_geometry(plans)
+    remaining = executor._reserve_state_cache_mem([10_000, 10_000], plans)
+
+    # One padding group is fixed even for a pure-KV shared arena.
+    assert remaining == [9_800, 9_760]
+
+
+def test_shared_cache_reserves_runtime_state_groups_without_checkpoint_budget():
+    state_shapes = [((2, ), torch.float32)]
+    executor = _make_shared_executor(group_size=2, states_shapes=state_shapes)
+    executor.cache_config.num_state_caches = 5
+    plans = [_WorkerCachePlanSizes(target=256)]
+
+    executor._finalize_shared_arena_geometry(plans)
+
+    # One dummy state + four runtime state groups, plus one padding group.
+    assert executor.cache_config.arena_num_protected_groups == 5
+    assert executor._get_shared_fixed_mem(plans) == [6 * 2 * 256]
+
+
+def test_shared_cache_rounds_automatic_capacity_down_to_complete_groups():
+    executor = _make_shared_executor(group_size=4)
+    plans = [_WorkerCachePlanSizes(target=256)]
+
+    executor._update_num_gpu_blocks([10_000], plans, None)
+
+    assert executor.cache_config.num_gpu_blocks == 36
+    assert executor.cache_config.arena_num_groups == 10
+    assert executor.cache_config.arena_num_units == 40
+
+
+def test_shared_cache_rejects_explicit_non_multiple_capacity():
+    executor = _make_shared_executor(group_size=4, num_gpu_blocks=10)
+    plans = [_WorkerCachePlanSizes(target=256)]
+
+    with pytest.raises(ValueError, match='positive multiple'):
+        executor._update_num_gpu_blocks([10_000], plans, None)
+
+
+@pytest.mark.parametrize('field, value, message', [
+    ('num_cpu_blocks', 1, 'CPU cache blocks'),
+    ('window_size', 128, 'sliding-window'),
+])
+def test_shared_cache_rejects_unsupported_storage_modes(field, value, message):
+    executor = _make_shared_executor()
+    setattr(executor.cache_config, field, value)
+
+    with pytest.raises(ValueError, match=message):
+        executor._validate_shared_cache_config()
+
+
 def test_get_state_cache_mem_uses_prefix_cache_state_budget():
     executor = object.__new__(ExecutorBase)
     state_shapes = [((2, ), torch.float32)]

@@ -39,14 +39,22 @@ class CachePool:
 
 @dataclass(frozen=True)
 class CacheAllocation:
-    """Own cache pools and retain typed tensor views in cache-spec order."""
+    """Retain cache pools and typed tensor views in cache-spec order.
+
+    ``owns_storage`` is false for a shared-arena projection.  The projection
+    still exposes the same pool metadata to movement code, while the arena
+    root remains the sole owning allocation.
+    """
 
     pools: tuple[CachePool, ...]
     tensor_views: tuple[torch.Tensor, ...]
+    owns_storage: bool = True
 
     @property
     def nbytes(self) -> int:
         """Count owning pools without double-counting cache views."""
+        if not self.owns_storage:
+            return 0
         return sum(pool.nbytes for pool in self.pools)
 
 

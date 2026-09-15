@@ -82,6 +82,7 @@ from lmdeploy.pytorch.prefix_cache_state import PrefixCacheExtraIdentity
 from lmdeploy.utils import get_logger
 
 from ..block_manager.base_block_manager import LogicalAllocator
+from ..block_manager.group_allocator import GroupAllocator
 from ..state_manager import StateManager
 from .checkpoint import (
     StateCheckpointIndex,
@@ -146,8 +147,10 @@ class BlockTrie:
                  allocator: LogicalAllocator,
                  block_size: int,
                  enabled: bool,
-                 checkpoint_state_manager: StateManager | None = None):
+                 checkpoint_state_manager: StateManager | None = None,
+                 group_allocator: GroupAllocator | None = None):
         self.allocator = allocator
+        self.group_allocator = group_allocator or getattr(allocator, 'group_allocator', None)
         self.block_size = block_size
         self.enabled = enabled
         self._use_checkpoints = checkpoint_state_manager is not None
@@ -167,7 +170,9 @@ class BlockTrie:
             index=self._checkpoint_index,
             snapshot_match_data=self._snapshot_checkpoint_match_data,
         )
-        self._kv_lifecycle = KVBlockLifecycle(self.allocator, self._state_checkpoints)
+        self._kv_lifecycle = KVBlockLifecycle(self.allocator,
+                                              self._state_checkpoints,
+                                              group_allocator=self.group_allocator)
         self.stats = PrefixCacheStats()
 
     @property
@@ -671,3 +676,9 @@ class BlockTrie:
         if evicted < max_num_blocks:
             evicted += self._kv_lifecycle.evict(max_num_blocks - evicted)
         return evicted
+
+    def evict_one_kv_group(self) -> int:
+        """Evict one complete shared KV group when it is safe."""
+        if not self.enabled:
+            return 0
+        return self._kv_lifecycle.evict_one_kv_group()

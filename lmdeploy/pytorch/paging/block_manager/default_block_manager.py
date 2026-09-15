@@ -3,13 +3,7 @@
 import numpy as np
 
 from ...messages import SchedulerSequence
-from .base_block_manager import BaseBlockManager
-
-
-def _div_up(x, n):
-    """Perform div up."""
-    return (x + n - 1) // n
-
+from .base_block_manager import BaseBlockManager, _num_required_blocks
 
 BlockTable = np.ndarray
 
@@ -22,16 +16,16 @@ class DefaultBlockManager(BaseBlockManager):
         num_cpu_blocks (int): number of cpu blocks.
     """
 
+    def __init__(self,
+                 num_gpu_blocks: int,
+                 num_cpu_blocks: int,
+                 num_gpu_reserved: int = 0) -> None:
+        super().__init__(num_gpu_blocks, num_cpu_blocks, num_gpu_reserved)
+
     @classmethod
     def num_required_blocks(cls, obj: SchedulerSequence, prealloc_size: int = 0):
         """Get num required blocks."""
-        num_tokens = obj.num_all_ids
-        if obj.kv_token_limit is not None:
-            num_tokens = min(num_tokens, obj.kv_token_limit)
-        num_tokens += prealloc_size
-
-        num_all_blocks = _div_up(num_tokens, obj.block_size)
-        return max(0, num_all_blocks - len(obj.logical_blocks))
+        return _num_required_blocks(obj, prealloc_size)
 
     def can_allocate(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Return if physical block can be allocated for given message."""

@@ -60,11 +60,18 @@ def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
 
 
 def _make_state_checkpoint_copy_plan(
-        pairs: Sequence[tuple[int, int]]) -> StateCacheCopyPlan | None:
+        pairs: Sequence[tuple[int, int]],
+        state_id_resolver=None) -> StateCacheCopyPlan | None:
     """Transpose logical owner pairs into the compact engine carrier."""
     if len(pairs) == 0:
         return None
     src_offsets, dst_offsets = zip(*pairs)
+    if state_id_resolver is not None:
+        state_ids = np.asarray((*src_offsets, *dst_offsets), dtype=np.int64)
+        physical_ids = state_id_resolver(state_ids)
+        split = len(src_offsets)
+        src_offsets = physical_ids[:split].tolist()
+        dst_offsets = physical_ids[split:].tolist()
     return tuple(src_offsets), tuple(dst_offsets)
 
 
@@ -931,11 +938,20 @@ class InputsMakerAsync:
         """Check whether this input maker emits SSM checkpoint operations."""
         return self.config.is_ssm and self.config.enable_prefix_caching
 
+    def _resolve_state_offsets(self, state_ids):
+        """Resolve logical state ids at the input-construction boundary."""
+        state_ids = np.asarray(state_ids, dtype=np.int64).reshape(-1)
+        scheduler = getattr(self, 'scheduler', None)
+        resolver = getattr(scheduler, 'resolve_state_offsets', None)
+        if resolver is None:
+            return state_ids
+        return np.asarray(resolver(state_ids), dtype=np.int64)
+
     def _prepare_prefill_cache_restore(
             self, messages: 'SeqList') -> tuple[torch.LongTensor | None, StateCacheCopyPlan | None]:
         """Acquire checkpoints and build prefill restore plans."""
         copy_plan = self.state_checkpoints.prepare_restore_batch(messages)
-        state_restore_plan = _make_state_checkpoint_copy_plan(copy_plan.state_pairs)
+        state_restore_plan = _make_state_checkpoint_copy_plan(copy_plan.state_pairs, self._resolve_state_offsets)
         if state_restore_plan is None:
             return None, None
 
@@ -951,7 +967,7 @@ class InputsMakerAsync:
     ) -> tuple[torch.LongTensor | None, StateCacheCopyPlan | None]:
         """Reserve checkpoints and build prefill save plans."""
         copy_plan = self.state_checkpoints.reserve_prefill_save_batch(messages, save_steps)
-        state_save_plan = _make_state_checkpoint_copy_plan(copy_plan.state_pairs)
+        state_save_plan = _make_state_checkpoint_copy_plan(copy_plan.state_pairs, self._resolve_state_offsets)
         kv_save_plan = None
         if copy_plan.kv_block_pairs:
             kv_save_plan = self._make_kv_prefix_cache_copy_plan(copy_plan.kv_block_pairs)
@@ -987,7 +1003,7 @@ class InputsMakerAsync:
             return None
 
         copy_plan = self.state_checkpoints.reserve_decode_save_batch(valid_seqs, decode_state_interval)
-        state_save_plan = _make_state_checkpoint_copy_plan(copy_plan.state_pairs)
+        state_save_plan = _make_state_checkpoint_copy_plan(copy_plan.state_pairs, self._resolve_state_offsets)
         if state_save_plan is None:
             return None
         return CacheCheckpointInputs(state_save_plan=state_save_plan)
@@ -1058,7 +1074,8 @@ class InputsMakerAsync:
 
         # ssm
         if self.config.is_ssm:
-            state_offsets = torch.tensor([msg.logical_state for msg in messages])
+            logical_state_ids = np.asarray([msg.logical_state for msg in messages], dtype=np.int64)
+            state_offsets = torch.from_numpy(self._resolve_state_offsets(logical_state_ids))
             model_inputs.state_offsets = state_offsets
 
         if self.config.use_mrope:
@@ -1123,7 +1140,8 @@ class InputsMakerAsync:
 
         # ssm
         if self.config.is_ssm:
-            model_inputs.state_offsets = torch.tensor([seq.logical_state])
+            logical_state_ids = np.asarray([seq.logical_state], dtype=np.int64)
+            model_inputs.state_offsets = torch.from_numpy(self._resolve_state_offsets(logical_state_ids))
 
         # mrope
         if self.config.use_mrope:

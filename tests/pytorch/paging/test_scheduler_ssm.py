@@ -54,6 +54,12 @@ def test_ssm_runtime_state_reclaims_borrowed_checkpoint_slot():
     assert scheduler.state_manager.get_num_allocated_checkpoint_states() == 0
 
 
+def test_ssm_state_offset_resolution_preserves_dummy_sentinel():
+    scheduler = _make_ssm_scheduler(max_batch_size=1)
+
+    assert scheduler.resolve_state_offsets([-1]).tolist() == [-1]
+
+
 def test_ssm_long_chunked_request_schedules_with_only_runtime_state_slot():
     scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=0)
     scheduler.cache_config.max_prefill_token_num = scheduler.seq_meta.block_size * 2

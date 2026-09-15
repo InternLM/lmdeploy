@@ -1488,6 +1488,12 @@ def test_state_checkpoint_copy_plan_is_compact():
     assert _make_state_checkpoint_copy_plan(()) is None
 
 
+def test_state_checkpoint_copy_plan_can_resolve_physical_group_ids():
+    plan = _make_state_checkpoint_copy_plan(((1, 4), (2, 6)), lambda ids: ids + 100)
+
+    assert plan == ((101, 102), (104, 106))
+
+
 def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans():
     messages = [_state_seq(4, 11), _state_seq(5)]
     events = []
@@ -1514,6 +1520,28 @@ def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans():
     assert events == ['pin_restores']
     assert cache_inputs.state_restore_plan == ((11, ), (4, ))
     assert cache_inputs.state_save_plan == ((4, ), (21, ))
+
+
+def test_prepare_prefill_cache_inputs_resolves_shared_state_groups():
+    messages = [_state_seq(4, 11)]
+
+    class _StateCheckpoints:
+
+        def prepare_restore_batch(self, seqs):
+            return CheckpointCopyPlan(state_pairs=((11, 4), ))
+
+        def reserve_prefill_save_batch(self, seqs, steps=None):
+            return CheckpointCopyPlan(state_pairs=((4, 21), ))
+
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
+    maker.scheduler = SimpleNamespace(resolve_state_offsets=lambda ids: ids + 100)
+    maker.state_checkpoints = _StateCheckpoints()
+
+    cache_inputs = maker._prepare_prefill_cache_inputs(messages)
+
+    assert cache_inputs.state_restore_plan == ((111, ), (104, ))
+    assert cache_inputs.state_save_plan == ((104, ), (121, ))
 
 
 def test_prepare_prefill_cache_inputs_uses_explicit_chunk_end_step():

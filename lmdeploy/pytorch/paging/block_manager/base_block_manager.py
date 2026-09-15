@@ -4,6 +4,21 @@ import time
 import numpy as np
 
 from ...messages import SchedulerSequence
+from .group_allocator import GroupAllocator, GroupHandle
+
+
+def _div_up(x, n):
+    """Perform integer ceiling division."""
+    return (x + n - 1) // n
+
+
+def _num_required_blocks(obj: SchedulerSequence, prealloc_size: int = 0) -> int:
+    """Return the number of new logical blocks required by a sequence."""
+    num_tokens = obj.num_all_ids
+    if obj.kv_token_limit is not None:
+        num_tokens = min(num_tokens, obj.kv_token_limit)
+    num_tokens += prealloc_size
+    return max(0, _div_up(num_tokens, obj.block_size) - len(obj.logical_blocks))
 
 
 class LogicalMemory:
@@ -64,22 +79,205 @@ class PhysicalAllocator:
         """Get numbers of free blocks."""
         return self._free_count
 
+    @property
+    def address_span(self) -> int:
+        """Return the first address after this physical range."""
+        return self._offset + self._num_blocks
+
+
+class _SharedGpuAllocatorView:
+    """Read-only compatibility view for existing paging admission calls."""
+
+    def __init__(self, allocator: 'LogicalAllocator') -> None:
+        self._allocator = allocator
+
+    def get_num_free_blocks(self) -> int:
+        return self._allocator.get_num_free_gpu_blocks()
+
+    def allocate(self, num_blocks: int):
+        raise RuntimeError('Shared GPU allocation must reserve complete groups.')
+
+    def free(self, blocks: np.ndarray):
+        raise RuntimeError('Shared GPU release must release complete groups or logical blocks.')
+
 
 class LogicalAllocator:
-    """The logical block allocator."""
+    """Allocate logical blocks and map them to physical cache offsets.
 
-    def __init__(self, num_cpu_blocks: int, num_gpu_blocks: int, num_gpu_reserved: int = 0) -> None:
+    Standalone mode retains the dense allocator used by existing backends.
+    Shared mode is selected by passing a :class:`GroupAllocator`; this class
+    then owns only the logical-to-physical map and its reference counts.
+    """
+
+    def __init__(self,
+                 num_cpu_blocks: int,
+                 num_gpu_blocks: int,
+                 num_gpu_reserved: int = 0,
+                 *,
+                 group_allocator: GroupAllocator | None = None) -> None:
+        self.group_allocator = group_allocator
+        self.shared = group_allocator is not None
+        if self.shared:
+            self._init_group_backed(num_cpu_blocks,
+                                    num_gpu_blocks,
+                                    num_gpu_reserved,
+                                    group_allocator)
+            return
+
+        self.group_size = 1
         self._log_mem = LogicalMemory(num_cpu_blocks + num_gpu_blocks)
 
         self._cpu_mem_offset = num_gpu_blocks
         num_gpu_blocks -= num_gpu_reserved
         self._gpu_allocator = PhysicalAllocator(num_gpu_blocks, num_gpu_reserved)
         self._cpu_allocator = PhysicalAllocator(num_cpu_blocks, self._cpu_mem_offset)
+        self._address_span = self._gpu_allocator.address_span
 
         num_blocks = self._log_mem.num_blocks()
         self._num_blocks = num_blocks
         self._free_blocks = np.arange(num_blocks)
         self._free_count = num_blocks
+
+    def _init_group_backed(self,
+                           num_cpu_blocks: int,
+                           num_gpu_blocks: int,
+                           num_gpu_reserved: int,
+                           group_allocator: GroupAllocator) -> None:
+        """Initialize logical storage backed by shared physical groups."""
+        if num_cpu_blocks != 0:
+            raise ValueError('Shared cache allocation requires num_cpu_blocks=0.')
+        if num_gpu_reserved != 0:
+            raise ValueError('Shared cache allocation uses a complete padding group; '
+                             'num_gpu_reserved must be zero.')
+        flexible_groups = group_allocator.num_groups - group_allocator.num_protected_groups
+        if num_gpu_blocks != flexible_groups * group_allocator.group_size:
+            raise ValueError('Logical and group allocator capacities do not match.')
+
+        self.group_size = group_allocator.group_size
+        self._num_gpu_blocks = num_gpu_blocks
+        self._log_mem = LogicalMemory(num_gpu_blocks)
+        self._cpu_mem_offset = group_allocator.address_span
+        self._gpu_allocator = _SharedGpuAllocatorView(self)
+        self._cpu_allocator = PhysicalAllocator(0, self._cpu_mem_offset)
+        self._address_span = group_allocator.address_span
+        self._free_blocks = np.arange(num_gpu_blocks, dtype=np.int64)
+        self._free_count = num_gpu_blocks
+
+    def _require_shared(self) -> None:
+        if self.group_allocator is None:
+            raise RuntimeError('Group operations require shared allocation mode.')
+
+    def acquire_group(self, role: str = 'kv') -> GroupHandle:
+        """Reserve one empty flexible group for ``role``."""
+        self._require_shared()
+        return self.group_allocator.acquire_group(role)
+
+    def acquire_groups(self, num_groups: int, role: str = 'kv') -> tuple[GroupHandle, ...]:
+        """Atomically reserve complete empty groups."""
+        self._require_shared()
+        return self.group_allocator.acquire_groups(num_groups, role)
+
+    def release_group(self, group_id: int | GroupHandle, generation: int | None = None) -> None:
+        """Release one empty group after validating its generation."""
+        self._require_shared()
+        current_group_id = group_id.group_id if isinstance(group_id, GroupHandle) else group_id
+        if self.group_allocator.group_role(current_group_id) == 'kv' and not self.is_group_empty(
+                current_group_id):
+            raise RuntimeError('Cannot release a shared KV group with live logical blocks.')
+        self.group_allocator.release_group(group_id, generation)
+
+    def group_handle(self, group_id: int) -> GroupHandle:
+        """Return the current handle for one owned group."""
+        self._require_shared()
+        return self.group_allocator.group_handle(group_id)
+
+    def protected_group_handle(self, group_id: int) -> GroupHandle:
+        """Return the stable handle for one protected group."""
+        self._require_shared()
+        return self.group_allocator.protected_group_handle(group_id)
+
+    def group_role(self, group_id: int) -> str:
+        """Return the current role of one physical group."""
+        self._require_shared()
+        return self.group_allocator.group_role(group_id)
+
+    def group_offsets(self, group_id: int) -> np.ndarray:
+        """Return all physical offsets belonging to one group."""
+        self._require_shared()
+        return self.group_allocator.group_offsets(group_id)
+
+    def logical_blocks_for_group(self, group_id: int) -> np.ndarray:
+        """Return live logical blocks currently mapped into one group."""
+        self._require_shared()
+        offsets = self.group_offsets(group_id)
+        live = self._log_mem.ref_count > 0
+        return np.flatnonzero(live & np.isin(self._log_mem.phy_map, offsets)).astype(np.int64)
+
+    def live_logical_blocks_by_group(self) -> dict[int, np.ndarray]:
+        """Return live logical blocks grouped by their shared physical group.
+
+        The grouping is materialized in one vectorized pass so eviction code does not rescan the complete logical-block
+        map once per group.
+        """
+        self._require_shared()
+        logical_blocks = np.flatnonzero(self._log_mem.ref_count > 0).astype(np.int64)
+        if len(logical_blocks) == 0:
+            return {}
+
+        physical_blocks = self._log_mem.get_physical_blocks(logical_blocks)
+        group_ids = physical_blocks // self.group_size
+        order = np.argsort(group_ids, kind='stable')
+        sorted_groups = group_ids[order]
+        sorted_blocks = logical_blocks[order]
+        split_points = np.flatnonzero(sorted_groups[1:] != sorted_groups[:-1]) + 1
+        chunks = np.split(sorted_blocks, split_points)
+        unique_groups = sorted_groups[np.r_[0, split_points]]
+        return {int(group_id): blocks for group_id, blocks in zip(unique_groups, chunks)}
+
+    def is_group_empty(self, group_id: int) -> bool:
+        """Prove group emptiness from logical references."""
+        self._require_shared()
+        offsets = self.group_offsets(group_id)
+        allocated = self._log_mem.ref_count > 0
+        return not np.any(np.isin(self._log_mem.phy_map[allocated], offsets))
+
+    @property
+    def num_empty_groups(self) -> int:
+        """Return flexible groups available for a new owner."""
+        self._require_shared()
+        return self.group_allocator.num_empty_groups
+
+    @property
+    def address_span(self) -> int:
+        """Return the physical GPU address span."""
+        return self._address_span
+
+    def _allocate_logical_blocks_at(self, physical_blocks: np.ndarray) -> np.ndarray:
+        """Bind new logical blocks to explicit shared physical offsets."""
+        self._require_shared()
+        physical_blocks = np.asarray(physical_blocks, dtype=np.int64).reshape(-1)
+        if len(physical_blocks) == 0:
+            return np.empty((0, ), dtype=np.int64)
+        if np.any(physical_blocks < 0) or np.any(physical_blocks >= self.address_span):
+            raise ValueError('Shared physical block offset is out of range.')
+        if len(np.unique(physical_blocks)) != len(physical_blocks):
+            raise ValueError('Shared physical block offsets must be unique.')
+        group_ids = physical_blocks // self.group_size
+        if np.any(self.group_allocator.group_roles(np.unique(group_ids)) != 'kv'):
+            raise ValueError('Shared logical blocks must belong to KV-owned groups.')
+        if self._free_count < len(physical_blocks):
+            raise MemoryError('No enough free logical blocks.')
+        allocated = self._log_mem.ref_count > 0
+        if np.any(np.isin(physical_blocks, self._log_mem.phy_map[allocated])):
+            raise RuntimeError('Shared physical block offset is already allocated.')
+
+        num_used = self._num_gpu_blocks - self._free_count
+        logical_blocks = self._free_blocks[num_used:num_used + len(physical_blocks)]
+        self._log_mem.phy_map[logical_blocks] = physical_blocks
+        self._log_mem.ref_count[logical_blocks] = 1
+        self.update_access_time(logical_blocks)
+        self._free_count -= len(physical_blocks)
+        return logical_blocks.copy()
 
     def get_phy_allocator(self, device: str):
         """Get allocator."""
@@ -90,8 +288,27 @@ class LogicalAllocator:
         else:
             raise ValueError(f'Unsupported device: {device}')
 
-    def allocate(self, num_blocks: int, device: str = 'gpu'):
-        """Allocate logical blocks."""
+    def _allocate_shared(self, num_blocks: int, device: str):
+        """Allocate logical blocks from complete shared groups."""
+        if device != 'gpu':
+            raise ValueError('Shared allocation supports GPU blocks only.')
+        if num_blocks < 0:
+            raise ValueError('num_blocks must be non-negative.')
+        if num_blocks == 0:
+            return np.empty((0, ), dtype=np.int64)
+        handles = self.acquire_groups((num_blocks + self.group_size - 1) // self.group_size)
+        group_ids = np.fromiter((handle.group_id for handle in handles), dtype=np.int64)
+        slot_offsets = np.arange(self.group_size, dtype=np.int64)
+        physical_blocks = (group_ids[:, None] * self.group_size + slot_offsets).reshape(-1)[:num_blocks]
+        try:
+            return self._allocate_logical_blocks_at(physical_blocks)
+        except Exception:
+            for handle in reversed(handles):
+                self.release_group(handle)
+            raise
+
+    def _allocate_dense(self, num_blocks: int, device: str):
+        """Allocate logical blocks from the standalone physical pools."""
         if num_blocks == 0:
             return np.empty((0, ), dtype=np.int64)
         phy_allocator = self.get_phy_allocator(device)
@@ -109,9 +326,42 @@ class LogicalAllocator:
         else:
             raise MemoryError('No enough free memory blocks.')
 
-    def free(self, blocks: np.ndarray):
-        """Free logical block."""
+    def allocate(self, num_blocks: int, device: str = 'gpu'):
+        """Allocate logical blocks using the configured ownership model."""
+        if self.shared:
+            return self._allocate_shared(num_blocks, device)
+        return self._allocate_dense(num_blocks, device)
 
+    def _free_shared(self, blocks: np.ndarray):
+        """Release logical blocks and recycle groups that became empty."""
+        blocks = np.asarray(blocks, dtype=np.int64).reshape(-1)
+        if len(blocks) == 0:
+            return
+        if len(np.unique(blocks)) != len(blocks):
+            raise RuntimeError('Cannot free duplicate logical blocks.')
+        if np.any(blocks < 0) or np.any(blocks >= self._num_gpu_blocks):
+            raise RuntimeError('Cannot free an out-of-range logical block.')
+        if np.any(self.get_ref_count(blocks) <= 0):
+            raise RuntimeError('Cannot free an unallocated logical block.')
+
+        self.add_ref_count(blocks, -1)
+        self.update_access_time(blocks)
+        ref_count = self.get_ref_count(blocks)
+        freed_blocks = blocks[ref_count == 0]
+        if len(freed_blocks) == 0:
+            return
+
+        num_used = self._num_gpu_blocks - self._free_count
+        self._free_blocks[num_used - len(freed_blocks):num_used] = freed_blocks
+        self._free_count += len(freed_blocks)
+        group_ids = np.unique(self.get_physical_blocks(freed_blocks) // self.group_size)
+        for group_id in group_ids:
+            group_id = int(group_id)
+            if self.group_allocator.group_role(group_id) == 'kv' and self.is_group_empty(group_id):
+                self.release_group(self.group_handle(group_id))
+
+    def _free_dense(self, blocks: np.ndarray):
+        """Release logical blocks and return their dense physical slots."""
         self.add_ref_count(blocks, -1)
         self.update_access_time(blocks)
         ref_count = self.get_ref_count(blocks)
@@ -135,9 +385,21 @@ class LogicalAllocator:
         if len(gpu_blocks) > 0:
             self._gpu_allocator.free(gpu_blocks)
 
+    def free(self, blocks: np.ndarray):
+        """Free logical blocks using the configured ownership model."""
+        if self.shared:
+            return self._free_shared(blocks)
+        return self._free_dense(blocks)
+
     def get_num_free_blocks(self):
         """Get numbers of free blocks."""
         return self._free_count
+
+    def get_num_free_gpu_blocks(self) -> int:
+        """Return request-visible free GPU capacity."""
+        if self.shared:
+            return self.num_empty_groups * self.group_size
+        return self._gpu_allocator.get_num_free_blocks()
 
     def get_physical_blocks(self, blocks: np.ndarray):
         """Get physical address."""
@@ -194,6 +456,12 @@ class LogicalAllocator:
             phy_device = 'cpu'
         return device == phy_device
 
+    def allocate_at(self, physical_blocks: np.ndarray) -> np.ndarray:
+        """Bind logical blocks to explicit physical shared offsets."""
+        if not self.shared:
+            raise RuntimeError('allocate_at is only available in shared mode.')
+        return self._allocate_logical_blocks_at(physical_blocks)
+
 
 BlockTable = np.ndarray
 
@@ -206,11 +474,20 @@ class BaseBlockManager:
         num_cpu_blocks (int): number of cpu blocks.
     """
 
-    def __init__(self, num_gpu_blocks: int, num_cpu_blocks: int, num_gpu_reserved: int = 0) -> None:
+    def __init__(self,
+                 num_gpu_blocks: int,
+                 num_cpu_blocks: int,
+                 num_gpu_reserved: int = 0,
+                 *,
+                 group_allocator: GroupAllocator | None = None) -> None:
         self.num_gpu_blocks = num_gpu_blocks
         self.num_cpu_blocks = num_cpu_blocks
 
-        self.allocator = LogicalAllocator(num_cpu_blocks, num_gpu_blocks, num_gpu_reserved)
+        self.group_allocator = group_allocator
+        self.allocator = LogicalAllocator(num_cpu_blocks,
+                                          num_gpu_blocks,
+                                          num_gpu_reserved,
+                                          group_allocator=self.group_allocator)
 
         self.block_tables: dict[int, BlockTable] = {}
 
@@ -282,7 +559,8 @@ class BaseBlockManager:
             raise ValueError('logical_block_ids contains an unallocated allocator id.')
 
         block_offsets = allocator.get_physical_blocks(logical_block_ids)
-        if np.any(block_offsets < 0) or np.any(block_offsets >= self.num_gpu_blocks):
+        physical_limit = self.allocator.address_span if self.allocator.shared else self.num_gpu_blocks
+        if np.any(block_offsets < 0) or np.any(block_offsets >= physical_limit):
             raise ValueError('logical_block_ids contains a block that is not GPU-resident.')
         return block_offsets
 
@@ -304,7 +582,7 @@ class BaseBlockManager:
 
     def get_num_free_gpu_blocks(self) -> int:
         """Get number of free gpu blocks."""
-        return self.allocator.get_phy_allocator('gpu').get_num_free_blocks()
+        return self.allocator.get_num_free_gpu_blocks()
 
     def get_num_free_cpu_blocks(self) -> int:
         """Get number of free cpu blocks."""

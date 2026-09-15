@@ -24,19 +24,33 @@ def _allocate_state_caches(tensor_specs: Sequence[CacheTensorSpec], num_caches: 
 class StateCacheEngine:
     """Own state-cache allocation and state-slot transitions."""
 
-    def __init__(self, cache_config: CacheConfig, model_config: ModelConfig):
+    def __init__(self,
+                 cache_config: CacheConfig,
+                 model_config: ModelConfig,
+                 *,
+                 allocation: CacheAllocation | None = None):
         self.cache_config = cache_config
         tensor_specs = build_state_cache_tensor_specs(cache_config.states_shapes,
                                                       state_specs=model_config.state_cache_specs)
 
-        # Non-CUDA device integrations patch the canonical "cuda" device path
-        # before reaching this layer, so keep using it here.
-        self.allocation = _allocate_state_caches(tensor_specs,
-                                                 num_caches=cache_config.num_state_caches,
-                                                 device='cuda')
+        if allocation is None:
+            # Non-CUDA device integrations patch the canonical "cuda" device path
+            # before reaching this layer, so keep using it here.
+            allocation = _allocate_state_caches(tensor_specs,
+                                                num_caches=cache_config.num_state_caches,
+                                                device='cuda')
+        self.allocation = allocation
         self._cache_tensors = list(self.allocation.tensor_views)
+        if len(self._cache_tensors) != len(tensor_specs):
+            raise ValueError('State-cache allocation does not match the declared tensor specs.')
+        if tensor_specs and not self.allocation.pools:
+            raise ValueError('State-cache allocation must expose storage pools for declared tensor specs.')
         # Each pool declares the axis that indexes independently movable slots.
         self._slot_tensors = tuple((pool.tensor, pool.entry_axis) for pool in self.allocation.pools)
+        slot_counts = tuple(tensor.size(axis) for tensor, axis in self._slot_tensors)
+        if slot_counts and len(set(slot_counts)) != 1:
+            raise ValueError('State-cache allocation pools must expose the same slot count.')
+        self._num_slots = slot_counts[0] if slot_counts else cache_config.num_state_caches
         if any(spec.layer_rows is not None for spec in tensor_specs):
             self._named_state_caches = NamedCacheView(tensor_specs, self._cache_tensors)
         else:
@@ -62,12 +76,17 @@ class StateCacheEngine:
         """Return model-facing state-cache tensors keyed by semantic name."""
         return self._named_state_caches
 
+    @property
+    def num_slots(self) -> int:
+        """Return the physical state-slot span visible to model kernels."""
+        return getattr(self, '_num_slots', self.cache_config.num_state_caches)
+
     def zero_slots(self, slot_ids: torch.Tensor | None, zero_mask: torch.Tensor) -> None:
         """Zero the selected state slots in every physical tensor."""
         if slot_ids is None or not self._cache_tensors:
             return
 
-        num_slots = self.cache_config.num_state_caches
+        num_slots = self.num_slots
         slot_mask = torch.zeros((num_slots, ), dtype=torch.bool, device=slot_ids.device)
         slot_mask.index_copy_(0, slot_ids, zero_mask)
         for tensor, slot_axis in self._slot_tensors:
@@ -133,7 +152,7 @@ class StateCacheEngine:
         if len(src_slots) == 0:
             return
 
-        num_slots = self.cache_config.num_state_caches
+        num_slots = self.num_slots
         self._validate_slot_ids(src_slots, num_slots)
         self._validate_slot_ids(dst_slots, num_slots)
         if len(set(dst_slots)) != len(dst_slots):

@@ -5,7 +5,19 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.config import CacheConfig
-from lmdeploy.pytorch.paging.state_manager import StateManager, build_state_manager
+from lmdeploy.pytorch.paging.state_manager import StateAllocator, StateManager, build_state_manager
+
+
+def test_bounded_state_allocation_returns_the_candidate_after_swap():
+    allocator = StateAllocator(num_states=4, offset=1)
+    assert allocator.allocate() == 1
+    assert allocator.allocate() == 2
+    allocator.free(1)
+    allocator.free(4)
+
+    # The first free entry is flexible (4), while state 1 is later in the
+    # free segment.  A bounded allocation must return the swapped candidate.
+    assert allocator.allocate(max_id=2) == 1
 
 
 def test_reserved_state_cache_is_not_allocatable():

@@ -50,16 +50,16 @@ class RecomputeEvictionHelper:
             seq,
             prealloc_size,
         )
-        if block_manager.get_num_free_gpu_blocks() >= num_required_blocks:
+        if block_manager.can_allocate(seq, prealloc_size):
             return True
 
         for evict_seq in evictable_seqs:
             if not self._reclaim_candidate(evict_seq):
                 continue
-            if self._try_make_block_capacity(num_required_blocks):
+            if self._try_make_block_capacity(num_required_blocks, seq, prealloc_size):
                 return True
 
-        return self._try_make_block_capacity(num_required_blocks)
+        return self._try_make_block_capacity(num_required_blocks, seq, prealloc_size)
 
     def _try_make_ssm_capacity(
         self,
@@ -82,9 +82,7 @@ class RecomputeEvictionHelper:
             has_runtime_state
             or state_checkpoints.make_runtime_state_available()
         )
-        if (has_free_state
-                and block_manager.get_num_free_gpu_blocks()
-                >= num_required_blocks):
+        if has_free_state and block_manager.can_allocate(seq, prealloc_size):
             return True
 
         for evict_seq in evictable_seqs:
@@ -94,12 +92,12 @@ class RecomputeEvictionHelper:
                 has_runtime_state
                 or state_checkpoints.make_runtime_state_available()
             )
-            if self._try_make_block_capacity(num_required_blocks):
+            if self._try_make_block_capacity(num_required_blocks, seq, prealloc_size):
                 return has_free_state
 
         if not has_free_state:
             return False
-        return self._try_make_block_capacity(num_required_blocks)
+        return self._try_make_block_capacity(num_required_blocks, seq, prealloc_size)
 
     def _reclaim_candidate(self, seq: SchedulerSequence) -> bool:
         """Release one eligible candidate's paging ownership."""
@@ -117,14 +115,36 @@ class RecomputeEvictionHelper:
         seq.state.release_paging_resources()
         return True
 
-    def _try_make_block_capacity(self, num_required_blocks: int) -> bool:
+    def _try_make_block_capacity(self,
+                                 num_required_blocks: int,
+                                 seq: SchedulerSequence | None = None,
+                                 prealloc_size: int = 0) -> bool:
         """Evict cached trie blocks until the required capacity is free."""
         block_manager = self.block_manager
+        if seq is None:
+            def has_capacity():
+                return num_required_blocks <= block_manager.get_num_free_gpu_blocks()
+        else:
+            def has_capacity():
+                return block_manager.can_allocate(seq, prealloc_size)
+        if has_capacity():
+            return True
         num_missing_blocks = (
             num_required_blocks - block_manager.get_num_free_gpu_blocks()
         )
         if num_missing_blocks > 0:
-            self.block_trie.evict(num_missing_blocks)
-        return (
-            num_required_blocks <= block_manager.get_num_free_gpu_blocks()
-        )
+            if not block_manager.allocator.shared:
+                self.block_trie.evict(num_missing_blocks)
+            else:
+                # Shared paging admits complete groups.  Evicting an
+                # arbitrary number of trie blocks can leave a partially empty
+                # group that still cannot be lent to another owner.
+                while not has_capacity():
+                    free_before = block_manager.get_num_free_gpu_blocks()
+                    if self.block_trie.evict_frozen_checkpoints(1) == 0:
+                        if self.block_trie.evict_one_kv_group() == 0:
+                            break
+                    free_after = block_manager.get_num_free_gpu_blocks()
+                    if free_after <= free_before:
+                        break
+        return has_capacity()

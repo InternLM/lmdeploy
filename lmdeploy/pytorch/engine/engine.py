@@ -330,7 +330,7 @@ class Engine(EngineBase):
         num_gpu_blocks = self.cache_config.num_gpu_blocks - self.cache_config.num_reserved_gpu_blocks
         max_tokens = (num_gpu_blocks * self.cache_config.block_size)
         window_size = self.cache_config.window_size
-        if window_size > 0 and window_size <= max_tokens:
+        if window_size is not None and window_size > 0 and window_size <= max_tokens:
             max_tokens = (1 << 63) - 1
         max_tokens -= self.cache_config.block_size
         if session_len is None:

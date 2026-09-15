@@ -84,8 +84,12 @@ class Scheduler:
         self.seq_meta = seq_meta
         self.seq_manager = SequenceManager(seq_meta)
 
-        self.state_manager = build_state_manager(self.cache_config)
         self.block_manager = build_block_manager(cache_config)
+        self.state_manager = build_state_manager(
+            self.cache_config,
+            group_allocator=(self.block_manager.group_allocator if self.block_manager.group_allocator is not None
+                             and self.cache_config.states_shapes else None),
+        )
         self.is_ssm = len(self.cache_config.states_shapes) > 0
         transfer_config = cache_config.kv_transfer_config
         # A producer-only connector still needs the save path below, but must
@@ -101,7 +105,8 @@ class Scheduler:
         self.block_trie = BlockTrie(allocator=self.block_manager.allocator,
                                    block_size=self.cache_config.block_size,
                                    enabled=self.cache_config.enable_prefix_caching,
-                                   checkpoint_state_manager=checkpoint_state_manager)
+                                   checkpoint_state_manager=checkpoint_state_manager,
+                                   group_allocator=self.block_manager.group_allocator)
         self.sequence_lifecycle = SequenceLifecycle(
             seq_manager=self.seq_manager,
             block_manager=self.block_manager,
@@ -254,6 +259,18 @@ class Scheduler:
     def get_sessions(self) -> list[SchedulerSession]:
         """Return a snapshot of current session owners."""
         return list(self.sessions.values())
+
+    def resolve_state_offsets(self, state_ids: np.ndarray | list[int]) -> np.ndarray:
+        """Resolve logical state IDs to physical state-group offsets."""
+        state_ids = np.asarray(state_ids, dtype=np.int64).reshape(-1)
+        if len(state_ids) == 0:
+            return np.empty((0, ), dtype=np.int64)
+        # ``-1`` is the long-standing dummy-state sentinel.  Keep it visible
+        # to the model instead of asking the state manager to resolve it.
+        return np.asarray([
+            state_id if state_id < 0 else self.state_manager.get_physical_state_id(state_id)
+            for state_id in state_ids
+        ], dtype=np.int64)
 
     def schedule_migration(self):
         """Admit waiting migration sequences to paging resources."""

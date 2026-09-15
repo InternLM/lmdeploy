@@ -23,7 +23,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, Mode
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
-from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.cache_engine import CacheEngine, SharedCacheArena, StateCacheEngine
 from lmdeploy.pytorch.engine.cache_engine.collector import collect_block_cache_requests
 from lmdeploy.pytorch.engine.cache_engine.plan import build_block_cache_plan
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
@@ -376,6 +376,7 @@ class BaseModelAgent:
 
         self.patched_model = None
         self.cache_engine = None
+        self.gpu_arena = None
         self.block_cache_plan = None
         # Exact target/draft bytes used when cache capacity was calculated.
         self._cache_plan_block_nbytes: tuple[int, int]
@@ -1421,6 +1422,7 @@ class BaseModelAgent:
                 tp,
                 request_collector=request_collector,
             )
+            self._validate_shared_cache_plan(cache_config)
             target_nbytes = self.block_cache_plan.logical_block_nbytes
             spec_nbytes = self.spec_agent.build_cache_plan(spec_cache_config)
             memory_nbytes = 0
@@ -1428,6 +1430,10 @@ class BaseModelAgent:
                 memory_nbytes = self.memdecode_agent.build_cache_plan(cache_config)
             self._cache_plan_block_nbytes = (target_nbytes, spec_nbytes)
             return target_nbytes, spec_nbytes, memory_nbytes
+
+    def _validate_shared_cache_plan(self, cache_config: CacheConfig) -> None:
+        """Reject cache layouts that cannot project from one native arena."""
+        SharedCacheArena.validate_plan(cache_config, self.model_config, self.block_cache_plan)
 
     def build_graph_runner(self):
         """Build graph runner."""
@@ -1465,12 +1471,31 @@ class BaseModelAgent:
             tp = dist_cfg.attn_tp
             tp_rank = dist_ctx.attn_tp_group.rank
 
-            self.cache_engine = CacheEngine(self.cache_config,
-                                            rank=self.rank,
-                                            tp_rank=tp_rank,
-                                            cache_stream=self.cache_stream,
-                                            block_cache_plan=self.block_cache_plan)
-            self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
+            if self.cache_config.enable_kv_state_cache_sharing:
+                self.gpu_arena = SharedCacheArena.allocate(
+                    self.cache_config,
+                    self.model_config,
+                    self.block_cache_plan,
+                )
+                kv_allocation = self.gpu_arena.project_kv(self.block_cache_plan)
+                state_allocation = self.gpu_arena.project_state(self.cache_config, self.model_config)
+                self.cache_engine = CacheEngine(self.cache_config,
+                                                rank=self.rank,
+                                                tp_rank=tp_rank,
+                                                cache_stream=self.cache_stream,
+                                                block_cache_plan=self.block_cache_plan,
+                                                gpu_allocation=kv_allocation)
+                self.state_cache_engine = StateCacheEngine(self.cache_config,
+                                                           self.model_config,
+                                                           allocation=state_allocation)
+            else:
+                self.gpu_arena = None
+                self.cache_engine = CacheEngine(self.cache_config,
+                                                rank=self.rank,
+                                                tp_rank=tp_rank,
+                                                cache_stream=self.cache_stream,
+                                                block_cache_plan=self.block_cache_plan)
+                self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
 
             self.kv_connector = build_kv_connector(
                 KVConnectorRole.WORKER,
@@ -1767,6 +1792,9 @@ class BaseModelAgent:
             spec_model.to(device=device, non_blocking=True)
 
         torch.cuda.synchronize()
+        # Projections and the root share storage; retain the root until all
+        # model/cache streams have drained before releasing it.
+        self.gpu_arena = None
         self.reset_runtime_state()
         # force clean _update_params_ipc tensor and event after all gpu jobs done
         self._update_params_ipc_tensor = None
@@ -1833,4 +1861,5 @@ class BaseModelAgent:
         self.cache_engine = None
         self.block_cache_plan = None
         self.state_cache_engine = None
+        self.gpu_arena = None
         torch.cuda.empty_cache()

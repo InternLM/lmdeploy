@@ -322,6 +322,98 @@ class ExecutorBase:
                 'fusion logits will be aligned to the base vocab before sampling.'
             )
 
+    def _validate_shared_cache_config(self) -> None:
+        """Validate the intentionally narrow first shared-arena path."""
+        if not self.cache_config.enable_kv_state_cache_sharing:
+            return
+
+        if self.device_type != 'cuda' or self.cache_config.device_type != 'cuda':
+            raise ValueError('Shared KV/state cache requires the CUDA device path.')
+        if self.cache_config.num_cpu_blocks != 0:
+            raise ValueError('Shared KV/state cache does not support CPU cache blocks.')
+        if self.cache_config.window_size is not None and self.cache_config.window_size >= 0:
+            raise ValueError('Shared KV/state cache does not support sliding-window attention.')
+        if self.specdecode_config is not None:
+            raise ValueError('Shared KV/state cache does not support speculative decoding.')
+        if self.misc_config.memdecode_config is not None:
+            raise ValueError('Shared KV/state cache does not support MemDecode.')
+        if self.cache_config.kv_transfer_config is not None:
+            raise ValueError('Shared KV/state cache does not support KV transfer.')
+        if self.cache_config.role != EngineRole.Hybrid:
+            raise ValueError('Shared KV/state cache requires a hybrid engine role.')
+        if self.cache_config.num_reserved_gpu_blocks != 0:
+            raise ValueError('Shared KV/state cache reserves its padding group internally.')
+
+    def _finalize_shared_arena_geometry(self,
+                                        cache_block_sizes: list[_WorkerCachePlanSizes]) -> None:
+        """Finalize group geometry and protected-group capacity.
+
+        ``num_gpu_blocks`` remains the flexible logical KV-block count.  The
+        allocator adds protected state groups and one never-lent padding group
+        outside that count.
+        """
+        if not self.cache_config.enable_kv_state_cache_sharing:
+            return
+
+        group_size = self.cache_config.arena_units_per_group
+        if group_size <= 0:
+            raise ValueError('arena_units_per_group must be positive.')
+        if any(plan.spec or plan.memory for plan in cache_block_sizes):
+            raise ValueError('Shared KV/state cache requires target-only cache plans.')
+
+        # State slots are placed in protected groups.  A flexible checkpoint
+        # group uses the same stride and is checked by the allocator when it is
+        # materialized; this early check gives sizing a useful error message.
+        if self.cache_config.states_shapes:
+            from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
+
+            state_slot_nbytes = StateCacheEngine.get_state_slot_nbytes(
+                self.cache_config.states_shapes,
+                state_specs=getattr(self.model_config, 'state_cache_specs', None),
+            )
+            too_small = [
+                plan.target * group_size for plan in cache_block_sizes
+                if plan.target * group_size < state_slot_nbytes
+            ]
+            if too_small:
+                raise ValueError(
+                    'Shared KV/state cache group stride is smaller than one state slot: '
+                    f'group_size={group_size}, state_slot_nbytes={state_slot_nbytes}, '
+                    f'kv_block_nbytes={min(plan.target for plan in cache_block_sizes)}.')
+
+            num_state_caches = self.cache_config.num_state_caches
+            if num_state_caches is None:
+                # Keep this helper usable in isolation as well as from
+                # update_configs(), where _get_state_cache_mem has already
+                # resolved the default.
+                num_state_caches = self.cache_config.max_batches + 2 + self.cache_config.prefix_cache_state_budget
+                self.cache_config.num_state_caches = num_state_caches
+            num_runtime_states = max(
+                0,
+                num_state_caches - 1 - self.cache_config.prefix_cache_state_budget,
+            )
+            required_protected_groups = 1 + num_runtime_states
+            self.cache_config.arena_num_protected_groups = max(
+                self.cache_config.arena_num_protected_groups,
+                required_protected_groups,
+            )
+
+    def _get_shared_fixed_mem(self, cache_block_sizes: list[_WorkerCachePlanSizes]) -> list[int]:
+        """Return fixed arena bytes for protected and padding groups."""
+        group_size = self.cache_config.arena_units_per_group
+        fixed_groups = self.cache_config.arena_num_protected_groups + 1  # one padding group
+        return [fixed_groups * group_size * plan.target for plan in cache_block_sizes]
+
+    def _update_shared_arena_capacity_metadata(self) -> None:
+        """Publish the physical arena span alongside flexible KV capacity."""
+        if not self.cache_config.enable_kv_state_cache_sharing:
+            return
+        group_size = self.cache_config.arena_units_per_group
+        flexible_groups = self.cache_config.num_gpu_blocks // group_size
+        num_groups = flexible_groups + self.cache_config.arena_num_protected_groups + 1
+        self.cache_config.arena_num_groups = num_groups
+        self.cache_config.arena_num_units = num_groups * group_size
+
     def _sync_spec_cache_block_size(self) -> None:
         """Keep spec cache block sizes aligned with target cache."""
         if self.specdecode_config and self.specdecode_config.cache_config:
@@ -338,8 +430,21 @@ class ExecutorBase:
         logger.debug(f'minimal free gpu memory: {min(free_mems) >> 20} mb')
         return free_mems
 
-    def _reserve_state_cache_mem(self, free_mems: list[int]) -> list[int]:
+    def _reserve_state_cache_mem(self,
+                                 free_mems: list[int],
+                                 cache_block_sizes: list[_WorkerCachePlanSizes] | None = None) -> list[int]:
         """Reserve non-pageable state cache memory from free memory."""
+        if self.cache_config.enable_kv_state_cache_sharing:
+            if cache_block_sizes is None:
+                raise ValueError('Shared cache sizing requires worker cache plans.')
+            if len(free_mems) != len(cache_block_sizes):
+                raise ValueError('Free-memory and cache-plan results must contain the same worker ranks.')
+            fixed_mems = self._get_shared_fixed_mem(cache_block_sizes)
+            free_mems = [free_mem - fixed_mem for free_mem, fixed_mem in zip(free_mems, fixed_mems)]
+            if min(free_mems) <= 0:
+                raise AssertionError('No enough gpu memory for shared KV/state cache arena.')
+            return free_mems
+
         state_cache_mem = self._get_state_cache_mem() + self._get_mem_state_cache_mem()
         # State cache is allocated as a separate pool and is not governed by
         # cache_max_entry_count, so subtract it from every rank first.
@@ -386,6 +491,13 @@ class ExecutorBase:
         if self.cache_config.num_gpu_blocks != 0:
             # User supplied an explicit block count. Do not resize it from the
             # current free-memory snapshot.
+            if self.cache_config.enable_kv_state_cache_sharing:
+                group_size = self.cache_config.arena_units_per_group
+                if self.cache_config.num_gpu_blocks < group_size or self.cache_config.num_gpu_blocks % group_size:
+                    raise ValueError(
+                        'Shared KV/state cache num_gpu_blocks must be a positive multiple of '
+                        f'arena_units_per_group ({group_size}).')
+                self._update_shared_arena_capacity_metadata()
             if spec_cache_config is not None:
                 spec_cache_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
             return
@@ -393,6 +505,10 @@ class ExecutorBase:
         available_mems = [int(free_mem * self.cache_config.cache_max_entry_count) for free_mem in free_mems]
         rank_cache_block_sizes = self._get_rank_cache_block_sizes(cache_block_sizes)
         self.cache_config.num_gpu_blocks = self._get_min_num_gpu_blocks(available_mems, rank_cache_block_sizes)
+        if self.cache_config.enable_kv_state_cache_sharing:
+            group_size = self.cache_config.arena_units_per_group
+            self.cache_config.num_gpu_blocks = (self.cache_config.num_gpu_blocks // group_size) * group_size
+            self._update_shared_arena_capacity_metadata()
         if self.cache_config.num_gpu_blocks <= 2:
             raise RuntimeError('No enough gpu memory for kv cache.')
         if spec_cache_config is not None:
@@ -405,12 +521,14 @@ class ExecutorBase:
         self._sync_spec_cache_block_size()
         self._validate_memdecode_configs()
         self.cache_config.states_shapes = self.model_config.states_shapes
+        self._validate_shared_cache_config()
 
         spec_cache_config, spec_model_config = self._get_spec_configs()
         cache_block_sizes = self._prepare_worker_cache_plans(self.cache_config, spec_cache_config)
+        self._finalize_shared_arena_geometry(cache_block_sizes)
 
         free_mems = self._get_free_gpu_mems()
-        free_mems = self._reserve_state_cache_mem(free_mems)
+        free_mems = self._reserve_state_cache_mem(free_mems, cache_block_sizes)
         free_mems = self._reserve_runtime_mem(free_mems, cache_block_sizes, spec_cache_config)
         self._update_num_gpu_blocks(free_mems, cache_block_sizes, spec_cache_config)
 

@@ -5,10 +5,34 @@ from types import SimpleNamespace
 import pytest
 
 from lmdeploy.messages import EngineOutput, ResponseType
+from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.engine.engine import Engine
 from lmdeploy.pytorch.engine.engine_instance import EngineInstance
 from lmdeploy.pytorch.engine.executor.mp_executor import MPExecutor
 from lmdeploy.pytorch.engine.request import RequestManager, RequestType, Response
+
+
+def test_get_max_session_len_tolerates_unset_sliding_window():
+    engine = object.__new__(Engine)
+    engine.scheduler_config = SimpleNamespace(max_session_len=None)
+    engine.cache_config = SimpleNamespace(
+        num_gpu_blocks=8,
+        num_reserved_gpu_blocks=0,
+        block_size=16,
+        window_size=None,
+    )
+
+    assert engine._get_max_session_len() == 8 * 16 - 16
+
+
+def test_cache_config_accepts_unset_sliding_window():
+    config = CacheConfig(max_batches=1,
+                         block_size=16,
+                         num_cpu_blocks=0,
+                         num_gpu_blocks=8,
+                         window_size=None)
+
+    assert config.window_size is None
 
 
 class _FakeSequence:

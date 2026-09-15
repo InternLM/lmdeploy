@@ -180,11 +180,25 @@ class CacheConfig:
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
     kv_transfer_config: KVTransferConfig | None = None
 
+    # Optional GPU-only shared KV/state group allocator.  The arena geometry
+    # is finalized by the executor and carried here for scheduler construction.
+    # Keep these fields at the end so legacy positional construction retains
+    # its parameter order.
+    enable_kv_state_cache_sharing: bool = False
+    arena_units_per_group: int = 1
+    arena_num_protected_groups: int = 0
+    arena_num_groups: int = 0
+    arena_num_units: int = 0
+
     def __post_init__(self):
         """Post init."""
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
-        if self.window_size > 1 and self.enable_prefix_caching:
+        assert self.arena_units_per_group > 0, 'invalid arena_units_per_group'
+        assert self.arena_num_protected_groups >= 0, 'invalid arena_num_protected_groups'
+        assert self.arena_num_groups >= 0, 'invalid arena_num_groups'
+        assert self.arena_num_units >= 0, 'invalid arena_num_units'
+        if self.window_size is not None and self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
         if self.kernel_block_size == -1:

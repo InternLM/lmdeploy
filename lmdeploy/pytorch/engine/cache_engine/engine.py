@@ -23,7 +23,7 @@ from lmdeploy.utils import get_logger
 
 from ....messages import QuantPolicy
 from ...config import CacheConfig
-from .layout import CachePool
+from .layout import CacheAllocation, CachePool
 from .migration import (
     build_cache_pool_assignments,
     describe_cache_pools,
@@ -66,6 +66,7 @@ class CacheEngine:
         cache_stream: torch.cuda.Stream | None = None,
         *,
         block_cache_plan: BlockCachePlan,
+        gpu_allocation: CacheAllocation | None = None,
     ) -> None:
         self.rank = rank
         self.tp_rank = tp_rank
@@ -78,7 +79,8 @@ class CacheEngine:
         self.block_cache_plan = block_cache_plan
 
         # Initialize the cache.
-        self.local_gpu_cache = self.allocate_gpu_cache()
+        self.local_gpu_cache = self.allocate_gpu_cache() if gpu_allocation is None else self._set_gpu_allocation(
+            gpu_allocation)
         self.local_cpu_cache = self.allocate_cpu_cache()
         self._build_swap_pairs()
         self._build_block_copy()
@@ -117,11 +119,16 @@ class CacheEngine:
         """Allocate caches on GPU."""
         # Non-CUDA device integrations patch the canonical "cuda" device path
         # before reaching this layer, so keep using it here.
-        self.gpu_allocation = self.block_cache_plan.allocate(
+        allocation = self.block_cache_plan.allocate(
             num_logical_blocks=self.cache_config.num_gpu_blocks,
             device='cuda',
         )
-        caches = self.gpu_allocation.tensor_views
+        return self._set_gpu_allocation(allocation)
+
+    def _set_gpu_allocation(self, allocation: CacheAllocation):
+        """Bind an owning allocation or a shared-arena projection."""
+        self.gpu_allocation = allocation
+        caches = allocation.tensor_views
         self._block_caches = self._build_block_cache_view(caches)
         return self._build_model_layer_cache(caches)
 
@@ -162,6 +169,8 @@ class CacheEngine:
         beyond the cache engine's lifetime.
         """
         allocation = self.gpu_allocation
+        if not allocation.owns_storage:
+            raise RuntimeError('External KV connectors are not supported for shared cache projections.')
 
         connector_caches: dict[str, torch.Tensor] = {}
         for pool_index, pool in enumerate(allocation.pools):
@@ -204,10 +213,23 @@ class CacheEngine:
     def _build_block_copy(self):
         """Build local logical-block copy from the device allocation."""
         pages_per_block = self.block_cache_plan.kernel_blocks_per_logical_block
+        num_logical_blocks = self.cache_config.num_gpu_blocks
+        if not self.gpu_allocation.owns_storage:
+            # Shared projections intentionally carry a group-strided view.
+            # Use the portable stride-aware copy until the CUDA primitive grows
+            # an equivalent non-contiguous path.
+            from ...backends.default.cache import TorchBlockCacheCopy
+
+            num_logical_blocks = self.gpu_allocation.pools[0].tensor.size(
+                self.gpu_allocation.pools[0].entry_axis) // pages_per_block
+            self._block_copy = TorchBlockCacheCopy.build(self.gpu_allocation,
+                                                         num_logical_blocks,
+                                                         pages_per_block)
+            return
         cache_backend = get_backend().get_cache_backend()
         self._block_copy = cache_backend.build_block_copy(
             self.gpu_allocation,
-            num_logical_blocks=self.cache_config.num_gpu_blocks,
+            num_logical_blocks=num_logical_blocks,
             pages_per_block=pages_per_block,
         )
 
@@ -276,6 +298,8 @@ class CacheEngine:
         Args:
             src_to_dst (dict[int, int]): Map between src and dst.
         """
+        if not self.gpu_allocation.owns_storage:
+            raise RuntimeError('Shared KV/state cache does not support swap.')
         self._swap(self._swap_in_pairs, src_to_dst)
 
     def swap_out(self, src_to_dst: dict[int, int]) -> None:
@@ -284,6 +308,8 @@ class CacheEngine:
         Args:
             src_to_dst (dict[int, int]): Map between src and dst.
         """
+        if not self.gpu_allocation.owns_storage:
+            raise RuntimeError('Shared KV/state cache does not support swap.')
         self._swap(self._swap_out_pairs, src_to_dst)
 
     # PD disaggregation.
@@ -292,8 +318,17 @@ class CacheEngine:
         """Return owning pools with the metadata required by PD migration."""
         if self.cache_config.block_size != self.cache_config.kernel_block_size:
             raise RuntimeError('PD migration does not support block_size != kernel_block_size.')
+        allocation = getattr(self, 'gpu_allocation', None)
+        if allocation is None:
+            # Keep the validation path useful for lightweight test fixtures
+            # that construct a CacheEngine without running __init__.
+            allocation = getattr(self, 'cpu_allocation', None)
+        if allocation is None:
+            raise RuntimeError('PD migration cache allocation is not initialized.')
+        if not allocation.owns_storage:
+            raise RuntimeError('PD migration is not supported for shared cache projections.')
 
-        return self.gpu_allocation.pools
+        return allocation.pools
 
     def _get_pd_cache_pool_infos(self) -> tuple[DistServeCachePoolInfo, ...]:
         """Describe the stable local allocation once for every PD link."""

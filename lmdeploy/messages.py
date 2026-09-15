@@ -494,6 +494,9 @@ class PytorchEngineConfig:
             but use more checkpoint memory and copy work; larger values reduce
             overhead but make decode-prefix hits less likely. Positive values
             must be multiples of the cache block size.
+        enable_kv_state_cache_sharing: Enable the GPU-only shared KV/state
+            group allocator. The standalone KV/State allocation remains the
+            default and is required for unsupported backends.
         device_type: The inference device type, options ['cuda']
         eager_mode: Enable "eager" mode or not
         custom_module_map: nn module map customized by users. Once
@@ -591,6 +594,9 @@ class PytorchEngineConfig:
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
     kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
     piecewise_cudagraph_max_tokens: int | None = None
+    # Keep newly added options at the end so legacy positional construction
+    # retains its parameter order.
+    enable_kv_state_cache_sharing: bool = False
 
     def __post_init__(self):
         """Check input validation."""

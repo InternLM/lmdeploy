@@ -84,12 +84,14 @@ class ConfigBuilder:
             enable_prefix_caching=engine_config.enable_prefix_caching,
             prefix_cache_state_budget=engine_config.prefix_cache_state_budget,
             prefix_cache_decode_state_interval=engine_config.prefix_cache_decode_state_interval,
+            enable_kv_state_cache_sharing=engine_config.enable_kv_state_cache_sharing,
             quant_policy=engine_config.quant_policy,
             device_type=engine_config.device_type,
             migration_backend=engine_config.migration_backend,
             role=engine_config.role,
-            # reserve 1 blocks for dummy input and padding
-            num_reserved_gpu_blocks=1,
+            # Standalone paging keeps one reserved dummy block. Shared mode
+            # reserves one complete padding group in its physical arena.
+            num_reserved_gpu_blocks=0 if engine_config.enable_kv_state_cache_sharing else 1,
             kv_transfer_config=copy.deepcopy(engine_config.kv_transfer_config))
         return cache_config
 
