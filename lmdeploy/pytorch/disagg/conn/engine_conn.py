@@ -97,7 +97,7 @@ class EngineP2PConnection:
             else:
                 logger.error(f'invalid free, {remote_engine_id}, {session_id}')
 
-    async def zmq_disconnect(self, remote_engine_id: str):
+    def zmq_disconnect(self, remote_engine_id: str):
         self.p2p_receiver[remote_engine_id].close()
         self.p2p_sender[remote_engine_id].close()
         self.p2p_conn_ctx[remote_engine_id].term()
