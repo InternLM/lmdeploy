@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 from transformers import AutoTokenizer
 from utils.config_utils import get_model_path_from_config, set_device_env_variable, unset_device_env_variable
+from utils.pytest_layout_utils import layout_mark
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.messages import Response
@@ -33,43 +34,57 @@ def run_case_in_spawn(target, args):
         name = getattr(target, '__name__', repr(target))
         raise AssertionError(f'spawn worker {name!r} failed with exit code {process.exitcode!r}')
 
-@pytest.mark.gpu_num_1
-@pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Meta-Llama-3-1-8B-Instruct'])
-@pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
-def test_long_test_passkey_tp1(config, model, backend, worker_id):
+
+_PASSKEY_CASES = (
+    (
+        ['Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Meta-Llama-3-1-8B-Instruct'],
+        ['turbomind', 'pytorch'],
+        1,
+    ),
+    (
+        ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-27B'],
+        ['turbomind', 'pytorch'],
+        2,
+    ),
+    (
+        ['meta-llama/Meta-Llama-3-1-70B-Instruct'],
+        ['turbomind', 'pytorch'],
+        8,
+    ),
+)
+
+
+def _build_passkey_params():
+    rows = []
+    for models, backends, tp in _PASSKEY_CASES:
+        marks = [layout_mark({'tp': tp})]
+        for model in models:
+            for backend in backends:
+                rows.append(
+                    pytest.param(
+                        model,
+                        backend,
+                        tp,
+                        marks=marks,
+                        id=f'{backend}-{model.replace("/", "_")}-tp{tp}',
+                    ))
+    return rows
+
+
+_PASSKEY_PARAMS = _build_passkey_params()
+
+
+@pytest.mark.parametrize('model, backend, tp', _PASSKEY_PARAMS)
+def test_long_test_passkey(config, model, backend, tp, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id)
-    run_case_in_spawn(passkey_retrival_worker,
-                      (config, model, backend, log_name, 1, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
-    if 'gw' in worker_id:
-        unset_device_env_variable()
-
-
-@pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-27B'])
-@pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
-def test_long_test_passkey_tp2(config, model, backend, worker_id):
-    log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id, parallel_config=2)
-        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_case_in_spawn(passkey_retrival_worker,
-                      (config, model, backend, log_name, 2, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
-    if 'gw' in worker_id:
-        unset_device_env_variable()
-
-
-@pytest.mark.gpu_num_8
-@pytest.mark.parametrize('model', ['meta-llama/Meta-Llama-3-1-70B-Instruct'])
-@pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
-def test_long_test_passkey_tp8(config, model, backend, worker_id):
-    log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id, parallel_config=8)
-        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_case_in_spawn(passkey_retrival_worker,
-                      (config, model, backend, log_name, 8, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
+        set_device_env_variable(worker_id, parallel_config=tp if tp > 1 else None)
+        if tp > 1:
+            os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
+    run_case_in_spawn(
+        passkey_retrival_worker,
+        (config, model, backend, log_name, tp, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)),
+    )
     if 'gw' in worker_id:
         unset_device_env_variable()
 
@@ -112,9 +127,9 @@ def passkey_retrival_worker(config, model, backend, log_name, tp_num, session_le
                                                  hf_overrides=YARN_CONFIG)
         elif 'intern-s1' in model.lower():
             backend_config = PytorchEngineConfig(session_len=session_len,
-                                                   tp=tp_num,
-                                                   max_batch_size=1,
-                                                   hf_overrides={'text_config': NTK_CONFIG})
+                                                 tp=tp_num,
+                                                 max_batch_size=1,
+                                                 hf_overrides={'text_config': NTK_CONFIG})
         else:
             backend_config = PytorchEngineConfig(session_len=session_len, tp=tp_num, max_batch_size=1)
 
@@ -123,11 +138,9 @@ def passkey_retrival_worker(config, model, backend, log_name, tp_num, session_le
     gen_config = GenerationConfig(top_k=40)
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
-    # inference
     pass_key1, prompt = get_passkey_prompt(pipe, session_len, tokenizer)
     response1 = pipe(prompt, gen_config=gen_config)
 
-    # inference
     pass_key2, prompt = get_passkey_prompt(pipe, session_len, tokenizer)
     response2 = pipe([prompt] * 2, gen_config=gen_config)
 
@@ -148,7 +161,6 @@ def passkey_retrival_worker(config, model, backend, log_name, tp_num, session_le
 
 
 def get_passkey_prompt(pipe, session_len, tokenizer):
-    # create long context input
     task_description = 'There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there.'  # noqa: E501
     garbage = 'The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again.'  # noqa: E501
 
@@ -168,6 +180,5 @@ def get_passkey_prompt(pipe, session_len, tokenizer):
         final_question,
     ]
 
-    # inference
     prompt = ' '.join(lines)
     return pass_key, prompt

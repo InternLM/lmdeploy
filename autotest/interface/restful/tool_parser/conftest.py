@@ -1,8 +1,8 @@
 import os
 
 import pytest
-from utils.config_utils import model_enables_return_routed_experts
-from utils.constant import BACKEND_LIST, DEFAULT_MAX_COMPLETION_TOKENS, TOOL_REASONING_MODEL_LIST
+from utils.config_utils import get_tool_reasoning_model_list, model_enables_return_routed_experts
+from utils.constant import BACKEND_LIST, DEFAULT_MAX_COMPLETION_TOKENS
 from utils.tool_reasoning_definitions import (
     CONCURRENT_WEATHER_TOOL,
     DEFAULT_TOOL_CALL_CONCURRENCY,
@@ -30,7 +30,7 @@ _CLASS_MARKS = [
     pytest.mark.tool_call,
     pytest.mark.flaky(reruns=2),
     pytest.mark.parametrize('backend', BACKEND_LIST),
-    pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
+    pytest.mark.parametrize('model_case', get_tool_reasoning_model_list()),
 ]
 
 _CLASS_MARKS_MM = [
@@ -39,7 +39,7 @@ _CLASS_MARKS_MM = [
     pytest.mark.mm_tool_call,
     pytest.mark.flaky(reruns=2),
     pytest.mark.parametrize('backend', BACKEND_LIST),
-    pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
+    pytest.mark.parametrize('model_case', get_tool_reasoning_model_list()),
 ]
 
 def _apply_marks(cls):
