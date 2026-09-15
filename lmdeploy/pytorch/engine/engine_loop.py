@@ -603,7 +603,10 @@ class EngineLoop:
             logger.exception('Failed to end session %s after migration error', msg.session_id)
 
     async def _migration_loop_migrate(self, migration_ready: 'SeqList') -> 'SeqList':
-        """Migrate ready sequences. Failures are isolated to the request."""
+        """Migrate ready sequences.
+
+        Failures are isolated to the request.
+        """
         succeeded = []
         for msg in migration_ready:
             try:
