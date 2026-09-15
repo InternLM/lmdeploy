@@ -122,6 +122,8 @@ class CUDAGraphRunner(GraphRunner):
                  backend_config: BackendConfig, device: torch.device):
         super().__init__(model, model_config, cache_config, backend_config, device)
         self.num_blocks = cache_config.num_gpu_blocks
+        self.max_kv_seqlen = cache_config.max_session_len or (
+            cache_config.num_gpu_blocks * cache_config.block_size)
         _validate_speculative_decoding(model_config)
 
         self.enable_graph = self.check_enable_graph()
@@ -250,6 +252,7 @@ class CUDAGraphRunner(GraphRunner):
             num_blocks=self.num_blocks,
             is_decoding=graph_key[1],
             decode_query_len=graph_key[3],
+            max_kv_seqlen=self.max_kv_seqlen,
             pool=self._full_graph_pool_handle,
             model_config=self.model_config,
             device=self.device,

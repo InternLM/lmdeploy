@@ -344,3 +344,14 @@ MODULE_MAP.update({
     'HYV3MTP': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.hy3_mtp.HYV3MTP',
     'Qwen3_5MTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_mtp.Qwen3_5MTPModel',
 })
+
+# dflash qwen
+MODULE_MAP.update({'DFlashDraftModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_dflash.DFlashDraftModel'})
+
+# dspark external Qwen/Speculators and bundled DeepSeek-V4 drafts
+MODULE_MAP.update({
+    'DSparkDraftModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_dspark.Qwen3DSparkModel',
+    'Qwen3DSparkModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_dspark.Qwen3DSparkModel',
+    'DeepseekV4ForCausalLMDSpark':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v4_dspark.DeepseekV4ForCausalLMDSpark',
+})

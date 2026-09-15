@@ -120,6 +120,7 @@ class TritonV4CompressorImpl(V4CompressorImpl):
         compressed_kv: torch.Tensor,
         block_caches: Mapping[str, torch.Tensor],
         meta: V4CompressorMetadata,
+        state_ids: torch.Tensor | None = None,
     ) -> None:
         cache = block_caches[self.block_cache_name]
         kv_cache = None
@@ -136,7 +137,8 @@ class TritonV4CompressorImpl(V4CompressorImpl):
             meta.block_offsets, self.compress_ratio, meta.block_size,
             meta.max_q_seqlen,
             fp8_cache=fp8_cache,
-            kv_scale_cache=kv_scale_cache)
+            kv_scale_cache=kv_scale_cache,
+            state_ids=state_ids)
 
     def rotate_activation(self, x: torch.Tensor) -> torch.Tensor:
         from fast_hadamard_transform import hadamard_transform
