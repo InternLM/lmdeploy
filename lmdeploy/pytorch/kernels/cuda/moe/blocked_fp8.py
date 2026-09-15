@@ -6,7 +6,9 @@ import torch
 import triton
 import triton.language as tl
 
-from ..activation import silu_and_mul
+from lmdeploy.pytorch import envs as _envs
+
+from ..activation import silu_and_mul_post_quant
 from ..blocked_gemm_fp8 import quant_fp8
 from .fused_moe import _get_sorted_idx, _get_sorted_idx_blocks, _make_intermediate, _renormalize, moe_reduce
 
@@ -517,6 +519,84 @@ def _origin_blocked_fp8_moe_configs(num_tokens: int, num_routes: int, num_expert
     return gate_config, down_config
 
 
+def _supports_blocked_fp8_decode_fast_path(input: torch.Tensor,
+                                           w1: torch.Tensor,
+                                           w2: torch.Tensor,
+                                           topk_ids: torch.Tensor,
+                                           num_experts: int):
+    """Check the correctness contract of active-block decode scheduling."""
+    if not input.is_cuda or torch.cuda.get_device_capability(input.device) != (9, 0):
+        return False
+    if input.dim() != 2 or w1.dim() != 3 or w2.dim() != 3 or topk_ids.dim() != 2:
+        return False
+
+    num_tokens, hidden = input.shape
+    local_experts, gate_up_features, gate_k = w1.shape
+    down_experts, down_features, down_k = w2.shape
+    topk = topk_ids.size(1)
+    return (
+        num_tokens >= 1
+        and topk_ids.size(0) == num_tokens
+        and 1 <= topk <= 16
+        and local_experts == down_experts == num_experts
+        and num_experts >= 64
+        and gate_k == hidden == down_features
+        and gate_up_features == 2 * down_k
+        and hidden % 128 == 0
+        and down_k % 128 == 0
+    )
+
+
+_ACTIVE_BLOCK_DECODE_CONFIG = dict(block_m=16, block_n=128, num_warps=4, num_stages=3)
+
+# Measured backend geometries. Keys intentionally contain no model identity:
+# (SM, input dtype, output dtype, group size, M, E, top-k,
+#  hidden/down N, gate-up N).
+_ACTIVE_BLOCK_DECODE_SHAPE_CONFIGS = {
+    ((9, 0), torch.float8_e4m3fn, torch.bfloat16, 128, 1, 256, 8, 6144, 512):
+    _ACTIVE_BLOCK_DECODE_CONFIG,
+    ((9, 0), torch.float8_e4m3fn, torch.bfloat16, 128, 4, 256, 8, 6144, 512):
+    _ACTIVE_BLOCK_DECODE_CONFIG,
+    ((9, 0), torch.float8_e4m3fn, torch.bfloat16, 128, 16, 256, 8, 6144, 512):
+    _ACTIVE_BLOCK_DECODE_CONFIG,
+    ((9, 0), torch.float8_e4m3fn, torch.bfloat16, 128, 17, 256, 8, 6144, 512):
+    _ACTIVE_BLOCK_DECODE_CONFIG,
+    ((9, 0), torch.float8_e4m3fn, torch.bfloat16, 128, 32, 256, 8, 6144, 512):
+    _ACTIVE_BLOCK_DECODE_CONFIG,
+    ((9, 0), torch.float8_e4m3fn, torch.bfloat16, 128, 8, 256, 8, 6144, 1024):
+    _ACTIVE_BLOCK_DECODE_CONFIG,
+    ((9, 0), torch.float8_e4m3fn, torch.bfloat16, 128, 16, 256, 8, 6144, 1024):
+    _ACTIVE_BLOCK_DECODE_CONFIG,
+    ((9, 0), torch.float8_e4m3fn, torch.bfloat16, 128, 32, 256, 8, 6144, 1024):
+    _ACTIVE_BLOCK_DECODE_CONFIG,
+}
+
+
+def _select_active_block_decode_config(num_tokens: int,
+                                       num_routes: int,
+                                       num_experts: int,
+                                       local_experts: int,
+                                       gate_out_features: int,
+                                       down_out_features: int,
+                                       device_capability: tuple[int, int],
+                                       input_dtype: torch.dtype,
+                                       out_dtype: torch.dtype,
+                                       group_size: int):
+    """Select an exact measured active-block schedule, or safely fall back."""
+    if local_experts != num_experts or local_experts < 256:
+        return None
+    if num_tokens < 1 or num_routes > 2048 or num_experts > 2048:
+        return None
+
+    topk, remainder = divmod(num_routes, num_tokens)
+    if remainder != 0:
+        return None
+    shape_key = (device_capability, input_dtype, out_dtype, group_size, num_tokens,
+                 num_experts, topk, down_out_features, gate_out_features)
+    config = _ACTIVE_BLOCK_DECODE_SHAPE_CONFIGS.get(shape_key)
+    return None if config is None else dict(config)
+
+
 def _compact_blocked_fp8_moe_config(num_routes: int, num_experts: int):
     """Choose compact routed-blocked-FP8 MoE launch config."""
     avg_routes = triton.cdiv(num_routes, num_experts)
@@ -704,8 +784,21 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
     gate_moe_cfg, down_moe_cfg = _origin_blocked_fp8_moe_configs(M, topk_ids.numel(), num_experts, E)
     supports_compact = _supports_compact_blocked_fp8_moe(input, input_scale, w1, w1_scale, w2, w2_scale, topk_ids,
                                                          num_experts, expert_offset)
-    compact_moe_cfg = None
-    if supports_compact:
+    active_decode_config = None
+    if (_envs.moe_active_block_decode and supports_compact
+            and _supports_blocked_fp8_decode_fast_path(input, w1, w2, topk_ids, num_experts)):
+        active_decode_config = _select_active_block_decode_config(M,
+                                                                  topk_ids.numel(),
+                                                                  num_experts,
+                                                                  E,
+                                                                  w1.size(1),
+                                                                  w2.size(1),
+                                                                  torch.cuda.get_device_capability(input.device),
+                                                                  input.dtype,
+                                                                  out_dtype,
+                                                                  group_size)
+    compact_moe_cfg = active_decode_config
+    if compact_moe_cfg is None and supports_compact:
         compact_moe_cfg = _select_compact_blocked_fp8_moe_both_config(M, topk_ids.numel(), num_experts, E,
                                                                       w1.size(1), w1.size(2))
     use_compact_both = compact_moe_cfg is not None
@@ -767,14 +860,16 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
             **gate_moe_cfg,
         )
 
-    # activate
+    # Activate and directly emit the block-quantized down-projection input.
     intermediate_cache1 = intermediate_cache1.flatten(0, -2)
     if act_func is None:
-        gate_cache = silu_and_mul(intermediate_cache1)
+        gate_cache, gate_scale = silu_and_mul_post_quant(intermediate_cache1,
+                                                         group_size,
+                                                         dtype=input.dtype)
     else:
         gate_cache = act_func(intermediate_cache1)
+        gate_cache, gate_scale = quant_fp8(gate_cache, group_size, dtype=input.dtype)
     del intermediate_cache1
-    gate_cache, gate_scale = quant_fp8(gate_cache, group_size, dtype=input.dtype)
 
     intermediate_cache2 = _make_intermediate((M, topk, w2.shape[1]), dtype=out_dtype, device=device, zeros=not full_exp)
     # down
