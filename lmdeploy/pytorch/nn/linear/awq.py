@@ -31,7 +31,7 @@ class AwqLinear(LinearBase):
         layer_type: str = 'attn',
         dtype: torch.dtype | None = torch.float16,
     ):
-        super().__init__(dtype=torch.float16,
+        super().__init__(dtype=dtype,
                          device=device,
                          colwise=colwise,
                          is_tp=is_tp,
