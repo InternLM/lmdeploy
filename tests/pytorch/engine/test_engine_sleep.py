@@ -53,6 +53,7 @@ class _FakeScheduler:
     def __init__(self, session):
         self.sessions = {1: session}
         self.ended_sessions = []
+        self.reset_called = False
 
     def end_session(self, session_id):
         self.ended_sessions.append(session_id)
@@ -66,6 +67,9 @@ class _FakeScheduler:
 
     def finish_kv_transfers_after_worker_drain(self):
         pass
+
+    def reset_cache(self):
+        self.reset_called = True
 
 
 class _FakeEngineLoop:
@@ -156,6 +160,7 @@ def test_engine_sleep_blocks_inputs_cancels_sessions_then_sleeps(event_loop):
     assert resp.is_done
     assert resp.event.is_set()
     assert engine.scheduler.ended_sessions == [1]
+    assert engine.scheduler.reset_called
     assert engine.executor.sleep_calls == [1]
     assert engine.events == ['drain', 'sleep', 'reset_engine_loop']
 

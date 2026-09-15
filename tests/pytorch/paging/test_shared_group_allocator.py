@@ -246,6 +246,32 @@ def test_shared_partial_checkpoint_owns_and_releases_a_private_group():
     assert manager.group_allocator.group_role(frozen_group) == 'empty'
 
 
+def test_shared_reset_cache_releases_trie_and_checkpoint_groups():
+    scheduler = _make_shared_scheduler(
+        group_size=2,
+        num_gpu_blocks=8,
+        states_shapes=[((1, ), torch.float32)],
+        enable_prefix_caching=True,
+        num_state_caches=3,
+    )
+    session = scheduler.add_session(0)
+    seq = session.add_sequence(torch.ones(6, dtype=torch.int64))
+    manager = scheduler.block_manager
+    manager.allocate(seq)
+    scheduler.block_trie.allocate(seq)
+    assert scheduler.block_trie.state_checkpoints.reserve_save(seq) >= 0
+    assert scheduler.block_trie.state_checkpoints.publish_save(seq)
+    node = seq.prefix_cache.trie_cursor
+
+    scheduler.end_session(session.session_id)
+    scheduler.reset_cache()
+
+    assert manager.group_allocator.num_empty_groups == 4
+    assert scheduler.state_manager.get_num_allocated_checkpoint_states() == 0
+    assert scheduler.block_trie._roots == {}
+    assert node.parent is None
+
+
 def test_shared_block_manager_rejects_cpu_and_window_modes():
     cache_config = CacheConfig(max_batches=1,
                                block_size=4,
@@ -300,9 +326,14 @@ def test_shared_eviction_helper_reclaims_complete_groups():
 
     class _Trie:
 
-        def evict_frozen_checkpoints(self, limit):
-            evictions.append(('frozen', limit))
-            return 0
+        class _StateCheckpoints:
+
+            @staticmethod
+            def evict_frozen_checkpoints(limit):
+                evictions.append(('frozen', limit))
+                return 0
+
+        state_checkpoints = _StateCheckpoints()
 
         def evict_one_kv_group(self):
             evictions.append(('group', ))
@@ -330,9 +361,14 @@ def test_shared_eviction_helper_does_not_over_evict_open_append_capacity():
 
     class _Trie:
 
-        def evict_frozen_checkpoints(self, limit):
-            evictions.append(('frozen', limit))
-            return 0
+        class _StateCheckpoints:
+
+            @staticmethod
+            def evict_frozen_checkpoints(limit):
+                evictions.append(('frozen', limit))
+                return 0
+
+        state_checkpoints = _StateCheckpoints()
 
         def evict_one_kv_group(self):
             evictions.append(('group', ))

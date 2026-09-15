@@ -371,6 +371,16 @@ class ExecutorBase:
                 self.cache_config.states_shapes,
                 state_specs=getattr(self.model_config, 'state_cache_specs', None),
             )
+            # The public engine config does not expose arena geometry.  Derive
+            # the smallest common complete-group stride from finalized worker
+            # plans; direct CacheConfig callers may still provide a larger
+            # stride for controlled experiments.
+            if group_size == 1:
+                group_size = max(
+                    1,
+                    max((state_slot_nbytes + plan.target - 1) // plan.target for plan in cache_block_sizes),
+                )
+                self.cache_config.arena_units_per_group = group_size
             too_small = [
                 plan.target * group_size for plan in cache_block_sizes
                 if plan.target * group_size < state_slot_nbytes

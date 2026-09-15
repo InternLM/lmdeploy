@@ -141,7 +141,7 @@ class RecomputeEvictionHelper:
                 # group that still cannot be lent to another owner.
                 while not has_capacity():
                     free_before = block_manager.get_num_free_gpu_blocks()
-                    if self.block_trie.evict_frozen_checkpoints(1) == 0:
+                    if self.block_trie.state_checkpoints.evict_frozen_checkpoints(1) == 0:
                         if self.block_trie.evict_one_kv_group() == 0:
                             break
                     free_after = block_manager.get_num_free_gpu_blocks()

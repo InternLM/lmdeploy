@@ -85,6 +85,25 @@ class TestScheduler:
 
         assert scheduler.has_unfinished()
 
+    def test_reset_cache_releases_prefix_cache_owners(self, scheduler, block_size, num_gpu_blocks):
+        token_ids = torch.arange(block_size * 2)
+        session = scheduler.add_session(0)
+        seq = session.add_sequence(token_ids)
+        scheduler.block_trie.enabled = True
+        scheduler.block_manager.allocate(seq)
+        scheduler.block_trie.allocate(seq)
+        nodes = tuple(scheduler.block_trie.leaves)
+
+        scheduler.end_session(session.session_id)
+        scheduler.reset_cache()
+
+        assert scheduler.sessions == {}
+        assert scheduler.block_manager.get_num_free_gpu_blocks() == num_gpu_blocks
+        assert scheduler.block_trie.leaves == set()
+        assert scheduler.block_trie._roots == {}
+        assert nodes
+        assert all(node.parent is None for node in nodes)
+
     def test_schedule_metrics_without_gpu_blocks(self, cache_config, scheduler_config, seq_meta):
         cache_config.num_gpu_blocks = 0
         scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)

@@ -426,6 +426,18 @@ def test_shared_cache_reserves_runtime_state_groups_without_checkpoint_budget():
     assert executor._get_shared_fixed_mem(plans) == [6 * 2 * 256]
 
 
+def test_shared_cache_derives_ssm_group_stride_from_finalized_plan():
+    state_shapes = [((257, ), torch.float32)]
+    executor = _make_shared_executor(states_shapes=state_shapes)
+    plans = [_WorkerCachePlanSizes(target=256)]
+
+    executor._finalize_shared_arena_geometry(plans)
+
+    state_slot_nbytes = StateCacheEngine.get_state_slot_nbytes(state_shapes)
+    expected = (state_slot_nbytes + plans[0].target - 1) // plans[0].target
+    assert executor.cache_config.arena_units_per_group == expected
+
+
 def test_shared_cache_rounds_automatic_capacity_down_to_complete_groups():
     executor = _make_shared_executor(group_size=4)
     plans = [_WorkerCachePlanSizes(target=256)]

@@ -511,6 +511,18 @@ class Scheduler:
             self.kv_connector.finish_transfers_after_worker_drain()
         self.kv_save_coordinator.clear()
 
+    def reset_cache(self) -> None:
+        """Reset scheduler cache ownership at a new physical-cache epoch.
+
+        This must run only after EngineLoop and worker transfers have drained. Sequence-owned resources are already gone
+        by the time sleep reaches this boundary; the remaining ownership is prefix-cache metadata.
+        """
+        if self.sessions:
+            raise RuntimeError('Cannot reset cache while scheduler sessions remain.')
+        self.kv_load_coordinator.clear()
+        self.kv_save_coordinator.clear()
+        self.block_trie.reset()
+
     def get_block_tables(self, seqs: SeqList):
         """Get block tables for the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]

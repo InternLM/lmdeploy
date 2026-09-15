@@ -102,6 +102,11 @@ class StateCheckpointIndex:
         self._buckets: dict[StateCheckpointKey, list[Node]] = {}
         self._steps_by_adapter: dict[str, set[int]] = {}
 
+    def clear(self):
+        """Drop all sparse checkpoint candidates."""
+        self._buckets.clear()
+        self._steps_by_adapter.clear()
+
     def make_request_key(self, seq: SchedulerSequence, step: int) -> StateCheckpointKey:
         """Make the sparse lookup key for one request checkpoint step."""
         tail_start = checkpoint_tail_start(step, self.block_size)

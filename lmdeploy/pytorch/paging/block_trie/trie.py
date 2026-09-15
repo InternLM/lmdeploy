@@ -185,6 +185,59 @@ class BlockTrie:
         """Expose the state-checkpoint lifecycle as a grouped public API."""
         return self._state_checkpoints
 
+    def reset(self):
+        """Release every cached prefix owner and invalidate trie metadata.
+
+        The scheduler calls this after worker-side cache users and external transfer leases have drained.  CacheEngine
+        may then destroy and recreate its physical storage without leaving logical KV or SSM state pointing at the
+        previous cache epoch.
+        """
+        nodes = []
+        seen = set()
+        pending = list(self._roots.values())
+        while pending:
+            node = pending.pop()
+            node_id = id(node)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            nodes.append(node)
+            pending.extend(node.children.values())
+
+        # The index is auxiliary and may contain a stale detached entry.  It
+        # can still own a state slot or frozen block, so include those nodes in
+        # the release pass before dropping the index wholesale.
+        for node in self._checkpoint_index.unique_nodes():
+            if id(node) not in seen:
+                seen.add(id(node))
+                nodes.append(node)
+
+        for node in nodes:
+            if self._state_checkpoints.is_pinned(node):
+                raise RuntimeError('Cannot reset prefix cache while a checkpoint copy is pinned.')
+
+        for node in nodes:
+            self._state_checkpoints.release_checkpoint(node)
+
+        trie_blocks = np.asarray([
+            node.block_id for node in nodes if node.parent is not None and node.block_id >= 0
+        ], dtype=np.int64)
+        if len(trie_blocks) > 0 and len(np.unique(trie_blocks)) != len(trie_blocks):
+            raise RuntimeError('Prefix-cache trie owns duplicate logical blocks.')
+
+        # Detach deepest nodes first so every edge satisfies Node's leaf-only
+        # topology rule.  Detached cursors are rejected by future matches.
+        for node in sorted(nodes, key=lambda item: item.prefix_len, reverse=True):
+            if node.parent is not None:
+                node.detach_leaf()
+
+        self._roots.clear()
+        self._kv_lifecycle.leaves.clear()
+        self._checkpoint_index.clear()
+        if len(trie_blocks) > 0:
+            self.allocator.free(trie_blocks)
+        self.stats.reset()
+
     def _record_match_stats(self, seq: SchedulerSequence, query_tokens: int, hit_tokens: int = 0):
         """Record a user-visible prefix-cache match attempt."""
         if seq.prefix_cache.suppress_match_stats:
