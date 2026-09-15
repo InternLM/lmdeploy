@@ -1,10 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+from functools import cached_property
 from typing import Any, Literal
 
 import PIL
 
 from lmdeploy.model import MODELS, BaseChatTemplate
+from lmdeploy.serve.processors.special_tokens import SpecialTokenGuard
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
@@ -53,6 +55,12 @@ class MultimodalProcessor:
         self.vl_encoder = vl_encoder
         self.backend = backend
         self.allowed_media_domains = allowed_media_domains
+
+    @cached_property
+    def special_token_guard(self) -> SpecialTokenGuard:
+        """The guard that keeps special-token literals in message content from
+        being encoded as special tokens."""
+        return SpecialTokenGuard(self.tokenizer)
 
     @staticmethod
     def merge_message_content(msg: dict) -> dict:
@@ -379,11 +387,13 @@ class MultimodalProcessor:
         # Change multimodal data to openai text messages
         if isinstance(prompt, list):
             prompt = [self.merge_message_content(msg) for msg in prompt]
+        placeholder_prefix = None
         if do_preprocess:
             # use adapter's chat template if possible
             chat_template = self.chat_template
             if adapter_name in MODELS.module_dict:
                 chat_template = MODELS.module_dict[adapter_name]()
+            prompt, placeholder_prefix = self.special_token_guard.escape(prompt)
         else:
             chat_template = BaseChatTemplate()
         chat_template_kwargs = dict(chat_template_kwargs or {})
@@ -400,7 +410,7 @@ class MultimodalProcessor:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
             )
-        input_ids = self.tokenizer.encode(prompt, add_bos=True)
+        prompt, input_ids = self.special_token_guard.encode(prompt, placeholder_prefix)
         return {'prompt': prompt, 'input_ids': input_ids}
 
     async def _get_multimodal_prompt_input(self,
