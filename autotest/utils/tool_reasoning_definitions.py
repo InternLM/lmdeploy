@@ -8,7 +8,7 @@ import uuid
 import aiohttp
 import requests
 from utils.config_utils import get_model_path_from_config
-from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_PORT
+from utils.constant import CAPPED_MAX_COMPLETION_TOKENS, DEFAULT_PORT
 from utils.restful_return_check import get_client_and_model
 
 from lmdeploy.serve.openai.protocol import (
@@ -221,6 +221,13 @@ def _merge_create_kwargs_defaults(kwargs: dict) -> None:
         extra_body.setdefault(key, value)
 
 
+def _setdefault_enable_thinking(extra_body: dict, enable_thinking: bool) -> None:
+    ctk = extra_body.setdefault('chat_template_kwargs', {})
+    if not isinstance(ctk, dict):
+        raise TypeError(f'chat_template_kwargs must be dict, got {type(ctk).__name__}')
+    ctk.setdefault('enable_thinking', enable_thinking)
+
+
 class StreamTee:
     """Transparent iterator proxy: yields every chunk unchanged while
     recording each ``repr(chunk)`` to the log file."""
@@ -262,13 +269,19 @@ def setup_log_file(config, test_name, category):
     return os.path.join(log_dir, f'{safe_test_name}_{timestamp}.log')
 
 
-def make_logged_client(log_file):
-    """Return an OpenAI client whose ``chat.completions.create`` logs I/O."""
+def make_logged_client(log_file, *, default_enable_thinking: bool | None = None):
+    """Return an OpenAI client whose ``chat.completions.create`` logs I/O.
+
+    ``default_enable_thinking`` is applied only when the request does not set
+    ``chat_template_kwargs.enable_thinking`` (tool tests pass False).
+    """
     client, model_name = get_client_and_model()
     original_create = client.chat.completions.create
 
     def _logged_create(*args, **kwargs):
         _merge_create_kwargs_defaults(kwargs)
+        if default_enable_thinking is not None:
+            _setdefault_enable_thinking(kwargs['extra_body'], default_enable_thinking)
         stream = 'stream' in kwargs and kwargs['stream']
         result = original_create(*args, **kwargs)
         if stream:
@@ -1028,7 +1041,7 @@ def _build_stream_tool_call_payload(
                 'messages': [],
                 'stream': True,
                 'temperature': 0,
-                'max_completion_tokens': DEFAULT_MAX_COMPLETION_TOKENS,
+                'max_completion_tokens': CAPPED_MAX_COMPLETION_TOKENS,
                 **token_fields,
                 'stream_options': {'include_usage': True},
                 **LMDEPLOY_DECODE_DEFAULTS,
@@ -1047,7 +1060,7 @@ def _build_stream_tool_call_payload(
             'messages': messages,
             'stream': True,
             'temperature': 0,
-            'max_completion_tokens': DEFAULT_MAX_COMPLETION_TOKENS,
+            'max_completion_tokens': CAPPED_MAX_COMPLETION_TOKENS,
             **token_fields,
             'stream_options': {'include_usage': True},
             **LMDEPLOY_DECODE_DEFAULTS,
@@ -1055,6 +1068,11 @@ def _build_stream_tool_call_payload(
     if tools is not None and not use_input_ids:
         payload['tools'] = tools
     payload.update(payload_extra)
+    ctk = payload.get('chat_template_kwargs')
+    if not isinstance(ctk, dict):
+        ctk = {}
+        payload['chat_template_kwargs'] = ctk
+    ctk.setdefault('enable_thinking', False)
     return payload, prompt_tokens_computed
 
 
@@ -1562,7 +1580,10 @@ async def _async_concurrent_worker_turns(
 
     for turn in range(num_turns):
         city = cities[turn % len(cities)]
-        messages.append({'role': 'user', 'content': f'What is the weather in {city}?'})
+        messages.append({
+            'role': 'user',
+            'content': f'What is the weather in {city}? Call the weather tool now.',
+        })
         try:
             result = await collect_stream_tool_call_http_async(
                 session,

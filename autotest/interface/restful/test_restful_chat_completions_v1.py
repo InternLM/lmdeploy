@@ -2,7 +2,7 @@ import pytest
 import requests
 from openai import BadRequestError
 from utils.config_utils import get_model_path_from_config
-from utils.constant import BACKEND_LIST, BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
+from utils.constant import BACKEND_LIST, BASE_URL, CAPPED_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
 from utils.restful_return_check import (
     CONTEXT_LENGTH_ERROR,
     assert_chat_completions_batch_return,
@@ -507,7 +507,7 @@ class TestRestfulOpenAI:
     def test_max_tokens_default_cap_no_overshoot_followup(self, backend, model_case, openai_client_and_model):
         client, model_name = openai_client_and_model
         prompt = 'Continue writing forever without stopping.'
-        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
+        max_tokens = CAPPED_MAX_COMPLETION_TOKENS
         overshoot_slack = 1
         outputs = client.chat.completions.create(
             model=model_name,

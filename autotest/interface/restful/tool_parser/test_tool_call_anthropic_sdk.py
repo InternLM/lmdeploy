@@ -30,7 +30,7 @@ from utils.anthropic_messages import (
     get_async_anthropic_client_and_model,
 )
 from utils.config_utils import get_config
-from utils.constant import BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS
+from utils.constant import BASE_URL, THINKING_MAX_COMPLETION_TOKENS
 from utils.restful_return_check import deployed_model_name
 
 from .conftest import _apply_marks, _ToolCallTestBase
@@ -43,8 +43,8 @@ _TINY_PNG_BASE64 = (
 )
 
 # Leave room for reasoning thinking before tool_use.
-_TOOL_MAX_TOKENS = DEFAULT_MAX_COMPLETION_TOKENS
-_VLM_TOOL_MAX_TOKENS = DEFAULT_MAX_COMPLETION_TOKENS
+_TOOL_MAX_TOKENS = THINKING_MAX_COMPLETION_TOKENS
+_VLM_TOOL_MAX_TOKENS = THINKING_MAX_COMPLETION_TOKENS
 
 _SOLID_COLOR_VLM_PROMPT = (
     'The image is a single solid color (one pixel). '

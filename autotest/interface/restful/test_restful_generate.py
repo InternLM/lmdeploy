@@ -14,7 +14,7 @@ from utils.config_utils import (
     get_model_path_from_config,
     model_enables_return_routed_experts,
 )
-from utils.constant import BACKEND_LIST, BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
+from utils.constant import BACKEND_LIST, BASE_URL, CAPPED_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
 from utils.toolkit import encode_text, parse_sse_stream
 
 
@@ -951,13 +951,13 @@ class TestGenerateComprehensive:
             f'ignore_eos=True must end due to length, actual: {reason_ignore}'
 
     def test_max_tokens_default_cap_no_overshoot_followup(self):
-        """Hit DEFAULT max_tokens (8192) with ignore_eos; no overshoot; follow-
-        up must succeed.
+        """Hit CAPPED_MAX_COMPLETION_TOKENS with ignore_eos; no overshoot;
+        follow- up must succeed.
 
         Catches regressions where length-capped generation returns a few extra tokens and breaks the next request.
         """
         prompt = 'Continue writing forever without stopping.'
-        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
+        max_tokens = CAPPED_MAX_COMPLETION_TOKENS
         print(f'\n[Model: {self.model_name}] Running max_tokens={max_tokens} '
               'length-cap / follow-up test')
         # Align with existing generate/chat length checks (allow at most +1).
@@ -1273,8 +1273,8 @@ class TestGenerateComprehensive:
     @pytest.mark.experts
     @pytest.mark.not_turbomind
     def test_request_returns_experts_max_tokens_cap_followup(self, backend):
-        """Hit DEFAULT max_tokens with return_routed_experts; length/experts
-        OK; follow-up OK.
+        """Hit CAPPED_MAX_COMPLETION_TOKENS with return_routed_experts;
+        length/experts OK; follow-up OK.
 
         Catches regressions where length-capped MoE generation overshoots a few tokens and breaks routed_experts length
         or the next request.
@@ -1283,7 +1283,7 @@ class TestGenerateComprehensive:
                 self.model_name, backend, required_suites=frozenset({'experts'})):
             pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
         prompt = 'Continue writing forever without stopping.'
-        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
+        max_tokens = CAPPED_MAX_COMPLETION_TOKENS
         print(f'\n[Model: {self.model_name}] Running experts max_tokens='
               f'{max_tokens} length-cap / follow-up test')
         overshoot_slack = 1
