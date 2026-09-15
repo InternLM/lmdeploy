@@ -20,23 +20,36 @@ def test_arspec_cudagraph_keeps_full_spec_capture_for_eagle3():
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=40) == 40
 
 
-def test_cudagraph_fa3_metadata_uses_single_query_len_for_single_token_capture():
+def test_cudagraph_step_metadata_plan_owns_single_token_capture_buffers(monkeypatch):
     from types import SimpleNamespace
 
     import torch
 
+    from lmdeploy.pytorch.models.utils import cudagraph as cudagraph_mod
     from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 
-    class DummyCudaGraphModel(CudaGraphMixin):
+    step_context = SimpleNamespace(model_config=SimpleNamespace(sliding_window=4096))
+    monkeypatch.setattr(cudagraph_mod, 'get_step_ctx_manager',
+                        lambda: SimpleNamespace(current_context=lambda: step_context))
+
+    class DummyPlan:
 
         def __init__(self):
             self.max_seqlen_q_calls = []
 
-        def update_meta_flashattn(self, batch_size, max_seqlen_q, block_size, max_seqlen_k, cache_seqlens):
-            self.max_seqlen_q_calls.append(max_seqlen_q)
-            return torch.zeros(4, dtype=torch.int32)
+        def make_cudagraph_buffers(self, graph_meta, input_buffers, step_context):
+            self.max_seqlen_q_calls.append(graph_meta.decode_query_len)
+            return SimpleNamespace(attention_buffers=(torch.zeros(4, dtype=torch.int32), ))
+
+        def fill_cudagraph_buffers(self, graph_meta, input_buffers, step_context, buffers, attn_metadata):
+            self.max_seqlen_q_calls.append(graph_meta.decode_query_len)
+            assert len(buffers.attention_buffers) == 1
+
+    class DummyCudaGraphModel(CudaGraphMixin):
+        pass
 
     model = DummyCudaGraphModel()
+    plan = DummyPlan()
     graph_meta = CudaGraphMeta(
         max_batchs=8,
         max_tokens=8,
@@ -47,6 +60,7 @@ def test_cudagraph_fa3_metadata_uses_single_query_len_for_single_token_capture()
         output_buffers={},
         use_fa3_decoding=True,
         decode_query_len=1,
+        step_meta_plan=plan,
     )
     input_ids = torch.zeros((1, 8), dtype=torch.long)
     position_ids = torch.zeros_like(input_ids)
@@ -73,7 +87,7 @@ def test_cudagraph_fa3_metadata_uses_single_query_len_for_single_token_capture()
         inputs_embeds=None,
     )
 
-    assert model.max_seqlen_q_calls == [1, 1]
+    assert plan.max_seqlen_q_calls == [1, 1]
 
 
 def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypatch):
