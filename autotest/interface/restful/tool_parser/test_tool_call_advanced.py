@@ -1,7 +1,6 @@
 import pytest
 from utils.config_utils import ROUTED_EXPERTS_UNSUPPORTED_SKIP
 from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS
-from utils.restful_return_check import cap_completion_tokens_for_session
 from utils.tool_reasoning_definitions import (
     ALL_OPTIONAL_TOOL,
     CALCULATOR_TOOL,
@@ -739,9 +738,7 @@ class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
         if not self._validate_experts():
             pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
         prompt = 'Continue writing forever without stopping.'
-        max_tokens = cap_completion_tokens_for_session(
-            prompt, DEFAULT_MAX_COMPLETION_TOKENS,
-            config=self._config, model_id=self._model_case)
+        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
         overshoot_slack = 1
         messages = [
             {

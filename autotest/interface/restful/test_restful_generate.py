@@ -15,7 +15,6 @@ from utils.config_utils import (
     model_enables_return_routed_experts,
 )
 from utils.constant import BACKEND_LIST, BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
-from utils.restful_return_check import cap_completion_tokens_for_session
 from utils.toolkit import encode_text, parse_sse_stream
 
 
@@ -951,16 +950,14 @@ class TestGenerateComprehensive:
         assert reason_ignore == 'length', \
             f'ignore_eos=True must end due to length, actual: {reason_ignore}'
 
-    def test_max_tokens_default_cap_no_overshoot_followup(self, config):
+    def test_max_tokens_default_cap_no_overshoot_followup(self):
         """Hit DEFAULT max_tokens (8192) with ignore_eos; no overshoot; follow-
         up must succeed.
 
         Catches regressions where length-capped generation returns a few extra tokens and breaks the next request.
         """
         prompt = 'Continue writing forever without stopping.'
-        max_tokens = cap_completion_tokens_for_session(
-            prompt, DEFAULT_MAX_COMPLETION_TOKENS,
-            config=config, model_id=self.model_name)
+        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
         print(f'\n[Model: {self.model_name}] Running max_tokens={max_tokens} '
               'length-cap / follow-up test')
         # Align with existing generate/chat length checks (allow at most +1).
@@ -1275,7 +1272,7 @@ class TestGenerateComprehensive:
 
     @pytest.mark.experts
     @pytest.mark.not_turbomind
-    def test_request_returns_experts_max_tokens_cap_followup(self, backend, config):
+    def test_request_returns_experts_max_tokens_cap_followup(self, backend):
         """Hit DEFAULT max_tokens with return_routed_experts; length/experts
         OK; follow-up OK.
 
@@ -1286,9 +1283,7 @@ class TestGenerateComprehensive:
                 self.model_name, backend, required_suites=frozenset({'experts'})):
             pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
         prompt = 'Continue writing forever without stopping.'
-        max_tokens = cap_completion_tokens_for_session(
-            prompt, DEFAULT_MAX_COMPLETION_TOKENS,
-            config=config, model_id=self.model_name)
+        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
         print(f'\n[Model: {self.model_name}] Running experts max_tokens='
               f'{max_tokens} length-cap / follow-up test')
         overshoot_slack = 1

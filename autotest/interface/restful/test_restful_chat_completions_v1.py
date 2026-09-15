@@ -9,7 +9,6 @@ from utils.restful_return_check import (
     assert_chat_completions_stream_return,
     assert_openai_invalid_request_error,
     build_session_sized_user_content,
-    cap_completion_tokens_for_session,
     get_chat_delta_text,
     get_chat_message_text,
     get_client_and_model,
@@ -505,12 +504,10 @@ class TestRestfulOpenAI:
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length >= 99 and length <= 101
 
-    def test_max_tokens_default_cap_no_overshoot_followup(self, backend, model_case, openai_client_and_model, config):
+    def test_max_tokens_default_cap_no_overshoot_followup(self, backend, model_case, openai_client_and_model):
         client, model_name = openai_client_and_model
         prompt = 'Continue writing forever without stopping.'
-        max_tokens = cap_completion_tokens_for_session(
-            prompt, DEFAULT_MAX_COMPLETION_TOKENS,
-            config=config, model_id=model_case)
+        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
         overshoot_slack = 1
         outputs = client.chat.completions.create(
             model=model_name,

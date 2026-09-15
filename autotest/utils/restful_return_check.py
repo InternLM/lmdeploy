@@ -1,4 +1,5 @@
 import re
+from functools import lru_cache
 from typing import Any
 
 import requests
@@ -218,6 +219,12 @@ def get_client_and_model(base_url: str | None = None) -> tuple[OpenAI, str]:
     return client, models[0].id
 
 
+@lru_cache(maxsize=1)
+def deployed_model_name() -> str:
+    """Single model id exposed by the RESTFUL api_server."""
+    return get_client_and_model(BASE_URL)[1]
+
+
 def resolve_effective_session_len(config: dict[str, Any], model_id: str) -> int:
     """Context limit aligned with ``async_engine.session_len``.
 
@@ -288,20 +295,3 @@ def build_session_sized_user_content(
         text = text[:-(max(1, len(text) // 20))]
         token_len = len(encode_text(model_path, text, add_special_tokens=False))
     return text
-
-
-def cap_completion_tokens_for_session(
-    prompt_text: str,
-    default_cap: int,
-    *,
-    config: dict[str, Any],
-    model_id: str,
-    reserve: int = 128,
-    min_cap: int = 64,
-) -> int:
-    """Cap ``max_tokens`` so prompt + completion fits ``session_len``."""
-    session_len = resolve_effective_session_len(config, model_id)
-    model_path = get_model_path_from_config(config, model_id)
-    prompt_tokens = len(encode_text(model_path, prompt_text, add_special_tokens=False))
-    available = session_len - prompt_tokens - reserve
-    return min(default_cap, max(min_cap, available))
