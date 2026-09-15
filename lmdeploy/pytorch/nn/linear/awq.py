@@ -29,8 +29,9 @@ class AwqLinear(LinearBase):
         is_tp: bool = False,
         all_reduce: bool = True,
         layer_type: str = 'attn',
+        dtype: torch.dtype | None = torch.float16,
     ):
-        super().__init__(dtype=torch.float16,
+        super().__init__(dtype=dtype,
                          device=device,
                          colwise=colwise,
                          is_tp=is_tp,
@@ -190,7 +191,8 @@ class MergedAwqLinear(AwqLinear):
                  device: torch.device | None = None,
                  is_tp: bool = True,
                  out_names: list[int] | None = None,
-                 layer_type: str = 'attn'):
+                 layer_type: str = 'attn',
+                 dtype: torch.dtype | None = torch.float16):
         self.init_tp_args(is_tp, all_reduce=False, colwise=True, layer_type=layer_type)
 
         self.split_section_s = all_out_features
@@ -212,7 +214,8 @@ class MergedAwqLinear(AwqLinear):
                          device,
                          colwise=True,
                          is_tp=is_tp,
-                         layer_type=layer_type)
+                         layer_type=layer_type,
+                         dtype=dtype)
         self.setup_loaders()
 
     def setup_loaders(self):
@@ -292,7 +295,8 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
                  bias: bool = False,
                  device: torch.device | None = None,
                  is_tp: bool = True,
-                 num_replicate_kv_heads: int = 1):
+                 num_replicate_kv_heads: int = 1,
+                 dtype: torch.dtype | None = torch.float16):
         self.init_tp_args(is_tp, all_reduce=False, colwise=True, layer_type='attn')
         QKVMixin.__init__(self,
                           num_q_heads=num_q_heads,
@@ -317,7 +321,8 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
                          device=device,
                          is_tp=is_tp,
                          out_names=out_names,
-                         layer_type='attn')
+                         layer_type='attn',
+                         dtype=dtype)
 
     def _update_all_out_features(self, all_out_features: list[int], w_bit: int, group_size: int):
         """Update all out features."""
