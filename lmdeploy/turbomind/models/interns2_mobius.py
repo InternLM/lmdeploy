@@ -118,6 +118,12 @@ def build_meta_moe_layer(text_model, pfx, layer_id: int):
 
     m = MoeBuilder(cfg, text_model._ctx, ep=text_model._ep)
     m.add_gate('shared_gate', text_model._linear(pfx + 'shared_expert_gate'))
+    # Attach the shared expert before build(): post-build child assignment
+    # raises, and the C++ MoeWeight owns it as the `shared` child.
+    m.shared = text_model.ffn(
+        pfx + 'shared_expert',
+        text_model.cfg.shared_expert_intermediate_size,
+        tp=text_model._mlp_tp)
     moe = m.build()
 
     pack = text_model._meta_pack_modules[layer_id % text_model._n_meta_groups]
@@ -126,10 +132,7 @@ def build_meta_moe_layer(text_model, pfx, layer_id: int):
             with text_model._ctx.devices[i]:
                 moe_h.set_meta_pack(pack_h)
 
-    shared = text_model.ffn(
-        pfx + 'shared_expert',
-        text_model.cfg.shared_expert_intermediate_size)
-    return moe, shared
+    return moe
 
 
 class InternS2MobiusTextModel(Qwen3_5TextModel):
@@ -178,7 +181,7 @@ class InternS2MobiusTextModel(Qwen3_5TextModel):
                 d.linear_attn = self.linear_attn(p + 'linear_attn')
             else:
                 d.attention = self.attn(p + 'self_attn')
-            d.moe_ffn, d.feed_forward = build_meta_moe_layer(self, p + 'mlp', i)
+            d.moe_ffn = build_meta_moe_layer(self, p + 'mlp', i)
             d.attention_norm = self.norm(p + 'input_layernorm', zero_centered=True)
             d.ffn_norm = self.norm(p + 'post_attention_layernorm', zero_centered=True)
             layers[i] = d.build()
