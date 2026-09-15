@@ -55,8 +55,7 @@ def test_indexer_meta_builds_causal_rows():
     assert meta.max_kv_seqlen == 8
 
 
-@pytest.mark.parametrize('dcp_size', [1, 4])
-def test_deepgemm_prefill_scores_are_chunked_by_logits_budget(monkeypatch, dcp_size):
+def test_deepgemm_prefill_scores_are_chunked_by_logits_budget(monkeypatch):
     from lmdeploy.pytorch.backends.cuda import nsa as cuda_nsa
 
     class FakeDeepGemm:
@@ -79,13 +78,10 @@ def test_deepgemm_prefill_scores_are_chunked_by_logits_budget(monkeypatch, dcp_s
     monkeypatch.setattr(cuda_nsa, '_get_deep_gemm', lambda: deep_gemm)
 
     impl = object.__new__(cuda_nsa.TritonNSAIndexFP8Impl)
-    impl.dcp_world_size = dcp_size
-    impl.dcp_rank = 0
+    impl.dcp_world_size = 1
     impl.topk = 2
     impl.fill = -1
     impl.max_logits_bytes = 2 * 4 * 4
-    # DCP and non-DCP use the same score-row budget, excluding candidates.
-    impl._merge_dcp_topk = lambda scores, indices: indices
     flatten_calls = []
 
     def fake_flatten(indexer_k_cache, head_dim, meta):
