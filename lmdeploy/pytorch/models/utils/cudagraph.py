@@ -127,8 +127,7 @@ class CudaGraphMixin:
         input_buffers['cu_seqlens_q'] = input_buffers['cu_seqlens'][0]
         input_buffers['cu_seqlens_k'] = input_buffers['cu_seqlens'][1]
 
-        dcp_world_rank = get_dcp_world_rank()
-        dcp_world_size, _ = dcp_world_rank
+        dcp_world_size, _ = get_dcp_world_rank()
         if dcp_world_size > 1:
             input_buffers['dcp_local_kv_seqlens'] = torch.zeros(
                 max_batches, dtype=torch.int32, device=device)

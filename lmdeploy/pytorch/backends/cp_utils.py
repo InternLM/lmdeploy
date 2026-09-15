@@ -20,7 +20,7 @@ def get_dcp_prefill_workspace_size(*, batch_size: int, head_dim: int, block_size
 
 
 @dataclass(frozen=True)
-class DcpPrefillChunk:
+class DCPPrefillChunk:
     """Layer-independent lengths for one virtual-block-aligned prefix chunk."""
 
     start: int
@@ -32,7 +32,7 @@ class DcpPrefillChunk:
 
 
 def build_dcp_prefill_chunks(*, prefix_lens: torch.Tensor, prefix_limit: int, block_size: int, head_dim: int,
-                             dcp_world_rank: tuple[int, int]) -> tuple[DcpPrefillChunk, ...]:
+                             dcp_world_rank: tuple[int, int]) -> tuple[DCPPrefillChunk, ...]:
     """Plan identical collective shapes on all ranks without device sync."""
     if prefix_limit <= 0:
         return ()
@@ -55,7 +55,7 @@ def build_dcp_prefill_chunks(*, prefix_lens: torch.Tensor, prefix_limit: int, bl
         local_lengths = ((lengths[None, :] + dcp_size - 1 - ranks) // dcp_size).clamp_min(0)
         cu_lens = torch.nn.functional.pad(lengths.cumsum(0, dtype=torch.int32), (1, 0))
         local_cu_lens = torch.nn.functional.pad(local_lengths[dcp_rank].cumsum(0, dtype=torch.int32), (1, 0))
-        chunks.append(DcpPrefillChunk(start, size, lengths, cu_lens, local_lengths, local_cu_lens))
+        chunks.append(DCPPrefillChunk(start, size, lengths, cu_lens, local_lengths, local_cu_lens))
     return tuple(chunks)
 
 

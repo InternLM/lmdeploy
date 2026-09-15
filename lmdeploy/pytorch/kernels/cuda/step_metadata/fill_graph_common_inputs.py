@@ -95,7 +95,9 @@ def _fill_graph_common_inputs_kernel(
                  mask=valid)
         if DCP_SIZE > 1:
             local_kv_len = tl.maximum((kv_len + DCP_SIZE - 1 - DCP_RANK) // DCP_SIZE, 0)
-            tl.store(dcp_local_kv_seqlens + q_offsets, local_kv_len, mask=valid)
+            tl.store(dcp_local_kv_seqlens + q_offsets,
+                     local_kv_len,
+                     mask=valid)
 
         cu_q = tl.cumsum(q_len, 0)
         cu_k = tl.cumsum(kv_len, 0)

@@ -448,6 +448,8 @@ def test_dcp_sparse_prefill_maps_and_compacts_partition_indices(topk, strided, p
 ])
 def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse, fp8_cache, dcp_size, kv_length):
     pytest.importorskip('flash_mla')
+    if fp8_cache and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip('FP8 MLA cache test requires SM90 or newer')
     if sparse and torch.cuda.get_device_capability()[0] != 9:
         pytest.skip('FlashMLA BF16 sparse attention requires an SM90 GPU')
 

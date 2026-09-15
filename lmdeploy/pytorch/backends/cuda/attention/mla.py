@@ -8,7 +8,7 @@ import torch
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends.cp_utils import (
-    DcpPrefillChunk,
+    DCPPrefillChunk,
     gather_dcp_query,
     get_dcp_local_causal_seq_lens,
     merge_dcp_attention,
@@ -513,7 +513,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
-        chunk: DcpPrefillChunk,
+        chunk: DCPPrefillChunk,
         out_dtype: torch.dtype,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,

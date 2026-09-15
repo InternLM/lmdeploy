@@ -19,6 +19,8 @@ import torch
 import triton
 import triton.language as tl
 
+from .sparse_index_topk import _PASS_CONFIGS, _ordered_fp32_key
+
 tilelang.set_log_level('WARNING')
 
 _FILL = -1
@@ -28,24 +30,6 @@ _RADIX_SIZE = 1 << _RADIX_BITS
 _STATE_SELECTED_BIN = 0
 _STATE_COUNT_PRIOR = 1
 _STATE_VALID_COUNT = 2
-
-_PASS_CONFIGS = {
-    tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True,
-    tilelang.PassConfigKey.TL_DISABLE_SAFE_MEMORY_ACCESS: True,
-    tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
-    tilelang.PassConfigKey.TL_DISABLE_TMA_LOWER: True,
-}
-
-
-def _ordered_fp32_key(score):
-    """Map fp32 to an integer key whose unsigned order matches fp32 order."""
-    bits = T.reinterpret(score, T.uint32)
-    sign_mask = T.cast(2147483648, T.uint32)
-    all_ones = T.cast(4294967295, T.uint32)
-    return T.if_then_else(T.bitwise_and(bits, sign_mask) == T.cast(0, T.uint32),
-                          T.bitwise_xor(bits, sign_mask),
-                          T.bitwise_xor(bits, all_ones))
-
 
 @triton.jit
 def _pack_dcp_topk_candidates_kernel(
@@ -225,7 +209,7 @@ def _sparse_dcp_global_topk_kernel(top_k: int,
                         score_key = _ordered_fp32_key(score)
                         id_key = T.bitwise_xor(
                             T.cast(global_id, T.uint32),
-                            T.cast(4294967295, T.uint32))
+                            T.cast(0xFFFFFFFF, T.uint32))
                         if round_idx < 4:
                             key = score_key
                             matches_prefix = T.bitwise_and(
@@ -286,7 +270,7 @@ def _sparse_dcp_global_topk_kernel(top_k: int,
                     score_key = _ordered_fp32_key(score)
                     id_key = T.bitwise_xor(
                         T.cast(global_id, T.uint32),
-                        T.cast(4294967295, T.uint32))
+                        T.cast(0xFFFFFFFF, T.uint32))
                     wins = (score_key > score_prefix or
                             (score_key == score_prefix
                              and id_key >= id_prefix))
@@ -316,7 +300,7 @@ def _sparse_dcp_global_topk_kernel(top_k: int,
                     score_key = _ordered_fp32_key(score)
                     id_key = T.bitwise_xor(
                         T.cast(global_id, T.uint32),
-                        T.cast(4294967295, T.uint32))
+                        T.cast(0xFFFFFFFF, T.uint32))
                     wins = (score_key > score_prefix or
                             (score_key == score_prefix
                              and id_key >= id_prefix))
