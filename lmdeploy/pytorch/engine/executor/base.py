@@ -216,6 +216,48 @@ class ExecutorBase:
             return 0
         return _envs.dsa_indexer_max_logits_mb * (1 << 20)
 
+    def _get_dcp_workspace_size(self, num_prefill_tokens: int) -> int:
+        """Estimate per-GPU DCP temporary bytes to exclude from KV-cache
+        sizing.
+
+        Reserve the larger of indexer (scores/candidates) and attention (prefix KV/merge) phases, plus persistent
+        indices. Returns zero without DCP. Flattened indexer KV still relies on memory headroom.
+        """
+        if self.cache_config.dcp <= 1:
+            return 0
+
+        from lmdeploy.pytorch.backends.cp_utils import (
+            get_dcp_prefill_workspace_size,
+            get_dcp_topk_workspace_size,
+        )
+
+        config = self.cache_config
+        model = self.model_config
+        attention_workspace = get_dcp_prefill_workspace_size(
+            batch_size=config.max_batches,
+            head_dim=model.head_dim,
+            block_size=config.block_size,
+            dcp_size=config.dcp,
+        )
+        local_heads = model.num_attention_heads // self.dist_config.attn_tp
+        # Budget three FP32 output/LSE states: old, partial, and merged.
+        # Full head_dim bounds V width; MLA's standalone V-cache width is zero.
+        attention_workspace += num_prefill_tokens * local_heads * (model.head_dim * 12 + 12)
+        if model.mla_index_topk is None:
+            return attention_workspace
+
+        decode_rows = config.max_batches
+        if self.specdecode_config is not None:
+            # Verification includes draft tokens plus one target token.
+            decode_rows *= self.specdecode_config.num_speculative_tokens + 1
+        # Candidates may cover all prefill or verification rows.
+        max_rows = max(num_prefill_tokens, decode_rows)
+        indexer_workspace = self._get_dsa_score_workspace_size()
+        indexer_workspace += get_dcp_topk_workspace_size(max_rows, model.mla_index_topk, config.dcp)
+        # Only final indices persist across the indexer and attention phases.
+        index_bytes = max_rows * model.mla_index_topk * 4
+        return index_bytes + max(indexer_workspace, attention_workspace)
+
     def _get_runtime_size(self, free_mems: list[int], cache_block_sizes: list[_WorkerCachePlanSizes],
                           vocab_size: int) -> tuple[int, int]:
         """Find best prefill num."""
@@ -230,7 +272,8 @@ class ExecutorBase:
             # logits/vocab size. They are not pageable KV cache, so reserve
             # them before applying the KV cache memory ratio.
             runtime_cache_size = int((max_prefill_token_num + max_batches * 2) * vocab_size * 2)
-            runtime_cache_size += dsa_score_workspace
+            # The DCP phase estimate already includes indexer scores.
+            runtime_cache_size += max(dsa_score_workspace, self._get_dcp_workspace_size(max_prefill_token_num))
             available_mems = [int((free_mem - runtime_cache_size) * cache_max_entry_count) for free_mem in free_mems]
             # Keep at least a small number of KV blocks after runtime reserve.
             # If not possible, reduce the prefill token budget and try again.
@@ -425,6 +468,15 @@ class ExecutorBase:
         self.set_cache_config(self.cache_config, spec_cache_config)
         self.set_model_config(self.model_config, spec_model_config)
 
+    def _log_kv_cache_capacity(self) -> None:
+        """Log usable token capacity across DCP shards, excluding reserved
+        blocks."""
+        config = self.cache_config
+        num_gpu_blocks = config.num_gpu_blocks - config.num_reserved_gpu_blocks
+        num_tokens = num_gpu_blocks * config.block_size * config.dcp
+        logger.info(f'GPU KV cache capacity: {num_tokens:,} tokens '
+                    f'({num_gpu_blocks:,} usable blocks/rank, DCP={config.dcp}).')
+
     def init(self):
         """init."""
         logger.info('Building Model.')
@@ -443,6 +495,7 @@ class ExecutorBase:
         if self.misc_config.memdecode_config is not None:
             logger.info('Building MemDecode memory KV/state cache engines.')
         self.build_cache_engine()
+        self._log_kv_cache_capacity()
         logger.info('Warming up model.')
         self.warmup()
 

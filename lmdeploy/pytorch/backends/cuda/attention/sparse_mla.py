@@ -4,6 +4,7 @@ import functools
 
 import torch
 
+from lmdeploy.pytorch.backends.cp_utils import gather_dcp_query, merge_dcp_attention
 from lmdeploy.utils import get_logger
 
 from .default import TritonAttentionMetadata
@@ -131,8 +132,11 @@ class FlashMLASparseImpl(FlashMLAImpl):
         except Exception:
             logger.exception('Can not import flash_mla_sparse_fwd from flash_mla.')
 
-    def _flash_mla_sparse_forward(self, query: torch.Tensor, indexed_kv: torch.Tensor,
-                                  indices: torch.Tensor) -> torch.Tensor:
+    def _flash_mla_sparse_forward(
+            self, query: torch.Tensor, indexed_kv: torch.Tensor,
+            indices: torch.Tensor, return_lse: bool = False,
+            topk_length: torch.Tensor = None
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Run sparse FlashMLA over index-addressable BF16 KV storage."""
         flash_mla_sparse_fwd = self._get_flash_mla_sparse_fwd()
         num_q_heads = query.size(1)
@@ -140,8 +144,19 @@ class FlashMLASparseImpl(FlashMLAImpl):
         if pad_heads:
             query = torch.nn.functional.pad(query, (0, 0, 0, pad_heads))
 
-        attn_output = flash_mla_sparse_fwd(query, indexed_kv, indices, sm_scale=self.scale)[0]
-        return attn_output[:, :num_q_heads]
+        flash_kwargs = dict(sm_scale=self.scale)
+        if topk_length is not None:
+            flash_kwargs['topk_length'] = topk_length
+        results = flash_mla_sparse_fwd(query, indexed_kv, indices,
+                                       **flash_kwargs)
+        attn_output = results[0]
+        attn_output = attn_output[:, :num_q_heads]
+        if return_lse:
+            softmax_lse = results[2]
+            if softmax_lse.dim() == 3 and softmax_lse.size(-1) == 1:
+                softmax_lse = softmax_lse.squeeze(-1)
+            return attn_output, softmax_lse[:, :num_q_heads]
+        return attn_output
 
     def _prefill_sparse(self, query: torch.Tensor, flatten_k: torch.Tensor,
                         nsa_indices: torch.Tensor,
@@ -152,9 +167,74 @@ class FlashMLASparseImpl(FlashMLAImpl):
                                                      attn_metadata.cu_seqlens_k)
         return self._flash_mla_sparse_forward(query, flatten_k, indices)
 
-    def _decoding_sparse_bf16(self, query: torch.Tensor, k_cache: torch.Tensor,
-                              nsa_indices: torch.Tensor,
-                              attn_metadata: TritonAttentionMetadata) -> torch.Tensor:
+    def _prefill_sparse_partition(
+            self, query: torch.Tensor, flatten_k: torch.Tensor,
+            indices: torch.Tensor, valid_counts: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Run one sparse partition and sanitize its LSE for merging."""
+        from lmdeploy.pytorch.kernels.cuda.dcp import sanitize_dcp_lse
+
+        output, lse = self._flash_mla_sparse_forward(query,
+                                                     flatten_k,
+                                                     indices,
+                                                     return_lse=True,
+                                                     topk_length=valid_counts)
+        # The FP32 merge ignores zero-weight outputs, including NaNs from
+        # empty partitions. Only their LSE needs to be neutralized here.
+        return output, sanitize_dcp_lse(lse, valid_counts > 0)
+
+    def _prefill_sparse_dcp(
+        self,
+        query: torch.Tensor,
+        current_key: torch.Tensor,
+        k_cache: torch.Tensor,
+        v_cache: torch.Tensor,
+        nsa_indices: torch.Tensor,
+        attn_metadata: TritonAttentionMetadata,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """Run sparse prefill over bounded current and cached partitions."""
+        from lmdeploy.pytorch.kernels.cuda.dcp import map_and_compact_dcp_prefill_indices, merge_attention_states
+
+        prefix_lens = attn_metadata.kv_seqlens - attn_metadata.q_seqlens
+        current_indices, current_counts = map_and_compact_dcp_prefill_indices(
+            nsa_indices,
+            request_ids=attn_metadata.dcp_prefill_request_ids,
+            partition_starts=prefix_lens,
+            partition_cu_lens=attn_metadata.cu_seqlens_q,
+        )
+        output, output_lse = self._prefill_sparse_partition(
+            query, current_key, current_indices, current_counts)
+
+        for chunk in attn_metadata.dcp_prefill_chunks:
+            context_k, context_cu_lens = self._gather_dcp_prefill_context_chunk(
+                k_cache,
+                v_cache,
+                attn_metadata,
+                chunk,
+                out_dtype=query.dtype,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+            )
+            context_indices, context_counts = map_and_compact_dcp_prefill_indices(
+                nsa_indices,
+                request_ids=attn_metadata.dcp_prefill_request_ids,
+                partition_starts=chunk.start,
+                partition_cu_lens=context_cu_lens,
+            )
+            context_output, context_lse = self._prefill_sparse_partition(
+                query, context_k, context_indices, context_counts)
+            output, output_lse = merge_attention_states(
+                output, output_lse, context_output, context_lse)
+            del context_k, context_indices, context_output, context_lse
+        return output.to(query.dtype)
+
+    def _decoding_sparse_bf16(
+            self, query: torch.Tensor, k_cache: torch.Tensor,
+            nsa_indices: torch.Tensor,
+            attn_metadata: TritonAttentionMetadata,
+            return_lse: bool = False, topk_length: torch.Tensor = None
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Run sparse decode over a zero-copy BF16 paged-cache view."""
         assert query.dtype == torch.bfloat16, 'BF16 sparse MLA requires a bfloat16 query'
         assert k_cache.dtype == torch.bfloat16, 'BF16 sparse MLA requires a bfloat16 KV cache'
@@ -180,11 +260,17 @@ class FlashMLASparseImpl(FlashMLAImpl):
             index_stride,
         )
         indices = indices.flatten(0, 1)[:, None]
-        return self._flash_mla_sparse_forward(query, storage_k, indices)
+        return self._flash_mla_sparse_forward(query,
+                                              storage_k,
+                                              indices,
+                                              return_lse=return_lse,
+                                              topk_length=topk_length)
 
-    def _decoding_sparse_fp8(self, query: torch.Tensor, k_cache: torch.Tensor,
-                             nsa_indices: torch.Tensor,
-                             attn_metadata: TritonAttentionMetadata) -> torch.Tensor:
+    def _decoding_sparse_fp8(
+            self, query: torch.Tensor, k_cache: torch.Tensor,
+            nsa_indices: torch.Tensor,
+            attn_metadata: TritonAttentionMetadata, return_lse: bool = False
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Run sparse decode directly over the packed FP8 paged cache."""
         max_q_seqlen = query.size(0) // attn_metadata.q_seqlens.size(0)
         indices = self.index_mapper.map_paged_decode(
@@ -205,18 +291,50 @@ class FlashMLASparseImpl(FlashMLAImpl):
                                       k_cache,
                                       attn_metadata,
                                       indices=indices,
-                                      causal=False)
+                                      causal=False,
+                                      return_lse=return_lse)
+        if return_lse:
+            attn_output, softmax_lse = output
+            return attn_output[:, :num_q_heads], softmax_lse[:, :num_q_heads]
         return output[:, :num_q_heads]
 
-    def _forward_decoding(self, query: torch.Tensor, k_cache: torch.Tensor,
+    def _decoding_sparse(
+            self, query: torch.Tensor, k_cache: torch.Tensor,
+            nsa_indices: torch.Tensor, attn_metadata: TritonAttentionMetadata,
+            *, return_lse: bool = False, topk_length: torch.Tensor = None
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Dispatch sparse decode by cache format."""
+        if k_cache.dtype == torch.float8_e4m3fn:
+            # FP8 masks fixed-width -1 padding but rejects dynamic topk_length.
+            return self._decoding_sparse_fp8(
+                query, k_cache, nsa_indices, attn_metadata, return_lse=return_lse)
+        return self._decoding_sparse_bf16(
+            query, k_cache, nsa_indices, attn_metadata,
+            return_lse=return_lse, topk_length=topk_length)
+
+    def _forward_decoding(self,
+                          query: torch.Tensor,
+                          k_cache: torch.Tensor,
                           attn_metadata: TritonAttentionMetadata,
                           nsa_indices: torch.Tensor = None) -> torch.Tensor:
         """Forward pass for sparse MLA decoding."""
         if nsa_indices is None:
             raise RuntimeError('Sparse MLA requires DSA top-k indices.')
-        if k_cache.dtype == torch.float8_e4m3fn:
-            return self._decoding_sparse_fp8(query, k_cache, nsa_indices, attn_metadata)
-        return self._decoding_sparse_bf16(query, k_cache, nsa_indices, attn_metadata)
+        if self.dcp_world_size > 1:
+            from lmdeploy.pytorch.kernels.cuda.dcp import filter_and_compact_dcp_indices
+
+            dcp_world_rank = self.dcp_world_size, self.dcp_rank
+            local_indices, local_counts = filter_and_compact_dcp_indices(
+                nsa_indices, dcp_world_rank=dcp_world_rank)
+            query = gather_dcp_query(query, dcp_world_size=self.dcp_world_size)
+            local_output, local_lse = self._decoding_sparse(
+                query, k_cache, local_indices, attn_metadata,
+                return_lse=True, topk_length=local_counts)
+            return merge_dcp_attention(local_output,
+                                       local_lse,
+                                       valid_rows=local_counts > 0,
+                                       dcp_world_rank=dcp_world_rank)
+        return self._decoding_sparse(query, k_cache, nsa_indices, attn_metadata)
 
     def _forward_prefill(self,
                          query: torch.Tensor,
@@ -225,7 +343,8 @@ class FlashMLASparseImpl(FlashMLAImpl):
                          attn_metadata: TritonAttentionMetadata,
                          nsa_indices: torch.Tensor = None,
                          k_scales_zeros: torch.Tensor = None,
-                         v_scales_zeros: torch.Tensor = None) -> torch.Tensor:
+                         v_scales_zeros: torch.Tensor = None,
+                         current_key: torch.Tensor = None) -> torch.Tensor:
         """Forward pass for sparse MLA prefill."""
         if attn_metadata.max_kv_seqlen <= self.mla_index_topk:
             # Top-k contains every valid key, so dense attention is equivalent
@@ -236,18 +355,33 @@ class FlashMLASparseImpl(FlashMLAImpl):
                                             attn_metadata,
                                             nsa_indices=None,
                                             k_scales_zeros=k_scales_zeros,
-                                            v_scales_zeros=v_scales_zeros)
+                                            v_scales_zeros=v_scales_zeros,
+                                            current_key=current_key)
         if nsa_indices is None:
             raise RuntimeError('Sparse MLA requires DSA top-k indices.')
-        flatten_k, _ = self._flatten_prefill_kv_cache(
-            k_cache,
-            v_cache,
-            attn_metadata,
-            out_dtype=query.dtype,
-            kv_layout='shd',
-            k_scales_zeros=k_scales_zeros,
-            v_scales_zeros=v_scales_zeros,
-        )
+        if self.dcp_world_size > 1:
+            if attn_metadata.dcp_prefill_chunks:
+                return self._prefill_sparse_dcp(
+                    query,
+                    current_key,
+                    k_cache,
+                    v_cache,
+                    nsa_indices,
+                    attn_metadata,
+                    k_scales_zeros=k_scales_zeros,
+                    v_scales_zeros=v_scales_zeros,
+                )
+            flatten_k = current_key
+        else:
+            flatten_k, _ = self._flatten_prefill_kv_cache(
+                k_cache,
+                v_cache,
+                attn_metadata,
+                out_dtype=query.dtype,
+                kv_layout='shd',
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+            )
         return self._prefill_sparse(query, flatten_k, nsa_indices, attn_metadata)
 
 
@@ -308,7 +442,8 @@ class TileLangSparseMLAImpl(FlashMLASparseImpl):
                          attn_metadata: TritonAttentionMetadata,
                          nsa_indices: torch.Tensor = None,
                          k_scales_zeros: torch.Tensor = None,
-                         v_scales_zeros: torch.Tensor = None) -> torch.Tensor:
+                         v_scales_zeros: torch.Tensor = None,
+                         current_key: torch.Tensor = None) -> torch.Tensor:
         """Use TileLang even when top-k covers the complete sequence."""
         if nsa_indices is None:
             raise RuntimeError('TileLang SparseMLA requires DSA top-k indices.')
