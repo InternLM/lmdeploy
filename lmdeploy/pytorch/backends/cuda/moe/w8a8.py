@@ -75,6 +75,8 @@ class TritonFusedMoEW8A8Impl(FusedMoEW8A8Impl):
 
 def _build_fused_moe_w8a8(spec: FusedMoEW8A8BuildSpec) -> FusedMoEW8A8Impl:
     """Build a CUDA W8A8 fused MoE implementation."""
+    if spec.ep_size > 1:
+        raise RuntimeError('FusedMoEW8A8 does not support EP mode now.')
     return TritonFusedMoEW8A8Impl(
         top_k=spec.top_k,
         num_experts=spec.num_experts,
