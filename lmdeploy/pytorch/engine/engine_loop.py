@@ -582,33 +582,67 @@ class EngineLoop:
                 msg.update_token_ids(update_token, model_meta=model_meta, mode=UpdateTokenMode.PREFILL)
                 msg.state.finish()
 
-    async def _migration_loop_migrate(self, migration_ready: 'SeqList'):
-        """Migration loop migrate."""
+    def _fail_migration_request(self, msg, err: BaseException):
+        """Fail one migration request without tearing down EngineLoop."""
+        err_msg = str(err) or 'KV cache migration failed.'
+        msg.resp.type = ResponseType.INTERNAL_ENGINE_ERROR
+        msg.resp.is_done = True
+        msg.resp.err_msg = err_msg
+        self.resp_queue.put_nowait({
+            msg.session_id: InferOutput(
+                session_id=msg.session_id,
+                resp=msg.resp,
+                finish=False,
+                token_ids=_EMPTY_TOKEN,
+            )
+        })
+        try:
+            if msg.session_id in self.scheduler.sessions:
+                self.scheduler.end_session(msg.session_id)
+        except Exception:
+            logger.exception('Failed to end session %s after migration error', msg.session_id)
+
+    async def _migration_loop_migrate(self, migration_ready: 'SeqList') -> 'SeqList':
+        """Migrate ready sequences.
+
+        Failures are isolated to the request.
+        """
+        succeeded = []
         for msg in migration_ready:
-            # skip dummy prefill migration
-            if msg.migration_request.is_dummy_prefill:
-                continue
+            try:
+                # skip dummy prefill migration
+                if msg.migration_request is None or msg.migration_request.is_dummy_prefill:
+                    succeeded.append(msg)
+                    continue
 
-            migration_execution_requests: list[tuple[int, list[tuple[int, int]]]] = []
-            migration_request = msg.migration_request
-            prefill_block_ids = migration_request.remote_block_ids
-            decode_block_ids = list(self.scheduler.block_manager.get_block_table(msg=msg))
+                migration_execution_requests: list[tuple[int, list[tuple[int, int]]]] = []
+                migration_request = msg.migration_request
+                prefill_block_ids = migration_request.remote_block_ids
+                decode_block_ids = list(self.scheduler.block_manager.get_block_table(msg=msg))
 
-            assert len(prefill_block_ids) == len(decode_block_ids), (
-                f'#prefill block ids ({len(prefill_block_ids)}) must equal to '
-                f'#decode block ids ({len(decode_block_ids)})'
-                f'all id length: {msg.num_token_ids}')
-            migration_execution_requests.append((
-                migration_request.remote_engine_id,
-                list(zip(prefill_block_ids, decode_block_ids)),
-            ))
-            migration_inputs = MigrationExecutionBatch(protocol=migration_request.protocol,
-                                                       requests=migration_execution_requests)
-            logger.info(f'migrating session: {msg.session_id} begin')
-            await self.executor.migrate(migration_inputs)
-            logger.info(f'migrating session: {msg.session_id} done')
-            await self.engine_conn.zmq_send(remote_engine_id=migration_request.remote_engine_id,
-                                            remote_session_id=migration_request.remote_session_id)
+                if len(prefill_block_ids) != len(decode_block_ids):
+                    raise ValueError(
+                        f'#prefill block ids ({len(prefill_block_ids)}) must equal to '
+                        f'#decode block ids ({len(decode_block_ids)})'
+                        f'all id length: {msg.num_token_ids}')
+                migration_execution_requests.append((
+                    migration_request.remote_engine_id,
+                    list(zip(prefill_block_ids, decode_block_ids)),
+                ))
+                migration_inputs = MigrationExecutionBatch(protocol=migration_request.protocol,
+                                                           requests=migration_execution_requests)
+                logger.info(f'migrating session: {msg.session_id} begin')
+                await self.executor.migrate(migration_inputs)
+                logger.info(f'migrating session: {msg.session_id} done')
+                await self.engine_conn.zmq_send(remote_engine_id=migration_request.remote_engine_id,
+                                                remote_session_id=migration_request.remote_session_id)
+                succeeded.append(msg)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception('KV cache migration failed for session %s', msg.session_id)
+                self._fail_migration_request(msg, exc)
+        return succeeded
 
     async def _migration_loop_get_outputs(self, migration_ready: 'SeqList'):
         """Migration loop get outputs."""
@@ -633,11 +667,10 @@ class EngineLoop:
 
     async def _migration_loop_process_ready(self, migration_ready: 'SeqList'):
         """Process migration ready."""
-        await self._migration_loop_migrate(migration_ready)
-
-        # generate output
-        with self.scheduler.seqs_migration_activation(migration_ready):
-            await self._migration_loop_get_outputs(migration_ready)
+        succeeded = await self._migration_loop_migrate(migration_ready)
+        if succeeded:
+            with self.scheduler.seqs_migration_activation(succeeded):
+                await self._migration_loop_get_outputs(succeeded)
         self.has_runable_event.set()
 
     async def migration_loop(self):
