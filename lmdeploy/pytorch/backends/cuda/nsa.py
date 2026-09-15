@@ -43,7 +43,7 @@ logger = get_logger('lmdeploy')
 
 
 def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int) -> int:
-    """Limit query rows by the FP32 score payload, independently of top-k."""
+    """Return the query rows fitting in a bounded FP32 score tensor."""
     if max_kv_seqlen <= 0:
         return 1
     # DeepGEMM materializes an aligned [query_rows, max_kv_seqlen] output
@@ -51,8 +51,8 @@ def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int) -> int:
     # https://github.com/deepseek-ai/DeepGEMM/blob/88965b078186ee7510ab9fc4f1d5ebc19adfa8d1/csrc/apis/attention.hpp#L155-L171
     # Bounding flattened KV alone therefore does not bound the M * N logits
     # allocation; limit M so its FP32 payload stays within the runtime budget.
-    row_bytes = max_kv_seqlen * 4
-    return max(1, max_logits_bytes // row_bytes)
+    _fp32_bytes = 4
+    return max(1, max_logits_bytes // (max_kv_seqlen * _fp32_bytes))
 
 
 def _get_dsa_indexer_k_cache_views(indexer_k_cache: Tensor,
