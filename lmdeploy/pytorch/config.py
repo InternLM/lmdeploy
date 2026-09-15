@@ -619,6 +619,13 @@ class ModelConfig:
             assert tp % model_config.num_key_value_heads == 0
         model_config.dist_config = dist_config
 
+        if dist_config.dcp > 1:
+            assert model_config.use_flash_mla, 'DCP requires FlashMLA attention'
+            assert model_config.sliding_window < 0, 'DCP does not support sliding-window attention'
+            if model_config.mla_index_topk is not None:
+                from lmdeploy.pytorch import envs
+                assert envs.sparse_mla_backend != 'tilelang', 'DCP does not support TileLang attention'
+
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config, dtype, device_type=device_type)
 

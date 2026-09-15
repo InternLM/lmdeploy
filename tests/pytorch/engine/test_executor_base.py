@@ -24,7 +24,7 @@ class _RecordingExecutor(ExecutorBase):
         super().__init__(
             model_path='',
             model_config=SimpleNamespace(sliding_window=None, states_shapes=None),
-            cache_config=SimpleNamespace(role=EngineRole.Hybrid),
+            cache_config=CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=16),
             backend_config=SimpleNamespace(),
             dist_config=SimpleNamespace(dp=1, world_size=1),
             misc_config=SimpleNamespace(empty_init=empty_init, memdecode_config=None),

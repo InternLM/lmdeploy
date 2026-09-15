@@ -360,6 +360,11 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
         from lmdeploy.pytorch.distributed import get_dcp_world_rank
         self.dcp_world_size, self.dcp_rank = get_dcp_world_rank()
         self._sparse_index_topk = _get_sparse_index_topk(topk)
+        if self.dcp_world_size > 1:
+            if self._sparse_index_topk is None:
+                raise RuntimeError('DCP requires the TileLang sparse index top-k kernel.')
+            if _get_deep_gemm() is None:
+                raise RuntimeError('DCP DSA scoring requires a compatible DeepGEMM installation.')
         self._step_meta_group: int | None = None
         self._piecewise_forward: Callable[..., Tensor] | None = None
         self._piecewise_forward_fused: Callable[..., Tensor] | None = None
@@ -459,9 +464,6 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
             if self.dcp_world_size == 1:
                 return local_indices
             return self._merge_dcp_topk(scores, local_indices)
-        if self.dcp_world_size > 1:
-            raise RuntimeError(
-                'DCP requires the TileLang sparse index top-k kernel.')
         return bitonic_topk(scores,
                             meta.q_seqlens,
                             kv_seqlens,
@@ -551,9 +553,7 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
             )
         else:
             if self.dcp_world_size > 1:
-                raise RuntimeError(
-                    'DCP DSA scoring requires a compatible DeepGEMM installation.'
-                )
+                raise RuntimeError('DCP DSA scoring requires DeepGEMM score metadata.')
             _warn_triton_index_scoring()
             score_bytes = q.size(0) * meta.max_kv_seqlen * 4
             if score_bytes > self.max_logits_bytes:

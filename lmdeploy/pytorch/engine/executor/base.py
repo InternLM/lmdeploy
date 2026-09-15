@@ -468,6 +468,15 @@ class ExecutorBase:
         self.set_cache_config(self.cache_config, spec_cache_config)
         self.set_model_config(self.model_config, spec_model_config)
 
+    def _log_kv_cache_capacity(self) -> None:
+        """Log usable token capacity across DCP shards, excluding reserved
+        blocks."""
+        config = self.cache_config
+        num_gpu_blocks = config.num_gpu_blocks - config.num_reserved_gpu_blocks
+        num_tokens = num_gpu_blocks * config.block_size * config.dcp
+        logger.info(f'GPU KV cache capacity: {num_tokens:,} tokens '
+                    f'({num_gpu_blocks:,} usable blocks/rank, DCP={config.dcp}).')
+
     def init(self):
         """init."""
         logger.info('Building Model.')
@@ -486,6 +495,7 @@ class ExecutorBase:
         if self.misc_config.memdecode_config is not None:
             logger.info('Building MemDecode memory KV/state cache engines.')
         self.build_cache_engine()
+        self._log_kv_cache_capacity()
         logger.info('Warming up model.')
         self.warmup()
 

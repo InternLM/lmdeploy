@@ -608,6 +608,9 @@ class PytorchEngineConfig:
         assert self.tp >= 1, 'invalid tp'
         assert self.dcp >= 1, 'invalid dcp'
         assert self.tp % self.dcp == 0, 'tp must be divisible by dcp'
+        if self.dcp > 1:
+            assert self.device_type == 'cuda', 'DCP requires CUDA'
+            assert self.kv_transfer_config is None, 'DCP does not support KV-cache connectors'
         assert self.dp >= 1, 'invalid dp'
         assert self.ep >= 1, 'invalid ep'
         assert 0 < self.cache_max_entry_count < 1, \
