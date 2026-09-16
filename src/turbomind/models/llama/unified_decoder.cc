@@ -78,15 +78,21 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
         moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(engine, ctx, moe_weights.front());
     }
 
-    // MoE layers always reduce over mlp_group_ (the combine excludes the ep
-    // dimension). Dense layers reduce over node_group_ in MoE models (their
-    // weights shard node-locally, Python: _dense_tp) and keep the historical
-    // whole-domain allreduce (mlp_group_ == 0) in pure-dense models —
-    // cross-node is legal there.
-    const int dense_group = moe_ffn_layer_ ? node_group_ : mlp_group_;
-    ffn_group_.resize(model_weight.num_layer);
-    for (int i = 0; i < model_weight.num_layer; ++i) {
-        ffn_group_[i] = model_weight.layer(i)->moe_ffn ? mlp_group_ : dense_group;
+    // Per-layer FFN group, used on both sides of the FFN: the pre-FFN gather
+    // assembles exactly the chunks the group's members own, and the post-FFN
+    // reduce sums exactly those chunks. Everything runs over mlp_group_ (the
+    // MoE combine excludes the ep dimension; pure-dense models get the
+    // historical whole-domain allreduce) — except dense layers in a MoE
+    // model, whose weights shard node-locally (Python: _dense_tp) and whose
+    // node collectively holds every row it reduces, so they never pay
+    // cross-node traffic.
+    ffn_group_.assign(model_weight.num_layer, mlp_group_);
+    if (moe_ffn_layer_) {
+        for (int i = 0; i < model_weight.num_layer; ++i) {
+            if (!model_weight.layer(i)->moe_ffn) {
+                ffn_group_[i] = node_group_;
+            }
+        }
     }
 
     if (!ffn_weights.empty()) {
@@ -289,6 +295,10 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
             out_bias = weights.at(layer)->attention->wo->bias;
         }
 
+        // Per-layer FFN group, precomputed in the ctor — the same group is
+        // used for the pre-FFN gather (here) and the post-FFN reduce.
+        const int ffn_group = ffn_group_[layer];
+
         AllreduceResidualRMSnorm(global_hidden_states,
                                  local_residual,
                                  out_bias,
@@ -297,7 +307,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
                                  weights.at(layer)->ffn_norm->zero_centered_,
                                  local_token_num,
                                  attn_tp_group_,
-                                 mlp_group_,
+                                 ffn_group,
                                  local_token_nums.data(),
                                  local_token_nums.size());
 
@@ -335,9 +345,6 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         const bool scale_zero_centered =
             !last ? weights.at(layer + 1)->attention_norm->zero_centered_ : output_norm_zero_centered_;
 
-        // Per-layer post-FFN reduce group, precomputed in the constructor.
-        const int ffn_group0 = ffn_group_[layer];
-
         AllreduceResidualRMSnorm(global_hidden_states,
                                  local_residual,
                                  {},
@@ -345,7 +352,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
                                  weights.at(layer)->ffn_norm->norm_eps_,
                                  scale_zero_centered,
                                  local_token_num,
-                                 ffn_group0,
+                                 ffn_group,
                                  attn_tp_group_,
                                  local_token_nums.data(),
                                  local_token_nums.size());
