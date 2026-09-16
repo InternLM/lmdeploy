@@ -86,6 +86,7 @@ def _make_async_lookup_scheduler(
     max_batches=1,
     num_gpu_blocks=16,
     max_prefill_token_num=8192,
+    sequence_strategy=None,
 ):
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 4
@@ -108,7 +109,7 @@ def _make_async_lookup_scheduler(
                 kv_role='kv_both',
             ),
         ),
-        seq_meta=SequenceMeta(block_size, strategy=ARSequenceStrategy()),
+        seq_meta=SequenceMeta(block_size, strategy=sequence_strategy or ARSequenceStrategy()),
         kv_connector=connector,
     )
 
@@ -925,6 +926,62 @@ def test_external_cached_tokens_survive_remote_ready_admission():
     assert admitted.running == [seq]
     assert seq.cached_tokens == 8
     assert seq.prefix_cache.match_start_step == 0
+
+
+@pytest.mark.parametrize('enable_prefix_caching', [False, True])
+def test_mtp_remote_hit_recomputes_boundary_in_private_block(enable_prefix_caching):
+    from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
+
+    cache_config = CacheConfig(
+        max_batches=1,
+        block_size=4,
+        num_cpu_blocks=0,
+        num_gpu_blocks=16,
+        kv_transfer_config=KVTransferConfig(
+            kv_connector='MooncakeStoreConnector',
+            kv_role='kv_both',
+        ),
+    )
+    connector = MooncakeStoreScheduler(cache_config)
+    connector.client.lookup = Mock(return_value=8)
+    scheduler = _make_async_lookup_scheduler(
+        connector,
+        enable_prefix_caching=enable_prefix_caching,
+        sequence_strategy=ARSpecSequenceStrategy(),
+    )
+    tokens = torch.arange(13)
+    tokens[8] = 99
+    seq = scheduler.add_session(90).add_sequence(tokens)
+
+    started = scheduler.schedule(is_prefill=True)
+    assert started.running == []
+    assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    load = connector.build_connector_meta(started).load_requests[0]
+    assert load.remote_block_count == 1
+    assert len(load.block_ids) == 1
+
+    # A concurrent request publishes the same first two target blocks while
+    # remote I/O is pending. Its MTP row 7 depends on token 8 rather than 99.
+    cached = scheduler.add_session(91).add_sequence(torch.arange(13))
+    scheduler.block_manager.allocate(cached)
+    scheduler.block_trie.allocate(cached)
+    cached_blocks = cached.logical_blocks.get_real_blocks().copy()
+    cached.state.stop()
+
+    scheduler.update_connector_output(
+        KVConnectorOutput(finished_receiving={seq.seq_id}))
+    assert seq.num_history_ids == 4
+    assert seq.cached_tokens == 4
+
+    admitted = scheduler.schedule(is_prefill=True)
+    assert admitted.running == [seq]
+    assert seq.num_history_ids == 4
+    assert seq.logical_blocks[1] != cached_blocks[1]
+    assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
+    if enable_prefix_caching:
+        assert seq.logical_blocks[0] == cached_blocks[0]
+    connector.client.lookup.assert_called_once()
+    scheduler.shutdown()
 
 
 def test_remote_ready_long_prefill_respects_short_only_turn():

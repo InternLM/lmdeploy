@@ -40,7 +40,8 @@ class _RequestHashTracker:
 class _LookupPlan:
     """Positive lookup snapshot waiting for paging block allocation.
 
-    The remote boundary and its block hashes must come from the same lookup.
+    The remote boundary has already excluded any recompute overlap. It and
+    its block hashes must come from the same lookup.
     ``update_state_after_alloc`` consumes this snapshot exactly once after the
     paging scheduler has assigned destination GPU blocks.
     """
@@ -111,11 +112,13 @@ class MooncakeStoreScheduler:
             return 0, False
 
         block_size = self._cache_config.block_size
-        token_len = request.get_prefix_cache_max_match_step()
+        token_len = request.clamp_prefix_cache_match_step(
+            request.get_prefix_cache_max_candidate_step())
         # Mooncake stores complete KV blocks, so do not query the incomplete
         # block at the end of the request.
         token_len = token_len // block_size * block_size
-        if token_len < block_size or num_computed_tokens >= token_len:
+        recompute_tokens = max(0, request.prefix_cache.recompute_overlap.recompute_blocks) * block_size
+        if token_len < block_size or num_computed_tokens >= token_len - recompute_tokens:
             return 0, False
 
         req_id = int(request.seq_id)
@@ -148,6 +151,13 @@ class MooncakeStoreScheduler:
         # completed lookup with no remotely reusable suffix.
         if remote_token_len is None:
             return None, False
+
+        # MTP KV at position N-1 depends on token N, outside that block's
+        # target-token hash. Reserve the last actually matched block for
+        # recomputation, even when the remote hit is shorter than the prompt.
+        # Querying the untrimmed candidate above avoids dropping two blocks
+        # on a full hit. Cached plans retain this already-safe boundary.
+        remote_token_len = max(0, int(remote_token_len) - recompute_tokens)
 
         # Keep the exact token delta for scheduler accounting. If the local
         # position is inside a block, paging expands the load start down to the

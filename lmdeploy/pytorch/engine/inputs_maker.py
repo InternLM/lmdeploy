@@ -424,6 +424,10 @@ class _ForwardInputsTask:
         common boundary keeps the corresponding target and MTP rows in every
         saved block.  The Mooncake scheduler still rounds this boundary down
         to complete blocks.
+
+        Regular prefill and the final chunk fill the last MTP row using the
+        next token sampled by the target. That token is already accepted;
+        subsequent unverified draft rows lie beyond this prefill boundary.
         """
         if (self.maker.spec_decoding and inputs.logits_indices is not None
                 and inputs.seq_logit_length is not None):

@@ -699,7 +699,7 @@ def test_spec_decoding_connector_boundary_uses_common_chunk_length(
         is_decoding=False,
         is_dummy=False,
         is_chunk=is_chunk,
-        is_first_chunk=is_chunk,
+        is_first_chunk=is_chunk and not is_last_chunk,
         is_last_chunk=is_last_chunk,
         is_chunk_multimodal=False,
         history_lengths=torch.tensor([8]),
