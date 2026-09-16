@@ -20,8 +20,6 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      CARGO_HOME: /data/cargo-cache
     defaults:
       run:
         working-directory: lmdeploy/router
@@ -46,8 +44,6 @@ jobs:
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      CARGO_HOME: /data/cargo-cache
     defaults:
       run:
         working-directory: lmdeploy/router
