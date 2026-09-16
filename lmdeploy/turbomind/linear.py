@@ -128,12 +128,13 @@ class Linear:
     """Plan, prepare, tune, and execute TurboMind linear operations from
     Torch."""
 
-    __slots__ = ('device', '_impl', '_context', '__weakref__')
+    __slots__ = ('device', '_impl', '_workspaces', '_context', '__weakref__')
 
     def __init__(self):
         """Create an executor for the current CUDA device."""
         self.device = torch.device('cuda', torch.cuda.current_device())
         self._impl = None
+        self._workspaces = {}
         self._context = None
         with self._activate():
             self._impl = _tm.LlamaLinear()
@@ -162,7 +163,23 @@ class Linear:
         """Release the native executor on its device."""
         with self._activate():
             self._impl = None
+            # Workspace destruction is a plain cudaFree with no implicit
+            # synchronization; ensure all work using them has completed first.
+            torch.cuda.synchronize(self.device)
+            self._workspaces.clear()
         self._context = None
+
+    def _workspace(self, stream):
+        """Default GEMM workspace for a stream, created on first use.
+
+        One per stream, kept for the lifetime of this executor (PyTorch
+        convention: like per-stream cuBLAS workspaces).
+        """
+        ws = self._workspaces.get(stream.cuda_stream)
+        if ws is None:
+            ws = _tm.GemmWorkspace(stream.cuda_stream)
+            self._workspaces[stream.cuda_stream] = ws
+        return ws
 
     def get_weight_plan(
         self,
@@ -422,7 +439,11 @@ class Linear:
         """Select an immutable execution plan for an input and prepared
         weight."""
         tm = _tm
+        stream = torch.cuda.current_stream(self.device)
+        with torch.cuda.device(self.device):
+            workspace = self._workspace(stream)
         impl = self._impl.get_exec_plan(
+            workspace,
             weight._impl,
             tm.from_dlpack(x),
             None if indices is None else tm.from_dlpack(indices),
@@ -466,6 +487,7 @@ class Linear:
         with self._activate():
             out, out_scales = self._allocate_output(exec_plan._impl, out, out_scales)
             self._impl.forward_dense(
+                self._workspace(torch.cuda.current_stream(self.device)),
                 exec_plan._impl,
                 _tm.from_dlpack(x),
                 weight._impl,
@@ -491,6 +513,7 @@ class Linear:
         with self._activate():
             out, out_scales = self._allocate_output(exec_plan._impl, out, out_scales)
             self._impl.forward_moe(
+                self._workspace(torch.cuda.current_stream(self.device)),
                 exec_plan._impl,
                 _tm.from_dlpack(x),
                 weight._impl,
@@ -524,6 +547,7 @@ class Linear:
             output_spec = self._impl._get_output_spec(weight._impl, input_impl, indices_impl)
             out, out_scales = self._allocate_output(output_spec, out, out_scales)
             impl = self._impl.tune(
+                self._workspace(torch.cuda.current_stream(self.device)),
                 input_impl,
                 weight._impl,
                 indices_impl,
