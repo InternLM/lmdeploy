@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools-rust>=1.5.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lmdeploy-router"
+version = "0.0.3"
+description = "High-performance Rust-based load balancer for LMDeploy with multiple routing algorithms and prefill-decode disaggregation support"
+authors = [{name = "Byron Hsu", email = "byronhsu1230@gmail.com"}]
+requires-python = ">=3.8"
+readme = "README.md"
+license = "Apache-2.0"
+classifiers = [
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+]
+
+dependencies = [
+    "setproctitle",
+    "aiohttp",
+    "orjson",
+    "uvicorn",
+    "fastapi",
+    "requests>=2.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+lmdeploy-router = "lmdeploy_router.launch_router:main"
+
+
+# https://github.com/PyO3/setuptools-rust?tab=readme-ov-file
+[tool.setuptools.packages]
+find = { where = ["py_src"] }
+
+# workaround for https://github.com/pypa/twine/issues/1216
+[tool.setuptools]
+license-files = []
+
+[tool.distutils.bdist_wheel]
+py_limited_api = "cp38"
+
+
+# Lint config for `ruff check py_src/ py_test/`.
+# The CI installs ruff unpinned; newer ruff releases expanded the *default*
+# ruleset, which reddened py_src/py_test repo-wide even though nothing in the
+# code changed. Pin the selection to ruff's historical default (E4/E7/E9 + F)
+# so the lint is deterministic across ruff versions. A broader ruleset +
+# cleanup can be adopted separately.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

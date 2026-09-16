@@ -1,0 +1,7 @@
+{
+    "route": {
+        "type": "SingleServerRoute",
+        "host": "localhost",
+        "port": 8000
+    }
+}
