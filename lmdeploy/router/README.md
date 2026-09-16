@@ -15,6 +15,7 @@ A high-performance and lightweight request forwarding system for LMDeploy deploy
 ### Prerequisites
 
 **Rust and Cargo:**
+
 ```bash
 # Install rustup (Rust installer and version manager)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -32,14 +33,27 @@ cargo --version
 
 ### Installation & Basic Usage
 
-#### Rust Binary
+#### Unified Image
+
+The main LMDeploy image builds `lmdeploy-router` by default. If you need the
+standard image without the Rust toolchain and router binary, disable that
+optional build:
+
+```bash
+docker build -f docker/Dockerfile --build-arg BUILD_ROUTER=0 .
+```
+
+### Rust Binary
+
 ```bash
 # Build Rust components
 cargo build --release
 ```
 
 #### Python Package
+
 Install from PyPI:
+
 ```bash
 pip install lmdeploy-router
 ```
@@ -67,6 +81,7 @@ A Python-only wheel can be built for packaging checks with
 the Rust binary.
 
 Install and verify it with:
+
 ```bash
 python -m pip install --force-reinstall dist/lmdeploy_router-*.whl
 
@@ -78,6 +93,7 @@ lmdeploy-router --help
 ### Usage Examples
 
 #### Standard Data Parallelism Routing
+
 ```bash
 # Launch router with one worker per URL
 ./target/release/lmdeploy-router \
@@ -112,6 +128,7 @@ cargo run --release --bin lmdeploy-router -- \
 ```
 
 For the native registration flow, start the router without static PD URLs and start LMDeploy services with `--role Prefill` or `--role Decode` plus `--proxy-url`.
+
 ## Configuration
 
 ### Authentication
@@ -142,6 +159,7 @@ lmdeploy-router \
 ### Retries and Circuit Breakers
 
 #### Retry Configuration
+
 Retries are enabled by default with exponential backoff and jitter:
 
 ```bash
@@ -155,6 +173,7 @@ lmdeploy-router \
 ```
 
 #### Circuit Breaker Configuration
+
 Circuit breakers protect workers and provide automatic recovery:
 
 ```bash
@@ -167,6 +186,7 @@ lmdeploy-router \
 ```
 
 **Circuit Breaker State Machine:**
+
 - `Closed` → `Open` after N consecutive failures (failure-threshold)
 - `Open` → `HalfOpen` after timeout (timeout-duration-secs)
 - `HalfOpen` → `Closed` after M consecutive successes (success-threshold)
@@ -190,13 +210,13 @@ lmdeploy-router \
 
 The router supports multiple load balancing policies:
 
-| Policy | Description | Session Affinity | Use Case |
-|--------|-------------|------------------|----------|
-| `round_robin` | Sequential distribution across workers | No | General purpose, even distribution |
-| `random` | Uniform random selection | No | Simple deployments |
-| `consistent_hash` | Routes same session/user to same worker | Yes | Multi-turn chat, KV cache reuse |
-| `power_of_two` | Picks least loaded of two random workers | No | Load-sensitive workloads |
-| `cache_aware` | Optimizes for prefix cache hits | Yes | Repeated prompts, few-shot |
+| Policy            | Description                              | Session Affinity | Use Case                           |
+| ----------------- | ---------------------------------------- | ---------------- | ---------------------------------- |
+| `round_robin`     | Sequential distribution across workers   | No               | General purpose, even distribution |
+| `random`          | Uniform random selection                 | No               | Simple deployments                 |
+| `consistent_hash` | Routes same session/user to same worker  | Yes              | Multi-turn chat, KV cache reuse    |
+| `power_of_two`    | Picks least loaded of two random workers | No               | Load-sensitive workloads           |
+| `cache_aware`     | Optimizes for prefix cache hits          | Yes              | Repeated prompts, few-shot         |
 
 ```bash
 # Example: Using consistent_hash with HTTP header for session affinity
@@ -226,6 +246,7 @@ lmdeploy-router \
 ### Command Line Arguments Reference
 
 #### Service Discovery
+
 - `--service-discovery`: Enable Kubernetes service discovery
 - `--service-discovery-port`: Port for worker URLs (default: 8000)
 - `--service-discovery-namespace`: Kubernetes namespace to watch
@@ -249,6 +270,7 @@ Set `rust-analyzer.linkedProjects` to the absolute path of `Cargo.toml`:
 The continuous integration pipeline includes comprehensive testing, benchmarking, and publishing:
 
 #### Build & Test
+
 1. **Build Wheels**: Uses `cibuildwheel` for manylinux x86_64 packages
 2. **Build Source Distribution**: Creates source distribution for pip fallback
 3. **Rust HTTP Server Benchmarking**: Performance testing of router overhead
@@ -256,6 +278,7 @@ The continuous integration pipeline includes comprehensive testing, benchmarking
 5. **PD Disaggregation Testing**: Benchmark and sanity checks for prefill-decode load balancing
 
 #### Publishing
+
 - **PyPI Publishing**: Wheels and source distributions published when version changes in `pyproject.toml`
 - **Container Images**: Docker images published using `/docker/Dockerfile.router`
 
