@@ -309,7 +309,7 @@ fn analyze_ring_distribution(
     for url in worker_urls {
         vnodes_per_url.insert(url.clone(), 0);
     }
-    for (_, url) in ring.iter() {
+    for url in ring.values() {
         *vnodes_per_url.get_mut(url).unwrap() += 1;
     }
 

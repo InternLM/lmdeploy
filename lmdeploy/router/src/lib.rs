@@ -30,6 +30,7 @@ pub enum PolicyType {
     CacheAware,
     PowerOfTwo,
     ConsistentHash,
+    RendezvousHash,
 }
 
 #[cfg(feature = "python")]
@@ -132,6 +133,7 @@ impl Router {
                 PolicyType::ConsistentHash => ConfigPolicyConfig::ConsistentHash {
                     virtual_nodes: 160, // Default value
                 },
+                PolicyType::RendezvousHash => ConfigPolicyConfig::RendezvousHash,
             }
         };
 

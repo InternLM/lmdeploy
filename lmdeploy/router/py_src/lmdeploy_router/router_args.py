@@ -92,8 +92,7 @@ class RouterArgs:
         use_router_prefix: bool = False,
         exclude_host_port: bool = False,
     ):
-        """
-        Add router-specific arguments to an argument parser.
+        """Add router-specific arguments to an argument parser.
 
         Args:
             parser: The argument parser to add arguments to
@@ -136,6 +135,7 @@ class RouterArgs:
                 "cache_aware",
                 "power_of_two",
                 "consistent_hash",
+                "rendezvous_hash",
             ],
             help="Load balancing policy to use. In PD mode, this is used for both prefill and decode unless overridden",
         )
@@ -149,6 +149,7 @@ class RouterArgs:
                 "cache_aware",
                 "power_of_two",
                 "consistent_hash",
+                "rendezvous_hash",
             ],
             help="Specific policy for prefill nodes in PD mode. If not specified, uses the main policy",
         )
@@ -162,6 +163,7 @@ class RouterArgs:
                 "cache_aware",
                 "power_of_two",
                 "consistent_hash",
+                "rendezvous_hash",
             ],
             help="Specific policy for decode nodes in PD mode. If not specified, uses the main policy",
         )
@@ -483,8 +485,7 @@ class RouterArgs:
     def from_cli_args(
         cls, args: argparse.Namespace, use_router_prefix: bool = False
     ) -> "RouterArgs":
-        """
-        Create RouterArgs instance from parsed command line arguments.
+        """Create RouterArgs instance from parsed command line arguments.
 
         Args:
             args: Parsed command line arguments

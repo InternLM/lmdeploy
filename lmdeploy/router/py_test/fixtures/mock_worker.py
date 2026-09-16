@@ -1,11 +1,12 @@
-"""
-Lightweight mock worker HTTP server for router integration tests.
+"""Lightweight mock worker HTTP server for router integration tests.
 
 Implements minimal endpoints used by the router:
 - GET /health, /health_generate
 - POST /generate, /v1/completions, /v1/chat/completions
 - POST /flush_cache
 - GET /get_server_info, /get_model_info, /v1/models
+- GET /distserve/engine_info
+- POST /distserve/p2p_initialize, /distserve/p2p_connect, /distserve/p2p_drop_connect
 
 Behavior knobs are controlled via CLI flags to simulate failures, latency, and load.
 """
@@ -142,6 +143,28 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     async def get_load():
         return JSONResponse({"load": _inflight})
 
+    @app.get("/distserve/engine_info")
+    async def distserve_engine_info():
+        return JSONResponse({"tp_size": 1, "dp_size": int(args.dp_size)})
+
+    @app.post("/distserve/p2p_initialize")
+    async def distserve_p2p_initialize():
+        return JSONResponse(
+            {
+                "status": 1,
+                "engine_endpoint_info": {"url": f"{args.host}:{args.port}"},
+                "kvtransfer_endpoint_info": [],
+            }
+        )
+
+    @app.post("/distserve/p2p_connect")
+    async def distserve_p2p_connect():
+        return JSONResponse({"status": 1})
+
+    @app.post("/distserve/p2p_drop_connect")
+    async def distserve_p2p_drop_connect():
+        return JSONResponse({"status": 1})
+
     def make_json_response(obj: dict, status_code: int = 200) -> JSONResponse:
         resp = JSONResponse(obj, status_code=status_code)
         resp.headers["X-Worker-Id"] = worker_id
@@ -182,6 +205,17 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             data = {}
 
         now = time.time()
+        is_prefill = (
+            data.get("with_cache") is True and data.get("preserve_cache") is True
+        )
+        if is_prefill:
+            ret = {
+                "id": int(now * 1000),
+                "cache_block_ids": [1, 2, 3],
+                "remote_token_ids": [0, 1, 3],
+            }
+            return make_json_response(ret, status_code=200)
+
         ret = {
             "id": f"cmpl-{int(now*1000)}",
             "object": "text_completion",

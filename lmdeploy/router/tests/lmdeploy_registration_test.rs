@@ -14,9 +14,11 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 async fn regular_app() -> (Router, Arc<AppContext>) {
-    let mut config = RouterConfig::default();
-    config.mode = RoutingMode::Regular {
-        worker_urls: Vec::new(),
+    let config = RouterConfig {
+        mode: RoutingMode::Regular {
+            worker_urls: Vec::new(),
+        },
+        ..RouterConfig::default()
     };
     let context = Arc::new(
         AppContext::new(
@@ -42,15 +44,17 @@ async fn regular_app() -> (Router, Arc<AppContext>) {
 }
 
 async fn lmdeploy_pd_app() -> (Router, Arc<AppContext>) {
-    let mut config = RouterConfig::default();
-    config.mode = RoutingMode::LMDeployPrefillDecode {
-        prefill_urls: Vec::new(),
-        decode_urls: Vec::new(),
-        prefill_policy: None,
-        decode_policy: None,
-        migration_protocol: LMDeployMigrationProtocol::Rdma,
-        rdma_config: None,
-        dummy_prefill: false,
+    let config = RouterConfig {
+        mode: RoutingMode::LMDeployPrefillDecode {
+            prefill_urls: Vec::new(),
+            decode_urls: Vec::new(),
+            prefill_policy: None,
+            decode_policy: None,
+            migration_protocol: LMDeployMigrationProtocol::Rdma,
+            rdma_config: None,
+            dummy_prefill: false,
+        },
+        ..RouterConfig::default()
     };
     let context = Arc::new(
         AppContext::new(

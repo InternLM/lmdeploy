@@ -23,13 +23,13 @@ def policy_from_str(policy_str: Optional[str]) -> PolicyType:
         "cache_aware": PolicyType.CacheAware,
         "power_of_two": PolicyType.PowerOfTwo,
         "consistent_hash": PolicyType.ConsistentHash,
+        "rendezvous_hash": PolicyType.RendezvousHash,
     }
     return policy_map[policy_str]
 
 
 class Router:
-    """
-    A high-performance router for distributing requests across worker nodes.
+    """A high-performance router for distributing requests across worker nodes.
 
     Args:
         worker_urls: List of URLs for worker nodes that will handle requests. Each URL should include
@@ -97,7 +97,8 @@ class Router:
     """
 
     def __init__(self, router: Optional[_Router] = None, **kwargs):
-        """Initialize Router either from a _Router instance or keyword arguments.
+        """Initialize Router either from a _Router instance or keyword
+        arguments.
 
         Args:
             router: Optional _Router instance. If provided, kwargs are ignored.

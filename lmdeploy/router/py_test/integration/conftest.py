@@ -13,6 +13,7 @@ from ..fixtures.router_manager import RouterManager
 def pytest_configure(config):
     config.addinivalue_line("markers", "integration: mark as router integration test")
     config.addinivalue_line('markers', 'pd_engine: requires LMDeploy PD engine metadata')
+    config.addinivalue_line("markers", "lmdeploy: requires externally managed LMDeploy backends")
 
 
 @pytest.fixture

@@ -754,6 +754,9 @@ impl GenerationRequest for CompletionRequest {
     }
 
     fn extract_text_for_routing(&self) -> String {
+        if let Some(user) = self.user.as_deref() {
+            return format!("user:{user}");
+        }
         self.prompt.extract_text_for_routing()
     }
 }

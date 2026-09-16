@@ -137,6 +137,24 @@ class RouterManager:
         r = requests.post(f"{base_url}/remove_worker", params={"url": worker_url})
         assert r.status_code == 200, f"remove_worker failed: {r.status_code} {r.text}"
 
+    def add_lmdeploy_node(self, base_url: str, worker_url: str, role: int) -> None:
+        response = requests.post(
+            f"{base_url}/nodes/add", json={"url": worker_url, "status": {"role": role}}
+        )
+        assert response.status_code == 200, response.text
+
+    def remove_lmdeploy_node(self, base_url: str, worker_url: str, role: int) -> None:
+        response = requests.post(
+            f"{base_url}/nodes/remove",
+            json={"url": worker_url, "status": {"role": role}},
+        )
+        assert response.status_code == 200, response.text
+
+    def lmdeploy_nodes(self, base_url: str) -> dict:
+        response = requests.get(f"{base_url}/nodes/status")
+        assert response.status_code == 200, response.text
+        return response.json()
+
     def list_workers(self, base_url: str) -> list[str]:
         r = requests.get(f"{base_url}/list_workers")
         assert r.status_code == 200, f"list_workers failed: {r.status_code} {r.text}"
