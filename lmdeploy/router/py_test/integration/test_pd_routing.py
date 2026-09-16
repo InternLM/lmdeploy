@@ -7,6 +7,7 @@ import requests
 
 
 @pytest.mark.integration
+@pytest.mark.pd_engine
 def test_pd_power_of_two_decode_attribution(router_manager, mock_workers):
     # Start two prefill and three decode mock workers via fixture
     _, prefill_urls_raw, prefill_ids = mock_workers(n=2)
@@ -44,6 +45,7 @@ def test_pd_power_of_two_decode_attribution(router_manager, mock_workers):
 
 
 @pytest.mark.integration
+@pytest.mark.pd_engine
 def test_pd_power_of_two_skews_to_faster_decode(router_manager, mock_workers):
     # Start two prefill workers (fast)
     _, prefill_urls_raw, _ = mock_workers(n=2)
