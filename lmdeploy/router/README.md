@@ -265,6 +265,10 @@ Set `rust-analyzer.linkedProjects` to the absolute path of `Cargo.toml`:
 }
 ```
 
+### Release Model
+
+The router wheel has its own `pyproject.toml` version and is published independently from the main `lmdeploy` wheel. The manual `router-release` workflow builds artifacts by default; select the upload option only after those artifacts are approved. Publication uses the separate `ROUTER_PYPI_TOKEN` secret and the `prod` GitHub environment.
+
 ### CI/CD Pipeline
 
 The continuous integration pipeline includes comprehensive testing, benchmarking, and publishing:
