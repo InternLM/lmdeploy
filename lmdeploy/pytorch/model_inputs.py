@@ -357,8 +357,6 @@ class StepContext:
     # mrope
     mrope_position_ids: torch.Tensor | None = None
 
-    _outputs: dict = field(default_factory=dict)
-
     # chunk with multimodal
     is_chunk_multimodal: bool = False
     is_dummy: bool = False

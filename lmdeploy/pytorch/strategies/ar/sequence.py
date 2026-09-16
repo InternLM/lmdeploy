@@ -148,10 +148,10 @@ class ARSequenceStrategy(SequenceStrategy):
                 msg.update_token_ids(np.empty((0,), dtype=np.int64),
                                      model_meta=model_meta,
                                      mode=UpdateTokenMode.PREFILL)
-                msg.state.finish()
+                msg.finish()
                 continue
 
             # fill token
             msg.update_token_ids(token, model_meta=model_meta, mode=update_mode, routed_experts=routed_experts)
             if stop:
-                msg.state.finish()
+                msg.finish()

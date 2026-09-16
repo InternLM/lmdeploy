@@ -2,10 +2,10 @@
 """Shared tensor and weight transforms for native vision models."""
 from __future__ import annotations
 
-import _turbomind as _tm
 import torch
 
-from ..linear import Linear, transform_input_dim, transform_output_dim
+from .. import _tm
+from ..builders.linear import Linear, transform_input_dim, transform_output_dim
 from ..weight_format import TrivialFormat
 
 

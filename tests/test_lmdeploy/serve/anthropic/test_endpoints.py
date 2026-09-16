@@ -22,8 +22,10 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
+from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.response_parser import BaseResponseParser
 from lmdeploy.serve.parsers.tool_parser.interns2preview_tool_parser import InternS2PreviewToolParser
+from lmdeploy.serve.parsers.tool_parser.qwen3_tool_parser import Qwen3ToolParser
 from lmdeploy.serve.utils.server_utils import protocol_error_response
 
 ANTHROPIC_HEADERS = {'anthropic-version': '2023-06-01'}
@@ -159,10 +161,6 @@ class _BasicParser:
 
     def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
         return text, None, None
-
-    def validate_complete(self, text: str | None = None):
-        return True
-
 
 class _FakeServerContext:
     def __init__(
@@ -320,20 +318,6 @@ class _ToolAndReasoningParser:
             ],
             'internal reasoning',
         )
-
-    def validate_complete(self, text: str | None = None):
-        return True
-
-
-class _IncompleteToolParser(_ToolAndReasoningParser):
-    validate_calls = 0
-    last_text = None
-
-    def validate_complete(self, text: str | None = None):
-        type(self).validate_calls += 1
-        type(self).last_text = text
-        return False
-
 
 def _make_client(response_parser_cls=_BasicParser,
                  *,
@@ -697,18 +681,6 @@ def test_messages_non_stream_with_reasoning_and_tool_use_blocks():
     assert data['content'][2]['input'] == {'query': 'lmdeploy'}
 
 
-def test_messages_non_stream_validate_complete_marks_parse_error():
-    _IncompleteToolParser.validate_calls = 0
-    _IncompleteToolParser.last_text = None
-    client = _make_client(response_parser_cls=_IncompleteToolParser)
-    response = _post_messages(client, tools=[SEARCH_TOOL], return_token_ids=True)
-
-    assert response.status_code == 200
-    assert response.json()['stop_reason'] == 'parse_error'
-    assert _IncompleteToolParser.validate_calls == 1
-    assert _IncompleteToolParser.last_text == 'Hello world!'
-
-
 def test_messages_streaming_usage_matches_anthropic_event_spec():
     client, context = _make_client(return_context=True)
     status_code, body = _stream_messages_body(client)
@@ -784,20 +756,6 @@ def test_messages_streaming_with_reasoning_and_tool_use_events():
     assert '"output_ids": [102]' in body
 
 
-def test_messages_streaming_validate_complete_marks_parse_error():
-    _IncompleteToolParser.validate_calls = 0
-    _IncompleteToolParser.last_text = None
-    client = _make_client(response_parser_cls=_IncompleteToolParser)
-    status_code, body = _stream_messages_body(client, tools=[SEARCH_TOOL], return_token_ids=True)
-    payloads = _sse_payloads(body)
-    message_delta = next(item for item in payloads if item['type'] == 'message_delta')
-
-    assert status_code == 200
-    assert message_delta['delta']['stop_reason'] == 'parse_error'
-    assert _IncompleteToolParser.validate_calls == 1
-    assert _IncompleteToolParser.last_text is None
-
-
 def test_stream_messages_response_serializes_numpy_routed_experts():
     import numpy as np
 
@@ -865,77 +823,102 @@ def test_stream_messages_response_preserves_tool_start_output_ids():
     assert output_ids == [11, 12, 13]
 
 
-def test_stream_messages_response_closes_text_before_resuming_tool_delta():
-    class _InterleavedToolParser:
-        def __init__(self):
-            self.calls = 0
+def test_stream_messages_response_uses_identity_first_parser_contract():
+    class _ArgumentsBeforeNameResponseParser(BaseResponseParser):
+        reasoning_parser_cls = None
+        tool_parser_cls = Qwen3ToolParser
 
-        def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
-            self.calls += 1
-            if self.calls == 1:
-                return [(
-                    DeltaMessage(
-                        role='assistant',
-                        tool_calls=[
-                            DeltaToolCall(
-                                index=0,
-                                id='toolu_123',
-                                function=DeltaFunctionCall(
-                                    name='search',
-                                    arguments='{"query":',
-                                ),
-                            )
-                        ],
-                    ),
-                    True,
-                )]
-            if self.calls == 2:
-                return [(DeltaMessage(role='assistant', content='interlude'), False)]
-            return [(
-                DeltaMessage(
-                    role='assistant',
-                    tool_calls=[
-                        DeltaToolCall(
-                            index=0,
-                            id='toolu_123',
-                            function=DeltaFunctionCall(arguments='"lmdeploy"}'),
-                        )
-                    ],
-                ),
-                True,
-            )]
+    response_parser = _ArgumentsBeforeNameResponseParser(
+        ChatCompletionRequest(
+            model='fake-model',
+            messages=[],
+            tools=[{'type': 'function', 'function': {'name': 'search'}}],
+            tool_choice='auto',
+            stream=True,
+        ))
 
     async def _result_generator():
-        for idx, finish_reason in enumerate([None, None, 'stop'], start=1):
-            yield SimpleNamespace(
-                response=f'chunk-{idx}',
-                token_ids=[idx],
-                input_token_len=8,
-                generate_token_len=idx,
-                finish_reason=finish_reason,
-            )
+        yield SimpleNamespace(
+            response='<tool_call>{"arguments":{"query":"lmdeploy"}',
+            token_ids=[],
+            input_token_len=8,
+            generate_token_len=1,
+            finish_reason=None,
+        )
+        yield SimpleNamespace(
+            response=',"name":"search"}</tool_call>',
+            token_ids=[],
+            input_token_len=8,
+            generate_token_len=2,
+            finish_reason='stop',
+        )
 
     payloads = _collect_stream_response_payloads(
         _result_generator(),
-        _InterleavedToolParser(),
+        response_parser,
     )
 
     tool_start = next(
         item for item in payloads
         if item['type'] == 'content_block_start' and item['content_block']['type'] == 'tool_use')
+    argument_delta = next(
+        item for item in payloads
+        if item['type'] == 'content_block_delta' and item['delta']['type'] == 'input_json_delta')
     assert tool_start['content_block']['name'] == 'search'
-
-    resumed_tool_delta_index = next(
-        idx for idx, item in enumerate(payloads)
-        if item['type'] == 'content_block_delta' and item['delta']['type'] == 'input_json_delta'
-        and item['delta']['partial_json'] == '"lmdeploy"}')
-    assert any(
-        item['type'] == 'content_block_stop' and item['index'] == 1
-        for item in payloads[:resumed_tool_delta_index])
+    assert argument_delta['delta']['partial_json'] == '{"query":"lmdeploy"}'
 
 
-def test_stream_messages_response_interns2preview_inter_tool_whitespace_uses_text_block():
-    """Keep InternS2Preview's inter-tool newline off open tool-use blocks."""
+def test_stream_messages_response_preserves_nested_tool_event_order():
+    class _NestedToolResponseParser(BaseResponseParser):
+        reasoning_parser_cls = ReasoningParserManager.get('default')
+        tool_parser_cls = Qwen3ToolParser
+
+    response_parser = _NestedToolResponseParser(
+        ChatCompletionRequest(
+            model='fake-model',
+            messages=[],
+            tools=[{'type': 'function', 'function': {'name': 'search'}}],
+            tool_choice='auto',
+            stream=True,
+            chat_template_kwargs={'enable_thinking': True},
+        ))
+
+    async def _result_generator():
+        chunks = [
+            ('<think>before', None),
+            ('<tool_call>{"name":"search","arguments":{"query":"lmdeploy"}}</tool_call>', None),
+            ('after</think>answer', 'stop'),
+        ]
+        for index, (response, finish_reason) in enumerate(chunks, start=1):
+            yield SimpleNamespace(
+                response=response,
+                token_ids=[],
+                input_token_len=8,
+                generate_token_len=index,
+                finish_reason=finish_reason,
+            )
+
+    payloads = _collect_stream_response_payloads(_result_generator(), response_parser)
+    block_starts = [item for item in payloads if item['type'] == 'content_block_start']
+
+    assert [item['index'] for item in block_starts] == [0, 1, 2, 3]
+    assert [item['content_block']['type'] for item in block_starts] == [
+        'thinking',
+        'tool_use',
+        'thinking',
+        'text',
+    ]
+    assert block_starts[1]['content_block']['name'] == 'search'
+    assert [
+        item['delta']['thinking'] for item in payloads
+        if item['type'] == 'content_block_delta' and item['delta']['type'] == 'thinking_delta'
+    ] == ['before', 'after']
+
+
+
+
+def test_stream_messages_response_interns2preview_ignores_inter_tool_newline():
+    """Ignore InternS2Preview's newline between consecutive tool blocks."""
 
     class _InternS2PreviewResponseParser(BaseResponseParser):
         reasoning_parser_cls = None
@@ -1002,14 +985,11 @@ def test_stream_messages_response_interns2preview_inter_tool_whitespace_uses_tex
         ('content_block_start', 1),
         ('content_block_delta', 1),
         ('content_block_stop', 1),
-        ('content_block_start', 2),
-        ('content_block_delta', 2),
-        ('content_block_stop', 2),
     ]
     assert [
         item['content_block']['type'] for item in block_events
         if item['type'] == 'content_block_start'
-    ] == ['tool_use', 'text', 'tool_use']
+    ] == ['tool_use', 'tool_use']
     assert [
         item['delta'] for item in block_events
         if item['type'] == 'content_block_delta'
@@ -1017,10 +997,6 @@ def test_stream_messages_response_interns2preview_inter_tool_whitespace_uses_tex
         {
             'type': 'input_json_delta',
             'partial_json': '{"city": "Paris"}',
-        },
-        {
-            'type': 'text_delta',
-            'text': '\n',
         },
         {
             'type': 'input_json_delta',

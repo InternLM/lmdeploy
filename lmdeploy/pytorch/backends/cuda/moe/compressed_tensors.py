@@ -18,6 +18,7 @@ from lmdeploy.pytorch.kernels.cuda.compressed_tensors_w4a16 import (
 from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _renormalize
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
+from ..step_metadata import register_piecewise_graph_impl
 from .default import dispatch_ll
 from .ep_utils import gather_outputs_by_attn_tp, split_inputs_by_attn_tp
 
@@ -164,6 +165,10 @@ class DeepEPFusedMoEW4A16Impl(FusedMoEW4A16Impl):
             num_max_dispatch_tokens_per_rank=
             num_max_dispatch_tokens_per_rank,
         )
+        # Normal-mode DeepEP dispatch is dynamic and must not be captured as
+        # an ordinary graph op. Register it so PCG capability discovery fails
+        # closed until this implementation owns an eager boundary.
+        register_piecewise_graph_impl(self)
 
     def _validate_local_weights(
         self,

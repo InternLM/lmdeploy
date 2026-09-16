@@ -1,17 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# modified from https://github.com/vllm-project/vllm/tree/v0.7.3/vllm/entrypoints/openai/tool_parsers
 from __future__ import annotations
 
-import json
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar
 
-import partial_json_parser
 import shortuuid
 from mmengine import Registry
-from partial_json_parser.core.options import Allow
 
 from lmdeploy.serve.openai.protocol import (
-    DeltaFunctionCall,
     DeltaToolCall,
     FunctionCall,
     ToolCall,
@@ -21,6 +17,19 @@ if TYPE_CHECKING:
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool
 
 ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.parsers.tool_parser'])
+
+# Client-visible indices are non-negative; these values encode filtering state.
+_PENDING_INDEX = -2
+_REJECTED_INDEX = -1
+
+
+@dataclass
+class _ToolCallParts:
+    """Complete-call fields accumulated from streaming deltas."""
+
+    call_id: str | None = None
+    name: str | None = None
+    arguments: list[str] = field(default_factory=list)
 
 
 def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
@@ -61,28 +70,41 @@ def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
 
 
 class ToolParser:
-    """Base class for model-specific tool parsers."""
+    """Base class for model-specific tool-call boundary extractors.
 
-    validate_tool_names: ClassVar[bool] = False
-    # XGrammar builtin structural-tag keys for required tool calls.
+    Every accepted call emits its identity before any arguments: the first
+    client-visible delta contains ``index``, ``id``, ``type``, and the function
+    name. Arguments encountered earlier in the model payload are retained and
+    released afterward in their original order.
+
+    Streaming uses two distinct completion states. ``_payload_closed`` means
+    the model-specific parser has reached the end of the inner payload; the
+    outer closing marker may still be absent at that point. ``block_closed``
+    means the complete outer block has been consumed, or the final stream chunk
+    has forced it closed, so the response parser may leave tool mode.
+    """
+
     structural_tag_model: ClassVar[str | None] = None
     reasoning_structural_tag_model: ClassVar[str | None] = None
+    # Proper close-marker prefixes that end at decoded-token boundaries.
+    # An empty tuple means the complete closing marker is one token.
+    tool_close_prefixes: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self):
-        self._tool_payload: str = ''
+        self._close_tag: str | None = None
         self._active_tool_call_id: str = ''
-        self._active_tool_index: int = -1
         self._name_emitted: bool = False
-        self._args_emitted_len: int = 0
-        self._allowed_tool_names: set[str] = set()
-        self._stream_tool_indices: dict[int, int | None] = {}
-        self._next_stream_tool_index = 0
+        self._allowed_tool_names: set[str] | None = None
+        self._output_index: int = _PENDING_INDEX
+        self._next_output_index: int = 0
+        self._pending_arguments: list[str] = []
+        self._payload_closed: bool = False
+        self.block_closed: bool = False
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request payload before rendering, if needed."""
         request = dump_tools(request)
-        if self.validate_tool_names:
-            self._allowed_tool_names = self._get_allowed_tool_names(request)
+        self._allowed_tool_names = self._get_allowed_tool_names(request)
         return request
 
     @classmethod
@@ -104,12 +126,9 @@ class ToolParser:
 
     @staticmethod
     def _get_allowed_tool_names(request: ChatCompletionRequest) -> set[str]:
-        """Return names exposed by the effective request tool list."""
-        if request.tools is None:
-            return set()
-
+        """Return function names exposed by the effective request tools."""
         names: set[str] = set()
-        for tool in request.tools:
+        for tool in request.tools or []:
             if isinstance(tool, dict):
                 function = tool.get('function', tool)
                 name = function.get('name') if isinstance(function, dict) else None
@@ -118,38 +137,6 @@ class ToolParser:
             if isinstance(name, str):
                 names.add(name)
         return names
-
-    def is_valid_tool_name(self, name: str) -> bool:
-        """Return whether a name is allowed by the effective request tools."""
-        if not self.validate_tool_names:
-            return True
-        return name in self._allowed_tool_names
-
-    def filter_tool_call_deltas(self, calls: list[DeltaToolCall]) -> list[DeltaToolCall]:
-        """Drop streamed calls whose names are absent from request tools."""
-        if not self.validate_tool_names:
-            return calls
-
-        filtered: list[DeltaToolCall] = []
-        for call in calls:
-            function = call.function
-            if function is not None and function.name and call.index not in self._stream_tool_indices:
-                # Assign accepted calls a contiguous client-visible index.
-                # Mark rejected calls as None to filter their later argument deltas.
-                if self.is_valid_tool_name(function.name):
-                    self._stream_tool_indices[call.index] = self._next_stream_tool_index
-                    self._next_stream_tool_index += 1
-                else:
-                    self._stream_tool_indices[call.index] = None
-            visible_index = self._stream_tool_indices.get(call.index)
-            if visible_index is not None:
-                call.index = visible_index
-                filtered.append(call)
-        return filtered
-
-    def filter_tool_calls(self, calls: list[ToolCall]) -> list[ToolCall]:
-        """Drop complete calls whose names are absent from request tools."""
-        return [call for call in calls if self.is_valid_tool_name(call.function.name)]
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
@@ -161,138 +148,208 @@ class ToolParser:
         """Return tool closing tag string, or None if unsupported."""
         raise NotImplementedError('ToolParser.get_tool_close_tag has not been implemented!')
 
-    @classmethod
-    def get_tool_payload_format(cls) -> str:
-        """Return payload format for tool call body."""
-        raise NotImplementedError('ToolParser.get_tool_payload_format has not been implemented!')
+    def begin_tool_block(self) -> None:
+        """Initialize one streamed outer block after its opening marker.
 
-    def start_tool_call(self) -> None:
-        """Mark start of a tool-call block."""
-        self._active_tool_index += 1
-        self._active_tool_call_id = f'chatcmpl-tool-{shortuuid.random()}'
+        Concrete parsers begin each logical call with ``_begin_call`` once its
+        call boundary is known.
+        """
+        self._close_tag = self.get_tool_close_tag()
+        self._payload_closed = False
+        self.block_closed = False
+
+    def _begin_call(self, call_id: str | None = None) -> None:
+        """Initialize routing state for the next sequential tool call.
+
+        Args:
+            call_id: Model-provided call ID. An OpenAI-compatible ID is
+                generated when the protocol does not provide one.
+        """
+        self._active_tool_call_id = call_id if call_id is not None else f'chatcmpl-tool-{shortuuid.random()}'
         self._name_emitted = False
-        self._args_emitted_len = 0
-        self._tool_payload = ''
+        self._output_index = _PENDING_INDEX
+        self._pending_arguments.clear()
 
-    def finish_tool_call(self) -> None:
-        """Mark end of a tool-call block."""
-        self._active_tool_call_id = ''
-        self._name_emitted = False
-        self._args_emitted_len = 0
-        self._tool_payload = ''
+    def feed_tool_block(self, text: str, deltas: list[DeltaToolCall], *, final: bool) -> int:
+        """Consume a buffered prefix of an open streamed tool block.
 
-    def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
-        """Decode incremental tool payload emitted between tool tags."""
-        raise NotImplementedError('ToolParser.decode_tool_incremental has not been implemented!')
+        ``text`` begins immediately after the outer opening marker and may
+        include a previously retained marker prefix, newly decoded text, a
+        complete closing marker, and trailing assistant content. Parsed tool
+        call fragments are appended to ``deltas``. The caller must retain
+        ``text[consumed:]`` and pass it back with the next chunk.
 
-    def parse_tool_call_complete(self, payload: str) -> ToolCall | list[ToolCall] | None:
-        """Parse one complete tool payload into OpenAI tool call object."""
-        raise NotImplementedError('ToolParser.parse_tool_call_complete has not been implemented!')
+        The model-specific parser consumes only the inner payload. Once that
+        payload is closed, later calls bypass it and this method consumes the
+        configured outer closing marker before closing the complete block.
 
-    def validate_complete(self, text: str) -> bool:
-        """Return whether complete response text has valid tool calls."""
-        open_tag = self.get_tool_open_tag()
-        close_tag = self.get_tool_close_tag()
+        Args:
+            text: Buffered text following the tool opening marker.
+            deltas: Output list to which parsed streaming deltas are appended.
+            final: Whether this is the final generated stream chunk.
 
-        pos = 0
-        while True:
-            open_idx = text.find(open_tag, pos)
-            close_idx = text.find(close_tag, pos)
-            if open_idx < 0:
-                return close_idx < 0
+        Returns:
+            Number of leading characters that the caller may safely discard.
+        """
+        if self.block_closed:
+            return 0
 
-            payload_start = open_idx + len(open_tag)
-            if close_idx < payload_start:
-                return False
+        close_tag = self._close_tag
+        consumed = 0
+        if not self._payload_closed:
+            consumed = self._consume_stream_payload(text, deltas, final=final)
+        if self._payload_closed:
+            if close_tag is None:
+                self._close_tool_block()
+                return consumed
 
-            payload = text[payload_start:close_idx].strip()
-            if not self._validate_tool_payload(payload):
-                return False
+            close_at = text.find(close_tag, consumed)
+            if close_at >= 0:
+                self._close_tool_block()
+                return close_at + len(close_tag)
+            if final:
+                self._close_tool_block()
+                return len(text)
+            if not self.tool_close_prefixes:
+                return len(text)
+            return self._stable_prefix_end(text, self.tool_close_prefixes, consumed)
 
-            pos = close_idx + len(close_tag)
-            if pos >= len(text):
-                return True
+        if final:
+            self._close_tool_block()
+            return len(text)
+        return consumed
 
-    def _validate_tool_payload(self, payload: str) -> bool:
-        """Return whether one complete JSON tool payload is structurally
-        valid."""
-        try:
-            obj = json.loads(payload)
-        except json.JSONDecodeError:
-            return False
-        if not isinstance(obj, dict):
-            return False
-        name = obj.get('name')
-        return isinstance(name, str) and bool(name)
+    def _consume_stream_payload(self, text: str, deltas: list[DeltaToolCall], *, final: bool) -> int:
+        raise NotImplementedError('ToolParser._consume_stream_payload has not been implemented!')
 
-    def _decode_tool_incremental_json(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
-        self._tool_payload += added_text
-        payload = self._tool_payload.strip()
-        if not payload:
-            return []
+    def _close_tool_block(self) -> None:
+        self.block_closed = True
+        self._pending_arguments.clear()
 
-        # After the function name is emitted, arguments are only surfaced at
-        # final=True. Skip repeated partial_json_parser.loads on growing payload.
-        if self._name_emitted and not final:
-            return []
+    def _emit_delta(
+        self,
+        deltas: list[DeltaToolCall],
+        *,
+        name: str | None = None,
+        arguments: str | None = None,
+    ) -> None:
+        """Emit one fragment under the identity-first tool-call contract.
 
-        flags = Allow.ALL if final else Allow.ALL & ~Allow.STR
-        try:
-            obj = partial_json_parser.loads(payload, flags)
-        except partial_json_parser.core.exceptions.MalformedJSON:
-            return []
-        if not isinstance(obj, dict):
-            return []
+        Arguments seen before the function name are buffered. Once the name is
+        accepted, the first emitted delta establishes the call identity, then
+        every buffered argument is released in its original order. Rejected
+        calls and their buffered arguments are discarded. ``_begin_call`` must
+        be called before the first fragment of every logical tool call.
 
-        out: list[DeltaToolCall] = []
-        if not self._name_emitted:
-            fn_name = obj.get('name')
-            if isinstance(fn_name, str) and fn_name:
-                out.append(
-                    DeltaToolCall(
-                        id=self._active_tool_call_id,
-                        index=self._active_tool_index,
-                        type='function',
-                        function=DeltaFunctionCall(name=fn_name),
-                    ))
-                self._name_emitted = True
+        Nested function mappings are validated by ``DeltaToolCall`` so each
+        fragment needs only one Python-level model constructor call.
+        """
+        if name is None and arguments is None:
+            return
 
-        args_obj = obj.get('arguments', obj.get('parameters', None))
-        if args_obj is None:
-            return out
+        output_index = self._output_index
+        if output_index == _REJECTED_INDEX:
+            return
 
-        args_json = json.dumps(args_obj, ensure_ascii=False)
-        if args_json in ('{}', '[]'):
-            return out
+        if output_index == _PENDING_INDEX:
+            if name is None:
+                # Arguments cannot be exposed until the call has a validated
+                # identity. Keep fragments separate to preserve their order.
+                self._pending_arguments.append(arguments)
+                return
 
-        # Emit argument text only when the tool payload is complete. This keeps
-        # streamed argument chunks valid JSON and avoids malformed intermediate
-        # fragments when partial parsers expose transient dict states.
-        if final and len(args_json) > self._args_emitted_len:
-            diff = args_json[self._args_emitted_len:]
-            out.append(
+            allowed_names = self._allowed_tool_names
+            if allowed_names is not None and name not in allowed_names:
+                self._pending_arguments.clear()
+                self._output_index = _REJECTED_INDEX
+                return
+
+            output_index = self._next_output_index
+            self._next_output_index += 1
+            self._output_index = output_index
+            deltas.append(
                 DeltaToolCall(
-                    id=None,
-                    index=self._active_tool_index,
-                    type=None,
-                    function=DeltaFunctionCall(arguments=diff),
+                    id=self._active_tool_call_id,
+                    index=output_index,
+                    type='function',
+                    function={'name': name},
                 ))
-            self._args_emitted_len = len(args_json)
-        return out
+            if arguments is not None:
+                self._pending_arguments.append(arguments)
+            for pending_arguments in self._pending_arguments:
+                deltas.append(
+                    DeltaToolCall(
+                        id=None,
+                        index=output_index,
+                        type=None,
+                        function={'arguments': pending_arguments},
+                    ))
+            self._pending_arguments.clear()
+            return
+
+        deltas.append(
+            DeltaToolCall(
+                id=None,
+                index=output_index,
+                type=None,
+                function={'name': name, 'arguments': arguments},
+            ))
 
     @staticmethod
-    def _parse_tool_call_complete_json(payload: str) -> ToolCall | None:
-        if not payload:
-            return None
-        try:
-            obj = json.loads(payload)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(obj, dict):
-            return None
-        name = obj.get('name')
-        if not isinstance(name, str) or not name:
-            return None
-        args_obj = obj.get('arguments', obj.get('parameters', {}))
-        args_json = json.dumps(args_obj, ensure_ascii=False)
-        return ToolCall(function=FunctionCall(name=name, arguments=args_json))
+    def build_tool_calls(deltas: list[DeltaToolCall]) -> list[ToolCall]:
+        """Build complete calls by grouping ordered deltas by output index.
+
+        The first ID and name are retained, while every argument fragment is joined in emission order. An index without
+        an emitted name does not produce a complete call.
+        """
+        tool_calls: list[ToolCall] = []
+
+        parts_by_index: dict[int, _ToolCallParts] = {}
+        for delta in deltas:
+            parts = parts_by_index.get(delta.index)
+            if parts is None:
+                parts = _ToolCallParts()
+                parts_by_index[delta.index] = parts
+            if delta.id is not None and parts.call_id is None:
+                parts.call_id = delta.id
+            function = delta.function
+            if function is None:
+                continue
+            if function.name is not None and parts.name is None:
+                parts.name = function.name
+            if function.arguments is not None:
+                parts.arguments.append(function.arguments)
+
+        for parts in parts_by_index.values():
+            if parts.name is None:
+                continue
+            function = FunctionCall(name=parts.name, arguments=''.join(parts.arguments))
+            if parts.call_id is None:
+                tool_calls.append(ToolCall(function=function))
+            else:
+                tool_calls.append(ToolCall(id=parts.call_id, function=function))
+        return tool_calls
+
+    @staticmethod
+    def _stable_prefix_end(text: str, marker_prefixes: tuple[str, ...], start: int = 0) -> int:
+        """Find the consumable prefix before a token-aligned marker suffix.
+
+        ``marker_prefixes`` contains the proper marker prefixes that can occur
+        at real decoded-token boundaries, ordered longest first. The caller is
+        expected to have established that no complete marker is present. This
+        avoids testing every character boundary or tokenizing again in the hot
+        path.
+
+        Args:
+            text: Buffered text ending in a possible marker prefix.
+            marker_prefixes: Legal token-aligned proper prefixes of the marker.
+            start: Earliest offset at which a retained suffix may begin.
+
+        Returns:
+            End offset of the stable prefix. ``text`` before this offset may be
+            consumed; text at and after it must remain buffered.
+        """
+        for prefix in marker_prefixes:
+            if text.endswith(prefix, start):
+                return len(text) - len(prefix)
+        return len(text)

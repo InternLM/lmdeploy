@@ -141,8 +141,7 @@ if get_target_device() == 'cuda' and os.getenv('DISABLE_TURBOMIND', '').lower() 
 
     ext_modules = [
         cmake_build_extension.CMakeExtension(
-            name='_turbomind',
-            install_prefix='lmdeploy/lib',
+            name='lmdeploy.turbomind._turbomind',
             cmake_depends_on=['pybind11'],
             source_dir=str(Path(__file__).parent.absolute()),
             cmake_generator=None if os.name == 'nt' else 'Ninja',
@@ -150,7 +149,6 @@ if get_target_device() == 'cuda' and os.getenv('DISABLE_TURBOMIND', '').lower() 
             cmake_configure_options=[
                 f'-DPython3_ROOT_DIR={Path(sys.prefix)}',
                 f'-DPYTHON_EXECUTABLE={Path(sys.executable)}',
-                '-DCALL_FROM_SETUP_PY:BOOL=ON',
                 '-DBUILD_SHARED_LIBS:BOOL=OFF',
                 # Select the bindings implementation
                 '-DBUILD_PY_FFI=ON',

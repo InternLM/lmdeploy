@@ -284,7 +284,7 @@ autodoc_mock_imports = [
     'torch',
     'torchvision',
     'transformers',
-    '_turbomind',
+    'lmdeploy.turbomind._turbomind',
     'triton',
 ]
 

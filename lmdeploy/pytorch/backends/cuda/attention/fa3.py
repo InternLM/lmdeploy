@@ -308,6 +308,10 @@ class FA3Impl(TritonAttentionImpl):
             has_softcap=self.logit_softcapping > 0,
         )
 
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Return whether this selected implementation supports PCG."""
+        return True
+
     def _get_scheduler_metadata(self, attn_metadata: TritonAttentionMetadata):
         kernel_metadata = self.get_step_kernel_metadata(attn_metadata)
         if kernel_metadata is None:
