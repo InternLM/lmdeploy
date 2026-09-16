@@ -131,7 +131,7 @@ def test_sparse_index_topk_cuda_graph_capture():
 
 
 @pytest.mark.parametrize(('dcp_size', 'k', 'local_width'),
-                         [(2, 512, 700), (4, 2048, 2300)])
+                         [(2, 512, 700), (4, 2048, 2300), (8, 2048, 2300)])
 def test_sparse_dcp_global_topk_matches_global_scores_and_candidate_ties(
         dcp_size, k, local_width):
     from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import (
@@ -231,3 +231,13 @@ def test_sparse_dcp_global_topk_preserves_int32_ids_and_padding():
     actual = sparse_dcp_global_topk(gathered, k)
     assert torch.equal(actual[0, :3], ids)
     assert (actual[0, 3:] == -1).all()
+
+    # Exercise radix selection too: tied ids above FP32's exact integer range,
+    # in descending order within each rank, must retain the smallest K ids.
+    ids = (torch.arange(k - 1, -1, -1, dtype=torch.int32, device='cuda')[None] * 2
+           + torch.arange(2, dtype=torch.int32, device='cuda')[:, None] + 2**24 + 1)
+    gathered[..., 0].fill_(1)
+    gathered.view(torch.int32)[:, 0, :, 1].copy_(ids)
+    actual = sparse_dcp_global_topk(gathered, k)
+    expected = ids.flatten()[ids.flatten() < 2**24 + 1 + k]
+    assert torch.equal(actual[0], expected)
