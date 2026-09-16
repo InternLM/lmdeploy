@@ -2,7 +2,7 @@
 
 import pytest
 from openai import BadRequestError
-from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS
+from utils.constant import CAPPED_MAX_COMPLETION_TOKENS
 from utils.tool_reasoning_definitions import (
     SEARCH_TOOL,
     WEATHER_TOOL,
@@ -63,7 +63,7 @@ class TestToolCallMultimodalBasic(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
@@ -122,7 +122,7 @@ class TestToolCallMultimodalBasic(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             tool_choice={
                 'type': 'function',
@@ -149,7 +149,7 @@ class TestToolCallMultimodalBasic(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             tool_choice={
                 'type': 'function',
@@ -173,7 +173,7 @@ class TestToolCallMultimodalBasic(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[SEARCH_TOOL],
             logprobs=False,
         )
@@ -226,7 +226,7 @@ class TestToolCallMultimodalStreamConsistency(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
@@ -263,7 +263,7 @@ class TestToolCallMultimodalStreamConsistency(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -313,7 +313,7 @@ class TestToolCallMultimodalChoice(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice='none',
             logprobs=False,
@@ -337,7 +337,7 @@ class TestToolCallMultimodalChoice(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice='auto',
             logprobs=False,
@@ -365,7 +365,7 @@ class TestToolCallMultimodalChoice(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice={
                 'type': 'function',
@@ -392,7 +392,7 @@ class TestToolCallMultimodalChoice(_ToolCallTestBase):
                 model=model_name,
                 messages=messages,
                 temperature=0,
-                max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+                max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
                 tools=[WEATHER_TOOL, SEARCH_TOOL],
                 tool_choice='required',
                 logprobs=False,
@@ -418,7 +418,7 @@ class TestToolCallMultimodalChoice(_ToolCallTestBase):
                 model=model_name,
                 messages=messages,
                 temperature=0,
-                max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+                max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
                 tools=[WEATHER_TOOL, SEARCH_TOOL],
                 tool_choice='required',
                 logprobs=False,
@@ -452,7 +452,7 @@ class TestToolCallMultimodalArgumentsAndMultiTurn(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             tool_choice={
                 'type': 'function',
@@ -492,7 +492,7 @@ class TestToolCallMultimodalArgumentsAndMultiTurn(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -522,7 +522,7 @@ class TestToolCallMultimodalArgumentsAndMultiTurn(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
             stream=True,
@@ -553,7 +553,7 @@ class TestToolCallMultimodalArgumentsAndMultiTurn(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -585,7 +585,7 @@ class TestToolCallMultimodalArgumentsAndMultiTurn(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
@@ -615,7 +615,7 @@ class TestToolCallMultimodalArgumentsAndMultiTurn(_ToolCallTestBase):
         r = self._stream_tool_call(
             messages,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
         )
         assert r['finish_reason'] in ('stop', 'length', 'tool_calls')
         if r['finish_reason'] == 'tool_calls':
@@ -656,7 +656,7 @@ class TestToolCallMultimodalArgumentsAndMultiTurn(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -686,7 +686,7 @@ class TestToolCallMultimodalArgumentsAndMultiTurn(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
@@ -715,7 +715,7 @@ class TestToolCallMultimodalContentOrder(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -735,7 +735,7 @@ class TestToolCallMultimodalContentOrder(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -764,7 +764,7 @@ class TestToolCallMultimodalDualImage(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -798,7 +798,7 @@ class TestToolCallMultimodalMixedMedia(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
             extra_body=dict(MM_VIDEO_EXTRA_BODY),
@@ -876,7 +876,7 @@ class TestToolCallMultimodalToolResultImage(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -904,7 +904,7 @@ class TestToolCallMultimodalParallel(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -932,7 +932,7 @@ class TestToolCallMultimodalParallel(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
             stream=True,
@@ -965,7 +965,7 @@ class TestToolCallMultimodalParallel(_ToolCallTestBase):
                 model=model_name,
                 messages=messages,
                 temperature=0,
-                max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+                max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
                 tools=[WEATHER_TOOL],
                 parallel_tool_calls=False,
                 logprobs=False,
@@ -1003,7 +1003,7 @@ class TestToolCallMultimodalMediaTypes(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
             **create_kwargs,
@@ -1078,7 +1078,7 @@ class TestToolCallMultimodalMediaTypes(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )

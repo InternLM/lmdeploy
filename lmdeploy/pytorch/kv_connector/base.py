@@ -18,7 +18,6 @@ import torch
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.messages import SchedulerSequence
-    from lmdeploy.pytorch.paging.scheduler import SchedulerOutput
 
 RequestId = int
 KVOperationId = int
@@ -30,6 +29,16 @@ class KVConnectorRole(enum.Enum):
 
     SCHEDULER = enum.auto()
     WORKER = enum.auto()
+
+
+@dataclass
+class KVConnectorStepInput:
+    """Paging snapshot offered to a connector for one engine step."""
+
+    running: list['SchedulerSequence'] = field(default_factory=list)
+    connector_token_lens: tuple[int, ...] = ()
+    connector_block_ids: tuple[tuple[int, ...], ...] = ()
+    connector_logical_block_ids: tuple[tuple[int, ...], ...] = ()
 
 
 class KVConnectorMetadata(ABC):
@@ -282,10 +291,10 @@ class KVConnectorBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def build_connector_meta(self, scheduler_output: 'SchedulerOutput') -> KVConnectorMetadata | None:
+    def build_connector_meta(self, step_input: KVConnectorStepInput) -> KVConnectorMetadata | None:
         """Build serializable worker metadata for the current scheduler step.
 
-        Implementations must not mutate ``scheduler_output``. They may consume
+        Implementations must not mutate ``step_input``. They may consume
         and reset connector-owned per-step bookkeeping while building the
         returned metadata.
         """

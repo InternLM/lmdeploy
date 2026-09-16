@@ -1,4 +1,7 @@
 import asyncio
+import inspect
+from contextlib import nullcontext
+from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +10,13 @@ import torch
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
 from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
+from lmdeploy.pytorch.spec_decode.proposers.base import (
+    ProposalContext,
+    ProposalMethod,
+    ProposalWarmupCase,
+    ProposalWarmupPlan,
+)
+from lmdeploy.pytorch.spec_decode.proposers.dflash import DFlash
 from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
 from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
 
@@ -162,6 +172,8 @@ class _DummyDraftModel:
 
 class _DummyProposer:
 
+    proposal_method = ProposalMethod.AUTOREGRESSIVE
+
     def __init__(self):
         self.get_outputs_calls = 0
         self.update_inputs_decoding_calls = 0
@@ -246,6 +258,11 @@ def test_guided_serial_bitmask_updates_inference_tensor():
     assert manager.seen_is_inference == [True, True, True]
     assert manager.seen_inference_mode == [True, True, True]
     assert manager.accepted == [10, 20, 11, 21]
+
+class _NoForkGuidedHelper:
+
+    def get_processors(self, session_ctx, response_formats):
+        return {0: object()}
 
 
 def test_prepare_inputs_from_main_dp_non_last_first_chunk_shifts_last_token_indices():
@@ -529,7 +546,7 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
 
     agent._forward_impl = _forward_impl
 
-    output = asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+    output = asyncio.run(agent._async_autoregressive_model_forward(inputs, extra_inputs, sampling_inputs=None))
 
     expected = torch.zeros((2, 3), dtype=torch.long)
     torch.testing.assert_close(output.output_draft_token_ids, expected)
@@ -564,7 +581,7 @@ def test_async_model_forward_dp_non_last_chunk_pads_block_offsets(monkeypatch):
 
     agent._forward_impl = _forward_impl
 
-    output = asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+    output = asyncio.run(agent._async_autoregressive_model_forward(inputs, extra_inputs, sampling_inputs=None))
 
     expected = torch.tensor([[0, 1, 2], [0, 1, 2]], dtype=torch.long)
     torch.testing.assert_close(output.output_draft_token_ids, expected)
@@ -604,7 +621,7 @@ def test_async_model_forward_preserves_dp_global_decoding_in_draft_loop(monkeypa
 
     agent._forward_impl = _forward_impl
 
-    asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+    asyncio.run(agent._async_autoregressive_model_forward(inputs, extra_inputs, sampling_inputs=None))
 
     assert agent.proposer.model.update_inputs_dp_is_decoding == [True, True]
 
@@ -735,6 +752,204 @@ def test_spec_model_agent_warmup_adds_dp_meta_for_draft_capture(monkeypatch):
     ]
 
 
+def test_dflash_diffusion_warmup_materializes_context_and_captures_only_block_queries(monkeypatch):
+    """DFlash warmup must not capture its dead prefill or q_len=1 graphs."""
+
+    class DummyInputsStrategy:
+
+        def __init__(self):
+            self.calls = []
+
+        def make_dummy(self,
+                       batch_size,
+                       is_decoding,
+                       device='cpu',
+                       vocab_size=1,
+                       max_q_seqlen=1,
+                       target_hidden_size=None,
+                       target_dtype=torch.float32,
+                       meta=None):
+            self.calls.append((batch_size, is_decoding, max_q_seqlen, target_hidden_size))
+            num_tokens = batch_size * max_q_seqlen
+            return ModelInputs(
+                input_ids=torch.zeros((1, num_tokens), dtype=torch.long),
+                seq_length=torch.full((batch_size, ), max_q_seqlen, dtype=torch.long),
+                history_lengths=torch.zeros(batch_size, dtype=torch.long),
+                block_offsets=torch.zeros((batch_size, 1), dtype=torch.long),
+                is_decoding=is_decoding,
+                num_ignored_history=torch.zeros(batch_size, dtype=torch.long),
+                max_q_seqlen=max_q_seqlen,
+                max_kv_seqlen=max_q_seqlen,
+                sum_kv_seqlen=num_tokens,
+                target_hidden_states=torch.zeros((1, num_tokens, target_hidden_size), dtype=target_dtype),
+                target_position_ids=torch.zeros((1, num_tokens), dtype=torch.long),
+            )
+
+    class DummyGraphModel:
+
+        def get_capture_batch_sizes(self):
+            return [2, 4]
+
+    proposer = _make_dflash_proposer()
+    proposer.model = DummyGraphModel()
+    materialized = []
+    monkeypatch.setattr(proposer, '_materialize_context',
+                        lambda inputs, hidden, cache: materialized.append(
+                            (inputs.is_decoding, inputs.seq_length.numel(), inputs.max_q_seqlen,
+                             tuple(hidden.shape), cache)))
+
+    inputs_strategy = DummyInputsStrategy()
+    forward_graph_keys = []
+    sync_calls = []
+    monkeypatch.setattr(torch.cuda, 'synchronize', lambda: sync_calls.append(True))
+
+    agent = object.__new__(SpecModelAgent)
+    agent.draft_dist_ctx = SimpleNamespace(dist_config=SimpleNamespace(dp=1))
+    agent.draft_context = lambda: nullcontext()
+    agent.inputs_strategy = inputs_strategy
+    agent.proposer = proposer
+    agent.cache_engine = SimpleNamespace(
+        cache_config=SimpleNamespace(block_size=8, max_prefill_token_num=10))
+    agent.model_config = SimpleNamespace(vocab_size=11, dtype=torch.float32, hidden_size=4)
+    agent.num_spec_tokens = 3
+    agent.make_dummy_meta = None
+    dp_markers = []
+
+    def build_dp_meta(inputs):
+        marker = object()
+        inputs.dp_meta = marker
+        dp_markers.append(marker)
+
+    agent._build_warmup_dp_meta = build_dp_meta
+    agent._forward_impl = lambda inputs: forward_graph_keys.append(
+        (inputs.seq_length.numel(), inputs.max_q_seqlen, inputs.dp_meta)) or {}
+
+    agent.warmup(max_batches=4, target_model_config=SimpleNamespace(hidden_size=4))
+
+    assert inputs_strategy.calls == [(1, False, 8, 8), (4, True, 4, 8), (2, True, 4, 8)]
+    assert [(is_decoding, batches, q_len, shape) for is_decoding, batches, q_len, shape, _ in materialized] == [
+        (False, 1, 8, (8, 8)),
+        (False, 4, 4, (16, 8)),
+        (False, 2, 4, (8, 8)),
+    ]
+    assert all(cache is agent.cache_engine for *_, cache in materialized)
+    assert forward_graph_keys == [(4, 4, dp_markers[1]), (2, 4, dp_markers[2])]
+    assert len(sync_calls) == 3
+    assert 'synchronize' not in inspect.getsource(DFlash.prepare_warmup_forward)
+
+
+def test_proposal_warmup_plan_is_immutable_and_shape_only():
+    case = ProposalWarmupCase(batch_size=4, is_decoding=True, max_q_seqlen=16, target_hidden_size=1024)
+    plan = ProposalWarmupPlan(cases=(case, ))
+
+    assert tuple(ProposalWarmupCase.__dataclass_fields__) == (
+        'batch_size', 'is_decoding', 'max_q_seqlen', 'target_hidden_size')
+    assert tuple(ProposalWarmupPlan.__dataclass_fields__) == ('cases', )
+    with pytest.raises(FrozenInstanceError):
+        case.batch_size = 2
+    with pytest.raises(FrozenInstanceError):
+        plan.cases = ()
+
+
+def _make_dflash_proposer():
+    return DFlash(
+        SimpleNamespace(
+            mask_token_id=99,
+            target_layer_ids=(1, 5),
+            num_speculative_tokens=3,
+            model_config=None,
+        ),
+        device='cpu',
+    )
+
+
+def test_dflash_proposer_hook_rejects_guided_before_fork():
+    agent = object.__new__(SpecModelAgent)
+    agent.guided_helper = _NoForkGuidedHelper()
+    agent.proposer = _make_dflash_proposer()
+    agent.proposer.guided_helper = agent.guided_helper
+    agent.cache_engine = None
+    agent.rank = 0
+    agent.draft_context = lambda: nullcontext()
+
+    model_inputs = ModelInputs(
+        input_ids=torch.tensor([[1]]),
+        seq_length=torch.ones(1, dtype=torch.long),
+        history_lengths=torch.zeros(1, dtype=torch.long),
+        block_offsets=torch.ones((1, 1), dtype=torch.int32),
+        is_decoding=False,
+        num_ignored_history=torch.zeros(1, dtype=torch.long),
+        max_q_seqlen=1,
+        max_kv_seqlen=1,
+        sum_kv_seqlen=1,
+    )
+    extra_inputs = ARSpecExtraInputs(next_token_ids=torch.tensor([2]))
+    sampling_inputs = SimpleNamespace(session_ctx=object(), response_formats=object())
+
+    with pytest.raises(NotImplementedError, match='DFlash guided decoding'):
+        asyncio.run(agent.async_model_forward(model_inputs, extra_inputs, sampling_inputs))
+
+
+def test_dflash_proposer_hook_materializes_non_last_chunk_without_drafting(monkeypatch):
+    inputs, extra_inputs = _make_non_last_chunk_inputs()
+    extra_inputs.target_inputs_embeds = torch.randn(1, 2, 4)
+
+    agent = object.__new__(SpecModelAgent)
+    agent.num_spec_tokens = 3
+    agent.rank = 0
+    agent.guided_helper = GuidedSpecHelper()
+    agent.proposer = _make_dflash_proposer()
+    agent.proposer.guided_helper = agent.guided_helper
+    agent.cache_engine = object()
+    agent.draft_context = lambda: nullcontext()
+    captured = {
+        'materialize_context_calls': 0,
+        'propose_block_calls': 0,
+    }
+
+    def materialize_context(model_inputs, extra_inputs, cache_engine):
+        captured['materialize_context_calls'] += 1
+        assert cache_engine is agent.cache_engine
+
+    async def propose_block(model_inputs, extra_inputs, cache_engine, guided_processors=None):
+        captured['propose_block_calls'] += 1
+        return model_inputs.input_ids.new_full((model_inputs.seq_length.size(0), 3), 9)
+
+    monkeypatch.setattr(agent.proposer, 'materialize_context', materialize_context)
+    monkeypatch.setattr(agent.proposer, 'propose_block', propose_block)
+
+    output = asyncio.run(agent.async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+
+    torch.testing.assert_close(output.output_draft_token_ids, torch.zeros((2, 3), dtype=torch.long))
+    assert captured['materialize_context_calls'] == 1
+    assert captured['propose_block_calls'] == 0
+    assert output.next_token_ids is extra_inputs.next_token_ids
+    assert output.target_inputs_embeds is None
+
+
+def test_dflash_proposer_api_uses_explicit_context_not_spec_agent():
+    proposer = _make_dflash_proposer()
+
+    assert proposer.proposal_method == ProposalMethod.DIFFUSION
+    assert not hasattr(proposer, 'input_mode')
+    assert not hasattr(proposer, 'proposal_mode')
+    assert tuple(ProposalContext.__dataclass_fields__) == ('cache_engine', )
+
+
+def test_dflash_proposer_requires_explicit_proposal_context():
+    proposer = _make_dflash_proposer()
+
+    with pytest.raises(RuntimeError, match='requires ProposalContext'):
+        asyncio.run(proposer.propose(None, None, None))
+
+
+def test_dflash_spec_agent_reset_runtime_state_discards_chunk_carry():
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    agent._prev_chunk_last = {'hidden_states': object()}
+
+    agent.reset_runtime_state()
+
+    assert agent._prev_chunk_last == {}
 def _model_inputs(input_ids,
                   *,
                   is_decoding=False,

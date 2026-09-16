@@ -368,14 +368,10 @@ def get_async_anthropic_client_and_model(base_url: str | None = None):
     routes."""
 
     import anthropic
-
-    from lmdeploy.serve.openai.api_client import get_model_list
+    from utils.restful_return_check import get_client_and_model
 
     url = base_url or BASE_URL
-    model_names = get_model_list(f'{url}/v1/models')
-    if not model_names:
-        raise RuntimeError(f'No models returned from {url}/v1/models')
-    model_name = model_names[0]
+    _, model_name = get_client_and_model(url)
     client = anthropic.AsyncAnthropic(
         api_key=os.getenv('ANTHROPIC_API_KEY', 'YOUR_API_KEY'),
         base_url=url,

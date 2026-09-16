@@ -34,7 +34,7 @@ async def _sdk_simple_non_stream() -> object:
     return await client.messages.create(
         model=model_name,
         max_tokens=1024,
-        temperature=0.01,
+        extra_body={'temperature': 0.01},
         messages=[{'role': 'user', 'content': 'how are you!'}],
     )
 
@@ -44,7 +44,7 @@ async def _sdk_system_non_stream() -> object:
     return await client.messages.create(
         model=model_name,
         max_tokens=1024,
-        temperature=0.01,
+        extra_body={'temperature': 0.01},
         system=[{'type': 'text', 'text': 'you are a helpful assistant'}],
         messages=[{'role': 'user', 'content': 'how are you!'}],
     )
@@ -55,7 +55,7 @@ async def _sdk_stream_events_and_final() -> tuple[list, object | None]:
     stream = await client.messages.create(
         model=model_name,
         max_tokens=1024,
-        temperature=0.01,
+        extra_body={'temperature': 0.01},
         messages=[{'role': 'user', 'content': 'how are you!'}],
         stream=True,
     )

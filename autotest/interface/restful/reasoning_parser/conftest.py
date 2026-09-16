@@ -2,7 +2,7 @@ import json
 
 import pytest
 from utils.config_utils import get_tool_reasoning_model_list
-from utils.constant import BACKEND_LIST, DEFAULT_MAX_COMPLETION_TOKENS
+from utils.constant import BACKEND_LIST, THINKING_MAX_COMPLETION_TOKENS
 
 from utils.tool_reasoning_definitions import (  # isort: skip
     THINK_END_TOKEN,
@@ -172,7 +172,7 @@ class _ReasoningTestBase:
         """
         client, model_name = self._get_client()
         create_kwargs.setdefault('temperature', 0)
-        create_kwargs.setdefault('max_completion_tokens', DEFAULT_MAX_COMPLETION_TOKENS)
+        create_kwargs.setdefault('max_completion_tokens', THINKING_MAX_COMPLETION_TOKENS)
         create_kwargs.setdefault('logprobs', False)
         extra_body = create_kwargs.pop('extra_body', None)
         extra_body = {} if extra_body is None else dict(extra_body)

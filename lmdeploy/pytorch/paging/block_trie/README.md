@@ -16,7 +16,8 @@ asynchronous boundaries.
 1. Read this document for the ownership and lifecycle contracts.
 2. Read [`BlockTrie.match()` and `BlockTrie.allocate()`](./trie.py) for the
    public trie workflow.
-3. Read `_PrefillAdmissionAttempt` in [`scheduler.py`](../scheduler.py) for
+3. Read `_PrefillAdmissionAttempt` in
+   [`prefill_scheduler.py`](../prefill_scheduler.py) for
    tentative-match commit and rollback.
 4. For KV ownership and eviction, read [`kv_lifecycle.py`](./kv_lifecycle.py).
 5. For SSM support, read [`checkpoint.py`](./checkpoint.py) before
@@ -375,7 +376,7 @@ state that may contain stale entries.
 | Sparse checkpoint keys or exact verification           | `checkpoint.py`                                                   |
 | Checkpoint reservation, publication, pins, or eviction | `checkpoint_lifecycle.py`                                         |
 | KV references, leaf bookkeeping, or KV eviction        | `kv_lifecycle.py`                                                 |
-| Admission order or tentative-match rollback            | `../scheduler.py`                                                 |
+| Admission order or tentative-match rollback            | `../prefill_scheduler.py`                                         |
 | Per-sequence prefix-cache protocol state               | `../../prefix_cache_state.py`                                     |
 | Host restore/save copy plans                           | `../../engine/inputs_maker.py` and `../../engine/cache_inputs.py` |
 | Stream ordering around model execution                 | `../../engine/model_agent/agent.py`                               |
