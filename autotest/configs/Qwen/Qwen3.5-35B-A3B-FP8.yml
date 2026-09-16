@@ -32,13 +32,6 @@ a100:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
 h:
 - model_type:
   - chat
@@ -71,13 +64,6 @@ h:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
 - model_type:
   - chat
   - vl
@@ -98,10 +84,3 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
