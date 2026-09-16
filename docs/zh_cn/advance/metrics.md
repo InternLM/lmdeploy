@@ -69,7 +69,7 @@ docker compose up
 
 ```bash
 # Proxy server
-lmdeploy serve proxy --server-port 8000 --routing-strategy 'min_expected_latency' --serving-strategy Hybrid --log-level INFO
+lmdeploy serve proxy --server-port 8000 --routing-strategy 'cache_aware' --serving-strategy Hybrid --log-level INFO
 
 # API server
 LMDEPLOY_DP_MASTER_ADDR=127.0.0.1 \
@@ -84,7 +84,7 @@ lmdeploy serve api_server \
     --node-rank 0
 ```
 
-您应该能在代理服务器列表中看到多个 API 服务实例。详细信息可以在 `lmdeploy/serve/proxy/proxy_config.json` 中找到。
+您可以通过 `http://0.0.0.0:8000/nodes/status` 查看 router 节点列表中的多个 API 服务实例。
 
 例如，您可能会看到如下 API 服务地址：
 

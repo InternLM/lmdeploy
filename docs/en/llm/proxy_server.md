@@ -1,16 +1,19 @@
-# Request Distributor Server
+# Request Router Server
 
-The request distributor service can parallelize multiple api_server services. Users only need to access the proxy URL, and they can indirectly access different api_server services. The proxy service will automatically distribute requests internally, achieving load balancing.
+LMDeploy uses the Rust-based `lmdeploy-router` to distribute requests across multiple `api_server` services. Users access the router URL, and the router forwards requests to available `api_server` instances with load balancing.
 
 ## Startup
 
-Start the proxy service:
+Install the router package, then start the router with the compatibility `lmdeploy serve proxy` entry point:
 
 ```shell
-lmdeploy serve proxy --server-name {server_name} --server-port {server_port} --routing-strategy "min_expected_latency" --serving-strategy Hybrid
+pip install lmdeploy-router
+lmdeploy serve proxy --server-name {server_name} --server-port {server_port} --routing-strategy "cache_aware" --serving-strategy Hybrid
 ```
 
-After startup is successful, the URL of the proxy service will also be printed by the script. Access this URL in your browser to open the Swagger UI.
+The legacy `min_expected_latency` and `min_observed_latency` strategies remain accepted and are mapped to `cache_aware`. For the full router configuration, use the standalone `lmdeploy-router` CLI described in [`lmdeploy/router/README.md`](../../../lmdeploy/router/README.md).
+
+After startup, register workers by starting `api_server` with `--proxy-url`, or use the node-management APIs described below.
 Subsequently, users can add it directly to the proxy service when starting the `api_server` service by using the `--proxy-url` command. For example:
 `lmdeploy serve api_server InternLM/internlm2-chat-1_8b --proxy-url http://0.0.0.0:8000`。
 In this way, users can access the services of the `api_server` through the proxy node, and the usage of the proxy node is exactly the same as that of the `api_server`, both of which are compatible with the OpenAI format.
@@ -97,8 +100,10 @@ LMDeploy currently supports two serving strategies:
 
 ## Dispatch Strategy
 
-The current distribution strategies of the proxy service are as follows:
+The compatibility entry point supports the following router strategies:
 
-- random： dispatches based on the ability of each api_server node provided by the user to process requests. The greater the request throughput, the more likely it is to be allocated. Nodes that do not provide throughput are treated according to the average throughput of other nodes.
-- min_expected_latency： allocates based on the number of requests currently waiting to be processed on each node, and the throughput capability of each node, calculating the expected time required to complete the response. The shortest one gets allocated. Nodes that do not provide throughput are treated similarly.
-- min_observed_latency： allocates based on the average time required to handle a certain number of past requests on each node. The one with the shortest time gets allocated.
+- `random`: selects a healthy worker at random.
+- `round_robin`: selects healthy workers in round-robin order.
+- `cache_aware`: routes requests with shared prefixes to the worker with the most useful cache state.
+- `power_of_two`: samples two healthy workers and selects the less-loaded one.
+- `consistent_hash`: routes requests with the same routing key to the same worker.

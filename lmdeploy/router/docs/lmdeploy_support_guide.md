@@ -473,9 +473,8 @@ Prefill、KV cache migration、Decode 两阶段流程。LMDeploy PD 模式下 `/
 curl http://ROUTER_IP:30000/nodes/status
 ```
 
-响应是以节点 URL 为 key、LMDeploy `Status` 为 value 的 JSON 对象。字段与
-`lmdeploy.serve.proxy.proxy.Status` 保持一致：`role`、`models`、`unfinished`、
-`latency` 和 `speed`。
+响应是以节点 URL 为 key、LMDeploy `Status` 为 value 的 JSON 对象，字段包括
+`role`、`models`、`unfinished`、`latency` 和 `speed`。
 
 #### 手动注册
 

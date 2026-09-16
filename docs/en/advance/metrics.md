@@ -72,7 +72,7 @@ As an example, we use the model `Qwen/Qwen2.5-7B-Instruct` with `DP=2, TP=2`. St
 
 ```bash
 # Proxy server
-lmdeploy serve proxy --server-port 8000 --routing-strategy 'min_expected_latency' --serving-strategy Hybrid --log-level INFO
+lmdeploy serve proxy --server-port 8000 --routing-strategy 'cache_aware' --serving-strategy Hybrid --log-level INFO
 
 # API server
 LMDEPLOY_DP_MASTER_ADDR=127.0.0.1 \
@@ -87,7 +87,7 @@ lmdeploy serve api_server \
     --node-rank 0
 ```
 
-You should be able to see multiple API servers added to the proxy server list. Details can be found in `lmdeploy/serve/proxy/proxy_config.json`.
+You should be able to see multiple API servers in the router node list at `http://0.0.0.0:8000/nodes/status`.
 
 For example, you may have the following API servers:
 
