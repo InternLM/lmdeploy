@@ -39,11 +39,9 @@ def _turbomind_support_reason(in_features: int,
     if not _is_turbomind_gemm_capability_supported(capability):
         return f'CUDA capability {capability} is unsupported'
 
-    from .turbomind_awq_modules import _load_turbomind
-    try:
-        _load_turbomind()
-    except RuntimeError as error:
-        return str(error)
+    from lmdeploy import turbomind
+    if not turbomind.is_available():
+        return 'TurboMind native modules are not built'
     return None
 
 
@@ -108,22 +106,20 @@ def _build_linear_w4a16(spec: LinearW4A16BuildSpec) -> LinearW4A16Impl:
     """Build the selected CUDA W4A16 linear implementation."""
     provider = _envs.w4a16_gemm_backend
 
-    if provider == 'auto':
+    if provider in ('auto', 'turbomind'):
         reason = _turbomind_support_reason(spec.in_features, spec.out_features,
                                            spec.w_bit, spec.group_size, spec.output_dtype)
         if reason is None:
             from .turbomind_awq_modules import TurbomindAwqLinearW4A16Impl
             impl_cls = TurbomindAwqLinearW4A16Impl
+        elif provider == 'turbomind':
+            from lmdeploy import turbomind
+
+            raise RuntimeError(
+                f'TurboMind W4A16 linear was requested but is unavailable or incompatible: {reason}.'
+            ) from turbomind._import_error
         else:
             impl_cls = AwqLinearW4A16Impl
-    elif provider == 'turbomind':
-        reason = _turbomind_support_reason(spec.in_features, spec.out_features,
-                                           spec.w_bit, spec.group_size, spec.output_dtype)
-        if reason is not None:
-            raise RuntimeError('TurboMind W4A16 linear was requested but is unavailable '
-                               f'or incompatible: {reason}.')
-        from .turbomind_awq_modules import TurbomindAwqLinearW4A16Impl
-        impl_cls = TurbomindAwqLinearW4A16Impl
     else:
         impl_cls = AwqLinearW4A16Impl
 

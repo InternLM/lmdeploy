@@ -4,7 +4,7 @@ We currently support running lmdeploy on **Atlas 800T A3, Atlas 800T A2 and Atla
 The usage of lmdeploy on a Huawei Ascend device is almost the same as its usage on CUDA with PytorchEngine in lmdeploy.
 Please read the original [Get Started](../get_started.md) guide before reading this tutorial.
 
-Here is the [supported model list](../../supported_models/supported_models.md#PyTorchEngine-on-Other-Platforms).
+Here is the [supported model list](../../supported_models/supported_models.md#pytorchengine-on-other-platforms).
 
 > \[!IMPORTANT\]
 > We have uploaded a docker image with KUNPENG CPU to aliyun.

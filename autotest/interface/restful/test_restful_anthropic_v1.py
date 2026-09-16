@@ -18,8 +18,10 @@ from utils.anthropic_messages import (
 )
 from utils.config_utils import get_config
 from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_MODEL_LIST
-
-from lmdeploy.serve.openai.api_client import APIClient
+from utils.restful_return_check import (
+    build_session_sized_user_content,
+    deployed_model_name,
+)
 
 ANTHROPIC_VERSION = '2023-06-01'
 
@@ -35,13 +37,6 @@ _TINY_PNG_BASE64 = (
 
 _STOP_SEQUENCES_USER_PROMPT = 'Count to 10: 1, 2, 3, '
 _STOP_SEQUENCES = ('6',)
-
-
-@pytest.fixture(scope='class')
-def deployed_model_name() -> str:
-    """Single model id exposed by the RESTFUL api_server."""
-
-    return APIClient(BASE_URL).available_models[0]
 
 
 @lru_cache(maxsize=1)
@@ -135,12 +130,7 @@ def _assert_count_tokens_json(data: dict) -> int:
     return n
 
 
-_LARGE_PAYLOAD_PREFIX = 'Reply with one word: OK. Context:\n'
 _LARGE_PAYLOAD_MAX_TOKENS = 8
-
-
-def _large_payload_user_content() -> str:
-    return f'{_LARGE_PAYLOAD_PREFIX}{"x" * (128 * 1024)}'
 
 
 def _assert_anthropic_error_envelope(body: dict) -> dict:
@@ -184,7 +174,7 @@ def _assert_tool_parser_required_message(resp: requests.Response) -> None:
 @pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
 class TestRestfulAnthropicV1:
 
-    def test_list_models(self, backend, model_case, deployed_model_name: str):
+    def test_list_models(self, backend, model_case):
         url = f'{BASE_URL}/anthropic/v1/models'
         resp = requests.get(url, timeout=30)
         assert resp.status_code == 200, resp.text
@@ -198,7 +188,7 @@ class TestRestfulAnthropicV1:
             assert isinstance(m['id'], str) and len(m['id']) > 0
             assert isinstance(m['display_name'], str)
         ids = [m['id'] for m in data['data']]
-        assert deployed_model_name in ids, (deployed_model_name, ids)
+        assert deployed_model_name() in ids, (deployed_model_name(), ids)
         if ids:
             assert data['first_id'] == ids[0]
             assert data['last_id'] == ids[-1]
@@ -219,11 +209,11 @@ class TestRestfulAnthropicV1:
         ],
     )
     def test_messages_and_count_tokens_missing_version_header(
-            self, backend, model_case, deployed_model_name: str, endpoint_url: str, body_without_model: dict):
+            self, backend, model_case, endpoint_url: str, body_without_model: dict):
         resp = requests.post(
             endpoint_url,
             headers={'Content-Type': 'application/json'},
-            json={'model': deployed_model_name, **body_without_model},
+            json={'model': deployed_model_name(), **body_without_model},
             timeout=60,
         )
         assert resp.status_code == 400, resp.text
@@ -268,7 +258,7 @@ class TestRestfulAnthropicV1:
         assert body['error']['type'] == 'not_found_error'
         assert 'does not exist' in body['error']['message']
 
-    def test_messages_with_system(self, backend, model_case, deployed_model_name: str):
+    def test_messages_with_system(self, backend, model_case):
         """Anthropic ``system`` field (Messages API).
 
         Some chat models prefix visible chain-of-thought before the final reply; keep
@@ -279,7 +269,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 2048,
                 'temperature': 0.01,
                 'system': 'You reply only with the single word: Acknowledged.',
@@ -292,7 +282,7 @@ class TestRestfulAnthropicV1:
         text = _assistant_text_from_message_payload(data)
         assert 'acknowledge' in text.lower(), text[:500]
 
-    def test_messages_user_content_as_blocks(self, backend, model_case, deployed_model_name: str):
+    def test_messages_user_content_as_blocks(self, backend, model_case):
         """``messages[].content`` as a list of ``{type: text}`` blocks
         (Anthropic-native shape)."""
 
@@ -300,7 +290,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 24,
                 'temperature': 0.01,
                 'messages': [{
@@ -321,7 +311,7 @@ class TestRestfulAnthropicV1:
             k in tl
             for k in ('green', 'grass', '青', '綠', '绿')), f'expected color-of-grass hint in reply: {text[:500]!r}'
 
-    def test_messages_system_as_content_blocks(self, backend, model_case, deployed_model_name: str):
+    def test_messages_system_as_content_blocks(self, backend, model_case):
         """``system`` as Anthropic block list (concatenated server-side for the
         chat template)."""
 
@@ -329,7 +319,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 256,
                 'temperature': 0.01,
                 'system': [
@@ -346,7 +336,7 @@ class TestRestfulAnthropicV1:
         assert 'confirmed' in text, text[:500]
 
     def test_messages_history_tool_use_and_tool_result_without_request_tools(
-            self, backend, model_case, deployed_model_name: str):
+            self, backend, model_case):
         """Replay ``tool_use`` / ``tool_result`` blocks without top-level
         ``tools`` (parserless RESTFUL)."""
 
@@ -354,7 +344,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 2048,
                 'temperature': 0.01,
                 'messages': build_anthropic_messages_history_tool_result(
@@ -368,7 +358,7 @@ class TestRestfulAnthropicV1:
         text = _assistant_text_from_message_payload(data)
         assert_warm_yes_answer(text, stop_reason=data['stop_reason'])
 
-    def test_messages_history_thinking_and_text_blocks(self, backend, model_case, deployed_model_name: str):
+    def test_messages_history_thinking_and_text_blocks(self, backend, model_case):
         """Assistant history with ``thinking`` + ``text`` (reasoning replay
         path)."""
 
@@ -376,7 +366,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 2048,
                 'temperature': 0.01,
                 'messages': ANTHROPIC_MESSAGES_HISTORY_THINKING_REPLAY,
@@ -391,19 +381,19 @@ class TestRestfulAnthropicV1:
             f'stop_reason={data["stop_reason"]!r} text={text[:500]!r}'
         )
 
-    def test_messages_user_image_file_from_config_resource(self, backend, model_case, deployed_model_name: str):
+    def test_messages_user_image_file_from_config_resource(self, backend, model_case):
         """``user`` message with Anthropic ``image`` + local ``resource_path``
         file (``config_h.yml``)."""
 
-        if not _model_likely_supports_anthropic_vlm(deployed_model_name):
-            pytest.skip(f'model {deployed_model_name!r} is not treated as vision-capable for this test')
+        if not _model_likely_supports_anthropic_vlm(deployed_model_name()):
+            pytest.skip(f'model {deployed_model_name()!r} is not treated as vision-capable for this test')
 
         image_path = _eval_resource_file(_EVAL_IMAGE_TIGER)
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 128,
                 'temperature': 0.01,
                 'messages': [{
@@ -426,13 +416,13 @@ class TestRestfulAnthropicV1:
             k in text
             for k in ('tiger', 'cat', 'big cat', '虎', '猫', 'feline')), text[:800]
 
-    def test_count_tokens_user_image_block_exceeds_text_only(self, backend, model_case, deployed_model_name: str):
+    def test_count_tokens_user_image_block_exceeds_text_only(self, backend, model_case):
         """``count_tokens`` flattens ``image`` blocks in
         ``to_lmdeploy_messages``; count should exceed text-only."""
 
         image_path = _eval_resource_file(_EVAL_IMAGE_TIGER)
         base = {
-            'model': deployed_model_name,
+            'model': deployed_model_name(),
             'messages': [{
                 'role': 'user',
                 'content': [{'type': 'text', 'text': 'Describe briefly.'}],
@@ -446,7 +436,7 @@ class TestRestfulAnthropicV1:
             _COUNT_TOKENS_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'messages': [{
                     'role': 'user',
                     'content': [
@@ -461,18 +451,18 @@ class TestRestfulAnthropicV1:
         n1 = _assert_count_tokens_json(r1.json())
         assert n1 > n0, ('image-bearing user message should tokenize longer than text-only', n1, n0)
 
-    def test_messages_user_image_interleaved_text_blocks(self, backend, model_case, deployed_model_name: str):
+    def test_messages_user_image_interleaved_text_blocks(self, backend, model_case):
         """Multimodal user turn: ``text`` → ``image`` → ``text`` (ordering + VLM path)."""
 
-        if not _model_likely_supports_anthropic_vlm(deployed_model_name):
-            pytest.skip(f'model {deployed_model_name!r} is not treated as vision-capable for this test')
+        if not _model_likely_supports_anthropic_vlm(deployed_model_name()):
+            pytest.skip(f'model {deployed_model_name()!r} is not treated as vision-capable for this test')
 
         image_path = _eval_resource_file(_EVAL_IMAGE_TIGER)
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 128,
                 'temperature': 0.01,
                 'messages': [{
@@ -496,18 +486,18 @@ class TestRestfulAnthropicV1:
             k in text
             for k in ('tiger', 'cat', 'big cat', '虎', '猫', 'feline')), text[:800]
 
-    def test_messages_user_image_base64_stream(self, backend, model_case, deployed_model_name: str):
+    def test_messages_user_image_base64_stream(self, backend, model_case):
         """Tiny PNG via ``base64`` source + ``stream: true`` (VLM + SSE
         path)."""
 
-        if not _model_likely_supports_anthropic_vlm(deployed_model_name):
-            pytest.skip(f'model {deployed_model_name!r} is not treated as vision-capable for this test')
+        if not _model_likely_supports_anthropic_vlm(deployed_model_name()):
+            pytest.skip(f'model {deployed_model_name()!r} is not treated as vision-capable for this test')
 
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 # Same as tool_parser HTTP solid-color VLM test: leave room after thinking_delta.
                 'max_tokens': 16384,
                 'temperature': 0.01,
@@ -560,12 +550,12 @@ class TestRestfulAnthropicV1:
                 '绯',
             )), f'expected red-ish color name in streamed reply: {assembled[:500]!r}'
 
-    def test_messages_multi_turn(self, backend, model_case, deployed_model_name: str):
+    def test_messages_multi_turn(self, backend, model_case):
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 2048,
                 'temperature': 0.01,
                 'messages': [
@@ -581,7 +571,7 @@ class TestRestfulAnthropicV1:
         text = _assistant_text_from_message_payload(data).lower()
         assert 'banana' in text, text[:500]
 
-    def test_messages_max_tokens_budget(self, backend, model_case, deployed_model_name: str):
+    def test_messages_max_tokens_budget(self, backend, model_case):
         """Tight ``max_tokens`` should cap generation (``stop_reason`` often
         ``max_tokens``)."""
 
@@ -589,7 +579,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 6,
                 'temperature': 0.01,
                 'messages': [{
@@ -607,7 +597,7 @@ class TestRestfulAnthropicV1:
         assert data['stop_reason'] in ('max_tokens', 'end_turn')
         assert _assistant_text_from_message_payload(data), data['content']
 
-    def test_messages_stop_sequences(self, backend, model_case, deployed_model_name: str):
+    def test_messages_stop_sequences(self, backend, model_case):
         """``stop_sequences`` should truncate output and set ``stop_reason`` /
         ``stop_sequence`` (Anthropic protocol)."""
 
@@ -615,7 +605,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 256,
                 'temperature': 0.01,
                 'stop_sequences': list(_STOP_SEQUENCES),
@@ -631,7 +621,7 @@ class TestRestfulAnthropicV1:
         assert data['stop_sequence'] in _STOP_SEQUENCES, data
         assert len(text) > 0, 'stop_sequence should still yield visible assistant text before the stop'
 
-    def test_messages_stop_sequences_stream(self, backend, model_case, deployed_model_name: str):
+    def test_messages_stop_sequences_stream(self, backend, model_case):
         """Streaming ``stop_sequences``: ``message_delta`` carries stop
         metadata."""
 
@@ -639,7 +629,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 256,
                 'temperature': 0.01,
                 'stream': True,
@@ -657,14 +647,14 @@ class TestRestfulAnthropicV1:
         assert '6' not in assembled
         assert len(assembled) > 0
 
-    def test_messages_assistant_prefill(self, backend, model_case, deployed_model_name: str):
+    def test_messages_assistant_prefill(self, backend, model_case):
         """Assistant prefill: trailing ``assistant`` message continues generation."""
 
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 32,
                 'temperature': 0.01,
                 'messages': [
@@ -686,12 +676,12 @@ class TestRestfulAnthropicV1:
         tl = text.lower()
         assert 'paris' in tl, f'expected Paris continuation from assistant prefill: {text[:500]!r}'
 
-    def test_messages_non_stream(self, backend, model_case, deployed_model_name: str):
+    def test_messages_non_stream(self, backend, model_case):
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 32,
                 'temperature': 0.01,
                 'messages': [{'role': 'user', 'content': 'Reply with a single short greeting.'}],
@@ -703,14 +693,14 @@ class TestRestfulAnthropicV1:
         assert data['content'][0]['type'] == 'text'
         assert len(_assistant_text_from_message_payload(data).strip()) > 0
 
-    def test_messages_stream(self, backend, model_case, deployed_model_name: str):
+    def test_messages_stream(self, backend, model_case):
         """SSE lifecycle: ``message_start`` → block deltas → ``message_stop``."""
 
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 48,
                 'temperature': 0.01,
                 'stream': True,
@@ -729,11 +719,11 @@ class TestRestfulAnthropicV1:
             'expected at least two of the digits 1–3 in streamed text', repr(assembled[:200])
         )
 
-    def test_count_tokens(self, backend, model_case, deployed_model_name: str):
+    def test_count_tokens(self, backend, model_case):
         r_short = requests.post(
             _COUNT_TOKENS_URL,
             headers=_anthropic_headers(),
-            json={'model': deployed_model_name, 'messages': [{'role': 'user', 'content': 'Hi'}]},
+            json={'model': deployed_model_name(), 'messages': [{'role': 'user', 'content': 'Hi'}]},
             timeout=60,
         )
         assert r_short.status_code == 200, r_short.text
@@ -742,7 +732,7 @@ class TestRestfulAnthropicV1:
             _COUNT_TOKENS_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'messages': [{'role': 'user', 'content': 'Hello, estimate my token count.'}],
             },
             timeout=60,
@@ -757,7 +747,7 @@ class TestRestfulAnthropicV1:
         ids=['messages', 'count_tokens'],
     )
     def test_messages_and_count_tokens_invalid_json_body(
-            self, backend, model_case, deployed_model_name: str, endpoint_url: str):
+            self, backend, model_case, endpoint_url: str):
         resp = requests.post(
             endpoint_url,
             headers=_anthropic_headers(),
@@ -766,14 +756,14 @@ class TestRestfulAnthropicV1:
         )
         _assert_fastapi_validation_error(resp)
 
-    def test_count_tokens_with_tools(self, backend, model_case, deployed_model_name: str):
+    def test_count_tokens_with_tools(self, backend, model_case):
         """``count_tokens`` accepts ``tools`` in the request schema."""
 
         resp = requests.post(
             _COUNT_TOKENS_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'messages': [{'role': 'user', 'content': 'Hi'}],
                 'tools': [{
                     'name': 'demo',
@@ -789,12 +779,12 @@ class TestRestfulAnthropicV1:
         assert resp.status_code == 200, resp.text
         _assert_count_tokens_json(resp.json())
 
-    def test_count_tokens_matches_messages_prompt(self, backend, model_case, deployed_model_name: str):
+    def test_count_tokens_matches_messages_prompt(self, backend, model_case):
         """``count_tokens`` should match ``/messages`` ``usage.input_tokens``
         for the same prompt."""
 
         count_json = {
-            'model': deployed_model_name,
+            'model': deployed_model_name(),
             'system': 'Reply briefly.',
             'messages': [{'role': 'user', 'content': 'Say hello in one word.'}],
         }
@@ -821,7 +811,7 @@ class TestRestfulAnthropicV1:
         data = assert_success_message_json(r_msg.json())
         assert data['usage']['input_tokens'] == counted, (data['usage']['input_tokens'], counted)
 
-    def test_count_tokens_with_system_content_blocks(self, backend, model_case, deployed_model_name: str):
+    def test_count_tokens_with_system_content_blocks(self, backend, model_case):
         """``count_tokens`` with ``system`` as block list
         (``to_lmdeploy_messages`` flattens text)."""
 
@@ -829,7 +819,7 @@ class TestRestfulAnthropicV1:
         resp_base = requests.post(
             _COUNT_TOKENS_URL,
             headers=_anthropic_headers(),
-            json={'model': deployed_model_name, 'messages': messages},
+            json={'model': deployed_model_name(), 'messages': messages},
             timeout=60,
         )
         assert resp_base.status_code == 200, resp_base.text
@@ -842,7 +832,7 @@ class TestRestfulAnthropicV1:
             _COUNT_TOKENS_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'system': [
                     {'type': 'text', 'text': 'You are helpful.'},
                     {'type': 'text', 'text': 'Answer briefly.'},
@@ -862,7 +852,7 @@ class TestRestfulAnthropicV1:
             baseline,
         )
 
-    def test_messages_wrong_content_type(self, backend, model_case, deployed_model_name: str):
+    def test_messages_wrong_content_type(self, backend, model_case):
         resp = requests.post(
             _MESSAGES_URL,
             headers={
@@ -874,7 +864,7 @@ class TestRestfulAnthropicV1:
         )
         _assert_fastapi_validation_error(resp)
 
-    def test_messages_accepts_system_role_in_messages(self, backend, model_case, deployed_model_name: str):
+    def test_messages_accepts_system_role_in_messages(self, backend, model_case):
         """LMDeploy accepts ``messages[].role == system`` (Claude Code / beta
         history); classic Anthropic usually rejects this in favor of top-level
         ``system``."""
@@ -883,7 +873,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 32,
                 'temperature': 0.01,
                 'messages': [
@@ -897,12 +887,12 @@ class TestRestfulAnthropicV1:
         data = assert_success_message_json(resp.json())
         assert len(_assistant_text_from_message_payload(data).strip()) > 0
 
-    def test_messages_message_missing_role(self, backend, model_case, deployed_model_name: str):
+    def test_messages_message_missing_role(self, backend, model_case):
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 8,
                 'messages': [{'content': 'Hi'}],
             },
@@ -910,7 +900,7 @@ class TestRestfulAnthropicV1:
         )
         _assert_fastapi_validation_error(resp)
 
-    def test_messages_max_tokens_zero(self, backend, model_case, deployed_model_name: str):
+    def test_messages_max_tokens_zero(self, backend, model_case):
         """Official Anthropic allows ``max_tokens=0``; LMDeploy schema rejects
         it (``gt=0``)."""
 
@@ -918,7 +908,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 0,
                 'messages': [{'role': 'user', 'content': 'Hi'}],
             },
@@ -926,24 +916,24 @@ class TestRestfulAnthropicV1:
         )
         _assert_fastapi_validation_error(resp)
 
-    def test_messages_missing_max_tokens(self, backend, model_case, deployed_model_name: str):
+    def test_messages_missing_max_tokens(self, backend, model_case):
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'messages': [{'role': 'user', 'content': 'Hi'}],
             },
             timeout=30,
         )
         _assert_fastapi_validation_error(resp)
 
-    def test_messages_messages_not_list(self, backend, model_case, deployed_model_name: str):
+    def test_messages_messages_not_list(self, backend, model_case):
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 8,
                 'messages': {'role': 'user', 'content': 'Hi'},
             },
@@ -951,7 +941,7 @@ class TestRestfulAnthropicV1:
         )
         _assert_fastapi_validation_error(resp)
 
-    def test_messages_stream_validation_error_returns_json(self, backend, model_case, deployed_model_name: str):
+    def test_messages_stream_validation_error_returns_json(self, backend, model_case):
         """Invalid bodies must not upgrade to ``text/event-stream``; returns
         Anthropic JSON 400."""
 
@@ -959,7 +949,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': -1,
                 'stream': True,
                 'messages': [{'role': 'user', 'content': 'Hi'}],
@@ -972,27 +962,30 @@ class TestRestfulAnthropicV1:
         assert 'application/json' in ctype
         assert 'text/event-stream' not in ctype
 
-    def test_count_tokens_empty_messages(self, backend, model_case, deployed_model_name: str):
+    def test_count_tokens_empty_messages(self, backend, model_case):
         """``messages: []`` is invalid for Anthropic ``count_tokens``."""
 
         resp = requests.post(
             _COUNT_TOKENS_URL,
             headers=_anthropic_headers(),
-            json={'model': deployed_model_name, 'messages': []},
+            json={'model': deployed_model_name(), 'messages': []},
             timeout=60,
         )
         _assert_anthropic_invalid_request_error(resp)
 
-    def test_messages_large_user_payload(self, backend, model_case, deployed_model_name: str):
+    def test_messages_large_user_payload(self, backend, model_case, config):
         """Regression guard for large JSON bodies (CI-sized payload, not
         stress-test scale)."""
 
-        user_content = _large_payload_user_content()
+        user_content = build_session_sized_user_content(
+            config=config, model_id=model_case,
+            max_completion_tokens=_LARGE_PAYLOAD_MAX_TOKENS,
+        )
         resp = requests.post(
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': _LARGE_PAYLOAD_MAX_TOKENS,
                 'temperature': 0.01,
                 'messages': [{'role': 'user', 'content': user_content}],
@@ -1003,7 +996,7 @@ class TestRestfulAnthropicV1:
         data = assert_success_message_json(resp.json())
         assert len(_assistant_text_from_message_payload(data).strip()) > 0
 
-    def test_messages_rejects_tools_without_tool_call_parser(self, backend, model_case, deployed_model_name: str):
+    def test_messages_rejects_tools_without_tool_call_parser(self, backend, model_case):
         """Anthropic interface suites start api_server *without* ``--tool-call-
         parser``; ``tools`` must yield 400."""
 
@@ -1011,7 +1004,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 64,
                 'temperature': 0,
                 'messages': [{'role': 'user', 'content': USER_ASK_WEATHER_DALLAS}],
@@ -1022,7 +1015,7 @@ class TestRestfulAnthropicV1:
         _assert_tool_parser_required_message(resp)
 
     def test_messages_rejects_tool_choice_with_tools_without_tool_call_parser(
-            self, backend, model_case, deployed_model_name: str):
+            self, backend, model_case):
         """``tool_choice`` with ``tools`` is blocked without ``--tool-call-
         parser`` on the anthropic dedicated server."""
 
@@ -1030,7 +1023,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 64,
                 'temperature': 0,
                 'messages': [{'role': 'user', 'content': USER_ASK_WEATHER_DALLAS}],

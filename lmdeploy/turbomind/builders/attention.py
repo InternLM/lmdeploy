@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import torch
 
-from ..linear import Linear, dequant_mixed, transform_output_dim
 from ._base import Builder, ParallelGroup, SplitSide
+from .linear import Linear, dequant_mixed, transform_output_dim
 
 # ---------------------------------------------------------------------------
 # New pipeline functions (replacing merge_qkv_linear)
@@ -21,10 +21,7 @@ from ._base import Builder, ParallelGroup, SplitSide
 
 def _infer_heads(linear: Linear, head_dim: int) -> int:
     """Derive head count from the weight tensor's output dimension."""
-    w = linear.tensors.get('weight')
-    if w is None:
-        return 0
-    return w.size(-1) // head_dim
+    return linear.tensors['weight'].size(-1) // head_dim
 
 
 @transform_output_dim
@@ -98,7 +95,7 @@ class AttentionBuilder(Builder):
 
         Pipeline: dequant_mixed -> repeat_kv_for_tp -> fuse_qkv -> commit.
         """
-        q, k, v, gate = dequant_mixed(q, k, v, gate, data_type=self.config.data_type)
+        q, k, v, gate = dequant_mixed(q, k, v, gate, dtype=self._ctx.dtype)
         k, v = repeat_kv_for_tp(k, v, tp=self.tp.size,
                                 head_dim=self.config.head_dim)
         # After KV head repeat, push the padded-global kv_head_num onto
@@ -116,5 +113,5 @@ class AttentionBuilder(Builder):
 
         Builder determines split side.
         """
-        split_side = self._PARAM_TP_RULES.get(name)
+        split_side = self._PARAM_TP_RULES[name]
         self._add_tensor(name, tensor, split_side)
