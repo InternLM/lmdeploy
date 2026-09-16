@@ -1,7 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import torch
+
+from .base import BuildSpec
 
 
 class MultinomialSamplingImpl(ABC):
@@ -13,11 +16,6 @@ class MultinomialSamplingImpl(ABC):
         raise NotImplementedError
 
 
-class MultinomialSamplingBuilder(ABC):
-    """Multinomial sampling implementation builder."""
-
-    @staticmethod
-    @abstractmethod
-    def build():
-        """build."""
-        raise NotImplementedError
+@dataclass(frozen=True)
+class MultinomialSamplingBuildSpec(BuildSpec[MultinomialSamplingImpl]):
+    """Request construction of a multinomial sampling operator."""

@@ -104,6 +104,11 @@ struct TurboMind::Impl {
 
     void CreateContext(int index);
 
+    gemm::Gemm& gemm(int index)
+    {
+        return contexts_.at(index)->linear->gemm();
+    }
+
     void WarmUp(int index);
 
     void Sleep(int index, int level)
@@ -521,6 +526,11 @@ std::pair<core::Stream, core::Allocator> TurboMind::weight_context(int index)
     auto& root = impl_->weights_.at(index);
     TM_CHECK(root != nullptr);
     return {root->stream(), root->allocator()};
+}
+
+gemm::Gemm& TurboMind::gemm(int index)
+{
+    return impl_->gemm(index);
 }
 
 void TurboMind::ProcessWeights(int index)

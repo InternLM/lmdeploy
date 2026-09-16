@@ -116,6 +116,35 @@ def test_preprocess_rejects_active_session_without_removing_it():
     asyncio.run(_run())
 
 
+def test_preprocess_rejects_uncompilable_response_format():
+    import xgrammar as xgr
+
+    schema = {'type': 'not-a-json-schema-type'}
+    response_format = xgr.get_model_structural_tag(
+        'qwen_3',
+        [{
+            'type': 'function',
+            'function': {
+                'name': 'search',
+                'parameters': schema,
+            },
+        }],
+        tool_choice='required',
+        reasoning=False,
+    ).model_dump(mode='json')
+
+    async def _run():
+        engine = _engine()
+        gen_config = GenerationConfig(max_new_tokens=8, response_format=response_format)
+        with pytest.raises(RequestError) as exc_info:
+            await engine.preprocess(None, 9, input_ids=[1], gen_config=gen_config)
+
+        assert exc_info.value.code is ErrorCode.INVALID_REQUEST
+        assert engine.session_mgr.sessions == {}
+
+    asyncio.run(_run())
+
+
 def test_generate_rejects_raw_and_consumed_requests():
 
     async def _run():

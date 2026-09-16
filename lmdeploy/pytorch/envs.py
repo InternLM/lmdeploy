@@ -151,6 +151,7 @@ with set_envs():
     # logging
     log_file = os.getenv('LMDEPLOY_LOG_FILE', None)
     os.getenv('LMDEPLOY_LOG_PID', '0')
+    enable_request_cache_usage_metric = env_to_bool('LMDEPLOY_ENABLE_REQUEST_CACHE_USAGE_METRIC', True)
 
     # check env
     enable_check_env = env_to_bool('LMDEPLOY_ENABLE_CHECK_ENV', True)
@@ -179,6 +180,10 @@ with set_envs():
     # blocked FP8 GEMM
     blocked_fp8_gemm_backend = env_to_choice('LMDEPLOY_BLOCKED_FP8_GEMM_BACKEND', 'auto',
                                              {'auto', 'deepgemm', 'gluon', 'triton'})
+
+    # W4A16 GEMM
+    w4a16_gemm_backend = env_to_choice('LMDEPLOY_W4A16_GEMM_BACKEND', 'auto',
+                                       {'auto', 'triton', 'turbomind'})
 
     # model agent
     skip_warmup = env_to_bool('LMDEPLOY_SKIP_WARMUP', False)
@@ -230,6 +235,10 @@ with set_envs():
     # DSA indexer score memory
     dsa_indexer_max_logits_mb = max(1, env_to_int('LMDEPLOY_DSA_INDEXER_MAX_LOGITS_MB', 512))
 
+    # sparse MLA attention
+    sparse_mla_backend = env_to_choice('LMDEPLOY_SPARSE_MLA_BACKEND', 'flashmla',
+                                       {'flashmla', 'tilelang'})
+
     # cudagraph
     # fake capture flag for debug cudagraph padding behavior
     fake_capture = env_to_bool('LMDEPLOY_FAKE_CUDA_GRAPH_CAPTURE', False)
@@ -238,6 +247,9 @@ with set_envs():
     # cuda communicator
     enable_flashinfer_allreduce = env_to_bool('LMDEPLOY_ENABLE_FLASHINFER_ALLREDUCE', False)
     enable_symm_mem_allreduce = env_to_bool('LMDEPLOY_ENABLE_SYMM_MEM_ALLREDUCE', False)
+    # NCCL remains the default; launch and small-token policies are internal.
+    enable_symm_mem_lmhead = env_to_bool('LMDEPLOY_ENABLE_SYMM_MEM_LMHEAD', False)
+    symm_mem_lmhead_max_mb = max(1, env_to_int('LMDEPLOY_SYMM_MEM_LMHEAD_MAX_MB', 64))
 
     # opt-ttft
     opt_ttft_policy = env_to_choice('LMDEPLOY_PT_TTFT_POLICY', 'size', {'fifo', 'size'})

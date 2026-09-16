@@ -55,8 +55,6 @@ find_package(Threads REQUIRED)
 
 add_library(turbomind_nccl_stub SHARED nccl_stub.cc)
 set_target_properties(turbomind_nccl_stub PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
     OUTPUT_NAME turbomind_nccl_stub
@@ -69,11 +67,6 @@ add_library(token_dispatcher STATIC
     token_dispatcher.cc
     moe_a2a_utils.cu
 )
-set_target_properties(token_dispatcher PROPERTIES
-    CXX_STANDARD 20
-    CXX_STANDARD_REQUIRED ON
-    CUDA_STANDARD 17
-    CUDA_STANDARD_REQUIRED ON)
 target_compile_options(token_dispatcher PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--diag-suppress=2417>
     $<$<COMPILE_LANGUAGE:CUDA>:-Wno-deprecated-gpu-targets>)

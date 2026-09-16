@@ -1,63 +1,40 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-"""Request scheduling and prefix-cache side-effect boundaries.
+"""Public paging scheduler and sequence-lifecycle facade."""
 
-The scheduler is the first owner of prefix-cache side effects.  In prefill,
-``BlockTrie.match()`` is intentionally called before eviction and allocation so
-the scheduler can account for reused KV/state.  That match is tentative:
-rollback is required if checkpoint pinning, KV eviction, or runtime state
-allocation means the request cannot safely run now.  Long-context suffixes can
-continue chunking from the accepted prefix hit.
-
-Successful prefill scheduling keeps this order:
-
-1. ``block_trie.match(seq)`` mutates sequence state to skip a cached prefix.
-2. eviction and SSM runtime-state availability are checked.
-3. ``block_manager.allocate(seq)`` allocates missing KV blocks.
-4. ``block_trie.allocate(seq)`` publishes newly allocated full blocks.
-5. For SSM, downstream input/model/engine code restores and saves checkpoint
-   states; the scheduler only owns resource decisions and rollback.
-
-SSM scheduling detail:
-
-* ``block_trie.match(seq)`` may find a published checkpoint and record
-  ``seq.prefix_cache.restore`` before the request owns a runtime state.
-  The scheduler must treat that as tentative until KV blocks and one runtime
-  state slot are guaranteed.
-* A matched restore checkpoint can be pinned before eviction so checkpoint LRU
-  cannot free the source slot.  If that pin prevents eviction from finding
-  enough resources, the scheduler rolls the match back, releases the pin, and
-  retries eviction once without the tentative hit.
-* Runtime state availability is checked after KV eviction because old unpinned
-  checkpoints may be dropped to free state-cache slots.  If no runtime slot can
-  be recovered, the tentative prefix hit is rolled back and the request waits.
-* ``state_manager.allocate(seq)`` assigns the request runtime state only after
-  ``block_manager.allocate(seq)`` and ``block_trie.allocate(seq)`` succeed.
-  Later, ``InputsMaker`` may reserve checkpoint saves for the exact produced
-  step; scheduler code does not perform state-cache tensor copies or publish
-  checkpoint readiness.
-"""
-
-import time
-from collections import Counter, OrderedDict
+from collections import OrderedDict
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import chain
+from typing import TYPE_CHECKING
 
+import numpy as np
 from torch.profiler import record_function
 
-from lmdeploy.messages import EventType, ScheduleMetrics
+from lmdeploy.messages import ScheduleMetrics
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.pytorch.long_context import get_long_context_chunk_limit, plan_long_context_chunk
-from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig, SchedulerConfig
+from ..kv_connector import KVConnectorStepInput
 from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, SequenceManager, SequenceMeta
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
 from .eviction_helper import build_eviction_helper
+from .kv_load_coordinator import KVLoadCoordinator
+from .kv_save_coordinator import KVSaveCoordinator
+from .prefill_scheduler import (
+    _PrefillScheduler,
+    _PrefillTurnPolicy,
+    _TentativePrefixMatch,
+)
+from .seq_states import SequenceLifecycle
 from .state_manager import build_state_manager
 
-logger = get_logger('lmdeploy')
+if TYPE_CHECKING:
+    from lmdeploy.pytorch.kv_connector.base import KVConnectorBase
+
+    from .block_trie.checkpoint_lifecycle import StateCheckpointLifecycle
 
 MapType = dict[int, int]
 SeqList = list[SchedulerSequence]
@@ -65,405 +42,30 @@ SeqList = list[SchedulerSequence]
 
 @dataclass
 class SchedulerOutput:
-    """Output of schedule."""
+    """Paging selection and connector snapshots for one model step."""
 
     running: SeqList
     swap_in_map: MapType
     swap_out_map: MapType
     copy_map: MapType
-
-
-@dataclass(frozen=True)
-class _PrefillReorderInfo:
-    """Immutable pre-admission metadata used only for waiting-list ordering."""
-
-    prefill_token_count: int
-    is_nonfinal_long_prefill: bool
-    estimated_long_chunks: int
-
-
-class _PrefillReorderer:
-    """Order waiting prefills without applying scheduler side effects."""
-
-    def __init__(self, scheduler: 'Scheduler'):
-        self.scheduler = scheduler
-        self._info_cache: dict[int, _PrefillReorderInfo] = {}
-
-    def reorder(self,
-                waiting: SeqList,
-                allow_long_prefill: bool,
-                prefer_long_prefill: bool):
-        """Return waiting requests in the order the prefill loop should try."""
-        waiting = sorted(waiting, key=lambda seq: seq.arrive_time)
-        if prefer_long_prefill:
-            # Long-work turns choose one long waiter first. The size policy only
-            # reorders this long lane; it is not global shortest-prefill-first
-            # admission.
-            long_turn_order = self._reorder_for_long_turn(waiting)
-            if long_turn_order is not None:
-                return self._warn_if_not_permutation(waiting, long_turn_order)
-
-        if allow_long_prefill:
-            return self._warn_if_not_permutation(waiting, waiting)
-
-        reordered = self._reorder_for_short_turn(waiting)
-        return self._warn_if_not_permutation(waiting, reordered)
-
-    def _warn_if_not_permutation(self, original: SeqList, reordered: SeqList):
-        """Warn if reorder drops, duplicates, or substitutes waiting
-        sequences."""
-        original_ids = [id(seq) for seq in original]
-        reordered_ids = [id(seq) for seq in reordered]
-        if len(original_ids) == len(reordered_ids) and Counter(original_ids) == Counter(reordered_ids):
-            return reordered
-
-        logger.warning('Unexpected prefill reorder result: original_len=%s reordered_len=%s '
-                       'original_sample=%s reordered_sample=%s',
-                       len(original), len(reordered), self._seq_id_sample(original), self._seq_id_sample(reordered))
-        return reordered
-
-    @staticmethod
-    def _seq_id_sample(seqs: SeqList):
-        return [(seq.session_id, seq.seq_id) for seq in seqs[:5]]
-
-    def _get_reorder_info(self, seq: SchedulerSequence):
-        """Return reorder-only info before prefix-cache side effects.
-
-        Prefix-cache match/rollback mutates the remaining prompt. Keep this cache confined to waiting-list ordering and
-        recompute fresh values in the admission path.
-        """
-        seq_key = id(seq)
-        info = self._info_cache.get(seq_key)
-        if info is not None:
-            return info
-
-        scheduler = self.scheduler
-        chunk_limit = scheduler._long_context_chunk_limit(seq)
-        if seq.num_token_ids <= chunk_limit:
-            info = _PrefillReorderInfo(prefill_token_count=seq.num_token_ids,
-                                       is_nonfinal_long_prefill=False,
-                                       estimated_long_chunks=1)
-        else:
-            kv_token_limit = scheduler._next_long_context_chunk_end(seq, chunk_limit)
-            safe_chunk_limit = max(1, chunk_limit)
-            info = _PrefillReorderInfo(
-                prefill_token_count=max(0, kv_token_limit - seq.num_history_ids),
-                is_nonfinal_long_prefill=True,
-                estimated_long_chunks=max(1, (seq.num_token_ids + safe_chunk_limit - 1) // safe_chunk_limit),
-            )
-        self._info_cache[seq_key] = info
-        return info
-
-    def _long_priority_key(self, seq: SchedulerSequence, now: float):
-        """Prefer smaller long prompts, with age credit to avoid starvation."""
-        scheduler = self.scheduler
-        info = self._get_reorder_info(seq)
-        wait_age = max(0.0, now - seq.arrive_time)
-        age_credit = int(wait_age // scheduler._long_prefill_aging_seconds_per_chunk)
-        age_adjusted_chunks = info.estimated_long_chunks - age_credit
-        return age_adjusted_chunks, info.estimated_long_chunks, seq.arrive_time
-
-    def _split_by_prefill_kind(self, waiting: SeqList):
-        """Split waiting requests into normal/final and non-final long
-        prefill."""
-        normal_waiting: SeqList = []
-        long_waiting: SeqList = []
-        for seq in waiting:
-            if self._get_reorder_info(seq).is_nonfinal_long_prefill:
-                long_waiting.append(seq)
-            else:
-                normal_waiting.append(seq)
-        return normal_waiting, long_waiting
-
-    def _sort_normal_prefills(self, waiting: SeqList):
-        return sorted(waiting,
-                      key=lambda seq: (self._get_reorder_info(seq).prefill_token_count, seq.arrive_time))
-
-    def _sort_long_prefills(self, waiting: SeqList):
-        scheduler = self.scheduler
-        if scheduler._long_prefill_policy != 'size':
-            return waiting
-        now = time.perf_counter()
-        return sorted(waiting, key=lambda seq: self._long_priority_key(seq, now))
-
-    def _reorder_for_long_turn(self, waiting: SeqList):
-        """Choose one long waiter, then fill the turn with normal prefills."""
-        normal_waiting, long_waiting = self._split_by_prefill_kind(waiting)
-        if len(long_waiting) == 0:
-            return None
-
-        long_waiting = self._sort_long_prefills(long_waiting)
-        normal_waiting = self._sort_normal_prefills(normal_waiting)
-        return [long_waiting[0]] + normal_waiting + long_waiting[1:]
-
-    def _reorder_for_short_turn(self, waiting: SeqList):
-        """Prioritize normal/final prefills while preserving long waiters."""
-        normal_waiting, long_waiting = self._split_by_prefill_kind(waiting)
-        return self._sort_normal_prefills(normal_waiting) + long_waiting
-
-
-@dataclass(frozen=True)
-class _PrefillAdmissionResult:
-    """Outcome from trying to admit one waiting prefill request."""
-
-    admitted: bool
-    prefill_token_count: int = 0
-    should_skip: bool = False
-
-    @classmethod
-    def admit(cls, prefill_token_count: int):
-        return cls(admitted=True, prefill_token_count=prefill_token_count)
-
-    @classmethod
-    def skip(cls):
-        return cls(admitted=False, should_skip=True)
-
-    @classmethod
-    def stop(cls):
-        return cls(admitted=False)
-
-    @property
-    def should_stop(self):
-        return not self.admitted and not self.should_skip
-
-
-class _PrefillAdmissionAttempt:
-    """Try to admit one waiting prefill sequence.
-
-    The attempt owns all tentative prefix-cache side effects for the sequence:
-    match, SSM restore pinning, eviction, runtime-state checks, allocation, and
-    rollback. The outer scheduler loop still owns queue traversal and decides
-    whether a rejected candidate is skipped or ends the current prefill turn.
-    """
-
-    def __init__(self,
-                 scheduler: 'Scheduler',
-                 seq: SchedulerSequence,
-                 evictable_waiting: SeqList,
-                 prealloc_size: int,
-                 token_count: int,
-                 has_admitted: bool,
-                 allow_long_prefill: bool):
-        self.scheduler = scheduler
-        self.seq = seq
-        self.evictable_waiting = evictable_waiting
-        self.prealloc_size = prealloc_size
-        self.token_count = token_count
-        self.has_admitted = has_admitted
-        self.allow_long_prefill = allow_long_prefill
-        self._alloc_size = prealloc_size
-        self._gate_match_stats_snapshot = None
-        self._gate_match_rollback_result = None
-
-    def run(self):
-        """Run the admission route for one waiting prefill.
-
-        1. Check prefill gates.
-        2. Return skip/stop if a gate rejects the candidate.
-        3. Try resource admission, including prefix-cache rollback on failure.
-        4. Return skip/stop if resources block the candidate.
-        5. On success, allocate blocks/states and publish any prefix-cache hit.
-        """
-        gate_result = self._check_prefill_admission_gates()
-        if gate_result is not None:
-            return self._check_result(gate_result)
-
-        resource_result = self._admit_resources()
-        if resource_result is not None:
-            return self._check_result(resource_result)
-
-        return self._check_result(self._finish_admission())
-
-    def _rollback_gate(self, stats_snapshot, reason: str):
-        """Rollback a tentative prefix hit and return any gate-only rejection.
-
-        A prefill gate may do a tentative prefix-cache match before resource
-        admission. If that match is rolled back, the candidate should follow
-        the gate's original skip/stop result. Matches created after the gate
-        return ``None`` so the resource branch keeps its own retry/stop behavior.
-        """
-        self._rollback_prefix_match(stats_snapshot, reason)
-        return self._gate_match_rollback_result
-
-    def _check_result(self, result: _PrefillAdmissionResult):
-        if result.admitted and result.should_skip:
-            self._warn_unexpected_state(
-                f'admission result both admits and skips: prefill_token_count={result.prefill_token_count}')
-        if not result.admitted and result.prefill_token_count != 0:
-            self._warn_unexpected_state(
-                f'rejected admission result carries token count: prefill_token_count={result.prefill_token_count}')
-        return result
-
-    def _warn_unexpected_state(self, message: str):
-        seq = self.seq
-        logger.warning('Unexpected prefill admission state: session_id=%s seq_id=%s %s',
-                       seq.session_id, seq.seq_id, message)
-
-    def _admit_resources(self):
-        if self.scheduler.block_trie.enabled:
-            return self._admit_prefix_cache_resources()
-        if not self._prepare_and_evict():
-            return _PrefillAdmissionResult.stop()
-        return None
-
-    def _admit_prefix_cache_resources(self):
-        """Admit resources for prefix-cache scheduling.
-
-        Route map:
-        1. Use or create the tentative prefix-cache match.
-        2. Pin any SSM restore state required by the match.
-        3. Prepare allocation limits and evict KV/state resources.
-        4. For SSM, verify a runtime state slot is still available.
-
-        Any failure rolls the tentative match back. A match created only to pass
-        a prefill gate returns that gate's skip/stop result after rollback;
-        normal resource failures keep their local retry/stop behavior here.
-        """
-        scheduler = self.scheduler
-        seq = self.seq
-        stats_snapshot = self._gate_match_stats_snapshot
-        if stats_snapshot is None:
-            stats_snapshot = scheduler.block_trie.stats.snapshot()
-            scheduler.block_trie.match(seq)
-
-        had_ssm_restore = scheduler.is_ssm and seq.prefix_cache.restore.is_selected
-        if not scheduler._pin_ssm_restore_if_needed(seq):
-            result = self._rollback_gate(stats_snapshot, 'failed to pin SSM restore checkpoint')
-            if result is not None:
-                return result
-
-        if not self._prepare_and_evict():
-            if not had_ssm_restore:
-                result = self._rollback_gate(stats_snapshot, 'eviction failed')
-                if result is not None:
-                    return result
-                return _PrefillAdmissionResult.stop()
-
-            # A matched SSM restore may be pinning the only checkpoint state
-            # that eviction would otherwise free. Roll it back once and retry
-            # eviction before declaring the sequence unschedulable.
-            result = self._rollback_gate(stats_snapshot, 'eviction failed with pinned SSM restore')
-            if result is not None:
-                return result
-            if not self._prepare_and_evict():
-                return _PrefillAdmissionResult.stop()
-
-        if scheduler.is_ssm and not scheduler._ensure_runtime_state_available():
-            result = self._rollback_gate(stats_snapshot, 'no runtime SSM state available')
-            if result is not None:
-                return result
-            if not self._prepare_and_evict():
-                return _PrefillAdmissionResult.stop()
-            if not scheduler._ensure_runtime_state_available():
-                seq.kv_token_limit = None
-                return _PrefillAdmissionResult.stop()
-
-        return None
-
-    def _match_prefix_for_prefill_gate(self):
-        """Tentatively match once so a request can be rechecked by a gate."""
-        scheduler = self.scheduler
-        if not scheduler.block_trie.enabled:
-            return None
-        stats_snapshot = scheduler.block_trie.stats.snapshot()
-        scheduler.block_trie.match(self.seq)
-        return stats_snapshot
-
-    def _keep_gate_prefix_match(self, stats_snapshot, rollback_result: _PrefillAdmissionResult):
-        """Keep a gate-enabling match for the following resource admission."""
-        self._gate_match_stats_snapshot = stats_snapshot
-        self._gate_match_rollback_result = rollback_result
-
-    def _token_budget_rejection(self):
-        if self.allow_long_prefill:
-            return _PrefillAdmissionResult.stop()
-        return _PrefillAdmissionResult.skip()
-
-    def _check_prefill_admission_gates(self):
-        """Apply prefill gates, tentatively matching only when it may help."""
-        scheduler = self.scheduler
-        seq = self.seq
-        token_budget = scheduler.cache_config.max_prefill_token_num
-        prefill_token_count = scheduler._prefill_admission_token_count(seq)
-        is_nonfinal_long_prefill = scheduler._prefill_kv_token_limit(seq) is not None
-
-        if is_nonfinal_long_prefill and not self.allow_long_prefill:
-            stats_snapshot = self._match_prefix_for_prefill_gate()
-            if stats_snapshot is None:
-                return _PrefillAdmissionResult.skip()
-            if scheduler._prefill_kv_token_limit(seq) is not None:
-                self._rollback_prefix_match(stats_snapshot, 'still non-final long prefill on short turn')
-                return _PrefillAdmissionResult.skip()
-            self._keep_gate_prefix_match(stats_snapshot, _PrefillAdmissionResult.skip())
-            prefill_token_count = scheduler._prefill_admission_token_count(seq)
-
-        exceeds_token_budget = self.has_admitted and self.token_count + prefill_token_count > token_budget
-        if not exceeds_token_budget:
-            return None
-
-        if self._gate_match_stats_snapshot is None:
-            stats_snapshot = self._match_prefix_for_prefill_gate()
-            if stats_snapshot is not None:
-                prefill_token_count = scheduler._prefill_admission_token_count(seq)
-                if self.token_count + prefill_token_count <= token_budget:
-                    self._keep_gate_prefix_match(stats_snapshot, self._token_budget_rejection())
-                    return None
-                self._rollback_prefix_match(stats_snapshot, 'still exceeds prefill token budget')
-        else:
-            self._rollback_prefix_match(self._gate_match_stats_snapshot, 'still exceeds prefill token budget')
-        return self._token_budget_rejection()
-
-    def _prepare_and_evict(self):
-        """Apply chunk allocation limits and evict for this prefill."""
-        scheduler = self.scheduler
-        seq = self.seq
-        alloc_size = scheduler._prepare_prefill_allocation(seq, self.prealloc_size)
-        self._alloc_size = alloc_size
-        if self._evict_for_seq(alloc_size):
-            return True
-        seq.kv_token_limit = None
-        return False
-
-    def _evict_for_seq(self, alloc_size: int):
-        """Evict stopped or skipped waiters until this sequence can run."""
-        from itertools import chain
-        scheduler = self.scheduler
-        hanging = reversed(scheduler.hanging)
-        waiting = reversed(self.evictable_waiting)
-        evictable = list(chain(hanging, waiting))
-        return scheduler.eviction_helper.evict_for_seq(self.seq, evictable, alloc_size)
-
-    def _rollback_prefix_match(self, stats_snapshot, reason: str):
-        seq = self.seq
-        logger.debug('Rollback tentative prefix-cache match: session_id=%s seq_id=%s reason=%s '
-                     'num_history_ids=%s restore_state=%s', seq.session_id, seq.seq_id, reason, seq.num_history_ids,
-                     seq.prefix_cache.restore.slot)
-        self.scheduler._rollback_unscheduled_prefix_match(seq, stats_snapshot)
-
-    def _finish_admission(self):
-        scheduler = self.scheduler
-        seq = self.seq
-        # Prefix-cache matching can advance the sequence step and shrink the
-        # remaining prefill tail. Charge the admitted batch with the
-        # post-match/post-rollback cost, not the conservative pre-match
-        # estimate used to decide whether this sequence is worth trying.
-        prefill_token_count = scheduler._prefill_admission_token_count(seq)
-        scheduler.block_manager.allocate(seq, self._alloc_size)
-        if scheduler.block_trie.enabled:
-            scheduler.block_trie.allocate(seq)
-        if scheduler.is_ssm:
-            scheduler.state_manager.allocate(seq)
-        if scheduler.block_trie.enabled:
-            scheduler._finish_prefix_cache_schedule(seq)
-        return _PrefillAdmissionResult.admit(prefill_token_count)
+    # Absolute post-forward token boundary for each request. The connector
+    # rounds it down to full blocks and saves only the suffix not saved before.
+    connector_token_lens: tuple[int, ...] = ()
+    # Current physical GPU block table for each request. Workers use these IDs
+    # to locate KV tensors, but paging may reuse them after ownership is lost.
+    connector_block_ids: tuple[tuple[int, ...], ...] = ()
+    # Logical paging IDs corresponding to connector_block_ids. Save leases pin
+    # these stable ownership handles until all TP ranks finish asynchronous I/O,
+    # preventing their physical blocks from being reassigned too early.
+    connector_logical_block_ids: tuple[tuple[int, ...], ...] = ()
 
 
 class Scheduler:
-    """Tools to schedule next step.
+    """Coordinate sequence lifecycle and paging-resource admission.
 
     Args:
-        scheduler_config (SchedulerConfig): The config of scheduler.
-        cache_config (CacheConfig): The config of cache info.
+        scheduler_config: Batch and eviction policy.
+        cache_config: KV and state-cache configuration.
     """
 
     def __init__(
@@ -471,139 +73,103 @@ class Scheduler:
         scheduler_config: SchedulerConfig,
         cache_config: CacheConfig,
         seq_meta: SequenceMeta | None = None,
+        kv_connector: 'KVConnectorBase | None' = None,
     ) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.sessions: dict[int, SchedulerSession] = OrderedDict()
-
-        # For Disaggregation
-        self.locked_sessions: dict[int, SchedulerSession] = OrderedDict()
+        self.kv_connector = kv_connector
+        seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
+        seq_meta.enable_prefix_caching = self.cache_config.enable_prefix_caching
+        self.seq_meta = seq_meta
+        self.seq_manager = SequenceManager(seq_meta)
 
         self.state_manager = build_state_manager(self.cache_config)
         self.block_manager = build_block_manager(cache_config)
         self.is_ssm = len(self.cache_config.states_shapes) > 0
+        transfer_config = cache_config.kv_transfer_config
+        # A producer-only connector still needs the save path below, but must
+        # not issue lookups. SSM restore owns a different state-cache protocol
+        # and is deliberately excluded from external KV load admission.
+        external_lookup_enabled = (
+            kv_connector is not None
+            and transfer_config is not None
+            and transfer_config.is_kv_consumer
+            and not self.is_ssm
+        )
         checkpoint_state_manager = self.state_manager if self.is_ssm else None
         self.block_trie = BlockTrie(allocator=self.block_manager.allocator,
                                    block_size=self.cache_config.block_size,
                                    enabled=self.cache_config.enable_prefix_caching,
                                    checkpoint_state_manager=checkpoint_state_manager)
+        self.sequence_lifecycle = SequenceLifecycle(
+            seq_manager=self.seq_manager,
+            block_manager=self.block_manager,
+            state_manager=self.state_manager,
+            state_checkpoints=self.block_trie.state_checkpoints,
+            prefix_cache_enabled=self.block_trie.enabled,
+            is_ssm=self.is_ssm,
+            connector=kv_connector,
+        )
 
-        self.eviction_helper = build_eviction_helper(self, self.scheduler_config.eviction_type)
+        # Load admission receives only paging owners plus request-local queue
+        # candidates from its caller; it does not reach back through Scheduler.
+        self.kv_load_coordinator = KVLoadCoordinator(
+            lookup_enabled=external_lookup_enabled,
+            connector=kv_connector,
+            block_manager=self.block_manager,
+            block_trie=self.block_trie,
+            sessions=self.sessions,
+        )
+        self.eviction_helper = build_eviction_helper(
+            self.scheduler_config.eviction_type,
+            block_manager=self.block_manager,
+            block_trie=self.block_trie,
+            state_manager=self.state_manager,
+            load_coordinator=self.kv_load_coordinator,
+            is_ssm=self.is_ssm,
+        )
+        self._prefill_scheduler = _PrefillScheduler(
+            scheduler_config=self.scheduler_config,
+            cache_config=self.cache_config,
+            is_ssm=self.is_ssm,
+            block_manager=self.block_manager,
+            block_trie=self.block_trie,
+            state_manager=self.state_manager,
+            eviction_helper=self.eviction_helper,
+            load_coordinator=self.kv_load_coordinator,
+        )
+        # Keep save call sites uniform even when the producer role is disabled.
+        self.kv_save_coordinator = KVSaveCoordinator(self.block_manager)
 
-        seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
-        self.seq_meta = seq_meta
-        self.seq_manager = SequenceManager(seq_meta)
         self.scheduler_tick = 0
-        self._long_prefill_policy = _envs.opt_ttft_policy
-        self._long_prefill_aging_seconds_per_chunk = max(0.001, _envs.opt_ttft_aging_sec)
 
     def tick(self):
         """Mark one scheduler progress step (once per forward dispatch)."""
         self.scheduler_tick += 1
 
-    def _ensure_runtime_state_available(self):
-        """Make one state-cache slot available for an SSM runtime state.
+    def shutdown(self) -> None:
+        """Release scheduler-side connector resources exactly once.
 
-        Runtime states and frozen checkpoints share the same state-cache pool. Scheduling a request is more important
-        than keeping an old checkpoint, so unpinned checkpoints are evicted before we give up.
+        Engine shutdown normally drains worker queues first. Clearing scheduler ownership here makes repeated shutdown
+        harmless and prevents any later scheduling path from starting new external work.
         """
-        if not self.is_ssm:
-            return True
-        if self.state_manager.get_num_free_runtime() > 0:
-            return True
-        self.block_trie.state_checkpoints.evict(1)
-        return self.state_manager.get_num_free_runtime() > 0
+        connector = self.kv_connector
+        self.kv_connector = None
+        self.sequence_lifecycle.disable_connector()
+        self.kv_load_coordinator.shutdown()
+        self.kv_save_coordinator.clear()
+        if connector is not None:
+            connector.shutdown()
 
-    def _pin_ssm_restore_if_needed(self, seq: SchedulerSequence):
-        """Pin a matched SSM checkpoint before scheduler-side eviction."""
-        if not self.is_ssm or not seq.prefix_cache.restore.is_selected:
-            return True
-        return self.block_trie.state_checkpoints.pin_restore(seq)
-
-    def _rollback_unscheduled_prefix_match(self, seq: SchedulerSequence, stats_snapshot=None):
-        """Drop a tentative prefix match that will not be used now.
-
-        ``block_trie.match()`` mutates sequence state immediately: it advances
-        the history step, appends shared blocks, and may pin a restore node.
-        If later eviction or state allocation fails, undo those side effects so
-        the waiting sequence can be scheduled cleanly in a later round.
-        """
-        self.block_trie.stats.restore(stats_snapshot)
-        if self.is_ssm:
-            self.block_trie.state_checkpoints.unpin_restore(seq)
-        if seq.num_blocks > 0 or seq.logical_state >= 0:
-            seq.state.free()
-        elif seq.num_history_ids > 0:
-            seq.set_step(0)
-        seq.kv_token_limit = None
-        prefix_cache = seq.prefix_cache
-        prefix_cache.trie_cursor = None
-        prefix_cache.restore.clear()
-        prefix_cache.match_start_step = -1
-        prefix_cache.recompute_overlap.clear_tracking()
-        seq.cached_tokens = 0
-
-    @staticmethod
-    def _finalize_prefix_cache_match(seq: SchedulerSequence):
-        """Publish accepted cached-token count within the current prompt."""
-        match_start = seq.prefix_cache.match_start_step
-        if match_start < 0:
-            seq.cached_tokens = 0
-            return
-        cached_start = match_start
-        cached_end = seq.num_history_ids
-        prompt_start = seq.input_start_pos
-        prompt_end = seq.input_end_pos
-        seq.cached_tokens = max(0, min(cached_end, prompt_end) - max(cached_start, prompt_start))
-
-    @staticmethod
-    def _finish_prefix_cache_schedule(seq: SchedulerSequence):
-        """Publish match side effects after the sequence is accepted to run."""
-        prefix_cache = seq.prefix_cache
-        if prefix_cache.suppress_match_stats:
-            seq.cached_tokens = 0
-            prefix_cache.suppress_match_stats = False
-            return
-        Scheduler._finalize_prefix_cache_match(seq)
-
-    def _long_context_chunk_limit(self, seq: SchedulerSequence):
-        """Return the token budget for one long-context chunk."""
-        return get_long_context_chunk_limit(seq, self.cache_config.max_prefill_token_num)
-
-    def _next_long_context_chunk_end(self, seq: SchedulerSequence, max_prefill_num: int | None = None):
-        """Return the exclusive absolute token end for the next chunk."""
-        if max_prefill_num is None:
-            max_prefill_num = self._long_context_chunk_limit(seq)
-        plan = plan_long_context_chunk(seq, max_prefill_num, include_multimodals=False)
-        return plan.chunk_end
-
-    def _prefill_kv_token_limit(self, seq: SchedulerSequence):
-        """Limit KV allocation for a non-final long-context prefill chunk."""
-        max_prefill_num = self._long_context_chunk_limit(seq)
-        if seq.num_token_ids <= max_prefill_num:
-            return None
-        return self._next_long_context_chunk_end(seq, max_prefill_num)
-
-    def _prefill_admission_token_count(self, seq: SchedulerSequence):
-        """Return token budget cost for the next prefill or chunk."""
-        kv_token_limit = self._prefill_kv_token_limit(seq)
-        if kv_token_limit is None:
-            return seq.num_token_ids
-        return max(0, kv_token_limit - seq.num_history_ids)
+    @property
+    def last_schedule_had_pending_lookup(self) -> bool:
+        """Whether the latest prefill turn encountered a pending lookup."""
+        return self._prefill_scheduler.last_schedule_had_pending_lookup
 
     def has_waiting_long_prefill(self):
         """Whether a waiting request would need a non-final prefill chunk."""
-        return any(self._prefill_kv_token_limit(seq) is not None for seq in self.waiting)
-
-    def _prepare_prefill_allocation(self, seq: SchedulerSequence, prealloc_size: int):
-        """Apply chunk KV limit and return the effective prealloc size."""
-        kv_token_limit = self._prefill_kv_token_limit(seq)
-        if kv_token_limit is None:
-            seq.kv_token_limit = None
-            return prealloc_size
-
-        seq.kv_token_limit = kv_token_limit
-        return 0
+        return self._prefill_scheduler.has_waiting_long_prefill(self.waiting)
 
     def reserve_long_context_chunk(self,
                                    seq: SchedulerSequence,
@@ -611,70 +177,64 @@ class Scheduler:
                                    prealloc_size: int = 0,
                                    is_last_chunk: bool = False):
         """Reserve KV blocks for the next chunk of a running long prefill."""
-        old_kv_token_limit = seq.kv_token_limit
-        if is_last_chunk:
-            seq.kv_token_limit = None
-        else:
-            seq.kv_token_limit = seq.num_history_ids + chunk_size
-            prealloc_size = 0
+        return self._prefill_scheduler.reserve_long_context_chunk(
+            seq,
+            stopped=self.hanging,
+            waiting=self.waiting,
+            chunk_size=chunk_size,
+            prealloc_size=prealloc_size,
+            is_last_chunk=is_last_chunk,
+        )
 
-        evictable = self.hanging + self.waiting
-        if not self.eviction_helper.evict_for_seq(seq, evictable, prealloc_size):
-            seq.kv_token_limit = old_kv_token_limit
-            return False
+    # Remote-loading sequences are intentionally separate from WAITING: workers
+    # may address their destination blocks, so ordinary scheduling/eviction
+    # must not treat them as candidates until the coordinator publishes them.
 
-        self.block_manager.allocate(seq, prealloc_size)
-        self.block_trie.allocate(seq)
-        return True
+    # Sequence views.
+    @property
+    def waiting(self) -> SeqList:
+        return list(self.seq_manager.get_sequences(MessageStatus.WAITING).values())
 
-    @staticmethod
-    def create_status_list_property(status: MessageStatus):
-        """Create status list property."""
+    @property
+    def hanging(self) -> SeqList:
+        return list(self.seq_manager.get_sequences(MessageStatus.STOPPED).values())
 
-        def _get_status_list(self):
-            seq_map = self.seq_manager.get_sequences(status)
-            return list(seq_map.values())
+    @property
+    def migration_waiting(self) -> SeqList:
+        return list(self.seq_manager.get_sequences(MessageStatus.MIGRATION_WAITING).values())
 
-        return property(_get_status_list)
+    @property
+    def migration_done(self) -> SeqList:
+        return list(self.seq_manager.get_sequences(MessageStatus.MIGRATION_DONE).values())
 
-    @staticmethod
-    def create_num_status_method(status: MessageStatus):
-        """Create num status method."""
+    # Sequence counts.
+    def num_waiting(self) -> int:
+        return self.seq_manager.num_sequences(MessageStatus.WAITING)
 
-        def _num_status(self):
-            return self.seq_manager.num_sequences(status)
+    def num_remote_loading(self) -> int:
+        return self.seq_manager.num_sequences(MessageStatus.WAITING_FOR_REMOTE_KVS)
 
-        return _num_status
+    def num_ready(self) -> int:
+        return self.seq_manager.num_sequences(MessageStatus.READY)
 
-    @staticmethod
-    def create_has_status_method(status: MessageStatus):
-        """Create has status method."""
+    def num_running(self) -> int:
+        return self.seq_manager.num_sequences(MessageStatus.RUNNING)
 
-        def _has_status(self):
-            return self.seq_manager.num_sequences(status) > 0
+    # Non-empty status checks used by engine control flow.
+    def has_waiting(self) -> bool:
+        return self.seq_manager.num_sequences(MessageStatus.WAITING) > 0
 
-        return _has_status
+    def has_remote_loading(self) -> bool:
+        return self.seq_manager.num_sequences(MessageStatus.WAITING_FOR_REMOTE_KVS) > 0
 
-    # status list properties
-    waiting = create_status_list_property(MessageStatus.WAITING)
-    ready = create_status_list_property(MessageStatus.READY)
-    hanging = create_status_list_property(MessageStatus.STOPPED)
-    running = create_status_list_property(MessageStatus.RUNNING)
-    migration_waiting = create_status_list_property(MessageStatus.MIGRATION_WAITING)
-    migration_done = create_status_list_property(MessageStatus.MIGRATION_DONE)
+    def has_ready(self) -> bool:
+        return self.seq_manager.num_sequences(MessageStatus.READY) > 0
 
-    # num status methods
-    num_waiting = create_num_status_method(MessageStatus.WAITING)
-    num_ready = create_num_status_method(MessageStatus.READY)
-    num_running = create_num_status_method(MessageStatus.RUNNING)
-    num_migration_waiting = create_num_status_method(MessageStatus.MIGRATION_WAITING)
-    num_migration_done = create_num_status_method(MessageStatus.MIGRATION_DONE)
+    def has_migration_waiting(self) -> bool:
+        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_WAITING) > 0
 
-    # has status methods
-    has_waiting = create_has_status_method(MessageStatus.WAITING)
-    has_ready = create_has_status_method(MessageStatus.READY)
-    has_migration_waiting = create_has_status_method(MessageStatus.MIGRATION_WAITING)
-    has_migration_done = create_has_status_method(MessageStatus.MIGRATION_DONE)
+    def has_migration_done(self) -> bool:
+        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_DONE) > 0
 
     def add_session(self, session_id: int):
         """Add new session.
@@ -683,208 +243,123 @@ class Scheduler:
             session_id (int): New session id.
         """
         assert session_id not in self.sessions
-        session = SchedulerSession(session_id, seq_manager=self.seq_manager, scheduler=self)
+        session = SchedulerSession(session_id, seq_meta=self.seq_meta, lifecycle=self.sequence_lifecycle)
         self.sessions[session_id] = session
         return session
 
-    def _schedule_migration(self):
+    def get_session(self, session_id: int) -> SchedulerSession | None:
+        """Return one session owner, if it exists."""
+        return self.sessions.get(session_id)
+
+    def get_sessions(self) -> list[SchedulerSession]:
+        """Return a snapshot of current session owners."""
+        return list(self.sessions.values())
+
+    def schedule_migration(self):
+        """Admit waiting migration sequences to paging resources."""
         migration_ready: SeqList = []
-        migrating_token_count = 0
-
-        def _to_running(seq: SchedulerSequence):
-            """Activate a migrated sequence and count its tokens."""
-            seq.state.activate()
-            migration_ready.append(seq)
-            nonlocal migrating_token_count
-            migrating_token_count += seq.num_token_ids
-
-        def __evict_for_seq(seq: SchedulerSequence, waiting):
-            """Evict until can append."""
-            from itertools import chain
-
-            hanging = reversed(self.hanging)
-            waiting = reversed(waiting)
-            evictable = list(chain(hanging, waiting))
-            return self.eviction_helper.evict_for_seq(seq, evictable, 0)
-
-        def _reorder_migrating():
-            """Reorder waiting."""
-            return sorted(self.migration_waiting, key=lambda seq: seq.arrive_time)
-
-        migration_waiting = _reorder_migrating()
+        migration_waiting = sorted(
+            self.migration_waiting,
+            key=lambda seq: seq.arrive_time,
+        )
 
         max_batches = self.scheduler_config.max_batches - self.num_ready() - self.num_running()
-        while len(migration_waiting) > 0 and len(migration_ready) < max_batches:
+        while migration_waiting and len(migration_ready) < max_batches:
             seq = migration_waiting.pop(0)
-            self.block_trie.match(seq)
-            if not __evict_for_seq(seq, migration_waiting):
+            prefix_match = None
+            if self.block_trie.enabled:
+                prefix_match = _TentativePrefixMatch(
+                    seq,
+                    self.block_trie,
+                    self.block_manager,
+                    is_ssm=self.is_ssm,
+                    preserve_existing_state=False,
+                )
+                prefix_match.match()
+            evictable = list(
+                chain(
+                    reversed(self.hanging),
+                    reversed(migration_waiting),
+                ))
+            if not self.eviction_helper.try_make_capacity_for(
+                seq,
+                evictable,
+                0,
+            ):
+                if prefix_match is not None:
+                    prefix_match.rollback('migration capacity admission failed')
                 break
 
             # allocate session memory
             self.block_manager.allocate(seq)
-            self._finish_prefix_cache_schedule(seq)
-            _to_running(seq)
+            self.block_trie.finalize_match(seq)
+            if prefix_match is not None:
+                prefix_match.commit()
+            seq.state.activate()
+            migration_ready.append(seq)
 
         return migration_ready
-
-    @record_function('schedule_prefill')
-    def _schedule_prefill(self,
-                          prealloc_size: int = 0,
-                          allow_long_prefill: bool = True,
-                          prefer_long_prefill: bool = False):
-        """Schedule for prefilling."""
-
-        max_batches = self.scheduler_config.max_batches - self.num_ready() - self.num_running()
-        swap_out_map: MapType = dict()
-        swap_in_map: MapType = dict()
-        copy_map: MapType = dict()
-        running: SeqList = []
-        token_count = 0
-
-        def _to_running(seq: SchedulerSequence, prefill_token_count: int):
-            """Activate an admitted sequence and count its prefill tokens."""
-            seq.state.activate()
-            running.append(seq)
-            nonlocal token_count
-            token_count += prefill_token_count
-
-        num_waiting = self.seq_manager.num_sequences(MessageStatus.WAITING)
-        if (len(running) >= max_batches or num_waiting == 0):
-            return running, swap_in_map, swap_out_map, copy_map
-
-        waiting = _PrefillReorderer(self).reorder(self.waiting,
-                                                 allow_long_prefill=allow_long_prefill,
-                                                 prefer_long_prefill=prefer_long_prefill)
-        skipped_waiting: SeqList = []
-        while len(waiting) > 0 and len(running) < max_batches:
-            seq = waiting.pop(0)
-            evictable_waiting = skipped_waiting + waiting
-            admission = _PrefillAdmissionAttempt(
-                self,
-                seq,
-                evictable_waiting=evictable_waiting,
-                prealloc_size=prealloc_size,
-                token_count=token_count,
-                has_admitted=len(running) > 0,
-                allow_long_prefill=allow_long_prefill,
-            ).run()
-
-            if admission.should_skip:
-                skipped_waiting.append(seq)
-                continue
-            if admission.should_stop:
-                break
-
-            _to_running(seq, admission.prefill_token_count)
-
-            seq.record_event(EventType.SCHEDULED)
-
-            if seq.kv_token_limit is not None:
-                break
-
-        return running, swap_in_map, swap_out_map, copy_map
-
-    @record_function('schedule_decoding')
-    def _schedule_decoding(self, prealloc_size: int = 0):
-        """Schedule decoding."""
-
-        def _reorder_running():
-            """Reorder running."""
-            return sorted(self.ready, key=lambda seq: seq.arrive_time)
-
-        running = _reorder_running()
-        assert len(running) != 0
-
-        eviction_helper = self.eviction_helper
-        swap_out_map: MapType = dict()
-        swap_in_map: MapType = dict()
-        copy_map: MapType = dict()
-
-        def __evict_for_seq(seq: SchedulerSequence, num_required_blocks: int):
-            """Evict until can append."""
-            if num_required_blocks == 0:
-                # No need to evict, just return True.
-                return True
-            elif num_required_blocks < self.block_manager.get_num_free_gpu_blocks():
-                # Enough free blocks, just return True.
-                return True
-
-            from itertools import chain
-            hanging = reversed(self.hanging)
-            waiting = reversed(self.waiting)
-            evictable = list(chain(hanging, waiting))
-            return eviction_helper.evict_for_seq(seq, evictable, prealloc_size)
-
-        # 1. running
-        while len(running) > 0:
-            # token + n
-            seq = running.pop(0)
-            num_required_blocks = self.block_manager.num_required_blocks(seq, prealloc_size)
-            assert seq.num_blocks + num_required_blocks <= self.block_manager.num_gpu_blocks, (
-                'Sequence requires more blocks than total gpu blocks.')
-
-            while not __evict_for_seq(seq, num_required_blocks):
-                if len(running) == 0:
-                    break
-                seq_preempted = running.pop(-1)
-                seq_preempted.state.evict()
-
-            if self.block_manager.get_num_free_gpu_blocks() < num_required_blocks:
-                seq.state.evict()
-                continue
-
-            self.block_manager.allocate(seq, prealloc_size)
-            self.block_trie.allocate(seq)
-
-        return self.ready[:self.scheduler_config.max_batches], swap_in_map, swap_out_map, copy_map
 
     def schedule(self,
                  is_prefill: bool,
                  prealloc_size: int = 0,
                  allow_long_prefill: bool = True,
                  prefer_long_prefill: bool = False):
-        """Schedule inputs for next steps."""
-        if is_prefill:
-            output = self._schedule_prefill(prealloc_size, allow_long_prefill, prefer_long_prefill)
-        else:
-            output = self._schedule_decoding(prealloc_size)
-        running, swap_in_map, swap_out_map, copy_map = output
+        """Select the next prefill batch.
 
-        return SchedulerOutput(running=running, swap_in_map=swap_in_map, swap_out_map=swap_out_map, copy_map=copy_map)
+        Decode capacity is admitted by :meth:`schedule_running`.
+        """
+        if not is_prefill:
+            raise ValueError(
+                'schedule only selects prefill work; use schedule_running '
+                'for decode capacity admission')
+
+        turn_policy = _PrefillTurnPolicy.from_flags(
+            allow_long_prefill,
+            prefer_long_prefill,
+        )
+        running = self._prefill_scheduler.schedule(
+            waiting=self.waiting,
+            stopped=self.hanging,
+            num_ready=self.num_ready(),
+            num_running=self.num_running(),
+            turn_policy=turn_policy,
+            prealloc_size=prealloc_size,
+        )
+        return SchedulerOutput(
+            running=running,
+            swap_in_map={},
+            swap_out_map={},
+            copy_map={},
+        )
 
     @record_function('schedule_running')
     def schedule_running(self, running: SeqList, num_required_tokens: int = 1, prealloc_size: int = 1):
-        """Schedule running sequences.
-
-        This function is used to add blocks for running sequences request would be marked as invalid if not enough
-        blocks can be allocated.
-        """
+        """Admit KV growth for running sequences and return their validity."""
         assert len(running) > 0
         eviction_helper = self.eviction_helper
 
-        valid_mask = [True for _ in running]
-
-        # loop over reverse running
-        rev_running = reversed(running)
-        for idx, seq in enumerate(rev_running):
-            if not seq.status == MessageStatus.RUNNING:
+        valid_mask = [True] * len(running)
+        for idx in reversed(range(len(running))):
+            seq = running[idx]
+            if seq.status != MessageStatus.RUNNING:
                 valid_mask[idx] = False
                 continue
             num_required_blocks = self.block_manager.num_required_blocks(seq, num_required_tokens)
             if num_required_blocks == 0:
                 continue
 
-            if eviction_helper.evict_for_seq(seq, self.hanging + self.waiting, prealloc_size):
+            if eviction_helper.try_make_capacity_for(
+                seq,
+                self.hanging + self.waiting,
+                prealloc_size,
+            ):
                 self.block_manager.allocate(seq, prealloc_size)
                 self.block_trie.allocate(seq)
                 continue
 
-            # running to ready
-            seq.state.deactivate()
-            # ready to waiting
-            seq.state.evict()
+            self.preempt_seqs((seq, ))
             valid_mask[idx] = False
-        valid_mask = list(reversed(valid_mask))
         return valid_mask
 
     def stop_session(self, session_id: int):
@@ -895,7 +370,15 @@ class Scheduler:
         """
         assert session_id in self.sessions
         session = self.sessions[session_id]
+        connector = self.kv_connector
         for seq in session.sequences.values():
+            # A lookup owns no GPU destinations and can be cancelled directly.
+            if connector is not None:
+                connector.cancel_lookup(seq.seq_id)
+            # An active load may still write GPU memory. Defer the state change
+            # until all ranks terminate instead of making its blocks evictable.
+            if self.kv_load_coordinator.defer_stop_if_loading(seq):
+                continue
             seq.state.stop()
 
     def end_session(self, session_id: int):
@@ -908,78 +391,211 @@ class Scheduler:
             self.seq_meta.sampling_strategy.on_session_end(session_id)
         session = self.sessions[session_id]
         seqs = list(session.sequences.values())
+        connector = self.kv_connector
         for seq in seqs:
+            if connector is not None:
+                connector.cancel_lookup(seq.seq_id)
+            # Session removal also frees sequence blocks, so it must be deferred
+            # while a worker may still address an in-flight load destination.
+            if self.kv_load_coordinator.defer_end_if_loading(seq):
+                continue
             # stop session so it won't get scheduled again
             seq.state.stop()
-            session.remove_sequence(seq)
-        self.sessions.pop(session_id)
+            session.end_sequence(seq)
+        if not session.sequences:
+            self.sessions.pop(session_id)
 
     def has_unfinished(self):
-        """Check if there are any unfinished message."""
-        return self.has_ready() or self.has_waiting() or self.has_migration_done()
+        """Whether model, migration, load, or save ownership is outstanding.
+
+        Remote-loading requests are outside the normal waiting queue, and save leases may outlive their request. Both
+        must keep the engine alive until workers stop accessing paging-owned memory.
+        """
+        return (
+            self.has_ready()
+            or self.has_waiting()
+            or self.has_remote_loading()
+            or self.has_migration_done()
+            or self.kv_save_coordinator.has_pending()
+        )
+
+    def build_connector_meta(
+        self,
+        running: SeqList,
+        connector_token_lens: tuple[int, ...] = (),
+    ):
+        """Build and lease one connector payload after work selection.
+
+        This is called even when ``running`` is empty because connector-only
+        executor steps submit pending transfers and poll completions. For a
+        prefill save, block tables are snapshotted only after the model batch is
+        fixed, then logical leases are acquired before metadata reaches workers.
+        """
+        connector = self.kv_connector
+        if connector is None:
+            return None
+        if connector_token_lens:
+            # Workers address the current physical cache slots, while save
+            # leases pin logical block ownership across asynchronous I/O.
+            logical_block_ids = tuple(
+                tuple(int(block_id) for block_id in seq.logical_blocks.get_real_blocks())
+                for seq in running
+            )
+            block_ids = tuple(
+                tuple(int(block_id) for block_id in self.block_manager.get_block_table(seq))
+                for seq in running
+            )
+        else:
+            logical_block_ids = ()
+            block_ids = ()
+        step_input = KVConnectorStepInput(
+            running=running,
+            connector_token_lens=connector_token_lens,
+            connector_block_ids=block_ids,
+            connector_logical_block_ids=logical_block_ids,
+        )
+        metadata = connector.build_connector_meta(step_input)
+        if metadata is not None:
+            # Acquire before the caller queues metadata. Sequence cleanup may
+            # otherwise release the last block reference before save starts.
+            self.kv_save_coordinator.acquire(metadata)
+        return metadata
+
+    def has_kv_connector(self) -> bool:
+        """Whether connector work can be produced or polled."""
+        return self.kv_connector is not None
+
+    def update_connector_output(self, connector_output) -> None:
+        """Convert all-TP worker progress into paging state transitions.
+
+        The connector filters/aggregates rank-local output first. Paging then publishes or rolls back loads and releases
+        only save operations known to be terminal across all ranks.
+        """
+        if connector_output is None or self.kv_connector is None:
+            return
+        result = self.kv_connector.update_connector_output(connector_output)
+        self.kv_load_coordinator.apply_load_results(result.load_results)
+        self.kv_save_coordinator.release_completed_leases(
+            result.completed_save_ids)
+
+    def release_completed_prefill_reservations(self, seqs: SeqList) -> None:
+        """Release soft targets only after forward output advanced history."""
+        self.kv_load_coordinator.release_completed_prefill_reservations(seqs)
+
+    def finish_kv_transfers_after_worker_drain(self) -> None:
+        """Release paging ownership after worker transfer queues have drained.
+
+        Engine sleep may discard prefetched completion outputs. Worker drain is
+        the alternate terminal proof: deferred ended loads can be removed and
+        save leases can be released even without their normal output events.
+        """
+        self.kv_load_coordinator.finish_deferred_loads_after_worker_drain()
+        if self.kv_connector is not None:
+            self.kv_connector.finish_transfers_after_worker_drain()
+        self.kv_save_coordinator.clear()
 
     def get_block_tables(self, seqs: SeqList):
         """Get block tables for the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]
 
+    @property
+    def state_checkpoints(self) -> 'StateCheckpointLifecycle':
+        """Return the prefix-checkpoint lifecycle owner."""
+        return self.block_trie.state_checkpoints
+
+    def cache_routed_experts(self, seqs: SeqList) -> None:
+        """Publish routed-expert history to reusable prefix nodes."""
+        self.block_trie.cache_routed_experts(seqs)
+
     def resolve_gpu_block_offsets(self, logical_block_ids):
         """Resolve paging-owned logical ids for a forward cache-copy plan."""
         return self.block_manager.resolve_gpu_block_offsets(logical_block_ids)
 
-    def evict_seqs(self, running: SeqList):
-        """Evict running sequences."""
+    def activate_seqs(self, running: SeqList):
+        """Mark a ready batch as running at the engine dispatch boundary."""
         for seq in running:
-            seq.state.evict()
-
-    def activate_seqs(self, running: SeqList, filter_status: MessageStatus = MessageStatus.READY):
-        """Lock running sequence."""
-        for seq in running:
-            if seq.status == filter_status:
+            if seq.status == MessageStatus.READY:
                 seq.state.activate()
 
-    def deactivate_seqs(self, running: SeqList, filter_status: MessageStatus = MessageStatus.RUNNING):
-        for seq in running:
-            if seq.status == filter_status:
+    def preempt_seqs(self, seqs: Iterable[SchedulerSequence]) -> None:
+        """Return invalid decode sequences to their evictable queue states."""
+        for seq in seqs:
+            if seq.status == MessageStatus.RUNNING:
                 seq.state.deactivate()
-
-    @contextmanager
-    def seqs_activation(self, running: SeqList):
-        """Context manager to activate and deactivate sequences."""
-        self.activate_seqs(running, MessageStatus.READY)
-        try:
-            yield running
-        finally:
-            self.deactivate_seqs(running, MessageStatus.RUNNING)
-
-    def activate_migration_seqs(self, running: SeqList):
-        """Lock running sequence."""
-        return self.activate_seqs(running, filter_status=MessageStatus.MIGRATION_READY)
-
-    def deactivate_migration_seqs(self, running: SeqList):
-        """Unlock running migration."""
-        return self.deactivate_seqs(running, filter_status=MessageStatus.MIGRATION_RUNNING)
+            self.kv_load_coordinator.release_tracking(seq)
+            seq.state.evict()
 
     @contextmanager
     def seqs_migration_activation(self, running: SeqList):
-        """Context manager to activate and deactivate sequences."""
-        self.activate_migration_seqs(running)
+        """Keep a migration batch running only while applying its output."""
+        for seq in running:
+            if seq.status == MessageStatus.MIGRATION_READY:
+                seq.state.activate()
         try:
             yield running
         finally:
-            self.deactivate_migration_seqs(running)
+            for seq in running:
+                if seq.status == MessageStatus.MIGRATION_RUNNING:
+                    seq.state.deactivate()
 
-    def collect_migration_done(self):
+    def resume_completed_migrations(self):
+        """Move completed migration sequences back to the waiting queue."""
         for seq in self.migration_done:
             seq.state.activate()
+
+    def _get_request_cache_usage(self, total_blocks: int):
+        """Return GPU KV blocks referenced by requests, counted once."""
+        if total_blocks == 0:
+            return 0.0
+
+        num_logical_blocks = total_blocks + self.block_manager.num_cpu_blocks
+        request_block_mask = np.zeros(num_logical_blocks, dtype=np.bool_)
+        seen_prefix_anchors = set()
+        block_size = self.cache_config.block_size
+
+        for seq in self.seq_manager.get_all_sequences():
+            if seq.status == MessageStatus.STOPPED or seq.num_blocks == 0:
+                continue
+
+            logical_blocks = seq.logical_blocks.get_real_blocks()
+            prefix_cache = seq.prefix_cache
+            match_start = prefix_cache.match_start_step
+            matched_end = match_start + seq.cached_tokens
+            num_matched_blocks = matched_end // block_size
+            can_group_prefix = (
+                seq.cached_tokens > 0
+                and match_start == seq.input_start_pos
+                and match_start % block_size == 0
+                and matched_end % block_size == 0
+                and matched_end <= seq.num_history_ids
+                and 0 < num_matched_blocks <= len(logical_blocks)
+                and not prefix_cache.recompute_overlap.trie_block_map
+            )
+            if can_group_prefix:
+                # A matched endpoint block identifies its canonical trie path.
+                # Mark that path once, then only each request's private suffix.
+                anchor = (num_matched_blocks, int(logical_blocks[num_matched_blocks - 1]))
+                if anchor in seen_prefix_anchors:
+                    logical_blocks = logical_blocks[num_matched_blocks:]
+                else:
+                    seen_prefix_anchors.add(anchor)
+
+            request_block_mask[logical_blocks] = True
+
+        logical_block_ids = np.flatnonzero(request_block_mask)
+        num_request_gpu_blocks = self.block_manager.allocator.count_gpu_blocks(logical_block_ids)
+        return float(num_request_gpu_blocks) / total_blocks
 
     @property
     def schedule_metrics(self):
         total_blocks = self.block_manager.num_gpu_blocks
         free_blocks = self.block_manager.get_num_free_gpu_blocks()
         cache_usage = 1.0 - free_blocks / total_blocks if total_blocks else 0.0
+        if _envs.enable_request_cache_usage_metric:
+            cache_usage = self._get_request_cache_usage(total_blocks)
         return ScheduleMetrics(
             active_seqs=self.num_running(),
-            waiting_seqs=self.num_waiting() + self.num_ready(),
+            waiting_seqs=self.num_waiting() + self.num_ready() + self.num_remote_loading(),
             cache_usage=cache_usage,
             prefix_cache_hit_rate=self.block_trie.stats.hit_rate(),
             scheduler_tick=self.scheduler_tick,

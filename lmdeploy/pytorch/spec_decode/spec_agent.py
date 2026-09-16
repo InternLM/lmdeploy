@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from functools import partial
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -16,6 +17,8 @@ from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from ..distributed import DistContext, get_dist_manager
 from ..engine.cache_engine import CacheEngine
+from ..engine.cache_engine.collector import collect_block_cache_requests
+from ..engine.cache_engine.plan import build_block_cache_plan
 from ..engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
 from ..engine.model_agent.agent import BatchedLogProbs
 from ..model_inputs import DPMeta, ModelInputs
@@ -23,7 +26,11 @@ from ..strategies.ar_spec.model_agent import ARSpecExtraInputs
 from ..strategies.base.model_agent import ExtraInputs
 from .base import BaseSpecModelAgent
 from .guided_spec_helper import GuidedSpecHelper
-from .proposers.base import build_specdecode_proposer
+from .proposers.base import (
+    ProposalContext,
+    ProposalMethod,
+    build_specdecode_proposer,
+)
 from .reject_sampler import RejectionSampler
 
 if TYPE_CHECKING:
@@ -190,17 +197,36 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                              backend_config=self.backend_config,
                                                              device=self.device)
 
+    def build_cache_plan(self, cache_config: CacheConfig | None) -> int:
+        """Build and retain the rank-local draft cache plan."""
+        if cache_config is None:
+            self.block_cache_plan = None
+            return 0
+        with self.draft_context():
+            draft_tp = self.draft_dist_ctx.dist_config.attn_tp
+            cache_request_model = self.proposer.model
+            # Ray may recollect plans after the model has been graph-wrapped.
+            if not isinstance(cache_request_model, torch.nn.Module):
+                cache_request_model = cache_request_model.get_model()
+            request_collector = partial(collect_block_cache_requests, cache_request_model)
+            self.block_cache_plan = build_block_cache_plan(
+                self.model_config,
+                cache_config,
+                draft_tp,
+                request_collector=request_collector,
+            )
+            return self.block_cache_plan.logical_block_nbytes
+
     def build_cache_engine(self, cache_stream: torch.cuda.Stream):
         """Build cache engine."""
         if self.cache_config is not None:
             with self.draft_context():
                 draft_tp = self.draft_dist_ctx.dist_config.attn_tp
                 self.cache_engine = CacheEngine(self.cache_config,
-                                                self.model_config,
                                                 rank=0 if draft_tp == 1 else self.dist_ctx.rank,
                                                 tp_rank=self.draft_dist_ctx.attn_tp_group.rank,
-                                                world_size=draft_tp,
-                                                cache_stream=cache_stream)
+                                                cache_stream=cache_stream,
+                                                block_cache_plan=self.block_cache_plan)
 
     def _build_dp_meta_from_main(self, input_ids: torch.Tensor, dp_meta: DPMeta | None):
         """Build DP meta for draft inputs after MTP input shifting."""
@@ -554,9 +580,9 @@ class SpecModelAgent(BaseSpecModelAgent):
         with record_function('spec_rejection_sampling'):
             return await self._rejection_sampling(model_inputs, extra_inputs, sampling_inputs)
 
-    async def _async_model_forward(self, inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
-                                   sampling_inputs: SamplingInputs):
-        """Model forward.
+    async def _async_autoregressive_model_forward(self, inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
+                                                  sampling_inputs: SamplingInputs):
+        """Default autoregressive draft model forward.
 
         Args:
             inputs (dict): The input data comes from _make_inputs.
@@ -651,8 +677,21 @@ class SpecModelAgent(BaseSpecModelAgent):
         sampling_inputs: SamplingInputs,
     ):
         """Draft model forward."""
-        draft_model_inputs, draft_extra_inputs = self._prepare_inputs_from_main(model_inputs, extra_inputs)
-        return await self._async_model_forward(draft_model_inputs, draft_extra_inputs, sampling_inputs)
+        proposal_method = getattr(self.proposer, 'proposal_method', ProposalMethod.AUTOREGRESSIVE)
+        if proposal_method == ProposalMethod.AUTOREGRESSIVE:
+            draft_model_inputs, draft_extra_inputs = self._prepare_inputs_from_main(model_inputs, extra_inputs)
+            return await self._async_autoregressive_model_forward(draft_model_inputs, draft_extra_inputs,
+                                                                  sampling_inputs)
+        if proposal_method == ProposalMethod.DIFFUSION:
+            proposal_ctx = ProposalContext(
+                cache_engine=self.cache_engine,
+            )
+            with self.draft_context():
+                return await self.proposer.propose(model_inputs,
+                                                   extra_inputs,
+                                                   sampling_inputs,
+                                                   proposal_ctx=proposal_ctx)
+        raise RuntimeError(f'Unsupported speculative proposal method: {proposal_method!r}.')
 
     def _build_warmup_dp_meta(self, inputs: ModelInputs):
         """Build dp_meta for warmup dummy inputs.
@@ -677,48 +716,70 @@ class SpecModelAgent(BaseSpecModelAgent):
             if dist_config.dp > 1:
                 dist.barrier(group=self.draft_dist_ctx.cpu_group)
 
+            capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
+            capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
+
+            def _make_dummy(batch_size: int,
+                            is_decoding: bool,
+                            max_q_seqlen: int,
+                            target_hidden_size: int):
+                return self.inputs_strategy.make_dummy(batch_size,
+                                                       is_decoding=is_decoding,
+                                                       device='cuda',
+                                                       vocab_size=self.model_config.vocab_size,
+                                                       max_q_seqlen=max_q_seqlen,
+                                                       target_hidden_size=target_hidden_size,
+                                                       target_dtype=self.model_config.dtype,
+                                                       meta=self.make_dummy_meta)
+
+            cache_engine = getattr(self, 'cache_engine', None)
+            get_warmup_plan = getattr(self.proposer, 'get_warmup_plan', None)
+            warmup_plan = None
+            if get_warmup_plan is not None:
+                warmup_plan = get_warmup_plan(max_batches,
+                                              target_model_config,
+                                              capture_batch_sizes,
+                                              cache_engine.cache_config if cache_engine is not None else None)
+            if warmup_plan is not None:
+                for case in warmup_plan.cases:
+                    inputs = _make_dummy(case.batch_size,
+                                         is_decoding=case.is_decoding,
+                                         max_q_seqlen=case.max_q_seqlen,
+                                         target_hidden_size=case.target_hidden_size)
+                    self._build_warmup_dp_meta(inputs)
+                    forward_inputs = self.proposer.prepare_warmup_forward(inputs, cache_engine)
+                    if forward_inputs is not None:
+                        self._forward_impl(forward_inputs)
+                    torch.cuda.synchronize()
+                return
+
             target_hidden_size = self.proposer.get_target_hidden_size(target_model_config)
 
-            # warmup prefill
-            inputs = self.inputs_strategy.make_dummy(max_batches,
-                                                     is_decoding=False,
-                                                     device='cuda',
-                                                     vocab_size=self.model_config.vocab_size,
-                                                     target_hidden_size=target_hidden_size,
-                                                     target_dtype=self.model_config.dtype,
-                                                     meta=self.make_dummy_meta)
+            inputs = _make_dummy(max_batches,
+                                 is_decoding=False,
+                                 max_q_seqlen=1,
+                                 target_hidden_size=target_hidden_size)
             self._build_warmup_dp_meta(inputs)
 
             # warmup prefill
             self._forward_impl(inputs)
             torch.cuda.synchronize()
 
-            capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
-            capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
-
             # warmup decode
             for batch_size in capture_batch_sizes:
                 # decode with num_spec_tokens + 1 per seq
-                inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                         is_decoding=True,
-                                                         device='cuda',
-                                                         vocab_size=self.model_config.vocab_size,
-                                                         max_q_seqlen=self.num_spec_tokens + 1,
-                                                         target_hidden_size=target_hidden_size,
-                                                         target_dtype=self.model_config.dtype,
-                                                         meta=self.make_dummy_meta)
+                inputs = _make_dummy(batch_size,
+                                     is_decoding=True,
+                                     max_q_seqlen=self.num_spec_tokens + 1,
+                                     target_hidden_size=target_hidden_size)
                 self._build_warmup_dp_meta(inputs)
                 self._forward_impl(inputs)
                 torch.cuda.synchronize()
                 # decode 1 tokens per sequence
-                inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                         is_decoding=True,
-                                                         device='cuda',
-                                                         vocab_size=self.model_config.vocab_size,
-                                                         max_q_seqlen=1,
-                                                         target_hidden_size=self.model_config.hidden_size,
-                                                         target_dtype=self.model_config.dtype,
-                                                         meta=self.make_dummy_meta)
+                inputs = _make_dummy(batch_size,
+                                     is_decoding=True,
+                                     max_q_seqlen=1,
+                                     target_hidden_size=self.model_config.hidden_size)
                 self._build_warmup_dp_meta(inputs)
                 self._forward_impl(inputs)
                 torch.cuda.synchronize()

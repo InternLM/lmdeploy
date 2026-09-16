@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 import torch
 
+from lmdeploy._guided_decoding import ensure_response_format_compilable
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (
@@ -54,6 +55,8 @@ class GenOut:
     cache_block_ids: list[int] | None = None  # for disaggregation
     routed_experts: Any = None  # for RL router replay
     cached_tokens: int = 0
+    # Token ids aligned 1:1 with input-scoring logprobs rows.
+    logprob_token_ids: list[int] | None = None
 
     def to_response(self, index: int = 0) -> Response:
         """Convert GenOut to Response object.
@@ -202,11 +205,14 @@ class AsyncEngine:
                          trust_remote_code: bool = False,
                          **kwargs):
         """Inner build method for turbomind backend."""
-        from lmdeploy import turbomind as tm
-        return tm.TurboMind.from_pretrained(model_path,
-                                            engine_config=backend_config,
-                                            trust_remote_code=trust_remote_code,
-                                            **kwargs)
+        from lmdeploy import turbomind
+        if not turbomind.is_available():
+            raise RuntimeError(
+                'TurboMind was requested but its native module is unavailable.'
+            ) from turbomind._import_error
+        return turbomind.TurboMind.from_pretrained(
+            model_path, engine_config=backend_config, trust_remote_code=trust_remote_code, **kwargs
+        )
 
     def _build_pytorch(self,
                        model_path: str,
@@ -415,6 +421,16 @@ class AsyncEngine:
         self.sleeping_tags = self.sleeping_tags - set(tags)
         self.is_sleeping = bool(self.sleeping_tags)
 
+    def complete_weights_update(self):
+        """Record that externally supplied weights are ready.
+
+        This does not wake the KV cache or enable inference. The caller must
+        explicitly wake ``kv_cache`` after the weight update succeeds.
+        """
+        self.engine.complete_weights_update()
+        self.sleeping_tags.discard('weights')
+        self.is_sleeping = bool(self.sleeping_tags)
+
     def _determine_gen_config(self, input_ids, gen_config: GenerationConfig | None = None) -> GenerationConfig:
         """Determine the generation configuration."""
         gen_config = deepcopy(gen_config) or GenerationConfig()
@@ -514,6 +530,8 @@ class AsyncEngine:
             if (messages is not None) ^ (input_ids is None):
                 raise RequestError(ErrorCode.INVALID_REQUEST,
                                    'You must specify exactly one of messages or input_ids.')
+            if gen_config is not None and gen_config.response_format is not None:
+                ensure_response_format_compilable(gen_config.response_format)
             if isinstance(session_id, Session):
                 session = session_id
             elif isinstance(session_id, int):
@@ -564,7 +582,15 @@ class AsyncEngine:
                     f'Input length ({input_len}) must be smaller than the model context length ({self.session_len}).')
 
             gen_config = self._determine_gen_config(input_ids, gen_config=gen_config)
-            if gen_config.max_new_tokens < 1:
+            input_logprobs_requested = gen_config.logprob_start_len >= 0
+            if input_logprobs_requested and gen_config.logprob_start_len >= input_len:
+                raise RequestError(
+                    ErrorCode.INVALID_REQUEST,
+                    f'logprob_start_len({gen_config.logprob_start_len}) exceeds '
+                    f'the last source position for processed input_ids length({input_len}).')
+            if input_logprobs_requested and gen_config.max_new_tokens != 0:
+                raise RequestError(ErrorCode.INVALID_REQUEST, 'logprob_start_len requires max_new_tokens=0.')
+            if gen_config.max_new_tokens < 1 and not input_logprobs_requested:
                 raise RequestError(
                     ErrorCode.INVALID_REQUEST,
                     f'max_new_tokens must be at least 1, got {gen_config.max_new_tokens}.')
@@ -650,6 +676,9 @@ class AsyncEngine:
                 self.session_mgr.remove(session)
                 session_removed = True
 
+        input_logprobs_requested = gen_config.logprob_start_len >= 0
+        logprob_token_ids = (input_ids[gen_config.logprob_start_len + 1:]
+                             if input_logprobs_requested else None)
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
 
@@ -694,7 +723,6 @@ class AsyncEngine:
                 logger.debug(f'[generate] session {session_id} started')
                 hit_stop_token = 0
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
-
                 # We use this as default outputs in case the async_stream_infer of the Engine yields empty generator.
                 outputs = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
 
@@ -734,6 +762,7 @@ class AsyncEngine:
                                  gen_len,
                                  finish_reason,
                                  token_ids=res,
+                                 logprob_token_ids=logprob_token_ids,
                                  routed_experts=outputs.routed_experts,
                                  cache_block_ids=outputs.cache_block_ids,
                                  cached_tokens=cached_tokens)
@@ -753,7 +782,8 @@ class AsyncEngine:
                         finish_reason = 'abort'
                         metrics_processor.increase_failed_requests('abort')
                     else:
-                        finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+                        finish_reason = ('stop' if outputs.token_ids
+                                         and outputs.token_ids[-1] in stop_ids else 'length')
                         metrics_processor.increase_succeeded_requests()
 
                     # utf-8 char at the end means it's a potential unfinished byte sequence
@@ -761,7 +791,9 @@ class AsyncEngine:
                         # avoid returning the last response twice
                         response = ''
                     token_ids, logits, last_hidden_state, logprobs = [], None, None, None
-                    if gen_config.include_stop_str_in_output and finish_reason == 'stop':
+                    if input_logprobs_requested:
+                        logprobs = outputs.logprobs
+                    elif gen_config.include_stop_str_in_output and finish_reason == 'stop':
                         # return the eos token id (MUST be in a list), eos string, eos token's logits and so on
                         token_ids = outputs.token_ids[-1:]
                         response = self.tokenizer.decode(token_ids, skip_special_tokens=False)
@@ -784,6 +816,7 @@ class AsyncEngine:
                                  gen_len,
                                  finish_reason,
                                  token_ids=token_ids,
+                                 logprob_token_ids=logprob_token_ids,
                                  logprobs=logprobs,
                                  logits=logits,
                                  last_hidden_state=last_hidden_state,

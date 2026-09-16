@@ -205,6 +205,18 @@ class EngineWorkerBase:
         """Update params."""
         return self.engine.update_params(request)
 
+    async def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness."""
+        return await self.engine.get_checkpoint_engine_status()
+
+    async def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        return await self.engine.update_weights_from_ipc(request, reject_reason)
+
+    def complete_weights_update(self):
+        """Record a successful external weights update."""
+        return self.engine.complete_weights_update()
+
     async def init_weights_update_group(self, request: Any):
         """Init disaggregated weights-update process group."""
         return await self.engine.init_weights_update_group(request)
@@ -243,7 +255,7 @@ class EngineOutputGather:
 
     def get(self, stream_id):
         if stream_id not in self._output:
-            self._output[stream_id] = EngineOutput(status=None, token_ids=[], logprobs=[])
+            self._output[stream_id] = EngineOutput(status=None, token_ids=[], logprobs=None)
         return self._output[stream_id]
 
     def add(self, stream_id, result):
@@ -251,7 +263,10 @@ class EngineOutputGather:
             return
         output = self.get(stream_id)
         output.token_ids.extend(result.token_ids or [])
-        output.logprobs.extend(result.logprobs or [])
+        if result.logprobs is not None:
+            if output.logprobs is None:
+                output.logprobs = []
+            output.logprobs.extend(result.logprobs)
 
     def pop(self, stream_id, result):
         if not isinstance(result, EngineOutput):
@@ -260,7 +275,7 @@ class EngineOutputGather:
         if output is None:
             return result
         result.token_ids = output.token_ids or []
-        result.logprobs = output.logprobs or None
+        result.logprobs = output.logprobs
         return result
 
     def discard(self, stream_id):

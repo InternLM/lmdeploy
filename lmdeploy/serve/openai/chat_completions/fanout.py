@@ -14,8 +14,7 @@ from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, UsageInfo
-
-from .streaming_response import ManagedStreamingResponse
+from lmdeploy.serve.utils.streaming_response import ManagedStreamingResponse
 
 ChatEndpoint = Callable[[ChatCompletionRequest, Request],
                         Awaitable[dict | Response]]

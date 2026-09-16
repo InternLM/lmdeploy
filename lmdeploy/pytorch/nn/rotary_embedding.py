@@ -6,15 +6,18 @@ import torch
 from torch import Tensor, nn
 from transformers import PretrainedConfig
 
-from ..backends import OpType, get_backend
+from ..backends import get_backend
+from ..backends.apply_rotary_emb import ApplyRotaryEmbBuildSpec
 from ..backends.rotary_embedding import (
     FopeParameters,
     Llama3Parameters,
     LongRoPEScalingParameters,
     MropeParameters,
     RopeType,
+    RotaryEmbeddingBuildSpec,
     YarnParameters,
 )
+from ..models.patch import get_build_model_context
 
 
 def get_rope_parameters(config: PretrainedConfig):
@@ -189,19 +192,22 @@ def build_rotary_embedding(dim: int,
     """Build rotary embedding op."""
     backend = get_backend()
 
-    builder = backend.get_layer_impl_builder(OpType.RotaryEmbedding)
-
     # update rope_dim
     if partial_rotary_factor is not None:
         dim = int(dim * partial_rotary_factor)
-    impl = builder.build(dim,
-                         max_position_embeddings,
-                         base,
-                         scaling_factor,
-                         yarn_params=yarn_params,
-                         longrope_params=longrope_params,
-                         llama3_params=llama3_params,
-                         emb_type=emb_type)
+    impl = backend.build_op(
+        RotaryEmbeddingBuildSpec(
+            dim=dim,
+            max_position_embeddings=max_position_embeddings,
+            base=base,
+            scaling_factor=scaling_factor,
+            yarn_params=yarn_params,
+            longrope_params=longrope_params,
+            llama3_params=llama3_params,
+            emb_type=emb_type,
+        ),
+        enable_deterministic=get_build_model_context().enable_deterministic,
+    )
 
     if fope_params is not None:
         inv_freq = impl.inv_freq
@@ -243,9 +249,10 @@ class ApplyRotaryEmb(nn.Module):
 
     def __init__(self):
         super().__init__()
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.ApplyRotaryEmb)
-        self.impl = builder.build()
+        self.impl = get_backend().build_op(
+            ApplyRotaryEmbBuildSpec(),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     def forward(self, query: Tensor, key: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True,
                 complex_mode: bool = False):
@@ -414,13 +421,16 @@ class FopeRotaryEmbedding(nn.Module):
         params.num_key_value_heads = num_key_value_heads
 
         # build impl
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.RotaryEmbedding)
-        self.impl = builder.build(dim,
-                                  max_position_embeddings=max_position_embeddings,
-                                  scaling_factor=attention_scaling,
-                                  fope_params=params,
-                                  emb_type=RopeType.Fope)
+        self.impl = get_backend().build_op(
+            RotaryEmbeddingBuildSpec(
+                dim=dim,
+                max_position_embeddings=max_position_embeddings,
+                scaling_factor=attention_scaling,
+                fope_params=params,
+                emb_type=RopeType.Fope,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
         # setup params
         inv_freq = self.impl.inv_freq

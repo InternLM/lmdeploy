@@ -13,6 +13,9 @@ from .base import MPEngine
 
 logger = get_logger('lmdeploy')
 
+_DEFAULT_PROCESS_SHUTDOWN_TIMEOUT = 10
+_KV_CONNECTOR_PROCESS_SHUTDOWN_TIMEOUT = 60
+
 if TYPE_CHECKING:
     from lmdeploy.pytorch.engine.engine import Engine
 
@@ -40,6 +43,7 @@ class ZMQMPEngine(MPEngine):
         self.shared_dict = None
         self.port = None
         self.proc = None
+        self._process_shutdown_timeout = self._get_process_shutdown_timeout(engine_config)
         self._start_mp_proc(model_path, engine_config, speculative_config=speculative_config,
                             trust_remote_code=trust_remote_code, **kwargs)
 
@@ -52,6 +56,16 @@ class ZMQMPEngine(MPEngine):
 
         super().__init__()
         atexit.register(self.close)
+
+    @staticmethod
+    def _get_process_shutdown_timeout(engine_config: PytorchEngineConfig | None) -> int:
+        """Allow registered external buffers to be released before killing the
+        engine process."""
+        if engine_config is not None:
+            transfer_config = engine_config.kv_transfer_config
+            if transfer_config is not None and transfer_config.is_kv_transfer_instance:
+                return _KV_CONNECTOR_PROCESS_SHUTDOWN_TIMEOUT
+        return _DEFAULT_PROCESS_SHUTDOWN_TIMEOUT
 
     def _start_mp_proc(
         self,
@@ -216,12 +230,15 @@ class ZMQMPEngine(MPEngine):
         logger.info('Closing mp engine.')
         self.rpc_client.stop()
         self.proc.terminate()
-        self.proc.join(10)
+        shutdown_timeout = getattr(self, '_process_shutdown_timeout', _DEFAULT_PROCESS_SHUTDOWN_TIMEOUT)
+        self.proc.join(shutdown_timeout)
         if not self.proc.is_alive():
             self.proc.close()
         else:
-            logger.warning('MP process did not terminate in time, force killing.')
+            logger.warning('MP process did not terminate within %d seconds, force killing.', shutdown_timeout)
             self.proc.kill()
+            self.proc.join()
+            self.proc.close()
         self.proc = None
 
     def _is_proc_alive(self):

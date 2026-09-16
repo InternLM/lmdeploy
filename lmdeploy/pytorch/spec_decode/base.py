@@ -7,7 +7,7 @@ import torch
 from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from ..distributed import DistContext
 from ..engine.logits_process import SamplingInputs
-from ..model_inputs import ModelInputs
+from ..model_inputs import ModelInputs, SpecModelBuildContext
 from ..strategies.base.model_agent import ExtraInputs, ModelAgentStrategy
 from ..strategies.base.model_inputs import ModelInputsStrategy
 
@@ -52,6 +52,7 @@ class BaseSpecModelAgent:
         self.draft_dist_ctx = _build_draft_dist_ctx(dist_ctx, specdecode_config)
         self.device = device
         self.cache_engine = None
+        self.block_cache_plan = None
         self.inputs_strategy = inputs_strategy
         self.agent_strategy = agent_strategy
         self.misc_config = misc_config
@@ -62,6 +63,18 @@ class BaseSpecModelAgent:
 
     def is_enabled(self):
         return self._enabled
+
+    def build_model_context(self) -> SpecModelBuildContext:
+        """Build speculative metadata consumed during model construction."""
+        config = self.specdecode_config
+        if config is None:
+            return SpecModelBuildContext()
+        target_layer_ids = config.target_layer_ids or ()
+        mask_token_id = config.mask_token_id
+        return SpecModelBuildContext(
+            target_aux_hidden_state_layers=tuple(target_layer_ids),
+            speculative_mask_token_id=mask_token_id,
+        )
 
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""
@@ -82,6 +95,12 @@ class BaseSpecModelAgent:
     def build_cache_engine(self, cache_stream: torch.cuda.Stream):
         """Build cache engine."""
         pass
+
+    def build_cache_plan(self, cache_config: CacheConfig | None) -> int:
+        """Build this rank's draft cache plan and return logical-block
+        bytes."""
+        self.block_cache_plan = None
+        return 0
 
     async def async_model_forward(self,
                                 model_inputs: ModelInputs,

@@ -3,7 +3,9 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.hc_prepost import HCPrePostBuildSpec
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
 class HcPrePost(nn.Module):
@@ -11,9 +13,10 @@ class HcPrePost(nn.Module):
 
     def __init__(self, hc_mult: int, sinkhorn_iters: int = 20, eps: float = 1e-6):
         super().__init__()
-        backend = get_backend()
-        impl_builder = backend.get_layer_impl_builder(OpType.HcPrePost)
-        self.impl = impl_builder.build(hc_mult=hc_mult, sinkhorn_iters=sinkhorn_iters, eps=eps)
+        self.impl = get_backend().build_op(
+            HCPrePostBuildSpec(hc_mult=hc_mult, sinkhorn_iters=sinkhorn_iters, eps=eps),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     def pre(
         self,

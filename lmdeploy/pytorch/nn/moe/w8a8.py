@@ -2,8 +2,14 @@
 
 import torch
 
-from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.moe import FusedMoEW8A8BuildSpec
+from lmdeploy.pytorch.distributed import (
+    get_dist_manager,
+    get_ep_world_rank,
+    get_tp_world_rank,
+)
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from .base import FusedMoEBase, MoeType, moe_gather_inputs, moe_reduce, update_dims
 from .default import LinearWeights
@@ -84,10 +90,6 @@ class FusedMoEW8A8(FusedMoEBase):
         # init distributed tp arguments
         self.init_dist_args(all_reduce)
 
-        # check ep
-        if self.ep > 1:
-            raise RuntimeError('FusedMoEW8A8 does not support EP mode now.')
-
         super().__init__(
             tp=self.tp,
             tp_mode=self.tp_mode,
@@ -95,12 +97,28 @@ class FusedMoEW8A8(FusedMoEBase):
         )
 
         # create implementation
-        impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEW8A8)
-        self.impl = impl_builder.build(top_k, num_experts, renormalize, dtype, quant_dtype=quant_dtype)
+        dist_ctx = get_dist_manager().current_context()
+        self.ep_size, rank = get_ep_world_rank()
+        self.impl = get_backend().build_op(
+            FusedMoEW8A8BuildSpec(
+                top_k=top_k,
+                num_experts=num_experts,
+                renormalize=renormalize,
+                output_dtype=dtype,
+                quant_dtype=quant_dtype,
+                ep_size=self.ep_size,
+                ep_group=dist_ctx.ep_gpu_group,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
         # create weights
-        hidden_dim, ffn_dim = update_dims(hidden_dim, ffn_dim)
-        expert_list = None
+        if self.ep_size > 1:
+            expert_list = self.impl.ep_expert_list(self.ep_size, rank)
+            num_experts = len(expert_list)
+        else:
+            hidden_dim, ffn_dim = update_dims(hidden_dim, ffn_dim)
+            expert_list = None
         self.expert_list = expert_list
         self.gate_up = LinearWeightsW8A8(num_experts,
                                          hidden_dim,

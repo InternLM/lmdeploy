@@ -90,7 +90,7 @@ class APIClient:
     def chat_completions_v1(
         self,
         model: str,
-        messages: str | list[dict[str, str]],
+        messages: list[dict[str, str]],
         temperature: float | None = 0.7,
         top_p: float | None = 1.0,
         logprobs: bool | None = False,
@@ -118,8 +118,8 @@ class APIClient:
 
         Args:
             model: model name. Available from self.available_models.
-            messages: string prompt or chat history in OpenAI format. Chat
-                history example: `[{"role": "user", "content": "hi"}]`.
+            messages: chat history in OpenAI format, for example
+                `[{"role": "user", "content": "hi"}]`.
             temperature (float): to modulate the next token probability
             top_p (float): If set to float < 1, only the smallest set of most
                 probable tokens with probabilities that add up to top_p or

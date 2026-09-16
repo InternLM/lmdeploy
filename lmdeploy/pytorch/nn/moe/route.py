@@ -2,7 +2,9 @@
 
 import torch
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.moe_router import RouterGemmBuildSpec, RouterNoauxTCBuildSpec
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
 class RouterGemm(torch.nn.Module):
@@ -10,8 +12,10 @@ class RouterGemm(torch.nn.Module):
 
     def __init__(self, out_dtype: torch.dtype | None = None):
         super().__init__()
-        impl_builder = get_backend().get_layer_impl_builder(OpType.RouterGemm)
-        self.impl = impl_builder.build(out_dtype=out_dtype)
+        self.impl = get_backend().build_op(
+            RouterGemmBuildSpec(output_dtype=out_dtype),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     def forward(self, hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
         """Compute router logits."""
@@ -33,16 +37,18 @@ class NoauxTCRouter(torch.nn.Module):
     ):
         super().__init__()
 
-        impl_builder = get_backend().get_layer_impl_builder(OpType.RouterNoauxTC)
-        self.impl = impl_builder.build(
-            scoring_func=scoring_func,
-            top_k=top_k,
-            n_group=n_group,
-            topk_group=topk_group,
-            n_routed_experts=n_routed_experts,
-            routed_scaling_factor=routed_scaling_factor,
-            renormalize=renormalize,
-            router_n_groups=router_n_groups,
+        self.impl = get_backend().build_op(
+            RouterNoauxTCBuildSpec(
+                scoring_func=scoring_func,
+                top_k=top_k,
+                n_group=n_group,
+                top_k_group=topk_group,
+                n_routed_experts=n_routed_experts,
+                routed_scaling_factor=routed_scaling_factor,
+                renormalize=renormalize,
+                router_n_groups=router_n_groups,
+            ),
+            enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
     def forward(self, router_logits: torch.Tensor,

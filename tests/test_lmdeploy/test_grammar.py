@@ -53,6 +53,15 @@ SCHEMA_MAP = {
     },
     'regex_schema': 'call me [A-Za-z]{1,10}',
     'json_object': None,
+    'structural_tag': {
+        'type': 'structural_tag',
+        'format': {
+            'type': 'tag',
+            'begin': '<answer>',
+            'content': {'type': 'regex', 'pattern': '[0-9]{1,3}'},
+            'end': '</answer>'
+        }
+    },
 }
 
 MIXED_SCHEMA = {
@@ -91,7 +100,8 @@ def test_guided_matrix(model_id, backend_name, backend_factory, schema_type):
             response_format[schema_type] = dict(name='test', schema=schema)
         elif schema_type == 'regex_schema':
             response_format[schema_type] = schema
-
+        elif schema_type == 'structural_tag':
+            response_format = schema
     try:
         if enable_guide:
             gen_config = GenerationConfig(response_format=response_format)
@@ -108,6 +118,10 @@ def test_guided_matrix(model_id, backend_name, backend_factory, schema_type):
                 validate(instance=json.loads(response[0].text), schema={'type': 'object', 'additionalProperties': True})
             elif schema_type == 'regex_schema':
                 assert re.fullmatch(schema, response[0].text)
+            elif schema_type == 'structural_tag':
+                pattern = r'<answer>([0-9]{1,3})</answer>'
+                m = re.fullmatch(pattern, response[0].text)
+                assert m, f'structural_tag output {response[0].text!r} does not match {pattern}'
     finally:
         pipe.close()
 

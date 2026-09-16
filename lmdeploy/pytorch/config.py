@@ -7,7 +7,7 @@ from typing import Any
 
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, QuantPolicy
+from lmdeploy.messages import KVTransferConfig, PytorchEngineConfig, QuantPolicy
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
 from lmdeploy.utils import get_logger, is_bf16_supported
@@ -135,6 +135,8 @@ class BackendConfig:
     """Backend config."""
     eager_mode: bool = True
     device_type: str = 'cuda'
+    piecewise_cudagraph_max_tokens: int | None = None
+    enable_deterministic: bool = False
 
 
 @dataclass
@@ -176,6 +178,7 @@ class CacheConfig:
     # For PD Disaggregation
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
+    kv_transfer_config: KVTransferConfig | None = None
 
     def __post_init__(self):
         """Post init."""
@@ -404,16 +407,6 @@ class MemDecodeConfig:
 
 
 @dataclass
-class BlockCacheSpec:
-    """Spec for a named block-scoped cache (e.g. compressed KV)."""
-    name: str
-    layer_ids: list[int]
-    shape: tuple[int, ...]
-    dtype: torch.dtype
-    alignment: int = 256
-
-
-@dataclass
 class StateCacheSpec:
     """Spec for a named sequence-scoped state cache (e.g. compressor
     scratch)."""
@@ -456,9 +449,6 @@ class ModelConfig:
     dllm_mask_token: int = 0
     dllm_block_length: int = None
 
-    # Added for deepseekv3.2 nsa index
-    # caches would be added after kv cache
-    cache_shapes: list[tuple[list[int], torch.dtype]] = field(default_factory=list)
     # added for qwen3_next
     # could used for any SSM model.
     states_shapes: list[tuple[tuple[int], torch.dtype]] = field(default_factory=list)
@@ -466,12 +456,9 @@ class ModelConfig:
     # and requires prepare_chunk_indices during prefill
     is_gated_delta: bool = False
 
-    # Named cache specs for models that need multiple block/state caches.
-    # V4 uses these instead of cache_shapes/states_shapes for formal resource declaration.
-    block_cache_specs: list[BlockCacheSpec] = field(default_factory=list)
+    # Named state-cache specs for models that need layered sequence state.
     state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
     use_standard_kv_cache: bool = True
-    post_build_func: Callable[['ModelConfig', int], None] | None = None
 
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
@@ -488,6 +475,9 @@ class ModelConfig:
 
     # update cache config
     update_cache_config_func: Any = None
+
+    # Number of contiguous TP ranks that own the same logical KV-head shard.
+    num_replicate_key_value_heads: int = 1
 
     @property
     def use_mla_fp8_cache(self):
@@ -575,8 +565,6 @@ class ModelConfig:
         # add quant_config
         model_config.quant_config = QuantizationConfig.from_config(hf_config)
         model_config.block_size = block_size
-        if model_config.post_build_func is not None:
-            model_config.post_build_func(model_config, block_size)
         return model_config
 
     @classmethod
@@ -624,6 +612,9 @@ class ModelConfig:
 
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config, dtype, device_type=device_type)
+
+        if spec_method == 'dflash':
+            model_config.model_paradigm = 'ar_spec'
 
         # update eos_token_id to list
         if isinstance(model_config.eos_token_id, int):
@@ -709,6 +700,8 @@ class SpecDecodeConfig:
     num_speculative_tokens: int = 1
     model_config: ModelConfig = None
     dist_config: DistConfig = field(default_factory=DistConfig)
+    target_layer_ids: tuple[int, ...] | None = None
+    mask_token_id: int | None = None
 
     @classmethod
     def from_config(
@@ -724,9 +717,9 @@ class SpecDecodeConfig:
         hf_overrides: dict[str, Any] = None,
         dist_config: DistConfig = None,
     ):
-        model = model or target_model
+        draft_model = model or target_model
         dist_config = dist_config or DistConfig()
-        model_config = ModelConfig.from_pretrained(model,
+        model_config = ModelConfig.from_pretrained(draft_model,
                                                    trust_remote_code=trust_remote_code,
                                                    dtype=dtype,
                                                    dist_config=dist_config,
@@ -737,6 +730,42 @@ class SpecDecodeConfig:
                                                    hf_overrides=hf_overrides,
                                                    device_type=target_cache_cfg.device_type,
                                                    )
+        target_layer_ids = None
+        mask_token_id = None
+        if method == 'dflash':
+            from lmdeploy.pytorch.spec_decode.dflash_utils import (
+                parse_dflash_config,
+                validate_dflash_cache_config,
+                validate_dflash_runtime_config,
+            )
+            validate_dflash_cache_config(target_cache_cfg)
+            validate_dflash_runtime_config(cache_config=target_cache_cfg)
+            if target_model is None:
+                raise ValueError('DFlash requires an explicit target_model for checkpoint compatibility checks.')
+            target_model_config = ModelConfig.from_pretrained(
+                target_model,
+                trust_remote_code=trust_remote_code,
+                dtype=dtype,
+                dist_config=dist_config,
+                is_draft_model=False,
+                spec_method=method,
+                num_spec_tokens=num_speculative_tokens,
+                model_format=model_format,
+                hf_overrides=hf_overrides,
+                device_type=target_cache_cfg.device_type,
+                block_size=target_cache_cfg.block_size,
+            )
+            # Hybrid target configs use ``ModelConfig.num_layers`` for the
+            # number of KV-cache attention layers, while DFlash layer ids
+            # address every transformer layer. Prefer the underlying text
+            # config depth and fall back to the generic ModelConfig field.
+            target_num_layers = getattr(target_model_config.llm_config, 'num_hidden_layers',
+                                        target_model_config.num_layers)
+            target_layer_ids, mask_token_id = parse_dflash_config(
+                model_config.hf_config,
+                num_speculative_tokens,
+                target_num_layers=target_num_layers,
+            )
         cache_config = None
         # include medusa
         no_caches = ['medusa']
@@ -753,12 +782,14 @@ class SpecDecodeConfig:
                                        quant_policy=target_cache_cfg.quant_policy,
                                        migration_backend=target_cache_cfg.migration_backend)
         obj = cls(
-            model=model,
+            model=draft_model,
             method=method,
             cache_config=cache_config,
             model_config=model_config,
             dist_config=dist_config,
             num_speculative_tokens=num_speculative_tokens,
+            target_layer_ids=target_layer_ids,
+            mask_token_id=mask_token_id,
         )
         return obj
 

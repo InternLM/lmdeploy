@@ -1,7 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 from torch import Tensor
+
+from .base import BuildSpec
 
 
 class ApplyRotaryEmbImpl(ABC):
@@ -19,11 +22,6 @@ class ApplyRotaryEmbImpl(ABC):
         raise NotImplementedError
 
 
-class ApplyRotaryEmbBuilder(ABC):
-    """Apply rotary embedding implementation builder."""
-
-    @staticmethod
-    @abstractmethod
-    def build():
-        """Build implementation."""
-        raise NotImplementedError
+@dataclass(frozen=True)
+class ApplyRotaryEmbBuildSpec(BuildSpec[ApplyRotaryEmbImpl]):
+    """Request construction of an apply-RoPE operator."""

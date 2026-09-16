@@ -22,6 +22,7 @@ from lmdeploy.utils import get_logger, get_model
 
 from ..adapter.adapter import AdapterManager
 from ..config import CacheConfig, ModelConfig
+from ..kv_connector import KVConnectorRole, build_kv_connector, prepare_kv_connector_config
 from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
 from ..multimodal.data_type import ensure_multimodal_content_hashes
 from ..paging import Scheduler
@@ -29,7 +30,7 @@ from ..strategies import build_strategy_factory
 from .base import EngineBase
 from .config_builder import ConfigBuilder
 from .engine_checker import EngineChecker
-from .executor import build_executor
+from .executor import build_executor, get_distributed_executor_backend
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
@@ -138,6 +139,22 @@ class Engine(EngineBase):
         cache_config = ConfigBuilder.build_cache_config(engine_config)
         backend_config = ConfigBuilder.build_backend_config(engine_config)
         dist_config = ConfigBuilder.build_dist_config(engine_config)
+        distributed_executor_backend = engine_config.distributed_executor_backend
+        transfer_config = cache_config.kv_transfer_config
+        if (distributed_executor_backend is None and transfer_config is not None
+                and transfer_config.is_kv_transfer_instance):
+            distributed_executor_backend = get_distributed_executor_backend(
+                dist_config.world_size,
+                dist_config.dp,
+                engine_config.device_type,
+                logger,
+            )
+        prepare_kv_connector_config(
+            cache_config,
+            model_path=model_path,
+            dist_config=dist_config,
+            distributed_executor_backend=distributed_executor_backend,
+        )
         memdecode_config = ConfigBuilder.build_memdecode_config(model_path,
                                                                 engine_config,
                                                                 cache_config,
@@ -166,7 +183,7 @@ class Engine(EngineBase):
             misc_config=misc_config,
             adapters=adapters,
             device_type=engine_config.device_type,
-            distributed_executor_backend=engine_config.distributed_executor_backend,
+            distributed_executor_backend=distributed_executor_backend,
             dtype=engine_config.dtype,
             specdecode_config=self.specdecode_config,
             trust_remote_code=trust_remote_code,
@@ -189,7 +206,18 @@ class Engine(EngineBase):
                                         cache_config=cache_config,
                                         seq_strategy=self.seq_strategy,
                                         sampling_strategy=self.sampling_strategy)
-        self.scheduler = Scheduler(scheduler_config, cache_config, seq_meta=self.seq_meta)
+        scheduler_connector = build_kv_connector(
+            KVConnectorRole.SCHEDULER,
+            cache_config,
+            tp_size=dist_config.attn_tp,
+            kv_head_replica_num=self.model_config.num_replicate_key_value_heads,
+        )
+        self.scheduler = Scheduler(
+            scheduler_config,
+            cache_config,
+            seq_meta=self.seq_meta,
+            kv_connector=scheduler_connector,
+        )
 
         # engine args
         self.model_path = model_path
@@ -204,10 +232,11 @@ class Engine(EngineBase):
         self.engine_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
 
         self.req_manager = self._bind_request_manager()
-        # This state tracks only explicit Engine.sleep()/wakeup() calls. Do not
-        # infer sleeping from empty_init: empty_init still builds runtime
-        # resources and has its own weight-update workflow.
-        self._sleeping_tags = set()
+        # Empty init deliberately omits weights and KV cache readiness. Keep
+        # internal requests blocked until both resources have been completed.
+        self._sleeping_tags = _SLEEPING_TAGS.copy() if self.misc_config.empty_init else set()
+        if self._sleeping_tags:
+            self._block_new_inputs()
         self._weights_update_lock: asyncio.Lock | None = None
         self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
         self._multimodal_session_end_count = 0
@@ -317,7 +346,7 @@ class Engine(EngineBase):
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_REPEAT
-            if session_id not in self.scheduler.sessions:
+            if self.scheduler.get_session(session_id) is None:
                 self.scheduler.add_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
@@ -329,8 +358,8 @@ class Engine(EngineBase):
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
-            if session_id in self.scheduler.sessions:
-                session = self.scheduler.sessions[session_id]
+            session = self.scheduler.get_session(session_id)
+            if session is not None:
                 stopped_resp_ids = set()
                 for seq in session.sequences.values():
                     if seq.status not in (MessageStatus.STOPPED, MessageStatus.TO_BE_MIGRATED):
@@ -384,10 +413,11 @@ class Engine(EngineBase):
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
-            if session_id in self.scheduler.sessions:
-                msgs = list(self.scheduler.sessions[session_id].sequences.values())
+            session = self.scheduler.get_session(session_id)
+            if session is not None:
+                msgs = list(session.sequences.values())
                 if len(msgs) > 0 and msgs[0].preserve_cache:
-                    msgs[0].state.finish()
+                    msgs[0].finish()
                 else:
                     self.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
@@ -400,7 +430,7 @@ class Engine(EngineBase):
         for req in reqs:
             req_data = req.data
             session_id = req_data['session_id']
-            if self.scheduler and session_id not in self.scheduler.sessions:
+            if self.scheduler and self.scheduler.get_session(session_id) is None:
                 self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
             valid_reqs.append(req)
@@ -453,7 +483,7 @@ class Engine(EngineBase):
         scheduler = self.scheduler
         for req in reqs:
             session_id = req.data['session_id']
-            sess = scheduler.sessions.get(session_id, None)
+            sess = scheduler.get_session(session_id)
             if sess is None:
                 self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
@@ -482,7 +512,7 @@ class Engine(EngineBase):
                     mode=UpdateTokenMode.INPUTS,
                 )
                 msg.sampling_param = sampling_param
-                msg.state.activate()
+                msg.activate()
 
             __update_max_new_tokens(msg)
             msg.resp = req.resp
@@ -505,6 +535,7 @@ class Engine(EngineBase):
         """Finally process for dist."""
         logger.info('Cleanup executor.')
         self.migration_event = None
+        self.scheduler.shutdown()
         self.executor.release()
 
     def update_params(self, request: Any):
@@ -517,10 +548,23 @@ class Engine(EngineBase):
             self._weights_update_lock = asyncio.Lock()
         return self._weights_update_lock
 
-    async def _run_weights_update(self, func, request: Any):
+    async def _run_weights_update(self, func, *args):
         """Run one serialized disaggregated weights-update operation."""
         async with self._get_weights_update_lock():
-            return await asyncio.to_thread(func, request)
+            return await asyncio.to_thread(func, *args)
+
+    async def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness from all local model workers."""
+        return await asyncio.to_thread(self.executor.get_checkpoint_engine_status)
+
+    async def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        return await self._run_weights_update(self.executor.update_weights_from_ipc,
+                                              request, reject_reason)
+
+    def complete_weights_update(self):
+        """Record successful initialization/update without waking KV cache."""
+        self._sleeping_tags.discard('weights')
 
     async def init_weights_update_group(self, request: Any):
         """Init disaggregated weights-update process group."""
@@ -547,8 +591,9 @@ class Engine(EngineBase):
     def _cancel_and_end_all_sessions(self):
         """Cancel active responses and remove all scheduler sessions."""
         num_cancelled = 0
-        session_ids = list(self.scheduler.sessions.keys())
-        for session in list(self.scheduler.sessions.values()):
+        sessions = self.scheduler.get_sessions()
+        session_ids = [session.session_id for session in sessions]
+        for session in sessions:
             for seq in list(session.sequences.values()):
                 resp: Response = getattr(seq, 'resp', None)
                 if resp is None or resp.is_done:
@@ -576,6 +621,7 @@ class Engine(EngineBase):
         # cancel all remain sessions
         self._cancel_and_end_all_sessions()
         await self.executor.sleep(level)
+        self.scheduler.finish_kv_transfers_after_worker_drain()
         if self._engine_loop is not None:
             self._engine_loop.reset_runtime_state()
         logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))
@@ -684,8 +730,9 @@ class Engine(EngineBase):
 
     def end_session(self, session_id: int):
         """End session."""
-        if session_id in self.scheduler.sessions:
-            has_multimodal = self._has_multimodal_session(self.scheduler.sessions[session_id])
+        session = self.scheduler.get_session(session_id)
+        if session is not None:
+            has_multimodal = self._has_multimodal_session(session)
             self.scheduler.end_session(session_id)
             self._maybe_trim_multimodal_session(has_multimodal)
             return True

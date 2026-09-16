@@ -1,11 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import json
 import logging
 from typing import Any
 
 import torch
 import xgrammar as xgr
 from transformers import PreTrainedTokenizerBase
+
+from lmdeploy._guided_decoding import compile_response_format
 
 logger = logging.getLogger('lmdeploy')
 
@@ -35,52 +36,21 @@ class GuidedDecodingManager:
         processors = {}
         for i, _format in enumerate(response_formats):
             if isinstance(_format, dict) and _format.get('type', 'text') != 'text':
-                schema_type = _format['type']
-                if schema_type == 'json_schema':
-                    schema = _format['json_schema']
-                    if isinstance(schema, dict):
-                        for key in ['json_schema', 'schema']:
-                            if key in schema:
-                                val = schema[key]
-                                schema = val if isinstance(val, str) else json.dumps(val, ensure_ascii=False)
-
-                    if not isinstance(schema, str):
-                        raise ValueError(f'Cannot parse schema {schema}. The schema must be '
-                                         'either a dictionary or a string that contains the'
-                                         ' JSON Schema specification')
-                elif schema_type == 'regex_schema':
-                    schema = _format.get('regex_schema', '')
-                elif schema_type == 'json_object':
-                    schema = '{"type" : "object", "additionalProperties": true}'
-                else:
-                    raise ValueError(f'unsupported format type: {schema_type}')
-
                 session_id = session_ctx[i]['session_id']
                 seq_id = session_ctx[i]['seq_id']
-
-                processors[i] = self.get_processor(session_id, seq_id, schema, schema_type)
+                processors[i] = self.get_processor(session_id, seq_id, _format)
 
         return processors
 
-    def get_processor(self, session_id: int, seq_id: int, schema: str, type: str) -> xgr.GrammarMatcher:
+    def get_processor(self, session_id: int, seq_id: int,
+                      response_format: dict[str, Any]) -> xgr.GrammarMatcher:
         if session_id in self.processors:
             session_dict = self.processors[session_id]
             if seq_id in session_dict:
                 processor = session_dict[seq_id]
                 return processor
 
-        if type == 'json_schema':
-            if isinstance(schema, str):
-                schema = json.loads(schema)
-
-            assert isinstance(schema, dict)
-            compiled = self.compiler.compile_json_schema(schema)
-        elif type == 'regex_schema':
-            compiled = self.compiler.compile_regex(schema)
-        elif type == 'json_object':
-            compiled = self.compiler.compile_json_schema(schema)
-        else:
-            assert False, f'Do not support schema type {type}'
+        compiled = compile_response_format(self.compiler, response_format)
 
         processor = xgr.GrammarMatcher(compiled)
         self.processors.setdefault(session_id, {})[seq_id] = processor

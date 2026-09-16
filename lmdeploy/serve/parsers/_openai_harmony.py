@@ -87,11 +87,6 @@ class GptOssResponseParser(ResponseParser):
             format_body = f'# Response Formats\n{format_json}'
             messages = self.request.messages
 
-            if isinstance(messages, str):
-                messages = messages + '\n\n' + format_body
-                self._clear_response_format(messages=messages)
-                return
-
             if not isinstance(messages, list):
                 logger.warning('Cannot inject response_format schema into '
                                'non-list messages for GPT-OSS; clearing response_format only.')

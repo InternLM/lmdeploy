@@ -3,7 +3,10 @@ import os
 DEFAULT_PORT = 23333
 DEFAULT_SERVER = os.getenv('MASTER_ADDR', '127.0.0.1')
 PROXY_PORT = 8000
-DEFAULT_MAX_COMPLETION_TOKENS = 8192
+# Reasoning / Anthropic thinking (thinking + tool).
+THINKING_MAX_COMPLETION_TOKENS = 8192
+# Tool tests (thinking off) and ignore_eos length-cap tests.
+CAPPED_MAX_COMPLETION_TOKENS = 1024
 
 BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
 BASE_URL = f'{BASE_HTTP_URL}:{os.getenv("LMDEPLOY_PORT", str(DEFAULT_PORT))}'

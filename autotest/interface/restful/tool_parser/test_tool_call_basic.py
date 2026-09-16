@@ -1,6 +1,6 @@
 import pytest
 from openai import BadRequestError
-from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS
+from utils.constant import CAPPED_MAX_COMPLETION_TOKENS
 from utils.tool_reasoning_definitions import (
     SEARCH_TOOL,
     WEATHER_TOOL,
@@ -30,7 +30,7 @@ class TestToolCallBasic(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
@@ -89,7 +89,7 @@ class TestToolCallBasic(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             tool_choice={
                 'type': 'function',
@@ -119,7 +119,7 @@ class TestToolCallStreamConsistency(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
@@ -168,7 +168,7 @@ class TestToolCallChoice(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice='auto',
             logprobs=False,
@@ -199,7 +199,7 @@ class TestToolCallChoice(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice='none',
             logprobs=False,
@@ -226,7 +226,7 @@ class TestToolCallChoice(_ToolCallTestBase):
                 model=model_name,
                 messages=MESSAGES_ASKING_FOR_WEATHER,
                 temperature=0,
-                max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+                max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
                 tools=[WEATHER_TOOL, SEARCH_TOOL],
                 tool_choice='required',
                 logprobs=False,
@@ -255,7 +255,7 @@ class TestToolCallChoice(_ToolCallTestBase):
                 model=model_name,
                 messages=MESSAGES_ASKING_FOR_WEATHER,
                 temperature=0,
-                max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+                max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
                 tools=[WEATHER_TOOL, SEARCH_TOOL],
                 tool_choice='required',
                 logprobs=False,
@@ -279,7 +279,7 @@ class TestToolCallChoice(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice={
                 'type': 'function',
@@ -319,7 +319,7 @@ class TestToolCallArgumentsParsing(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -357,7 +357,7 @@ class TestToolCallArgumentsParsing(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_SEARCH,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[SEARCH_TOOL],
             logprobs=False,
         )
@@ -397,7 +397,7 @@ class TestToolCallArgumentsParsing(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             tool_choice={
                 'type': 'function',

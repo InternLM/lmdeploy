@@ -12,8 +12,20 @@ from pydantic import ValidationError
 from lmdeploy.serve.anthropic.protocol import CountTokensRequest, MessagesRequest
 from lmdeploy.serve.anthropic.router import create_anthropic_router
 from lmdeploy.serve.anthropic.streaming import stream_messages_response
+from lmdeploy.serve.core.chat_runner import ChatStreamChunk
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
-from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
+from lmdeploy.serve.openai.protocol import (
+    ChatCompletionRequest,
+    DeltaFunctionCall,
+    DeltaMessage,
+    DeltaToolCall,
+    FunctionCall,
+    ToolCall,
+)
+from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
+from lmdeploy.serve.parsers.response_parser import BaseResponseParser
+from lmdeploy.serve.parsers.tool_parser.interns2preview_tool_parser import InternS2PreviewToolParser
+from lmdeploy.serve.parsers.tool_parser.qwen3_tool_parser import Qwen3ToolParser
 from lmdeploy.serve.utils.server_utils import protocol_error_response
 
 ANTHROPIC_HEADERS = {'anthropic-version': '2023-06-01'}
@@ -116,6 +128,8 @@ class _FakeEngine:
                 input_token_len=8,
                 generate_token_len=1,
                 finish_reason=None,
+                cached_tokens=0,
+                cache_block_ids=None,
                 routed_experts=[[[1, 2, 3]]],
                 logprobs=[{101: -0.5, 102: -1.2}],
             )
@@ -125,6 +139,8 @@ class _FakeEngine:
                 input_token_len=8,
                 generate_token_len=2,
                 finish_reason='stop',
+                cached_tokens=0,
+                cache_block_ids=None,
                 routed_experts=[[[1, 2, 3]]],
                 logprobs=[{102: -0.3, 103: -2.1}],
             )
@@ -137,16 +153,14 @@ class _BasicParser:
 
     def __init__(self, request):
         self.request = request
+        self.tool_parser = None
+        self.reasoning_tokens = None
 
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
         return [(DeltaMessage(role='assistant', content=delta_text), False)]
 
     def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
         return text, None, None
-
-    def validate_complete(self, text: str | None = None):
-        return True
-
 
 class _FakeServerContext:
     def __init__(
@@ -263,6 +277,8 @@ class _ToolAndReasoningParser:
 
     def __init__(self, request):
         self.request = request
+        self.tool_parser = object()
+        self.reasoning_tokens = None
 
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
         if delta_text.startswith('Hello'):
@@ -302,20 +318,6 @@ class _ToolAndReasoningParser:
             ],
             'internal reasoning',
         )
-
-    def validate_complete(self, text: str | None = None):
-        return True
-
-
-class _IncompleteToolParser(_ToolAndReasoningParser):
-    validate_calls = 0
-    last_text = None
-
-    def validate_complete(self, text: str | None = None):
-        type(self).validate_calls += 1
-        type(self).last_text = text
-        return False
-
 
 def _make_client(response_parser_cls=_BasicParser,
                  *,
@@ -363,6 +365,25 @@ def test_messages_non_stream():
     assert len(context.session_mgr.removed) == 1
 
 
+@pytest.mark.parametrize(
+    ('field_name', 'value'),
+    [
+        pytest.param('temperature', -0.1, id='temperature-below-range'),
+        pytest.param('temperature', 1.1, id='temperature-above-range'),
+        pytest.param('top_p', -0.1, id='top-p-below-range'),
+        pytest.param('top_p', 1.1, id='top-p-above-range'),
+        pytest.param('top_k', -1, id='negative-top-k'),
+    ],
+)
+def test_messages_rejects_invalid_sampling_parameter(field_name, value):
+    response = _post_messages(_make_client(), **{field_name: value})
+
+    assert response.status_code == 400
+    data = response.json()
+    assert data['type'] == 'error'
+    assert field_name in data['error']['message']
+
+
 def test_messages_count_tokens_rejects_empty_messages():
     response = _post_count_tokens(_make_client(), messages=[])
 
@@ -408,15 +429,53 @@ def _sse_payloads(body: str):
     ]
 
 
+async def _parsed_stream(result_generator, response_parser):
+    streaming_tools = False
+    async for res in result_generator:
+        token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
+        stream_deltas = response_parser.stream_chunk(
+            res.response or '',
+            token_ids,
+            final=res.finish_reason is not None,
+        )
+        if not stream_deltas:
+            if res.finish_reason is None and not token_ids:
+                continue
+            stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
+
+        for delta_index, (delta_message, tool_emitted) in enumerate(stream_deltas):
+            if tool_emitted:
+                streaming_tools = True
+            is_last_delta = delta_index == len(stream_deltas) - 1
+            finish_reason = res.finish_reason if is_last_delta else None
+            if finish_reason == 'stop' and streaming_tools:
+                finish_reason = 'tool_calls'
+            yield ChatStreamChunk(
+                delta_message=delta_message,
+                tool_emitted=tool_emitted,
+                finish_reason=finish_reason,
+                token_ids=token_ids,
+                logprobs=getattr(res, 'logprobs', None),
+                input_token_len=res.input_token_len,
+                generate_token_len=res.generate_token_len,
+                cached_tokens=getattr(res, 'cached_tokens', 0),
+                routed_experts=getattr(res, 'routed_experts', None) if finish_reason is not None else None,
+                reasoning_tokens=getattr(response_parser, 'reasoning_tokens', None),
+                is_last_delta=is_last_delta,
+            )
+
+
 def _collect_stream_response_payloads(result_generator, response_parser, **kwargs):
     async def _collect_events():
         return [
             event async for event in stream_messages_response(
-                result_generator,
+                _parsed_stream(result_generator, response_parser),
                 request_id='msg_test',
-                model='fake-model',
-                response_parser=response_parser,
-                **kwargs,
+                request=ChatCompletionRequest(
+                    model='fake-model',
+                    messages=[],
+                    **kwargs,
+                ),
             )
         ]
 
@@ -450,6 +509,42 @@ def test_messages_return_routed_experts_requires_engine_flag():
 
     assert response.status_code == 400
     assert 'enable-return-routed-experts' in response.json()['error']['message']
+
+
+def test_messages_tools_require_tool_parser():
+    response = _post_messages(_make_client(), tools=[SEARCH_TOOL])
+
+    assert response.status_code == 400
+    assert '--tool-call-parser' in response.json()['error']['message']
+
+
+@pytest.mark.parametrize('tool_choice', ['any', {'type': 'any'}])
+def test_messages_any_tool_choice_requires_tools(tool_choice):
+    response = _post_messages(
+        _make_client(response_parser_cls=_ToolAndReasoningParser),
+        tool_choice=tool_choice,
+    )
+
+    assert response.status_code == 400
+    assert 'requires at least one tool' in response.json()['error']['message']
+
+
+@pytest.mark.parametrize(
+    ('tools', 'tool_choice', 'error_fragment'),
+    [
+        (None, {'type': 'tool', 'name': 'search'}, 'requires at least one tool'),
+        ([SEARCH_TOOL], {'type': 'tool', 'name': 'missing'}, "not found in `tools`: 'missing'"),
+    ],
+)
+def test_messages_named_tool_choice_validation(tools, tool_choice, error_fragment):
+    response = _post_messages(
+        _make_client(response_parser_cls=_ToolAndReasoningParser),
+        tools=tools,
+        tool_choice=tool_choice,
+    )
+
+    assert response.status_code == 400
+    assert error_fragment in response.json()['error']['message']
 
 
 def test_messages_beta_accepts_system_role_message():
@@ -586,18 +681,6 @@ def test_messages_non_stream_with_reasoning_and_tool_use_blocks():
     assert data['content'][2]['input'] == {'query': 'lmdeploy'}
 
 
-def test_messages_non_stream_validate_complete_marks_parse_error():
-    _IncompleteToolParser.validate_calls = 0
-    _IncompleteToolParser.last_text = None
-    client = _make_client(response_parser_cls=_IncompleteToolParser)
-    response = _post_messages(client, tools=[SEARCH_TOOL], return_token_ids=True)
-
-    assert response.status_code == 200
-    assert response.json()['stop_reason'] == 'parse_error'
-    assert _IncompleteToolParser.validate_calls == 1
-    assert _IncompleteToolParser.last_text == 'Hello world!'
-
-
 def test_messages_streaming_usage_matches_anthropic_event_spec():
     client, context = _make_client(return_context=True)
     status_code, body = _stream_messages_body(client)
@@ -611,6 +694,23 @@ def test_messages_streaming_usage_matches_anthropic_event_spec():
         'output_tokens': 1,
     }
     assert message_delta['usage'] == {'output_tokens': 2}
+    assert len(context.session_mgr.removed) == 1
+
+
+def test_messages_unconsumed_streaming_response_cleans_up_session():
+    context = _FakeServerContext()
+    router = create_anthropic_router(context)
+    endpoint = next(route.endpoint for route in router.routes if route.path == '/v1/messages')
+
+    async def _close_without_consuming():
+        response = await endpoint(
+            MessagesRequest(**_messages_payload(stream=True)),
+            _FakeRawRequest(ANTHROPIC_HEADERS),
+        )
+        await response.close()
+
+    asyncio.run(_close_without_consuming())
+
     assert len(context.session_mgr.removed) == 1
 
 
@@ -654,20 +754,6 @@ def test_messages_streaming_with_reasoning_and_tool_use_events():
     assert '"type": "input_json_delta"' in body
     assert '"type": "tool_use"' in body
     assert '"output_ids": [102]' in body
-
-
-def test_messages_streaming_validate_complete_marks_parse_error():
-    _IncompleteToolParser.validate_calls = 0
-    _IncompleteToolParser.last_text = None
-    client = _make_client(response_parser_cls=_IncompleteToolParser)
-    status_code, body = _stream_messages_body(client, tools=[SEARCH_TOOL], return_token_ids=True)
-    payloads = _sse_payloads(body)
-    message_delta = next(item for item in payloads if item['type'] == 'message_delta')
-
-    assert status_code == 200
-    assert message_delta['delta']['stop_reason'] == 'parse_error'
-    assert _IncompleteToolParser.validate_calls == 1
-    assert _IncompleteToolParser.last_text is None
 
 
 def test_stream_messages_response_serializes_numpy_routed_experts():
@@ -737,73 +823,186 @@ def test_stream_messages_response_preserves_tool_start_output_ids():
     assert output_ids == [11, 12, 13]
 
 
-def test_stream_messages_response_closes_text_before_resuming_tool_delta():
-    class _InterleavedToolParser:
-        def __init__(self):
-            self.calls = 0
+def test_stream_messages_response_uses_identity_first_parser_contract():
+    class _ArgumentsBeforeNameResponseParser(BaseResponseParser):
+        reasoning_parser_cls = None
+        tool_parser_cls = Qwen3ToolParser
 
-        def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
-            self.calls += 1
-            if self.calls == 1:
-                return [(
-                    DeltaMessage(
-                        role='assistant',
-                        tool_calls=[
-                            DeltaToolCall(
-                                index=0,
-                                id='toolu_123',
-                                function=DeltaFunctionCall(
-                                    name='search',
-                                    arguments='{"query":',
-                                ),
-                            )
-                        ],
-                    ),
-                    True,
-                )]
-            if self.calls == 2:
-                return [(DeltaMessage(role='assistant', content='interlude'), False)]
-            return [(
-                DeltaMessage(
-                    role='assistant',
-                    tool_calls=[
-                        DeltaToolCall(
-                            index=0,
-                            id='toolu_123',
-                            function=DeltaFunctionCall(arguments='"lmdeploy"}'),
-                        )
-                    ],
-                ),
-                True,
-            )]
+    response_parser = _ArgumentsBeforeNameResponseParser(
+        ChatCompletionRequest(
+            model='fake-model',
+            messages=[],
+            tools=[{'type': 'function', 'function': {'name': 'search'}}],
+            tool_choice='auto',
+            stream=True,
+        ))
 
     async def _result_generator():
-        for idx, finish_reason in enumerate([None, None, 'stop'], start=1):
-            yield SimpleNamespace(
-                response=f'chunk-{idx}',
-                token_ids=[idx],
-                input_token_len=8,
-                generate_token_len=idx,
-                finish_reason=finish_reason,
-            )
+        yield SimpleNamespace(
+            response='<tool_call>{"arguments":{"query":"lmdeploy"}',
+            token_ids=[],
+            input_token_len=8,
+            generate_token_len=1,
+            finish_reason=None,
+        )
+        yield SimpleNamespace(
+            response=',"name":"search"}</tool_call>',
+            token_ids=[],
+            input_token_len=8,
+            generate_token_len=2,
+            finish_reason='stop',
+        )
 
     payloads = _collect_stream_response_payloads(
         _result_generator(),
-        _InterleavedToolParser(),
+        response_parser,
     )
 
     tool_start = next(
         item for item in payloads
         if item['type'] == 'content_block_start' and item['content_block']['type'] == 'tool_use')
+    argument_delta = next(
+        item for item in payloads
+        if item['type'] == 'content_block_delta' and item['delta']['type'] == 'input_json_delta')
     assert tool_start['content_block']['name'] == 'search'
+    assert argument_delta['delta']['partial_json'] == '{"query":"lmdeploy"}'
 
-    resumed_tool_delta_index = next(
-        idx for idx, item in enumerate(payloads)
-        if item['type'] == 'content_block_delta' and item['delta']['type'] == 'input_json_delta'
-        and item['delta']['partial_json'] == '"lmdeploy"}')
-    assert any(
-        item['type'] == 'content_block_stop' and item['index'] == 1
-        for item in payloads[:resumed_tool_delta_index])
+
+def test_stream_messages_response_preserves_nested_tool_event_order():
+    class _NestedToolResponseParser(BaseResponseParser):
+        reasoning_parser_cls = ReasoningParserManager.get('default')
+        tool_parser_cls = Qwen3ToolParser
+
+    response_parser = _NestedToolResponseParser(
+        ChatCompletionRequest(
+            model='fake-model',
+            messages=[],
+            tools=[{'type': 'function', 'function': {'name': 'search'}}],
+            tool_choice='auto',
+            stream=True,
+            chat_template_kwargs={'enable_thinking': True},
+        ))
+
+    async def _result_generator():
+        chunks = [
+            ('<think>before', None),
+            ('<tool_call>{"name":"search","arguments":{"query":"lmdeploy"}}</tool_call>', None),
+            ('after</think>answer', 'stop'),
+        ]
+        for index, (response, finish_reason) in enumerate(chunks, start=1):
+            yield SimpleNamespace(
+                response=response,
+                token_ids=[],
+                input_token_len=8,
+                generate_token_len=index,
+                finish_reason=finish_reason,
+            )
+
+    payloads = _collect_stream_response_payloads(_result_generator(), response_parser)
+    block_starts = [item for item in payloads if item['type'] == 'content_block_start']
+
+    assert [item['index'] for item in block_starts] == [0, 1, 2, 3]
+    assert [item['content_block']['type'] for item in block_starts] == [
+        'thinking',
+        'tool_use',
+        'thinking',
+        'text',
+    ]
+    assert block_starts[1]['content_block']['name'] == 'search'
+    assert [
+        item['delta']['thinking'] for item in payloads
+        if item['type'] == 'content_block_delta' and item['delta']['type'] == 'thinking_delta'
+    ] == ['before', 'after']
+
+
+
+
+def test_stream_messages_response_interns2preview_ignores_inter_tool_newline():
+    """Ignore InternS2Preview's newline between consecutive tool blocks."""
+
+    class _InternS2PreviewResponseParser(BaseResponseParser):
+        reasoning_parser_cls = None
+        tool_parser_cls = InternS2PreviewToolParser
+
+    request = ChatCompletionRequest(
+        model='fake-model',
+        messages=[],
+        stream=True,
+        tool_choice='auto',
+        tools=[
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'city': {
+                                'type': 'string'
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'get_news',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'topic': {
+                                'type': 'string'
+                            }
+                        },
+                    },
+                },
+            },
+        ],
+    )
+    response_parser = _InternS2PreviewResponseParser(request)
+    raw_response = (
+        '<tool_call>\n<function=get_weather>\n<parameter=city>Paris</parameter>\n</function>\n</tool_call>'
+        '\n'
+        '<tool_call>\n<function=get_news>\n<parameter=topic>France</parameter>\n</function>\n</tool_call>')
+
+    async def _result_generator():
+        yield SimpleNamespace(
+            response=raw_response,
+            token_ids=[1],
+            input_token_len=8,
+            generate_token_len=1,
+            finish_reason='stop',
+        )
+
+    payloads = _collect_stream_response_payloads(_result_generator(), response_parser)
+    block_events = [item for item in payloads if item['type'].startswith('content_block_')]
+
+    assert [(item['type'], item['index']) for item in block_events] == [
+        ('content_block_start', 0),
+        ('content_block_delta', 0),
+        ('content_block_stop', 0),
+        ('content_block_start', 1),
+        ('content_block_delta', 1),
+        ('content_block_stop', 1),
+    ]
+    assert [
+        item['content_block']['type'] for item in block_events
+        if item['type'] == 'content_block_start'
+    ] == ['tool_use', 'tool_use']
+    assert [
+        item['delta'] for item in block_events
+        if item['type'] == 'content_block_delta'
+    ] == [
+        {
+            'type': 'input_json_delta',
+            'partial_json': '{"city": "Paris"}',
+        },
+        {
+            'type': 'input_json_delta',
+            'partial_json': '{"topic": "France"}',
+        },
+    ]
 
 
 def test_stream_messages_response_maps_stop_to_tool_use_on_empty_terminal_chunk():

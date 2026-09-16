@@ -92,12 +92,16 @@ def get_speculative_config(args):
     """Get speculative config from args."""
     from lmdeploy.messages import SpeculativeConfig
     speculative_config = None
+    dflash_block_size = getattr(args, 'speculative_dflash_block_size', None)
     if args.speculative_algorithm is not None:
         speculative_config = SpeculativeConfig(
             method=args.speculative_algorithm,
             model=args.speculative_draft_model,
             num_speculative_tokens=args.speculative_num_draft_tokens,
+            dflash_block_size=dflash_block_size,
         )
+    elif dflash_block_size is not None:
+        raise ValueError('--speculative-dflash-block-size requires --speculative-algorithm dflash.')
     return speculative_config
 
 
@@ -529,6 +533,16 @@ class ArgumentHelper:
                                    'cache, excluding weights ')
 
     @staticmethod
+    def num_gpu_blocks(parser):
+        """Add argument num_gpu_blocks to parser."""
+
+        return parser.add_argument('--num-gpu-blocks',
+                                   type=int,
+                                   default=0,
+                                   help='Explicit number of GPU KV cache blocks for PyTorch engine. '
+                                   'Use 0 to auto-size from cache-max-entry-count.')
+
+    @staticmethod
     def adapters(parser):
         """Add argument adapters to parser."""
 
@@ -642,6 +656,15 @@ class ArgumentHelper:
                                    help='the max number of tokens per iteration during prefill')
 
     @staticmethod
+    def piecewise_cudagraph_max_tokens(parser):
+        return parser.add_argument('--piecewise-cudagraph-max-tokens',
+                                   type=int,
+                                   default=None,
+                                   help='Enable piecewise CUDA graph in the PyTorch engine and capture prefill '
+                                   'token buckets up to this value. If not specified, piecewise CUDA graph is '
+                                   'disabled')
+
+    @staticmethod
     def cudagraph_capture_batch_sizes(parser):
         return parser.add_argument('--cudagraph-capture-batch-sizes',
                                    type=int,
@@ -680,6 +703,16 @@ class ArgumentHelper:
                                    default=False,
                                    help='Whether to enable eager mode. '
                                    'If True, cuda graph would be disabled')
+
+    @staticmethod
+    def empty_init(parser):
+        """Add the PyTorch empty-weight initialization argument."""
+        return parser.add_argument(
+            '--empty-init',
+            action='store_true',
+            default=False,
+            help='Build the PyTorch runtime without loading model weights or KV cache. '
+            'Use checkpoint-engine IPC to load weights, then wake kv_cache explicitly.')
 
     @staticmethod
     def communicator(parser):
@@ -802,7 +835,7 @@ class ArgumentHelper:
         spec_group.add_argument('--speculative-algorithm',
                                 type=str,
                                 default=None,
-                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'hy3_mtp', 'qwen3_5_mtp'],
+                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'hy3_mtp', 'qwen3_5_mtp', 'dflash'],
                                 help='The speculative algorithm to use. `None` means speculative decoding is disabled')
 
         spec_group.add_argument('--speculative-draft-model',
@@ -814,6 +847,14 @@ class ArgumentHelper:
                                 type=int,
                                 default=1,
                                 help='The number of speculative tokens to generate per step')
+
+        spec_group.add_argument(
+            '--speculative-dflash-block-size',
+            type=int,
+            default=None,
+            help='DFlash only. Runtime draft block length, including the current target token. '
+            'Overrides --speculative-num-draft-tokens with block_size - 1 proposed tokens and must not exceed '
+            'the DFlash checkpoint block_size.')
 
         return spec_group
 
@@ -833,6 +874,20 @@ class ArgumentHelper:
                                    action='store_true',
                                    default=False,
                                    help='Whether to trust remote code from model repositories.')
+
+    @staticmethod
+    def kv_transfer_config(parser):
+        """Add external KV-cache connector configuration."""
+        return parser.add_argument(
+            '--kv-transfer-config',
+            type=json.loads,
+            default=None,
+            help='External KV-cache connector configuration for the PyTorch engine. '
+            'Mooncake Store requires MOONCAKE_CONFIG_PATH (or '
+            'kv_connector_extra_config.mooncake_config_path) and does not support '
+            'distributed_executor_backend="mp". '
+            'Example: '
+            "'{\"kv_connector\":\"MooncakeStoreConnector\",\"kv_role\":\"kv_both\"}'.")
 
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py

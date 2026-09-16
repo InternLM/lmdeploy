@@ -1,8 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
+
+from .base import BuildSpec
 
 
 class LinearBlockedF8Impl(ABC):
@@ -33,16 +36,15 @@ class LinearBlockedF8Impl(ABC):
         raise NotImplementedError
 
 
-class LinearBlockedF8Builder(ABC):
-    """Linear BlockedF8 implementation builder."""
+@dataclass(frozen=True)
+class LinearBlockedF8BuildSpec(BuildSpec[LinearBlockedF8Impl]):
+    """Immutable requirements for constructing a blocked-FP8 linear
+    operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(in_features: int,
-              out_features: int,
-              block_size: int = 128,
-              bias: bool = True,
-              dtype: torch.dtype = None,
-              fp8_dtype: torch.dtype = torch.float8_e4m3fn):
-        """build."""
-        raise NotImplementedError
+    in_features: int
+    out_features: int
+    block_size: int
+    bias: bool
+    output_dtype: torch.dtype | None
+    fp8_dtype: torch.dtype
+    scale_fmt: str | None

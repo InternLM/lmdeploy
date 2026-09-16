@@ -229,6 +229,10 @@ class ModelInputs:
     target_hidden_states: torch.Tensor | None = None
     target_position_ids: torch.Tensor | None = None
     target_inputs_embeds: torch.Tensor | None = None
+    # Hidden-state positions requiring lm-head projection.
+    logits_indices: torch.LongTensor | None = None
+    # Number of compact logprob rows emitted for each sequence.
+    seq_logit_length: torch.LongTensor | None = None
     is_chunk: bool = False
     is_first_chunk: bool = False
     is_last_chunk: bool = False
@@ -255,6 +259,8 @@ class ModelInputs:
             history_lengths=self.history_lengths + step_seqlens,
             max_kv_seqlen=self.max_kv_seqlen + self.max_q_seqlen,
             sum_kv_seqlen=self.sum_kv_seqlen + self.max_q_seqlen * self.seq_length.numel(),
+            logits_indices=None,
+            seq_logit_length=None,
             mrope_pos_ids=mrope_pos_ids,
         )
 
@@ -344,14 +350,12 @@ class StepContext:
     state_caches: list | None = None
     state_offsets: torch.LongTensor | None = None
 
-    # named cache views for models with block_cache_specs / state_cache_specs
+    # named views for operator-owned block caches and configured state caches
     block_caches: Mapping[str, torch.Tensor] | None = None
     named_state_caches: Mapping[str, torch.Tensor] | None = None
 
     # mrope
     mrope_position_ids: torch.Tensor | None = None
-
-    _outputs: dict = field(default_factory=dict)
 
     # chunk with multimodal
     is_chunk_multimodal: bool = False
@@ -507,10 +511,19 @@ class StepContext:
         return attention_mask, position_ids
 
 
+@dataclass(frozen=True)
+class SpecModelBuildContext:
+    """Speculative-decoding metadata needed while building models."""
+
+    target_aux_hidden_state_layers: tuple[int, ...] = ()
+    speculative_mask_token_id: int | None = None
+
+
 @dataclass
 class BuildModelContext:
     """Context for building model."""
     language_model_only: bool = False
+    enable_deterministic: bool = False
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False
@@ -519,6 +532,7 @@ class BuildModelContext:
     tie_word_embeddings: bool = False
     num_spec_tokens: int = 0
     max_batch_size: int = 0
+    spec_model_ctx: SpecModelBuildContext = field(default_factory=SpecModelBuildContext)
 
     @property
     def deep_ep_max_tokens_per_rank(self) -> int:
