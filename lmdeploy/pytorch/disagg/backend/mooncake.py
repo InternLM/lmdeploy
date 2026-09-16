@@ -182,17 +182,13 @@ class MooncakeMigrationManagement:
         if not LMDEPLOY_USE_ASYNC_MIGRATION:
             # For synchronous migration, call the method directly
             self._migrate(assignment)
-        else:
-            # For asynchronous migration, use an async method
-            import asyncio
-            loop = asyncio.get_event_loop()
-            future = loop.create_future()
+            return
 
-            await loop.run_in_executor(None, self._migrate, assignment)
-
-            result = await future
-            if result != 0:
-                raise RuntimeError(f'Failed to perform async transfer: {result}')
+        # Offload the blocking RDMA transfer so the event loop can keep running.
+        # Await the executor future itself; `_migrate` already raises on failure.
+        import asyncio
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._migrate, assignment)
 
     def _migrate(self, assignment: MigrationAssignment):
         """Migrate data to the remote engine synchronously."""
