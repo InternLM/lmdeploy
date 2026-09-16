@@ -50,6 +50,9 @@ class FakeScheduler:
     def __init__(self, seq):
         self.sessions = {1: SimpleNamespace(sequences={0: seq})}
 
+    def get_session(self, session_id):
+        return self.sessions.get(session_id)
+
     def stop_session(self, session_id):
         for seq in self.sessions[session_id].sequences.values():
             seq.state.stop()

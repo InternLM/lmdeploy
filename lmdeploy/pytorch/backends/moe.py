@@ -111,7 +111,8 @@ class FusedMoEW8A8BuildSpec(BuildSpec[FusedMoEW8A8Impl]):
     renormalize: bool
     output_dtype: torch.dtype
     quant_dtype: torch.dtype | None
-
+    ep_size: int
+    ep_group: dist.ProcessGroup | None
 
 class FusedMoEStaticF8Impl(ABC):
     """Fused MoE static FP8 implementation."""
