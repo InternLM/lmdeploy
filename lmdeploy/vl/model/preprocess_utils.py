@@ -251,12 +251,14 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                         audio_token_id=token_id,
                     ))
             elif modality == Modality.TIME_SERIES:
+                ts_channels = item.get('ts_channels')
                 expanded_mm_items.append(
                     dict(
                         modality=modality,
                         ts_values=item['feature'],
                         ts_sr=item['ts_sr'],
                         ts_lens=item['ts_lens'],
+                        ts_channels=ts_channels,
                         offset=item['offset'][0],
                         ts_token_id=token_id,
                     ))

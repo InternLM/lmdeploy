@@ -14,7 +14,6 @@ from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMetaBuilder
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .interns1_pro_time_series import InternS1ProTimeSeriesModel
 from .patch import add_prefix, get_build_model_context
 from .qwen3_5 import (
     Qwen3_5Attention,
@@ -235,9 +234,6 @@ class Qwen3_5MoeModel(Qwen3_5Model):
                                                   device=device,
                                                   prefix=add_prefix('language_model', prefix))
 
-        # build time series model
-        if hasattr(config, 'ts_config'):
-            self.time_series = InternS1ProTimeSeriesModel(config.ts_config, dtype=dtype, device=device)
 
 class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
     """ModelForCausalLM."""
@@ -365,7 +361,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
 
             if 'mtp.' in name:
                 continue
-            if name.startswith(('model.time_series.', 'time_series_forecaster.')):
+            if name.startswith('time_series_forecaster.'):
                 continue
             if 'rotary_emb.inv_freq' in name:
                 continue
