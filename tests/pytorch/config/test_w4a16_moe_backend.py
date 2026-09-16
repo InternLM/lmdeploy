@@ -8,7 +8,7 @@ import torch
 from lmdeploy.pytorch import envs
 
 
-@pytest.mark.parametrize('value,expected', [(None, 'cute'), ('auto', 'auto'), ('triton', 'triton'),
+@pytest.mark.parametrize('value,expected', [(None, 'auto'), ('auto', 'auto'), ('triton', 'triton'),
                                             ('cute', 'cute'), (' CUTE ', 'cute')])
 def test_w4a16_moe_backend_choices(monkeypatch, value, expected):
     if value is None:
@@ -121,7 +121,9 @@ def test_builder_handles_unsupported_devices(monkeypatch, build_spec, provider, 
 
 
 @pytest.mark.parametrize('available', [False, True])
-def test_cute_probes_optional_kernel_import(monkeypatch, build_spec, available):
+@pytest.mark.parametrize('ep_size', [1, 2])
+@pytest.mark.parametrize('deepep_available', [False, True])
+def test_cute_probes_optional_kernel_import(monkeypatch, build_spec, available, ep_size, deepep_available):
     import builtins
     from types import SimpleNamespace
 
@@ -131,6 +133,7 @@ def test_cute_probes_optional_kernel_import(monkeypatch, build_spec, available):
 
     def guarded_import(name, *args, **kwargs):
         if name == 'lmdeploy.pytorch.kernels.cuda.compressed_tensors_w4a16_cute':
+            assert ep_size == 1 or deepep_available
             if not available:
                 raise ImportError('optional CuTe dependency missing')
             return SimpleNamespace(fused_moe_w4a16_cute=object())
@@ -138,8 +141,28 @@ def test_cute_probes_optional_kernel_import(monkeypatch, build_spec, available):
 
     monkeypatch.setattr(torch.cuda, 'is_available', lambda: True)
     monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda: (9, 0))
+    monkeypatch.setattr(backend, 'use_deepep', deepep_available)
     monkeypatch.setattr(builtins, '__import__', guarded_import)
-    assert backend._supports_cute(build_spec) is available
+    expected = available and (ep_size == 1 or deepep_available)
+    assert backend._supports_cute(replace(build_spec, ep_size=ep_size)) is expected
+
+
+@pytest.mark.parametrize('provider', ['auto', 'cute'])
+def test_ep_missing_deepep_preserves_dependency_error(monkeypatch, build_spec, provider):
+    from lmdeploy.pytorch.backends.cuda.moe import compressed_tensors as backend
+
+    monkeypatch.setattr(envs, 'w4a16_moe_backend', provider)
+    monkeypatch.setattr(torch.cuda, 'is_available', lambda: True)
+    monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda: (9, 0))
+    monkeypatch.setattr(backend, 'use_deepep', False)
+    monkeypatch.setattr(backend.dist, 'is_initialized', lambda: False)
+    spec = replace(build_spec, ep_size=2, ep_group=object())
+    assert not backend._supports_cute(spec)
+    # Both providers require DeepEP for EP > 1. Auto selects the existing
+    # Triton builder and retains its dependency error, not a CuTe error.
+    message = 'DeepEP is required for DeepEP W4A16' if provider == 'auto' else 'EP additionally requires DeepEP'
+    with pytest.raises(ImportError, match=message):
+        backend._build_fused_moe_w4a16(spec)
 
 
 def test_auto_does_not_hide_builder_errors(monkeypatch, build_spec):

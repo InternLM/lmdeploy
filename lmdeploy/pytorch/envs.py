@@ -185,7 +185,7 @@ with set_envs():
                                        {'auto', 'triton', 'turbomind'})
 
     # Compressed-tensors routed experts (independent of AWQ linear GEMM).
-    w4a16_moe_backend = env_to_choice('LMDEPLOY_W4A16_MOE_BACKEND', 'cute',
+    w4a16_moe_backend = env_to_choice('LMDEPLOY_W4A16_MOE_BACKEND', 'auto',
                                       {'auto', 'triton', 'cute'})
 
     # model agent

@@ -386,6 +386,8 @@ def _supports_cute(spec: FusedMoEW4A16BuildSpec) -> bool:
         return False
     if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
         return False
+    if spec.ep_size > 1 and not use_deepep:
+        return False
     try:
         from lmdeploy.pytorch.kernels.cuda.compressed_tensors_w4a16_cute import fused_moe_w4a16_cute  # noqa: F401
     except ImportError:

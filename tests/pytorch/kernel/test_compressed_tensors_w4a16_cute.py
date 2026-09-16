@@ -208,16 +208,73 @@ def test_split_k(bm, bk, split, fast):
     assert nrmse(out[:count], ref[:count]) < .001
 
 
+@pytest.mark.parametrize('k,bk,split', [(1056, 128, 4), (1056, 128, 8), (32, 128, 8)])
+@pytest.mark.parametrize('fast', [False, True])
+def test_empty_split_k_writes_zero(monkeypatch, k, bk, split, fast):
+    from lmdeploy.pytorch.kernels.cuda.compressed_tensors_w4a16_cute import _launch_gemm, gather_routed
+    from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _get_sorted_idx_blocks
+
+    torch.manual_seed(25)
+    bm, n = 8, 64
+    packed, scales, _ = weights(2, n, k)
+    x = torch.randn(2, k, device='cuda', dtype=torch.bfloat16)
+    ids = torch.tensor([[0], [1]], device='cuda')
+    meta = _get_sorted_idx_blocks(ids, 2, 2, 0, bm)
+    padded = gather_routed(x, meta, 1, bm)
+    ref = x.new_empty((padded.shape[0], n))
+    _launch_gemm(padded, packed, scales, ref, meta, scatter=False, block_k=bk)
+    target_shape = (ref.shape[0] * split, n)
+    original_empty = torch.empty
+    allocations = []
+
+    def poisoned_empty(*args, **kwargs):
+        tensor = original_empty(*args, **kwargs)
+        if tensor.shape == target_shape and tensor.dtype == torch.float32 and tensor.is_cuda:
+            tensor.fill_(float('nan'))
+            allocations.append(tensor)
+        return tensor
+
+    monkeypatch.setattr(torch, 'empty', poisoned_empty)
+
+    def run():
+        return _launch_gemm(padded, packed, scales, ref, meta, scatter=False, block_k=bk,
+                            split_k=split, fast_dequant=fast, reduce_split=False)
+
+    partials = run()
+    count = int(meta[3][-1]) * bm
+    tiles = (k + bk - 1) // bk
+    per_split = (tiles + split - 1) // split
+    first_empty = (tiles + per_split - 1) // per_split
+    assert first_empty < split
+
+    def check(output):
+        active = output.view(split, ref.shape[0], n)[:, :count]
+        assert torch.isfinite(active).all()
+        assert torch.count_nonzero(active[first_empty:]) == 0
+        assert nrmse(active.sum(0), ref[:count]) < .003
+
+    assert len(allocations) == 1
+    check(partials)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        captured = run()
+    assert len(allocations) == 2
+    for _ in range(2):
+        graph.replay()
+        check(captured)
+
+
+@pytest.mark.parametrize('m,k', [(1, 1024), (1, 1056), (4, 1056)])
 @pytest.mark.parametrize('duplicate', [False, True])
-def test_single_token_split_activation_graph(duplicate):
+def test_decode_split_activation_graph(duplicate, m, k):
     from lmdeploy.pytorch.kernels.cuda.compressed_tensors_w4a16 import fused_moe_w4a16
     from lmdeploy.pytorch.kernels.cuda.compressed_tensors_w4a16_cute import fused_moe_w4a16_cute
     torch.manual_seed(124)
-    gp, gs, _ = weights(4, 128, 1024)
-    dp, ds, _ = weights(4, 1024, 64)
-    x = torch.randn(1, 1024, device='cuda', dtype=torch.bfloat16)
-    ids = torch.tensor([[1, 1] if duplicate else [3, 1]], device='cuda', dtype=torch.int32)
-    tw = torch.tensor([[.3, .7]], device='cuda')
+    gp, gs, _ = weights(4, 128, k)
+    dp, ds, _ = weights(4, k, 64)
+    x = torch.randn(m, k, device='cuda', dtype=torch.bfloat16)
+    ids = torch.tensor([[1, 1] if duplicate else [3, 1]], device='cuda', dtype=torch.int32).repeat(m, 1)
+    tw = torch.tensor([[.3, .7]], device='cuda').repeat(m, 1)
 
     def run(fn):
         return fn(x, gp, gs, dp, ds, tw, ids, 2)

@@ -128,7 +128,7 @@ class CuteW4A16Gemm:
             total_tiles = cute.ceil_div(s.shape[2] * 32, self.bk)
             per_split = cute.ceil_div(total_tiles, self.split_k)
             first_tile = split * per_split
-            tiles = min(per_split, total_tiles - first_tile)
+            tiles = max(0, min(per_split, total_tiles - first_tile))
             tx_bytes = self.bm * self.bk * 2 + 64 * self.bk // 2
             if cutlass.const_expr(stage_scales):
                 tx_bytes += 64 * (self.bk // 32) * (s.element_type.width // 8)
@@ -221,6 +221,9 @@ class CuteW4A16Gemm:
                                   tsg[None, first_tile + tile + self.stages],
                                   tss[None, stage],
                                   tma_bar_ptr=barriers + stage)
+            # Empty K partitions also reach this epilogue and write their
+            # zero accumulator. Only inactive route blocks skip stores; both
+            # split reducers mask those blocks before reading the target.
             for i in cutlass.range_constexpr(cute.size(acc)):
                 n = tile_n * 64 + cc[i][0]
                 row = cc[i][1]
