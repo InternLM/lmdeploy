@@ -566,7 +566,8 @@ def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse,
     torch.testing.assert_close(actual.float(), torch.stack(expected), atol=2e-2, rtol=2e-2)
 
 
-def test_dcp_attention_correction_kernel_matches_torch():
+@pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
+def test_dcp_attention_correction_kernel_matches_torch(dtype):
     if not torch.cuda.is_available():
         pytest.skip('requires CUDA')
     from lmdeploy.pytorch.kernels.cuda.dcp import correct_dcp_attention_output, sanitize_dcp_lse
@@ -575,7 +576,7 @@ def test_dcp_attention_correction_kernel_matches_torch():
     local_output = torch.randn(5,
                                8,
                                16,
-                               dtype=torch.bfloat16,
+                               dtype=dtype,
                                device='cuda',
                                generator=generator)
     # Model FlashMLA's head-padding result: slicing restores the logical head
@@ -605,7 +606,8 @@ def test_dcp_attention_correction_kernel_matches_torch():
     scale = torch.exp(gathered[0] - global_lse)
     scale = torch.nan_to_num(scale, nan=0.0, posinf=0.0, neginf=0.0)
     expected = torch.where(scale[..., None] == 0, 0,
-                           local_output.float() * scale[..., None]).transpose(0, 1)
+                           local_output.float() * scale[..., None]).transpose(0, 1).to(dtype)
+    assert actual.dtype == dtype
     torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
 
     torch.cuda.synchronize()

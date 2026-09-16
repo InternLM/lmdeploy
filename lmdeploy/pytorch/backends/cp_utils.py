@@ -159,7 +159,7 @@ def merge_dcp_attention(local_output: torch.Tensor,
     """Merge normalized CUDA shard outputs and scatter heads back to each rank.
 
     Inputs are [tokens, gathered_heads, value_dim] outputs and natural-log [tokens, gathered_heads] LSE. Invalid rows
-    contribute zero. Correction and reduction use FP32; the result retains the input output dtype.
+    contribute zero. LSE and correction arithmetic use FP32; reduce-scatter uses the input output dtype.
     """
     dcp_world_size, dcp_rank = dcp_world_rank
     if dcp_world_size == 1:
@@ -184,4 +184,4 @@ def merge_dcp_attention(local_output: torch.Tensor,
                                               contribution.size(1),
                                               contribution.size(2))
     reduce_scatter_tensor(scattered_output, contribution, group='dcp')
-    return scattered_output.transpose(0, 1).to(local_output.dtype)
+    return scattered_output.transpose(0, 1)

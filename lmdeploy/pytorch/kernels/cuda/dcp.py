@@ -348,7 +348,7 @@ def correct_dcp_attention_output(local_output: torch.Tensor,
         dcp_rank: Rank of ``local_output`` within the DCP group.
 
     Returns:
-        FP32 corrected contributions in ``[heads, tokens, dim]``.
+        Corrected contributions in ``[heads, tokens, dim]``, retaining the input dtype. Correction arithmetic is FP32.
     """
     assert local_output.dim() == 3 and gathered_lse.dim() == 3
     dcp_size, num_tokens, num_heads = gathered_lse.shape
@@ -356,7 +356,7 @@ def correct_dcp_attention_output(local_output: torch.Tensor,
     assert 0 <= dcp_rank < dcp_size
 
     corrected = torch.empty((num_heads, num_tokens, local_output.size(2)),
-                            dtype=torch.float32,
+                            dtype=local_output.dtype,
                             device=local_output.device)
     block_n = triton.next_power_of_2(dcp_size)
     block_d = triton.next_power_of_2(local_output.size(2))
