@@ -51,6 +51,9 @@ Workspace::Workspace(cudaStream_t stream):
     TM_CUDA_CHECK(cudaMallocAsync(&tensormaps, tensormaps_size, stream));
     TM_CUDA_CHECK(cudaMemsetAsync(barriers, 0, barriers_size, stream));
     TM_CUDA_CHECK(cudaMallocAsync(&flags, sizeof(int), stream));
+    // The stream is not retained: publish allocation/initialization readiness
+    // for first use on any stream.
+    TM_CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 Workspace::~Workspace()
@@ -382,6 +385,8 @@ std::vector<DataType> Gemm::DataTypes(const DataFormat& weight_format) const
 
 std::optional<ExecPlan> Gemm::GetExecPlan(const Arguments& args)
 {
+    TM_CHECK(args.workspace);
+
     Context context{*impl_->props_};
     if (!context.Init(args.operation, args.Adesc, args.Udesc, args.Bdesc, args.Vdesc, args.Cdesc, args.Ddesc)) {
         return std::nullopt;
@@ -399,6 +404,8 @@ std::optional<ExecPlan> Gemm::GetExecPlan(const Arguments& args)
 
 std::optional<ExecPlan> Gemm::Tune(const Arguments& args)
 {
+    TM_CHECK(args.workspace);
+
     Context context{*impl_->props_};
     if (!context.Init(args.operation, args.Adesc, args.Udesc, args.Bdesc, args.Vdesc, args.Cdesc, args.Ddesc)) {
         return std::nullopt;
@@ -424,6 +431,8 @@ std::optional<ExecPlan> Gemm::Tune(const Arguments& args)
 
 int Gemm::Run(const ExecPlan& plan, const Arguments& args)
 {
+    TM_CHECK(args.workspace);
+
     if (!plan.launch_.kernel) {
         TM_LOG_FATAL("No feasible kernel found for the problem: {}", to_string(plan.desc_));
         return -1;

@@ -240,9 +240,10 @@ inline Striding get_mode(const MatrixLayout& m)
 }
 
 // Scratch memory for one in-flight GEMM. Self-contained: constructing with a
-// stream allocates and initializes everything on that stream; destruction
-// frees it. Non-copyable, movable; kernels mutate the contents during Run.
-// The stream is used at construction only and never retained.
+// stream allocates and initializes everything on that stream, then
+// synchronizes it, so the workspace is ready for use on any stream;
+// destruction frees it. Non-copyable, movable; kernels mutate the contents
+// during Run. The stream is used at construction only and never retained.
 //
 // Teardown: owners on a live stream should call `Release(stream)`, which
 // stream-orders the frees after in-flight work. The destructor frees with
@@ -251,9 +252,9 @@ inline Striding get_mode(const MatrixLayout& m)
 struct Workspace {
     static constexpr size_t kBarriersSize   = 1 << 20;
     static constexpr size_t kPartialsSize   = 32 << 20;
-    static constexpr size_t kTensormapsSize = 8192 * 128;  // 8192 tensor maps of 128 bytes
+    static constexpr size_t kTensormapsSize = 16384 * 128;  // 16384 tensor maps of 128 bytes
 
-    Workspace() = default;
+    Workspace() = delete;
     explicit Workspace(cudaStream_t stream);
     ~Workspace();
 
