@@ -1229,14 +1229,15 @@ class InputsMakerAsync:
 
     def update_running_seqs(self, running: 'SeqList', inputs: 'ModelInputs|None'):
         """Update running seqs."""
-        if self.config.role == EngineRole.Prefill:
-            # p node will not update running seqs
-            return
-
         is_decoding = inputs is None
         if self.long_context_chunker.enabled() and not is_decoding and inputs.is_chunk:
             # long context chunk does not need to update running seqs
             self.long_context_chunker.update_step(inputs)
+            return
+
+        # Prefill workers must advance chunk history above, but must not add
+        # completed prefills to the decode-running list.
+        if self.config.role == EngineRole.Prefill:
             return
 
         if is_decoding:
