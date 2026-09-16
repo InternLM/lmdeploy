@@ -85,6 +85,8 @@ class _ResponseParser:
 
 class _Session:
 
+    session_id = 0
+
     async def async_abort(self):
         pass
 
