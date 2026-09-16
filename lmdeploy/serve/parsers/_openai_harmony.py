@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import shortuuid
 from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
@@ -47,19 +47,21 @@ class GptOssResponseParser(ResponseParser):
             # GPT-OSS templates expect full tool wrappers.
             if request.tools is None or request.tool_choice == 'none':
                 rendered_tools = None
-            elif not isinstance(request.tool_choice, str):
+            elif getattr(request.tool_choice, 'type', None) == 'function':
+                # ToolChoice (type='function'): keep only the selected tool.
                 rendered_tools = [
                     item.model_dump() for item in request.tools
                     if item.function.name == request.tool_choice.function.name
                 ]
             else:
+                # auto/required/allowed_tools: keep all tools.
                 rendered_tools = [item.model_dump() for item in request.tools]
             self.request = request.model_copy(update={'tools': rendered_tools})
         else:
             # Unit tests may inject a lightweight sentinel request object.
             self.request = request
-        self._convert_response_format_to_harmony()
         self.request = normalize_chat_request(self.request)
+        self._maybe_inject_tool_grammar()
         self.parser = StreamableParser(get_encoding(), role=Role.ASSISTANT)
         self._seen_any = False
         self._next_tool_index = 0
@@ -69,21 +71,172 @@ class GptOssResponseParser(ResponseParser):
         self.tool_parser = object()  # API server checks `is not None` for tool support.
         self.reasoning_tokens = 0
 
-    def _convert_response_format_to_harmony(self):
-        """Convert response_format to Harmony-native mode for GPT-OSS.
+    def _maybe_inject_tool_grammar(self) -> None:
+        """Enforce tool calling and structured output with an xgrammar
+        structural_tag attached to the request's ``response_format``.
 
-        GPT-OSS uses Harmony mode for structured output, which conflicts with
-        the engine's built-in JSON/response-format mode. This method injects
-        the response_format schema into the system prompt as a
-        ``# Response Formats`` section and clears ``response_format`` on the
-        request so that only the Harmony-native instructions are used.
+        This is an internal mechanism: the tag reaches the engine through the
+        regular ``response_format`` dict (the OpenAI protocol itself is not
+        extended); a non-text ``response_format`` must be consumed or cleared
+        here so it cannot conflict with Harmony tool-call constraints.
+
+        Runs after :func:`normalize_chat_request`, so ``response_format`` is
+        the normalized dict form. Two cases:
+
+        - **Tool calling** (``tools`` present, ``tool_choice != 'none'``):
+          builds a Harmony tool-call structural_tag via
+          ``xgrammar.get_model_structural_tag("harmony", ...)``; any
+          ``response_format`` is overridden (tool grammar takes priority).
+        - **Plain structured output** (``json_schema``, ``regex_schema``,
+          ``json_object``): builds a structural_tag that wraps the schema in
+          the Harmony final channel (``<|channel|>final<|message|> ...
+          <|end|>``), optionally preceded by an analysis block.
+
+        If grammar construction fails the ``response_format`` is injected
+        into the system prompt as a ``# Response Formats`` section and
+        cleared, matching the Harmony-native fallback.
         """
         fmt = getattr(self.request, 'response_format', None)
-        if fmt is None or getattr(fmt, 'type', 'text') == 'text':
+        tools = getattr(self.request, 'tools', None)
+        tool_choice = getattr(self.request, 'tool_choice', 'auto')
+        has_tools = tools and tool_choice != 'none'
+        is_non_text = fmt is not None and fmt.get('type', 'text') != 'text'
+
+        if has_tools:
+            grammar = self._build_tool_grammar(tools, tool_choice)
+            if grammar is not None:
+                self._set_response_format(grammar)
+                return
+            # tool grammar failed — fall back to prompt injection so the
+            # original response_format (if any) is not left intact to
+            # conflict with Harmony tool-call constraints downstream.
+            if is_non_text:
+                self._convert_response_format_to_harmony()
+            return
+
+        if is_non_text:
+            grammar = self._build_response_format_grammar(fmt)
+            if grammar is not None:
+                self._set_response_format(grammar)
+                return
+            # grammar construction failed — fall back to prompt injection
+            self._convert_response_format_to_harmony()
+
+    @staticmethod
+    def _build_tool_grammar(tools: list, tool_choice: Any) -> dict | None:
+        """Construct a Harmony-compatible structural_tag for tool calling.
+
+        Returns a dict suitable for ``response_format`` or ``None`` on
+        failure.
+        """
+        try:
+            from xgrammar.builtin_structural_tag import get_model_structural_tag
+        except ImportError:
+            logger.warning('xgrammar builtin_structural_tag not available; '
+                           'falling back to prompt-only tool calling for GPT-OSS.')
+            return None
+
+        # Normalize tool_choice to xgrammar's expected format.
+        xg_tool_choice = tool_choice
+        if hasattr(tool_choice, 'model_dump'):
+            xg_tool_choice = tool_choice.model_dump(mode='json')
+        elif not isinstance(tool_choice, str):  # duck-typed without model_dump
+            xg_tool_choice = {'type': 'function',
+                              'function': {'name': tool_choice.function.name}}
+
+        # Tools are usually model_dump'd dicts, but sentinel requests may
+        # pass Tool objects.
+        dumped_tools = [t if isinstance(t, dict) else t.model_dump() for t in tools]
+
+        try:
+            st = get_model_structural_tag(
+                'harmony',
+                tools=dumped_tools,
+                tool_choice=xg_tool_choice,
+                reasoning=True,
+            )
+            return {
+                'type': 'structural_tag',
+                'structural_tag': json.loads(st.model_dump_json()),
+            }
+        except Exception as e:  # xgrammar may raise ValueError/ValidationError
+            logger.warning(f'Failed to build harmony structural tag for tool '
+                           f'calling: {e}; falling back to prompt-only.')
+            return None
+
+    @staticmethod
+    def _build_response_format_grammar(fmt: dict) -> dict | None:
+        """Convert a normalized ``response_format`` dict (json_schema /
+        regex_schema / json_object) into a Harmony-compatible structural_tag.
+
+        The schema is wrapped in the Harmony final channel::
+
+            [<|channel|>analysis<|message|> ... <|end|><|start|>assistant]?
+            <|channel|>final<|message|> <schema> <|end|>
+
+        Returns a dict or ``None`` on failure.
+        """
+        try:
+            from xgrammar.structural_tag import (
+                AnyTextFormat,
+                ConstStringFormat,
+                JSONSchemaFormat,
+                OptionalFormat,
+                RegexFormat,
+                SequenceFormat,
+                StructuralTag,
+                TagFormat,
+            )
+        except ImportError:
+            logger.warning('xgrammar structural_tag not available; '
+                           'clearing response_format for GPT-OSS.')
+            return None
+
+        fmt_type = fmt.get('type', 'text')
+        analysis_end = ['<|end|>', '<|return|>']
+        final_begin = '<|channel|>final<|message|>'
+        final_end = ['<|end|>', '<|return|>']
+
+        if fmt_type == 'json_schema':
+            # normalize dumps JsonSchema via by_alias: inner schema lives at
+            # key 'schema' (OpenAI wire format).
+            raw = (fmt.get('json_schema') or {}).get('schema')
+            content = JSONSchemaFormat(json_schema=raw if raw is not None else {'type': 'object'})
+        elif fmt_type == 'regex_schema':
+            content = RegexFormat(pattern=fmt.get('regex_schema') or '.*')
+        elif fmt_type == 'json_object':
+            content = JSONSchemaFormat(json_schema={'type': 'object'})
+        else:
+            return None
+
+        analysis_tag = OptionalFormat(
+            content=SequenceFormat(elements=[
+                TagFormat(begin='<|channel|>analysis<|message|>',
+                          content=AnyTextFormat(), end=analysis_end),
+                ConstStringFormat(value='<|start|>assistant'),
+            ]))
+        final_tag = TagFormat(begin=final_begin, content=content, end=final_end)
+        st = StructuralTag(format=SequenceFormat(elements=[analysis_tag, final_tag]))
+        return {
+            'type': 'structural_tag',
+            'structural_tag': json.loads(st.model_dump_json()),
+        }
+
+    def _convert_response_format_to_harmony(self) -> None:
+        """Fall back to Harmony-native prompt injection when grammar
+        construction is unavailable.
+
+        Injects the ``response_format`` schema into the system prompt as a
+        ``# Response Formats`` section and clears ``response_format`` so only
+        the Harmony-native instructions are used. This is the legacy path
+        used when xgrammar structural_tag construction fails.
+        """
+        fmt = getattr(self.request, 'response_format', None)
+        if fmt is None or fmt.get('type', 'text') == 'text':
             return
 
         try:
-            format_json = json.dumps(fmt.model_dump())
+            format_json = json.dumps(fmt)
             format_body = f'# Response Formats\n{format_json}'
             messages = self.request.messages
 
@@ -95,14 +248,14 @@ class GptOssResponseParser(ResponseParser):
 
             new_messages = list(messages)
             system_idx = next(
-                (i for i, msg in enumerate(new_messages) if isinstance(msg, dict) and msg.get('role') == 'system'),
+                (i for i, msg in enumerate(new_messages)
+                 if isinstance(msg, dict) and msg.get('role') == 'system'),
                 None,
             )
 
             if system_idx is not None:
                 content = new_messages[system_idx].get('content')
                 if isinstance(content, list):
-                    # Multimodal content blocks — append a text block.
                     new_messages[system_idx] = {
                         **new_messages[system_idx],
                         'content': content + [{'type': 'text', 'text': format_body}],
@@ -120,12 +273,20 @@ class GptOssResponseParser(ResponseParser):
                 new_messages.insert(0, {'role': 'system', 'content': format_body})
 
             self._clear_response_format(messages=new_messages)
-        except Exception:
+        except Exception:  # fmt dumps or message manipulation may fail
             logger.exception('Failed to convert response_format to Harmony-native mode for GPT-OSS')
-            # Still clear response_format to avoid the Harmony/JSON mode conflict
             self._clear_response_format()
 
-    def _clear_response_format(self, messages=None):
+
+    def _set_response_format(self, grammar: dict) -> None:
+        """Set response_format on the request, handling both Pydantic and plain
+        objects."""
+        if hasattr(self.request, 'model_copy'):
+            self.request = self.request.model_copy(update={'response_format': grammar})
+        else:
+            self.request.response_format = grammar
+
+    def _clear_response_format(self, messages: list | str | None = None) -> None:
         """Clear response_format on the request, handling both Pydantic and
         plain objects."""
         if hasattr(self.request, 'model_copy'):
