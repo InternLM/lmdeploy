@@ -30,16 +30,10 @@ BASE_TP_LAYOUTS: tuple[dict[str, int], ...] = (
     {'tp': 2},
 )
 
-DISTRIBUTED_DP_EP_EQUAL_LAYOUTS: tuple[dict[str, int], ...] = (
+DISTRIBUTED_DP_EP_LAYOUTS: tuple[dict[str, int], ...] = (
     {'dp': 8, 'ep': 8},
     {'dp': 16, 'ep': 16},
     {'dp': 32, 'ep': 32},
-)
-
-# Backward-compatible alias.
-DISTRIBUTED_DPEP_LAYOUTS = DISTRIBUTED_DP_EP_EQUAL_LAYOUTS
-
-DISTRIBUTED_DP_EP_LAYOUTS: tuple[dict[str, int], ...] = (
     {'dp': 4, 'ep': 8},
 )
 
@@ -52,9 +46,8 @@ DISTRIBUTED_CP_TP_LAYOUTS: tuple[dict[str, int], ...] = (
 )
 
 ALL_KNOWN_LAYOUTS: tuple[dict[str, int], ...] = (
-    LOCAL_TP_LAYOUTS + BASE_TP_LAYOUTS + DISTRIBUTED_DP_EP_EQUAL_LAYOUTS +
-    DISTRIBUTED_DP_EP_LAYOUTS + DISTRIBUTED_TP_DP_EP_LAYOUTS +
-    DISTRIBUTED_CP_TP_LAYOUTS
+    LOCAL_TP_LAYOUTS + BASE_TP_LAYOUTS + DISTRIBUTED_DP_EP_LAYOUTS +
+    DISTRIBUTED_TP_DP_EP_LAYOUTS + DISTRIBUTED_CP_TP_LAYOUTS
 )
 
 

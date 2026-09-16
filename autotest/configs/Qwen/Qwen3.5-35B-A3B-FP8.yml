@@ -1,15 +1,11 @@
 # HF model id: Qwen/Qwen3.5-35B-A3B-FP8
 
-# A100 has no native FP8; FP8 weights are cast to bf16 via dtype: bfloat16.
-# That conversion is supported on turbomind only, not pytorch.
 a100:
 - model_type:
   - chat
   - vl
   engine_config:
     tp: 1
-    extra:
-      dtype: bfloat16
   backends:
   - name: turbomind
     communicators:

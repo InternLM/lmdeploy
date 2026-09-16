@@ -15,7 +15,7 @@ from utils.evaluate_utils import build_eval_judge_run_config, eval_test
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.pytest_layout_utils import (
     DISTRIBUTED_CP_TP_LAYOUTS,
-    DISTRIBUTED_DP_EP_EQUAL_LAYOUTS,
+    DISTRIBUTED_DP_EP_LAYOUTS,
     DISTRIBUTED_TP_DP_EP_LAYOUTS,
     LOCAL_TP_LAYOUTS,
     build_eval_longtext_params,
@@ -226,7 +226,7 @@ _LOCAL_EVAL_PARAMS = (
     )
     + build_eval_stage_params(
         'pytorch',
-        DISTRIBUTED_DP_EP_EQUAL_LAYOUTS + DISTRIBUTED_TP_DP_EP_LAYOUTS,
+        DISTRIBUTED_DP_EP_LAYOUTS + DISTRIBUTED_TP_DP_EP_LAYOUTS,
         test_types=('eval',),
         layout_extra_marks=_pytorch_ascend_marks,
     )
@@ -234,7 +234,7 @@ _LOCAL_EVAL_PARAMS = (
 
 _PROXY_INFER_PARAMS = build_eval_stage_params(
     'pytorch',
-    DISTRIBUTED_DP_EP_EQUAL_LAYOUTS + DISTRIBUTED_TP_DP_EP_LAYOUTS,
+    DISTRIBUTED_DP_EP_LAYOUTS + DISTRIBUTED_TP_DP_EP_LAYOUTS,
     test_types=('infer',),
     layout_extra_marks=lambda layout: (
         [pytest.mark.test_ascend] if layout == {'dp': 32, 'ep': 32} else []

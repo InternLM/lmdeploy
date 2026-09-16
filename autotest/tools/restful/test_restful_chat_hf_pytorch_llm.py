@@ -11,7 +11,7 @@ from utils.config_utils import get_case_str_by_config, get_workerid
 from utils.constant import PROXY_PORT
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.pytest_layout_utils import (
-    DISTRIBUTED_DP_EP_EQUAL_LAYOUTS,
+    DISTRIBUTED_DP_EP_LAYOUTS,
     DISTRIBUTED_TP_DP_EP_LAYOUTS,
     LOCAL_TP_LAYOUTS,
     build_layout_params,
@@ -79,7 +79,7 @@ _PREFIX_CACHE_LOCAL_PARAMS = build_layout_params(
 )
 _PROXY_PARAMS = build_layout_params(
     BACKEND,
-    DISTRIBUTED_DP_EP_EQUAL_LAYOUTS + DISTRIBUTED_TP_DP_EP_LAYOUTS,
+    DISTRIBUTED_DP_EP_LAYOUTS + DISTRIBUTED_TP_DP_EP_LAYOUTS,
     param_marks=_DISTRIBUTED_EXTRA_MARKS,
     layout_extra_marks=lambda layout: (
         [pytest.mark.test_ascend] if layout == {'dp': 32, 'ep': 32} else []

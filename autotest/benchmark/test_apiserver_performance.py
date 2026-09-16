@@ -3,7 +3,7 @@ import utils.constant as constant
 from utils.benchmark_utils import restful_profile, restful_test
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.pytest_layout_utils import (
-    DISTRIBUTED_DP_EP_EQUAL_LAYOUTS,
+    DISTRIBUTED_DP_EP_LAYOUTS,
     LOCAL_TP_LAYOUTS,
     build_layout_params,
     build_multi_backend_layout_params,
@@ -41,7 +41,7 @@ _APISERVER_PARAMS = build_multi_backend_layout_params(
 
 _PROXY_PARAMS = build_layout_params(
     'pytorch',
-    DISTRIBUTED_DP_EP_EQUAL_LAYOUTS[:1],
+    DISTRIBUTED_DP_EP_LAYOUTS,
     func_type='benchmark',
     param_marks=[pytest.mark.flaky(reruns=0), pytest.mark.pytorch],
 )

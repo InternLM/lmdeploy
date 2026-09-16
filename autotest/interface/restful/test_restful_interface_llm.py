@@ -3,7 +3,6 @@
 import pytest
 from utils.config_utils import get_interface_backend_list, get_interface_run_config_list
 from utils.pytest_layout_utils import (
-    DISTRIBUTED_DP_EP_EQUAL_LAYOUTS,
     DISTRIBUTED_DP_EP_LAYOUTS,
     DISTRIBUTED_TP_DP_EP_LAYOUTS,
     LOCAL_TP_LAYOUTS,
@@ -53,9 +52,7 @@ def _build_iface_params(layouts):
 _LOCAL_IFACE_PARAMS = _build_iface_params(LOCAL_TP_LAYOUTS)
 _RAY_IFACE_PARAMS = _build_iface_params(({'tp': 16},))
 _PROXY_IFACE_PARAMS = _build_iface_params(
-    DISTRIBUTED_DP_EP_EQUAL_LAYOUTS[:1]
-    + DISTRIBUTED_DP_EP_LAYOUTS
-    + DISTRIBUTED_TP_DP_EP_LAYOUTS,
+    DISTRIBUTED_DP_EP_LAYOUTS + DISTRIBUTED_TP_DP_EP_LAYOUTS,
 )
 
 
