@@ -10,6 +10,7 @@ authors = [{name = "Byron Hsu", email = "byronhsu1230@gmail.com"}]
 requires-python = ">=3.8"
 readme = "README.md"
 license = "Apache-2.0"
+license-files = []
 classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Rust",
@@ -39,10 +40,6 @@ lmdeploy-router = "lmdeploy_router.launch_router:main"
 # https://github.com/PyO3/setuptools-rust?tab=readme-ov-file
 [tool.setuptools.packages]
 find = { where = ["py_src"] }
-
-# workaround for https://github.com/pypa/twine/issues/1216
-[tool.setuptools]
-license-files = []
 
 [tool.distutils.bdist_wheel]
 py_limited_api = "cp38"

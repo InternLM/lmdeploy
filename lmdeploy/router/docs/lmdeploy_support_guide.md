@@ -756,6 +756,10 @@ python -m pip install build 'setuptools-rust>=1.5.2'
 python -m build --wheel --outdir dist .
 ```
 
+如需快速验证 Python 打包结构，可设置 `LMDEPLOY_ROUTER_BUILD_NO_RUST=1` 构建
+不含 Rust 扩展和二进制的 wheel；可通过 `lmdeploy_router.ROUTER_AVAILABLE`
+判断 Rust API 是否可用。完整发布仍必须构建默认 wheel。
+
 产物统一放在仓库根目录的 `dist/` 中：
 
 ```text

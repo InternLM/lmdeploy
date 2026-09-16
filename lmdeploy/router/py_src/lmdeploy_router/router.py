@@ -8,6 +8,8 @@ except ImportError as exc:  # No-Rust development mode
     _Router = None
     _ROUTER_IMPORT_ERROR = exc
 
+ROUTER_AVAILABLE = _Router is not None
+
 
 def policy_from_str(policy_str: Optional[str]) -> PolicyType:
     """Convert policy string to PolicyType enum."""

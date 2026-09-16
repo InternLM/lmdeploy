@@ -61,6 +61,11 @@ export LMDEPLOY_ROUTER_BIN="${PWD}/target/release/lmdeploy-router"
 python -m build --wheel --outdir dist .
 ```
 
+`lmdeploy_router.ROUTER_AVAILABLE` reports whether the Rust API is available.
+A Python-only wheel can be built for packaging checks with
+`LMDEPLOY_ROUTER_BUILD_NO_RUST=1`; it contains neither the PyO3 extension nor
+the Rust binary.
+
 Install and verify it with:
 ```bash
 python -m pip install --force-reinstall dist/lmdeploy_router-*.whl
