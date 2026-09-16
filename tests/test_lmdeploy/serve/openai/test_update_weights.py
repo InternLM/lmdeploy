@@ -13,12 +13,14 @@ from fastapi.testclient import TestClient
 from lmdeploy.serve.openai.endpoints.management import register
 from lmdeploy.utils import (
     ALLOW_PICKLE_UPDATE_PARAMS_ENV,
+    FlattenedTensorBucket,
     allow_pickle_update_params,
     coerce_update_params_tensor,
     is_pickle_serialized_named_tensors,
     load_pickled_serialized_named_tensors,
     load_safetensors_serialized_named_tensors,
     serialize_named_tensors_safetensors,
+    serialize_state_dict,
 )
 
 _PICKLE_MARKER = {'executed': False}
@@ -83,14 +85,63 @@ def test_http_update_weights_rejects_pickle_list():
     assert engine.requests == []
 
 
-def test_http_update_weights_rejects_pickle_even_when_engine_opt_in_is_set(monkeypatch):
+def test_http_update_weights_forwards_pickle_when_opt_in(monkeypatch):
     monkeypatch.setenv(ALLOW_PICKLE_UPDATE_PARAMS_ENV, '1')
+    blob = _pickle_b64({'w': 1})
     client, engine = _client()
     response = client.post('/update_weights', json={
-        'serialized_named_tensors': _pickle_b64({'w': 1}),
+        'serialized_named_tensors': blob,
         'finished': False,
     })
 
+    assert response.status_code == 200
+    assert len(engine.requests) == 1
+    assert engine.requests[0].serialized_named_tensors == blob
+
+
+def test_http_update_weights_forwards_xtuner_ipc_when_opt_in(monkeypatch):
+    monkeypatch.setenv(ALLOW_PICKLE_UPDATE_PARAMS_ENV, '1')
+    client, engine = _client()
+
+    import torch
+    named_tensors = [('layer.weight', torch.ones(2, dtype=torch.float32))]
+    bucket = FlattenedTensorBucket(named_tensors=named_tensors)
+    metadata_only = serialize_state_dict(dict(metadata=bucket.get_metadata()))
+    empty_finalizer = serialize_state_dict({})
+    tp_payload = [serialize_state_dict(dict(metadata=bucket.get_metadata()))]
+
+    metadata_resp = client.post('/update_weights', json={
+        'serialized_named_tensors': metadata_only,
+        'load_format': 'flattened_bucket',
+        'finished': False,
+    })
+    finalizer_resp = client.post('/update_weights', json={
+        'serialized_named_tensors': empty_finalizer,
+        'finished': True,
+    })
+    tp_resp = client.post('/update_weights', json={
+        'serialized_named_tensors': tp_payload,
+        'load_format': 'flattened_bucket',
+        'finished': False,
+    })
+
+    assert metadata_resp.status_code == 200
+    assert finalizer_resp.status_code == 200
+    assert tp_resp.status_code == 200
+    assert len(engine.requests) == 3
+    assert engine.requests[0].serialized_named_tensors == metadata_only
+    assert engine.requests[1].serialized_named_tensors == empty_finalizer
+    assert engine.requests[1].finished is True
+    assert engine.requests[2].serialized_named_tensors == tp_payload
+
+
+def test_http_update_weights_rejects_xtuner_ipc_without_opt_in(monkeypatch):
+    monkeypatch.delenv(ALLOW_PICKLE_UPDATE_PARAMS_ENV, raising=False)
+    client, engine = _client()
+    response = client.post('/update_weights', json={
+        'serialized_named_tensors': serialize_state_dict({}),
+        'finished': True,
+    })
     assert response.status_code == 400
     assert engine.requests == []
 
@@ -108,6 +159,24 @@ def test_http_update_weights_never_calls_pickle_loads(monkeypatch):
     })
     assert response.status_code == 400
     assert engine.requests == []
+
+
+def test_http_update_weights_opt_in_still_does_not_unpickle_in_handler(monkeypatch):
+    monkeypatch.setenv(ALLOW_PICKLE_UPDATE_PARAMS_ENV, '1')
+
+    def boom(*args, **kwargs):
+        raise AssertionError('HTTP /update_weights must not pickle-load')
+
+    monkeypatch.setattr(ForkingPickler, 'loads', boom)
+    monkeypatch.setattr(pickle, 'loads', boom)
+    blob = _pickle_b64({'w': 1})
+    client, engine = _client()
+    response = client.post('/update_weights', json={
+        'serialized_named_tensors': blob,
+        'finished': False,
+    })
+    assert response.status_code == 200
+    assert engine.requests[0].serialized_named_tensors == blob
 
 
 def test_http_update_weights_accepts_structured_dict():
@@ -196,3 +265,36 @@ def test_coerce_update_params_tensor_from_json_spec():
 def test_coerce_update_params_tensor_rejects_reduce_tuple():
     with pytest.raises(TypeError):
         coerce_update_params_tensor((int, (1, )))
+
+
+def test_serialize_named_tensors_safetensors_clones_tied_cpu_weights():
+    import torch
+    from safetensors.torch import save
+
+    weight = torch.arange(8, dtype=torch.float32).reshape(2, 4)
+    state = {
+        'model.embed_tokens.weight': weight,
+        'lm_head.weight': weight,
+    }
+    shared_cpu = {name: tensor.detach().contiguous().cpu() for name, tensor in state.items()}
+    with pytest.raises(RuntimeError, match='share memory'):
+        save(shared_cpu)
+
+    blob = serialize_named_tensors_safetensors(state)
+    loaded = load_safetensors_serialized_named_tensors(blob)
+    assert torch.equal(loaded['model.embed_tokens.weight'], weight)
+    assert torch.equal(loaded['lm_head.weight'], weight)
+
+
+def test_serialize_named_tensors_safetensors_clones_overlapping_views():
+    import torch
+
+    base = torch.arange(8, dtype=torch.float32)
+    state = {
+        'a': base[:6],
+        'b': base[2:],
+    }
+    blob = serialize_named_tensors_safetensors(state)
+    loaded = load_safetensors_serialized_named_tensors(blob)
+    assert torch.equal(loaded['a'], state['a'])
+    assert torch.equal(loaded['b'], state['b'])

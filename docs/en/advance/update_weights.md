@@ -5,11 +5,18 @@ LMDeploy supports update model weights online for scenes such as RL training. He
 For checkpoint-engine Broadcast and Mooncake P2P updates, see
 [Updating PyTorch weights with checkpoint-engine](./checkpoint_engine.md).
 
-`POST /update_weights` does not accept pickle payloads. Send
+`POST /update_weights` rejects pickle payloads **by default**. Send
 `load_format="safetensors"` (recommended) or a structured dict of tensors.
-Pickle encoding from `serialize_state_dict` is only for trusted same-node IPC
-when `LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1` is set on the engine process.
-Unauthenticated pickle deserialization over HTTP is rejected.
+Unauthenticated pickle deserialization over HTTP is RCE on the default
+`api_server` bind, so it stays disabled unless you opt in.
+
+XTuner same-node CUDA IPC still uses `serialize_state_dict()` and
+`FlattenedTensorBucket` to send IPC handles, event handles, and
+`FlattenedTensorMetadata` through HTTP `/update_weights`. The tensors stay in
+same-node GPU memory; only the control messages travel over HTTP. That path
+(including metadata-only buffer reuse and the empty `finished=true` finalizer)
+is restored by setting `LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1` on the **server**
+process. Do not enable this on untrusted public endpoints.
 
 ## Step 1: Launch server
 
@@ -64,9 +71,24 @@ PyTorch also supports receiving weights through
 `POST /update_weights_from_ipc` (checkpoint-engine). Those paths do not pickle
 HTTP bodies.
 
-**Note**: Flattened-bucket pickle transfer remains available only for trusted
-local IPC after setting `LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1` on the engine.
-Do not post that encoding to HTTP `/update_weights`.
+**Note**: XTuner flattened-bucket CUDA IPC over HTTP `/update_weights` requires
+`LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1` on the server:
+
+```python
+from lmdeploy.utils import serialize_state_dict, FlattenedTensorBucket, FlattenedTensorMetadata
+
+segmented_state_dict: List[Dict[str, torch.Tensor]] = ...
+num_segment = len(segmented_state_dict)
+for seg_idx in range(num_segment):
+    named_tensors = list(segmented_state_dict[seg_idx].items())
+    bucket = FlattenedTensorBucket(named_tensors=named_tensors)
+    metadata = bucket.get_metadata()
+    flattened_tensor_data = dict(flattened_tensor=bucket.get_flattened_tensor(), metadata=metadata)
+    serialized_data = serialize_state_dict(flattened_tensor_data)
+    data = dict(serialized_named_tensors=serialized_data, finished=seg_idx == num_segment-1, load_format='flattened_bucket')
+    response = requests.post(f"{BASE_URL}/update_weights", headers=headers, json=data)
+    assert response.status_code == 200, f"response.status_code = {response.status_code}"
+```
 
 ## Step 4: Wakeup server
 

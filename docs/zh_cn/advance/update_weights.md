@@ -5,10 +5,14 @@ LMDeploy支持在线权重更新，方便RL训练等场景下的使用。以下�
 checkpoint-engine Broadcast 和 Mooncake P2P 的使用方法请参考
 [使用 checkpoint-engine 更新 PyTorch 权重](./checkpoint_engine.md)。
 
-`POST /update_weights` 不再接受 pickle 载荷。请使用
+`POST /update_weights` **默认**拒绝 pickle 载荷。请使用
 `load_format="safetensors"`（推荐）或结构化 tensor dict。
-`serialize_state_dict` 的 pickle 编码仅用于受信的同机 IPC，且需要在引擎进程中设置
-`LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1`。HTTP 路径上的未认证 pickle 反序列化会被拒绝。
+默认 `api_server` 绑定下，未认证的 HTTP pickle 反序列化属于远程代码执行，因此保持关闭，除非显式开启。
+
+XTuner 同机 CUDA IPC 仍通过 HTTP `/update_weights` 发送 `serialize_state_dict()` /
+`FlattenedTensorBucket` 控制消息（IPC handle、event handle、`FlattenedTensorMetadata`）。
+张量本身留在同机 GPU 内存中，只有控制消息走 HTTP。该路径（包括仅发送 metadata 的 buffer 复用，以及空的 `finished=true` 收尾请求）需要在**服务端**进程设置
+`LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1` 才能恢复。不要在不受信任的公网入口上开启该选项。
 
 ## 步骤 1: 启动服务
 
@@ -62,8 +66,24 @@ PyTorch 还可以通过 `POST /update_weights_from_distributed`（NCCL）和
 `POST /update_weights_from_ipc`（checkpoint-engine）接收权重，这两条路径不会对 HTTP
 body 做 pickle 反序列化。
 
-**注意**: flattened bucket 的 pickle 传输仅适用于受信的本地 IPC，且需要设置
-`LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1`。不要将该编码 POST 到 HTTP `/update_weights`。
+**注意**: XTuner 通过 HTTP `/update_weights` 做 flattened-bucket CUDA IPC 时，需要在服务端设置
+`LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1`：
+
+```python
+from lmdeploy.utils import serialize_state_dict, FlattenedTensorBucket, FlattenedTensorMetadata
+
+segmented_state_dict: List[Dict[str, torch.Tensor]] = ...
+num_segment = len(segmented_state_dict)
+for seg_idx in range(num_segment):
+    named_tensors = list(segmented_state_dict[seg_idx].items())
+    bucket = FlattenedTensorBucket(named_tensors=named_tensors)
+    metadata = bucket.get_metadata()
+    flattened_tensor_data = dict(flattened_tensor=bucket.get_flattened_tensor(), metadata=metadata)
+    serialized_data = serialize_state_dict(flattened_tensor_data)
+    data = dict(serialized_named_tensors=serialized_data, finished=seg_idx == num_segment-1, load_format='flattened_bucket')
+    response = requests.post(f"{BASE_URL}/update_weights", headers=headers, json=data)
+    assert response.status_code == 200, f"response.status_code = {response.status_code}"
+```
 
 ## 步骤 4: 唤醒引擎
 

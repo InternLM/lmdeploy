@@ -539,8 +539,11 @@ class UpdateParamsRequest(BaseModel):
     """Update weights request.
 
     HTTP ``POST /update_weights`` rejects pickle strings (``str`` / ``list[str]`` without
-    ``load_format='safetensors'``). Send safetensors or a structured dict of tensors. Pickle
-    payloads are only for trusted local IPC when ``LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1``.
+    ``load_format='safetensors'``) unless ``LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1`` is set
+    on the server. That opt-in restores same-node XTuner CUDA IPC
+    (``serialize_state_dict`` / FlattenedTensorBucket, including metadata-only reuse and the
+    empty ``finished=true`` finalizer). Untrusted clients should send safetensors or a
+    structured dict of tensors.
     """
     serialized_named_tensors: str | list[str] | dict
     load_format: str | None = None  # 'safetensors', 'flattened_bucket', or None

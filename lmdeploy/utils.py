@@ -492,8 +492,9 @@ def is_pickle_serialized_named_tensors(payload: object, load_format: str | None 
     update_params.
 
     ``load_format='safetensors'`` is never treated as pickle, even when the wire type is a
-    base64 string or a list of per-rank strings. HTTP ``/update_weights`` must reject pickle
-    payloads; engine pickle loads require ``LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1``.
+    base64 string or a list of per-rank strings. HTTP ``/update_weights`` rejects pickle
+    unless ``LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1`` (trusted same-node XTuner IPC). Engine
+    pickle loads always require that env var.
     """
     if load_format == 'safetensors':
         return False
@@ -507,7 +508,10 @@ def is_pickle_serialized_named_tensors(payload: object, load_format: str | None 
 def allow_pickle_update_params() -> bool:
     """Whether pickle payloads may be loaded for trusted local IPC.
 
-    HTTP ``/update_weights`` never pickle-loads, even when this returns True.
+    When True, HTTP ``/update_weights`` forwards pickle blobs to the engine so same-node
+    XTuner CUDA IPC (``serialize_state_dict`` / FlattenedTensorBucket) keeps working. The
+    HTTP handler still does not call ``pickle.loads``; the engine does after this check.
+    Default remains off so untrusted public clients cannot reach pickle deserialization.
     """
     return os.environ.get(ALLOW_PICKLE_UPDATE_PARAMS_ENV, '0') == '1'
 
@@ -516,7 +520,8 @@ def load_pickled_serialized_named_tensors(serialized_data: str):
     """Deserialize a pickle update_params blob.
 
     This is disabled by default. Callers must only use it for trusted in-process / same-node
-    IPC after ``allow_pickle_update_params()`` is True. HTTP handlers must not call this.
+    IPC after ``allow_pickle_update_params()`` is True. HTTP ``/update_weights`` may forward
+    pickle blobs when that env var is set, but must not call this itself.
     """
     if not allow_pickle_update_params():
         raise ValueError('Pickled serialized_named_tensors is disabled by default. '
@@ -526,6 +531,30 @@ def load_pickled_serialized_named_tensors(serialized_data: str):
 
     import pybase64
     return ForkingPickler.loads(pybase64.b64decode(serialized_data))
+
+
+def _prepare_cpu_tensors_for_safetensors(state_dict: dict) -> dict:
+    """Move named tensors to contiguous CPU storage, cloning overlapping views.
+
+    ``.detach().contiguous().cpu()`` is a no-op for CPU tensors and preserves shared
+    storage. Qwen3-style tied embed / LM-head weights then make ``safetensors.save``
+    raise ``RuntimeError``. Clone any tensor whose storage was already seen so each
+    key owns unique bytes while values stay equal.
+    """
+    cpu_tensors = {}
+    seen_storage_ptrs: set[int] = set()
+    for name, tensor in state_dict.items():
+        cpu = tensor.detach().contiguous().cpu()
+        if cpu.numel() == 0:
+            cpu_tensors[name] = cpu
+            continue
+        storage_ptr = cpu.untyped_storage().data_ptr()
+        if storage_ptr in seen_storage_ptrs:
+            cpu = cpu.clone()
+        else:
+            seen_storage_ptrs.add(storage_ptr)
+        cpu_tensors[name] = cpu
+    return cpu_tensors
 
 
 def serialize_named_tensors_safetensors(state_dict: dict) -> str:
@@ -540,7 +569,7 @@ def serialize_named_tensors_safetensors(state_dict: dict) -> str:
     """
     import pybase64
     from safetensors.torch import save
-    cpu_tensors = {name: tensor.detach().contiguous().cpu() for name, tensor in state_dict.items()}
+    cpu_tensors = _prepare_cpu_tensors_for_safetensors(state_dict)
     return pybase64.b64encode(save(cpu_tensors)).decode('utf-8')
 
 
@@ -599,9 +628,10 @@ def serialize_state_dict(state_dict: dict) -> str:
     have different GPU visibility, we use reduce_tensor instead of ForkingPickler.dumps
     to fix the device_id when loading the serialized tensor.
 
-    This pickle encoding is not accepted by HTTP ``POST /update_weights``. For the HTTP API
-    use :func:`serialize_named_tensors_safetensors` with ``load_format='safetensors'``. Pickle
-    loads in the engine require ``LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1`` for trusted local IPC.
+    HTTP ``POST /update_weights`` rejects this encoding unless
+    ``LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1`` is set on the server (trusted same-node XTuner
+    CUDA IPC). Untrusted clients should use :func:`serialize_named_tensors_safetensors`
+    with ``load_format='safetensors'``.
 
     Args:
         state_dict (dict[str, torch.Tensor]): state dict to serialize.
