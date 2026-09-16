@@ -552,15 +552,24 @@ def terminate_node_all():
 
 @app.post('/distserve/connection_warmup', dependencies=[Depends(validate_json_request)])
 async def connection_warmup():
-    await asyncio.gather(*[
-        node_manager.pd_connection_pool.connect(
-            PDConnectionMessage(
-                p_url=p_url,
-                d_url=d_url,
-                protocol=node_manager.migration_protocol,
-                rdma_config=node_manager.rdma_config,
-            )) for p_url in node_manager.prefill_nodes for d_url in node_manager.decode_nodes
-    ])
+    """Warm up Prefill-Decode connections.
+
+    Concurrent warmup requests share a single in-flight gather. Per P-D link
+    handshakes are single-flighted inside PDConnectionPool so repeated warmup
+    cannot accumulate unbounded wait tasks.
+    """
+    messages = [
+        PDConnectionMessage(
+            p_url=p_url,
+            d_url=d_url,
+            protocol=node_manager.migration_protocol,
+            rdma_config=node_manager.rdma_config,
+        ) for p_url in node_manager.prefill_nodes for d_url in node_manager.decode_nodes
+    ]
+    try:
+        await node_manager.pd_connection_pool.warmup_connections(messages)
+    except TimeoutError as e:
+        return JSONResponse({'SUCCESS': False, 'error': str(e)}, status_code=504)
     return JSONResponse({'SUCCESS': True})
 
 
