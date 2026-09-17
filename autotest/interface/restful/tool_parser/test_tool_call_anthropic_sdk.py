@@ -30,9 +30,8 @@ from utils.anthropic_messages import (
     get_async_anthropic_client_and_model,
 )
 from utils.config_utils import get_config
-from utils.constant import BASE_URL, DEFAULT_MAX_COMPLETION_TOKENS
-
-from lmdeploy.serve.openai.api_client import APIClient
+from utils.constant import BASE_URL, THINKING_MAX_COMPLETION_TOKENS
+from utils.restful_return_check import deployed_model_name
 
 from .conftest import _apply_marks, _ToolCallTestBase
 
@@ -44,8 +43,8 @@ _TINY_PNG_BASE64 = (
 )
 
 # Leave room for reasoning thinking before tool_use.
-_TOOL_MAX_TOKENS = DEFAULT_MAX_COMPLETION_TOKENS
-_VLM_TOOL_MAX_TOKENS = DEFAULT_MAX_COMPLETION_TOKENS
+_TOOL_MAX_TOKENS = THINKING_MAX_COMPLETION_TOKENS
+_VLM_TOOL_MAX_TOKENS = THINKING_MAX_COMPLETION_TOKENS
 
 _SOLID_COLOR_VLM_PROMPT = (
     'The image is a single solid color (one pixel). '
@@ -312,7 +311,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
     """
 
     def test_http_stream_tool_choice_force_named_tool(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = deployed_model_name()
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
@@ -351,7 +350,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         assert_weather_tool_city_state(inputs[0], ctx='test_http_stream_tool_choice_force_named_tool')
 
     def test_http_stream_single_location_weather_tool(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = deployed_model_name()
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
@@ -387,7 +386,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         assert 'dallas' in loc, inputs
 
     def test_http_parallel_same_tool_stream(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = deployed_model_name()
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
@@ -425,7 +424,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         )
 
     def test_http_full_roundtrip_single_tool_result(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = deployed_model_name()
         url = f'{BASE_URL}/v1/messages'
         turn1 = {
             'model': model_name,
@@ -483,7 +482,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         assert '98' in text or 'Dallas' in text or 'sunny' in text.lower(), text[:500]
 
     def test_http_history_tool_use_and_tool_result_blocks(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = deployed_model_name()
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
@@ -515,7 +514,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         )
 
     def test_http_history_thinking_block_replay(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = deployed_model_name()
         url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
@@ -549,7 +548,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         """``tools`` + user ``content`` blocks with ``image`` (VLM matrix only;
         same tool contract as text-only)."""
 
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = deployed_model_name()
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
@@ -591,7 +590,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         """Streaming ``tools`` + user image URL (VLM): SSE must still surface
         ``tool_use``."""
 
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = deployed_model_name()
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
@@ -631,7 +630,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         """Align with RESTful ``test_messages_user_image_base64_stream``: SSE
         text names the solid color."""
 
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = deployed_model_name()
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
@@ -688,7 +687,7 @@ async def _async_weather_tool_single_location_non_stream(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         messages=[{'role': 'user', 'content': USER_ASK_WEATHER_DALLAS}],
         tools=[WEATHER_TOOL_SINGLE_LOCATION_ANTHROPIC],
     )
@@ -708,7 +707,7 @@ async def _async_tool_choice_force_named_tool(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC],
@@ -730,7 +729,7 @@ async def _async_tool_choice_any(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC],
@@ -752,7 +751,7 @@ async def _async_messages_tool_non_stream_with_user_image(log_file: str, image_u
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_VLM_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         system=ANTHROPIC_SYSTEM_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC],
         messages=[{
@@ -782,7 +781,7 @@ async def _async_messages_tool_non_stream_with_user_image_base64(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_VLM_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         system=ANTHROPIC_SYSTEM_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC],
         messages=[{
@@ -816,7 +815,7 @@ async def _async_messages_tool_non_stream(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC],
@@ -837,7 +836,7 @@ async def _async_messages_tool_stream(log_file: str):
     stream = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC],
@@ -877,7 +876,7 @@ async def _async_parallel_same_tool_non_stream(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         system=ANTHROPIC_SYSTEM_PARALLEL_WEATHER,
         messages=ANTHROPIC_MESSAGES_PARALLEL_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC],
@@ -891,7 +890,7 @@ async def _async_parallel_same_tool_stream(log_file: str):
     stream = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         system=ANTHROPIC_SYSTEM_PARALLEL_WEATHER,
         messages=ANTHROPIC_MESSAGES_PARALLEL_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC],
@@ -915,7 +914,7 @@ async def _async_parallel_mixed_tools_non_stream(log_file: str):
     msg = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         system=ANTHROPIC_SYSTEM_PARALLEL_MIXED,
         messages=ANTHROPIC_MESSAGES_PARALLEL_MIXED,
         tools=[WEATHER_TOOL_ANTHROPIC, CALCULATOR_TOOL_ANTHROPIC],
@@ -930,7 +929,7 @@ async def _async_full_roundtrip_single_tool_result(log_file: str):
     msg1 = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
         tools=tools,
@@ -951,7 +950,7 @@ async def _async_full_roundtrip_single_tool_result(log_file: str):
     msg2 = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         system=ANTHROPIC_SYSTEM_WEATHER,
         messages=turn2_messages,
         tools=tools,
@@ -965,7 +964,7 @@ async def _async_full_roundtrip_parallel_tool_results(log_file: str):
     msg1 = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         system=ANTHROPIC_SYSTEM_PARALLEL_WEATHER,
         messages=ANTHROPIC_MESSAGES_PARALLEL_WEATHER,
         tools=[WEATHER_TOOL_ANTHROPIC],
@@ -998,7 +997,7 @@ async def _async_full_roundtrip_parallel_tool_results(log_file: str):
     msg2 = await client.messages.create(
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
-        temperature=0,
+        extra_body={'temperature': 0},
         system=ANTHROPIC_SYSTEM_PARALLEL_WEATHER,
         messages=turn2_messages,
         tools=[WEATHER_TOOL_ANTHROPIC],
@@ -1036,7 +1035,7 @@ async def _async_vlm_base64_solid_color_stream(log_file: str) -> tuple[str, str]
     stream = await client.messages.create(
         model=model_name,
         max_tokens=16384,
-        temperature=0.01,
+        extra_body={'temperature': 0.01},
         stream=True,
         messages=[{
             'role': 'user',
@@ -1143,7 +1142,7 @@ class TestAnthropicSdkToolCall(_ToolCallTestBase):
         assert WEATHER_TOOL_ANTHROPIC['name'] in names, names
 
     def test_tool_non_stream_weather_with_user_image_url(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = deployed_model_name()
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
@@ -1155,7 +1154,7 @@ class TestAnthropicSdkToolCall(_ToolCallTestBase):
         assert_weather_tool_city_state(tool_blocks[0].input, ctx='test_tool_non_stream_weather_with_user_image_url')
 
     def test_tool_non_stream_weather_with_user_image_base64(self, backend, model_case):
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = deployed_model_name()
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
@@ -1171,7 +1170,7 @@ class TestAnthropicSdkToolCall(_ToolCallTestBase):
     def test_sdk_stream_vlm_user_image_base64_solid_color(self, backend, model_case):
         """Check that streaming output identifies the one-pixel red image."""
 
-        model_name = APIClient(BASE_URL).available_models[0]
+        model_name = deployed_model_name()
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 

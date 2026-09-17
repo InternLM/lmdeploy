@@ -165,12 +165,6 @@ set_property(TARGET gemm2_core PROPERTY INTERFACE_LINK_LIBRARIES_DIRECT
 add_library(gemm2 INTERFACE)
 target_link_libraries(gemm2 INTERFACE gemm2_core)
 
-# cublasGemmGroupedBatchedEx (CUDA 12.5+): grouped batched GEMM for MoE
-if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL "12.5")
-    target_compile_definitions(gemm2_kernels PRIVATE ENABLE_CUBLAS_GROUPED=1)
-    message(STATUS "GEMM: ENABLE_CUBLAS_GROUPED=1 (cublasGemmGroupedBatchedEx for MoE)")
-endif()
-
 target_compile_options(gemm2_core PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:
                 -Xptxas=-v

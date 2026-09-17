@@ -36,6 +36,7 @@ from lmdeploy.pytorch.nn.moe.route import RouterGemm
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .patch import add_prefix
 from .utils.cudagraph import CudaGraphMixin
 
 
@@ -717,7 +718,8 @@ class DeepseekV2MoE(nn.Module):
                  layer_idx,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 all_reduce: bool = True):
+                 all_reduce: bool = True,
+                 prefix: str = ''):
         super().__init__()
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
@@ -772,6 +774,7 @@ class DeepseekV2MoE(nn.Module):
             act_func=type(self).fused_moe_act_func,
             fp32_acc=type(self).fused_moe_fp32_acc,
             output_scale=type(self).fused_moe_output_scale,
+            prefix=add_prefix('experts', prefix),
         )
         self.shared_experts = None
         if config.n_shared_experts is not None:
@@ -783,6 +786,7 @@ class DeepseekV2MoE(nn.Module):
                 dtype=dtype,
                 device=device,
                 is_shared_expert=True,
+                prefix=add_prefix('shared_experts', prefix),
             )
 
         if all_reduce and dp == 1 and world_size > 1:
@@ -825,7 +829,8 @@ class DeepseekV2MLP(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None,
                  is_shared_expert: bool = False,
-                 all_reduce: bool = True):
+                 all_reduce: bool = True,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         if is_shared_expert:
@@ -854,6 +859,7 @@ class DeepseekV2MLP(nn.Module):
             device=device,
             quant_config=quantization_config,
             is_tp=is_tp,
+            prefix=add_prefix('gate_up_proj', prefix),
         )
 
         # silu and mul
@@ -869,6 +875,7 @@ class DeepseekV2MLP(nn.Module):
             device=device,
             is_tp=is_tp,
             all_reduce=all_reduce,
+            prefix=add_prefix('down_proj', prefix),
         )
 
     def forward(self, x):

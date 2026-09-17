@@ -786,8 +786,8 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         )
 
     def _build_indexer(self, config: Any, layer_idx: int, dtype: torch.dtype,
-                       device: torch.device):
-        del layer_idx
+                       device: torch.device, prefix: str = ''):
+        del layer_idx, prefix
         return KPoolIndexer(
             hidden_size=config.hidden_size,
             index_n_heads=config.index_n_heads,

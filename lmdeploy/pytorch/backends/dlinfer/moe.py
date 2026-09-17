@@ -7,11 +7,18 @@ from lmdeploy.pytorch.kernels.dlinfer import (
     DlinferMoECommType,  # noqa: F401
     DlinferMoeMetadata,  # noqa: F401
     fused_moe,
+    fused_moe_w8a8,
     moe_gating_topk_softmax,
 )
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
-from ..moe import FusedMoEBuildSpec, FusedMoEImpl, SoftmaxTopKImpl
+from ..moe import (
+    FusedMoEBuildSpec,
+    FusedMoEImpl,
+    FusedMoEW8A8BuildSpec,
+    FusedMoEW8A8Impl,
+    SoftmaxTopKImpl,
+)
 
 
 class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
@@ -116,4 +123,65 @@ def _build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
         renormalize=spec.renormalize,
         ep_size=spec.ep_size,
         ep_group=spec.ep_group,
+    )
+
+
+class DlinferFusedMoEW8A8Impl(DlinferFusedMoEImpl, FusedMoEW8A8Impl):
+    """Ascend non-fused dynamic W8A8 MoE implementation."""
+
+    def __init__(self,
+                 top_k: int,
+                 num_experts: int,
+                 renormalize: bool = False,
+                 ep_size: int = 1,
+                 ep_group: torch.distributed.ProcessGroup = None,
+                 out_dtype: torch.dtype = torch.bfloat16,
+                 quant_dtype: torch.dtype = torch.int8):
+        DlinferFusedMoEImpl.__init__(self, top_k, num_experts, renormalize, ep_size, ep_group)
+        if quant_dtype != torch.int8:
+            raise ValueError(
+                f'Ascend W8A8 MoE requires torch.int8, got {quant_dtype}')
+        self.out_dtype = out_dtype
+        self.quant_dtype = quant_dtype
+
+    def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
+                       down_scale: torch.Tensor):
+        """Keep OI weights and satisfy Ascend quant-GMM scale dtype rules."""
+        scale_dtype = torch.bfloat16 if self.out_dtype == torch.bfloat16 else torch.float32
+        gate_up_scale = gate_up_scale.to(scale_dtype)
+        down_scale = down_scale.to(scale_dtype)
+        return gate_up_weights, down_weights, gate_up_scale, down_scale
+
+    def forward(self,
+                hidden_states: torch.Tensor,
+                topk_weights: torch.Tensor,
+                topk_ids: torch.LongTensor,
+                gate_up_weights: torch.Tensor,
+                gate_up_scale: torch.Tensor,
+                down_weights: torch.Tensor,
+                down_scale: torch.Tensor,
+                expert_list: list[int] = None):
+        """Forward through dlinfer's public-op W8A8 fallback."""
+        step_context = get_step_ctx_manager().current_context()
+        moe_metadata = getattr(step_context, 'moe_metadata', None)
+        if moe_metadata is None:
+            raise RuntimeError('Dlinfer W8A8 MoE requires moe_metadata in the current step context.')
+        moe_metadata.expert_ids_per_ep_rank = self.expert_ids_per_ep_rank
+        return fused_moe_w8a8(hidden_states, gate_up_weights, gate_up_scale, down_weights, down_scale, topk_weights,
+                              topk_ids, self.top_k, self.renormalize, moe_metadata)
+
+
+
+
+def _build_fused_moe_w8a8(
+        spec: FusedMoEW8A8BuildSpec) -> FusedMoEW8A8Impl:
+    """Build a DLINFER W8A8 fused MoE implementation."""
+    return DlinferFusedMoEW8A8Impl(
+        top_k=spec.top_k,
+        num_experts=spec.num_experts,
+        renormalize=spec.renormalize,
+        ep_size=spec.ep_size,
+        ep_group=spec.ep_group,
+        out_dtype=spec.output_dtype,
+        quant_dtype=spec.quant_dtype,
     )
