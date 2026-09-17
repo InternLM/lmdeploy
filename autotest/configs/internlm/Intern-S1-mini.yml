@@ -29,7 +29,6 @@ a100:
       - hard_schema
       extra:
         logprobs-mode: raw_logprobs
-        enable-return-routed-experts: true
         tool-call-parser: intern-s1
         reasoning-parser: default
     turbomind:
@@ -76,7 +75,6 @@ h:
       - hard_schema
       extra:
         logprobs-mode: raw_logprobs
-        enable-return-routed-experts: true
         tool-call-parser: intern-s1
         reasoning-parser: default
     turbomind:

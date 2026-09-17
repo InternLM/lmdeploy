@@ -7,10 +7,6 @@ import uuid
 
 import aiohttp
 import requests
-from utils.config_utils import get_model_path_from_config
-from utils.constant import CAPPED_MAX_COMPLETION_TOKENS, DEFAULT_PORT
-from utils.restful_return_check import get_client_and_model
-
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponseStreamChoice,
@@ -23,6 +19,9 @@ from lmdeploy.serve.parsers.response_parser import (
     _normalize_request_messages,
     _parse_tool_call_arguments_dict,
 )
+from utils.config_utils import get_model_path_from_config
+from utils.constant import CAPPED_MAX_COMPLETION_TOKENS, DEFAULT_PORT
+from utils.restful_return_check import get_client_and_model
 
 BASE_HTTP_URL = f"http://{os.getenv('MASTER_ADDR', 'localhost')}"
 PORT = os.getenv('LMDEPLOY_PORT', str(DEFAULT_PORT))
@@ -104,6 +103,9 @@ SEARCH_TOOL = {
         },
     },
 }
+
+# Greeting + search + required: model must still tool-call (not reply in text).
+MESSAGES_HELLO = [{'role': 'user', 'content': 'Hello'}]
 
 CALCULATOR_TOOL = {
     'type': 'function',

@@ -786,7 +786,7 @@ def derive_interface_case_info(profiles: list[str], suites: list[str] | set[str]
     """Derive REST case groups from model profiles + interface suites.
 
     Directory-based suites (toolcall / reasoning) and anthropic protocol files are selected by path in CI; generate
-    logprob/experts stay in one file and are filtered by pytest marks.
+    logprob/experts stay in one file and are filtered by pytest marks. Chat models also run ``responses_v1``.
     """
     suite_set = set(suites)
     case_info: list[str] = []
@@ -797,6 +797,7 @@ def derive_interface_case_info(profiles: list[str], suites: list[str] | set[str]
     else:
         if suite_set & GENERATE_SUITES:
             case_info.append('chat_completions_v1')
+            case_info.append('responses_v1')
             case_info.append('generate')
     if 'anthropic' in suite_set:
         case_info.append('anthropic_v1')

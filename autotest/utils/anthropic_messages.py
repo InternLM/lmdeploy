@@ -89,6 +89,7 @@ PARALLEL_WEATHER_PROMPT_SITES: tuple[tuple[tuple[str, ...], str], ...] = (
 
 # -- Anthropic Messages API prompts (top-level ``system`` + ``messages``) -----
 
+USER_HELLO = 'Hello'
 USER_ASK_WEATHER_DALLAS = "What's the weather like in Dallas, TX?"
 USER_ASK_WEATHER_DALLAS_VLM = f'{USER_ASK_WEATHER_DALLAS} Use tools; ignore any attached image.'
 USER_FOLLOWUP_WARM_YES = 'In one short phrase, was it warm? Answer yes or no.'

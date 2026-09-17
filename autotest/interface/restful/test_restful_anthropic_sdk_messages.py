@@ -57,8 +57,8 @@ async def _sdk_inline_system_non_stream() -> object:
     client, model_name = get_async_anthropic_client_and_model()
     return await client.messages.create(
         model=model_name,
-        max_tokens=256,
-        temperature=0.01,
+        max_tokens=1024,
+        extra_body={'temperature': 0.01},
         messages=[
             {'role': 'system', 'content': ANTHROPIC_SYSTEM_REPLY_OK},
             {'role': 'user', 'content': USER_ACKNOWLEDGE},

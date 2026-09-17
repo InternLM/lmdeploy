@@ -9,7 +9,6 @@ import requests
 from utils.anthropic_messages import (
     ANTHROPIC_MESSAGES_HISTORY_THINKING_REPLAY,
     ANTHROPIC_SYSTEM_REPLY_ACKNOWLEDGED,
-    ANTHROPIC_SYSTEM_REPLY_BRIEFLY,
     ANTHROPIC_SYSTEM_REPLY_CONFIRMED,
     ANTHROPIC_SYSTEM_REPLY_OK,
     USER_ACKNOWLEDGE,
@@ -792,13 +791,8 @@ class TestRestfulAnthropicV1:
         for the same prompt."""
 
         count_json = {
-<<<<<<< HEAD
-            'model': deployed_model_name,
-            'system': ANTHROPIC_SYSTEM_REPLY_BRIEFLY,
-=======
             'model': deployed_model_name(),
             'system': 'Reply briefly.',
->>>>>>> origin/sync-upstream-main
             'messages': [{'role': 'user', 'content': 'Say hello in one word.'}],
         }
         r_count = requests.post(
@@ -886,13 +880,8 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-<<<<<<< HEAD
-                'model': deployed_model_name,
-                'max_tokens': 256,
-=======
                 'model': deployed_model_name(),
-                'max_tokens': 32,
->>>>>>> origin/sync-upstream-main
+                'max_tokens': 1024,
                 'temperature': 0.01,
                 'messages': [
                     {'role': 'system', 'content': ANTHROPIC_SYSTEM_REPLY_OK},
@@ -906,7 +895,7 @@ class TestRestfulAnthropicV1:
         text = _assistant_text_from_message_payload(data).lower()
         assert 'ok' in text, text[:500]
 
-    def test_messages_inline_system_in_history(self, backend, model_case, deployed_model_name: str):
+    def test_messages_inline_system_in_history(self, backend, model_case):
         """Inline ``messages[].role == system`` mid-conversation (merged to
         front when the chat template requires system-first)."""
 
@@ -914,7 +903,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 256,
                 'temperature': 0.01,
                 'messages': build_anthropic_messages_inline_system_history(),
@@ -926,7 +915,7 @@ class TestRestfulAnthropicV1:
         text = _assistant_text_from_message_payload(data).lower()
         assert 'confirmed' in text, text[:500]
 
-    def test_messages_top_level_and_inline_system(self, backend, model_case, deployed_model_name: str):
+    def test_messages_top_level_and_inline_system(self, backend, model_case):
         """Top-level ``system`` plus inline system messages are accepted
         together."""
 
@@ -935,7 +924,7 @@ class TestRestfulAnthropicV1:
             _MESSAGES_URL,
             headers=_anthropic_headers(),
             json={
-                'model': deployed_model_name,
+                'model': deployed_model_name(),
                 'max_tokens': 256,
                 'temperature': 0.01,
                 'system': top_level_system,
@@ -948,14 +937,13 @@ class TestRestfulAnthropicV1:
         text = _assistant_text_from_message_payload(data).lower()
         assert 'confirmed' in text or 'acknowledge' in text, text[:500]
 
-    def test_count_tokens_matches_messages_with_inline_system(
-            self, backend, model_case, deployed_model_name: str):
+    def test_count_tokens_matches_messages_with_inline_system(self, backend, model_case):
         """``count_tokens`` matches ``/messages`` when system is split across
         top-level and ``messages[].role``."""
 
         top_level_system, messages = build_anthropic_messages_merged_system_prompt()
         count_json = {
-            'model': deployed_model_name,
+            'model': deployed_model_name(),
             'system': top_level_system,
             'messages': messages,
         }

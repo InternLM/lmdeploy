@@ -196,7 +196,9 @@ def _run_interface_suites(
     ``generate`` suite (``/generate`` always emits ``output_ids``), and
     toolcall tests marked ``experts`` (return_token_ids / routed_experts /
     encode+input_ids paths). Also skips Anthropic suites and toolcall
-    tests marked ``anthropic`` (proxy does not expose ``/v1/messages``).
+    tests marked ``anthropic`` (proxy does not expose ``/v1/messages``),
+    plus ``responses_v1`` and toolcall tests marked ``responses``
+    (proxy does not expose ``/v1/responses``).
     """
     model = run_config['model']
     backend = run_config['backend']
@@ -216,13 +218,18 @@ def _run_interface_suites(
         )
 
     if via_proxy:
-        # Proxy does not expose Anthropic /v1/messages (404 Not Found).
-        dropped = [c for c in ('anthropic_v1', 'anthropic_sdk') if c in case_info]
+        # Proxy does not expose Anthropic /v1/messages or Responses /v1/responses.
+        dropped = [
+            c for c in ('anthropic_v1', 'anthropic_sdk', 'responses_v1') if c in case_info
+        ]
         if dropped:
-            case_info = [c for c in case_info if c not in ('anthropic_v1', 'anthropic_sdk')]
+            case_info = [
+                c for c in case_info
+                if c not in ('anthropic_v1', 'anthropic_sdk', 'responses_v1')
+            ]
             print(
                 f'proxy: skipping {", ".join(dropped)} '
-                '(Anthropic Messages API not available via proxy)',
+                '(Anthropic / Responses API not available via proxy)',
                 flush=True,
             )
 
@@ -242,8 +249,9 @@ def _run_interface_suites(
 
     toolcall_marker = f'tool_call and not not_{backend} and not anthropic'
     if via_proxy:
-        # Exclude return_token_ids / routed_experts / encode(input_ids) cases.
-        toolcall_marker += ' and not experts'
+        # Exclude return_token_ids / routed_experts / encode(input_ids) cases,
+        # and Responses toolcall (proxy has no /v1/responses).
+        toolcall_marker += ' and not experts and not responses'
 
     hard_schema_marker = f'hard_schema and not not_{backend}'
 
@@ -253,6 +261,11 @@ def _run_interface_suites(
         (
             'chat_completions_v1',
             'autotest/interface/restful/test_restful_chat_completions_v1.py',
+            f'not not_{backend}',
+        ),
+        (
+            'responses_v1',
+            'autotest/interface/restful/test_restful_responses_v1.py',
             f'not not_{backend}',
         ),
         (
@@ -427,9 +440,11 @@ def run_interface_restful_proxy_distributed_test(config, run_config, manager) ->
     """Run interface suites against LMDeploy proxy (dp/ep multi-node).
 
     Skips ``generate``, Anthropic suites (``/v1/messages`` 404 via proxy),
-    and toolcall ``experts`` / ``anthropic``-marked cases: proxy cannot
+    Responses suites (``/v1/responses`` 404 via proxy), and toolcall
+    ``experts`` / ``anthropic`` / ``responses``-marked cases: proxy cannot
     safely carry large ``/generate`` / encode / return_token_ids /
-    routed_experts payloads, and does not forward Anthropic Messages.
+    routed_experts payloads, and does not forward Anthropic Messages or
+    Responses.
 
     One ``ApiServerPerTest`` restart per launch profile. All ranks join each
     phase; workers sync via a shared done-flag, and also exit when master

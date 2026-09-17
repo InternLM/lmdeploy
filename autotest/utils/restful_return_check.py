@@ -123,6 +123,69 @@ def assert_usage(usage):
     assert usage.get('completion_tokens') + usage.get('prompt_tokens') == usage.get('total_tokens')
 
 
+def assert_responses_usage(usage):
+    assert usage['input_tokens'] > 0
+    assert usage['output_tokens'] > 0
+    assert usage['total_tokens'] == usage['input_tokens'] + usage['output_tokens']
+    assert usage['output_tokens_details']['reasoning_tokens'] >= 0
+
+
+def assert_responses_batch_return(output, model_name, *, status: str = 'completed'):
+    """Assert ``POST /v1/responses`` JSON (lmdeploy Text V1).
+
+    Returns ``function_call`` output items (possibly empty).
+    """
+    assert output['id']
+    assert output['object'] == 'response'
+    assert output['model'] == model_name
+    assert output['status'] == status
+    assert_responses_usage(output['usage'])
+    output_items = output['output']
+    assert output_items
+    messages = []
+    function_calls = []
+    for item in output_items:
+        assert item['type'] in ('message', 'function_call'), item
+        if item['type'] == 'message':
+            assert item['role'] == 'assistant'
+            content = item['content']
+            assert content[0]['type'] == 'output_text'
+            assert isinstance(content[0]['text'], str)
+            messages.append(item)
+        else:
+            assert item['name']
+            assert item['call_id']
+            assert isinstance(item['arguments'], str)
+            function_calls.append(item)
+    if messages:
+        assert output['output_text'] == messages[0]['content'][0]['text']
+    if status == 'completed':
+        assert output.get('incomplete_details') is None
+        if not function_calls:
+            assert len(output['output_text']) > 0
+    else:
+        assert status == 'incomplete'
+        assert messages[0]['status'] == 'incomplete'
+        assert output['incomplete_details']['reason'] == 'max_output_tokens'
+    return function_calls
+
+
+def assert_responses_error(response: requests.Response, *, status_code: int, error_type: str,
+                           param: str | None = None, message_substr: str | None = None) -> dict:
+    """Assert nested ``error`` from Responses ``check_request``."""
+    assert response.status_code == status_code, response.text[:500]
+    body = response.json()
+    err = body['error']
+    assert err['message']
+    assert err['code'] == status_code
+    assert err['type'] == error_type
+    if param is not None:
+        assert err['param'] == param
+    if message_substr is not None:
+        assert message_substr in err['message']
+    return body
+
+
 def assert_logprobs(logprobs, logprobs_num):
     assert_logprob_element(logprobs)
     assert len(logprobs.get('top_logprobs')) >= 0
@@ -239,9 +302,8 @@ def resolve_effective_session_len(config: dict[str, Any], model_id: str) -> int:
             session_len = int(extra['session-len'])
             break
     if session_len is None:
-        from transformers import AutoConfig
-
         from lmdeploy.utils import _get_and_verify_max_len
+        from transformers import AutoConfig
 
         hf_cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         session_len = _get_and_verify_max_len(hf_cfg, None)
