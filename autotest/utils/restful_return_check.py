@@ -302,8 +302,9 @@ def resolve_effective_session_len(config: dict[str, Any], model_id: str) -> int:
             session_len = int(extra['session-len'])
             break
     if session_len is None:
-        from lmdeploy.utils import _get_and_verify_max_len
         from transformers import AutoConfig
+
+        from lmdeploy.utils import _get_and_verify_max_len
 
         hf_cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         session_len = _get_and_verify_max_len(hf_cfg, None)

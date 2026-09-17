@@ -4,6 +4,9 @@ h:
 - model_type: chat
   engine_config:
     tp: 4
+    extra:
+      max-batch-size: 256
+      cache-max-entry-count: 0.9
   backends:
   - name: pytorch
     communicators:
