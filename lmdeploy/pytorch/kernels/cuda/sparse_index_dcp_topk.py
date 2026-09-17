@@ -278,6 +278,8 @@ def sparse_dcp_global_topk(gathered_candidates: torch.Tensor,
     dcp_size, num_tokens, local_k, pair_width = gathered_candidates.shape
     assert local_k == k and pair_width == 2
     assert gathered_candidates.dtype == torch.float32
+    assert dcp_size * k % _THREADS == 0, (
+        'DCP candidate count must be divisible by the thread count')
     output = torch.empty((num_tokens, k),
                          dtype=torch.int32,
                          device=gathered_candidates.device)

@@ -20,7 +20,6 @@ class NSAIndexMeta:
     cu_seqlen_q: Tensor
     q_seqlens: Tensor
     k_seqlens: Tensor  # global lengths used by interleaved cache writes
-    dcp_local_kv_seqlens: Tensor
     cu_seqlen_k: Tensor | None  # rank-local KV offsets; unused in DCP paged decode
     block_offset: Tensor
     indexer_kv_seqlens: Tensor = None
@@ -31,6 +30,7 @@ class NSAIndexMeta:
     block_size: int = None
     is_decoding: bool = False
     score_meta: object = None
+    dcp_local_kv_seqlens: Tensor | None = None
 
 
 def _build_indexer_kv_seqlens(num_tokens: int, q_seqlens: Tensor,
