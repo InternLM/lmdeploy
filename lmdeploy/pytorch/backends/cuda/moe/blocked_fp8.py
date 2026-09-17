@@ -337,13 +337,17 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
                  num_experts: int,
                  renormalize: bool = False,
                  block_size: int = 128,
-                 out_dtype: torch.dtype = torch.float16):
+                 out_dtype: torch.dtype = torch.float16,
+                 fp32_acc: bool = False,
+                 output_scale: float = 1.0):
         super().__init__()
         self.num_experts = num_experts
         self.top_k = top_k
         self.renormalize = renormalize
         self.block_size = block_size
         self.out_dtype = out_dtype
+        self.fp32_acc = fp32_acc
+        self.output_scale = output_scale
 
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
@@ -392,7 +396,9 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
                                        expert_offset=expert_offset,
                                        num_experts=num_experts,
                                        renormalize=self.renormalize,
-                                       act_func=act_func)
+                                       act_func=act_func,
+                                       fp32_acc=self.fp32_acc,
+                                       output_scale=self.output_scale)
         output = output.unflatten(0, input_size[:-1])
         return output
 
@@ -626,14 +632,14 @@ def _build_fused_moe_blocked_f8(spec: FusedMoEBlockedF8BuildSpec) -> FusedMoEBlo
             layer_index=spec.layer_idx,
         )
     else:
-        if spec.fp32_acc or spec.output_scale != 1.0:
-            raise ValueError('FP32 MoE reduction and output scaling require use_deep_gemm=True.')
         impl = TritonFusedMoEBlockedF8Impl(
             top_k=spec.top_k,
             num_experts=spec.num_experts,
             renormalize=spec.renormalize,
             block_size=spec.block_size,
             out_dtype=spec.output_dtype,
+            fp32_acc=spec.fp32_acc,
+            output_scale=spec.output_scale,
         )
     impl.set_scale_fmt(spec.scale_fmt)
     return impl

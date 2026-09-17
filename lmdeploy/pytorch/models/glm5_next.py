@@ -511,10 +511,6 @@ class Glm5NextMoE(DeepseekV2MoE):
     # its BF16 store.
     router_routed_scaling_factor = 1.0
     fused_moe_output_scale = 2.5
-    # Reuse LMDeploy's generic compact DeepGEMM path.  With the model's
-    # sigmoid KDA gate and single-owner routed scaling restored, its real
-    # weight replay is closer to the reference than the generic Triton path.
-    fused_moe_use_deep_gemm = True
     shared_expert_cls = Glm5NextMLP
 
     def __init__(self, config: Any, *args, **kwargs):
