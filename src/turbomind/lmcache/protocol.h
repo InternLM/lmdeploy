@@ -37,20 +37,20 @@ T Unpack(const Bytes& bytes)
     return msgpack::unpack(reinterpret_cast<const char*>(bytes.data()), bytes.size()).get().as<T>();
 }
 
-// Values are frozen to the LMCache MP server RequestType enum.
+// Wire values from LMCache 0.5.5's RequestType enum.
 enum class RequestType : std::int64_t
 {
     kRegisterKvCache     = 1,
     kUnregisterKvCache   = 2,
-    kStore               = 3,
-    kRetrieve            = 4,
-    kLookup              = 5,
-    kQueryPrefetchStatus = 6,
-    kWaitPrefetchStatus  = 7,
-    kFreeLookupLocks     = 9,
-    kEndSession          = 10,
-    kGetChunkSize        = 18,
-    kPing                = 19,
+    kStore               = 6,
+    kRetrieve            = 7,
+    kLookup              = 8,
+    kQueryPrefetchStatus = 9,
+    kWaitPrefetchStatus  = 10,
+    kFreeLookupLocks     = 12,
+    kEndSession          = 13,
+    kGetChunkSize        = 21,
+    kPing                = 22,
 };
 
 inline constexpr std::int8_t kTurboMindCudaIpcExtensionCode = 2;
@@ -64,8 +64,10 @@ struct IPCCacheServerKey {
     std::int64_t                end{};
     std::string                 request_id;
     std::string                 cache_salt;
+    std::int64_t                num_kv_readers{1};  // One reader per TP shard's object.
 
-    MSGPACK_DEFINE_MAP(model_name, world_size, worker_id, token_ids, start, end, request_id, cache_salt);
+    MSGPACK_DEFINE_MAP(
+        model_name, world_size, worker_id, token_ids, start, end, request_id, cache_salt, num_kv_readers);
 };
 
 struct LayoutHints {

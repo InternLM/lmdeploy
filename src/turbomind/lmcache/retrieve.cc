@@ -152,7 +152,12 @@ std::optional<RetrieveResult> RetrieveContext::Poll()
             auto       response = rpc.Get();
             const auto transfer = protocol::UnpackTransferResponse(response.at(0));
             state.success       = transfer.success;
-            state.done_handle   = DecodeCudaEventHandle(transfer.event_handle);
+            // An empty event is the daemon's guarantee that no device work ran.
+            if (transfer.event_handle.empty()) {
+                state.Finish(state.success, state.success ? std::string{} : "daemon rejected RETRIEVE");
+                return state.result;
+            }
+            state.done_handle = DecodeCudaEventHandle(transfer.event_handle);
         }
         if (state.done_handle && !state.done_event) {
             state.done_event.emplace(CudaEvent::Open(*state.done_handle));

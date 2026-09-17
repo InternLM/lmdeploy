@@ -133,7 +133,12 @@ std::optional<StoreResult> StoreContext::Poll()
             auto       response = rpc.Get();
             const auto transfer = protocol::UnpackTransferResponse(response.at(0));
             state.success       = transfer.success;
-            state.done_handle   = DecodeCudaEventHandle(transfer.event_handle);
+            // LMCache 0.5.5 returns no event when no device work was submitted.
+            if (transfer.event_handle.empty()) {
+                state.Finish(state.success, state.success ? std::string{} : "LMCache daemon rejected STORE");
+                return state.result;
+            }
+            state.done_handle = DecodeCudaEventHandle(transfer.event_handle);
         }
         if (state.done_handle && !state.done_event) {
             state.done_event.emplace(CudaEvent::Open(*state.done_handle));
