@@ -112,7 +112,6 @@ public:
          int                block_size,
          int                phases):
         tp_group_{group},
-        cache_group_{group->Split(0, group->rank())},
         rank_{group->rank()},
         is_warm_up_{is_warm_up},
         block_size_{block_size},
@@ -228,7 +227,7 @@ public:
         if (waiting.empty()) {
             return;
         }
-        comm::AllReduce(cache_group_, proof.data(), proof.size(), comm::RedOp::kMin);
+        comm::AllReduce(tp_group_, proof.data(), proof.size(), comm::RedOp::kMin);
         for (size_t i = 0; i < waiting.size(); ++i) {
             auto& session = *waiting[i];
             if (proof[2 * i]) {
@@ -266,7 +265,7 @@ public:
         if (waiting.empty()) {
             return;
         }
-        comm::AllReduce(cache_group_, admitted.data(), admitted.size(), comm::RedOp::kMin);
+        comm::AllReduce(tp_group_, admitted.data(), admitted.size(), comm::RedOp::kMin);
         for (size_t i = 0; i < waiting.size(); ++i) {
             auto& session = *waiting[i];
             if (admitted[i] == 1) {
@@ -334,7 +333,7 @@ public:
             return;  // Host ranges and reservation cursors are shared across TP.
         }
         auto common = ranges;
-        comm::Broadcast(cache_group_, common, 0);
+        comm::Broadcast(tp_group_, common, 0);
         TM_CHECK_EQ(ranges.size(), common.size());
         const bool       checkpoints = pools_.size() > 1;
         std::vector<int> available;
@@ -350,7 +349,7 @@ public:
             }
         }
         if (checkpoints) {
-            comm::AllReduce(cache_group_, available.data(), available.size(), comm::RedOp::kMin);
+            comm::AllReduce(tp_group_, available.data(), available.size(), comm::RedOp::kMin);
         }
         int index = 0;
         for (const auto& r : ranges) {
@@ -679,7 +678,7 @@ private:
                 status[0] = 0;
             }
         }
-        comm::AllReduce(cache_group_, status.data(), status.size(), comm::RedOp::kMin);
+        comm::AllReduce(tp_group_, status.data(), status.size(), comm::RedOp::kMin);
         transfers_healthy_ = status[0] != 0;
         int index          = 1;
         stores_.erase(std::remove_if(stores_.begin(), stores_.end(), [&](const auto&) { return status[index++] != 0; }),
@@ -698,7 +697,6 @@ private:
 
     Scheduler*                          scheduler_{};
     comm::HostComm&                     tp_group_;
-    comm::HostComm                      cache_group_;
     const int                           rank_;
     const int&                          is_warm_up_;
     const int                           block_size_;
