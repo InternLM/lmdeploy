@@ -20,6 +20,8 @@ def check_module_init(root: str):
             continue
         elif d.startswith('lmdeploy/monitoring'):
             continue
+        elif d.startswith('lmdeploy/router'):
+            continue
         elif d.startswith('lmdeploy/serve/turbomind/triton_models'):
             continue
         elif d.startswith('lmdeploy/serve/turbomind/triton_python_backend'):

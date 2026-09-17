@@ -667,7 +667,24 @@ async fn remove_lmdeploy_node(
 }
 
 async fn lmdeploy_node_status(State(state): State<Arc<AppState>>) -> Response {
-    Json(state.context.lmdeploy_nodes.lock().await.clone()).into_response()
+    let dynamic_nodes = state.context.lmdeploy_nodes.lock().await.clone();
+    let mut nodes = dynamic_nodes;
+
+    for worker in state.context.worker_registry.get_all() {
+        let role = match worker.worker_type() {
+            WorkerType::Regular => LMDEPLOY_ROLE_HYBRID,
+            WorkerType::Prefill => LMDEPLOY_ROLE_PREFILL,
+            WorkerType::Decode => LMDEPLOY_ROLE_DECODE,
+        };
+        nodes
+            .entry(worker.url().to_string())
+            .or_insert_with(|| LMDeployNodeStatus {
+                role,
+                ..LMDeployNodeStatus::default()
+            });
+    }
+
+    Json(nodes).into_response()
 }
 
 async fn add_worker(

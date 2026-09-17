@@ -5,6 +5,7 @@ use axum::{
 };
 use lmdeploy_router_rs::{
     config::{LMDeployMigrationProtocol, RouterConfig, RoutingMode},
+    core::{BasicWorker, WorkerType},
     routers::{http::lmdeploy_pd_router::LMDeployPDRouter, http::router::Router as HttpRouter},
     server::{build_app_with_request_tracing, AppContext, AppState},
 };
@@ -139,6 +140,34 @@ async fn lmdeploy_hybrid_registration_is_immediate_and_idempotent() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!("Deleted successfully"));
     assert!(context.worker_registry.get_all().is_empty());
+}
+
+#[tokio::test]
+async fn nodes_status_includes_registry_workers() {
+    let (app, context) = regular_app().await;
+    let workers = [
+        ("http://127.0.0.1:49152", WorkerType::Regular, 1),
+        ("http://127.0.0.1:49153", WorkerType::Prefill, 2),
+        ("http://127.0.0.1:49154", WorkerType::Decode, 3),
+    ];
+
+    for (url, worker_type, _) in &workers {
+        context.worker_registry.register(Arc::new(BasicWorker::new(
+            (*url).to_string(),
+            worker_type.clone(),
+        )));
+    }
+
+    let (status, body) = json_request(app, "GET", "/nodes/status", Value::Null).await;
+
+    assert_eq!(status, StatusCode::OK);
+    for (url, _, role) in workers {
+        assert_eq!(body[url]["role"], role);
+        assert_eq!(body[url]["models"], json!([]));
+        assert_eq!(body[url]["unfinished"], 0);
+        assert_eq!(body[url]["latency"], json!([]));
+        assert!(body[url]["speed"].is_null());
+    }
 }
 
 #[tokio::test]
