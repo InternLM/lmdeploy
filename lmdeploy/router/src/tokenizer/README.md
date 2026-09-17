@@ -7,6 +7,7 @@
 The LMDeploy Router tokenizer layer provides a unified interface for text tokenization and detokenization, supporting multiple tokenizer backends (HuggingFace, Tiktoken, Mock) with sophisticated streaming capabilities and stop sequence detection. The architecture follows a trait-based design pattern enabling pluggable tokenizer implementations while maintaining consistent APIs across the router.
 
 **Key Components:**
+
 - **Factory Pattern**: Auto-detection and creation of appropriate tokenizer types from files or model names
 - **HuggingFace Hub Integration**: Automatic downloading of tokenizer files from HuggingFace Hub for model IDs
 - **Trait System**: `Encoder`, `Decoder`, and `Tokenizer` traits for implementation flexibility
@@ -17,6 +18,7 @@ The LMDeploy Router tokenizer layer provides a unified interface for text tokeni
 - **Metrics Integration**: Comprehensive performance and error tracking across all operations
 
 **Data Flow:**
+
 1. Request → Factory (type detection/HF download) → Concrete Tokenizer Creation
 2. Encode: Text → Tokenizer → Encoding (token IDs)
 3. Stream: Token IDs → DecodeStream → Incremental Text Chunks
@@ -285,16 +287,19 @@ impl Tokenizer {
 ```
 
 **Key Responsibilities:**
+
 - Main wrapper providing unified interface (mod.rs:36-93)
 - Arc-based shared ownership for thread safety
 - Delegates to concrete implementations via trait object
 - Factory method integration for creation
 
 **State Management:**
+
 - Single field: `Arc<dyn traits::Tokenizer>` for polymorphic dispatch
 - Immutable after creation, Clone via Arc
 
 **Re-exports** (mod.rs:26-43):
+
 - Factory functions: `create_tokenizer`, `create_tokenizer_async`, `create_tokenizer_from_file`, `create_tokenizer_with_chat_template`
 - Types: `Sequence`, `StopSequenceConfig`, `DecodeStream`, `Encoding`, `TokenizerType`
 - Chat template: `ChatMessage`
@@ -325,6 +330,7 @@ pub trait Tokenizer: Encoder + Decoder {
 ```
 
 **Encoding Enum** (traits.rs:24-53):
+
 ```rust
 pub enum Encoding {
     Hf(Box<tokenizers::tokenizer::Encoding>),  // HuggingFace
@@ -334,6 +340,7 @@ pub enum Encoding {
 ```
 
 **Key Design Decisions:**
+
 - Separation of Encoder/Decoder allows partial implementations
 - Send + Sync for thread safety
 - Encoding enum handles different backend representations
@@ -341,6 +348,7 @@ pub enum Encoding {
 - `token_ids_ref()` has limitation for Tiktoken (returns empty slice)
 
 **SpecialTokens Struct** (traits.rs:55-65):
+
 - Standard tokens: bos, eos, unk, sep, pad, cls, mask
 - Additional tokens vector for custom special tokens
 
@@ -362,28 +370,33 @@ pub fn get_tokenizer_info(file_path: &str) -> Result<TokenizerType>
 ```
 
 **Auto-Detection Logic** (factory.rs:94-132):
+
 1. Read first 512 bytes of file
 2. Check for JSON format (HuggingFace)
 3. Check for GGUF magic bytes
 4. Check for SentencePiece patterns
 
 **File Type Detection** (factory.rs:135-161):
+
 - JSON detection: Skip BOM, find `{` or `[`
 - SentencePiece: Check for specific byte patterns
 - GGUF: Check magic number "GGUF"
 
 **Model Name Routing** (factory.rs:145-193):
+
 - GPT models → Tiktoken (gpt-4, gpt-3.5, davinci, curie, etc.)
 - File paths → file-based creation
 - HuggingFace model IDs → Automatic download from Hub
 
 **HuggingFace Hub Integration**:
+
 - Downloads tokenizer files (tokenizer.json, tokenizer_config.json, etc.)
 - Respects HF_TOKEN environment variable for private models
 - Caches downloaded files using hf-hub crate
 - Async and blocking versions available
 
 **Metrics Integration:**
+
 - Records factory load/error events (factory.rs:56-57, 82-83)
 - Tracks vocab size on successful load
 - Measures load duration
@@ -410,19 +423,23 @@ impl HuggingFaceTokenizer {
 ```
 
 **Special Token Extraction** (huggingface.rs:58-82):
+
 - Searches for common patterns: `<s>`, `</s>`, `<unk>`, `[CLS]`, etc.
 - Falls back to None if not found
 
 **Vocab Management:**
+
 - Builds forward and reverse mappings on creation (huggingface.rs:26-30)
 - Used for token↔ID conversions
 
 **Metrics** (huggingface.rs:97-111, 136-150):
+
 - Tracks encode/decode requests, durations
 - Records character/token counts
 - Reports errors with context
 
 **Chat Template Integration** (huggingface.rs:21-144):
+
 - Automatic loading from tokenizer_config.json
 - Custom template loading from .jinja files
 - Runtime template modification via `set_chat_template()`
@@ -457,6 +474,7 @@ impl Sequence {
 ```
 
 **Incremental Decoding Algorithm** (sequence.rs:93-142):
+
 1. Store old read_offset before adding token
 2. Push new token, update read_offset
 3. Decode prefix window (prefix_offset..old_read_offset)
@@ -466,6 +484,7 @@ impl Sequence {
 7. Handle incomplete UTF-8 (�) by returning empty
 
 **State Variables:**
+
 - `token_ids`: Complete sequence of tokens
 - `prefix_offset`: Where last decode started
 - `read_offset`: Current position in sequence
@@ -506,25 +525,30 @@ pub struct StopSequenceDecoder {
 **Stop Detection Algorithm** (stop.rs:97-252):
 
 1. **Token-level checks** (stop.rs:104-132):
+
    - Check stop_tokens → return Stopped
    - Check visible_stop_tokens → return StoppedWithText
 
 2. **Incremental decode** (stop.rs:136-166):
+
    - Decode previous context
    - Decode including new token
    - Check for incomplete UTF-8
 
 3. **String matching** (stop.rs:169-202):
+
    - Combine jail_buffer + new_text
    - Check for complete matches
    - Check visible sequences
 
 4. **Partial match detection** (stop.rs:204-239):
+
    - Check all suffixes as potential prefixes
    - Split safe text vs potential match
    - Jail potential match text
 
 **Critical Fix** (stop.rs:385-424):
+
 - Ensures no repeated/accumulated output
 - Only outputs NEW text, not full buffer
 
@@ -545,6 +569,7 @@ pub struct DecodeStream {
 ```
 
 **Constants:**
+
 - `INITIAL_INCREMENTAL_DETOKENIZATION_OFFSET: usize = 5` (stream.rs:9)
   - Matches common incremental detokenization behavior
 
@@ -561,6 +586,7 @@ impl DecodeStream {
 ```
 
 **Streaming Algorithm** (stream.rs:47-82):
+
 1. Append token to buffer
 2. Decode prefix window for context
 3. Decode full window
@@ -569,6 +595,7 @@ impl DecodeStream {
 6. Update offsets for next iteration
 
 **Metrics:**
+
 - Records stream tokens, incomplete UTF-8, step duration
 
 ### 3.8 tiktoken.rs (Tiktoken Implementation)
@@ -594,21 +621,25 @@ pub enum TiktokenModel {
 ```
 
 **Model Detection** (tiktoken.rs:67-81):
+
 - GPT-4, GPT-3.5, turbo → Cl100kBase
 - davinci-002/003, codex → P50kBase
 - edit models → P50kEdit
 - davinci, curie, babbage, ada → R50kBase
 
 **Vocab Sizes** (tiktoken.rs:46-50):
+
 - Cl100kBase: 100,256 tokens
 - P50k variants: 50,281 tokens
 - R50kBase: 50,257 tokens
 
 **Special Tokens** (tiktoken.rs:84-114):
+
 - All models use `<|endoftext|>` for BOS/EOS/PAD
 - Cl100k adds FIM tokens for code completion
 
 **Limitations:**
+
 - No token↔ID mapping (returns None) (tiktoken.rs:151-161)
 - Requires Vec<u32> → Vec<usize> conversion
 
@@ -619,10 +650,12 @@ pub enum TiktokenModel {
 **Purpose:** Simple tokenizer for unit testing
 
 **Vocabulary:**
+
 - 8 predefined tokens: "Hello"→1, "world"→2, "test"→3, etc.
 - Special tokens: `<eos>`→999, `<bos>`→1000
 
 **Behavior:**
+
 - Encode: Split on whitespace, lookup tokens
 - Decode: Join tokens with spaces
 - Skips special tokens when requested
@@ -641,6 +674,7 @@ pub async fn from_hf(name: impl AsRef<Path>, ignore_weights: bool) -> Result<Pat
 ```
 
 **Features:**
+
 - Downloads only tokenizer-related files by default
 - Filters out model weights, images, and documentation
 - Uses HF_TOKEN environment variable for authentication
@@ -648,9 +682,10 @@ pub async fn from_hf(name: impl AsRef<Path>, ignore_weights: bool) -> Result<Pat
 - Progress indication during download
 
 **File Detection:**
+
 - Tokenizer files: tokenizer.json, tokenizer_config.json, special_tokens_map.json
 - Vocabulary files: vocab.json, merges.txt
-- SentencePiece models: *.model files
+- SentencePiece models: \*.model files
 
 ### 3.11 chat_template.rs (Chat Template Support)
 
@@ -676,16 +711,19 @@ pub struct ChatTemplateProcessor {
 **Key Features:**
 
 1. **Jinja2 Template Rendering** (chat_template.rs:63-102):
+
    - Uses minijinja crate for Jinja2 compatibility
    - Supports full Jinja2 syntax (loops, conditionals, variables)
    - Compatible with HuggingFace chat templates
 
 2. **Template Loading Sources:**
+
    - **tokenizer_config.json** (automatic): Default behavior when creating tokenizer
    - **.jinja files** (explicit): Custom templates that override built-in
    - **Programmatic** (runtime): `set_chat_template()` method
 
 3. **Loading Priority:**
+
    ```rust
    // Priority order:
    // 1. Explicit .jinja file (if provided) - OVERRIDES all
@@ -694,6 +732,7 @@ pub struct ChatTemplateProcessor {
    ```
 
 **Template Variables:**
+
 - `messages`: Array of chat messages with role and content
 - `add_generation_prompt`: Boolean for assistant prompt
 - `bos_token`: Beginning of sequence token
@@ -731,6 +770,7 @@ impl HuggingFaceTokenizer {
 **Template Examples:**
 
 1. **Llama-style Template:**
+
    ```jinja
    {%- for message in messages %}
    {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' }}
@@ -742,6 +782,7 @@ impl HuggingFaceTokenizer {
    ```
 
 2. **ChatML Format:**
+
    ```jinja
    {%- for message in messages %}
    {{- '<|im_start|>' + message['role'] + '\n' }}
@@ -755,20 +796,24 @@ impl HuggingFaceTokenizer {
 **Integration with HuggingFace Tokenizer:**
 
 1. **Automatic Loading** (huggingface.rs:108-124):
+
    - Searches for tokenizer_config.json in same directory
    - Extracts `chat_template` field if present
    - Stores template for use in apply_chat_template
 
 2. **Override Mechanism** (huggingface.rs:28-50):
+
    - If chat_template_path provided, loads from .jinja file
    - Replaces any existing template from tokenizer_config.json
    - Matches Python's behavior: custom templates always override
 
 3. **Runtime Modification** (huggingface.rs:140-144):
+
    - `set_chat_template()` allows changing template after creation
    - Equivalent to Python's `tokenizer.chat_template = template`
 
 **Testing Coverage:**
+
 - Template rendering with various formats (Llama, ChatML, custom)
 - Loading from .jinja files
 - Override behavior verification
@@ -780,15 +825,18 @@ impl HuggingFaceTokenizer {
 ### Core Trait Hierarchy
 
 1. **Encoder** (traits.rs:4-7)
+
    - Contract: Convert text to token IDs
    - Requirements: Send + Sync for thread safety
    - Error handling via Result
 
 2. **Decoder** (traits.rs:10-12)
+
    - Contract: Convert token IDs to text
    - `skip_special_tokens` parameter for filtering
 
 3. **Tokenizer** (traits.rs:15-20)
+
    - Extends both Encoder and Decoder
    - Adds vocab introspection
    - Token↔ID bidirectional mapping
@@ -796,6 +844,7 @@ impl HuggingFaceTokenizer {
 ### Encoding Contract
 
 The `Encoding` enum must:
+
 - Provide `token_ids()` returning Vec<u32>
 - Support multiple backend representations
 - Handle type conversions (usize→u32 for Tiktoken)
@@ -812,11 +861,13 @@ The `Encoding` enum must:
 ### HuggingFace Adapter
 
 **Normalization/Pretokenization:**
+
 - Handled by underlying `tokenizers` crate
 - Configurable via JSON tokenizer files
 - BPE, WordPiece, Unigram models supported
 
 **API Mapping:**
+
 - `encode(input, add_special_tokens=false)` → Encoding::Hf
 - Batch encoding supported natively
 - Vocab extraction for lookups
@@ -824,12 +875,14 @@ The `Encoding` enum must:
 ### Tiktoken Adapter
 
 **Model Families:**
+
 - cl100k_base: Modern GPT models (GPT-4, GPT-3.5)
 - p50k_base: Codex and davinci-002/003
 - p50k_edit: Edit-specific models
 - r50k_base: Classic GPT-3
 
 **Byte-Level Behavior:**
+
 - Direct byte-pair encoding without pretokenization
 - No subword regularization
 - Deterministic encoding
@@ -839,20 +892,24 @@ The `Encoding` enum must:
 **Algorithms:**
 
 1. **Substring Matching:**
+
    - Exact match for stop sequences
    - Prefix detection for partial matches
 
 2. **Streaming Matcher:**
+
    - Incremental text accumulation
    - Jail buffer for uncertain text
    - Release on divergence
 
 3. **Overlap Handling:**
+
    - Token boundaries respected
    - UTF-8 boundary checking
    - Multi-byte character safety
 
 **Window Sizes:**
+
 - Initial offset: 5 tokens (standard)
 - Prefix window: Variable based on decoding
 - Jail buffer: Unbounded (cleared on match/divergence)
@@ -862,10 +919,12 @@ The `Encoding` enum must:
 ### Pipeline Position
 
 1. **Tokenization Phase:**
+
    - Runs during request preprocessing
    - Caches prompt encodings
 
 2. **Decoding Phase:**
+
    - Runs per-token during generation
    - Maintains streaming state
 
@@ -888,6 +947,7 @@ The `Encoding` enum must:
 ### Test Coverage Summary
 
 **Unit Tests (38 tests across 7 modules):**
+
 - `factory.rs`: 4 tests - JSON detection, file types, model routing
 - `huggingface.rs`: 1 test - Chat template handling
 - `sequence.rs`: 5 tests - Append operations, incremental decode
@@ -897,6 +957,7 @@ The `Encoding` enum must:
 - `tests.rs`: 9 tests - Cross-module integration
 
 **Integration Tests (10 tests in tokenizer_integration.rs):**
+
 - HuggingFace tokenizer hash verification
 - Encode/decode lifecycle testing
 - Sequence operations with real tokenizers
@@ -910,20 +971,22 @@ The `Encoding` enum must:
 ### Benchmark Suite (tokenizer_benchmark.rs)
 
 **Performance Benchmarks (12 benchmark groups):**
-1. **Encode Throughput**: Single-threaded encoding performance
-2. **Batch Encode**: Batch vs individual encoding comparison
-3. **Concurrent Encode**: Multi-request concurrent encoding
-4. **Decode Performance**: Various decode scenarios
-5. **Streaming Decode**: 100K token streaming performance
-6. **Latency Distribution**: P50/P90/P99 latency metrics
-7. **Concurrent Streaming**: Multi-stream performance
-8. **Stop Sequences**: Stop detection overhead
-9. **Multithreaded Encode**: Thread scaling characteristics
+
+01. **Encode Throughput**: Single-threaded encoding performance
+02. **Batch Encode**: Batch vs individual encoding comparison
+03. **Concurrent Encode**: Multi-request concurrent encoding
+04. **Decode Performance**: Various decode scenarios
+05. **Streaming Decode**: 100K token streaming performance
+06. **Latency Distribution**: P50/P90/P99 latency metrics
+07. **Concurrent Streaming**: Multi-stream performance
+08. **Stop Sequences**: Stop detection overhead
+09. **Multithreaded Encode**: Thread scaling characteristics
 10. **Multithreaded Decode**: Decode thread scaling
 11. **Memory Efficiency**: Memory usage patterns
 12. **Scaling Characteristics**: Performance vs input size
 
 **Test Prompts:**
+
 - Short: 30 chars ("What is the capital of France?")
 - Medium: 201 chars (Quantum computing explanation)
 - Long: 638 chars (Software engineering review)
@@ -933,19 +996,23 @@ The `Encoding` enum must:
 ### Configuration
 
 **Environment Variables:**
+
 - `HF_TOKEN`: HuggingFace authentication token for private models
 
 **Dependencies:**
+
 - All tokenizer backends included by default
 - No feature flags required
 
 **Model Mapping:**
+
 - Hardcoded in factory.rs
 - TODO: Make configurable
 
 ### Metrics
 
 **Metric Names (via TokenizerMetrics):**
+
 - `lmdeploy_router_tokenizer_encode_duration_seconds`
 - `lmdeploy_router_tokenizer_decode_duration_seconds`
 - `lmdeploy_router_tokenizer_tokens_per_encode`
@@ -955,6 +1022,7 @@ The `Encoding` enum must:
 - `lmdeploy_router_tokenizer_stream_incomplete_utf8_total`
 
 **Labels:**
+
 - `tokenizer_type`: huggingface, tiktoken, mock
 - `operation`: encode, decode, factory_load
 - `error_type`: Various error conditions
@@ -970,6 +1038,7 @@ The `Encoding` enum must:
 ### Dynamic Batching Analysis
 
 **Note**: Dynamic batching implementation was explored but found to have significant overhead:
+
 - Channel communication adds ~3-4ms latency per request
 - Single requests are ~300x slower with dynamic batching
 - Even concurrent requests show 50-100% performance regression
@@ -993,29 +1062,36 @@ The `Encoding` enum must:
 ## 10. TODO
 
 1. **TODO:** Implement `Encoding::get_hash()` for caching support
+
    - File: `src/tokenizer/traits.rs`
    - Symbol: `impl Encoding`
 
 2. **TODO:** Add character offset tracking
+
    - File: `src/tokenizer/traits.rs`
    - Symbol: `pub type Offsets = (usize, usize)`
 
 3. **TODO:** Support SentencePiece models
+
    - File: `src/tokenizer/factory.rs:69-72`
    - Symbol: Extension match arm for "model"
 
 4. **TODO:** Support GGUF format
+
    - File: `src/tokenizer/factory.rs:74-78`
    - Symbol: Extension match arm for "gguf"
 
 5. **TODO:** Add token↔ID mapping for Tiktoken
+
    - File: `src/tokenizer/tiktoken.rs:151-161`
    - Symbol: `token_to_id()` and `id_to_token()` methods
 
 6. **TODO:** Fix `token_ids_ref()` for Tiktoken
+
    - File: `src/tokenizer/traits.rs:46-50`
    - Symbol: `Encoding::Tiktoken` match arm
 
 7. **TODO:** Make model→tokenizer mapping configurable
+
    - File: `src/tokenizer/factory.rs:174-184`
    - Symbol: GPT model detection logic

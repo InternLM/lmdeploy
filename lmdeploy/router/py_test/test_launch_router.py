@@ -79,13 +79,15 @@ class TestLaunchRouter(unittest.TestCase):
         )
 
     def create_router_args(self, **kwargs):
-        """Create router arguments by updating default args with provided kwargs."""
+        """Create router arguments by updating default args with provided
+        kwargs."""
         args_dict = vars(self.default_args).copy()
         args_dict.update(kwargs)
         return SimpleNamespace(**args_dict)
 
     def run_router_process(self, args):
-        """Run router in a separate process and verify it starts successfully."""
+        """Run router in a separate process and verify it starts
+        successfully."""
         process = multiprocessing.Process(target=run_router, args=(args,))
         try:
             process.start()
@@ -124,7 +126,8 @@ class TestLaunchRouter(unittest.TestCase):
         self.run_router_process(args)
 
     def test_launch_router_pd_mode_basic(self):
-        """Test basic PD router functionality without actually starting servers."""
+        """Test basic PD router functionality without actually starting
+        servers."""
         # This test just verifies the PD router can be created and configured
         # without actually starting it (which would require real prefill/decode servers)
         from lmdeploy_router import Router
@@ -172,7 +175,8 @@ class TestLaunchRouter(unittest.TestCase):
         self.assertIsNotNone(router)
 
     def test_policy_validation(self):
-        """Test that policy validation works correctly for PD and regular modes."""
+        """Test that policy validation works correctly for PD and regular
+        modes."""
         from lmdeploy_router.launch_router import launch_router
 
         # Test 1: PowerOfTwo requires at least 2 workers
@@ -294,7 +298,8 @@ class TestLaunchRouter(unittest.TestCase):
         self.assertEqual(router_args.decode_selector, {})
 
     def test_empty_worker_urls_args_parsing(self):
-        """Test that router accepts no worker URLs and defaults to empty list."""
+        """Test that router accepts no worker URLs and defaults to empty
+        list."""
         import argparse
 
         from lmdeploy_router.launch_router import RouterArgs

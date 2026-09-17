@@ -1,8 +1,7 @@
-"""
-Unit tests for validation logic in lmdeploy_router.
+"""Unit tests for validation logic in lmdeploy_router.
 
-These tests focus on testing the validation logic in isolation,
-including parameter validation, URL validation, and configuration validation.
+These tests focus on testing the validation logic in isolation, including parameter validation, URL validation, and
+configuration validation.
 """
 
 from unittest.mock import MagicMock, patch

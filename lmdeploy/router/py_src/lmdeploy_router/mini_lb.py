@@ -1,6 +1,4 @@
-"""
-Minimal HTTP load balancer for prefill and decode servers for testing.
-"""
+"""Minimal HTTP load balancer for prefill and decode servers for testing."""
 
 import asyncio
 import logging

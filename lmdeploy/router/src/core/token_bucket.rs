@@ -51,7 +51,7 @@ impl TokenBucket {
     }
 
     /// Try to acquire tokens immediately
-    pub async fn try_acquire(&self, tokens: f64) -> Result<(), ()> {
+    pub async fn try_acquire(&self, tokens: f64) -> bool {
         let mut inner = self.inner.lock().await;
 
         // Refill tokens based on elapsed time
@@ -74,16 +74,16 @@ impl TokenBucket {
                 "Token bucket: acquired {} tokens, {} remaining",
                 tokens, inner.tokens
             );
-            Ok(())
+            true
         } else {
-            Err(())
+            false
         }
     }
 
     /// Acquire tokens, waiting if necessary
     pub async fn acquire(&self, tokens: f64) -> Result<(), tokio::time::error::Elapsed> {
         // First try to acquire immediately
-        if self.try_acquire(tokens).await.is_ok() {
+        if self.try_acquire(tokens).await {
             return Ok(());
         }
 
@@ -104,7 +104,7 @@ impl TokenBucket {
         tokio::time::timeout(wait_time, async {
             loop {
                 // Check if we can acquire now
-                if self.try_acquire(tokens).await.is_ok() {
+                if self.try_acquire(tokens).await {
                     return;
                 }
 
@@ -165,17 +165,17 @@ mod tests {
         let bucket = TokenBucket::new(10, 5); // 10 capacity, 5 per second
 
         // Should succeed - bucket starts full
-        assert!(bucket.try_acquire(5.0).await.is_ok());
-        assert!(bucket.try_acquire(5.0).await.is_ok());
+        assert!(bucket.try_acquire(5.0).await);
+        assert!(bucket.try_acquire(5.0).await);
 
         // Should fail - no tokens left
-        assert!(bucket.try_acquire(1.0).await.is_err());
+        assert!(!bucket.try_acquire(1.0).await);
 
         // Wait for refill
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         // Should have ~1.5 tokens now
-        assert!(bucket.try_acquire(1.0).await.is_ok());
+        assert!(bucket.try_acquire(1.0).await);
     }
 
     #[tokio::test]
@@ -183,7 +183,7 @@ mod tests {
         let bucket = TokenBucket::new(10, 10); // 10 capacity, 10 per second
 
         // Use all tokens
-        assert!(bucket.try_acquire(10.0).await.is_ok());
+        assert!(bucket.try_acquire(10.0).await);
 
         // Wait for partial refill
         tokio::time::sleep(Duration::from_millis(500)).await;

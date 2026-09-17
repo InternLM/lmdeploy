@@ -4,15 +4,15 @@ The LMDeploy Router supports multiple load balancing policies for distributing r
 
 ## Available Policies
 
-| Policy | Best For | Session Affinity | Load Aware |
-|--------|----------|------------------|------------|
-| `round_robin` | General purpose, even distribution | No | No |
-| `random` | Simple deployments | No | No |
-| `consistent_hash` | Multi-turn conversations, KV cache reuse | Yes | No |
-| `power_of_two` | Load-sensitive workloads | No | Yes |
-| `cache_aware` | Prefix caching optimization | Yes (cache-based) | Yes |
+| Policy            | Best For                                 | Session Affinity  | Load Aware |
+| ----------------- | ---------------------------------------- | ----------------- | ---------- |
+| `round_robin`     | General purpose, even distribution       | No                | No         |
+| `random`          | Simple deployments                       | No                | No         |
+| `consistent_hash` | Multi-turn conversations, KV cache reuse | Yes               | No         |
+| `power_of_two`    | Load-sensitive workloads                 | No                | Yes        |
+| `cache_aware`     | Prefix caching optimization              | Yes (cache-based) | Yes        |
 
----
+______________________________________________________________________
 
 ## Consistent Hash
 
@@ -40,25 +40,26 @@ router = Router(
 
 The consistent hash policy extracts a routing key in the following priority order:
 
-| Priority | Source | Header/Field | Example |
-|----------|--------|--------------|---------|
-| 1 | HTTP Header | `X-Session-ID` | `X-Session-ID: session-abc-123` |
-| 2 | HTTP Header | `X-User-ID` | `X-User-ID: user-456` |
-| 3 | HTTP Header | `X-Tenant-ID` | `X-Tenant-ID: tenant-xyz` |
-| 4 | HTTP Header | `X-Request-ID` | `X-Request-ID: req-789` |
-| 5 | HTTP Header | `X-Correlation-ID` | `X-Correlation-ID: corr-001` |
-| 6 | HTTP Header | `X-Trace-ID` | `X-Trace-ID: trace-002` |
-| 7 | Request Body | `session_params.session_id` | `{"session_params": {"session_id": "..."}}` |
-| 8 | Request Body | `user` | `{"user": "..."}` (OpenAI format) |
-| 9 | Request Body | `session_id` | `{"session_id": "..."}` (legacy) |
-| 10 | Request Body | `user_id` | `{"user_id": "..."}` (legacy) |
-| 11 | Fallback | Request body hash | Hash of entire request body |
+| Priority | Source       | Header/Field                | Example                                     |
+| -------- | ------------ | --------------------------- | ------------------------------------------- |
+| 1        | HTTP Header  | `X-Session-ID`              | `X-Session-ID: session-abc-123`             |
+| 2        | HTTP Header  | `X-User-ID`                 | `X-User-ID: user-456`                       |
+| 3        | HTTP Header  | `X-Tenant-ID`               | `X-Tenant-ID: tenant-xyz`                   |
+| 4        | HTTP Header  | `X-Request-ID`              | `X-Request-ID: req-789`                     |
+| 5        | HTTP Header  | `X-Correlation-ID`          | `X-Correlation-ID: corr-001`                |
+| 6        | HTTP Header  | `X-Trace-ID`                | `X-Trace-ID: trace-002`                     |
+| 7        | Request Body | `session_params.session_id` | `{"session_params": {"session_id": "..."}}` |
+| 8        | Request Body | `user`                      | `{"user": "..."}` (OpenAI format)           |
+| 9        | Request Body | `session_id`                | `{"session_id": "..."}` (legacy)            |
+| 10       | Request Body | `user_id`                   | `{"user_id": "..."}` (legacy)               |
+| 11       | Fallback     | Request body hash           | Hash of entire request body                 |
 
 ### Usage Examples
 
 #### Recommended: Using HTTP Headers
 
 HTTP headers are the **recommended approach** for session affinity because:
+
 - No JSON body parsing required (faster routing)
 - Works with any request format
 - Compatible with standard infrastructure tools (Nginx, Envoy, K8s Ingress)
@@ -114,7 +115,7 @@ curl -X POST http://router:8000/v1/chat/completions \
 - **Virtual nodes**: Uses 160 virtual nodes per worker for even distribution
 - **DP-aware routing**: Supports data-parallel worker URLs (e.g., `http://worker:8000@0`)
 
----
+______________________________________________________________________
 
 ## Round Robin
 
@@ -139,7 +140,7 @@ lmdeploy-router --policy round_robin --worker-urls http://worker1:8000,http://wo
 - Single-turn requests
 - When even distribution is more important than cache locality
 
----
+______________________________________________________________________
 
 ## Random
 
@@ -163,7 +164,7 @@ lmdeploy-router --policy random --worker-urls http://worker1:8000,http://worker2
 - When you want to avoid any sequential patterns
 - Testing and development
 
----
+______________________________________________________________________
 
 ## Power of Two Choices
 
@@ -191,7 +192,7 @@ lmdeploy-router --policy power_of_two --worker-urls http://worker1:8000,http://w
 
 Requires at least 2 workers. With only 1 worker, behaves like direct routing.
 
----
+______________________________________________________________________
 
 ## Cache Aware
 
@@ -209,22 +210,24 @@ lmdeploy-router --policy cache_aware \
 
 ### Parameters
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `cache_threshold` | 0.5 | Minimum prefix match ratio to use cache-based routing |
-| `balance_abs_threshold` | 32 | Absolute load difference threshold for load balancing |
-| `balance_rel_threshold` | 1.1 | Relative load ratio threshold for load balancing |
-| `eviction_interval_secs` | 30 | Interval for cache eviction |
-| `max_tree_size` | 10000 | Maximum nodes per radix tree |
+| Parameter                | Default | Description                                           |
+| ------------------------ | ------- | ----------------------------------------------------- |
+| `cache_threshold`        | 0.5     | Minimum prefix match ratio to use cache-based routing |
+| `balance_abs_threshold`  | 32      | Absolute load difference threshold for load balancing |
+| `balance_rel_threshold`  | 1.1     | Relative load ratio threshold for load balancing      |
+| `eviction_interval_secs` | 30      | Interval for cache eviction                           |
+| `max_tree_size`          | 10000   | Maximum nodes per radix tree                          |
 
 ### Behavior
 
 1. **Balanced mode** (when load is even):
+
    - Find worker with highest prefix match for the request
    - If match rate > `cache_threshold`: route to that worker (cache hit)
    - Otherwise: route to worker with smallest tree (most cache capacity)
 
 2. **Imbalanced mode** (when load is skewed):
+
    - Route to worker with lowest load (shortest queue)
    - Still updates the tree to maintain cache state
 
@@ -234,7 +237,7 @@ lmdeploy-router --policy cache_aware \
 - When prefix caching is enabled on backend workers
 - Multi-tenant deployments with distinct prompt patterns
 
----
+______________________________________________________________________
 
 ## Choosing a Policy
 
@@ -267,15 +270,15 @@ lmdeploy-router --policy cache_aware \
 
 ### Quick Reference
 
-| Scenario | Recommended Policy |
-|----------|-------------------|
-| Chat applications with conversation history | `consistent_hash` |
-| Batch inference with no state | `round_robin` |
-| Variable request complexity | `power_of_two` |
-| Repeated system prompts / few-shot | `cache_aware` |
-| Simple testing / development | `random` |
+| Scenario                                    | Recommended Policy |
+| ------------------------------------------- | ------------------ |
+| Chat applications with conversation history | `consistent_hash`  |
+| Batch inference with no state               | `round_robin`      |
+| Variable request complexity                 | `power_of_two`     |
+| Repeated system prompts / few-shot          | `cache_aware`      |
+| Simple testing / development                | `random`           |
 
----
+______________________________________________________________________
 
 ## PD (Prefill-Decode) Mode
 
@@ -291,5 +294,6 @@ lmdeploy-router \
 ```
 
 This allows optimizing each stage independently:
+
 - **Prefill**: Use `consistent_hash` for cache locality
 - **Decode**: Use `round_robin` or `power_of_two` for load distribution

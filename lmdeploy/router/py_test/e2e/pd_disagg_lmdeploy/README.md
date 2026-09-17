@@ -55,3 +55,4 @@ Optional LM-Eval:
 python3 test_lm_eval_accuracy.py \
   --router-url http://127.0.0.1:8300 \
   --model "$MODEL_NAME"
+```

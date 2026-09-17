@@ -48,6 +48,8 @@ jobs:
     steps:
       - name: Clone repository
         uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
       - name: Install lmdeploy
         run: |
           python3 -m pip install --upgrade -r requirements/runtime_cuda.txt

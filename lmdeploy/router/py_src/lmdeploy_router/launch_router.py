@@ -20,8 +20,7 @@ except ImportError:
 
 
 def launch_router(args: argparse.Namespace) -> Optional[Router]:
-    """
-    Launch the LMDeploy router with the configuration from parsed arguments.
+    """Launch the LMDeploy router with the configuration from parsed arguments.
 
     Args:
         args: Namespace object containing router configuration
@@ -60,7 +59,8 @@ def launch_router(args: argparse.Namespace) -> Optional[Router]:
 class CustomHelpFormatter(
     argparse.RawDescriptionHelpFormatter, argparse.ArgumentDefaultsHelpFormatter
 ):
-    """Custom formatter that preserves both description formatting and shows defaults"""
+    """Custom formatter that preserves both description formatting and shows
+    defaults."""
 
     pass
 

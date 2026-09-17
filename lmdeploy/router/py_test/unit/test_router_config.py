@@ -1,8 +1,7 @@
-"""
-Unit tests for router configuration validation and setup.
+"""Unit tests for router configuration validation and setup.
 
-These tests focus on testing the router configuration logic in isolation,
-including validation of configuration parameters and their interactions.
+These tests focus on testing the router configuration logic in isolation, including validation of configuration
+parameters and their interactions.
 """
 
 from unittest.mock import MagicMock, patch

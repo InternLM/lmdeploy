@@ -1,8 +1,7 @@
-"""
-Unit tests for startup sequence logic in lmdeploy_router.
+"""Unit tests for startup sequence logic in lmdeploy_router.
 
-These tests focus on testing the startup sequence logic in isolation,
-including router initialization, configuration validation, and startup flow.
+These tests focus on testing the startup sequence logic in isolation, including router initialization, configuration
+validation, and startup flow.
 """
 
 import logging
@@ -562,7 +561,8 @@ class TestStartupValidation:
                 router_mod.from_args.assert_called_once()
 
     def test_policy_info_decode_only_during_startup(self):
-        """Test policy info logging during startup with only decode policy specified."""
+        """Test policy info logging during startup with only decode policy
+        specified."""
         args = RouterArgs(
             lmdeploy_pd_disaggregation=True,
             prefill_urls=["http://prefill1:8000"],

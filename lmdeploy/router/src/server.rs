@@ -154,7 +154,7 @@ async fn transparent_proxy_handler(State(state): State<Arc<AppState>>, req: Requ
 
     // Check authorization
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     // Extract path and method
@@ -197,7 +197,7 @@ async fn transparent_proxy_handler(State(state): State<Arc<AppState>>, req: Requ
 async fn liveness(State(state): State<Arc<AppState>>, req: Request) -> Response {
     let headers = req.headers().clone();
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state.router.liveness()
@@ -206,7 +206,7 @@ async fn liveness(State(state): State<Arc<AppState>>, req: Request) -> Response 
 async fn readiness(State(state): State<Arc<AppState>>, req: Request) -> Response {
     let headers = req.headers().clone();
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state.router.readiness()
@@ -215,7 +215,7 @@ async fn readiness(State(state): State<Arc<AppState>>, req: Request) -> Response
 async fn health(State(state): State<Arc<AppState>>, req: Request) -> Response {
     let headers = req.headers().clone();
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state.router.health(req).await
@@ -224,7 +224,7 @@ async fn health(State(state): State<Arc<AppState>>, req: Request) -> Response {
 async fn health_generate(State(state): State<Arc<AppState>>, req: Request) -> Response {
     let headers = req.headers().clone();
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state.router.health_generate(req).await
@@ -233,7 +233,7 @@ async fn health_generate(State(state): State<Arc<AppState>>, req: Request) -> Re
 async fn get_server_info(State(state): State<Arc<AppState>>, req: Request) -> Response {
     let headers = req.headers().clone();
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state.router.get_server_info(req).await
@@ -242,7 +242,7 @@ async fn get_server_info(State(state): State<Arc<AppState>>, req: Request) -> Re
 async fn v1_models(State(state): State<Arc<AppState>>, req: Request) -> Response {
     let headers = req.headers().clone();
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state.router.get_models(req).await
@@ -251,7 +251,7 @@ async fn v1_models(State(state): State<Arc<AppState>>, req: Request) -> Response
 async fn get_model_info(State(state): State<Arc<AppState>>, req: Request) -> Response {
     let headers = req.headers().clone();
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state.router.get_model_info(req).await
@@ -265,7 +265,7 @@ async fn generate(
     Json(body): Json<GenerateRequest>,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state
@@ -280,7 +280,7 @@ async fn v1_chat_completions(
     Json(body): Json<ChatCompletionRequest>,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state.router.route_chat(Some(&headers), &body, None).await
@@ -292,7 +292,7 @@ async fn v1_completions(
     Json(body): Json<CompletionRequest>,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state
@@ -307,7 +307,7 @@ async fn v1_responses(
     Json(body): Json<serde_json::Value>,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state
@@ -322,7 +322,7 @@ async fn v1_embeddings(
     Json(body): Json<EmbeddingRequest>,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state
@@ -337,7 +337,7 @@ async fn v1_responses_get(
     headers: http::HeaderMap,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state
@@ -352,7 +352,7 @@ async fn v1_responses_cancel(
     headers: http::HeaderMap,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state
@@ -367,7 +367,7 @@ async fn v1_responses_delete(
     headers: http::HeaderMap,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     // Python server does not support this yet
@@ -383,7 +383,7 @@ async fn v1_responses_list_input_items(
     headers: http::HeaderMap,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     // Python server does not support this yet
@@ -406,7 +406,7 @@ struct UrlQuery {
 async fn authorize_request(
     state: &Arc<AppState>,
     headers: &http::HeaderMap,
-) -> Result<(), Response> {
+) -> Result<(), Box<Response>> {
     let validation_urls = state.context.api_key_validation_urls.as_ref();
     if validation_urls.is_empty() {
         return Ok(());
@@ -421,13 +421,17 @@ async fn authorize_request(
         .strip_prefix("Bearer ")
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, AUTH_FAILURE_MESSAGE).into_response())?;
+        .ok_or_else(|| {
+            Box::new((StatusCode::UNAUTHORIZED, AUTH_FAILURE_MESSAGE).into_response())
+        })?;
 
     if let Some(valid) = state.context.api_key_cache.read().await.get(token).copied() {
         if valid {
             return Ok(());
         }
-        return Err((StatusCode::UNAUTHORIZED, AUTH_FAILURE_MESSAGE).into_response());
+        return Err(Box::new(
+            (StatusCode::UNAUTHORIZED, AUTH_FAILURE_MESSAGE).into_response(),
+        ));
     }
 
     let mut validated = false;
@@ -463,7 +467,9 @@ async fn authorize_request(
     if validated {
         Ok(())
     } else {
-        Err((StatusCode::UNAUTHORIZED, AUTH_FAILURE_MESSAGE).into_response())
+        Err(Box::new(
+            (StatusCode::UNAUTHORIZED, AUTH_FAILURE_MESSAGE).into_response(),
+        ))
     }
 }
 
@@ -670,7 +676,7 @@ async fn add_worker(
     headers: http::HeaderMap,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     match state.router.add_worker(&url).await {
@@ -681,7 +687,7 @@ async fn add_worker(
 
 async fn list_workers(State(state): State<Arc<AppState>>, headers: http::HeaderMap) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     let worker_list = state.router.get_worker_urls();
@@ -694,7 +700,7 @@ async fn remove_worker(
     headers: http::HeaderMap,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state.router.remove_worker(&url);
@@ -707,7 +713,7 @@ async fn remove_worker(
 
 async fn flush_cache(State(state): State<Arc<AppState>>, headers: http::HeaderMap) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state.router.flush_cache().await
@@ -715,7 +721,7 @@ async fn flush_cache(State(state): State<Arc<AppState>>, headers: http::HeaderMa
 
 async fn get_loads(State(state): State<Arc<AppState>>, headers: http::HeaderMap) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     state.router.get_worker_loads().await
@@ -730,7 +736,7 @@ async fn create_worker(
     Json(config): Json<WorkerConfigRequest>,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     // Check if we have a RouterManager (enable_igw=true)
@@ -767,7 +773,7 @@ async fn list_workers_rest(
     headers: http::HeaderMap,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     if let Some(router_manager) = &state.router_manager {
@@ -813,7 +819,7 @@ async fn get_worker(
     headers: http::HeaderMap,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     if let Some(router_manager) = &state.router_manager {
@@ -852,7 +858,7 @@ async fn delete_worker(
     headers: http::HeaderMap,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
-        return response;
+        return *response;
     }
 
     if let Some(router_manager) = &state.router_manager {

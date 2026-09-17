@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""
-P/D Disaggregation LM-Eval Accuracy Test for LMDeploy Router
+"""P/D Disaggregation LM-Eval Accuracy Test for LMDeploy Router.
 
-This script measures LM-Eval accuracy through the LMDeploy Prefill/Decode
-router. It is optional and requires the router to be already running.
+This script measures LM-Eval accuracy through the LMDeploy Prefill/Decode router. It is optional and requires the router
+to be already running.
 
 Uses the LM Evaluation Harness (lm-eval) to measure accuracy on the gsm8k task.
 """
@@ -37,7 +36,7 @@ SIMPLE_PROMPT = (
 
 
 class Colors:
-    """Terminal colors for output"""
+    """Terminal colors for output."""
 
     GREEN = "\033[92m"
     RED = "\033[91m"
@@ -63,8 +62,8 @@ def print_warning(msg: str):
 
 
 def run_simple_prompt(base_url: str, model_name: str) -> bool:
-    """
-    Run a simple prompt to verify connectivity before running full evaluation.
+    """Run a simple prompt to verify connectivity before running full
+    evaluation.
 
     Args:
         base_url: Base URL for the router API
@@ -110,8 +109,7 @@ def run_accuracy_evaluation(
     model_name: str,
     num_concurrent: int = 20,
 ) -> dict:
-    """
-    Run LM Evaluation Harness on gsm8k task.
+    """Run LM Evaluation Harness on gsm8k task.
 
     Args:
         base_url: Base URL for the router API (should be http://host:port/v1)
@@ -154,8 +152,7 @@ def validate_accuracy(
     results: dict,
     model_name: str,
 ) -> bool:
-    """
-    Validate that accuracy meets expected thresholds.
+    """Validate that accuracy meets expected thresholds.
 
     Args:
         results: LM-Eval results dictionary

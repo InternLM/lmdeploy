@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""
-Simple mock backend server for testing the router's transparent proxy feature.
+"""Simple mock backend server for testing the router's transparent proxy
+feature.
 
 Usage:
     python mock_backend_server.py [--port PORT] [--host HOST]

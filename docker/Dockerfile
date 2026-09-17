@@ -22,7 +22,7 @@ FROM ${CUDA_VERSION} AS dev
 ARG PYTHON_VERSION=3.12
 ARG BUILD_ROUTER=1
 
-ENV PATH=/opt/py3/bin:/root/.local/bin:${PATH}
+ENV PATH=/opt/py3/bin:/root/.local/bin:/root/.cargo/bin:${PATH}
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 
@@ -90,6 +90,7 @@ RUN --mount=type=cache,target=/root/.cache \
 # same artifact path in both variants.
 FROM dev AS router-builder
 ARG BUILD_ROUTER=1
+ENV PATH=/opt/py3/bin:/root/.local/bin:/root/.cargo/bin:${PATH}
 WORKDIR /src
 COPY lmdeploy/router/Cargo.toml lmdeploy/router/Cargo.lock ./
 COPY lmdeploy/router/src ./src

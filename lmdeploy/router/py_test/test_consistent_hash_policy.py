@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""
-Test script for the new Consistent Hash load balancing policy.
+"""Test script for the new Consistent Hash load balancing policy.
 
-This demonstrates how the consistent hash policy routes requests based on session_id
-or user_id, ensuring that requests from the same user/session are consistently
-routed to the same worker for better cache locality and stateful processing.
+This demonstrates how the consistent hash policy routes requests based on session_id or user_id, ensuring that requests
+from the same user/session are consistently routed to the same worker for better cache locality and stateful processing.
 """
 
 import argparse
@@ -36,8 +34,8 @@ class ConsistentHashTester:
     def make_request(
         self, prompt: str, session_id: str = None, user_id: str = None
     ) -> Tuple[bool, str]:
-        """
-        Make a request to the router and return (success, response_text).
+        """Make a request to the router and return (success, response_text).
+
         Returns the full response for analysis.
         """
         # Build request with session_id or user_id in session_params
@@ -66,9 +64,8 @@ class ConsistentHashTester:
             return False, str(e)
 
     def test_session_consistency(self, num_requests: int = 10) -> bool:
-        """
-        Test that requests with the same session_id always go to the same worker.
-        """
+        """Test that requests with the same session_id always go to the same
+        worker."""
         self.log("Testing session consistency...")
 
         session_id = self.generate_session_id()
@@ -93,9 +90,8 @@ class ConsistentHashTester:
         return True
 
     def test_user_consistency(self, num_requests: int = 10) -> bool:
-        """
-        Test that requests with the same user_id always go to the same worker.
-        """
+        """Test that requests with the same user_id always go to the same
+        worker."""
         self.log("Testing user consistency...")
 
         user_id = self.generate_user_id()
@@ -118,9 +114,7 @@ class ConsistentHashTester:
         return True
 
     def test_session_priority_over_user(self) -> bool:
-        """
-        Test that session_id takes priority over user_id for routing.
-        """
+        """Test that session_id takes priority over user_id for routing."""
         self.log("Testing session_id priority over user_id...")
 
         session_id = self.generate_session_id()
@@ -162,9 +156,8 @@ class ConsistentHashTester:
         return True
 
     def test_distribution_across_workers(self, num_sessions: int = 20) -> bool:
-        """
-        Test that different sessions are distributed across multiple workers.
-        """
+        """Test that different sessions are distributed across multiple
+        workers."""
         self.log(
             f"Testing distribution across workers with {num_sessions} different sessions..."
         )
@@ -197,9 +190,8 @@ class ConsistentHashTester:
             return False
 
     def test_fallback_without_session_or_user(self) -> bool:
-        """
-        Test that requests without session_id or user_id still work (fallback behavior).
-        """
+        """Test that requests without session_id or user_id still work
+        (fallback behavior)."""
         self.log("Testing fallback behavior without session_id or user_id...")
 
         for i in range(5):
@@ -218,9 +210,8 @@ class ConsistentHashTester:
         return True
 
     def test_openai_user_field_routing(self) -> bool:
-        """
-        Test routing with OpenAI-style user field instead of session_params.
-        """
+        """Test routing with OpenAI-style user field instead of
+        session_params."""
         self.log("Testing OpenAI user field routing...")
 
         user = self.generate_user_id()
@@ -292,9 +283,8 @@ class ConsistentHashTester:
             return False
 
     def test_concurrent_requests(self, num_concurrent: int = 10) -> bool:
-        """
-        Test concurrent requests with the same session_id to verify thread safety.
-        """
+        """Test concurrent requests with the same session_id to verify thread
+        safety."""
         import threading
         import time
 
@@ -342,9 +332,8 @@ class ConsistentHashTester:
             return False
 
     def test_different_request_formats(self) -> bool:
-        """
-        Test consistent hashing with different request formats (JSON variations).
-        """
+        """Test consistent hashing with different request formats (JSON
+        variations)."""
         self.log("Testing different request formats...")
 
         session_id = self.generate_session_id()
@@ -390,9 +379,7 @@ class ConsistentHashTester:
         return True
 
     def run_comprehensive_test(self) -> bool:
-        """
-        Run all test cases and return overall success.
-        """
+        """Run all test cases and return overall success."""
         self.log("=" * 80)
         self.log("Starting Consistent Hash Policy Comprehensive Test")
         self.log(f"Router URL: {self.router_url}")

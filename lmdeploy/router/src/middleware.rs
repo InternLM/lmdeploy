@@ -433,7 +433,7 @@ impl QueueProcessor {
             let remaining_timeout = self.queue_timeout - elapsed;
 
             // Try to acquire token for this request
-            if self.token_bucket.try_acquire(1.0).await.is_ok() {
+            if self.token_bucket.try_acquire(1.0).await {
                 // Got token immediately
                 debug!("Queue: acquired token immediately for queued request");
                 let _ = queued.permit_tx.send(Ok(()));
@@ -504,7 +504,7 @@ pub async fn concurrency_limit_middleware(
     let token_bucket = app_state.context.rate_limiter.clone();
 
     // Try to acquire token immediately
-    if token_bucket.try_acquire(1.0).await.is_ok() {
+    if token_bucket.try_acquire(1.0).await {
         debug!("Acquired token immediately");
         let response = next.run(request).await;
 

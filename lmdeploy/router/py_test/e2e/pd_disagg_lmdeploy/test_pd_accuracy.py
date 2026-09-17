@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""
-P/D Disaggregation Accuracy Test for LMDeploy Router
+"""P/D Disaggregation Accuracy Test for LMDeploy Router.
 
-This script validates that the router correctly routes requests through
-prefill and decode instances with proper output accuracy.
+This script validates that the router correctly routes requests through prefill and decode instances with proper output
+accuracy.
 """
 
 import argparse
@@ -14,7 +13,7 @@ import requests
 
 
 class Colors:
-    """Terminal colors for output"""
+    """Terminal colors for output."""
 
     GREEN = "\033[92m"
     RED = "\033[91m"
@@ -60,8 +59,7 @@ def test_completion_accuracy(
     max_tokens: int = 30,
     temperature: float = 0.0,
 ) -> bool:
-    """
-    Test that completions return valid outputs through P/D disaggregation.
+    """Test that completions return valid outputs through P/D disaggregation.
 
     Args:
         router_url: URL of the router
@@ -164,8 +162,8 @@ def test_streaming_accuracy(
     max_tokens: int = 20,
     temperature: float = 0.0,
 ) -> bool:
-    """
-    Test that streaming completions work correctly through P/D disaggregation.
+    """Test that streaming completions work correctly through P/D
+    disaggregation.
 
     Args:
         router_url: URL of the router
@@ -271,8 +269,7 @@ def test_streaming_accuracy(
 
 
 def test_router_health(router_url: str) -> bool:
-    """
-    Test that the router is healthy and responding.
+    """Test that the router is healthy and responding.
 
     Args:
         router_url: URL of the router

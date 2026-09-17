@@ -193,12 +193,10 @@ def test_circuit_breaker_with_retries(router_manager, mock_workers):
 
 @pytest.mark.integration
 def test_circuit_breaker_ignores_4xx_client_errors(router_manager, mock_workers):
-    """
-    4xx client errors (e.g., 400 Bad Request) should NOT count as circuit breaker
-    failures. Only 5xx server errors indicate worker health issues.
+    """4xx client errors (e.g., 400 Bad Request) should NOT count as circuit
+    breaker failures. Only 5xx server errors indicate worker health issues.
 
-    This test ensures that many 400 responses do not trip the circuit breaker,
-    while 500 responses still do.
+    This test ensures that many 400 responses do not trip the circuit breaker, while 500 responses still do.
     """
     # Worker that returns 400 Bad Request for all requests
     _, [client_error_url], _ = mock_workers(n=1, args=["--status-code", "400"])

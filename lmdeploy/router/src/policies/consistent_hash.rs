@@ -48,8 +48,7 @@ impl ConsistentHashPolicy {
         let mut h = (seed as u64) ^ ((key.len() as u64).wrapping_mul(M));
 
         // Process 8-byte chunks
-        let chunks = key.chunks_exact(8);
-        let remainder = chunks.remainder();
+        let (chunks, remainder) = key.as_chunks::<8>();
 
         for chunk in chunks {
             let mut k = u64::from_le_bytes([

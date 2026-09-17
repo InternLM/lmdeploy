@@ -1,8 +1,6 @@
-"""
-Unit tests for argument parsing functionality in lmdeploy_router.
+"""Unit tests for argument parsing functionality in lmdeploy_router.
 
-These tests focus on testing the argument parsing logic in isolation,
-without starting actual router instances.
+These tests focus on testing the argument parsing logic in isolation, without starting actual router instances.
 """
 
 from types import SimpleNamespace
@@ -312,7 +310,8 @@ class TestRouterArgs:
         assert router_args.policy == "cache_aware"  # Main policy still set
 
     def test_from_cli_args_without_prefix(self):
-        """Test creating RouterArgs from CLI arguments without router prefix."""
+        """Test creating RouterArgs from CLI arguments without router
+        prefix."""
         args = SimpleNamespace(
             host="127.0.0.1",
             port=30000,
