@@ -40,6 +40,10 @@ private:
 
     const int attn_tp_group_;
     const int mlp_group_;
+    const int node_group_;
+
+    // Per-layer post-FFN reduce group, precomputed in the constructor.
+    std::vector<int> ffn_group_;
 
     comm::DeviceCommImpl* const d_comm_;
 
