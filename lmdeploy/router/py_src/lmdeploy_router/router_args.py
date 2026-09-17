@@ -1,7 +1,7 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import argparse
 import dataclasses
 import logging
-from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -9,24 +9,24 @@ logger = logging.getLogger(__name__)
 @dataclasses.dataclass
 class RouterArgs:
     # Worker configuration
-    worker_urls: List[str] = dataclasses.field(default_factory=list)
-    host: str = "127.0.0.1"
+    worker_urls: list[str] = dataclasses.field(default_factory=list)
+    host: str = '127.0.0.1'
     port: int = 30000
 
     # PD-specific configuration
     mini_lb: bool = False
     lmdeploy_pd_disaggregation: bool = False
-    lmdeploy_migration_protocol: str = "rdma"
-    lmdeploy_rdma_link_type: str = "roce"
+    lmdeploy_migration_protocol: str = 'rdma'
+    lmdeploy_rdma_link_type: str = 'roce'
     lmdeploy_disable_gdr: bool = False
     lmdeploy_dummy_prefill: bool = False
-    prefill_urls: List[str] = dataclasses.field(default_factory=list)
-    decode_urls: List[str] = dataclasses.field(default_factory=list)
+    prefill_urls: list[str] = dataclasses.field(default_factory=list)
+    decode_urls: list[str] = dataclasses.field(default_factory=list)
 
     # Routing policy
-    policy: str = "cache_aware"
-    prefill_policy: Optional[str] = None  # Specific policy for prefill nodes in PD mode
-    decode_policy: Optional[str] = None  # Specific policy for decode nodes in PD mode
+    policy: str = 'cache_aware'
+    prefill_policy: str | None = None  # Specific policy for prefill nodes in PD mode
+    decode_policy: str | None = None  # Specific policy for decode nodes in PD mode
     worker_startup_timeout_secs: int = 600
     worker_startup_check_interval: int = 30
     cache_threshold: float = 0.3
@@ -36,24 +36,24 @@ class RouterArgs:
     max_tree_size: int = 2**26
     max_payload_size: int = 512 * 1024 * 1024  # 512MB default for large batches
     enable_igw: bool = False  # Enable IGW (Inter-Gateway) mode for multi-model support
-    api_key: Optional[str] = None
-    log_dir: Optional[str] = None
-    log_level: Optional[str] = None
+    api_key: str | None = None
+    log_dir: str | None = None
+    log_level: str | None = None
     # Service discovery configuration
     service_discovery: bool = False
-    selector: Dict[str, str] = dataclasses.field(default_factory=dict)
+    selector: dict[str, str] = dataclasses.field(default_factory=dict)
     service_discovery_port: int = 80
-    service_discovery_namespace: Optional[str] = None
+    service_discovery_namespace: str | None = None
     # PD service discovery configuration
-    prefill_selector: Dict[str, str] = dataclasses.field(default_factory=dict)
-    decode_selector: Dict[str, str] = dataclasses.field(default_factory=dict)
+    prefill_selector: dict[str, str] = dataclasses.field(default_factory=dict)
+    decode_selector: dict[str, str] = dataclasses.field(default_factory=dict)
     # KV connector for PD disaggregation (nixl pull-based or mooncake push-based)
-    kv_connector: str = "nixl"
+    kv_connector: str = 'nixl'
     # Prometheus configuration
-    prometheus_port: Optional[int] = None
-    prometheus_host: Optional[str] = None
+    prometheus_port: int | None = None
+    prometheus_host: str | None = None
     # Request ID headers configuration
-    request_id_headers: Optional[List[str]] = None
+    request_id_headers: list[str] | None = None
     # Request timeout in seconds
     request_timeout_secs: int = 1800
     # Max concurrent requests for rate limiting
@@ -63,9 +63,9 @@ class RouterArgs:
     # Maximum time (in seconds) a request can wait in queue before timing out
     queue_timeout_secs: int = 60
     # Token bucket refill rate (tokens per second). If not set, defaults to max_concurrent_requests
-    rate_limit_tokens_per_second: Optional[int] = None
+    rate_limit_tokens_per_second: int | None = None
     # CORS allowed origins
-    cors_allowed_origins: List[str] = dataclasses.field(default_factory=list)
+    cors_allowed_origins: list[str] = dataclasses.field(default_factory=list)
     # Retry configuration
     retry_max_retries: int = 5
     retry_initial_backoff_ms: int = 50
@@ -78,7 +78,7 @@ class RouterArgs:
     health_success_threshold: int = 2
     health_check_timeout_secs: int = 5
     health_check_interval_secs: int = 60
-    health_check_endpoint: str = "/health"
+    health_check_endpoint: str = '/health'
     # Circuit breaker configuration
     cb_failure_threshold: int = 10
     cb_success_threshold: int = 3
@@ -99,424 +99,429 @@ class RouterArgs:
             use_router_prefix: If True, prefix all arguments with 'router-' to avoid conflicts
             exclude_host_port: If True, don't add host and port arguments (used when inheriting from server)
         """
-        prefix = "router-" if use_router_prefix else ""
+        prefix = 'router-' if use_router_prefix else ''
 
         # Worker configuration
         if not exclude_host_port:
             parser.add_argument(
-                "--host",
+                '--host',
                 type=str,
                 default=RouterArgs.host,
-                help="Host address to bind the router server",
+                help='Host address to bind the router server',
             )
             parser.add_argument(
-                "--port",
+                '--port',
                 type=int,
                 default=RouterArgs.port,
-                help="Port number to bind the router server",
+                help='Port number to bind the router server',
             )
 
         parser.add_argument(
-            "--worker-urls",
+            '--worker-urls',
             type=str,
-            nargs="*",
+            nargs='*',
             default=[],
-            help="List of worker URLs (e.g., http://worker1:8000 http://worker2:8000)",
+            help='List of worker URLs (e.g., http://worker1:8000 http://worker2:8000)',
         )
 
         # Routing policy configuration
         parser.add_argument(
-            f"--{prefix}policy",
+            f'--{prefix}policy',
             type=str,
             default=RouterArgs.policy,
             choices=[
-                "random",
-                "round_robin",
-                "cache_aware",
-                "power_of_two",
-                "consistent_hash",
-                "rendezvous_hash",
+                'random',
+                'round_robin',
+                'cache_aware',
+                'power_of_two',
+                'consistent_hash',
+                'rendezvous_hash',
             ],
-            help="Load balancing policy to use. In PD mode, this is used for both prefill and decode unless overridden",
+            help='Load balancing policy to use. In PD mode, this is used for both prefill and decode unless overridden',
         )
         parser.add_argument(
-            f"--{prefix}prefill-policy",
+            f'--{prefix}prefill-policy',
             type=str,
             default=None,
             choices=[
-                "random",
-                "round_robin",
-                "cache_aware",
-                "power_of_two",
-                "consistent_hash",
-                "rendezvous_hash",
+                'random',
+                'round_robin',
+                'cache_aware',
+                'power_of_two',
+                'consistent_hash',
+                'rendezvous_hash',
             ],
-            help="Specific policy for prefill nodes in PD mode. If not specified, uses the main policy",
+            help='Specific policy for prefill nodes in PD mode. If not specified, uses the main policy',
         )
         parser.add_argument(
-            f"--{prefix}decode-policy",
+            f'--{prefix}decode-policy',
             type=str,
             default=None,
             choices=[
-                "random",
-                "round_robin",
-                "cache_aware",
-                "power_of_two",
-                "consistent_hash",
-                "rendezvous_hash",
+                'random',
+                'round_robin',
+                'cache_aware',
+                'power_of_two',
+                'consistent_hash',
+                'rendezvous_hash',
             ],
-            help="Specific policy for decode nodes in PD mode. If not specified, uses the main policy",
+            help='Specific policy for decode nodes in PD mode. If not specified, uses the main policy',
         )
 
         # PD-specific arguments
         parser.add_argument(
-            f"--{prefix}mini-lb",
-            action="store_true",
-            help="Enable MiniLB",
+            f'--{prefix}mini-lb',
+            action='store_true',
+            help='Enable MiniLB',
         )
         parser.add_argument(
-            f"--{prefix}lmdeploy-pd-disaggregation",
-            action="store_true",
-            help="Enable LMDeploy PD (Prefill-Decode) disaggregated mode",
+            f'--{prefix}lmdeploy-pd-disaggregation',
+            action='store_true',
+            help='Enable LMDeploy PD (Prefill-Decode) disaggregated mode',
         )
         parser.add_argument(
-            f"--{prefix}lmdeploy-migration-protocol",
+            f'--{prefix}lmdeploy-migration-protocol',
             type=str,
             default=RouterArgs.lmdeploy_migration_protocol,
-            choices=["rdma", "nvlink"],
-            help="Migration protocol for LMDeploy PD disaggregation",
+            choices=['rdma', 'nvlink'],
+            help='Migration protocol for LMDeploy PD disaggregation',
         )
         parser.add_argument(
-            f"--{prefix}lmdeploy-rdma-link-type",
+            f'--{prefix}lmdeploy-rdma-link-type',
             type=str,
             default=RouterArgs.lmdeploy_rdma_link_type,
-            choices=["ib", "roce"],
-            help="RDMA link type for LMDeploy PD disaggregation (used when migration protocol is rdma)",
+            choices=['ib', 'roce'],
+            help='RDMA link type for LMDeploy PD disaggregation (used when migration protocol is rdma)',
         )
         parser.add_argument(
-            f"--{prefix}lmdeploy-disable-gdr",
-            action="store_true",
-            help="Disable GPU Direct RDMA for LMDeploy PD disaggregation",
+            f'--{prefix}lmdeploy-disable-gdr',
+            action='store_true',
+            help='Disable GPU Direct RDMA for LMDeploy PD disaggregation',
         )
         parser.add_argument(
-            f"--{prefix}lmdeploy-dummy-prefill",
-            action="store_true",
-            help="Use dummy prefill for LMDeploy PD disaggregation",
+            f'--{prefix}lmdeploy-dummy-prefill',
+            action='store_true',
+            help='Use dummy prefill for LMDeploy PD disaggregation',
         )
         parser.add_argument(
-            f"--{prefix}prefill",
+            f'--{prefix}prefill',
             nargs=1,
-            action="append",
-            metavar=("URL",),
-            help="Prefill server URL. Can be specified multiple times. "
-            "Format: --prefill URL.",
+            action='append',
+            metavar=('URL',),
+            help='Prefill server URL. Can be specified multiple times. '
+            'Format: --prefill URL.',
         )
         parser.add_argument(
-            f"--{prefix}decode",
+            f'--{prefix}decode',
             nargs=1,
-            action="append",
-            metavar=("URL",),
-            help="Decode server URL. Can be specified multiple times.",
+            action='append',
+            metavar=('URL',),
+            help='Decode server URL. Can be specified multiple times.',
         )
         parser.add_argument(
-            f"--{prefix}worker-startup-timeout-secs",
+            f'--{prefix}worker-startup-timeout-secs',
             type=int,
             default=RouterArgs.worker_startup_timeout_secs,
-            help="Timeout in seconds for worker startup",
+            help='Timeout in seconds for worker startup',
         )
         parser.add_argument(
-            f"--{prefix}worker-startup-check-interval",
+            f'--{prefix}worker-startup-check-interval',
             type=int,
             default=RouterArgs.worker_startup_check_interval,
-            help="Interval in seconds between checks for worker startup",
+            help='Interval in seconds between checks for worker startup',
         )
         parser.add_argument(
-            f"--{prefix}cache-threshold",
+            f'--{prefix}cache-threshold',
             type=float,
             default=RouterArgs.cache_threshold,
-            help="Cache threshold (0.0-1.0) for cache-aware routing",
+            help='Cache threshold (0.0-1.0) for cache-aware routing',
         )
         parser.add_argument(
-            f"--{prefix}balance-abs-threshold",
+            f'--{prefix}balance-abs-threshold',
             type=int,
             default=RouterArgs.balance_abs_threshold,
-            help="Load balancing is triggered when (max_load - min_load) > abs_threshold AND max_load > min_load * rel_threshold. Otherwise, use cache aware",
+            help='Load balancing is triggered when (max_load - min_load) > abs_threshold '
+                 'AND max_load > min_load * rel_threshold. Otherwise, use cache aware',
         )
         parser.add_argument(
-            f"--{prefix}balance-rel-threshold",
+            f'--{prefix}balance-rel-threshold',
             type=float,
             default=RouterArgs.balance_rel_threshold,
-            help="Load balancing is triggered when (max_load - min_load) > abs_threshold AND max_load > min_load * rel_threshold. Otherwise, use cache aware",
+            help='Load balancing is triggered when (max_load - min_load) > abs_threshold '
+                 'AND max_load > min_load * rel_threshold. Otherwise, use cache aware',
         )
         parser.add_argument(
-            f"--{prefix}eviction-interval-secs",
+            f'--{prefix}eviction-interval-secs',
             type=int,
             default=RouterArgs.eviction_interval_secs,
-            help="Interval in seconds between cache eviction operations",
+            help='Interval in seconds between cache eviction operations',
         )
         parser.add_argument(
-            f"--{prefix}max-tree-size",
+            f'--{prefix}max-tree-size',
             type=int,
             default=RouterArgs.max_tree_size,
-            help="Maximum size of the approximation tree for cache-aware routing",
+            help='Maximum size of the approximation tree for cache-aware routing',
         )
         parser.add_argument(
-            f"--{prefix}max-payload-size",
+            f'--{prefix}max-payload-size',
             type=int,
             default=RouterArgs.max_payload_size,
-            help="Maximum payload size in bytes",
+            help='Maximum payload size in bytes',
         )
         parser.add_argument(
-            f"--{prefix}enable-igw",
-            action="store_true",
-            help="Enable IGW (Inference-Gateway) mode for multi-model support",
+            f'--{prefix}enable-igw',
+            action='store_true',
+            help='Enable IGW (Inference-Gateway) mode for multi-model support',
         )
         parser.add_argument(
-            f"--{prefix}api-key",
+            f'--{prefix}api-key',
             type=str,
             default=None,
-            help="The API key used for authorization with workers.",
+            help='The API key used for authorization with workers.',
         )
         parser.add_argument(
-            f"--{prefix}log-dir",
+            f'--{prefix}log-dir',
             type=str,
             default=None,
-            help="Directory to store log files. If not specified, logs are only output to console.",
+            help='Directory to store log files. If not specified, logs are only output to console.',
         )
         parser.add_argument(
-            f"--{prefix}log-level",
+            f'--{prefix}log-level',
             type=str,
-            default="info",
-            choices=["debug", "info", "warning", "error", "critical"],
-            help="Set the logging level. If not specified, defaults to INFO.",
+            default='info',
+            choices=['debug', 'info', 'warning', 'error', 'critical'],
+            help='Set the logging level. If not specified, defaults to INFO.',
         )
         parser.add_argument(
-            f"--{prefix}service-discovery",
-            action="store_true",
-            help="Enable Kubernetes service discovery",
+            f'--{prefix}service-discovery',
+            action='store_true',
+            help='Enable Kubernetes service discovery',
         )
         parser.add_argument(
-            f"--{prefix}selector",
+            f'--{prefix}selector',
             type=str,
-            nargs="+",
+            nargs='+',
             default={},
-            help="Label selector for Kubernetes service discovery (format: key1=value1 key2=value2)",
+            help='Label selector for Kubernetes service discovery (format: key1=value1 key2=value2)',
         )
         parser.add_argument(
-            f"--{prefix}service-discovery-port",
+            f'--{prefix}service-discovery-port',
             type=int,
             default=RouterArgs.service_discovery_port,
-            help="Port to use for discovered worker pods",
+            help='Port to use for discovered worker pods',
         )
         parser.add_argument(
-            f"--{prefix}service-discovery-namespace",
+            f'--{prefix}service-discovery-namespace',
             type=str,
-            help="Kubernetes namespace to watch for pods. If not provided, watches all namespaces (requires cluster-wide permissions)",
+            help='Kubernetes namespace to watch for pods. If not provided, watches all namespaces '
+                 '(requires cluster-wide permissions)',
         )
         parser.add_argument(
-            f"--{prefix}prefill-selector",
+            f'--{prefix}prefill-selector',
             type=str,
-            nargs="+",
+            nargs='+',
             default={},
-            help="Label selector for prefill server pods in PD mode (format: key1=value1 key2=value2)",
+            help='Label selector for prefill server pods in PD mode (format: key1=value1 key2=value2)',
         )
         parser.add_argument(
-            f"--{prefix}decode-selector",
+            f'--{prefix}decode-selector',
             type=str,
-            nargs="+",
+            nargs='+',
             default={},
-            help="Label selector for decode server pods in PD mode (format: key1=value1 key2=value2)",
+            help='Label selector for decode server pods in PD mode (format: key1=value1 key2=value2)',
         )
         parser.add_argument(
-            f"--{prefix}kv-connector",
+            f'--{prefix}kv-connector',
             type=str,
             default=RouterArgs.kv_connector,
-            choices=["nixl", "mooncake", "moriio"],
+            choices=['nixl', 'mooncake', 'moriio'],
             help="KV connector type for PD disaggregation. 'nixl' (default) uses NIXL's "
             "pull-based KV transfer; 'mooncake' uses Mooncake's push-based protocol "
             "'moriio' uses the MoRI-IO connector (either READ or WRITE modes).",
         )
         # Prometheus configuration
         parser.add_argument(
-            f"--{prefix}prometheus-port",
+            f'--{prefix}prometheus-port',
             type=int,
             default=29000,
-            help="Port to expose Prometheus metrics. If not specified, Prometheus metrics are disabled",
+            help='Port to expose Prometheus metrics. If not specified, Prometheus metrics are disabled',
         )
         parser.add_argument(
-            f"--{prefix}prometheus-host",
+            f'--{prefix}prometheus-host',
             type=str,
-            default="127.0.0.1",
-            help="Host address to bind the Prometheus metrics server",
+            default='127.0.0.1',
+            help='Host address to bind the Prometheus metrics server',
         )
         parser.add_argument(
-            f"--{prefix}request-id-headers",
+            f'--{prefix}request-id-headers',
             type=str,
-            nargs="*",
-            help="Custom HTTP headers to check for request IDs (e.g., x-request-id x-trace-id). If not specified, uses common defaults.",
+            nargs='*',
+            help='Custom HTTP headers to check for request IDs (e.g., x-request-id x-trace-id). '
+                 'If not specified, uses common defaults.',
         )
         parser.add_argument(
-            f"--{prefix}request-timeout-secs",
+            f'--{prefix}request-timeout-secs',
             type=int,
             default=RouterArgs.request_timeout_secs,
-            help="Request timeout in seconds",
+            help='Request timeout in seconds',
         )
         # Retry configuration
         parser.add_argument(
-            f"--{prefix}retry-max-retries",
+            f'--{prefix}retry-max-retries',
             type=int,
             default=RouterArgs.retry_max_retries,
         )
         parser.add_argument(
-            f"--{prefix}retry-initial-backoff-ms",
+            f'--{prefix}retry-initial-backoff-ms',
             type=int,
             default=RouterArgs.retry_initial_backoff_ms,
         )
         parser.add_argument(
-            f"--{prefix}retry-max-backoff-ms",
+            f'--{prefix}retry-max-backoff-ms',
             type=int,
             default=RouterArgs.retry_max_backoff_ms,
         )
         parser.add_argument(
-            f"--{prefix}retry-backoff-multiplier",
+            f'--{prefix}retry-backoff-multiplier',
             type=float,
             default=RouterArgs.retry_backoff_multiplier,
         )
         parser.add_argument(
-            f"--{prefix}retry-jitter-factor",
+            f'--{prefix}retry-jitter-factor',
             type=float,
             default=RouterArgs.retry_jitter_factor,
         )
         parser.add_argument(
-            f"--{prefix}disable-retries",
-            action="store_true",
-            help="Disable retries (equivalent to setting retry_max_retries=1)",
+            f'--{prefix}disable-retries',
+            action='store_true',
+            help='Disable retries (equivalent to setting retry_max_retries=1)',
         )
         # Circuit breaker configuration
         parser.add_argument(
-            f"--{prefix}cb-failure-threshold",
+            f'--{prefix}cb-failure-threshold',
             type=int,
             default=RouterArgs.cb_failure_threshold,
         )
         parser.add_argument(
-            f"--{prefix}cb-success-threshold",
+            f'--{prefix}cb-success-threshold',
             type=int,
             default=RouterArgs.cb_success_threshold,
         )
         parser.add_argument(
-            f"--{prefix}cb-timeout-duration-secs",
+            f'--{prefix}cb-timeout-duration-secs',
             type=int,
             default=RouterArgs.cb_timeout_duration_secs,
         )
         parser.add_argument(
-            f"--{prefix}cb-window-duration-secs",
+            f'--{prefix}cb-window-duration-secs',
             type=int,
             default=RouterArgs.cb_window_duration_secs,
         )
         parser.add_argument(
-            f"--{prefix}disable-circuit-breaker",
-            action="store_true",
-            help="Disable circuit breaker (equivalent to setting cb_failure_threshold to u32::MAX)",
+            f'--{prefix}disable-circuit-breaker',
+            action='store_true',
+            help='Disable circuit breaker (equivalent to setting cb_failure_threshold to u32::MAX)',
         )
         # Health check configuration
         parser.add_argument(
-            f"--{prefix}health-failure-threshold",
+            f'--{prefix}health-failure-threshold',
             type=int,
             default=RouterArgs.health_failure_threshold,
-            help="Number of consecutive health check failures before marking worker unhealthy",
+            help='Number of consecutive health check failures before marking worker unhealthy',
         )
         parser.add_argument(
-            f"--{prefix}health-success-threshold",
+            f'--{prefix}health-success-threshold',
             type=int,
             default=RouterArgs.health_success_threshold,
-            help="Number of consecutive health check successes before marking worker healthy",
+            help='Number of consecutive health check successes before marking worker healthy',
         )
         parser.add_argument(
-            f"--{prefix}health-check-timeout-secs",
+            f'--{prefix}health-check-timeout-secs',
             type=int,
             default=RouterArgs.health_check_timeout_secs,
-            help="Timeout in seconds for health check requests",
+            help='Timeout in seconds for health check requests',
         )
         parser.add_argument(
-            f"--{prefix}health-check-interval-secs",
+            f'--{prefix}health-check-interval-secs',
             type=int,
             default=RouterArgs.health_check_interval_secs,
-            help="Interval in seconds between runtime health checks",
+            help='Interval in seconds between runtime health checks',
         )
         parser.add_argument(
-            f"--{prefix}health-check-endpoint",
+            f'--{prefix}health-check-endpoint',
             type=str,
             default=RouterArgs.health_check_endpoint,
-            help="Health check endpoint path",
+            help='Health check endpoint path',
         )
         parser.add_argument(
-            f"--{prefix}max-concurrent-requests",
+            f'--{prefix}max-concurrent-requests',
             type=int,
             default=RouterArgs.max_concurrent_requests,
-            help="Maximum number of concurrent requests allowed (for rate limiting)",
+            help='Maximum number of concurrent requests allowed (for rate limiting)',
         )
         parser.add_argument(
-            f"--{prefix}queue-size",
+            f'--{prefix}queue-size',
             type=int,
             default=RouterArgs.queue_size,
-            help="Queue size for pending requests when max concurrent limit reached (0 = no queue, return 429 immediately)",
+            help='Queue size for pending requests when max concurrent limit reached '
+                 '(0 = no queue, return 429 immediately)',
         )
         parser.add_argument(
-            f"--{prefix}queue-timeout-secs",
+            f'--{prefix}queue-timeout-secs',
             type=int,
             default=RouterArgs.queue_timeout_secs,
-            help="Maximum time (in seconds) a request can wait in queue before timing out",
+            help='Maximum time (in seconds) a request can wait in queue before timing out',
         )
         parser.add_argument(
-            f"--{prefix}rate-limit-tokens-per-second",
+            f'--{prefix}rate-limit-tokens-per-second',
             type=int,
             default=RouterArgs.rate_limit_tokens_per_second,
-            help="Token bucket refill rate (tokens per second). If not set, defaults to max_concurrent_requests",
+            help='Token bucket refill rate (tokens per second). If not set, defaults to max_concurrent_requests',
         )
         parser.add_argument(
-            f"--{prefix}cors-allowed-origins",
+            f'--{prefix}cors-allowed-origins',
             type=str,
-            nargs="*",
+            nargs='*',
             default=[],
-            help="CORS allowed origins (e.g., http://localhost:3000 https://example.com)",
+            help='CORS allowed origins (e.g., http://localhost:3000 https://example.com)',
         )
 
     @classmethod
     def from_cli_args(
         cls, args: argparse.Namespace, use_router_prefix: bool = False
-    ) -> "RouterArgs":
+    ) -> 'RouterArgs':
         """Create RouterArgs instance from parsed command line arguments.
 
         Args:
             args: Parsed command line arguments
             use_router_prefix: If True, look for arguments with 'router-' prefix
         """
-        prefix = "router_" if use_router_prefix else ""
+        prefix = 'router_' if use_router_prefix else ''
         cli_args_dict = vars(args)
         args_dict = {}
 
         for attr in dataclasses.fields(cls):
             # Auto strip prefix from args
-            if f"{prefix}{attr.name}" in cli_args_dict:
-                args_dict[attr.name] = cli_args_dict[f"{prefix}{attr.name}"]
+            if f'{prefix}{attr.name}' in cli_args_dict:
+                args_dict[attr.name] = cli_args_dict[f'{prefix}{attr.name}']
             elif attr.name in cli_args_dict:
                 args_dict[attr.name] = cli_args_dict[attr.name]
 
         # parse special arguments and remove "--prefill" and "--decode" from cli_args_dict
-        args_dict["prefill_urls"] = cls._parse_prefill_urls(
-            cli_args_dict.get(f"{prefix}prefill", None)
+        args_dict['prefill_urls'] = cls._parse_prefill_urls(
+            cli_args_dict.get(f'{prefix}prefill', None)
         )
-        args_dict["decode_urls"] = cls._parse_decode_urls(
-            cli_args_dict.get(f"{prefix}decode", None)
+        args_dict['decode_urls'] = cls._parse_decode_urls(
+            cli_args_dict.get(f'{prefix}decode', None)
         )
-        args_dict["selector"] = cls._parse_selector(
-            cli_args_dict.get(f"{prefix}selector", None)
+        args_dict['selector'] = cls._parse_selector(
+            cli_args_dict.get(f'{prefix}selector', None)
         )
-        args_dict["prefill_selector"] = cls._parse_selector(
-            cli_args_dict.get(f"{prefix}prefill_selector", None)
+        args_dict['prefill_selector'] = cls._parse_selector(
+            cli_args_dict.get(f'{prefix}prefill_selector', None)
         )
-        args_dict["decode_selector"] = cls._parse_selector(
-            cli_args_dict.get(f"{prefix}decode_selector", None)
+        args_dict['decode_selector'] = cls._parse_selector(
+            cli_args_dict.get(f'{prefix}decode_selector', None)
         )
 
         return cls(**args_dict)
@@ -526,8 +531,8 @@ class RouterArgs:
         if self.lmdeploy_pd_disaggregation:
             if self.prefill_policy and self.decode_policy and self.policy:
                 logger.warning(
-                    "Both --prefill-policy and --decode-policy are specified. "
-                    "The main --policy flag will be ignored for PD mode."
+                    'Both --prefill-policy and --decode-policy are specified. '
+                    'The main --policy flag will be ignored for PD mode.'
                 )
             elif self.prefill_policy and not self.decode_policy and self.policy:
                 logger.info(
@@ -547,8 +552,8 @@ class RouterArgs:
 
         selector = {}
         for item in selector_list:
-            if "=" in item:
-                key, value = item.split("=", 1)
+            if '=' in item:
+                key, value = item.split('=', 1)
                 selector[key] = value
         return selector
 

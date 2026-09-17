@@ -1,7 +1,8 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import subprocess
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
 
 import pytest
 import requests
@@ -11,9 +12,9 @@ from ..fixtures.router_manager import RouterManager
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "integration: mark as router integration test")
+    config.addinivalue_line('markers', 'integration: mark as router integration test')
     config.addinivalue_line('markers', 'pd_engine: requires LMDeploy PD engine metadata')
-    config.addinivalue_line("markers", "lmdeploy: requires externally managed LMDeploy backends")
+    config.addinivalue_line('markers', 'lmdeploy: requires externally managed LMDeploy backends')
 
 
 @pytest.fixture
@@ -25,22 +26,22 @@ def router_manager() -> Iterable[RouterManager]:
         mgr.stop_all()
 
 
-def _spawn_mock_worker(args: List[str]) -> Tuple[subprocess.Popen, str, str]:
+def _spawn_mock_worker(args: list[str]) -> tuple[subprocess.Popen, str, str]:
     router_root = Path(__file__).resolve().parents[2]
-    script = router_root / "py_test" / "fixtures" / "mock_worker.py"
+    script = router_root / 'py_test' / 'fixtures' / 'mock_worker.py'
     port = find_free_port()
-    worker_id = f"worker-{port}"
+    worker_id = f'worker-{port}'
     base_cmd = [
-        "python3",
+        'python3',
         str(script),
-        "--port",
+        '--port',
         str(port),
-        "--worker-id",
+        '--worker-id',
         worker_id,
     ]
     cmd = base_cmd + args
     proc = subprocess.Popen(cmd)
-    url = f"http://127.0.0.1:{port}"
+    url = f'http://127.0.0.1:{port}'
     _wait_health(url)
     return proc, url, worker_id
 
@@ -50,13 +51,13 @@ def _wait_health(url: str, timeout: float = 10.0):
     with requests.Session() as s:
         while time.time() - start < timeout:
             try:
-                r = s.get(f"{url}/health", timeout=1)
+                r = s.get(f'{url}/health', timeout=1)
                 if r.status_code == 200:
                     return
             except requests.RequestException:
                 pass
             time.sleep(0.1)
-    raise TimeoutError(f"Mock worker at {url} did not become healthy")
+    raise TimeoutError(f'Mock worker at {url} did not become healthy')
 
 
 @pytest.fixture
@@ -83,13 +84,13 @@ def mock_workers():
         ...
     """
 
-    procs: List[subprocess.Popen] = []
+    procs: list[subprocess.Popen] = []
 
-    def _start(n: int, args: Optional[List[str]] = None):
+    def _start(n: int, args: list[str] | None = None):
         args = args or []
-        new_procs: List[subprocess.Popen] = []
-        urls: List[str] = []
-        ids: List[str] = []
+        new_procs: list[subprocess.Popen] = []
+        urls: list[str] = []
+        ids: list[str] = []
         for _ in range(n):
             p, url, wid = _spawn_mock_worker(args)
             procs.append(p)

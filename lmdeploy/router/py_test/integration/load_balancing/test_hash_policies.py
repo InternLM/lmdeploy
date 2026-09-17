@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import collections
 
 import pytest
@@ -5,7 +6,7 @@ import requests
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("policy", ["consistent_hash", "rendezvous_hash"])
+@pytest.mark.parametrize('policy', ['consistent_hash', 'rendezvous_hash'])
 def test_hash_policy_routes_sessions_consistently_and_distributes_sessions(
     policy, mock_workers, router_manager
 ):
@@ -17,19 +18,19 @@ def test_hash_policy_routes_sessions_consistently_and_distributes_sessions(
 
     selected = []
     for session_seq in range(30):
-        session_id = f"session-{session_seq}"
+        session_id = f'session-{session_seq}'
         for _ in range(2):
             response = requests.post(
-                f"{router.url}/v1/completions",
+                f'{router.url}/v1/completions',
                 json={
-                    "model": "mock",
-                    "prompt": "hello",
-                    "user": session_id,
+                    'model': 'mock',
+                    'prompt': 'hello',
+                    'user': session_id,
                 },
                 timeout=5,
             )
             assert response.status_code == 200
-            worker_id = response.headers.get("X-Worker-Id")
+            worker_id = response.headers.get('X-Worker-Id')
             assert worker_id in worker_ids
             selected.append((session_id, worker_id))
 

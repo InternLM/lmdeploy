@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import time
 
 import pytest
@@ -7,27 +8,27 @@ import requests
 @pytest.mark.integration
 def test_circuit_breaker_opens_and_recovers(router_manager, mock_workers):
     # A single worker that fails first 3 requests, then succeeds
-    _, [wurl], _ = mock_workers(n=1, args=["--fail-first-n", "3"])  # fails first 3
+    _, [wurl], _ = mock_workers(n=1, args=['--fail-first-n', '3'])  # fails first 3
     rh = router_manager.start_router(
         worker_urls=[wurl],
-        policy="round_robin",
+        policy='round_robin',
         extra={
-            "cb_failure_threshold": 3,
-            "cb_success_threshold": 2,
-            "cb_timeout_duration_secs": 3,
-            "cb_window_duration_secs": 10,
-            "disable_retries": True,
+            'cb_failure_threshold': 3,
+            'cb_success_threshold': 2,
+            'cb_timeout_duration_secs': 3,
+            'cb_window_duration_secs': 10,
+            'disable_retries': True,
         },
     )
 
     def post_once():
         return requests.post(
-            f"{rh.url}/v1/completions",
+            f'{rh.url}/v1/completions',
             json={
-                "model": "test-model",
-                "prompt": "trigger",
-                "max_tokens": 1,
-                "stream": False,
+                'model': 'test-model',
+                'prompt': 'trigger',
+                'max_tokens': 1,
+                'stream': False,
             },
             timeout=3,
         )
@@ -38,7 +39,7 @@ def test_circuit_breaker_opens_and_recovers(router_manager, mock_workers):
         if r.status_code == 503:
             saw_503 = True
             break
-    assert saw_503, "circuit breaker did not open to return 503"
+    assert saw_503, 'circuit breaker did not open to return 503'
 
     time.sleep(4)
     r1 = post_once()
@@ -48,27 +49,27 @@ def test_circuit_breaker_opens_and_recovers(router_manager, mock_workers):
 
 @pytest.mark.integration
 def test_circuit_breaker_half_open_failure_reopens(router_manager, mock_workers):
-    _, [wurl], _ = mock_workers(n=1, args=["--status-code", "500"])  # always fail
+    _, [wurl], _ = mock_workers(n=1, args=['--status-code', '500'])  # always fail
     rh = router_manager.start_router(
         worker_urls=[wurl],
-        policy="round_robin",
+        policy='round_robin',
         extra={
-            "cb_failure_threshold": 2,
-            "cb_success_threshold": 2,
-            "cb_timeout_duration_secs": 2,
-            "cb_window_duration_secs": 5,
-            "disable_retries": True,
+            'cb_failure_threshold': 2,
+            'cb_success_threshold': 2,
+            'cb_timeout_duration_secs': 2,
+            'cb_window_duration_secs': 5,
+            'disable_retries': True,
         },
     )
 
     def post_once():
         return requests.post(
-            f"{rh.url}/v1/completions",
+            f'{rh.url}/v1/completions',
             json={
-                "model": "test-model",
-                "prompt": "x",
-                "max_tokens": 1,
-                "stream": False,
+                'model': 'test-model',
+                'prompt': 'x',
+                'max_tokens': 1,
+                'stream': False,
             },
             timeout=3,
         )
@@ -79,7 +80,7 @@ def test_circuit_breaker_half_open_failure_reopens(router_manager, mock_workers)
         if r.status_code == 503:
             opened = True
             break
-    assert opened, "circuit breaker did not open"
+    assert opened, 'circuit breaker did not open'
 
     time.sleep(3)
     r = post_once()
@@ -90,22 +91,22 @@ def test_circuit_breaker_half_open_failure_reopens(router_manager, mock_workers)
 
 @pytest.mark.integration
 def test_circuit_breaker_disable_flag(router_manager, mock_workers):
-    _, [wurl], _ = mock_workers(n=1, args=["--status-code", "500"])  # always fail
+    _, [wurl], _ = mock_workers(n=1, args=['--status-code', '500'])  # always fail
     rh = router_manager.start_router(
         worker_urls=[wurl],
-        policy="round_robin",
+        policy='round_robin',
         extra={
-            "disable_circuit_breaker": True,
-            "disable_retries": True,
+            'disable_circuit_breaker': True,
+            'disable_retries': True,
         },
     )
     r = requests.post(
-        f"{rh.url}/v1/completions",
+        f'{rh.url}/v1/completions',
         json={
-            "model": "test-model",
-            "prompt": "x",
-            "max_tokens": 1,
-            "stream": False,
+            'model': 'test-model',
+            'prompt': 'x',
+            'max_tokens': 1,
+            'stream': False,
         },
         timeout=3,
     )
@@ -114,28 +115,28 @@ def test_circuit_breaker_disable_flag(router_manager, mock_workers):
 
 @pytest.mark.integration
 def test_circuit_breaker_per_worker_isolation(router_manager, mock_workers):
-    _, [fail_url], _ = mock_workers(n=1, args=["--status-code", "500"])  # always fail
+    _, [fail_url], _ = mock_workers(n=1, args=['--status-code', '500'])  # always fail
     _, [ok_url], _ = mock_workers(n=1)
     rh = router_manager.start_router(
         worker_urls=[fail_url, ok_url],
-        policy="round_robin",
+        policy='round_robin',
         extra={
-            "cb_failure_threshold": 2,
-            "cb_success_threshold": 1,
-            "cb_timeout_duration_secs": 2,
-            "cb_window_duration_secs": 10,
-            "disable_retries": True,
+            'cb_failure_threshold': 2,
+            'cb_success_threshold': 1,
+            'cb_timeout_duration_secs': 2,
+            'cb_window_duration_secs': 10,
+            'disable_retries': True,
         },
     )
 
     def post_once():
         return requests.post(
-            f"{rh.url}/v1/completions",
+            f'{rh.url}/v1/completions',
             json={
-                "model": "test-model",
-                "prompt": "y",
-                "max_tokens": 1,
-                "stream": False,
+                'model': 'test-model',
+                'prompt': 'y',
+                'max_tokens': 1,
+                'stream': False,
             },
             timeout=3,
         )
@@ -156,35 +157,35 @@ def test_circuit_breaker_per_worker_isolation(router_manager, mock_workers):
             if r.status_code == 200:
                 successes_after_open += 1
             else:
-                assert False, f"Unexpected non-200 after CB open: {r.status_code}"
+                assert False, f'Unexpected non-200 after CB open: {r.status_code}'
     assert opened and successes_after_open >= 5
 
 
 @pytest.mark.integration
 def test_circuit_breaker_with_retries(router_manager, mock_workers):
-    _, [fail_url], _ = mock_workers(n=1, args=["--status-code", "500"])  # always fail
+    _, [fail_url], _ = mock_workers(n=1, args=['--status-code', '500'])  # always fail
     _, [ok_url], _ = mock_workers(n=1)
     rh = router_manager.start_router(
         worker_urls=[fail_url, ok_url],
-        policy="round_robin",
+        policy='round_robin',
         extra={
-            "retry_max_retries": 3,
-            "retry_initial_backoff_ms": 10,
-            "retry_max_backoff_ms": 50,
-            "cb_failure_threshold": 2,
-            "cb_success_threshold": 1,
-            "cb_timeout_duration_secs": 2,
-            "cb_window_duration_secs": 10,
+            'retry_max_retries': 3,
+            'retry_initial_backoff_ms': 10,
+            'retry_max_backoff_ms': 50,
+            'cb_failure_threshold': 2,
+            'cb_success_threshold': 1,
+            'cb_timeout_duration_secs': 2,
+            'cb_window_duration_secs': 10,
         },
     )
 
     r = requests.post(
-        f"{rh.url}/v1/completions",
+        f'{rh.url}/v1/completions',
         json={
-            "model": "test-model",
-            "prompt": "z",
-            "max_tokens": 1,
-            "stream": False,
+            'model': 'test-model',
+            'prompt': 'z',
+            'max_tokens': 1,
+            'stream': False,
         },
         timeout=5,
     )
@@ -199,27 +200,27 @@ def test_circuit_breaker_ignores_4xx_client_errors(router_manager, mock_workers)
     This test ensures that many 400 responses do not trip the circuit breaker, while 500 responses still do.
     """
     # Worker that returns 400 Bad Request for all requests
-    _, [client_error_url], _ = mock_workers(n=1, args=["--status-code", "400"])
+    _, [client_error_url], _ = mock_workers(n=1, args=['--status-code', '400'])
     rh = router_manager.start_router(
         worker_urls=[client_error_url],
-        policy="round_robin",
+        policy='round_robin',
         extra={
-            "cb_failure_threshold": 2,  # Low threshold - would trip quickly if 400s counted
-            "cb_success_threshold": 1,
-            "cb_timeout_duration_secs": 2,
-            "cb_window_duration_secs": 10,
-            "disable_retries": True,
+            'cb_failure_threshold': 2,  # Low threshold - would trip quickly if 400s counted
+            'cb_success_threshold': 1,
+            'cb_timeout_duration_secs': 2,
+            'cb_window_duration_secs': 10,
+            'disable_retries': True,
         },
     )
 
     def post_once():
         return requests.post(
-            f"{rh.url}/v1/completions",
+            f'{rh.url}/v1/completions',
             json={
-                "model": "test-model",
-                "prompt": "test",
-                "max_tokens": 1,
-                "stream": False,
+                'model': 'test-model',
+                'prompt': 'test',
+                'max_tokens': 1,
+                'stream': False,
             },
             timeout=3,
         )
@@ -230,6 +231,6 @@ def test_circuit_breaker_ignores_4xx_client_errors(router_manager, mock_workers)
         r = post_once()
         # Should get 400 from worker, NOT 503 from circuit breaker
         assert r.status_code == 400, (
-            f"Request {i+1}: Expected 400 (client error passthrough), "
-            f"got {r.status_code}. Circuit breaker incorrectly opened on 4xx errors."
+            f'Request {i+1}: Expected 400 (client error passthrough), '
+            f'got {r.status_code}. Circuit breaker incorrectly opened on 4xx errors.'
         )

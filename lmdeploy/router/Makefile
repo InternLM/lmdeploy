@@ -50,11 +50,11 @@ docs: ## Generate and open documentation
 	@echo "Generating documentation..."
 	@cargo doc --open
 
-check: ## Run cargo check and clippy
+check: ## Run cargo check and clippy with CI settings
 	@echo "Running cargo check..."
-	@cargo check
+	@cargo check --locked --all-targets
 	@echo "Running clippy..."
-	@cargo clippy
+	@cargo clippy --all-targets --locked -- -D warnings
 
 fmt: ## Format code with rustfmt
 	@echo "Formatting code..."
@@ -64,7 +64,7 @@ fmt: ## Format code with rustfmt
 dev-setup: build test ## Set up development environment
 	@echo "Development environment ready!"
 
-pre-commit: fmt check test bench-quick ## Run pre-commit checks
+pre-commit: fmt check test bench-quick ## Run router pre-commit checks
 	@echo "Pre-commit checks passed!"
 
 # Benchmark analysis shortcuts

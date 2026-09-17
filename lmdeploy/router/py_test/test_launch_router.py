@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import multiprocessing
 import time
 import unittest
@@ -38,9 +39,9 @@ class TestLaunchRouter(unittest.TestCase):
     def setUp(self):
         """Set up default arguments for router tests."""
         self.default_args = SimpleNamespace(
-            host="127.0.0.1",
+            host='127.0.0.1',
             port=30000,
-            policy="cache_aware",
+            policy='cache_aware',
             worker_startup_timeout_secs=600,
             worker_startup_check_interval=10,
             cache_threshold=0.5,
@@ -99,7 +100,7 @@ class TestLaunchRouter(unittest.TestCase):
             terminate_process(process)
 
     def test_launch_router_common(self):
-        args = self.create_router_args(worker_urls=["http://localhost:8000"])
+        args = self.create_router_args(worker_urls=['http://localhost:8000'])
         self.run_router_process(args)
 
     def test_launch_router_with_empty_worker_urls(self):
@@ -111,7 +112,7 @@ class TestLaunchRouter(unittest.TestCase):
     def test_launch_router_with_service_discovery(self):
         # Test router startup with service discovery enabled but no selectors
         args = self.create_router_args(
-            worker_urls=[], service_discovery=True, selector=["app=test-worker"]
+            worker_urls=[], service_discovery=True, selector=['app=test-worker']
         )
         self.run_router_process(args)
 
@@ -120,8 +121,8 @@ class TestLaunchRouter(unittest.TestCase):
         args = self.create_router_args(
             worker_urls=[],
             service_discovery=True,
-            selector=["app=test-worker"],
-            service_discovery_namespace="test-namespace",
+            selector=['app=test-worker'],
+            service_discovery_namespace='test-namespace',
         )
         self.run_router_process(args)
 
@@ -138,38 +139,38 @@ class TestLaunchRouter(unittest.TestCase):
         # Simulate the parsed args structure from argparse with action="append"
         args = self.create_router_args(
             lmdeploy_pd_disaggregation=True,
-            policy="power_of_two",  # PowerOfTwo is only valid in PD mode
+            policy='power_of_two',  # PowerOfTwo is only valid in PD mode
             prefill=[
-                ["http://prefill1:8080"],
-                ["http://prefill2:8080"],
+                ['http://prefill1:8080'],
+                ['http://prefill2:8080'],
             ],
             decode=[
-                ["http://decode1:8081"],
-                ["http://decode2:8081"],
+                ['http://decode1:8081'],
+                ['http://decode2:8081'],
             ],
             worker_urls=[],  # Empty for PD mode
         )
 
         router_args = RouterArgs.from_cli_args(args)
         self.assertTrue(router_args.lmdeploy_pd_disaggregation)
-        self.assertEqual(router_args.policy, "power_of_two")
+        self.assertEqual(router_args.policy, 'power_of_two')
         self.assertEqual(len(router_args.prefill_urls), 2)
         self.assertEqual(len(router_args.decode_urls), 2)
 
         # Verify the parsed URLs
-        self.assertEqual(router_args.prefill_urls[0], "http://prefill1:8080")
-        self.assertEqual(router_args.prefill_urls[1], "http://prefill2:8080")
-        self.assertEqual(router_args.decode_urls[0], "http://decode1:8081")
-        self.assertEqual(router_args.decode_urls[1], "http://decode2:8081")
+        self.assertEqual(router_args.prefill_urls[0], 'http://prefill1:8080')
+        self.assertEqual(router_args.prefill_urls[1], 'http://prefill2:8080')
+        self.assertEqual(router_args.decode_urls[0], 'http://decode1:8081')
+        self.assertEqual(router_args.decode_urls[1], 'http://decode2:8081')
 
         # Test Router creation in PD mode
         router = Router(
             worker_urls=[],  # Empty for PD mode
             lmdeploy_pd_disaggregation=True,
-            prefill_urls=["http://prefill1:8080", "http://prefill2:8080"],
-            decode_urls=["http://decode1:8081", "http://decode2:8081"],
+            prefill_urls=['http://prefill1:8080', 'http://prefill2:8080'],
+            decode_urls=['http://decode1:8081', 'http://decode2:8081'],
             policy=PolicyType.CacheAware,
-            host="127.0.0.1",
+            host='127.0.0.1',
             port=3001,
         )
         self.assertIsNotNone(router)
@@ -182,23 +183,23 @@ class TestLaunchRouter(unittest.TestCase):
         # Test 1: PowerOfTwo requires at least 2 workers
         args = self.create_router_args(
             lmdeploy_pd_disaggregation=False,
-            policy="power_of_two",
-            worker_urls=["http://localhost:8000"],  # Only 1 worker
+            policy='power_of_two',
+            worker_urls=['http://localhost:8000'],  # Only 1 worker
         )
 
         # Should raise error
         with self.assertRaises(ValueError) as cm:
             launch_router(args)
         self.assertIn(
-            "Power-of-two policy requires at least 2 workers",
+            'Power-of-two policy requires at least 2 workers',
             str(cm.exception),
         )
 
         # Test 2: PowerOfTwo with sufficient workers should succeed
         args = self.create_router_args(
             lmdeploy_pd_disaggregation=False,
-            policy="power_of_two",
-            worker_urls=["http://localhost:8000", "http://localhost:8001"],  # 2 workers
+            policy='power_of_two',
+            worker_urls=['http://localhost:8000', 'http://localhost:8001'],  # 2 workers
         )
         # This should not raise an error (validation passes)
 
@@ -206,17 +207,17 @@ class TestLaunchRouter(unittest.TestCase):
         # Regular mode with RoundRobin
         args = self.create_router_args(
             lmdeploy_pd_disaggregation=False,
-            policy="round_robin",
-            worker_urls=["http://localhost:8000"],
+            policy='round_robin',
+            worker_urls=['http://localhost:8000'],
         )
         # This should not raise validation error
 
         # PD mode with RoundRobin (now supported!)
         args = self.create_router_args(
             lmdeploy_pd_disaggregation=True,
-            policy="round_robin",
-            prefill=[["http://prefill1:8080", "9000"]],
-            decode=[["http://decode1:8081"]],
+            policy='round_robin',
+            prefill=[['http://prefill1:8080', '9000']],
+            decode=[['http://decode1:8081']],
             worker_urls=[],
         )
         # This should not raise validation error
@@ -232,20 +233,20 @@ class TestLaunchRouter(unittest.TestCase):
 
         args = parser.parse_args(
             [
-                "--lmdeploy-pd-disaggregation",
-                "--service-discovery",
-                "--prefill-selector",
-                "app=lmdeploy",
-                "component=prefill",
-                "--decode-selector",
-                "app=lmdeploy",
-                "component=decode",
-                "--service-discovery-port",
-                "8000",
-                "--service-discovery-namespace",
-                "production",
-                "--policy",
-                "cache_aware",
+                '--lmdeploy-pd-disaggregation',
+                '--service-discovery',
+                '--prefill-selector',
+                'app=lmdeploy',
+                'component=prefill',
+                '--decode-selector',
+                'app=lmdeploy',
+                'component=decode',
+                '--service-discovery-port',
+                '8000',
+                '--service-discovery-namespace',
+                'production',
+                '--policy',
+                'cache_aware',
             ]
         )
 
@@ -255,14 +256,14 @@ class TestLaunchRouter(unittest.TestCase):
         self.assertTrue(router_args.service_discovery)
         self.assertEqual(
             router_args.prefill_selector,
-            {"app": "lmdeploy", "component": "prefill"},
+            {'app': 'lmdeploy', 'component': 'prefill'},
         )
         self.assertEqual(
             router_args.decode_selector,
-            {"app": "lmdeploy", "component": "decode"},
+            {'app': 'lmdeploy', 'component': 'decode'},
         )
         self.assertEqual(router_args.service_discovery_port, 8000)
-        self.assertEqual(router_args.service_discovery_namespace, "production")
+        self.assertEqual(router_args.service_discovery_namespace, 'production')
 
     def test_regular_service_discovery_args_parsing(self):
         """Test regular mode service discovery CLI argument parsing."""
@@ -275,14 +276,14 @@ class TestLaunchRouter(unittest.TestCase):
 
         args = parser.parse_args(
             [
-                "--service-discovery",
-                "--selector",
-                "app=lmdeploy-worker",
-                "environment=staging",
-                "--service-discovery-port",
-                "8000",
-                "--policy",
-                "round_robin",
+                '--service-discovery',
+                '--selector',
+                'app=lmdeploy-worker',
+                'environment=staging',
+                '--service-discovery-port',
+                '8000',
+                '--policy',
+                'round_robin',
             ]
         )
 
@@ -292,7 +293,7 @@ class TestLaunchRouter(unittest.TestCase):
         self.assertTrue(router_args.service_discovery)
         self.assertEqual(
             router_args.selector,
-            {"app": "lmdeploy-worker", "environment": "staging"},
+            {'app': 'lmdeploy-worker', 'environment': 'staging'},
         )
         self.assertEqual(router_args.prefill_selector, {})
         self.assertEqual(router_args.decode_selector, {})
@@ -308,15 +309,15 @@ class TestLaunchRouter(unittest.TestCase):
         RouterArgs.add_cli_args(parser)
 
         # Test with no --worker-urls argument at all
-        args = parser.parse_args(["--policy", "random", "--port", "30000"])
+        args = parser.parse_args(['--policy', 'random', '--port', '30000'])
         router_args = RouterArgs.from_cli_args(args)
         self.assertEqual(router_args.worker_urls, [])
 
         # Test with explicit empty --worker-urls
-        args = parser.parse_args(["--worker-urls", "--policy", "random"])
+        args = parser.parse_args(['--worker-urls', '--policy', 'random'])
         router_args = RouterArgs.from_cli_args(args)
         self.assertEqual(router_args.worker_urls, [])
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

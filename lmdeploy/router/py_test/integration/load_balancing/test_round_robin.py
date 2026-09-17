@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import collections
 
 import pytest
@@ -8,22 +9,22 @@ import requests
 def test_round_robin_distribution(mock_workers, router_manager):
     procs, urls, ids = mock_workers(n=3)
 
-    rh = router_manager.start_router(worker_urls=urls, policy="round_robin")
+    rh = router_manager.start_router(worker_urls=urls, policy='round_robin')
 
     counts = collections.Counter()
     with requests.Session() as s:
         for i in range(30):
             r = s.post(
-                f"{rh.url}/v1/completions",
+                f'{rh.url}/v1/completions',
                 json={
-                    "model": "test-model",
-                    "prompt": f"hello {i}",
-                    "max_tokens": 1,
-                    "stream": False,
+                    'model': 'test-model',
+                    'prompt': f'hello {i}',
+                    'max_tokens': 1,
+                    'stream': False,
                 },
             )
             assert r.status_code == 200
-            wid = r.headers.get("X-Worker-Id") or r.json().get("worker_id")
+            wid = r.headers.get('X-Worker-Id') or r.json().get('worker_id')
             assert wid in ids
             counts[wid] += 1
 

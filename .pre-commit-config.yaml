@@ -3,20 +3,15 @@ repos:
     rev: v0.15.4
     hooks:
       - id: ruff-check
-        exclude: ^lmdeploy/router/
         args: ["--fix", "--exit-non-zero-on-fix"]
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: ^lmdeploy/router/
       - id: check-yaml
-        exclude: ^lmdeploy/router/
       - id: end-of-file-fixer
-        exclude: ^lmdeploy/router/
       - id: requirements-txt-fixer
       - id: double-quote-string-fixer
-        exclude: ^lmdeploy/router/
       - id: check-merge-conflict
       - id: mixed-line-ending
         args: ["--fix=lf"]
@@ -42,7 +37,7 @@ repos:
     rev: v0.2.0
     hooks:
     -   id: check-copyright
-        args: ["lmdeploy", "--excludes", "lmdeploy/router"]
+        args: ["lmdeploy"]
 
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: v11.1.0

@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import concurrent.futures
 
 import pytest
@@ -8,25 +9,25 @@ import requests
 def test_rate_limit_and_queue(router_manager, mock_workers):
     # Add latency to ensure requests overlap and trigger rate limiting
     # Without latency, requests may complete too fast to trigger concurrency limits
-    _, urls, _ = mock_workers(n=1, args=["--latency-ms", "100"])
+    _, urls, _ = mock_workers(n=1, args=['--latency-ms', '100'])
     rh = router_manager.start_router(
         worker_urls=urls,
-        policy="round_robin",
+        policy='round_robin',
         extra={
-            "max_concurrent_requests": 2,
-            "queue_size": 0,  # no queue -> immediate 429 when limit exceeded
+            'max_concurrent_requests': 2,
+            'queue_size': 0,  # no queue -> immediate 429 when limit exceeded
         },
     )
 
     def call_once(i):
         try:
             r = requests.post(
-                f"{rh.url}/v1/completions",
+                f'{rh.url}/v1/completions',
                 json={
-                    "model": "test-model",
-                    "prompt": f"p{i}",
-                    "max_tokens": 1,
-                    "stream": False,
+                    'model': 'test-model',
+                    'prompt': f'p{i}',
+                    'max_tokens': 1,
+                    'stream': False,
                 },
                 timeout=3,
             )
@@ -46,28 +47,28 @@ def test_rate_limit_and_queue(router_manager, mock_workers):
 @pytest.mark.integration
 def test_rate_limit_queue_and_timeout(router_manager, mock_workers):
     # Slow backend: ~2s per request ensures queue wait > timeout
-    _, urls, _ = mock_workers(n=1, args=["--latency-ms", "2000"])  # 2.0s per request
+    _, urls, _ = mock_workers(n=1, args=['--latency-ms', '2000'])  # 2.0s per request
 
     # Allow 1 concurrent, queue up to 1, with 1s queue timeout
     rh = router_manager.start_router(
         worker_urls=urls,
-        policy="round_robin",
+        policy='round_robin',
         extra={
-            "max_concurrent_requests": 1,
-            "queue_size": 1,
-            "queue_timeout_secs": 1,
+            'max_concurrent_requests': 1,
+            'queue_size': 1,
+            'queue_timeout_secs': 1,
         },
     )
 
     def call_once(i):
         try:
             r = requests.post(
-                f"{rh.url}/v1/completions",
+                f'{rh.url}/v1/completions',
                 json={
-                    "model": "test-model",
-                    "prompt": f"q{i}",
-                    "max_tokens": 1,
-                    "stream": False,
+                    'model': 'test-model',
+                    'prompt': f'q{i}',
+                    'max_tokens': 1,
+                    'stream': False,
                 },
                 timeout=5,
             )

@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import collections
 import concurrent.futures
 import time
@@ -17,27 +18,27 @@ def test_pd_power_of_two_decode_attribution(router_manager, mock_workers):
     decode_ids = set(decode_ids_list)
 
     rh = router_manager.start_router(
-        policy="power_of_two",
+        policy='power_of_two',
         lmdeploy_pd_disaggregation=True,
         prefill_urls=prefill_urls,
         decode_urls=decode_urls,
-        extra={"worker_startup_check_interval": 1},
+        extra={'worker_startup_check_interval': 1},
     )
 
     counts = collections.Counter()
     with requests.Session() as s:
         for i in range(30):
             r = s.post(
-                f"{rh.url}/v1/completions",
+                f'{rh.url}/v1/completions',
                 json={
-                    "model": "test-model",
-                    "prompt": f"p{i}",
-                    "max_tokens": 1,
-                    "stream": False,
+                    'model': 'test-model',
+                    'prompt': f'p{i}',
+                    'max_tokens': 1,
+                    'stream': False,
                 },
             )
             assert r.status_code == 200
-            wid = r.headers.get("X-Worker-Id") or r.json().get("worker_id")
+            wid = r.headers.get('X-Worker-Id') or r.json().get('worker_id')
             assert wid in decode_ids
             counts[wid] += 1
 
@@ -53,7 +54,7 @@ def test_pd_power_of_two_skews_to_faster_decode(router_manager, mock_workers):
     # Start two decode workers: one very slow, one fast
     # Use 2000ms latency to create a clear load difference
     _, [decode_slow_url], [slow_id] = mock_workers(
-        n=1, args=["--latency-ms", "2000"]
+        n=1, args=['--latency-ms', '2000']
     )  # 2 second latency - very slow
     _, [decode_fast_url], [fast_id] = mock_workers(n=1)
     decode_urls_raw = [decode_slow_url, decode_fast_url]
@@ -62,23 +63,23 @@ def test_pd_power_of_two_skews_to_faster_decode(router_manager, mock_workers):
     decode_urls = list(decode_urls_raw)
 
     rh = router_manager.start_router(
-        policy="power_of_two",
+        policy='power_of_two',
         lmdeploy_pd_disaggregation=True,
         prefill_urls=prefill_urls,
         decode_urls=decode_urls,
-        extra={"worker_startup_check_interval": 1},
+        extra={'worker_startup_check_interval': 1},
     )
 
     # Prime the router with some initial requests
     def _prime_call(i):
         try:
             requests.post(
-                f"{rh.url}/v1/completions",
+                f'{rh.url}/v1/completions',
                 json={
-                    "model": "test-model",
-                    "prompt": f"warm-{i}",
-                    "max_tokens": 1,
-                    "stream": False,
+                    'model': 'test-model',
+                    'prompt': f'warm-{i}',
+                    'max_tokens': 1,
+                    'stream': False,
                 },
                 timeout=10,
             )
@@ -98,12 +99,12 @@ def test_pd_power_of_two_skews_to_faster_decode(router_manager, mock_workers):
         while not stop_background_load:
             try:
                 requests.post(
-                    f"{decode_slow_url}/v1/completions",
+                    f'{decode_slow_url}/v1/completions',
                     json={
-                        "model": "test-model",
-                        "prompt": f"bg-{i}",
-                        "max_tokens": 1,
-                        "stream": False,
+                        'model': 'test-model',
+                        'prompt': f'bg-{i}',
+                        'max_tokens': 1,
+                        'stream': False,
                     },
                     timeout=10,
                 )
@@ -126,17 +127,17 @@ def test_pd_power_of_two_skews_to_faster_decode(router_manager, mock_workers):
     # Now send test requests - power-of-two should strongly prefer the fast worker
     def call(i):
         r = requests.post(
-            f"{rh.url}/v1/completions",
+            f'{rh.url}/v1/completions',
             json={
-                "model": "test-model",
-                "prompt": f"p{i}",
-                "max_tokens": 1,
-                "stream": False,
+                'model': 'test-model',
+                'prompt': f'p{i}',
+                'max_tokens': 1,
+                'stream': False,
             },
             timeout=10,
         )
         assert r.status_code == 200
-        return r.headers.get("X-Worker-Id") or r.json().get("worker_id")
+        return r.headers.get('X-Worker-Id') or r.json().get('worker_id')
 
     counts = collections.Counter()
     with concurrent.futures.ThreadPoolExecutor(max_workers=32) as ex:
@@ -150,7 +151,7 @@ def test_pd_power_of_two_skews_to_faster_decode(router_manager, mock_workers):
     # Allow for some variance, but expect at least 60/40 split favoring fast worker
     assert (
         counts[fast_id] > counts[slow_id]
-    ), f"Expected fast worker to handle more requests, got {counts}"
+    ), f'Expected fast worker to handle more requests, got {counts}'
     assert (
         counts[fast_id] >= counts[slow_id] * 1.2
-    ), f"Expected fast worker to handle at least 20% more requests than slow worker, got {counts}"
+    ), f'Expected fast worker to handle at least 20% more requests than slow worker, got {counts}'

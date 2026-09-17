@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 """Lightweight mock worker HTTP server for router integration tests.
 
 Implements minimal endpoints used by the router:
@@ -20,7 +21,6 @@ import signal
 import sys
 import time
 from contextlib import asynccontextmanager
-from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -33,21 +33,21 @@ _failures_seen = 0
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, required=True)
-    p.add_argument("--worker-id", default=None)
-    p.add_argument("--latency-ms", type=int, default=0)
-    p.add_argument("--timeout", action="store_true")
-    p.add_argument("--status-code", type=int, default=200)
-    p.add_argument("--fail-first-n", type=int, default=0)
-    p.add_argument("--random-fail-rate", type=float, default=0.0)
-    p.add_argument("--require-api-key", action="store_true")
-    p.add_argument("--api-key", default=None)
-    p.add_argument("--max-payload-bytes", type=int, default=10 * 1024 * 1024)
-    p.add_argument("--stream", action="store_true")
-    p.add_argument("--dp-size", type=int, default=1)
-    p.add_argument("--crash-on-request", action="store_true")
-    p.add_argument("--health-fail-after-ms", type=int, default=0)
+    p.add_argument('--host', default='127.0.0.1')
+    p.add_argument('--port', type=int, required=True)
+    p.add_argument('--worker-id', default=None)
+    p.add_argument('--latency-ms', type=int, default=0)
+    p.add_argument('--timeout', action='store_true')
+    p.add_argument('--status-code', type=int, default=200)
+    p.add_argument('--fail-first-n', type=int, default=0)
+    p.add_argument('--random-fail-rate', type=float, default=0.0)
+    p.add_argument('--require-api-key', action='store_true')
+    p.add_argument('--api-key', default=None)
+    p.add_argument('--max-payload-bytes', type=int, default=10 * 1024 * 1024)
+    p.add_argument('--stream', action='store_true')
+    p.add_argument('--dp-size', type=int, default=1)
+    p.add_argument('--crash-on-request', action='store_true')
+    p.add_argument('--health-fail-after-ms', type=int, default=0)
     return p.parse_args()
 
 
@@ -55,20 +55,20 @@ def _extract_worker_id(args: argparse.Namespace) -> str:
     if args.worker_id:
         return str(args.worker_id)
     # default to port (unique enough for tests)
-    return f"worker-{args.port}"
+    return f'worker-{args.port}'
 
 
 def create_app(args: argparse.Namespace) -> FastAPI:
     app = FastAPI()
     worker_id = _extract_worker_id(args)
     start_ts = time.time()
-    crashed = {"done": False}
+    crashed = {'done': False}
 
     async def maybe_delay():
         if args.latency_ms > 0:
             await asyncio.sleep(args.latency_ms / 1000.0)
 
-    def should_fail() -> Optional[int]:
+    def should_fail() -> int | None:
         global _failures_seen
         # Fail first N requests (500)
         if args.fail_first_n > 0 and _failures_seen < args.fail_first_n:
@@ -85,12 +85,12 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     def check_api_key(request: Request):
         if not args.require_api_key:
             return
-        auth = request.headers.get("Authorization")
-        if not auth or not auth.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Unauthorized")
-        key = auth.split(" ", 1)[1]
+        auth = request.headers.get('Authorization')
+        if not auth or not auth.startswith('Bearer '):
+            raise HTTPException(status_code=401, detail='Unauthorized')
+        key = auth.split(' ', 1)[1]
         if args.api_key and key != args.api_key:
-            raise HTTPException(status_code=401, detail="Unauthorized")
+            raise HTTPException(status_code=401, detail='Unauthorized')
 
     @asynccontextmanager
     async def track_inflight():
@@ -101,73 +101,73 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         finally:
             _inflight -= 1
 
-    @app.get("/health")
+    @app.get('/health')
     async def health():
         if (
             args.health_fail_after_ms
             and (time.time() - start_ts) * 1000.0 >= args.health_fail_after_ms
         ):
-            return PlainTextResponse("bad", status_code=500)
-        return PlainTextResponse("ok", status_code=200)
+            return PlainTextResponse('bad', status_code=500)
+        return PlainTextResponse('ok', status_code=200)
 
-    @app.get("/health_generate")
+    @app.get('/health_generate')
     async def health_generate():
-        return PlainTextResponse("ok", status_code=200)
+        return PlainTextResponse('ok', status_code=200)
 
-    @app.post("/flush_cache")
+    @app.post('/flush_cache')
     async def flush_cache():
-        return PlainTextResponse("ok", status_code=200)
+        return PlainTextResponse('ok', status_code=200)
 
-    @app.get("/get_model_info")
+    @app.get('/get_model_info')
     async def get_model_info():
-        return JSONResponse({"model": "mock", "vocab_size": 32000})
+        return JSONResponse({'model': 'mock', 'vocab_size': 32000})
 
-    @app.get("/v1/models")
+    @app.get('/v1/models')
     async def list_models():
-        return JSONResponse({"data": [{"id": "mock", "object": "model"}]})
+        return JSONResponse({'data': [{'id': 'mock', 'object': 'model'}]})
 
-    @app.get("/get_server_info")
+    @app.get('/get_server_info')
     async def get_server_info(request: Request):
         # Enforce API key on server info when required (used by router for worker discovery)
         check_api_key(request)
         return JSONResponse(
             {
-                "worker_id": worker_id,
-                "load_in_flight": _inflight,
-                "cache": {"size": 0, "hit_rate": 0.0},
-                "dp_size": int(args.dp_size),
+                'worker_id': worker_id,
+                'load_in_flight': _inflight,
+                'cache': {'size': 0, 'hit_rate': 0.0},
+                'dp_size': int(args.dp_size),
             }
         )
 
-    @app.get("/get_load")
+    @app.get('/get_load')
     async def get_load():
-        return JSONResponse({"load": _inflight})
+        return JSONResponse({'load': _inflight})
 
-    @app.get("/distserve/engine_info")
+    @app.get('/distserve/engine_info')
     async def distserve_engine_info():
-        return JSONResponse({"tp_size": 1, "dp_size": int(args.dp_size)})
+        return JSONResponse({'tp_size': 1, 'dp_size': int(args.dp_size)})
 
-    @app.post("/distserve/p2p_initialize")
+    @app.post('/distserve/p2p_initialize')
     async def distserve_p2p_initialize():
         return JSONResponse(
             {
-                "status": 1,
-                "engine_endpoint_info": {"url": f"{args.host}:{args.port}"},
-                "kvtransfer_endpoint_info": [],
+                'status': 1,
+                'engine_endpoint_info': {'url': f'{args.host}:{args.port}'},
+                'kvtransfer_endpoint_info': [],
             }
         )
 
-    @app.post("/distserve/p2p_connect")
+    @app.post('/distserve/p2p_connect')
     async def distserve_p2p_connect():
-        return JSONResponse({"status": 1})
+        return JSONResponse({'status': 1})
 
-    @app.post("/distserve/p2p_drop_connect")
+    @app.post('/distserve/p2p_drop_connect')
     async def distserve_p2p_drop_connect():
-        return JSONResponse({"status": 1})
+        return JSONResponse({'status': 1})
 
     def make_json_response(obj: dict, status_code: int = 200) -> JSONResponse:
         resp = JSONResponse(obj, status_code=status_code)
-        resp.headers["X-Worker-Id"] = worker_id
+        resp.headers['X-Worker-Id'] = worker_id
         return resp
 
     async def handle_text_request(request: Request):
@@ -177,11 +177,11 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         # Payload limit
         body = await request.body()
         if len(body) > args.max_payload_bytes:
-            return make_json_response({"error": "payload too large"}, status_code=413)
+            return make_json_response({'error': 'payload too large'}, status_code=413)
 
         # Simulate crash on first request
-        if args.crash_on_request and not crashed["done"]:
-            crashed["done"] = True
+        if args.crash_on_request and not crashed['done']:
+            crashed['done'] = True
             os._exit(1)
 
         # Optional timeout (simulate hang)
@@ -195,7 +195,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         fail_code = should_fail()
         if fail_code is not None and fail_code != 200:
             return make_json_response(
-                {"error": f"mock failure {fail_code}"}, status_code=fail_code
+                {'error': f'mock failure {fail_code}'}, status_code=fail_code
             )
 
         # Build response echoing minimal shape
@@ -206,30 +206,30 @@ def create_app(args: argparse.Namespace) -> FastAPI:
 
         now = time.time()
         is_prefill = (
-            data.get("with_cache") is True and data.get("preserve_cache") is True
+            data.get('with_cache') is True and data.get('preserve_cache') is True
         )
         if is_prefill:
             ret = {
-                "id": int(now * 1000),
-                "cache_block_ids": [1, 2, 3],
-                "remote_token_ids": [0, 1, 3],
+                'id': int(now * 1000),
+                'cache_block_ids': [1, 2, 3],
+                'remote_token_ids': [0, 1, 3],
             }
             return make_json_response(ret, status_code=200)
 
         ret = {
-            "id": f"cmpl-{int(now*1000)}",
-            "object": "text_completion",
-            "created": int(now),
-            "model": "mock",
-            "choices": [
+            'id': f'cmpl-{int(now*1000)}',
+            'object': 'text_completion',
+            'created': int(now),
+            'model': 'mock',
+            'choices': [
                 {
-                    "text": "ok",
-                    "index": 0,
-                    "finish_reason": "stop",
+                    'text': 'ok',
+                    'index': 0,
+                    'finish_reason': 'stop',
                 }
             ],
-            "worker_id": worker_id,
-            "echo": data,
+            'worker_id': worker_id,
+            'echo': data,
         }
         return make_json_response(ret, status_code=200)
 
@@ -241,30 +241,30 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             for i in range(2):
                 await asyncio.sleep(0.01)
                 chunk = {
-                    "choices": [{"delta": {"content": "x"}}],
-                    "worker_id": worker_id,
+                    'choices': [{'delta': {'content': 'x'}}],
+                    'worker_id': worker_id,
                 }
-                yield f"data: {json.dumps(chunk)}\n\n"
-            yield "data: [DONE]\n\n"
+                yield f'data: {json.dumps(chunk)}\n\n'
+            yield 'data: [DONE]\n\n'
 
-        headers = {"X-Worker-Id": worker_id}
-        return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
+        headers = {'X-Worker-Id': worker_id}
+        return StreamingResponse(gen(), media_type='text/event-stream', headers=headers)
 
-    @app.post("/generate")
+    @app.post('/generate')
     async def generate(request: Request):
         async with track_inflight():
             if args.stream:
                 return await handle_stream_request(request)
             return await handle_text_request(request)
 
-    @app.post("/v1/completions")
+    @app.post('/v1/completions')
     async def completions(request: Request):
         async with track_inflight():
             if args.stream:
                 return await handle_stream_request(request)
             return await handle_text_request(request)
 
-    @app.post("/v1/chat/completions")
+    @app.post('/v1/chat/completions')
     async def chat_completions(request: Request):
         async with track_inflight():
             if args.stream:
@@ -279,8 +279,8 @@ def main() -> None:
     app = create_app(args)
     # Handle SIGTERM gracefully for fast test teardown
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    uvicorn.run(app, host=args.host, port=args.port, log_level='warning')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

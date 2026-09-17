@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 """LMDeploy-compatible dynamic registration tests with real workers."""
 
 import time
@@ -5,16 +6,15 @@ import time
 import pytest
 import requests
 
-
 pytestmark = [pytest.mark.integration, pytest.mark.lmdeploy]
 
 
 def _add_node(router_url, worker_url, model, role):
     return requests.post(
-        f"{router_url}/nodes/add",
+        f'{router_url}/nodes/add',
         json={
-            "url": worker_url,
-            "status": {"models": [model], "role": role},
+            'url': worker_url,
+            'status': {'models': [model], 'role': role},
         },
         timeout=30,
     )
@@ -25,12 +25,12 @@ def _wait_for_inference(config, router_url, timeout=30):
     last_response = None
     while time.monotonic() < deadline:
         last_response = requests.post(
-            f"{router_url}/v1/chat/completions",
+            f'{router_url}/v1/chat/completions',
             json={
-                "model": config.model,
-                "messages": [{"role": "user", "content": "Hello"}],
-                "max_tokens": 2,
-                "temperature": 0,
+                'model': config.model,
+                'messages': [{'role': 'user', 'content': 'Hello'}],
+                'max_tokens': 2,
+                'temperature': 0,
             },
             timeout=config.request_timeout,
         )
@@ -38,31 +38,31 @@ def _wait_for_inference(config, router_url, timeout=30):
             return last_response
         time.sleep(0.5)
     pytest.fail(
-        "registered worker never became routable: "
-        + (last_response.text[:500] if last_response is not None else "no response")
+        'registered worker never became routable: '
+        + (last_response.text[:500] if last_response is not None else 'no response')
     )
 
 
 def _assert_status_entry(status, worker_url, model, role):
     entry = status[worker_url]
-    assert entry["role"] == role
-    assert model in entry["models"]
-    assert entry["unfinished"] == 0
-    assert entry["latency"] == []
-    assert entry["speed"] is None
+    assert entry['role'] == role
+    assert model in entry['models']
+    assert entry['unfinished'] == 0
+    assert entry['latency'] == []
+    assert entry['speed'] is None
 
 
 def _assert_pd_unsupported_endpoints(config, router_url):
     generate = requests.post(
-        f"{router_url}/generate",
-        json={"prompt": "Hello", "max_tokens": 2},
+        f'{router_url}/generate',
+        json={'prompt': 'Hello', 'max_tokens': 2},
         timeout=config.request_timeout,
     )
     assert generate.status_code == 501
 
     responses = requests.post(
-        f"{router_url}/v1/responses",
-        json={"model": config.model, "input": "Hello", "max_output_tokens": 2},
+        f'{router_url}/v1/responses',
+        json={'model': config.model, 'input': 'Hello', 'max_output_tokens': 2},
         timeout=config.request_timeout,
     )
     assert responses.status_code == 501
@@ -80,26 +80,26 @@ def test_hybrid_dynamic_registration_is_idempotent_and_routable(
         second = _add_node(router.url, worker_url, lmdeploy_config.model, role=1)
         second.raise_for_status()
 
-        status = requests.get(f"{router.url}/nodes/status", timeout=10)
+        status = requests.get(f'{router.url}/nodes/status', timeout=10)
         status.raise_for_status()
         _assert_status_entry(status.json(), worker_url, lmdeploy_config.model, role=1)
 
-        workers = requests.get(f"{router.url}/list_workers", timeout=10)
+        workers = requests.get(f'{router.url}/list_workers', timeout=10)
         workers.raise_for_status()
-        assert workers.json().get("urls") == [worker_url]
+        assert workers.json().get('urls') == [worker_url]
         _wait_for_inference(lmdeploy_config, router.url)
 
         removed = requests.post(
-            f"{router.url}/nodes/remove",
-            json={"url": worker_url},
+            f'{router.url}/nodes/remove',
+            json={'url': worker_url},
             timeout=10,
         )
         removed.raise_for_status()
-        assert requests.get(f"{router.url}/nodes/status", timeout=10).json() == {}
+        assert requests.get(f'{router.url}/nodes/status', timeout=10).json() == {}
 
         removed_again = requests.post(
-            f"{router.url}/nodes/remove",
-            json={"url": worker_url},
+            f'{router.url}/nodes/remove',
+            json={'url': worker_url},
             timeout=10,
         )
         removed_again.raise_for_status()
@@ -130,7 +130,7 @@ def test_pd_dynamic_registration_and_inference(
 ):
     if not lmdeploy_config.pd_prefill_url or not lmdeploy_config.pd_decode_url:
         pytest.skip(
-            "set LMDEPLOY_PD_PREFILL_URL and LMDEPLOY_PD_DECODE_URL for real PD testing"
+            'set LMDEPLOY_PD_PREFILL_URL and LMDEPLOY_PD_DECODE_URL for real PD testing'
         )
 
     router = lmdeploy_router_factory.start(lmdeploy_pd=True)
@@ -150,7 +150,7 @@ def test_pd_dynamic_registration_and_inference(
         prefill.raise_for_status()
         decode.raise_for_status()
 
-        status = requests.get(f"{router.url}/nodes/status", timeout=10)
+        status = requests.get(f'{router.url}/nodes/status', timeout=10)
         status.raise_for_status()
         status_payload = status.json()
         _assert_status_entry(
@@ -173,7 +173,7 @@ def test_pd_dynamic_registration_and_inference(
             role=2,
         )
         duplicate_prefill.raise_for_status()
-        assert len(requests.get(f"{router.url}/nodes/status", timeout=10).json()) == 2
+        assert len(requests.get(f'{router.url}/nodes/status', timeout=10).json()) == 2
 
         hybrid = _add_node(
             router.url,
@@ -195,7 +195,7 @@ def test_pd_static_registration_and_inference(
 ):
     if not lmdeploy_config.pd_prefill_url or not lmdeploy_config.pd_decode_url:
         pytest.skip(
-            "set LMDEPLOY_PD_PREFILL_URL and LMDEPLOY_PD_DECODE_URL for real PD testing"
+            'set LMDEPLOY_PD_PREFILL_URL and LMDEPLOY_PD_DECODE_URL for real PD testing'
         )
 
     router = lmdeploy_router_factory.start(
@@ -205,7 +205,7 @@ def test_pd_static_registration_and_inference(
     )
     try:
         assert set(
-            requests.get(f"{router.url}/list_workers", timeout=10).json()["urls"]
+            requests.get(f'{router.url}/list_workers', timeout=10).json()['urls']
         ) == {
             lmdeploy_config.pd_prefill_url,
             lmdeploy_config.pd_decode_url,

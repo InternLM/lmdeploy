@@ -1,8 +1,10 @@
-from typing import Optional
+# Copyright (c) OpenMMLab. All rights reserved.
 
 from lmdeploy_router.router_args import RouterArgs
+
 try:
-    from lmdeploy_router_rs import PolicyType, Router as _Router
+    from lmdeploy_router_rs import PolicyType
+    from lmdeploy_router_rs import Router as _Router
 except ImportError as exc:  # No-Rust development mode
     PolicyType = None
     _Router = None
@@ -11,19 +13,19 @@ except ImportError as exc:  # No-Rust development mode
 ROUTER_AVAILABLE = _Router is not None
 
 
-def policy_from_str(policy_str: Optional[str]) -> PolicyType:
+def policy_from_str(policy_str: str | None) -> PolicyType:
     """Convert policy string to PolicyType enum."""
     if PolicyType is None:
         raise _ROUTER_IMPORT_ERROR
     if policy_str is None:
         return None
     policy_map = {
-        "random": PolicyType.Random,
-        "round_robin": PolicyType.RoundRobin,
-        "cache_aware": PolicyType.CacheAware,
-        "power_of_two": PolicyType.PowerOfTwo,
-        "consistent_hash": PolicyType.ConsistentHash,
-        "rendezvous_hash": PolicyType.RendezvousHash,
+        'random': PolicyType.Random,
+        'round_robin': PolicyType.RoundRobin,
+        'cache_aware': PolicyType.CacheAware,
+        'power_of_two': PolicyType.PowerOfTwo,
+        'consistent_hash': PolicyType.ConsistentHash,
+        'rendezvous_hash': PolicyType.RendezvousHash,
     }
     return policy_map[policy_str]
 
@@ -85,18 +87,21 @@ class Router:
             Example: ['x-my-request-id', 'x-custom-trace-id']. Default: None
         request_timeout_secs: Request timeout in seconds. Default: 600
         max_concurrent_requests: Maximum number of concurrent requests allowed for rate limiting. Default: 256
-        queue_size: Queue size for pending requests when max concurrent limit reached (0 = no queue, return 429 immediately). Default: 100
+        queue_size: Queue size for pending requests when max concurrent limit reached
+            (0 = no queue, return 429 immediately). Default: 100
         queue_timeout_secs: Maximum time (in seconds) a request can wait in queue before timing out. Default: 60
-        rate_limit_tokens_per_second: Token bucket refill rate (tokens per second). If not set, defaults to max_concurrent_requests. Default: None
+        rate_limit_tokens_per_second: Token bucket refill rate (tokens per second). If not set,
+            defaults to max_concurrent_requests. Default: None
         cors_allowed_origins: List of allowed origins for CORS. Empty list allows all origins. Default: []
-        health_failure_threshold: Number of consecutive health check failures before marking worker unhealthy. Default: 3
+        health_failure_threshold: Number of consecutive health check failures before marking
+            worker unhealthy. Default: 3
         health_success_threshold: Number of consecutive health check successes before marking worker healthy. Default: 2
         health_check_timeout_secs: Timeout in seconds for health check requests. Default: 5
         health_check_interval_secs: Interval in seconds between runtime health checks. Default: 60
         health_check_endpoint: Health check endpoint path. Default: '/health'
     """
 
-    def __init__(self, router: Optional[_Router] = None, **kwargs):
+    def __init__(self, router: _Router | None = None, **kwargs):
         """Initialize Router either from a _Router instance or keyword
         arguments.
 
@@ -111,34 +116,34 @@ class Router:
             self._router = _Router(**kwargs)
 
     @staticmethod
-    def from_args(args: RouterArgs) -> "Router":
+    def from_args(args: RouterArgs) -> 'Router':
         """Create a router from a RouterArgs instance."""
 
         args_dict = vars(args)
         # Convert RouterArgs to _Router parameters
-        args_dict["worker_urls"] = (
+        args_dict['worker_urls'] = (
             []
-            if args_dict["service_discovery"] or args_dict["lmdeploy_pd_disaggregation"]
-            else args_dict["worker_urls"]
+            if args_dict['service_discovery'] or args_dict['lmdeploy_pd_disaggregation']
+            else args_dict['worker_urls']
         )
-        args_dict["policy"] = policy_from_str(args_dict["policy"])
-        args_dict["prefill_urls"] = (
-            args_dict["prefill_urls"]
-            if args_dict["lmdeploy_pd_disaggregation"]
+        args_dict['policy'] = policy_from_str(args_dict['policy'])
+        args_dict['prefill_urls'] = (
+            args_dict['prefill_urls']
+            if args_dict['lmdeploy_pd_disaggregation']
             else None
         )
-        args_dict["decode_urls"] = (
-            args_dict["decode_urls"]
-            if args_dict["lmdeploy_pd_disaggregation"]
+        args_dict['decode_urls'] = (
+            args_dict['decode_urls']
+            if args_dict['lmdeploy_pd_disaggregation']
             else None
         )
-        args_dict["prefill_policy"] = policy_from_str(args_dict["prefill_policy"])
-        args_dict["decode_policy"] = policy_from_str(args_dict["decode_policy"])
+        args_dict['prefill_policy'] = policy_from_str(args_dict['prefill_policy'])
+        args_dict['decode_policy'] = policy_from_str(args_dict['decode_policy'])
 
         # remove mini_lb parameter
-        args_dict.pop("mini_lb")
+        args_dict.pop('mini_lb')
         # Rust exposes lmdeploy_with_gdr; the CLI flag disables it
-        args_dict["lmdeploy_with_gdr"] = not args_dict.pop("lmdeploy_disable_gdr")
+        args_dict['lmdeploy_with_gdr'] = not args_dict.pop('lmdeploy_disable_gdr')
 
         return Router(router=_Router(**args_dict))
 

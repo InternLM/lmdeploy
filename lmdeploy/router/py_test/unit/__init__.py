@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 """Unit tests for lmdeploy_router.
 
 This package contains fast, isolated unit tests for Python components of the LMDeploy router. These tests focus on

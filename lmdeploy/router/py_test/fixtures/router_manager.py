@@ -1,7 +1,7 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 import requests
 
@@ -18,85 +18,85 @@ class RouterManager:
     """Helper to spawn a router process and interact with admin endpoints."""
 
     def __init__(self):
-        self._children: List[subprocess.Popen] = []
+        self._children: list[subprocess.Popen] = []
 
     def start_router(
         self,
-        worker_urls: Optional[List[str]] = None,
-        policy: str = "round_robin",
-        port: Optional[int] = None,
-        extra: Optional[Dict] = None,
+        worker_urls: list[str] | None = None,
+        policy: str = 'round_robin',
+        port: int | None = None,
+        extra: dict | None = None,
         # PD options
         lmdeploy_pd_disaggregation: bool = False,
-        prefill_urls: Optional[List[str]] = None,
-        decode_urls: Optional[List[str]] = None,
-        prefill_policy: Optional[str] = None,
-        decode_policy: Optional[str] = None,
+        prefill_urls: list[str] | None = None,
+        decode_urls: list[str] | None = None,
+        prefill_policy: str | None = None,
+        decode_policy: str | None = None,
     ) -> ProcHandle:
         worker_urls = worker_urls or []
         port = port or find_free_port()
         cmd = [
-            "python3",
-            "-m",
-            "lmdeploy_router.launch_router",
-            "--host",
-            "127.0.0.1",
-            "--port",
+            'python3',
+            '-m',
+            'lmdeploy_router.launch_router',
+            '--host',
+            '127.0.0.1',
+            '--port',
             str(port),
-            "--policy",
+            '--policy',
             policy,
         ]
         # Avoid Prometheus port collisions by assigning a free port per router
         prom_port = find_free_port()
         cmd.extend(
-            ["--prometheus-port", str(prom_port), "--prometheus-host", "127.0.0.1"]
+            ['--prometheus-port', str(prom_port), '--prometheus-host', '127.0.0.1']
         )
         if worker_urls:
-            cmd.extend(["--worker-urls", *worker_urls])
+            cmd.extend(['--worker-urls', *worker_urls])
 
         # PD routing configuration
         if lmdeploy_pd_disaggregation:
-            cmd.append("--lmdeploy-pd-disaggregation")
+            cmd.append('--lmdeploy-pd-disaggregation')
             if prefill_urls:
                 for url in prefill_urls:
-                    cmd.extend(["--prefill", url])
+                    cmd.extend(['--prefill', url])
             if decode_urls:
                 for url in decode_urls:
-                    cmd.extend(["--decode", url])
+                    cmd.extend(['--decode', url])
             if prefill_policy:
-                cmd.extend(["--prefill-policy", prefill_policy])
+                cmd.extend(['--prefill-policy', prefill_policy])
             if decode_policy:
-                cmd.extend(["--decode-policy", decode_policy])
+                cmd.extend(['--decode-policy', decode_policy])
 
         # Map supported extras to CLI flags (subset for integration)
         if extra:
             flag_map = {
-                "max_payload_size": "--max-payload-size",
-                "api_key": "--api-key",
+                'max_payload_size': '--max-payload-size',
+                'api_key': '--api-key',
                 # Health/monitoring
-                "worker_startup_check_interval": "--worker-startup-check-interval",
+                'worker_startup_check_interval': '--worker-startup-check-interval',
                 # Cache-aware tuning
-                "cache_threshold": "--cache-threshold",
-                "balance_abs_threshold": "--balance-abs-threshold",
-                "balance_rel_threshold": "--balance-rel-threshold",
+                'cache_threshold': '--cache-threshold',
+                'balance_abs_threshold': '--balance-abs-threshold',
+                'balance_rel_threshold': '--balance-rel-threshold',
                 # Retry
-                "retry_max_retries": "--retry-max-retries",
-                "retry_initial_backoff_ms": "--retry-initial-backoff-ms",
-                "retry_max_backoff_ms": "--retry-max-backoff-ms",
-                "retry_backoff_multiplier": "--retry-backoff-multiplier",
-                "retry_jitter_factor": "--retry-jitter-factor",
-                "disable_retries": "--disable-retries",
+                'retry_max_retries': '--retry-max-retries',
+                'retry_initial_backoff_ms': '--retry-initial-backoff-ms',
+                'retry_max_backoff_ms': '--retry-max-backoff-ms',
+                'retry_backoff_multiplier': '--retry-backoff-multiplier',
+                'retry_jitter_factor': '--retry-jitter-factor',
+                'disable_retries': '--disable-retries',
                 # Circuit breaker
-                "cb_failure_threshold": "--cb-failure-threshold",
-                "cb_success_threshold": "--cb-success-threshold",
-                "cb_timeout_duration_secs": "--cb-timeout-duration-secs",
-                "cb_window_duration_secs": "--cb-window-duration-secs",
-                "disable_circuit_breaker": "--disable-circuit-breaker",
+                'cb_failure_threshold': '--cb-failure-threshold',
+                'cb_success_threshold': '--cb-success-threshold',
+                'cb_timeout_duration_secs': '--cb-timeout-duration-secs',
+                'cb_window_duration_secs': '--cb-window-duration-secs',
+                'disable_circuit_breaker': '--disable-circuit-breaker',
                 # Rate limiting
-                "max_concurrent_requests": "--max-concurrent-requests",
-                "queue_size": "--queue-size",
-                "queue_timeout_secs": "--queue-timeout-secs",
-                "rate_limit_tokens_per_second": "--rate-limit-tokens-per-second",
+                'max_concurrent_requests': '--max-concurrent-requests',
+                'queue_size': '--queue-size',
+                'queue_timeout_secs': '--queue-timeout-secs',
+                'rate_limit_tokens_per_second': '--rate-limit-tokens-per-second',
             }
             for k, v in extra.items():
                 if v is None:
@@ -112,7 +112,7 @@ class RouterManager:
 
         proc = subprocess.Popen(cmd)
         self._children.append(proc)
-        url = f"http://127.0.0.1:{port}"
+        url = f'http://127.0.0.1:{port}'
         self._wait_health(url)
         return ProcHandle(process=proc, url=url)
 
@@ -121,45 +121,45 @@ class RouterManager:
         with requests.Session() as s:
             while time.time() - start < timeout:
                 try:
-                    r = s.get(f"{base_url}/health", timeout=2)
+                    r = s.get(f'{base_url}/health', timeout=2)
                     if r.status_code == 200:
                         return
                 except requests.RequestException:
                     pass
                 time.sleep(0.2)
-        raise TimeoutError(f"Router at {base_url} did not become healthy")
+        raise TimeoutError(f'Router at {base_url} did not become healthy')
 
     def add_worker(self, base_url: str, worker_url: str) -> None:
-        r = requests.post(f"{base_url}/add_worker", params={"url": worker_url})
-        assert r.status_code == 200, f"add_worker failed: {r.status_code} {r.text}"
+        r = requests.post(f'{base_url}/add_worker', params={'url': worker_url})
+        assert r.status_code == 200, f'add_worker failed: {r.status_code} {r.text}'
 
     def remove_worker(self, base_url: str, worker_url: str) -> None:
-        r = requests.post(f"{base_url}/remove_worker", params={"url": worker_url})
-        assert r.status_code == 200, f"remove_worker failed: {r.status_code} {r.text}"
+        r = requests.post(f'{base_url}/remove_worker', params={'url': worker_url})
+        assert r.status_code == 200, f'remove_worker failed: {r.status_code} {r.text}'
 
     def add_lmdeploy_node(self, base_url: str, worker_url: str, role: int) -> None:
         response = requests.post(
-            f"{base_url}/nodes/add", json={"url": worker_url, "status": {"role": role}}
+            f'{base_url}/nodes/add', json={'url': worker_url, 'status': {'role': role}}
         )
         assert response.status_code == 200, response.text
 
     def remove_lmdeploy_node(self, base_url: str, worker_url: str, role: int) -> None:
         response = requests.post(
-            f"{base_url}/nodes/remove",
-            json={"url": worker_url, "status": {"role": role}},
+            f'{base_url}/nodes/remove',
+            json={'url': worker_url, 'status': {'role': role}},
         )
         assert response.status_code == 200, response.text
 
     def lmdeploy_nodes(self, base_url: str) -> dict:
-        response = requests.get(f"{base_url}/nodes/status")
+        response = requests.get(f'{base_url}/nodes/status')
         assert response.status_code == 200, response.text
         return response.json()
 
     def list_workers(self, base_url: str) -> list[str]:
-        r = requests.get(f"{base_url}/list_workers")
-        assert r.status_code == 200, f"list_workers failed: {r.status_code} {r.text}"
+        r = requests.get(f'{base_url}/list_workers')
+        assert r.status_code == 200, f'list_workers failed: {r.status_code} {r.text}'
         data = r.json()
-        return data.get("urls", [])
+        return data.get('urls', [])
 
     def stop_all(self):
         for p in self._children:

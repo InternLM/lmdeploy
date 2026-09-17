@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import pytest
 import requests
 
@@ -5,7 +6,7 @@ import requests
 @pytest.mark.integration
 def test_discovery_shim_add_remove(router_manager, mock_workers):
     # Start router without workers
-    rh = router_manager.start_router(worker_urls=[], policy="round_robin")
+    rh = router_manager.start_router(worker_urls=[], policy='round_robin')
 
     # Initially empty
     urls = router_manager.list_workers(rh.url)
@@ -19,12 +20,12 @@ def test_discovery_shim_add_remove(router_manager, mock_workers):
 
     # Can serve a request
     r = requests.post(
-        f"{rh.url}/v1/completions",
+        f'{rh.url}/v1/completions',
         json={
-            "model": "test-model",
-            "prompt": "hi",
-            "max_tokens": 1,
-            "stream": False,
+            'model': 'test-model',
+            'prompt': 'hi',
+            'max_tokens': 1,
+            'stream': False,
         },
     )
     assert r.status_code == 200

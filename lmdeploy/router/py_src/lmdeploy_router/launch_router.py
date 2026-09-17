@@ -1,25 +1,26 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import argparse
 import logging
 import os
 import sys
-from typing import List, Optional
 
 import setproctitle
+
 from lmdeploy_router.mini_lb import MiniLoadBalancer
 from lmdeploy_router.router_args import RouterArgs
 
-logger = logging.getLogger("router")
+logger = logging.getLogger('router')
 
 try:
     from lmdeploy_router.router import Router
 except ImportError:
     Router = None
     logger.warning(
-        "Rust Router is not installed, only python MiniLB (debugging only) is available"
+        'Rust Router is not installed, only python MiniLB (debugging only) is available'
     )
 
 
-def launch_router(args: argparse.Namespace) -> Optional[Router]:
+def launch_router(args: argparse.Namespace) -> Router | None:
     """Launch the LMDeploy router with the configuration from parsed arguments.
 
     Args:
@@ -29,11 +30,11 @@ def launch_router(args: argparse.Namespace) -> Optional[Router]:
     Returns:
         Router instance if successful, None if failed
     """
-    setproctitle.setproctitle("lmdeploy::router")
+    setproctitle.setproctitle('lmdeploy::router')
 
-    packaged_router_bin = os.path.join(sys.prefix, "bin", "lmdeploy-router-bin")
+    packaged_router_bin = os.path.join(sys.prefix, 'bin', 'lmdeploy-router-bin')
     if os.path.isfile(packaged_router_bin):
-        os.environ.setdefault("LMDPLOY_PYTHON_ROUTER_BIN", packaged_router_bin)
+        os.environ.setdefault('LMDPLOY_PYTHON_ROUTER_BIN', packaged_router_bin)
     try:
         # Convert to RouterArgs if needed
         if not isinstance(args, RouterArgs):
@@ -46,13 +47,13 @@ def launch_router(args: argparse.Namespace) -> Optional[Router]:
             mini_lb.start()
         else:
             if Router is None:
-                raise RuntimeError("Rust Router is not installed")
+                raise RuntimeError('Rust Router is not installed')
             router_args._validate_router_args()
             router = Router.from_args(router_args)
             router.start()
 
     except Exception as e:
-        logger.error(f"Error starting router: {e}")
+        logger.error(f'Error starting router: {e}')
         raise e
 
 
@@ -65,7 +66,7 @@ class CustomHelpFormatter(
     pass
 
 
-def parse_router_args(args: List[str]) -> RouterArgs:
+def parse_router_args(args: list[str]) -> RouterArgs:
     """Parse command line arguments and return RouterArgs instance."""
     parser = argparse.ArgumentParser(
         description="""LMDeploy Router - High-performance request distribution across worker nodes
@@ -97,5 +98,5 @@ def main() -> None:
     launch_router(router_args)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

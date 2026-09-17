@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import pytest
 import requests
 
@@ -6,7 +7,7 @@ import requests
 def test_add_and_remove_worker(mock_worker, router_manager, mock_workers):
     # Start with a single worker
     proc1, url1, id1 = mock_worker
-    rh = router_manager.start_router(worker_urls=[url1], policy="round_robin")
+    rh = router_manager.start_router(worker_urls=[url1], policy='round_robin')
 
     # Add a second worker
 
@@ -20,16 +21,16 @@ def test_add_and_remove_worker(mock_worker, router_manager, mock_workers):
     with requests.Session() as s:
         for i in range(20):
             r = s.post(
-                f"{rh.url}/v1/completions",
+                f'{rh.url}/v1/completions',
                 json={
-                    "model": "test-model",
-                    "prompt": f"x{i}",
-                    "max_tokens": 1,
-                    "stream": False,
+                    'model': 'test-model',
+                    'prompt': f'x{i}',
+                    'max_tokens': 1,
+                    'stream': False,
                 },
             )
             assert r.status_code == 200
-            wid = r.headers.get("X-Worker-Id") or r.json().get("worker_id")
+            wid = r.headers.get('X-Worker-Id') or r.json().get('worker_id')
             seen.add(wid)
             if len(seen) == 2:
                 break
@@ -43,15 +44,15 @@ def test_add_and_remove_worker(mock_worker, router_manager, mock_workers):
     with requests.Session() as s:
         for i in range(10):
             r = s.post(
-                f"{rh.url}/v1/completions",
+                f'{rh.url}/v1/completions',
                 json={
-                    "model": "test-model",
-                    "prompt": f"y{i}",
-                    "max_tokens": 1,
-                    "stream": False,
+                    'model': 'test-model',
+                    'prompt': f'y{i}',
+                    'max_tokens': 1,
+                    'stream': False,
                 },
             )
             assert r.status_code == 200
-            wid = r.headers.get("X-Worker-Id") or r.json().get("worker_id")
+            wid = r.headers.get('X-Worker-Id') or r.json().get('worker_id')
             assert wid == id1
     # mock_workers fixture handles cleanup

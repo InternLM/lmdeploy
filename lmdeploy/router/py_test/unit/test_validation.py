@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 """Unit tests for validation logic in lmdeploy_router.
 
 These tests focus on testing the validation logic in isolation, including parameter validation, URL validation, and
@@ -16,12 +17,12 @@ class TestURLValidation:
     def test_valid_worker_urls(self):
         """Test validation of valid worker URLs."""
         valid_urls = [
-            "http://worker1:8000",
-            "https://worker2:8000",
-            "http://localhost:8000",
-            "http://127.0.0.1:8000",
-            "http://192.168.1.100:8000",
-            "http://worker.example.com:8000",
+            'http://worker1:8000',
+            'https://worker2:8000',
+            'http://localhost:8000',
+            'http://127.0.0.1:8000',
+            'http://192.168.1.100:8000',
+            'http://worker.example.com:8000',
         ]
 
         for url in valid_urls:
@@ -32,10 +33,10 @@ class TestURLValidation:
     def test_valid_prefill_urls(self):
         """Test validation of valid prefill URLs."""
         valid_prefill_urls = [
-            "http://prefill1:8000",
-            "https://prefill2:8000",
-            "http://localhost:8000",
-            "http://127.0.0.1:8000",
+            'http://prefill1:8000',
+            'https://prefill2:8000',
+            'http://localhost:8000',
+            'http://127.0.0.1:8000',
         ]
 
         for url in valid_prefill_urls:
@@ -46,10 +47,10 @@ class TestURLValidation:
     def test_valid_decode_urls(self):
         """Test validation of valid decode URLs."""
         valid_decode_urls = [
-            "http://decode1:8001",
-            "https://decode2:8001",
-            "http://localhost:8001",
-            "http://127.0.0.1:8001",
+            'http://decode1:8001',
+            'https://decode2:8001',
+            'http://localhost:8001',
+            'http://127.0.0.1:8001',
         ]
 
         for url in valid_decode_urls:
@@ -62,11 +63,11 @@ class TestURLValidation:
         # Note: The current implementation doesn't validate URL format
         # This test documents the current behavior
         malformed_urls = [
-            "not-a-url",
-            "ftp://worker1:8000",  # Wrong protocol
-            "http://",  # Missing host
-            ":8000",  # Missing protocol and host
-            "http://worker1",  # Missing port
+            'not-a-url',
+            'ftp://worker1:8000',  # Wrong protocol
+            'http://',  # Missing host
+            ':8000',  # Missing protocol and host
+            'http://worker1',  # Missing port
         ]
 
         for url in malformed_urls:
@@ -271,8 +272,8 @@ class TestConfigurationValidation:
         # Valid PD configuration
         args = RouterArgs(
             lmdeploy_pd_disaggregation=True,
-            prefill_urls=["http://prefill1:8000"],
-            decode_urls=["http://decode1:8001"],
+            prefill_urls=['http://prefill1:8000'],
+            decode_urls=['http://decode1:8001'],
         )
 
         assert args.lmdeploy_pd_disaggregation is True
@@ -284,15 +285,15 @@ class TestConfigurationValidation:
         # Valid service discovery configuration
         args = RouterArgs(
             service_discovery=True,
-            selector={"app": "worker", "env": "prod"},
+            selector={'app': 'worker', 'env': 'prod'},
             service_discovery_port=8080,
-            service_discovery_namespace="default",
+            service_discovery_namespace='default',
         )
 
         assert args.service_discovery is True
-        assert args.selector == {"app": "worker", "env": "prod"}
+        assert args.selector == {'app': 'worker', 'env': 'prod'}
         assert args.service_discovery_port == 8080
-        assert args.service_discovery_namespace == "default"
+        assert args.service_discovery_namespace == 'default'
 
     def test_pd_service_discovery_validation(self):
         """Test PD service discovery configuration validation."""
@@ -300,19 +301,19 @@ class TestConfigurationValidation:
         args = RouterArgs(
             lmdeploy_pd_disaggregation=True,
             service_discovery=True,
-            prefill_selector={"app": "prefill"},
-            decode_selector={"app": "decode"},
+            prefill_selector={'app': 'prefill'},
+            decode_selector={'app': 'decode'},
         )
 
         assert args.lmdeploy_pd_disaggregation is True
         assert args.service_discovery is True
-        assert args.prefill_selector == {"app": "prefill"}
-        assert args.decode_selector == {"app": "decode"}
+        assert args.prefill_selector == {'app': 'prefill'}
+        assert args.decode_selector == {'app': 'decode'}
 
     def test_policy_validation(self):
         """Test policy configuration validation."""
         # Valid policies
-        valid_policies = ["random", "round_robin", "cache_aware", "power_of_two"]
+        valid_policies = ['random', 'round_robin', 'cache_aware', 'power_of_two']
 
         for policy in valid_policies:
             args = RouterArgs(policy=policy)
@@ -321,14 +322,14 @@ class TestConfigurationValidation:
     def test_pd_policy_validation(self):
         """Test PD policy configuration validation."""
         # Valid PD policies
-        valid_policies = ["random", "round_robin", "cache_aware", "power_of_two"]
+        valid_policies = ['random', 'round_robin', 'cache_aware', 'power_of_two']
 
         for prefill_policy in valid_policies:
             for decode_policy in valid_policies:
                 args = RouterArgs(
                     lmdeploy_pd_disaggregation=True,
-                    prefill_urls=["http://prefill1:8000"],
-                    decode_urls=["http://decode1:8001"],
+                    prefill_urls=['http://prefill1:8000'],
+                    decode_urls=['http://decode1:8001'],
                     prefill_policy=prefill_policy,
                     decode_policy=decode_policy,
                 )
@@ -340,10 +341,10 @@ class TestConfigurationValidation:
         # Valid CORS origins
         valid_origins = [
             [],
-            ["http://localhost:3000"],
-            ["https://example.com"],
-            ["http://localhost:3000", "https://example.com"],
-            ["*"],  # Wildcard (if supported)
+            ['http://localhost:3000'],
+            ['https://example.com'],
+            ['http://localhost:3000', 'https://example.com'],
+            ['*'],  # Wildcard (if supported)
         ]
 
         for origins in valid_origins:
@@ -353,7 +354,7 @@ class TestConfigurationValidation:
     def test_logging_validation(self):
         """Test logging configuration validation."""
         # Valid log levels
-        valid_log_levels = ["debug", "info", "warning", "error", "critical"]
+        valid_log_levels = ['debug', 'info', 'warning', 'error', 'critical']
 
         for level in valid_log_levels:
             args = RouterArgs(log_level=level)
@@ -362,23 +363,23 @@ class TestConfigurationValidation:
     def test_prometheus_validation(self):
         """Test Prometheus configuration validation."""
         # Valid Prometheus configuration
-        args = RouterArgs(prometheus_port=29000, prometheus_host="127.0.0.1")
+        args = RouterArgs(prometheus_port=29000, prometheus_host='127.0.0.1')
 
         assert args.prometheus_port == 29000
-        assert args.prometheus_host == "127.0.0.1"
+        assert args.prometheus_host == '127.0.0.1'
 
     def test_tokenizer_validation(self):
         """Test tokenizer configuration validation."""
-        pytest.skip("Tokenizer configuration not available in current implementation")
+        pytest.skip('Tokenizer configuration not available in current implementation')
 
     def test_request_id_headers_validation(self):
         """Test request ID headers configuration validation."""
         # Valid request ID headers
         valid_headers = [
-            ["x-request-id"],
-            ["x-request-id", "x-trace-id"],
-            ["x-request-id", "x-trace-id", "x-correlation-id"],
-            ["custom-header"],
+            ['x-request-id'],
+            ['x-request-id', 'x-trace-id'],
+            ['x-request-id', 'x-trace-id', 'x-correlation-id'],
+            ['custom-header'],
         ]
 
         for headers in valid_headers:
@@ -398,7 +399,7 @@ class TestLaunchValidation:
             service_discovery=False,
         )
 
-        with patch("lmdeploy_router.launch_router.Router") as router_mod:
+        with patch('lmdeploy_router.launch_router.Router') as router_mod:
             mock_router_instance = MagicMock()
             router_mod.from_args = MagicMock(return_value=mock_router_instance)
 
@@ -415,7 +416,7 @@ class TestLaunchValidation:
         )
 
         # Should not raise validation error
-        with patch("lmdeploy_router.launch_router.Router") as router_mod:
+        with patch('lmdeploy_router.launch_router.Router') as router_mod:
             mock_router_instance = MagicMock()
             router_mod.from_args = MagicMock(return_value=mock_router_instance)
 
@@ -429,7 +430,7 @@ class TestLaunchValidation:
         args = RouterArgs(worker_urls=[], service_discovery=False)
 
         # Should not raise validation error
-        with patch("lmdeploy_router.launch_router.Router") as router_mod:
+        with patch('lmdeploy_router.launch_router.Router') as router_mod:
             mock_router_instance = MagicMock()
             router_mod.from_args = MagicMock(return_value=mock_router_instance)
 
@@ -441,14 +442,14 @@ class TestLaunchValidation:
     def test_launch_with_valid_config(self):
         """Test launching with valid configuration."""
         args = RouterArgs(
-            host="127.0.0.1",
+            host='127.0.0.1',
             port=30000,
-            worker_urls=["http://worker1:8000"],
-            policy="cache_aware",
+            worker_urls=['http://worker1:8000'],
+            policy='cache_aware',
         )
 
         # Should not raise validation error
-        with patch("lmdeploy_router.launch_router.Router") as router_mod:
+        with patch('lmdeploy_router.launch_router.Router') as router_mod:
             mock_router_instance = MagicMock()
             router_mod.from_args = MagicMock(return_value=mock_router_instance)
 
@@ -461,13 +462,13 @@ class TestLaunchValidation:
         """Test launching with valid PD configuration."""
         args = RouterArgs(
             lmdeploy_pd_disaggregation=True,
-            prefill_urls=["http://prefill1:8000"],
-            decode_urls=["http://decode1:8001"],
-            policy="cache_aware",
+            prefill_urls=['http://prefill1:8000'],
+            decode_urls=['http://decode1:8001'],
+            policy='cache_aware',
         )
 
         # Should not raise validation error
-        with patch("lmdeploy_router.launch_router.Router") as router_mod:
+        with patch('lmdeploy_router.launch_router.Router') as router_mod:
             mock_router_instance = MagicMock()
             router_mod.from_args = MagicMock(return_value=mock_router_instance)
 
@@ -480,12 +481,12 @@ class TestLaunchValidation:
         """Test launching with valid service discovery configuration."""
         args = RouterArgs(
             service_discovery=True,
-            selector={"app": "worker"},
+            selector={'app': 'worker'},
             service_discovery_port=8080,
         )
 
         # Should not raise validation error
-        with patch("lmdeploy_router.launch_router.Router") as router_mod:
+        with patch('lmdeploy_router.launch_router.Router') as router_mod:
             mock_router_instance = MagicMock()
             router_mod.from_args = MagicMock(return_value=mock_router_instance)
 
