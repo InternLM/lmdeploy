@@ -12,7 +12,6 @@ from ...strategies.ar_spec.model_agent import ARSpecExtraInputs
 from .base import (
     SPEC_PROPOSERS,
     BaseSpecProposer,
-    ProposalContext,
     ProposalWarmupCase,
     ProposalWarmupPlan,
 )
@@ -25,8 +24,15 @@ logger = get_logger('lmdeploy')
 class DSpark(DFlash):
     """DFlash-family proposal with sequential DSpark logit correction."""
 
+    # Inherit DFlash.propose so deterministic DSpark tokens use the common
+    # one-hot rejection path for both greedy and non-greedy target sampling.
+
+    # Opt in only after warmup has checked the allocated draft cache geometry.
+    _full_context_materialization = False
+
     def build_model(self, empty_init: bool, target_model: torch.nn.Module = None,
                     build_model_ctx=None):
+        self._full_context_materialization = False
         if target_model is None:
             raise RuntimeError('DSpark requires the target model for shared modules.')
         BaseSpecProposer.build_model(self,
@@ -74,6 +80,29 @@ class DSpark(DFlash):
                      for batch_size in capture_batch_sizes)
         return ProposalWarmupPlan(tuple(cases))
 
+    def _configure_context_materialization(self, cache_engine: CacheEngine):
+        """Select the fixed-layout path using host metadata, never GPU
+        values."""
+        model = self._draft_model()
+        enabled = bool(getattr(model, 'supports_full_context_materialization', False))
+        state_engine = getattr(cache_engine, 'state_cache_engine', None)
+        named_caches = {} if state_engine is None else state_engine.named_state_caches
+        ring_capacity = getattr(getattr(model, 'args', None), 'ring_storage_capacity', None)
+        if ring_capacity is not None:
+            ring = named_caches.get('v4_window_kv_fp8')
+            if ring is not None and ring.size(2) != ring_capacity:
+                raise RuntimeError('DSpark draft ring capacity does not match the allocated cache: '
+                                   f'model={ring_capacity}, cache={ring.size(2)}.')
+            enabled = enabled and set(named_caches) == {'v4_window_kv_fp8'}
+        elif named_caches:
+            # A new stateful draft needs its own full-block safety proof.
+            enabled = False
+        self._full_context_materialization = enabled
+
+    def prepare_warmup_forward(self, inputs: ModelInputs, cache_engine: CacheEngine) -> ModelInputs | None:
+        self._configure_context_materialization(cache_engine)
+        return super().prepare_warmup_forward(inputs, cache_engine)
+
     def _build_query_inputs(self,
                             model_inputs: ModelInputs,
                             context_lengths: torch.Tensor,
@@ -106,13 +135,14 @@ class DSpark(DFlash):
     def _prepare_context_materialization(
             self, model_inputs: ModelInputs,
             extra_inputs: ARSpecExtraInputs):
-        """Keep only committed verifier rows for the V4 draft ring cache.
+        """Keep physical context layout separate from committed logical
+        lengths.
 
-        DFlash can leave rejected rows in pageable KV and hide them with logical lengths.  Bundled V4 DSpark also owns a
-        fixed circular window state, where those future writes can overwrite still-live history, so its decode
-        materialization must be compacted to the accepted prefix.
+        Pageable KV and validated W+N SWA rings may store the full verifier block. The next query starts at the
+        committed prefix, hiding rejected tails without boolean indexing/nonzero and its host synchronization.
+        Unvalidated/stateful layouts retain accepted-prefix compaction.
         """
-        if not model_inputs.is_decoding:
+        if not model_inputs.is_decoding or self._full_context_materialization:
             return super()._prepare_context_materialization(
                 model_inputs, extra_inputs)
 
@@ -198,24 +228,9 @@ class DSpark(DFlash):
             raise RuntimeError(
                 'DSpark draft_token_ids shape mismatch: '
                 f'{tuple(sampled.shape)} vs {expected_shape}.')
-        return sampled
-
-    async def propose(self,
-                      model_inputs: ModelInputs,
-                      extra_inputs: ARSpecExtraInputs,
-                      sampling_inputs,
-                      proposal_ctx: ProposalContext | None = None):
-        """Enforce the fixed-window greedy-only V1 contract."""
-        if sampling_inputs is not None:
-            if (sampling_inputs.max_top_k != 1
-                    or sampling_inputs.min_top_p < 1.0):
-                raise NotImplementedError(
-                    'DSpark V1 supports greedy sampling only (top_k=1, top_p=1).')
-            if (sampling_inputs.max_num_logprobs is not None
-                    and sampling_inputs.max_num_logprobs > 0):
-                raise NotImplementedError(
-                    'DSpark V1 does not support output log probabilities.')
-        return await super().propose(model_inputs,
-                                     extra_inputs,
-                                     sampling_inputs,
-                                     proposal_ctx=proposal_ctx)
+        # CUDA graph runners reuse one memory pool across capture buckets.
+        # Draft ids survive beyond this forward (for example while new
+        # prefills merge into an existing decode batch), so retaining the
+        # graph-owned view lets another replay overwrite them.  Own the ids
+        # before returning them to ARSpecExtraInputs.
+        return sampled.clone()

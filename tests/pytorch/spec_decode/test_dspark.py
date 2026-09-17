@@ -1,8 +1,10 @@
 import asyncio
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
 import torch
+from torch.utils._python_dispatch import TorchDispatchMode
 
 from lmdeploy.pytorch.backends.cuda.attention.v4 import (
     CudaV4AttentionMetadata,
@@ -27,6 +29,7 @@ from lmdeploy.pytorch.models.dspark_heads import (
     VanillaMarkovHead,
     compute_dspark_proposal_ids,
 )
+from lmdeploy.pytorch.models.qwen3_dspark import Qwen3DSparkModel
 from lmdeploy.pytorch.spec_decode.dspark_utils import (
     parse_dspark_config,
     prepare_dspark_hf_config,
@@ -293,7 +296,11 @@ def test_dspark_query_layouts():
         ]
 
 
-def test_dspark_compacts_rejected_v4_context_rows():
+@pytest.mark.parametrize('cache_kind', [
+    'pageable', 'v4', 'small_ring', 'small_window', 'compressed',
+    'extra_state', 'unknown', 'missing_ring', 'mismatched_ring',
+])
+def test_dspark_context_materialization_layout(cache_kind):
     proposer = DSpark(SimpleNamespace(
         mask_token_id=99,
         target_layer_ids=(1, 5),
@@ -303,78 +310,160 @@ def test_dspark_compacts_rejected_v4_context_rows():
         model_config=None,
     ), device='cpu')
     inputs = ModelInputs(
-        input_ids=torch.arange(12).reshape(1, 12),
-        seq_length=torch.tensor([6, 6]),
-        history_lengths=torch.tensor([10, 20]),
-        block_offsets=torch.zeros((2, 2), dtype=torch.int32),
+        input_ids=torch.arange(18).reshape(1, 18),
+        seq_length=torch.tensor([6, 6, 6]),
+        history_lengths=torch.tensor([10, 20, 30]),
+        block_offsets=torch.zeros((3, 2), dtype=torch.int32),
         is_decoding=True,
-        num_ignored_history=torch.zeros(2, dtype=torch.long),
+        num_ignored_history=torch.zeros(3, dtype=torch.long),
         max_q_seqlen=6,
-        max_kv_seqlen=26,
-        sum_kv_seqlen=42,
+        max_kv_seqlen=36,
+        sum_kv_seqlen=78,
     )
-    target_hidden = torch.arange(24, dtype=torch.float32).reshape(1, 12, 2)
+    target_hidden = torch.arange(36, dtype=torch.float32).reshape(1, 18, 2)
+    inputs.target_hidden_states = target_hidden
+    named_caches = {}
+    if cache_kind == 'pageable':
+        model = Qwen3DSparkModel.__new__(Qwen3DSparkModel)
+        torch.nn.Module.__init__(model)
+    elif cache_kind == 'unknown':
+        model = SimpleNamespace()
+    else:
+        model = DeepseekV4ForCausalLMDSpark.__new__(DeepseekV4ForCausalLMDSpark)
+        torch.nn.Module.__init__(model)
+        model.dspark_num_speculative_tokens = 5
+        model.args = SimpleNamespace(
+            window_size=4 if cache_kind == 'small_window' else 128,
+            ring_storage_capacity=128 if cache_kind == 'small_ring' else 134,
+            compress_ratios=(4,) if cache_kind == 'compressed' else (0,),
+        )
+        capacity = model.args.ring_storage_capacity
+        if cache_kind == 'mismatched_ring':
+            capacity -= 2
+        if cache_kind != 'missing_ring':
+            named_caches['v4_window_kv_fp8'] = torch.empty(1, 3, capacity, 1)
+        if cache_kind == 'extra_state':
+            named_caches['unvalidated_state'] = torch.empty(1)
+    proposer.model = model
+    cache = SimpleNamespace(
+        state_cache_engine=SimpleNamespace(named_state_caches=named_caches),
+        cache_config=SimpleNamespace(block_size=64),
+    )
+    proposer._materialize_context = lambda *args: None
+    if cache_kind == 'mismatched_ring':
+        with pytest.raises(RuntimeError, match='ring capacity'):
+            proposer.prepare_warmup_forward(inputs, cache)
+        return
+    # Exercise actual warmup routing, including wrapped graph-runner models.
+    proposer.model = SimpleNamespace(get_model=lambda: model)
+    proposer.prepare_warmup_forward(inputs, cache)
+    full_context = cache_kind in ('pageable', 'v4')
+    assert proposer._full_context_materialization == full_context
     extra = SimpleNamespace(
         target_hidden_states=target_hidden,
-        num_rejected_tokens=torch.tensor([4, 1]),
+        num_rejected_tokens=torch.tensor([5, 3, 0]),
     )
 
-    context, hidden, lengths, starts = (
-        proposer._prepare_context_materialization(inputs, extra))
+    class NoNonzero(TorchDispatchMode):
 
-    assert lengths.tolist() == [2, 5]
-    assert starts.tolist() == [12, 25]
-    assert context.seq_length.tolist() == [2, 5]
-    assert context.input_ids.tolist() == [[0, 1, 6, 7, 8, 9, 10]]
-    torch.testing.assert_close(
-        hidden,
-        target_hidden.reshape(2, 6, 2)[
-            torch.tensor([[True, True, False, False, False, False],
-                          [True, True, True, True, True, False]])])
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            assert func != torch.ops.aten.nonzero.default
+            return func(*args, **(kwargs or {}))
+
+    with NoNonzero() if full_context else nullcontext():
+        context, hidden, lengths, starts = (
+            proposer._prepare_context_materialization(inputs, extra))
+
+    assert lengths.tolist() == [1, 3, 6]
+    assert starts.tolist() == [11, 23, 36]
+    assert context.is_decoding is False
+    if full_context:
+        assert context.seq_length.tolist() == [6, 6, 6]
+        assert context.input_ids.data_ptr() == inputs.input_ids.data_ptr()
+        assert hidden.data_ptr() == target_hidden.data_ptr()
+        assert hidden.shape == (18, 2)
+    else:
+        assert context.seq_length.tolist() == [1, 3, 6]
+        indices = torch.tensor([0, 6, 7, 8, 12, 13, 14, 15, 16, 17])
+        torch.testing.assert_close(context.input_ids, inputs.input_ids[:, indices])
+        torch.testing.assert_close(hidden, target_hidden[0, indices])
+    query = proposer._build_query_inputs(
+        inputs, lengths, torch.tensor([7, 8, 9]), query_start_positions=starts)
+    assert query.history_lengths.tolist() == [11, 23, 36]
+    assert query.target_position_ids.reshape(3, 5)[:, 0].tolist() == [11, 23, 36]
 
 
-def test_dspark_query_does_not_commit_v4_window_rows():
+@pytest.mark.parametrize('query_len', [5, 6])
+def test_dspark_query_does_not_commit_v4_window_rows(query_len):
+    """Full/compact context have identical visible state across repeated
+    wraps."""
     proposer = DSpark(SimpleNamespace(
         mask_token_id=99,
         target_layer_ids=(1, 5),
         num_speculative_tokens=5,
-        dspark_draft_query_len=5,
-        dspark_sample_from_anchor=True,
+        dspark_draft_query_len=query_len,
+        dspark_sample_from_anchor=query_len == 5,
         model_config=None,
     ), device='cpu')
-    query = ModelInputs(
-        input_ids=torch.arange(5).reshape(1, 5),
-        seq_length=torch.tensor([5]),
-        history_lengths=torch.tensor([126]),
-        block_offsets=torch.zeros((1, 2), dtype=torch.int32),
-        is_decoding=True,
-        num_ignored_history=torch.zeros(1, dtype=torch.long),
-        max_q_seqlen=5,
-        max_kv_seqlen=131,
-        sum_kv_seqlen=131,
-        state_offsets=torch.tensor([0]),
-    )
-    state_engine = object.__new__(StateCacheEngine)
-    state_engine._named_state_caches = {
-        'v4_window_kv_fp8':
-        torch.arange(134, dtype=torch.float32).reshape(1, 1, 134, 1),
-    }
-    cache_engine = SimpleNamespace(state_cache_engine=state_engine)
-    before = state_engine.named_state_caches['v4_window_kv_fp8'].clone()
-    output = object()
+    window, capacity, width = 128, 134, 6
+    slots = torch.tensor([2, 0, 3])
+    history = torch.tensor([126, 132, 400])
+    engines = []
+    for _ in range(2):
+        state = object.__new__(StateCacheEngine)
+        state._named_state_caches = {
+            'v4_window_kv_fp8': torch.zeros(1, 4, capacity, 1),
+        }
+        for slot, start in zip(slots.tolist(), history.tolist(), strict=True):
+            positions = torch.arange(max(0, start - window), start)
+            state.named_state_caches['v4_window_kv_fp8'][0, slot, positions % capacity, 0] = (
+                positions.float() + slot * 10000)
+        engines.append(SimpleNamespace(state_cache_engine=state))
 
-    def fake_forward(model_inputs, cache_engine):
-        rows = torch.tensor([126, 127, 128, 129, 130])
-        window_cache = cache_engine.state_cache_engine.named_state_caches[
-            'v4_window_kv_fp8']
-        window_cache[:, 0, rows] = -1
-        return output
+    def visible(cache, starts):
+        tensor = cache.state_cache_engine.named_state_caches['v4_window_kv_fp8']
+        return [tensor[0, slot, torch.arange(max(0, start - window), start) % capacity].clone()
+                for slot, start in zip(slots.tolist(), starts.tolist(), strict=True)]
+
+    def fake_forward(inputs, cache_engine):
+        # Observe exactly the historical range used by the raw-KV flatten path,
+        # then simulate query KV writes that must be rolled back.
+        result = visible(cache_engine, inputs.history_lengths)
+        tensor = cache_engine.state_cache_engine.named_state_caches['v4_window_kv_fp8']
+        rows = (inputs.history_lengths[:, None] + torch.arange(query_len)[None]) % capacity
+        tensor[:, slots[:, None], rows] = -1
+        return result
 
     proposer._forward = fake_forward
-
-    assert proposer._forward_query(query, cache_engine) is output
-    torch.testing.assert_close(
-        state_engine.named_state_caches['v4_window_kv_fp8'], before)
+    for step in range(96):
+        lengths = torch.tensor([1, 3, 6]).roll(step % 3)
+        for full, cache in enumerate(engines):
+            tensor = cache.state_cache_engine.named_state_caches['v4_window_kv_fp8']
+            for slot, start, length in zip(slots.tolist(), history.tolist(), lengths.tolist(), strict=True):
+                positions = torch.arange(start, start + (width if full else length))
+                tensor[0, slot, positions % capacity, 0] = positions.float() + slot * 10000
+        starts = history + lengths
+        query = ModelInputs(
+            input_ids=torch.zeros((1, 3 * query_len), dtype=torch.long),
+            seq_length=torch.full((3,), query_len),
+            history_lengths=starts,
+            block_offsets=torch.zeros((3, 2), dtype=torch.int32),
+            is_decoding=True,
+            num_ignored_history=torch.zeros(3, dtype=torch.long),
+            max_q_seqlen=query_len,
+            max_kv_seqlen=int(starts.max()) + query_len,
+            sum_kv_seqlen=int(starts.sum()) + 3 * query_len,
+            state_offsets=slots,
+        )
+        expected = visible(engines[0], starts)
+        for cache in engines:
+            before = cache.state_cache_engine.named_state_caches['v4_window_kv_fp8'].clone()
+            actual = proposer._forward_query(query, cache)
+            for lhs, rhs in zip(actual, expected, strict=True):
+                torch.testing.assert_close(lhs, rhs, rtol=0, atol=0)
+            torch.testing.assert_close(
+                cache.state_cache_engine.named_state_caches['v4_window_kv_fp8'], before, rtol=0, atol=0)
+        history = starts
 
 
 def _fill_markov(head):
@@ -485,7 +574,9 @@ def test_v4_rectangular_cudagraph_builds_packed_decode_metadata(monkeypatch):
     device = torch.device('cuda')
     attn = SimpleNamespace(
         is_decoding=True,
-        block_offsets=torch.zeros((4, 8), dtype=torch.int32, device=device),
+        # CUDA graphs pad this table to the global pool. Keep it deliberately
+        # wider than the logical per-request session bound below.
+        block_offsets=torch.zeros((4, 64), dtype=torch.int32, device=device),
         cu_seqlens_q=torch.tensor([0, 5, 10, 15, 20], dtype=torch.int32,
                                  device=device),
         cu_seqlens_k=torch.tensor([0, 5, 10, 15, 20], dtype=torch.int32,
@@ -529,6 +620,28 @@ def test_v4_rectangular_cudagraph_builds_packed_decode_metadata(monkeypatch):
     # Causal target rows expose only their position-specific candidate prefix.
     assert meta.rectangular_decode.topk_length[:5].tolist() == [1, 2, 3, 4, 5]
     assert meta.rectangular_decode.topk_length[-5:].tolist() == [1] * 5
+    # R4 prefix indices are capped by max_session_len=512 rather than the
+    # 64-page graph table (4096 tokens): 512 / 4 = 128 entries.
+    assert meta.get_ratio_meta(4).decode.indices.shape == (20, 1, 128)
+
+
+def test_v4_rectangular_workspace_caps_global_graph_pool():
+    # Regression for TP8/B128 graph buffers with a ~73k-block global pool.
+    # A meta tensor keeps this CPU test allocation-free while preserving the
+    # real page-table shape used by the bound calculation.
+    meta = SimpleNamespace(
+        is_decoding=False,
+        max_kv_seqlen=1_048_576,
+        block_offsets=torch.empty((128, 73_108), device='meta'),
+        block_size=256,
+    )
+    assert CudaV4AttentionMetadata._get_index_score_max_len(meta, 4) == 262_144
+    assert CudaV4AttentionMetadata._get_index_score_max_len(meta, 128) == 8192
+
+    # The physical page table remains the fallback and upper bound when it is
+    # smaller than the logical session capacity.
+    meta.block_offsets = torch.empty((128, 128), device='meta')
+    assert CudaV4AttentionMetadata._get_index_score_max_len(meta, 4) == 8192
 
 
 def test_v4_decode_window_write_preserves_padded_slot_sentinel():
@@ -756,6 +869,9 @@ def test_dspark_sequential_sampling_feeds_each_token_to_next_step():
             SimpleNamespace(next_token_ids=torch.tensor([1, 3])),
             cache_engine=object()))
     assert result.tolist() == [[2, 3, 4], [4, 0, 1]]
+    assert result.data_ptr() != captured.data_ptr()
+    captured.fill_(-1)
+    assert result.tolist() == [[2, 3, 4], [4, 0, 1]]
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
@@ -812,7 +928,7 @@ def test_dspark_proposal_epilogue_cuda_graph_replays_all_steps():
     torch.testing.assert_close(graph_output, expected)
 
 
-def test_dspark_v1_rejects_nongreedy_sampling_before_forward():
+def test_dspark_delegates_nongreedy_sampling_to_dflash(monkeypatch):
     proposer = DSpark(SimpleNamespace(
         mask_token_id=99,
         target_layer_ids=(1,),
@@ -821,6 +937,29 @@ def test_dspark_v1_rejects_nongreedy_sampling_before_forward():
         dspark_sample_from_anchor=True,
         model_config=None,
     ), device='cpu')
-    sampling = SamplingInputs(max_top_k=8, min_top_p=1.0)
-    with pytest.raises(NotImplementedError, match='greedy sampling only'):
-        asyncio.run(proposer.propose(None, None, sampling))
+    sampling = SamplingInputs(max_top_k=8, min_top_p=0.9, max_num_logprobs=5)
+    draft_ids = torch.tensor([[1, 2, 3]])
+    cache_engine = object()
+
+    async def fake_propose_block(model_inputs, extra_inputs, cache):
+        assert cache is cache_engine
+        return draft_ids
+
+    monkeypatch.setattr(proposer, 'propose_block', fake_propose_block)
+    extra_inputs = SimpleNamespace(
+        next_token_ids=torch.tensor([0]),
+        num_rejected_tokens=torch.tensor([0]),
+        output_token_ids=torch.tensor([[0]]),
+        logprobs=None,
+    )
+    output = asyncio.run(
+        proposer.propose(
+            SimpleNamespace(is_chunk=False),
+            extra_inputs,
+            sampling,
+            proposal_ctx=SimpleNamespace(cache_engine=cache_engine),
+        ))
+
+    assert output.output_draft_token_ids is draft_ids
+    assert output.next_token_ids is extra_inputs.next_token_ids
+    assert output.num_rejected_tokens is extra_inputs.num_rejected_tokens

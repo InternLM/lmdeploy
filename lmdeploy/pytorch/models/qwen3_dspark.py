@@ -18,6 +18,9 @@ from .qwen3_dflash import DFlashDraftModel, _normalize_dflash_weight_name
 class Qwen3DSparkModel(DFlashDraftModel):
     """DFlash Qwen draft backbone plus a sequential DSpark head."""
 
+    # Pageable context KV may retain rejected tails outside logical history.
+    supports_full_context_materialization = True
+
     def __init__(self, config, ctx_mgr, dtype=None, device=None, prefix: str = ''):
         super().__init__(config, ctx_mgr, dtype=dtype, device=device, prefix=prefix)
         self.draft_vocab_size = int(getattr(config, 'draft_vocab_size', None)

@@ -247,7 +247,14 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
         for ratio in (4, 128):
             num_compressed = torch.div(
                 token_total_lens, ratio, rounding_mode='floor').to(torch.int32)
-            max_comp = max(block_offsets.size(1) * block_size // ratio, 1)
+            # CUDA-graph page tables are padded to the global GPU block pool.
+            # That width can be much larger than one request's logical session
+            # capacity and must not become the rectangular prefix workspace
+            # width. Besides wasting several GiB, B*Q*global_pool can overflow
+            # the Triton kernel's flat output offset. Bound it by both the
+            # physical page table and the per-request logical maximum.
+            max_comp = CudaV4AttentionMetadata._get_index_score_max_len(
+                meta, ratio)
             physical = build_rectangular_decode_prefix_compressed_sparse_indices(
                 token_total_lens,
                 block_offsets,
@@ -368,9 +375,12 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
 
     @staticmethod
     def _get_index_score_max_len(meta, ratio: int) -> int:
+        physical_capacity = meta.block_offsets.size(1) * meta.block_size
         max_kv_seqlen = meta.max_kv_seqlen
         if meta.is_decoding or max_kv_seqlen is None:
-            max_kv_seqlen = meta.block_offsets.size(1) * meta.block_size
+            max_kv_seqlen = physical_capacity
+        else:
+            max_kv_seqlen = min(max_kv_seqlen, physical_capacity)
         return max(max_kv_seqlen // ratio, 1)
 
     @staticmethod

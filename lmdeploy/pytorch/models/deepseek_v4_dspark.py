@@ -145,6 +145,15 @@ class DeepseekV4ForCausalLMDSpark(nn.Module, CudaGraphMixin):
         self.output_head: nn.Module | None = None
         self._load_buffers = {}
 
+    @property
+    def supports_full_context_materialization(self) -> bool:
+        """Expanded SWA rings preserve live history when verifier tails are
+        written."""
+        num_spec = self.dspark_num_speculative_tokens
+        return (not any(self.args.compress_ratios)
+                and self.args.window_size >= num_spec + 1
+                and self.args.ring_storage_capacity >= self.args.window_size + num_spec)
+
     def set_input_embeddings(self, embed_tokens: nn.Module):
         self.embed_tokens = embed_tokens
 
