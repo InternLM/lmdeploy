@@ -318,6 +318,35 @@ mod generation_tests {
     }
 
     #[tokio::test]
+    async fn test_generate_invalid_input_ids_returns_bad_request() {
+        let ctx = TestContext::new(vec![MockWorkerConfig {
+            port: 18107,
+            worker_type: WorkerType::Regular,
+            health_status: HealthStatus::Healthy,
+            response_delay_ms: 0,
+            fail_rate: 0.0,
+        }])
+        .await;
+        let app = ctx.create_app().await;
+
+        let payload = json!({
+            "input_ids": "not_a_list",
+            "max_tokens": 5
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/generate")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_string(&payload).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        ctx.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn test_generate_streaming() {
         let ctx = TestContext::new(vec![MockWorkerConfig {
             port: 18102,

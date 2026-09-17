@@ -18,7 +18,7 @@ use crate::{
     service_discovery::{start_service_discovery, ServiceDiscoveryConfig},
 };
 use axum::{
-    extract::{DefaultBodyLimit, Path, Query, Request, State},
+    extract::{rejection::JsonRejection, DefaultBodyLimit, Path, Query, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -262,11 +262,16 @@ async fn get_model_info(State(state): State<Arc<AppState>>, req: Request) -> Res
 async fn generate(
     State(state): State<Arc<AppState>>,
     headers: http::HeaderMap,
-    Json(body): Json<GenerateRequest>,
+    body: Result<Json<GenerateRequest>, JsonRejection>,
 ) -> Response {
     if let Err(response) = authorize_request(&state, &headers).await {
         return *response;
     }
+
+    let body = match body {
+        Ok(Json(body)) => body,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
 
     state
         .router
