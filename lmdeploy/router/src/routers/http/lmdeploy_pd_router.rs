@@ -260,7 +260,7 @@ impl LMDeployPDRouter {
         }
 
         let session_id = Self::extract_session_id(prefill_response)
-            .ok_or_else(|| "Prefill response is missing a numeric id".to_string())?;
+            .ok_or_else(|| "Prefill response is missing a numeric remote session id".to_string())?;
 
         let remote_block_ids: Vec<i64> = prefill_response
             .get("cache_block_ids")
@@ -297,11 +297,16 @@ impl LMDeployPDRouter {
     }
 
     fn extract_session_id(prefill_response: &Value) -> Option<i64> {
-        prefill_response.get("id").and_then(|value| {
+        let parse_session_id = |value: &Value| {
             value
                 .as_i64()
                 .or_else(|| value.as_str().and_then(|text| text.parse::<i64>().ok()))
-        })
+        };
+
+        prefill_response
+            .get("remote_session_id")
+            .and_then(parse_session_id)
+            .or_else(|| prefill_response.get("id").and_then(parse_session_id))
     }
 
     /// Ensure P2P RDMA connection between prefill and decode is established.
@@ -1340,6 +1345,24 @@ mod tests {
         assert_eq!(req["remote_token_id"], 30);
         assert_eq!(req["remote_block_ids"], json!([1, 2, 3]));
         assert_eq!(req["is_dummy_prefill"], false);
+    }
+
+    #[test]
+    fn test_build_migration_request_prefers_remote_session_id() {
+        let prefill_response = json!({
+            "id": "chatcmpl-not-a-number",
+            "remote_session_id": 67890,
+            "cache_block_ids": [5],
+            "remote_token_ids": [42]
+        });
+        let result = LMDeployPDRouter::build_migration_request_static(
+            "http://p:8000",
+            &prefill_response,
+            2,
+            false,
+        );
+        let req = result.unwrap();
+        assert_eq!(req["remote_session_id"], 67890);
     }
 
     #[test]

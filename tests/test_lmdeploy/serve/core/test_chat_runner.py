@@ -227,9 +227,25 @@ def test_runner_stream_chunks_preserve_metadata():
     assert chunks[0].token_ids == [1]
     assert chunks[0].logprobs == [{1: -0.1}]
     assert chunks[0].routed_experts == [[1]]
+    assert chunks[0].cache_block_ids == ['cache']
+    assert chunks[0].remote_session_id == -1
     assert chunks[0].reasoning_tokens == 2
     assert context.async_engine.generator_closed is True
     assert context.session_manager.removed == [context.session_manager.session]
+
+
+def test_runner_collect_preserves_remote_session_id():
+    context = _FakeServerContext(_Parser)
+
+    async def _run():
+        chat_runner = await ChatRunner.prepare(context, _request())
+        return await chat_runner.collect()
+
+    result = asyncio.run(_run())
+
+    assert result.cache_block_ids == [['cache']]
+    assert result.remote_token_ids == [[1]]
+    assert result.remote_session_id == -1
 
 
 def test_runner_close_cleans_prepared_unconsumed_request():

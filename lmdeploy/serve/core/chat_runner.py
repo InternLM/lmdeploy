@@ -41,6 +41,7 @@ class ChatStreamChunk:
     cached_tokens: int
     routed_experts: Any = None
     cache_block_ids: list[int] | None = None
+    remote_session_id: int | None = None
     reasoning_tokens: int | None = None
     is_last_delta: bool = True
 
@@ -61,6 +62,7 @@ class ChatResult:
     routed_experts: Any = None
     cache_block_ids: list[Any] = field(default_factory=list)
     remote_token_ids: list[Any] = field(default_factory=list)
+    remote_session_id: int | None = None
     reasoning_tokens: int | None = None
 
 
@@ -205,6 +207,7 @@ class ChatRunner:
                         cached_tokens=res.cached_tokens,
                         routed_experts=res.routed_experts if finish_reason is not None else None,
                         cache_block_ids=res.cache_block_ids,
+                        remote_session_id=self.session.session_id,
                         reasoning_tokens=self.response_parser.reasoning_tokens,
                         is_last_delta=is_last_delta,
                     )
@@ -258,6 +261,7 @@ class ChatRunner:
             routed_experts=final_res.routed_experts,
             cache_block_ids=cache_block_ids,
             remote_token_ids=remote_token_ids,
+            remote_session_id=self.session.session_id,
             reasoning_tokens=self.response_parser.reasoning_tokens,
         )
 
