@@ -286,6 +286,34 @@ def test_serialize_named_tensors_safetensors_clones_tied_cpu_weights():
     assert torch.equal(loaded['lm_head.weight'], weight)
 
 
+def test_pickle_opt_in_is_registered_for_ray_workers():
+    """Ray copies pytorch.envs.get_all_envs() onto workers."""
+    import importlib
+    import os
+    from pathlib import Path
+
+    envs_path = Path(__file__).resolve().parents[4] / 'lmdeploy' / 'pytorch' / 'envs.py'
+    assert "os.getenv('LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS'" in envs_path.read_text()
+
+    import lmdeploy.pytorch.envs as pytorch_envs
+
+    old = os.environ.get(ALLOW_PICKLE_UPDATE_PARAMS_ENV)
+    try:
+        os.environ[ALLOW_PICKLE_UPDATE_PARAMS_ENV] = '1'
+        importlib.reload(pytorch_envs)
+        assert pytorch_envs.get_all_envs().get(ALLOW_PICKLE_UPDATE_PARAMS_ENV) == '1'
+
+        os.environ.pop(ALLOW_PICKLE_UPDATE_PARAMS_ENV, None)
+        importlib.reload(pytorch_envs)
+        assert ALLOW_PICKLE_UPDATE_PARAMS_ENV not in pytorch_envs.get_all_envs()
+    finally:
+        if old is None:
+            os.environ.pop(ALLOW_PICKLE_UPDATE_PARAMS_ENV, None)
+        else:
+            os.environ[ALLOW_PICKLE_UPDATE_PARAMS_ENV] = old
+        importlib.reload(pytorch_envs)
+
+
 def test_serialize_named_tensors_safetensors_clones_overlapping_views():
     import torch
 

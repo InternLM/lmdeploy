@@ -16,7 +16,8 @@ XTuner same-node CUDA IPC still uses `serialize_state_dict()` and
 same-node GPU memory; only the control messages travel over HTTP. That path
 (including metadata-only buffer reuse and the empty `finished=true` finalizer)
 is restored by setting `LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1` on the **server**
-process. Do not enable this on untrusted public endpoints.
+process. Ray workers inherit it through `get_all_envs()`. Do not enable this on
+untrusted public endpoints.
 
 ## Step 1: Launch server
 

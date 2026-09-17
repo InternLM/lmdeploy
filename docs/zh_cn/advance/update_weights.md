@@ -12,7 +12,7 @@ checkpoint-engine Broadcast 和 Mooncake P2P 的使用方法请参考
 XTuner 同机 CUDA IPC 仍通过 HTTP `/update_weights` 发送 `serialize_state_dict()` /
 `FlattenedTensorBucket` 控制消息（IPC handle、event handle、`FlattenedTensorMetadata`）。
 张量本身留在同机 GPU 内存中，只有控制消息走 HTTP。该路径（包括仅发送 metadata 的 buffer 复用，以及空的 `finished=true` 收尾请求）需要在**服务端**进程设置
-`LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1` 才能恢复。不要在不受信任的公网入口上开启该选项。
+`LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1` 才能恢复。Ray worker 会通过 `get_all_envs()` 继承该变量。不要在不受信任的公网入口上开启该选项。
 
 ## 步骤 1: 启动服务
 
