@@ -8,14 +8,6 @@ on:
       - 'cmake/**'
       - 'examples/**'
       - '3rdparty/**'
-  pull_request:
-    paths:
-      - '.github/workflows/linux_x64_gpu.yml'
-      - 'src/**'
-      - 'CMakeLists.txt'
-      - 'cmake/**'
-      - 'examples/**'
-      - '3rdparty/**'
 concurrency:
   group: linux-x64-gpu-${{ github.ref }}
   cancel-in-progress: true
