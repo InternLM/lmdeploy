@@ -126,6 +126,27 @@ def test_prepare_producer_does_not_create_lookup_endpoint():
     assert extra_config == {'lookup_async': False}
 
 
+@pytest.mark.parametrize('role', ['kv_producer', 'kv_consumer', 'kv_both'])
+def test_prepare_mooncake_rejects_cpu_paging(role):
+    cache_config = _make_mooncake_cache_config(role)
+    cache_config.num_cpu_blocks = 8
+
+    with pytest.raises(ValueError, match='CPU KV paging.*num_cpu_blocks=0'):
+        prepare_kv_connector_config(cache_config)
+
+    assert cache_config.kv_transfer_config.kv_connector_extra_config == {}
+
+
+@pytest.mark.parametrize('transfer_config', [None, KVTransferConfig()])
+def test_prepare_without_mooncake_allows_cpu_paging(transfer_config):
+    cache_config = _make_cache_config(transfer_config)
+    cache_config.num_cpu_blocks = 8
+
+    prepare_kv_connector_config(cache_config)
+
+    assert cache_config.num_cpu_blocks == 8
+
+
 def test_engine_rejects_effective_mp_backend_before_executor_build(
     tmp_path,
     monkeypatch,
