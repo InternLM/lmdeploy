@@ -1,6 +1,10 @@
 name: router-test
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/router_test.yml"
+      - "lmdeploy/router/**"
   push:
     branches:
       - main
