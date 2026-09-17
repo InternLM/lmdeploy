@@ -203,7 +203,7 @@ class SubCliServe:
             type=str,
             choices=[
                 'random', 'round_robin', 'cache_aware', 'power_of_two', 'consistent_hash',
-                'min_expected_latency', 'min_observed_latency'
+                'rendezvous_hash', 'min_expected_latency', 'min_observed_latency'
             ],
             default='cache_aware',
             help='The strategy to dispatch requests to nodes. min_expected_latency and '

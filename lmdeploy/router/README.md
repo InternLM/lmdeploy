@@ -63,9 +63,6 @@ repository root. It contains the Python launcher, the `lmdeploy_router_rs`
 PyO3 extension, and the standalone Rust binary as `lmdeploy-router-bin`.
 
 ```bash
-export CARGO_HOME="${CARGO_HOME:-/data/cargo-cache}"
-export CARGO_NET_OFFLINE=true
-
 python -m pip install -U pip
 python -m pip install 'build>=1.2' 'setuptools>=64' 'setuptools-rust>=1.5.2' wheel
 
