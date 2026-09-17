@@ -64,10 +64,6 @@ def build_nsa_index_meta(*, num_tokens: int, is_decoding: bool,
     batch_size = q_seqlens.size(0)
     is_decoding = is_decoding or num_tokens == batch_size
     max_q_seqlen = num_tokens // batch_size if is_decoding else num_tokens
-    if indexer_kv_seqlens is None:
-        indexer_kv_seqlens = _build_indexer_kv_seqlens(
-            num_tokens, q_seqlens, sequence_metadata.kv_seqlens,
-            sequence_metadata.cu_seqlens_q)
     from lmdeploy.pytorch.backends.cp_utils import get_dcp_local_cu_seqlens, get_dcp_local_seq_lens
     if dcp_world_rank is None:
         from lmdeploy.pytorch.distributed import get_dcp_world_rank
@@ -84,6 +80,10 @@ def build_nsa_index_meta(*, num_tokens: int, is_decoding: bool,
         dcp_local_kv_seqlens, dcp_local_cu_seqlens = get_dcp_local_cu_seqlens(
             sequence_metadata.kv_seqlens, dcp_world_rank)
     if dcp_local_indexer_kv_seqlens is None:
+        if indexer_kv_seqlens is None:
+            indexer_kv_seqlens = _build_indexer_kv_seqlens(
+                num_tokens, q_seqlens, sequence_metadata.kv_seqlens,
+                sequence_metadata.cu_seqlens_q)
         indexer_kv_seqlens = get_dcp_local_seq_lens(
             indexer_kv_seqlens, dcp_world_rank).to(torch.int32)
     else:

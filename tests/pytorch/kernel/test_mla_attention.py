@@ -6,10 +6,10 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.backends.attention import PagedAttentionBuildSpec
-from lmdeploy.pytorch.backends.cp_utils import gather_dcp_query
 from lmdeploy.pytorch.backends.cuda import attention as attention_module
 from lmdeploy.pytorch.backends.cuda.attention import mla as mla_module
 from lmdeploy.pytorch.backends.cuda.attention import sparse_mla as sparse_mla_module
+from lmdeploy.pytorch.backends.cuda.attention.cp import gather_dcp_query
 from lmdeploy.pytorch.backends.cuda.attention.sparse_mla import (
     FlashMLAIndexMapper,
     FlashMLASparseImpl,

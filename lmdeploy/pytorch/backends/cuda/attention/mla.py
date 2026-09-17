@@ -9,13 +9,12 @@ import torch
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends.cp_utils import (
     DCPPrefillChunk,
-    gather_dcp_query,
     get_dcp_local_causal_seq_lens,
-    merge_dcp_attention,
 )
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import CudaAttentionMetaBuilder
+from .cp import gather_dcp_query, merge_dcp_attention
 from .default import TritonAttentionImpl, TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')

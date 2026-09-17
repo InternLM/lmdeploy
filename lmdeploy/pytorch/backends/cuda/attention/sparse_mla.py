@@ -4,9 +4,9 @@ import functools
 
 import torch
 
-from lmdeploy.pytorch.backends.cp_utils import gather_dcp_query, merge_dcp_attention
 from lmdeploy.utils import get_logger
 
+from .cp import gather_dcp_query, merge_dcp_attention
 from .default import TritonAttentionMetadata
 from .mla import FlashMLAAttentionMetaBuilder, FlashMLAImpl
 

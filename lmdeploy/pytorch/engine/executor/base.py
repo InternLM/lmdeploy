@@ -217,51 +217,30 @@ class ExecutorBase:
         return _envs.dsa_indexer_max_logits_mb * (1 << 20)
 
     def _get_dcp_workspace_size(self, num_prefill_tokens: int) -> int:
-        """Estimate per-GPU DCP temporary bytes to exclude from KV-cache
-        sizing.
-
-        Reserve max(indexer, attention) plus final indices shared by both phases. Flattened indexer KV relies on memory
-        headroom. Returns zero without DCP.
-        """
+        """Get the backend's DCP workspace estimate for KV-cache sizing."""
         if self.cache_config.dcp <= 1:
             return 0
 
-        from lmdeploy.pytorch.backends.cp_utils import (
-            get_dcp_prefill_workspace_size,
-            get_dcp_topk_workspace_size,
-        )
+        from lmdeploy.pytorch.backends.cp_utils import get_dcp_workspace_size
 
         config = self.cache_config
         model = self.model_config
-        # Prefix KV: local, gathered, and reordered buffers.
-        attention_workspace = get_dcp_prefill_workspace_size(
-            batch_size=config.max_batches,
-            head_dim=model.head_dim,
-            block_size=config.block_size,
-            dcp_size=config.dcp,
-        )
-        workspace_heads = model.num_attention_heads // self.dist_config.attn_tp
-        if model.mla_index_topk is not None:
-            # Sparse FlashMLA output slices retain storage padded to 64-head multiples.
-            workspace_heads = (workspace_heads + 63) // 64 * 64
-        # Old, partial, and merged states: model-dtype output + FP32 LSE.
-        # head_dim bounds the output width; standalone V-cache width is zero.
-        attention_workspace += num_prefill_tokens * workspace_heads * 3 * (model.head_dim * model.dtype.itemsize + 4)
-        if model.mla_index_topk is None:
-            return attention_workspace
-
-        decode_rows = config.max_batches
+        num_decode_tokens = config.max_batches
         if self.specdecode_config is not None:
             # Verification includes draft tokens plus one target token.
-            decode_rows *= self.specdecode_config.num_speculative_tokens + 1
-        # Cover both prefill and MTP verification.
-        max_rows = max(num_prefill_tokens, decode_rows)
-        # Indexer: scores, top-k ids, and local/gathered candidate pairs.
-        indexer_workspace = self._get_dsa_score_workspace_size()
-        indexer_workspace += get_dcp_topk_workspace_size(max_rows, model.mla_index_topk, config.dcp)
-        # Final INT32 ids survive into attention; other buffers are phase-local.
-        index_bytes = max_rows * model.mla_index_topk * 4
-        return index_bytes + max(indexer_workspace, attention_workspace)
+            num_decode_tokens *= self.specdecode_config.num_speculative_tokens + 1
+        return get_dcp_workspace_size(
+            num_prefill_tokens=num_prefill_tokens,
+            num_decode_tokens=num_decode_tokens,
+            batch_size=config.max_batches,
+            num_heads=model.num_attention_heads // self.dist_config.attn_tp,
+            head_dim=model.head_dim,
+            dtype=model.dtype,
+            block_size=config.block_size,
+            dcp_size=config.dcp,
+            topk=model.mla_index_topk,
+            score_workspace_bytes=self._get_dsa_score_workspace_size(),
+        )
 
     def _get_runtime_size(self, free_mems: list[int], cache_block_sizes: list[_WorkerCachePlanSizes],
                           vocab_size: int) -> tuple[int, int]:
