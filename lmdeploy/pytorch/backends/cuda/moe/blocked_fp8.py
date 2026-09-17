@@ -29,17 +29,7 @@ from .ep_utils import gather_outputs_by_attn_tp, split_inputs_by_attn_tp
 logger = get_logger('lmdeploy')
 
 
-def _count_tokens_per_expert(topk_ids: torch.Tensor,
-                             num_experts: int) -> torch.Tensor:
-    """Count routed assignments with a fixed-size, graph-safe CUDA output."""
-    flat_ids = topk_ids.flatten().to(torch.int64)
-    counts = torch.zeros(
-        num_experts, dtype=torch.int32, device=topk_ids.device)
-    return counts.scatter_add_(0, flat_ids, torch.ones_like(
-        flat_ids, dtype=counts.dtype))
-
-
-class FusedMoENormal(FusedMoEBlockedF8Impl):
+class FusedMoENormal:
 
     def __init__(
         self,
@@ -56,34 +46,24 @@ class FusedMoENormal(FusedMoEBlockedF8Impl):
         num_max_dispatch_tokens_per_rank: int = 128,
         chunk_size: int | None = 32 * 1024,
         expert_alignment: int = 128,
-        renormalize: bool = False,
-        fp32_acc: bool = False,
-        output_scale: float = 1.0,
     ):
-        super().__init__()
         self.layer_index = layer_index
         self.top_k = top_k
         self.num_experts = num_experts
         self.block_size = block_size
-        self.ep_size = ep_size
         self.num_local_experts = num_experts // ep_size
         self.out_dtype = out_dtype
         self.fp8_dtype = fp8_dtype
         self.scale_fmt = scale_fmt
-        self.renormalize = renormalize
-        self.fp32_acc = fp32_acc
-        self.output_scale = output_scale
-        self.token_dispatcher = None
-        if ep_size > 1:
-            self.token_dispatcher = DeepEPTokenDispatcherNormal(
-                group=ep_group,
-                num_experts=num_experts,
-                num_local_experts=self.num_local_experts,
-                hidden_size=hidden_dim,
-                params_dtype=out_dtype,
-                num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
-                expert_alignment=expert_alignment,
-            )
+        self.token_dispatcher = DeepEPTokenDispatcherNormal(
+            group=ep_group,
+            num_experts=num_experts,
+            num_local_experts=self.num_local_experts,
+            hidden_size=hidden_dim,
+            params_dtype=out_dtype,
+            num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
+            expert_alignment=expert_alignment,
+        )
 
     def forward(
         self,
@@ -95,34 +75,7 @@ class FusedMoENormal(FusedMoEBlockedF8Impl):
         down_weights: torch.Tensor,
         down_scale: torch.Tensor,
         expert_list: list[int] = None,
-        gate_up_bias: torch.Tensor = None,
-        down_bias: torch.Tensor = None,
-        act_func: Callable = None,
     ):
-        if self.token_dispatcher is None:
-            assert expert_list is None
-            assert gate_up_bias is None and down_bias is None
-            input_size = hidden_states.shape
-            hidden_states = hidden_states.flatten(0, -2)
-            topk_ids = topk_ids.flatten(0, -2)
-            topk_weights = _renormalize(topk_weights.flatten(0, -2), self.renormalize)
-            hs_quant, hs_scale = per_token_group_quant_fp8(hidden_states,
-                                                           self.block_size,
-                                                           dtype=up_weights.dtype,
-                                                           scale_fmt=self.scale_fmt)
-            tokens_per_expert = _count_tokens_per_expert(
-                topk_ids, self.num_experts)
-            out_states = fused_moe_v3_fp8((hs_quant, hs_scale),
-                                          topk_ids,
-                                          topk_weights, (up_weights, up_scale),
-                                          (down_weights, down_scale),
-                                          tokens_per_expert,
-                                          compact_layout=True,
-                                          act_func=act_func,
-                                          fp32_acc=self.fp32_acc,
-                                          output_scale=self.output_scale)
-            return out_states.unflatten(0, input_size[:-1])
-
         hs_quant, hs_scale = per_token_group_quant_fp8(hidden_states,
                                                        self.block_size,
                                                        dtype=up_weights.dtype,
@@ -138,7 +91,6 @@ class FusedMoENormal(FusedMoEBlockedF8Impl):
         return self.token_dispatcher.combine(out_states)
 
     def capture(self):
-        assert self.token_dispatcher is not None
         return self.token_dispatcher.buffer_normal.capture()
 
     def wait(self, event):
@@ -609,27 +561,6 @@ def _build_fused_moe_blocked_f8(spec: FusedMoEBlockedF8BuildSpec) -> FusedMoEBlo
             fp8_dtype=spec.fp8_dtype,
             num_max_dispatch_tokens_per_rank=spec.num_max_dispatch_tokens_per_rank,
             layer_idx=spec.layer_idx,
-        )
-    elif spec.use_deep_gemm:
-        try:
-            import deep_gemm  # noqa: F401
-        except ImportError as e:
-            raise ImportError('The DeepGEMM MoE path requires the installable deep_gemm package.') from e
-        impl = FusedMoENormal(
-            ep_size=1,
-            ep_group=spec.ep_group,
-            num_experts=spec.num_experts,
-            hidden_dim=spec.hidden_dim,
-            renormalize=spec.renormalize,
-            block_size=spec.block_size,
-            top_k=spec.top_k,
-            out_dtype=spec.output_dtype,
-            fp8_dtype=spec.fp8_dtype,
-            scale_fmt=spec.scale_fmt,
-            fp32_acc=spec.fp32_acc,
-            output_scale=spec.output_scale,
-            num_max_dispatch_tokens_per_rank=spec.num_max_dispatch_tokens_per_rank,
-            layer_index=spec.layer_idx,
         )
     else:
         impl = TritonFusedMoEBlockedF8Impl(

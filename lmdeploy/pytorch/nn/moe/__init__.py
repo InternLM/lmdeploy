@@ -27,7 +27,6 @@ def build_fused_moe(
     *,
     fp32_acc: bool = False,
     output_scale: float = 1.0,
-    use_deep_gemm: bool = False,
 ):
     """Fused moe builder."""
     quant_method = None
@@ -113,7 +112,6 @@ def build_fused_moe(
             act_func=act_func,
             fp32_acc=fp32_acc,
             output_scale=output_scale,
-            use_deep_gemm=use_deep_gemm,
         )
     elif quant_method == 'compressed-tensors':
         if bias:

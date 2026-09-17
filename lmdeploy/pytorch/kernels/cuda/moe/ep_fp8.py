@@ -145,81 +145,50 @@ def _deepgemm_grouped_fp8_nt_contiguous(input_tuple, w_tuple, out: torch.Tensor,
     return deep_gemm.m_grouped_fp8_gemm_nt_contiguous(input_tuple, w_tuple, out, m_indices)
 
 
-def _get_compact_all_tokens(num_assignments: int, num_experts: int, block_e: int = 128) -> int:
-    """Maximum expert-aligned rows for a graph-stable compact layout."""
-    max_nonempty_experts = min(num_assignments, num_experts)
-    return block_e * (max_nonempty_experts + (num_assignments - max_nonempty_experts) // block_e)
-
-
 def fused_moe_v3_fp8(
     hidden_states_fp8: tuple[torch.Tensor, torch.Tensor],
     topk_idx,
     topk_weights,
     w13_weight_fp8: tuple[torch.Tensor, torch.Tensor],
     w2_weight_fp8: tuple[torch.Tensor, torch.Tensor],
-    num_recv_tokens_per_expert: list[int] | torch.Tensor | None,
-    *,
-    compact_layout: bool = False,
-    act_func=None,
-    fp32_acc: bool = False,
-    output_scale: float = 1.0,
+    num_recv_tokens_per_expert: list[int] | None,
 ):
     hidden_states_fp8, hidden_states_scale = hidden_states_fp8
     if num_recv_tokens_per_expert is None:
         return hidden_states_fp8.to(torch.bfloat16)
-    if compact_layout:
-        assert isinstance(num_recv_tokens_per_expert, torch.Tensor)
-        all_tokens = _get_compact_all_tokens(topk_idx.numel(), num_recv_tokens_per_expert.numel())
-        num_recv_tokens_per_expert_gpu = num_recv_tokens_per_expert.to(device=hidden_states_fp8.device,
-                                                                     dtype=torch.int32)
-        num_recv_tokens_per_expert_gpu = (num_recv_tokens_per_expert_gpu + 127) // 128 * 128
-        num_recv_tokens_per_expert_gpu[-1].add_(all_tokens - num_recv_tokens_per_expert_gpu.sum())
-    else:
-        all_tokens = sum(num_recv_tokens_per_expert)
-        num_recv_tokens_per_expert_gpu = torch.tensor(num_recv_tokens_per_expert,
-                                                     dtype=torch.int32,
-                                                     pin_memory=True,
-                                                     device='cpu').cuda(non_blocking=True)
+    all_tokens = sum(num_recv_tokens_per_expert)
     if all_tokens <= 0:
         return hidden_states_fp8.to(torch.bfloat16)
+    from lmdeploy.pytorch.third_party.deep_gemm import get_mn_major_tma_aligned_tensor
     m, k = hidden_states_fp8.size()
     n = w13_weight_fp8[0].size(1)
     block_size = k // hidden_states_scale.size(1)
     gather_out = torch.empty_like(hidden_states_fp8, device=hidden_states_fp8.device, dtype=torch.bfloat16)
-    # Padding keeps its expert id in the existing scatter kernel. Zero its
-    # inputs/scales; gather reads only the real routed rows via output_index.
-    allocator = torch.zeros if compact_layout else torch.empty
-    input_tensor = allocator((all_tokens, k), device=hidden_states_fp8.device, dtype=hidden_states_fp8.dtype)
-    input_tensor_scale = allocator((all_tokens, k // block_size),
-                                   device=hidden_states_fp8.device,
-                                   dtype=torch.float32)
+    input_tensor = torch.empty((all_tokens, k), device=hidden_states_fp8.device, dtype=hidden_states_fp8.dtype)
+    input_tensor_scale = torch.empty((all_tokens, k // block_size),
+                                    device=hidden_states_fp8.device,
+                                    dtype=torch.float32)
     m_indices = torch.empty(all_tokens, device=hidden_states_fp8.device, dtype=torch.int32)
     output_index = torch.empty_like(topk_idx)
+    num_recv_tokens_per_expert_gpu = torch.tensor(num_recv_tokens_per_expert,
+                                                 dtype=torch.int32,
+                                                 pin_memory=True,
+                                                 device='cpu').cuda(non_blocking=True)
     expert_start_loc = torch.empty_like(num_recv_tokens_per_expert_gpu)
     ep_scatter_fp8(hidden_states_fp8, hidden_states_scale, topk_idx, num_recv_tokens_per_expert_gpu, expert_start_loc,
                    input_tensor, input_tensor_scale, m_indices, output_index)
     del hidden_states_fp8
 
-    from lmdeploy.pytorch.third_party.deep_gemm import get_mn_major_tma_aligned_tensor
     gateup_output = torch.empty((all_tokens, n), device=gather_out.device, dtype=torch.bfloat16)
     input_tensor_scale = get_mn_major_tma_aligned_tensor(input_tensor_scale)
     _deepgemm_grouped_fp8_nt_contiguous((input_tensor, input_tensor_scale), w13_weight_fp8, gateup_output, m_indices)
 
-    if act_func is None:
-        down_input = torch.empty((all_tokens, n // 2), device=gateup_output.device, dtype=torch.bfloat16)
-        silu_and_mul(gateup_output.view(-1, n), down_input)
-    else:
-        down_input = act_func(gateup_output.view(-1, n))
+    down_input = torch.empty((all_tokens, n // 2), device=gateup_output.device, dtype=torch.bfloat16)
+    silu_and_mul(gateup_output.view(-1, n), down_input)
     del gateup_output
     down_input_fp8, down_input_scale = per_token_group_quant_fp8(down_input, block_size)
     down_input_scale = get_mn_major_tma_aligned_tensor(down_input_scale)
     down_output = torch.empty((all_tokens, k), device=gather_out.device, dtype=torch.bfloat16)
     _deepgemm_grouped_fp8_nt_contiguous((down_input_fp8, down_input_scale), w2_weight_fp8, down_output, m_indices)
-    ep_gather(down_output,
-              topk_idx,
-              topk_weights,
-              output_index,
-              gather_out,
-              fp32_acc=fp32_acc,
-              output_scale=output_scale)
+    ep_gather(down_output, topk_idx, topk_weights, output_index, gather_out)
     return gather_out

@@ -709,7 +709,6 @@ class DeepseekV2MoE(nn.Module):
     fused_moe_act_func = None
     fused_moe_fp32_acc = False
     fused_moe_output_scale = 1.0
-    fused_moe_use_deep_gemm = False
     router_routed_scaling_factor = None
     shared_expert_cls = None
 
@@ -773,7 +772,6 @@ class DeepseekV2MoE(nn.Module):
             act_func=type(self).fused_moe_act_func,
             fp32_acc=type(self).fused_moe_fp32_acc,
             output_scale=type(self).fused_moe_output_scale,
-            use_deep_gemm=type(self).fused_moe_use_deep_gemm,
         )
         self.shared_experts = None
         if config.n_shared_experts is not None:
