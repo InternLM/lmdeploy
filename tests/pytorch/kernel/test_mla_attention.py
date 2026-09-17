@@ -498,7 +498,7 @@ def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse,
                         lambda **kwargs: 2 * 64 * (1 + 2 * dcp_size) * 576 * 2)
     metadata = build_triton_attention_metadata(TritonAttentionMetadata, step, layout)
     num_chunks = (prefix_length + 64 * dcp_size - 1) // (64 * dcp_size)
-    assert len(metadata.dcp_prefill_chunks) == num_chunks
+    assert len(metadata.dcp_prefix_chunks) == num_chunks
     if use_sparse:
         assert metadata.dcp_prefill_request_ids.dtype == torch.int32
         assert metadata.dcp_prefill_request_ids.tolist() == [0, 0, 1, 1, 1]
@@ -533,7 +533,7 @@ def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse,
     def gather(output, local, group='tp'):
         nonlocal gather_calls
         assert group == 'dcp'
-        chunk = metadata.dcp_prefill_chunks[gather_calls]
+        chunk = metadata.dcp_prefix_chunks[gather_calls]
         prefix = reference_keys[chunk.start:min(chunk.start + chunk.size, prefix_length)]
         torch.testing.assert_close(local[:prefix[::dcp_size].size(0)], prefix[::dcp_size], atol=0, rtol=0)
         output[:local.size(0)].copy_(local)
@@ -637,7 +637,7 @@ def test_reorder_dcp_prefill_kv_handles_uneven_requests(monkeypatch, dcp_size):
     # One virtual block per chunk, matching the production gather layout.
     monkeypatch.setattr(cp_utils, 'get_dcp_prefill_workspace_size',
                         lambda **kwargs: len(lengths) * (1 + 2 * dcp_size) * 2)
-    chunks = cp_utils.build_dcp_prefill_chunks(
+    chunks = cp_utils.build_dcp_prefix_chunks(
         prefix_lens=prefix_lens, prefix_limit=max(lengths), block_size=1,
         head_dim=1, dcp_world_rank=(dcp_size, 0))
     for chunk in chunks:

@@ -206,8 +206,8 @@ class FlashMLASparseImpl(FlashMLAImpl):
         output, output_lse = self._prefill_sparse_partition(
             query, current_key, current_indices, current_counts)
 
-        for chunk in attn_metadata.dcp_prefill_chunks:
-            context_k, context_cu_lens = self._gather_dcp_prefill_context_chunk(
+        for chunk in attn_metadata.dcp_prefix_chunks:
+            context_k, context_cu_lens = self._gather_dcp_prefix_chunk(
                 k_cache,
                 v_cache,
                 attn_metadata,
@@ -360,7 +360,7 @@ class FlashMLASparseImpl(FlashMLAImpl):
         if nsa_indices is None:
             raise RuntimeError('Sparse MLA requires DSA top-k indices.')
         if self.dcp_world_size > 1:
-            if attn_metadata.dcp_prefill_chunks:
+            if attn_metadata.dcp_prefix_chunks:
                 return self._prefill_sparse_dcp(
                     query,
                     current_key,

@@ -7,7 +7,7 @@ import torch
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends.attention import AttentionImpl, AttentionMetadata
-from lmdeploy.pytorch.backends.cp_utils import DCPPrefillChunk, update_dcp_metadata
+from lmdeploy.pytorch.backends.cp_utils import DCPPrefixChunk, update_dcp_metadata
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import CudaAttentionMetaBuilder, CudaSequenceMetadata, register_step_metadata_impl
@@ -59,7 +59,7 @@ class TritonAttentionMetadata(AttentionMetadata):
     max_kv_seqlen: int = None
     max_q_seqlen: int = None
     dcp_local_kv_seqlens: torch.Tensor = None
-    dcp_prefill_chunks: tuple[DCPPrefillChunk, ...] = ()
+    dcp_prefix_chunks: tuple[DCPPrefixChunk, ...] = ()
     dcp_prefill_request_ids: torch.Tensor = None
     kernel_metadata: tuple[Any, ...] = ()
 

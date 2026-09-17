@@ -8,7 +8,7 @@ import torch
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends.cp_utils import (
-    DCPPrefillChunk,
+    DCPPrefixChunk,
     get_dcp_local_causal_seq_lens,
 )
 from lmdeploy.utils import get_logger
@@ -507,12 +507,12 @@ class FlashMLAImpl(TritonAttentionImpl):
 
         return flatten_k, flatten_v
 
-    def _gather_dcp_prefill_context_chunk(
+    def _gather_dcp_prefix_chunk(
         self,
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
-        chunk: DCPPrefillChunk,
+        chunk: DCPPrefixChunk,
         out_dtype: torch.dtype,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
@@ -589,8 +589,8 @@ class FlashMLAImpl(TritonAttentionImpl):
             return_lse=True,
         )
 
-        for chunk in attn_metadata.dcp_prefill_chunks:
-            context_k, context_cu_lens = self._gather_dcp_prefill_context_chunk(
+        for chunk in attn_metadata.dcp_prefix_chunks:
+            context_k, context_cu_lens = self._gather_dcp_prefix_chunk(
                 k_cache,
                 v_cache,
                 attn_metadata,
@@ -775,7 +775,7 @@ class FlashMLAImpl(TritonAttentionImpl):
             raise RuntimeError('Sparse MLA indices require FlashMLASparseImpl.')
 
         if self.dcp_world_size > 1:
-            if attn_metadata.dcp_prefill_chunks:
+            if attn_metadata.dcp_prefix_chunks:
                 return self._prefill_dcp_context(
                     query,
                     current_key,

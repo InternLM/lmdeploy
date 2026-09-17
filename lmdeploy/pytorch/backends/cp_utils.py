@@ -56,8 +56,9 @@ def get_dcp_workspace_size(*, num_prefill_tokens: int, num_decode_tokens: int,
 
 
 @dataclass(frozen=True)
-class DCPPrefillChunk:
-    """Layer-independent lengths for one virtual-block-aligned prefix chunk."""
+class DCPPrefixChunk:
+    """Metadata for one bounded chunk of cached prefix KV gathered across DCP
+    ranks."""
 
     start: int
     size: int
@@ -67,8 +68,8 @@ class DCPPrefillChunk:
     local_cu_seqlens: torch.Tensor  # current rank
 
 
-def build_dcp_prefill_chunks(*, prefix_lens: torch.Tensor, prefix_limit: int, block_size: int, head_dim: int,
-                             dcp_world_rank: tuple[int, int]) -> tuple[DCPPrefillChunk, ...]:
+def build_dcp_prefix_chunks(*, prefix_lens: torch.Tensor, prefix_limit: int, block_size: int, head_dim: int,
+                             dcp_world_rank: tuple[int, int]) -> tuple[DCPPrefixChunk, ...]:
     """Plan identical collective shapes on all ranks without device sync."""
     if prefix_limit <= 0:
         return ()
@@ -92,7 +93,7 @@ def build_dcp_prefill_chunks(*, prefix_lens: torch.Tensor, prefix_limit: int, bl
         local_lengths = ((lengths[None, :] + dcp_size - 1 - ranks) // dcp_size).clamp_min(0)
         cu_lens = torch.nn.functional.pad(lengths.cumsum(0, dtype=torch.int32), (1, 0))
         local_cu_lens = torch.nn.functional.pad(local_lengths[dcp_rank].cumsum(0, dtype=torch.int32), (1, 0))
-        chunks.append(DCPPrefillChunk(start, size, lengths, cu_lens, local_lengths, local_cu_lens))
+        chunks.append(DCPPrefixChunk(start, size, lengths, cu_lens, local_lengths, local_cu_lens))
     return tuple(chunks)
 
 
@@ -137,7 +138,7 @@ def update_dcp_metadata(attn_metadata, step_context) -> None:
 
     dcp_world_rank = get_dcp_world_rank()
     attn_metadata.dcp_local_kv_seqlens = get_dcp_local_seq_lens(attn_metadata.kv_seqlens, dcp_world_rank)
-    attn_metadata.dcp_prefill_chunks = ()
+    attn_metadata.dcp_prefix_chunks = ()
     attn_metadata.dcp_prefill_request_ids = None
     if dcp_world_rank[0] == 1 or attn_metadata.is_decoding:
         return
@@ -145,7 +146,7 @@ def update_dcp_metadata(attn_metadata, step_context) -> None:
     num_tokens = step_context.input_ids.numel()
     prefix_total = attn_metadata.kv_flatten_size - num_tokens
     prefix_limit = min(prefix_total, max(0, attn_metadata.max_kv_seqlen - 1))
-    attn_metadata.dcp_prefill_chunks = build_dcp_prefill_chunks(
+    attn_metadata.dcp_prefix_chunks = build_dcp_prefix_chunks(
         prefix_lens=attn_metadata.kv_seqlens - attn_metadata.q_seqlens,
         prefix_limit=prefix_limit,
         block_size=step_context.cache_config.block_size,
@@ -154,7 +155,7 @@ def update_dcp_metadata(attn_metadata, step_context) -> None:
     )
     topk = step_context.model_config.mla_index_topk
     # Short-context sparse MLA uses dense attention and needs no index mapping.
-    if attn_metadata.dcp_prefill_chunks and topk is not None and attn_metadata.max_kv_seqlen > topk:
+    if attn_metadata.dcp_prefix_chunks and topk is not None and attn_metadata.max_kv_seqlen > topk:
         # Map query rows to requests once, reused across chunks and layers.
         # E.g. q_seqlens=[2, 3] -> request_ids=[0, 0, 1, 1, 1].
         attn_metadata.dcp_prefill_request_ids = torch.repeat_interleave(
