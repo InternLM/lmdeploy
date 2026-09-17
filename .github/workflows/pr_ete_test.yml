@@ -110,7 +110,7 @@ jobs:
           exit 1
       - name: Start lmdeploy-router for PD
         run: |
-          lmdeploy-router --host 127.0.0.1 --port 23410 --policy round_robin --lmdeploy-pd-disaggregation > ${{env.SERVER_LOG}}/pd_router.log 2>&1 &
+          lmdeploy-router --host 127.0.0.1 --port 23410 --prometheus-port 29001 --policy round_robin --lmdeploy-pd-disaggregation > ${{env.SERVER_LOG}}/pd_router.log 2>&1 &
           pd_router_pid=$!
           for i in $(seq 1 30)
           do
