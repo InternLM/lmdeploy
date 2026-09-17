@@ -45,6 +45,7 @@ logger = get_logger('lmdeploy')
 
 class Status(BaseModel):
     """Status protocol consists of models' information."""
+
     role: EngineRole = EngineRole.Hybrid
     models: list[str] = Field(default=[], examples=[[]])
     unfinished: int = 0
@@ -54,6 +55,7 @@ class Status(BaseModel):
 
 class Node(BaseModel):
     """Node protocol consists of url and status."""
+
     url: str
     status: Status | None = None
 
@@ -554,9 +556,8 @@ def terminate_node_all():
 async def connection_warmup():
     """Warm up Prefill-Decode connections.
 
-    Concurrent warmup requests share a single in-flight gather. Per P-D link
-    handshakes are single-flighted inside PDConnectionPool so repeated warmup
-    cannot accumulate unbounded wait tasks.
+    Concurrent warmup requests share a single in-flight gather. Per P-D link handshakes are single-flighted inside
+    PDConnectionPool so repeated warmup cannot accumulate unbounded wait tasks.
     """
     messages = [
         PDConnectionMessage(

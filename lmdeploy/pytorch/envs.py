@@ -148,6 +148,9 @@ with set_envs():
     dist_master_addr = os.getenv('LMDEPLOY_DIST_MASTER_ADDR', None)
     dist_master_port = os.getenv('LMDEPLOY_DIST_MASTER_PORT', None)
 
+    # distserve PD connection wait timeout (seconds). <=0 means unlimited.
+    pd_conn_wait_timeout = env_to_float('LMDEPLOY_PD_CONN_WAIT_TIMEOUT', 60.0)
+
     # logging
     log_file = os.getenv('LMDEPLOY_LOG_FILE', None)
     os.getenv('LMDEPLOY_LOG_PID', '0')

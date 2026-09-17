@@ -8,6 +8,7 @@ import aiohttp
 import requests
 
 from lmdeploy.logger import get_logger
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeCacheFreeRequest,
@@ -23,28 +24,9 @@ logger = get_logger('lmdeploy')
 
 AIOHTTP_TIMEOUT = os.getenv('AIOHTTP_TIMEOUT', None)
 
-
-def _optional_float_env(name: str, default: float | None) -> float | None:
-    """Parse an optional float env var.
-
-    Empty / none / non-positive values mean unlimited.
-    """
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    raw = raw.strip()
-    if raw == '' or raw.lower() in ('none', 'null'):
-        return None
-    value = float(raw)
-    if value <= 0:
-        return None
-    return value
-
-
 # Bound waiters so connect()/warmup cannot hang forever when a handshake is stuck.
 # Set LMDEPLOY_PD_CONN_WAIT_TIMEOUT=0 to restore unlimited wait.
-DEFAULT_CONNECT_WAIT_TIMEOUT = 60.0
-CONNECT_WAIT_TIMEOUT = _optional_float_env('LMDEPLOY_PD_CONN_WAIT_TIMEOUT', DEFAULT_CONNECT_WAIT_TIMEOUT)
+CONNECT_WAIT_TIMEOUT = _envs.pd_conn_wait_timeout if _envs.pd_conn_wait_timeout > 0 else None
 
 
 class PDConnectionStatus(enum.Enum):
@@ -201,7 +183,10 @@ class PDConnectionPool:
                 return DistServeConnectionResponse.model_validate(result)
 
     async def _handshake(self, conn_req: PDConnectionMessage):
-        """Perform the P-D handshake. Overridable in tests."""
+        """Perform the P-D handshake.
+
+        Overridable in tests.
+        """
         # Step 1. Get Remote Engine Configuration
         prefill_engine_config = await self._get_engine_config(conn_req.p_url)
         decode_engine_config = await self._get_engine_config(conn_req.d_url)
@@ -296,7 +281,8 @@ class PDConnectionPool:
                 task.add_done_callback(self._bg_tasks.discard)
 
     async def _join_or_start(self, conn_req: PDConnectionMessage) -> asyncio.Event | None:
-        """Return the in-flight event for this P-D link, starting at most one handshake.
+        """Return the in-flight event for this P-D link, starting at most one
+        handshake.
 
         Returns None when the link is already Connected.
         """
@@ -369,8 +355,7 @@ class PDConnectionPool:
     async def warmup_connections(self, messages: list[PDConnectionMessage], concurrency: int | None = None):
         """Connect all P-D pairs, coalescing concurrent warmup callers.
 
-        Concurrent callers join the in-flight warmup task instead of spawning
-        another full P×D gather.
+        Concurrent callers join the in-flight warmup task instead of spawning another full P×D gather.
         """
         if not messages:
             return
