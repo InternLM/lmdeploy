@@ -593,9 +593,10 @@ def test_dcp_attention_correction_kernel_matches_torch(dtype):
     all_lse[0, 3, :2] = torch.tensor([torch.inf, torch.nan], device='cuda')
     # Empty shards may return non-finite outputs or even finite LSE values.
     local_output[:3] = torch.nan
-    valid_rows = torch.tensor([False, True, False, True, True], device='cuda')
-    sanitized = sanitize_dcp_lse(all_lse[0], valid_rows)
-    expected_lse = torch.where(valid_rows[:, None] & torch.isfinite(all_lse[0]), all_lse[0], -torch.inf)
+    # Include even nonzero counts: validity is a comparison, not a bitwise mask.
+    valid_counts = torch.tensor([0, 1, 0, 2, 513], dtype=torch.int32, device='cuda')
+    sanitized = sanitize_dcp_lse(all_lse[0], valid_counts)
+    expected_lse = torch.where((valid_counts[:, None] > 0) & torch.isfinite(all_lse[0]), all_lse[0], -torch.inf)
     torch.testing.assert_close(sanitized, expected_lse, rtol=0, atol=0)
     assert sanitized.is_contiguous()
     gathered = all_lse.clone()
@@ -613,11 +614,14 @@ def test_dcp_attention_correction_kernel_matches_torch(dtype):
     torch.cuda.synchronize()
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
+        graph_lse = sanitize_dcp_lse(all_lse[0], valid_counts)
+        gathered[0].copy_(graph_lse)
         graph_output = correct_dcp_attention_output(local_output,
                                                     gathered,
                                                     dcp_rank=0)
     graph.replay()
     torch.cuda.synchronize()
+    torch.testing.assert_close(graph_lse, expected_lse, rtol=0, atol=0)
     torch.testing.assert_close(graph_output, expected, rtol=1e-5, atol=1e-5)
 
 

@@ -185,15 +185,16 @@ def test_get_min_num_gpu_blocks_rejects_worker_count_mismatch():
         ExecutorBase._get_min_num_gpu_blocks([4096, 4096], [256])
 
 
-@pytest.mark.parametrize(('draft_tokens', 'topk', 'score_mb'), [
-    (0, None, 1),
-    (0, 2048, 1), (9, 2048, 1),
-    (0, 2048, 128), (9, 2048, 128),
+@pytest.mark.parametrize(('draft_tokens', 'topk', 'score_mb', 'dtype'), [
+    (0, None, 1, torch.bfloat16), (0, None, 1, torch.float32),
+    (0, 2048, 1, torch.bfloat16), (9, 2048, 1, torch.float16),
+    (0, 2048, 128, torch.bfloat16), (9, 2048, 128, torch.bfloat16),
 ])
-def test_runtime_size_reserves_dcp_peak_phase(monkeypatch, draft_tokens, topk, score_mb):
+def test_runtime_size_reserves_dcp_peak_phase(monkeypatch, draft_tokens, topk, score_mb, dtype):
     monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', score_mb)
     executor = object.__new__(ExecutorBase)
-    executor.model_config = SimpleNamespace(mla_index_topk=topk, head_dim=576, v_head_dim=0, num_attention_heads=64)
+    executor.model_config = SimpleNamespace(mla_index_topk=topk, head_dim=576, v_head_dim=0,
+                                            num_attention_heads=64, dtype=dtype)
     executor.specdecode_config = SimpleNamespace(num_speculative_tokens=draft_tokens) if draft_tokens else None
     executor.dist_config = SimpleNamespace(attn_tp=8)
     executor.cache_config = SimpleNamespace(cache_max_entry_count=1.0,
@@ -205,7 +206,10 @@ def test_runtime_size_reserves_dcp_peak_phase(monkeypatch, draft_tokens, topk, s
                                                           vocab_size=100)
     # Explicitly include MLA accumulators despite its empty standalone V cache.
     decode_rows = 2 * (draft_tokens + 1)
-    attention_bytes = (64 << 20) + 16 * 8 * (576 * 12 + 12)
+    output_bytes = 4 if dtype == torch.float32 else 2
+    # Sparse output slices keep the 64-head backing allocation, not just 8 heads.
+    workspace_heads = 64 if topk is not None else 8
+    attention_bytes = (64 << 20) + 16 * workspace_heads * (3 * 576 * output_bytes + 12)
     workspace = attention_bytes
     if topk is not None:
         rows = max(16, decode_rows)

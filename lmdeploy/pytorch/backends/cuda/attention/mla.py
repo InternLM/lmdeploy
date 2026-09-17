@@ -616,7 +616,7 @@ class FlashMLAImpl(TritonAttentionImpl):
             output, output_lse = merge_attention_states(
                 output, output_lse, context_output, context_lse)
             del context_k, context_output, context_lse
-        return output.to(query.dtype)
+        return output
 
     def _get_max_q_seqlen(
         self,
@@ -744,7 +744,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         return merge_dcp_attention(
             local_output,
             local_lse,
-            valid_rows=attn_metadata.dcp_local_kv_seqlens > 0,
+            valid_counts=attn_metadata.dcp_local_kv_seqlens,
             dcp_world_rank=(self.dcp_world_size, self.dcp_rank))
 
     def _forward_prefill(

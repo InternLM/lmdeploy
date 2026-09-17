@@ -220,8 +220,8 @@ class ExecutorBase:
         """Estimate per-GPU DCP temporary bytes to exclude from KV-cache
         sizing.
 
-        Reserve the larger of indexer (scores/candidates) and attention (prefix KV/merge) phases, plus persistent
-        indices. Returns zero without DCP. Flattened indexer KV still relies on memory headroom.
+        Reserve max(indexer, attention) plus final indices shared by both phases. Flattened indexer KV relies on memory
+        headroom. Returns zero without DCP.
         """
         if self.cache_config.dcp <= 1:
             return 0
@@ -233,16 +233,20 @@ class ExecutorBase:
 
         config = self.cache_config
         model = self.model_config
+        # Prefix KV: local, gathered, and reordered buffers.
         attention_workspace = get_dcp_prefill_workspace_size(
             batch_size=config.max_batches,
             head_dim=model.head_dim,
             block_size=config.block_size,
             dcp_size=config.dcp,
         )
-        local_heads = model.num_attention_heads // self.dist_config.attn_tp
-        # Budget three FP32 output/LSE states: old, partial, and merged.
-        # Full head_dim bounds V width; MLA's standalone V-cache width is zero.
-        attention_workspace += num_prefill_tokens * local_heads * (model.head_dim * 12 + 12)
+        workspace_heads = model.num_attention_heads // self.dist_config.attn_tp
+        if model.mla_index_topk is not None:
+            # Sparse FlashMLA output slices retain storage padded to 64-head multiples.
+            workspace_heads = (workspace_heads + 63) // 64 * 64
+        # Old, partial, and merged states: model-dtype output + FP32 LSE.
+        # head_dim bounds the output width; standalone V-cache width is zero.
+        attention_workspace += num_prefill_tokens * workspace_heads * 3 * (model.head_dim * model.dtype.itemsize + 4)
         if model.mla_index_topk is None:
             return attention_workspace
 
@@ -250,11 +254,12 @@ class ExecutorBase:
         if self.specdecode_config is not None:
             # Verification includes draft tokens plus one target token.
             decode_rows *= self.specdecode_config.num_speculative_tokens + 1
-        # Candidates may cover all prefill or verification rows.
+        # Cover both prefill and MTP verification.
         max_rows = max(num_prefill_tokens, decode_rows)
+        # Indexer: scores, top-k ids, and local/gathered candidate pairs.
         indexer_workspace = self._get_dsa_score_workspace_size()
         indexer_workspace += get_dcp_topk_workspace_size(max_rows, model.mla_index_topk, config.dcp)
-        # Only final indices persist across the indexer and attention phases.
+        # Final INT32 ids survive into attention; other buffers are phase-local.
         index_bytes = max_rows * model.mla_index_topk * 4
         return index_bytes + max(indexer_workspace, attention_workspace)
 

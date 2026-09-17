@@ -153,12 +153,12 @@ def gather_dcp_query(query: torch.Tensor, *, dcp_world_size: int) -> torch.Tenso
 
 def merge_dcp_attention(local_output: torch.Tensor,
                         local_lse: torch.Tensor,
-                        valid_rows: torch.Tensor,
+                        valid_counts: torch.Tensor,
                         *,
                         dcp_world_rank: tuple[int, int]) -> torch.Tensor:
     """Merge normalized CUDA shard outputs and scatter heads back to each rank.
 
-    Inputs are [tokens, gathered_heads, value_dim] outputs and natural-log [tokens, gathered_heads] LSE. Invalid rows
+    Inputs are [tokens, gathered_heads, value_dim] outputs and natural-log [tokens, gathered_heads] LSE. Empty rows
     contribute zero. LSE and correction arithmetic use FP32; reduce-scatter uses the input output dtype.
     """
     dcp_world_size, dcp_rank = dcp_world_rank
@@ -167,7 +167,7 @@ def merge_dcp_attention(local_output: torch.Tensor,
     from lmdeploy.pytorch.distributed import all_gather_into_tensor, reduce_scatter_tensor
     from lmdeploy.pytorch.kernels.cuda.dcp import correct_dcp_attention_output, sanitize_dcp_lse
 
-    local_lse = sanitize_dcp_lse(local_lse, valid_rows)
+    local_lse = sanitize_dcp_lse(local_lse, valid_counts)
     gathered_lse = local_lse.new_empty(
         dcp_world_size * local_lse.size(0), local_lse.size(1))
     all_gather_into_tensor(gathered_lse, local_lse, group='dcp')

@@ -109,7 +109,7 @@ def map_and_compact_dcp_prefill_indices(indices: torch.Tensor, *, request_ids: t
 @triton.jit
 def _sanitize_dcp_lse_kernel(
     Lse,
-    ValidRows,
+    ValidCounts,
     Out,
     numel,
     stride_lr,
@@ -126,7 +126,7 @@ def _sanitize_dcp_lse_kernel(
     heads = offsets % NUM_HEADS
     lse = tl.load(Lse + rows * stride_lr + heads * stride_lh,
                   mask=mask).to(tl.float32)
-    valid = tl.load(ValidRows + rows, mask=mask, other=0)
+    valid = tl.load(ValidCounts + rows, mask=mask, other=0) > 0
     invalid_lse = (lse != lse) | (lse == float('inf'))
     lse = tl.where(valid & ~invalid_lse, lse, -float('inf'))
     tl.store(Out + offsets, lse, mask=mask)
@@ -306,14 +306,13 @@ def _reorder_dcp_prefill_kv_kernel(
 
 
 def sanitize_dcp_lse(local_lse: torch.Tensor,
-                     valid_rows: torch.Tensor) -> torch.Tensor:
+                     valid_counts: torch.Tensor) -> torch.Tensor:
     """Return contiguous FP32 LSE with invalid entries masked to -inf.
 
-    Mask rows where valid_rows is false, plus NaN and +inf entries. Finite values and existing -inf entries are
-    preserved for DCP merging.
+    Mask rows with no valid KV entries, plus NaN and +inf entries.
     """
     assert local_lse.dim() == 2
-    assert valid_rows.shape == local_lse.shape[:1]
+    assert valid_counts.shape == local_lse.shape[:1]
     output = torch.empty(local_lse.shape,
                          dtype=torch.float32,
                          device=local_lse.device)
@@ -326,7 +325,7 @@ def sanitize_dcp_lse(local_lse: torch.Tensor,
     # LSE for all-gather without an extra ``contiguous()`` copy.
     _sanitize_dcp_lse_kernel[(triton.cdiv(numel, block), )](
         local_lse,
-        valid_rows,
+        valid_counts,
         output,
         numel,
         local_lse.stride(0),
@@ -381,10 +380,10 @@ def merge_attention_states(
         prefix_output: torch.Tensor, prefix_lse: torch.Tensor,
         suffix_output: torch.Tensor,
         suffix_lse: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Merge attention partitions, retaining FP32 output for further merges."""
+    """Merge in FP32, retaining the prefix output dtype and FP32 LSE."""
     assert prefix_output.shape == suffix_output.shape
     assert prefix_lse.shape == suffix_lse.shape == prefix_output.shape[:2]
-    output = torch.empty_like(prefix_output, dtype=torch.float32)
+    output = torch.empty_like(prefix_output)
     output_lse = torch.empty_like(prefix_lse, dtype=torch.float32)
     block_d = triton.next_power_of_2(prefix_output.size(2))
     _merge_attention_states_kernel[prefix_output.shape[:2]](

@@ -178,9 +178,9 @@ class FlashMLASparseImpl(FlashMLAImpl):
                                                      indices,
                                                      return_lse=True,
                                                      topk_length=valid_counts)
-        # The FP32 merge ignores zero-weight outputs, including NaNs from
+        # The merge ignores zero-weight outputs, including NaNs from
         # empty partitions. Only their LSE needs to be neutralized here.
-        return output, sanitize_dcp_lse(lse, valid_counts > 0)
+        return output, sanitize_dcp_lse(lse, valid_counts)
 
     def _prefill_sparse_dcp(
         self,
@@ -227,7 +227,7 @@ class FlashMLASparseImpl(FlashMLAImpl):
             output, output_lse = merge_attention_states(
                 output, output_lse, context_output, context_lse)
             del context_k, context_indices, context_output, context_lse
-        return output.to(query.dtype)
+        return output
 
     def _decoding_sparse_bf16(
             self, query: torch.Tensor, k_cache: torch.Tensor,
@@ -332,7 +332,7 @@ class FlashMLASparseImpl(FlashMLAImpl):
                 return_lse=True, topk_length=local_counts)
             return merge_dcp_attention(local_output,
                                        local_lse,
-                                       valid_rows=local_counts > 0,
+                                       valid_counts=local_counts,
                                        dcp_world_rank=dcp_world_rank)
         return self._decoding_sparse(query, k_cache, nsa_indices, attn_metadata)
 
