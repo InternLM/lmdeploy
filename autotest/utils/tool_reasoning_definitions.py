@@ -105,6 +105,9 @@ SEARCH_TOOL = {
     },
 }
 
+# Greeting + search + required: model must still tool-call (not reply in text).
+MESSAGES_HELLO = [{'role': 'user', 'content': 'Hello'}]
+
 CALCULATOR_TOOL = {
     'type': 'function',
     'function': {

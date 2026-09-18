@@ -85,7 +85,7 @@ def load_video_sampled_pil(video_path: str, num_frames: int, **kwargs: Any) -> t
 def _is_video_mixed_whitelist_model(model_path: str) -> bool:
     """Only run video/mixed-mm cases for selected model families."""
     m = model_path.lower()
-    whitelist = ('qwen3-vl', 'qwen3.5', 'interns2-preview')
+    whitelist = ('qwen3-vl', 'qwen3.5', 'intern-s2-preview')
     return any(p in m for p in whitelist)
 
 

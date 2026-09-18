@@ -25,6 +25,7 @@ h:
       - base
       - logprob
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
@@ -39,6 +40,7 @@ h:
       - base
       - logprob
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
@@ -64,6 +66,7 @@ h:
       max-batch-size: 256
       prefix-cache-decode-state-interval: 1024
       prefix-cache-state-budget: 256
+      max-prefill-token-num: 64
   backends:
   - name: pytorch
     communicators:

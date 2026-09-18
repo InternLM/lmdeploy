@@ -102,6 +102,14 @@ Rules:
 
 - Keep MTP (speculative decoding) on its own row with `speculative-algorithm` in `engine_config.extra`; use `func` and/or `evaluate` in `test_coverage`.
 - Use `prefix_cache` in `test_coverage`; do not add `enable-prefix-caching` manually to `engine_config.extra`.
+- SSM models (Qwen3.5 / Intern-S2): dedicated row with **only** `prefix_cache` in
+  `test_coverage`, **pytorch only** (TurboMind has no serve CLI for checkpoint
+  interval; do not list turbomind on this row). Put `max-prefill-token-num: 64`
+  and `prefix-cache-state-budget` (plus `prefix-cache-decode-state-interval` if
+  evaluate also uses the row) in that row's `engine_config.extra`. Do not put
+  these knobs on `func`/`evaluate` rows. `assert_prefix_cache_hit` uses the same
+  short prompt as AR (text in `*_llm.py`; image in `*_mllm.py` prefix_cache).
+  Do not inject extras in Python.
 - Use `quantization` in `test_coverage` only for runtime weight-quant rows (`awq`, `gptq`, `w8a8`).
 
 ## `interface` (REST interface coverage)
@@ -189,10 +197,31 @@ is enabled.
 Suites:
 
 - `base` — chat/completions basic cases; generate without logprob/experts
+
 - `logprob` — generate logprob cases
+
 - `experts` — generate routed-experts cases
+
 - `anthropic` — Anthropic Messages HTTP + SDK smoke (`RESTFUL_MODEL_LIST`). Share a profile with `base`/`logprob` when `extra` matches; otherwise its own profile **without** `tool-call-parser` / `reasoning-parser`.
+
 - `toolcall` — `interface/restful/tool_parser/` (requires `tool-call-parser` in yaml `extra`; add `enable-return-routed-experts: true` when toolcall includes `@experts` cases)
+
+- `hard_schema` — walle MFJS tool-call schema validation (`tool_parser/test_tool_call_json_schema.py`; requires `tool-call-parser`; for thinking models set `gen_config.chat-template-kwargs.enable_thinking: true` (not `interface.extra`); runs full walle case set). Kimi-Vendor-Verifier checkout: `eval_resource/Kimi-Vendor-Verifier` (see `kimi_vendor_verifier_path` in `env_paths.yml`), overridable via `KIMI_VENDOR_VERIFIER_ROOT`; cases override via `WALLE_CASE_DIR`. One representative model per parser (see table below); all `internlm/*` configs with `toolcall` also enable `hard_schema`.
+
+  | `tool-call-parser` | Representative model                                    |
+  | ------------------ | ------------------------------------------------------- |
+  | `qwen3coder`       | `Qwen/Qwen3.5-35B-A3B`                                  |
+  | `qwen3`            | `Qwen/Qwen3-8B-FP8`                                     |
+  | `qwen2d5`          | `Qwen/Qwen2.5-7B-Instruct`                              |
+  | `llama3`           | `meta-llama/Llama-3.1-70B-Instruct`                     |
+  | `glm47`            | `zai-org/GLM-4.7-Flash`                                 |
+  | `kimi-k2`          | `moonshotai/Kimi-K2-Instruct-0905`                      |
+  | `deepseek-v32`     | `deepseek-ai/DeepSeek-V3`                               |
+  | `deepseek-v4`      | `deepseek-ai/DeepSeek-V4-Flash-0731`                    |
+  | `intern-s1`        | `internlm/Intern-S1` (+ all Intern-S1 / Intern-S1-mini) |
+  | `interns2-preview` | `internlm/Intern-S2-Preview` (+ all Intern-S2 variants) |
+  | `internlm`         | `internlm/internlm3-8b-instruct`                        |
+
 - `reasoning` — `interface/restful/reasoning_parser/` (requires `reasoning-parser` in yaml `extra`)
 
 Notes:
