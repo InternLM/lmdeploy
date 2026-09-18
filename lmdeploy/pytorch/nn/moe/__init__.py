@@ -24,6 +24,9 @@ def build_fused_moe(
     layer_idx: int = 0,
     act_func: Callable = None,
     prefix: str = '',
+    *,
+    fp32_acc: bool = False,
+    output_scale: float = 1.0,
 ):
     """Fused moe builder."""
     quant_method = None
@@ -107,6 +110,8 @@ def build_fused_moe(
             all_reduce=all_reduce,
             layer_idx=layer_idx,
             act_func=act_func,
+            fp32_acc=fp32_acc,
+            output_scale=output_scale,
         )
     elif quant_method == 'compressed-tensors':
         if bias:

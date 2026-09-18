@@ -947,6 +947,7 @@ def _moe_reduce_kernel(
     N: tl.constexpr,
     BLOCK_K: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    output_scale: tl.constexpr,
 ):
     pid = tl.program_id(0)
     num_n_split = tl.cdiv(N, BLOCK_N)
@@ -974,11 +975,14 @@ def _moe_reduce_kernel(
 
     wh = h * w[:, None]
     o = wh.sum(axis=0)
+    if output_scale != 1.0:
+        o *= output_scale
     tl.store(o_ptrs, o, mask=mask_n)
 
 
-def moe_reduce(hidden_states: torch.Tensor, topk_weights: torch.Tensor, fp32_acc: bool = False) -> torch.Tensor:
-    """Moe reduce."""
+def moe_reduce(hidden_states: torch.Tensor, topk_weights: torch.Tensor, fp32_acc: bool = False,
+               *, output_scale: float = 1.0) -> torch.Tensor:
+    """Weight and reduce experts, optionally scaling before the output cast."""
     assert hidden_states.dim() == 3
     assert topk_weights.dim() == 2
     assert hidden_states.size(0) == topk_weights.size(0)
@@ -1008,6 +1012,7 @@ def moe_reduce(hidden_states: torch.Tensor, topk_weights: torch.Tensor, fp32_acc
         N,
         BLOCK_K,
         BLOCK_N,
+        output_scale,
         num_warps=num_warps,
     )
 

@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import gc
+import os
 from typing import Any
 
 from lmdeploy.pytorch.backends.selector import get_backend
@@ -58,6 +59,9 @@ class WorkerWrapperBase:
 
     def init_process_group(self, rank: int, master_addr: str = None, master_port: str = None):
         """Initialize process group."""
+        for key, value in self.model_config.process_group_env_defaults.items():
+            os.environ.setdefault(key, value)
+
         self.rank = rank
         if self.world_size > 1:
             if master_addr is not None and master_port is not None:

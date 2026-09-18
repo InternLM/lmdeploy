@@ -114,7 +114,8 @@ def _load_fused_qkv_a_weight(name: str, loaded_weight: torch.Tensor, params_dict
     if param is None:
         return False
 
-    if shard_id == 1 and not name.endswith('.weight_scale_inv'):
+    if (shard_id == 1 and config.qk_rope_head_dim > 0
+            and not name.endswith('.weight_scale_inv')):
         kv_dim = config.kv_lora_rank + config.qk_rope_head_dim
         loaded_weight = loaded_weight.to(param.device).unflatten(0, (-1, kv_dim))
         rope_weight = loaded_weight[:, config.kv_lora_rank:]
@@ -249,6 +250,9 @@ class Indexer(nn.Module):
 
 class DeepseekV32Attention(DeepseekV2Attention):
 
+    use_sparse_mla = True
+    mla_head_padding = 0
+
     def __init__(self,
                  config: Any,
                  layer_idx: int,
@@ -354,13 +358,15 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 self.softmax_scale = self.softmax_scale * mscale * mscale
 
         self.attn_fwd = Attention(self.num_heads,
-                                  config.kv_lora_rank + self.qk_rope_head_dim,
+                                  config.kv_lora_rank + self.qk_rope_head_dim
+                                  + type(self).mla_head_padding,
                                   scale=self.softmax_scale,
                                   num_kv_heads=num_key_value_heads,
                                   v_head_size=config.kv_lora_rank,
                                   num_replicate_kv_heads=num_replicate_kv_heads,
                                   use_flash_mla=use_flash_mla,
-                                  mla_index_topk=config.index_topk)
+                                  mla_index_topk=(config.index_topk
+                                                  if type(self).use_sparse_mla else None))
 
         self.vc = DeepseekV2BMM(self.num_heads, config.kv_lora_rank, self.v_head_dim, dtype=dtype, device=device)
         self.o_proj = build_o_proj(

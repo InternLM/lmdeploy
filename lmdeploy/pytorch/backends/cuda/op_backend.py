@@ -43,6 +43,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         from ..gated_delta_rule import GatedDeltaMetaBuildSpec, GatedDeltaRuleBuildSpec
         from ..hc_prepost import HCPrePostBuildSpec
         from ..indexer import V4IndexerBuildSpec
+        from ..kda import KdaBuildSpec
         from ..lora import LoRABuildSpec
         from ..moe import (
             FusedMoEBlockedF8BuildSpec,
@@ -62,6 +63,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         if isinstance(spec, SiluAndMulBuildSpec):
             from .activation import TritonSiluAndMulImpl
             return cast(ImplT, TritonSiluAndMulImpl(spec.inplace))
+        if isinstance(spec, KdaBuildSpec):
+            from .kda import CudaKdaImpl
+            return cast(ImplT, CudaKdaImpl())
         if isinstance(spec, ApplyRotaryEmbBuildSpec):
             from .apply_rotary_emb import TritonApplyRotaryEmbImpl
             return cast(ImplT, TritonApplyRotaryEmbImpl())
