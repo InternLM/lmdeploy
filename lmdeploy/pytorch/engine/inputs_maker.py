@@ -1178,7 +1178,7 @@ class InputsMakerAsync:
         block_offsets = self._map_to_kernel_block_offsets(block_offsets)
 
         # sliding window
-        if self.config.window_size > 0:
+        if self.config.window_size is not None and self.config.window_size > 0:
             num_ignored_history = torch.tensor([msg.num_ignored_history for msg in valid_seqs])
         else:
             num_ignored_history = torch.zeros(len(valid_seqs), dtype=torch.long)

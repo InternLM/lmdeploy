@@ -399,7 +399,7 @@ class StepContext:
 
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
-        if cache_config.window_size > 0:
+        if cache_config.window_size is not None and cache_config.window_size > 0:
             kv_seqlens -= inputs.num_ignored_history
 
         ret = StepContext(

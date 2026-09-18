@@ -83,7 +83,7 @@ class MooncakeStoreWorker:
             raise ValueError(f'tp_rank must be in [0, {tp_size}), got {tp_rank}')
         if cache_config.states_shapes:
             raise ValueError('Mooncake Store does not support linear-attention state caches')
-        if cache_config.window_size > 1:
+        if cache_config.window_size is not None and cache_config.window_size > 1:
             raise ValueError('Mooncake Store does not support sliding-window KV caches')
 
         self._cache_config = cache_config
