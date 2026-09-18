@@ -102,6 +102,14 @@ Rules:
 
 - Keep MTP (speculative decoding) on its own row with `speculative-algorithm` in `engine_config.extra`; use `func` and/or `evaluate` in `test_coverage`.
 - Use `prefix_cache` in `test_coverage`; do not add `enable-prefix-caching` manually to `engine_config.extra`.
+- SSM models (Qwen3.5 / Intern-S2): dedicated row with **only** `prefix_cache` in
+  `test_coverage`, **pytorch only** (TurboMind has no serve CLI for checkpoint
+  interval; do not list turbomind on this row). Put `max-prefill-token-num: 64`
+  and `prefix-cache-state-budget` (plus `prefix-cache-decode-state-interval` if
+  evaluate also uses the row) in that row's `engine_config.extra`. Do not put
+  these knobs on `func`/`evaluate` rows. `assert_prefix_cache_hit` uses the same
+  short prompt as AR (text in `*_llm.py`; image in `*_mllm.py` prefix_cache).
+  Do not inject extras in Python.
 - Use `quantization` in `test_coverage` only for runtime weight-quant rows (`awq`, `gptq`, `w8a8`).
 
 ## `interface` (REST interface coverage)

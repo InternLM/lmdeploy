@@ -406,7 +406,7 @@ def _entry_matches_deps_profile(entry: dict[str, Any], env_key: str, selector: D
 def _entry_matches_func(entry: dict[str, Any], func_type: str, extra: dict[str, Any] | None) -> bool:
     funcs = set(entry.get(TEST_COVERAGE_KEY) or [])
     extra = extra or {}
-    if extra.get('enable-prefix-caching') is not None:
+    if 'enable-prefix-caching' in extra:
         if 'prefix_cache' not in funcs:
             return False
         # evaluate/infer accuracy: only dedicated yaml rows with tuned prefix-cache params
@@ -1069,7 +1069,7 @@ def _build_run_config_entry(
     merged_extra = copy.deepcopy(launch_extra)
     if extra:
         merged_extra.update(extra)
-    if extra and extra.get('enable-prefix-caching') is not None:
+    if extra and 'enable-prefix-caching' in extra:
         if 'prefix_cache' in (entry.get(TEST_COVERAGE_KEY) or []):
             merged_extra['enable-prefix-caching'] = None
 
@@ -1327,7 +1327,7 @@ def get_model_list(config: dict[str, Any],
     Rows with entry-level ``deps`` are never included (regardless of ``DEPS_PROFILE``).
     """
     parallel_config = parallel_config or {'tp': 1}
-    if extra and extra.get('enable-prefix-caching') is not None:
+    if extra and 'enable-prefix-caching' in extra:
         return _model_ids_for_entries(config, backend, parallel_config, model_type, func_type, extra)
     if func_type == 'func':
         return _model_ids_for_entries(config, backend, parallel_config, model_type, 'func', extra)

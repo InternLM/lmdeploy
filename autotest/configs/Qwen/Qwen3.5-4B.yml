@@ -15,3 +15,18 @@ h:
     - nccl
   test_coverage:
   - func
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 1
+    extra:
+      prefix-cache-state-budget: 256
+      prefix-cache-decode-state-interval: 1024
+      max-prefill-token-num: 64
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - prefix_cache

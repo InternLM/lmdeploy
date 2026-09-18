@@ -15,6 +15,7 @@ from utils.config_utils import (
     model_enables_return_routed_experts,
 )
 from utils.constant import BACKEND_LIST, BASE_URL, CAPPED_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
+from utils.restful_return_check import has_repeated_fragment
 from utils.toolkit import encode_text, parse_sse_stream
 
 
@@ -913,25 +914,29 @@ class TestGenerateComprehensive:
     def test_repetition_penalty(self):
         print(f'\n[Model: {self.model_name}] Running repetition penalty test')
         prompt = 'Repeat repeat repeat repeat'
-        base = {'prompt': prompt, 'max_tokens': 10, 'top_k': 0, 'stream': False}
+        base = {
+            'prompt': prompt,
+            'max_tokens': 200,
+            'temperature': 0.01,
+            'ignore_eos': True,
+            'stream': False,
+        }
+        data_boost = self._post({**base, 'repetition_penalty': 0.0000001}).json()
+        data_penalize = self._post({**base, 'repetition_penalty': 1.5}).json()
+        self._validate_generation_response(data=data_boost, validate_tokens=True)
+        self._validate_generation_response(data=data_penalize, validate_tokens=True)
 
-        resp_no_penalty = self._post({**base, 'repetition_penalty': 1.0})
-        resp_penalty = self._post({**base, 'repetition_penalty': 1.5})
-
-        text_no_penalty = resp_no_penalty.json()['text']
-        text_penalty = resp_penalty.json()['text']
-
-        def count_repeats(text):
-            words = text.lower().split()
-            return sum(1 for i in range(1, len(words)) if words[i] == words[i - 1])
-
-        repeats_no_penalty = count_repeats(text_no_penalty)
-        repeats_penalty = count_repeats(text_penalty)
-
-        assert repeats_penalty <= repeats_no_penalty, (
-            f'High penalty coefficient ({1.5}) repetition count ({repeats_penalty}) '
-            f'not less than low penalty ({1.0}) count ({repeats_no_penalty}), '
-            f'repetition_penalty ineffective')
+        boost_ids = data_boost['output_ids']
+        penalize_ids = data_penalize['output_ids']
+        assert boost_ids, data_boost
+        assert penalize_ids, data_penalize
+        boost_repeat, boost_msg = has_repeated_fragment(data_boost['text'])
+        assert boost_repeat, boost_msg
+        uniq_boost = len(set(boost_ids)) / len(boost_ids)
+        uniq_penalize = len(set(penalize_ids)) / len(penalize_ids)
+        assert uniq_penalize > uniq_boost, (
+            f'uniq_penalize={uniq_penalize} uniq_boost={uniq_boost} '
+            f'boost_text={data_boost["text"]!r} penalize_text={data_penalize["text"]!r}')
 
     def test_ignore_eos_parameter(self):
         print(f'\n[Model: {self.model_name}] Running ignore_eos parameter test')

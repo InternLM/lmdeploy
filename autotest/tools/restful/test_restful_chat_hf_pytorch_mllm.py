@@ -3,6 +3,7 @@ from utils.config_utils import get_func_config_list
 from utils.run_restful_chat import run_mllm_test
 
 BACKEND = 'pytorch'
+_PREFIX_CACHE_EXTRA = {'enable-prefix-caching': None}
 
 
 @pytest.mark.gpu_num_1
@@ -33,4 +34,24 @@ def test_restful_chat_tp8(config, run_config, worker_id):
 @pytest.mark.gpu_num_16
 @pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 16}, model_type='vl_model'))
 def test_restful_chat_tp16(config, run_config, worker_id):
+    run_mllm_test(config, run_config, worker_id)
+
+
+@pytest.mark.gpu_num_1
+@pytest.mark.test_3090
+@pytest.mark.test_ascend
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(BACKEND, {'tp': 1}, model_type='vl_model', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_restful_chat_pytorch_prefix_cache_tp1(config, run_config, worker_id):
+    run_mllm_test(config, run_config, worker_id)
+
+
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize(
+    'run_config',
+    get_func_config_list(BACKEND, {'tp': 2}, model_type='vl_model', extra=_PREFIX_CACHE_EXTRA),
+)
+def test_restful_chat_pytorch_prefix_cache_tp2(config, run_config, worker_id):
     run_mllm_test(config, run_config, worker_id)

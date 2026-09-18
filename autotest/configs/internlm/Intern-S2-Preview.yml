@@ -108,6 +108,7 @@ h:
       max-batch-size: 256
       prefix-cache-decode-state-interval: 1024
       prefix-cache-state-budget: 256
+      max-prefill-token-num: 64
   backends:
   - name: pytorch
     communicators:
