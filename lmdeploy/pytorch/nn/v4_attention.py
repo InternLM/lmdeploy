@@ -30,6 +30,14 @@ class V4Attention(nn.Module):
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
+    def build_cache_write_metadata(self, attn_metadata, position_ids: torch.Tensor,
+                                   state_ids: torch.Tensor, num_tokens: int):
+        return self.impl.build_cache_write_metadata(
+            attn_metadata, position_ids, state_ids, num_tokens)
+
+    def write_cache(self, kv: torch.Tensor, window_state: torch.Tensor, metadata) -> None:
+        self.impl.write_cache(kv, window_state, metadata)
+
     def forward(self,
                 query: torch.Tensor,
                 kv: torch.Tensor,

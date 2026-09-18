@@ -856,6 +856,29 @@ class TritonV4AttentionImpl(V4AttentionImpl):
         self._rectangular_decode_executor = _V4RectangularDecodeExecutor(self)
         self._prefill_executor = _V4PrefillExecutor(self)
 
+    def build_cache_write_metadata(self, attn_metadata, position_ids,
+                                   state_ids, num_tokens):
+        """Build the same uncompressed prefill writes without attention
+        workspaces."""
+        if self.compress_ratio or attn_metadata.is_decoding:
+            return None
+        from .v4_utils import build_prefill_token_meta
+
+        token_meta = build_prefill_token_meta(
+            attn_metadata.q_seqlens, attn_metadata.cu_seqlens_q,
+            total_tokens=num_tokens)
+        token_seq = token_meta.seq_id
+        token_slot = state_ids.to(torch.long)[token_seq]
+        token_abs_pos = position_ids.flatten()
+        cutoff = (attn_metadata.kv_seqlens[token_seq] - self.window_size).clamp(min=0)
+        ring_pos = token_abs_pos.remainder(self.ring_storage_capacity)
+        ring_pos = torch.where(token_abs_pos < cutoff, -1, ring_pos)
+        return _V4PrefillWindowMeta(slot=token_slot, ring_pos=ring_pos)
+
+    def write_cache(self, kv, window_state, metadata):
+        self._pack_window_fp8(kv.squeeze(0), window_state,
+                             metadata.slot, metadata.ring_pos)
+
     def forward(self, query, kv, attn_sink, attn_metadata: CudaV4AttentionMetadata,
                 window_state_fp8, block_caches, slot, index_out=None):
         """Dispatch V4 attention to decode or prefill execution."""

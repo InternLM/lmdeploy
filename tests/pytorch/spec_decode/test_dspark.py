@@ -963,3 +963,59 @@ def test_dspark_delegates_nongreedy_sampling_to_dflash(monkeypatch):
     assert output.output_draft_token_ids is draft_ids
     assert output.next_token_ids is extra_inputs.next_token_ids
     assert output.num_rejected_tokens is extra_inputs.num_rejected_tokens
+
+
+@pytest.mark.parametrize('device_name', ['cpu', 'cuda'])
+def test_v4_kv_only_metadata_matches_window_writes_without_scalar_read(device_name):
+    """The KV-only path preserves cutoff, wrap, empty requests and padded
+    slots."""
+    if device_name == 'cuda' and not torch.cuda.is_available():
+        pytest.skip('requires CUDA')
+    device = torch.device(device_name)
+    impl = TritonV4AttentionImpl.__new__(TritonV4AttentionImpl)
+    impl.compress_ratio = 0
+    impl.window_size = 128
+    impl.ring_storage_capacity = 134
+    lengths = [2, 0, 137, 1]
+    starts = [133, 0, 30, 260]
+    slots = [2, -1, 0, -1]
+    q = torch.tensor(lengths, dtype=torch.int32, device=device)
+    cu = torch.tensor([0, 2, 2, 139, 140], dtype=torch.int32, device=device)
+    kv = torch.tensor([s + n for s, n in zip(starts, lengths)], dtype=torch.int32, device=device)
+    positions = torch.tensor([s + i for s, n in zip(starts, lengths) for i in range(n)], device=device)
+    state_ids = torch.tensor(slots, device=device)
+    attn = SimpleNamespace(is_decoding=False, q_seqlens=q, cu_seqlens_q=cu, kv_seqlens=kv)
+
+    class NoScalarRead(TorchDispatchMode):
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            assert func != torch.ops.aten._local_scalar_dense.default
+            return func(*args, **(kwargs or {}))
+
+    def build():
+        return impl.build_cache_write_metadata(attn, positions, state_ids, positions.numel())
+
+    with NoScalarRead():
+        meta = build()
+    expected_slots = torch.tensor([slot for slot, n in zip(slots, lengths) for _ in range(n)], device=device)
+    expected_pos = torch.tensor([
+        (s + i) % 134 if s + i >= max(0, s + n - 128) else -1
+        for s, n in zip(starts, lengths) for i in range(n)
+    ], device=device)
+    torch.testing.assert_close(meta.slot, expected_slots)
+    torch.testing.assert_close(meta.ring_pos, expected_pos)
+    if device_name == 'cuda':
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            replayed = build()
+        for shift in (1, 134, 129):
+            positions.add_(shift)
+            kv.add_(shift)
+            graph.replay()
+            reference = build()
+            torch.testing.assert_close(replayed.slot, reference.slot)
+            torch.testing.assert_close(replayed.ring_pos, reference.ring_pos)
+    impl.compress_ratio = 4
+    assert build() is None
+    impl.compress_ratio = 0
+    attn.is_decoding = True
+    assert build() is None

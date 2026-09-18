@@ -224,7 +224,41 @@ class DeepseekV4ForCausalLMDSpark(nn.Module, CudaGraphMixin):
         return self.main_norm(self.main_proj(target_hidden))
 
     @torch.inference_mode()
-    def precompute_and_store_context_kv(self,
+    def precompute_and_store_context_kv(self, target_hidden: torch.Tensor,
+                                       position_ids: torch.Tensor,
+                                       past_key_values=None, attn_metadata=None,
+                                       max_q_seqlen: int | None = None):
+        """Write target-derived draft KV without computing discarded
+        attention."""
+        context = self.ctx_mgr.current_context()
+        state_ids = context.state_offsets
+        if state_ids is None:
+            raise RuntimeError('DeepSeek-V4 DSpark context materialization requires state offsets.')
+        write_meta = None
+        if not any(self.args.compress_ratios):
+            write_meta = self.layers[0].attn.attn_fwd.build_cache_write_metadata(
+                attn_metadata, position_ids, state_ids, target_hidden.size(0))
+        if write_meta is None:
+            return self._precompute_context_kv_with_attention(
+                target_hidden, position_ids, past_key_values, attn_metadata,
+                max_q_seqlen)
+
+        main_x = self.project_target_hidden(target_hidden).unsqueeze(0)
+        cos, sin = self.rotary_emb_plain(main_x, position_ids.reshape(1, -1))
+        rd = self.args.rope_head_dim
+        cos, sin = cos[0, :, :rd // 2], sin[0, :, :rd // 2]
+        caches = V4Caches(context.named_state_caches, context.block_caches)
+        for layer in self.layers:
+            attn = layer.attn
+            kv = attn.kv_norm(attn.wkv(main_x))
+            attn.apply_rotary.forward_single(
+                kv[..., -rd:].reshape(-1, 1, rd), cos, sin,
+                inplace=True, complex_mode=True)
+            window_state = caches.state_cache('v4_window_kv_fp8', attn.layer_id)
+            attn.attn_fwd.write_cache(kv, window_state, write_meta)
+
+    @torch.inference_mode()
+    def _precompute_context_kv_with_attention(self,
                                         target_hidden: torch.Tensor,
                                         position_ids: torch.Tensor,
                                         past_key_values=None,

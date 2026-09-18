@@ -118,6 +118,16 @@ class V4AttentionMetadata:
 class V4AttentionImpl(ABC):
     """DeepSeek-V4 attention implementation contract."""
 
+    def build_cache_write_metadata(self, attn_metadata, position_ids: torch.Tensor,
+                                   state_ids: torch.Tensor, num_tokens: int):
+        """Return KV-only write metadata, or None when unsupported."""
+        return None
+
+    def write_cache(self, kv: torch.Tensor, window_state: torch.Tensor, metadata) -> None:
+        """Materialize KV without evaluating attention (when metadata is
+        supported)."""
+        raise NotImplementedError
+
     @abstractmethod
     def forward(
         self,
