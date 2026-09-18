@@ -9,6 +9,7 @@ from lmdeploy.pytorch.kernels.dlinfer import (
     fused_moe,
     fused_moe_w8a8,
     moe_gating_topk_softmax,
+    prepare_fused_w8a8_weights,
 )
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
@@ -143,11 +144,23 @@ class DlinferFusedMoEW8A8Impl(DlinferFusedMoEImpl, FusedMoEW8A8Impl):
                 f'Ascend W8A8 MoE requires torch.int8, got {quant_dtype}')
         self.out_dtype = out_dtype
         self.quant_dtype = quant_dtype
+        self.use_fused_op = False
+        self._fused_scales = None
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
                        down_scale: torch.Tensor):
-        """Keep OI weights and satisfy Ascend quant-GMM scale dtype rules."""
+        """Prepare NZ weights for dispatch_ffn_combine when its binary is available."""
         scale_dtype = torch.bfloat16 if self.out_dtype == torch.bfloat16 else torch.float32
+        if not self.use_fused_op:
+            prepared = prepare_fused_w8a8_weights(
+                gate_up_weights, down_weights, gate_up_scale, down_scale
+            )
+            # Direct-NZ parameters are already in the fused layout.  The
+            # helper only adds the compact int64 scale representation.
+            if prepared[2].dtype == torch.int64:
+                self.use_fused_op = True
+                self._fused_scales = (prepared[2], prepared[3])
+
         gate_up_scale = gate_up_scale.to(scale_dtype)
         down_scale = down_scale.to(scale_dtype)
         return gate_up_weights, down_weights, gate_up_scale, down_scale
@@ -167,8 +180,10 @@ class DlinferFusedMoEW8A8Impl(DlinferFusedMoEImpl, FusedMoEW8A8Impl):
         if moe_metadata is None:
             raise RuntimeError('Dlinfer W8A8 MoE requires moe_metadata in the current step context.')
         moe_metadata.expert_ids_per_ep_rank = self.expert_ids_per_ep_rank
+        if self.use_fused_op and moe_metadata.moe_comm_type == DlinferMoECommType.MC2:
+            gate_up_scale, down_scale = self._fused_scales
         return fused_moe_w8a8(hidden_states, gate_up_weights, gate_up_scale, down_weights, down_scale, topk_weights,
-                              topk_ids, self.top_k, self.renormalize, moe_metadata)
+                              topk_ids, self.top_k, self.renormalize, moe_metadata, self.use_fused_op)
 
 
 
