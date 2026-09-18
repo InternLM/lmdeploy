@@ -125,6 +125,9 @@ with set_envs():
     # executor
     executor_backend = os.getenv('LMDEPLOY_EXECUTOR_BACKEND', None)
 
+    # pickle update_params opt-in - passed to ray workers (default deny)
+    os.getenv('LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS', '0')
+
     # torch profiler
     torch_profile_cpu = env_to_bool('LMDEPLOY_PROFILE_CPU', False)
     torch_profile_cuda = env_to_bool('LMDEPLOY_PROFILE_CUDA', False)
