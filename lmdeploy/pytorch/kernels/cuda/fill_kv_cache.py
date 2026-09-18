@@ -71,6 +71,8 @@ def _fill_kv_cache_kernel(
     stride_vch: tl.constexpr,
     stride_vcd: tl.constexpr,
     stride_boff,
+    DCP_SIZE: tl.constexpr,
+    DCP_RANK: tl.constexpr,
     BLOCK: tl.constexpr,
     BLOCK_D: tl.constexpr,
     BLOCK_DV: tl.constexpr,
@@ -85,24 +87,23 @@ def _fill_kv_cache_kernel(
     kv_seqlen = tl.load(KVSeqLens + batch_id)
     history_seqlen = kv_seqlen - q_seqlen
 
-    kv_block_id = history_seqlen // BLOCK + block_id
+    kv_block_id = history_seqlen // (BLOCK * DCP_SIZE) + block_id
 
     if kv_seqlen <= 0:
         return
 
-    if kv_block_id * BLOCK >= kv_seqlen:
+    if kv_block_id * BLOCK * DCP_SIZE >= kv_seqlen:
         return
 
     if is_decoding:
-        page_offs = tl.full((1, ), history_seqlen % BLOCK, dtype=tl.int32)
-        kv_mask = tl.full((1, ), 1, dtype=tl.int1)
+        page_offs = tl.full((1, ), (history_seqlen // DCP_SIZE) % BLOCK, dtype=tl.int32)
+        kv_mask = tl.full((1, ), history_seqlen % DCP_SIZE == DCP_RANK, dtype=tl.int1)
         q_offs = tl.full((1, ), q_startloc, dtype=tl.int32)
     else:
         page_offs = tl.arange(0, BLOCK)
-        kv_offs = kv_block_id * BLOCK + page_offs
+        kv_offs = (kv_block_id * BLOCK + page_offs) * DCP_SIZE + DCP_RANK
         kv_mask = (kv_offs >= history_seqlen) & (kv_offs < kv_seqlen)
-        token_off = q_startloc + kv_block_id * BLOCK - history_seqlen
-        q_offs = token_off + page_offs
+        q_offs = q_startloc + kv_offs - history_seqlen
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
     block_off = block_off.to(tl.int64)
@@ -796,7 +797,9 @@ def fill_kv_cache(k_states: Tensor,
                   k_scales_zeros: Tensor = None,
                   v_scales_zeros: Tensor = None,
                   quant_policy: QuantPolicy = QuantPolicy.NONE,
-                  kv_layout: str = 'bshd'):
+                  kv_layout: str = 'bshd',
+                  dcp_size: int = 1,
+                  dcp_rank: int = 0):
     """Fill key/value state to cache for paged attention.
 
     Args:
@@ -827,10 +830,12 @@ def fill_kv_cache(k_states: Tensor,
     if v_states.size(-1) == 0:
         head_dim_v = 0
 
+    if dcp_size > 1 and quant_policy != QuantPolicy.NONE:
+        raise ValueError('DCP generic KV fill currently supports only unquantized cache payloads')
     if max_q_seq_length == 1:
         max_num_blocks = 1
     else:
-        max_num_blocks = triton.cdiv(max_q_seq_length, block_size) + 1
+        max_num_blocks = triton.cdiv(max_q_seq_length, block_size * dcp_size) + 1
 
     BLOCK = block_size
 
@@ -904,6 +909,8 @@ def fill_kv_cache(k_states: Tensor,
             stride_vch=v_caches.stride(h_dim),
             stride_vcd=v_caches.stride(d_dim),
             stride_boff=block_offsets.stride(0),
+            DCP_SIZE=dcp_size,
+            DCP_RANK=dcp_rank,
             BLOCK=BLOCK,
             BLOCK_D=BLOCK_D,
             BLOCK_DV=BLOCK_DV,
@@ -1089,6 +1096,8 @@ def _fill_kv_cache_blocked_fp8_kernel(
     stride_boff,
     ROUND_SCALE: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
+    DCP_SIZE: tl.constexpr,
+    DCP_RANK: tl.constexpr,
     BLOCK: tl.constexpr,
     BLOCK_D: tl.constexpr,
     BLOCK_DV: tl.constexpr,
@@ -1103,24 +1112,23 @@ def _fill_kv_cache_blocked_fp8_kernel(
     kv_seqlen = tl.load(KVSeqLens + batch_id)
     history_seqlen = kv_seqlen - q_seqlen
 
-    kv_block_id = history_seqlen // BLOCK + block_id
+    kv_block_id = history_seqlen // (BLOCK * DCP_SIZE) + block_id
 
     if kv_seqlen <= 0:
         return
 
-    if kv_block_id * BLOCK >= kv_seqlen:
+    if kv_block_id * BLOCK * DCP_SIZE >= kv_seqlen:
         return
 
     if is_decoding:
-        page_offs = tl.full((1, ), history_seqlen % BLOCK, dtype=tl.int32)
-        kv_mask = tl.full((1, ), 1, dtype=tl.int1)
+        page_offs = tl.full((1, ), (history_seqlen // DCP_SIZE) % BLOCK, dtype=tl.int32)
+        kv_mask = tl.full((1, ), history_seqlen % DCP_SIZE == DCP_RANK, dtype=tl.int1)
         q_offs = tl.full((1, ), q_startloc, dtype=tl.int32)
     else:
         page_offs = tl.arange(0, BLOCK)
-        kv_offs = kv_block_id * BLOCK + page_offs
+        kv_offs = (kv_block_id * BLOCK + page_offs) * DCP_SIZE + DCP_RANK
         kv_mask = (kv_offs >= history_seqlen) & (kv_offs < kv_seqlen)
-        token_off = q_startloc + kv_block_id * BLOCK - history_seqlen
-        q_offs = token_off + page_offs
+        q_offs = q_startloc + kv_offs - history_seqlen
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
     block_off = block_off.to(tl.int64)
@@ -1180,7 +1188,9 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
                               block_offsets: Tensor,
                               group_size: int = 128,
                               kv_layout: str = 'bshd',
-                              scale_fmt: str | None = None):
+                              scale_fmt: str | None = None,
+                              dcp_size: int = 1,
+                              dcp_rank: int = 0):
     """Fill key/value state to cache for paged attention with fp8 quantization.
 
     Args:
@@ -1238,7 +1248,7 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
     if max_q_seqlen == 1:
         max_num_blocks = 1
     else:
-        max_num_blocks = triton.cdiv(max_q_seqlen, block_size) + 1
+        max_num_blocks = triton.cdiv(max_q_seqlen, block_size * dcp_size) + 1
 
     BLOCK = block_size
     BLOCK_D = triton.next_power_of_2(head_dim)
@@ -1294,6 +1304,8 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
         stride_boff=block_offsets.stride(0),
         ROUND_SCALE=ROUND_SCALE,
         GROUP_SIZE=group_size,
+        DCP_SIZE=dcp_size,
+        DCP_RANK=dcp_rank,
         BLOCK=BLOCK,
         BLOCK_D=BLOCK_D,
         BLOCK_DV=BLOCK_DV,

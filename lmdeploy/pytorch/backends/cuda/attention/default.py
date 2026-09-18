@@ -7,6 +7,7 @@ import torch
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends.attention import AttentionImpl, AttentionMetadata
+from lmdeploy.pytorch.backends.cp_utils import DCPPrefixChunk, update_dcp_metadata
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import CudaAttentionMetaBuilder, CudaSequenceMetadata, register_step_metadata_impl
@@ -37,6 +38,8 @@ class TritonAttentionMetadata(AttentionMetadata):
         scheduler_metadata: Scheduler metadata for FA3.
         max_kv_seqlen: Maximum KV sequence length in the batch.
         max_q_seqlen: Maximum query sequence length in the batch.
+        dcp_local_kv_seqlens: Rank-local KV sequence lengths under DCP.
+        dcp_prefill_request_ids: Request index per query row for mapping top-k indices into packed prefill KV.
     """
     is_decoding: bool
     block_offsets: torch.Tensor
@@ -55,13 +58,16 @@ class TritonAttentionMetadata(AttentionMetadata):
     scheduler_metadata: torch.Tensor = None
     max_kv_seqlen: int = None
     max_q_seqlen: int = None
+    dcp_local_kv_seqlens: torch.Tensor = None
+    dcp_prefix_chunks: tuple[DCPPrefixChunk, ...] = ()
+    dcp_prefill_request_ids: torch.Tensor = None
     kernel_metadata: tuple[Any, ...] = ()
 
 
 def build_triton_attention_metadata(attn_meta_cls, step_context,
                                     sequence_metadata: CudaSequenceMetadata) -> TritonAttentionMetadata:
     """Project CUDA sequence layout into compatible attention metadata."""
-    return attn_meta_cls(
+    attn_metadata = attn_meta_cls(
         is_decoding=step_context.is_decoding,
         block_offsets=sequence_metadata.block_offsets,
         q_start_loc=sequence_metadata.q_start_loc,
@@ -75,6 +81,8 @@ def build_triton_attention_metadata(attn_meta_cls, step_context,
         max_kv_seqlen=sequence_metadata.max_kv_seqlen,
         max_q_seqlen=step_context.max_q_seqlen,
     )
+    update_dcp_metadata(attn_metadata, step_context)
+    return attn_metadata
 
 
 def _cdiv(a, b):
@@ -158,6 +166,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
 
         self.block_sparse_size = block_sparse_size
         self._step_meta_group: int | None = None
+        from lmdeploy.pytorch.distributed import get_dcp_world_rank
+        self.dcp_world_size, self.dcp_rank = get_dcp_world_rank()
         self._piecewise_forward: Callable[..., torch.Tensor] | None = None
 
         register_step_metadata_impl(self)
@@ -296,6 +306,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
             quant_policy=quant_policy,
+            dcp_size=self.dcp_world_size,
+            dcp_rank=self.dcp_rank,
         )
 
     def _forward_decoding(
