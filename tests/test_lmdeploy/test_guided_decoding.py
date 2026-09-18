@@ -85,6 +85,14 @@ class TestGrammarSourceBounds:
         with pytest.raises(ValueError, match='maximum size'):
             _grammar_source(json_schema_format(schema))
 
+    def test_multibyte_source_counted_as_utf8_bytes(self):
+        # The size limit is UTF-8 bytes: 6000 CJK characters are only 6000
+        # code points but 18000 bytes, so the source must be rejected even
+        # though a code-point count would pass it.
+        schema = {'type': 'object', 'properties': {'名字': {'description': '描' * 6000}}}
+        with pytest.raises(ValueError, match='maximum size'):
+            _grammar_source(json_schema_format(schema))
+
     def test_regular_formats_pass(self):
         assert _grammar_source({'type': 'text'}) == ('text', '')
         assert _grammar_source({'type': 'json_object'}) == (
@@ -126,13 +134,12 @@ class TestAsyncValidation:
         with pytest.raises(ValueError):
             asyncio.run(ensure_response_format_compilable(nested_object_schema(10000)))
 
-    def test_validation_runs_off_the_event_loop(self, monkeypatch):
-        loop_thread = threading.get_ident()
+    def test_validation_runs_in_dedicated_pool(self, monkeypatch):
         seen_threads = []
         original = gd._check_response_format.__wrapped__
 
         def spy(serialized_format):
-            seen_threads.append(threading.get_ident())
+            seen_threads.append(threading.current_thread())
             return original(serialized_format)
 
         monkeypatch.setattr(gd, '_check_response_format', spy)
@@ -144,7 +151,9 @@ class TestAsyncValidation:
         }
         asyncio.run(ensure_response_format_compilable(json_schema_format(schema)))
         assert seen_threads, 'validation did not reach the grammar check'
-        assert all(t != loop_thread for t in seen_threads)
+        assert all(t.name.startswith('grammar-validate') for t in seen_threads), (
+            'validation must run in the dedicated grammar pool, not the default executor'
+        )
 
     def test_validation_timeout_becomes_value_error(self, monkeypatch):
         monkeypatch.setattr(gd, 'GRAMMAR_COMPILE_TIMEOUT', 0.2)

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from typing import Any
 
@@ -47,7 +48,11 @@ def _max_nesting_depth(value: Any) -> int:
 
 
 def _check_source_size(source: str) -> None:
-    if len(source) > MAX_GRAMMAR_SOURCE_BYTES:
+    # Count UTF-8 bytes, not code points: a serialized source keeps non-ASCII
+    # characters (json.dumps with ensure_ascii=False), so code points can
+    # understate the real size by up to 4x.
+    size = len(source.encode('utf-8'))
+    if size > MAX_GRAMMAR_SOURCE_BYTES:
         raise ValueError(f'grammar source exceeds the maximum size of {MAX_GRAMMAR_SOURCE_BYTES} bytes.')
 
 
@@ -131,16 +136,24 @@ def _ensure_response_format_compilable(response_format: dict[str, Any]) -> None:
         raise ValueError(f'Unsupported response format: {err}') from err
 
 
+VALIDATION_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix='grammar-validate')
+
+
 async def ensure_response_format_compilable(response_format: dict[str, Any]) -> None:
     """Reject response formats that XGrammar cannot compile.
 
-    The compile runs in a worker thread under a hard timeout: XGrammar has no
-    compile-time bound of its own, and a synchronous compile on the event loop
-    would stall every request, stream, and health check in the process.
+    The compile runs in a dedicated worker pool under a hard timeout:
+    XGrammar has no compile-time bound of its own, and a synchronous compile
+    on the event loop would stall every request, stream, and health check in
+    the process. A compile that overruns the timeout cannot be cancelled, but
+    it only ever occupies this small pool, never the interpreter's default
+    executor shared by other offloaded work.
     """
+    loop = asyncio.get_running_loop()
     try:
         await asyncio.wait_for(
-            asyncio.to_thread(_ensure_response_format_compilable, response_format), timeout=GRAMMAR_COMPILE_TIMEOUT
+            loop.run_in_executor(VALIDATION_EXECUTOR, _ensure_response_format_compilable, response_format),
+            timeout=GRAMMAR_COMPILE_TIMEOUT,
         )
     except asyncio.TimeoutError as err:
         raise ValueError(f'Response format validation timed out after {GRAMMAR_COMPILE_TIMEOUT}s.') from err
