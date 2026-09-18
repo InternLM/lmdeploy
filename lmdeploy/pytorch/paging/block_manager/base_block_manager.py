@@ -162,6 +162,7 @@ class LogicalAllocator:
         self._address_span = group_allocator.address_span
         self._free_blocks = np.arange(num_gpu_blocks, dtype=np.int64)
         self._free_count = num_gpu_blocks
+        self._physical_to_logical = np.full(self._address_span, -1, dtype=np.int64)
 
     def _require_shared(self) -> None:
         if self.group_allocator is None:
@@ -210,36 +211,32 @@ class LogicalAllocator:
         """Return live logical blocks currently mapped into one group."""
         self._require_shared()
         offsets = self.group_offsets(group_id)
-        live = self._log_mem.ref_count > 0
-        return np.flatnonzero(live & np.isin(self._log_mem.phy_map, offsets)).astype(np.int64)
+        logical_blocks = self._physical_to_logical[offsets]
+        return logical_blocks[logical_blocks >= 0].copy()
 
-    def live_logical_blocks_by_group(self) -> dict[int, np.ndarray]:
-        """Return live logical blocks grouped by their shared physical group.
-
-        The grouping is materialized in one vectorized pass so eviction code does not rescan the complete logical-block
-        map once per group.
-        """
+    def get_group_access_times(self, group_ids: np.ndarray) -> np.ndarray:
+        """Return the newest live-block access time in each shared group."""
         self._require_shared()
-        logical_blocks = np.flatnonzero(self._log_mem.ref_count > 0).astype(np.int64)
-        if len(logical_blocks) == 0:
-            return {}
+        group_ids = np.asarray(group_ids, dtype=np.int64).reshape(-1)
+        if len(group_ids) == 0:
+            return np.empty((0, ), dtype=self._log_mem.access_time.dtype)
+        if np.any(group_ids < 0) or np.any(group_ids >= self.group_allocator.num_groups):
+            raise ValueError('group_id is out of range.')
 
-        physical_blocks = self._log_mem.get_physical_blocks(logical_blocks)
-        group_ids = physical_blocks // self.group_size
-        order = np.argsort(group_ids, kind='stable')
-        sorted_groups = group_ids[order]
-        sorted_blocks = logical_blocks[order]
-        split_points = np.flatnonzero(sorted_groups[1:] != sorted_groups[:-1]) + 1
-        chunks = np.split(sorted_blocks, split_points)
-        unique_groups = sorted_groups[np.r_[0, split_points]]
-        return {int(group_id): blocks for group_id, blocks in zip(unique_groups, chunks)}
+        slot_offsets = np.arange(self.group_size, dtype=np.int64)
+        physical_blocks = group_ids[:, None] * self.group_size + slot_offsets
+        logical_blocks = self._physical_to_logical[physical_blocks]
+        live = logical_blocks >= 0
+        min_access_time = np.iinfo(self._log_mem.access_time.dtype).min
+        access_times = np.full(logical_blocks.shape, min_access_time, dtype=self._log_mem.access_time.dtype)
+        access_times[live] = self._log_mem.access_time[logical_blocks[live]]
+        return access_times.max(axis=1)
 
     def is_group_empty(self, group_id: int) -> bool:
         """Prove group emptiness from logical references."""
         self._require_shared()
         offsets = self.group_offsets(group_id)
-        allocated = self._log_mem.ref_count > 0
-        return not np.any(np.isin(self._log_mem.phy_map[allocated], offsets))
+        return not np.any(self._physical_to_logical[offsets] >= 0)
 
     @property
     def num_empty_groups(self) -> int:
@@ -267,14 +264,14 @@ class LogicalAllocator:
             raise ValueError('Shared logical blocks must belong to KV-owned groups.')
         if self._free_count < len(physical_blocks):
             raise MemoryError('No enough free logical blocks.')
-        allocated = self._log_mem.ref_count > 0
-        if np.any(np.isin(physical_blocks, self._log_mem.phy_map[allocated])):
+        if np.any(self._physical_to_logical[physical_blocks] >= 0):
             raise RuntimeError('Shared physical block offset is already allocated.')
 
         num_used = self._num_gpu_blocks - self._free_count
         logical_blocks = self._free_blocks[num_used:num_used + len(physical_blocks)]
         self._log_mem.phy_map[logical_blocks] = physical_blocks
         self._log_mem.ref_count[logical_blocks] = 1
+        self._physical_to_logical[physical_blocks] = logical_blocks
         self.update_access_time(logical_blocks)
         self._free_count -= len(physical_blocks)
         return logical_blocks.copy()
@@ -351,10 +348,12 @@ class LogicalAllocator:
         if len(freed_blocks) == 0:
             return
 
+        physical_blocks = self.get_physical_blocks(freed_blocks)
+        self._physical_to_logical[physical_blocks] = -1
         num_used = self._num_gpu_blocks - self._free_count
         self._free_blocks[num_used - len(freed_blocks):num_used] = freed_blocks
         self._free_count += len(freed_blocks)
-        group_ids = np.unique(self.get_physical_blocks(freed_blocks) // self.group_size)
+        group_ids = np.unique(physical_blocks // self.group_size)
         for group_id in group_ids:
             group_id = int(group_id)
             if self.group_allocator.group_role(group_id) == 'kv' and self.is_group_empty(group_id):
@@ -405,6 +404,10 @@ class LogicalAllocator:
         """Get physical address."""
         return self._log_mem.get_physical_blocks(blocks)
 
+    def get_physical_block(self, block: int) -> int:
+        """Get one physical address without creating a temporary array."""
+        return int(self._log_mem.phy_map[block])
+
     def get_ref_count(self, blocks: np.ndarray):
         """Get ref count."""
         return self._log_mem.ref_count[blocks]
@@ -437,8 +440,15 @@ class LogicalAllocator:
         return np.count_nonzero(phy_blocks < self.cpu_mem_offset())
 
     def update_phy_map(self, log_blocks: np.ndarray, phy_blocks: np.ndarray):
-        """Update physical map."""
-        assert len(phy_blocks) == len(log_blocks)
+        """Update the physical map for standalone allocations.
+
+        Shared allocations bind logical blocks to sequence-owned group slots. They do not have a remapping path, because
+        changing the physical map would also require updating the allocator's reverse group index.
+        """
+        if self.shared:
+            raise RuntimeError('Shared allocation does not support physical remapping.')
+        if len(phy_blocks) != len(log_blocks):
+            raise ValueError('Logical and physical block maps must have equal length.')
         self._log_mem.phy_map.put(log_blocks, phy_blocks)
 
     def on_device(self, blocks: np.ndarray, device: str):
@@ -583,6 +593,19 @@ class BaseBlockManager:
     def get_num_free_gpu_blocks(self) -> int:
         """Get number of free gpu blocks."""
         return self.allocator.get_num_free_gpu_blocks()
+
+    def num_required_capacity(self, msg: SchedulerSequence, prealloc_size: int = 0) -> int:
+        """Return the manager-specific capacity needed by ``msg``.
+
+        Standalone allocation measures capacity in blocks. Managers that reserve indivisible resources may override this
+        with their admission unit while keeping eviction policy out of the generic scheduler helper.
+        """
+        return self.num_required_blocks(msg, prealloc_size)
+
+    def num_free_capacity(self) -> int:
+        """Return free capacity in the same unit as
+        ``num_required_capacity``."""
+        return self.get_num_free_gpu_blocks()
 
     def get_num_free_cpu_blocks(self) -> int:
         """Get number of free cpu blocks."""

@@ -52,13 +52,24 @@ class SharedBlockManager(BaseBlockManager):
 
     def can_allocate(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Return whether enough complete groups remain for this request."""
+        return self.num_required_groups(msg, prealloc_size) <= self.group_allocator.num_empty_groups
+
+    def num_required_groups(self, msg: SchedulerSequence, prealloc_size: int = 0) -> int:
+        """Return new groups needed after consuming the open append group."""
         num_required_blocks = self.num_required_blocks(msg, prealloc_size)
         if num_required_blocks == 0:
-            return True
+            return 0
         available_slots = self._available_append_slots(msg)
         remaining = max(0, num_required_blocks - available_slots)
-        groups_needed = _div_up(remaining, self.group_allocator.group_size)
-        return groups_needed <= self.group_allocator.num_empty_groups
+        return _div_up(remaining, self.group_allocator.group_size)
+
+    def num_required_capacity(self, msg: SchedulerSequence, prealloc_size: int = 0) -> int:
+        """Return admission capacity in complete shared groups."""
+        return self.num_required_groups(msg, prealloc_size)
+
+    def num_free_capacity(self) -> int:
+        """Return the number of empty groups available for admission."""
+        return self.group_allocator.num_empty_groups
 
     def allocate_msg(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Allocate a fresh suffix from sequence-private KV groups."""
@@ -137,11 +148,7 @@ class SharedBlockManager(BaseBlockManager):
     def free(self, msg: SchedulerSequence):
         """Free all physical blocks allocated for the sequence."""
         self.allocator.free(msg.logical_blocks.get_real_blocks())
-        groups = self._append_groups.pop(msg.seq_id, ())
-        for group in groups:
-            if self.group_allocator.group_role(group.handle.group_id) == 'kv' and self.allocator.is_group_empty(
-                    group.handle.group_id):
-                self.allocator.release_group(group.handle)
+        self._append_groups.pop(msg.seq_id, None)
         msg.logical_blocks.reset()
 
     def truncate(self, msg: SchedulerSequence, target_num_blocks: int) -> np.ndarray:
@@ -161,8 +168,6 @@ class SharedBlockManager(BaseBlockManager):
                          if int(offset // self.group_allocator.group_size) == group_id]
                 group.next_slot = max(slots, default=-1) + 1
                 break
-            if self.group_allocator.group_role(group_id) == 'kv' and self.allocator.is_group_empty(group_id):
-                self.allocator.release_group(group.handle)
             groups.pop()
         if not groups:
             self._append_groups.pop(msg.seq_id, None)

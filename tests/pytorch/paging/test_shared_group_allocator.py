@@ -58,6 +58,19 @@ def test_group_allocator_allocate_is_atomic_and_padding_is_protected():
     assert group_allocator.num_empty_groups == 2
 
 
+def test_shared_allocator_rejects_physical_remapping():
+    group_allocator = GroupAllocator(num_gpu_blocks=4, group_size=2)
+    allocator = LogicalAllocator(num_cpu_blocks=0,
+                                 num_gpu_blocks=4,
+                                 group_allocator=group_allocator)
+    logical_blocks = allocator.allocate(1)
+
+    with pytest.raises(RuntimeError, match='physical remapping'):
+        allocator.update_phy_map(logical_blocks, np.array([3], dtype=np.int64))
+
+    assert np.array_equal(allocator.get_physical_blocks(logical_blocks), [0])
+
+
 def _make_shared_scheduler(*,
                            group_size=4,
                            num_gpu_blocks=8,
@@ -78,6 +91,30 @@ def _make_shared_scheduler(*,
                                        max_request_output_len=64)
     seq_meta = SequenceMeta(4, strategy=ARSequenceStrategy())
     return Scheduler(scheduler_config, cache_config, seq_meta=seq_meta)
+
+
+class _CapacityManager:
+
+    def __init__(self, free_capacity, allocation_limit=None):
+        self._free_capacity = free_capacity
+        self._allocation_limit = allocation_limit
+
+    def num_free_capacity(self):
+        return self._free_capacity[0]
+
+    def can_allocate(self, seq, prealloc_size):
+        del seq, prealloc_size
+        return (self._allocation_limit is not None
+                and self.num_free_capacity() >= self._allocation_limit)
+
+
+class _CapacityTrie:
+
+    def __init__(self, evict):
+        self._evict = evict
+
+    def evict_for_capacity(self, limit):
+        return self._evict(limit)
 
 
 def test_shared_manager_allocates_sequence_private_groups():
@@ -242,7 +279,7 @@ def test_shared_partial_checkpoint_owns_and_releases_a_private_group():
     assert scheduler.block_trie.state_checkpoints.publish_save(seq)
     session.remove_sequence(seq)
     assert manager.group_allocator.group_role(frozen_group) == 'kv'
-    assert scheduler.block_trie.state_checkpoints.evict_frozen_checkpoints(1) == 1
+    assert scheduler.block_trie.evict_for_capacity(1)
     assert manager.group_allocator.group_role(frozen_group) == 'empty'
 
 
@@ -309,76 +346,129 @@ def test_trie_can_evict_one_complete_shared_kv_group():
     manager = scheduler.block_manager
     manager.allocate(seq)
     scheduler.block_trie.allocate(seq)
+
+    # The trie and active request both hold these blocks.
+    assert scheduler.block_trie.evict_kv_groups(1) == 0
     manager.free(seq)
 
-    assert scheduler.block_trie.evict_one_kv_group() == 2
+    assert scheduler.block_trie.evict_kv_groups(1) == 2
     assert manager.group_allocator.num_empty_groups == 2
+
+
+def test_trie_group_eviction_handles_deep_prefix_path():
+    num_blocks = 1100
+    scheduler = _make_shared_scheduler(group_size=num_blocks,
+                                       num_gpu_blocks=num_blocks,
+                                       enable_prefix_caching=True)
+    session = scheduler.add_session(0)
+    seq = session.add_sequence(torch.ones(num_blocks * 4, dtype=torch.int64))
+    manager = scheduler.block_manager
+
+    manager.allocate(seq)
+    scheduler.block_trie.allocate(seq)
+    manager.free(seq)
+
+    assert scheduler.block_trie.evict_kv_groups(1) == num_blocks
+    assert manager.group_allocator.num_empty_groups == 1
+
+
+def test_trie_group_eviction_advances_across_group_boundaries():
+    scheduler = _make_shared_scheduler(group_size=1,
+                                       num_gpu_blocks=4,
+                                       enable_prefix_caching=True)
+    session = scheduler.add_session(0)
+    seq = session.add_sequence(torch.ones(16, dtype=torch.int64))
+    manager = scheduler.block_manager
+
+    manager.allocate(seq)
+    scheduler.block_trie.allocate(seq)
+    manager.free(seq)
+
+    assert scheduler.block_trie.evict_kv_groups(3) == 3
+    assert manager.group_allocator.num_empty_groups == 3
+    assert scheduler.block_trie.evict_kv_groups(1) == 1
+    assert manager.group_allocator.num_empty_groups == 4
 
 
 def test_shared_eviction_helper_reclaims_complete_groups():
     free_blocks = [0]
     evictions = []
 
-    block_manager = type('BlockManager', (), {
-        'allocator': type('Allocator', (), {'shared': True})(),
-        'get_num_free_gpu_blocks': lambda self: free_blocks[0],
-    })()
+    block_manager = _CapacityManager(free_blocks)
 
-    class _Trie:
-
-        class _StateCheckpoints:
-
-            @staticmethod
-            def evict_frozen_checkpoints(limit):
-                evictions.append(('frozen', limit))
-                return 0
-
-        state_checkpoints = _StateCheckpoints()
-
-        def evict_one_kv_group(self):
-            evictions.append(('group', ))
-            free_blocks[0] = 4
-            return 4
+    def evict(limit):
+        evictions.append(limit)
+        free_blocks[0] = 1
+        return True
 
     helper = RecomputeEvictionHelper(block_manager=block_manager,
-                                     block_trie=_Trie(),
+                                     block_trie=_CapacityTrie(evict),
                                      state_manager=None,
                                      load_coordinator=None,
                                      is_ssm=False)
-    assert helper._try_make_block_capacity(1)
-    assert evictions == [('frozen', 1), ('group', )]
+    assert helper._try_make_capacity(1)
+    assert evictions == [1]
 
 
 def test_shared_eviction_helper_does_not_over_evict_open_append_capacity():
     free_blocks = [0]
     evictions = []
 
-    block_manager = type('BlockManager', (), {
-        'allocator': type('Allocator', (), {'shared': True})(),
-        'get_num_free_gpu_blocks': lambda self: free_blocks[0],
-        'can_allocate': lambda self, seq, prealloc_size: free_blocks[0] >= 4,
-    })()
+    block_manager = _CapacityManager(free_blocks, allocation_limit=1)
 
-    class _Trie:
-
-        class _StateCheckpoints:
-
-            @staticmethod
-            def evict_frozen_checkpoints(limit):
-                evictions.append(('frozen', limit))
-                return 0
-
-        state_checkpoints = _StateCheckpoints()
-
-        def evict_one_kv_group(self):
-            evictions.append(('group', ))
-            free_blocks[0] += 4
-            return 4
+    def evict(limit):
+        evictions.append(limit)
+        free_blocks[0] += limit
+        return True
 
     helper = RecomputeEvictionHelper(block_manager=block_manager,
-                                     block_trie=_Trie(),
+                                     block_trie=_CapacityTrie(evict),
                                      state_manager=None,
                                      load_coordinator=None,
                                      is_ssm=False)
-    assert helper._try_make_block_capacity(5, seq=object())
-    assert evictions == [('frozen', 1), ('group', )]
+    assert helper._try_make_capacity(1, seq=object())
+    assert evictions == [1]
+
+
+def test_shared_eviction_helper_batches_missing_groups():
+    free_blocks = [0]
+    evictions = []
+    block_manager = _CapacityManager(free_blocks, allocation_limit=3)
+
+    def evict(limit):
+        evictions.append(limit)
+        free_blocks[0] += limit
+        return True
+
+    helper = RecomputeEvictionHelper(block_manager=block_manager,
+                                     block_trie=_CapacityTrie(evict),
+                                     state_manager=None,
+                                     load_coordinator=None,
+                                     is_ssm=False)
+    assert helper._try_make_capacity(3, seq=object())
+    assert evictions == [3]
+
+
+def test_shared_eviction_helper_recalculates_after_checkpoint_release():
+    free_blocks = [0]
+    checkpoint_evictions = [0]
+    kv_evictions = []
+    block_manager = _CapacityManager(free_blocks)
+
+    def evict(limit):
+        if checkpoint_evictions[0] == 0:
+            checkpoint_evictions[0] += 1
+            free_blocks[0] += 1
+            return True
+        kv_evictions.append(limit)
+        free_blocks[0] += limit
+        return True
+
+    helper = RecomputeEvictionHelper(block_manager=block_manager,
+                                     block_trie=_CapacityTrie(evict),
+                                     state_manager=None,
+                                     load_coordinator=None,
+                                     is_ssm=False)
+    assert helper._try_make_capacity(3)
+    assert checkpoint_evictions == [1]
+    assert kv_evictions == [2]

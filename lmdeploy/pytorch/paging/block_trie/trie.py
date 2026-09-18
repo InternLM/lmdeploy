@@ -730,8 +730,22 @@ class BlockTrie:
             evicted += self._kv_lifecycle.evict(max_num_blocks - evicted)
         return evicted
 
-    def evict_one_kv_group(self) -> int:
-        """Evict one complete shared KV group when it is safe."""
+    def evict_kv_groups(self, max_num_groups: int) -> int:
+        """Evict up to ``max_num_groups`` complete shared KV groups."""
         if not self.enabled:
             return 0
-        return self._kv_lifecycle.evict_one_kv_group()
+        return self._kv_lifecycle.evict_kv_groups(max_num_groups)
+
+    def evict_for_capacity(self, max_capacity: int) -> bool:
+        """Evict cached capacity using this trie's allocation model.
+
+        The return value only reports whether any cache ownership was released.  The input capacity uses the manager's
+        admission unit, so returning a block count here would be ambiguous for shared groups.
+        """
+        if not self.enabled or max_capacity <= 0:
+            return False
+        if self.group_allocator is None:
+            return self.evict(max_capacity) > 0
+        if self._state_checkpoints.evict_frozen_checkpoints(1) > 0:
+            return True
+        return self.evict_kv_groups(max_capacity) > 0

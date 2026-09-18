@@ -46,7 +46,7 @@ class RecomputeEvictionHelper:
             )
 
         block_manager = self.block_manager
-        num_required_blocks = block_manager.num_required_blocks(
+        num_required_capacity = block_manager.num_required_capacity(
             seq,
             prealloc_size,
         )
@@ -56,10 +56,10 @@ class RecomputeEvictionHelper:
         for evict_seq in evictable_seqs:
             if not self._reclaim_candidate(evict_seq):
                 continue
-            if self._try_make_block_capacity(num_required_blocks, seq, prealloc_size):
+            if self._try_make_capacity(num_required_capacity, seq, prealloc_size):
                 return True
 
-        return self._try_make_block_capacity(num_required_blocks, seq, prealloc_size)
+        return self._try_make_capacity(num_required_capacity, seq, prealloc_size)
 
     def _try_make_ssm_capacity(
         self,
@@ -71,7 +71,7 @@ class RecomputeEvictionHelper:
         block_manager = self.block_manager
         state_manager = self.state_manager
         state_checkpoints = self.block_trie.state_checkpoints
-        num_required_blocks = block_manager.num_required_blocks(
+        num_required_capacity = block_manager.num_required_capacity(
             seq,
             prealloc_size,
         )
@@ -92,12 +92,12 @@ class RecomputeEvictionHelper:
                 has_runtime_state
                 or state_checkpoints.make_runtime_state_available()
             )
-            if self._try_make_block_capacity(num_required_blocks, seq, prealloc_size):
+            if self._try_make_capacity(num_required_capacity, seq, prealloc_size):
                 return has_free_state
 
         if not has_free_state:
             return False
-        return self._try_make_block_capacity(num_required_blocks, seq, prealloc_size)
+        return self._try_make_capacity(num_required_capacity, seq, prealloc_size)
 
     def _reclaim_candidate(self, seq: SchedulerSequence) -> bool:
         """Release one eligible candidate's paging ownership."""
@@ -115,36 +115,29 @@ class RecomputeEvictionHelper:
         seq.state.release_paging_resources()
         return True
 
-    def _try_make_block_capacity(self,
-                                 num_required_blocks: int,
-                                 seq: SchedulerSequence | None = None,
-                                 prealloc_size: int = 0) -> bool:
-        """Evict cached trie blocks until the required capacity is free."""
+    def _try_make_capacity(self,
+                           num_required_capacity: int,
+                           seq: SchedulerSequence | None = None,
+                           prealloc_size: int = 0) -> bool:
+        """Evict cached entries until the manager's required capacity is
+        free."""
         block_manager = self.block_manager
         if seq is None:
             def has_capacity():
-                return num_required_blocks <= block_manager.get_num_free_gpu_blocks()
+                return num_required_capacity <= block_manager.num_free_capacity()
         else:
             def has_capacity():
                 return block_manager.can_allocate(seq, prealloc_size)
         if has_capacity():
             return True
-        num_missing_blocks = (
-            num_required_blocks - block_manager.get_num_free_gpu_blocks()
-        )
-        if num_missing_blocks > 0:
-            if not block_manager.allocator.shared:
-                self.block_trie.evict(num_missing_blocks)
-            else:
-                # Shared paging admits complete groups.  Evicting an
-                # arbitrary number of trie blocks can leave a partially empty
-                # group that still cannot be lent to another owner.
-                while not has_capacity():
-                    free_before = block_manager.get_num_free_gpu_blocks()
-                    if self.block_trie.state_checkpoints.evict_frozen_checkpoints(1) == 0:
-                        if self.block_trie.evict_one_kv_group() == 0:
-                            break
-                    free_after = block_manager.get_num_free_gpu_blocks()
-                    if free_after <= free_before:
-                        break
+        num_missing_capacity = num_required_capacity - block_manager.num_free_capacity()
+        if num_missing_capacity > 0:
+            while not has_capacity():
+                free_before = block_manager.num_free_capacity()
+                num_missing_capacity = num_required_capacity - block_manager.num_free_capacity()
+                if not self.block_trie.evict_for_capacity(num_missing_capacity):
+                    break
+                free_after = block_manager.num_free_capacity()
+                if free_after <= free_before:
+                    break
         return has_capacity()

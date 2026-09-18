@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import heapq
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 
@@ -18,6 +18,15 @@ if TYPE_CHECKING:
     from .checkpoint_lifecycle import StateCheckpointLifecycle
 
 logger = get_logger('lmdeploy')
+
+
+class _GroupEvictionCandidate(NamedTuple):
+    """Validated state for evicting one complete shared KV group."""
+
+    access_time: float
+    group_id: int
+    block_ids: np.ndarray
+    group_nodes: list[Node]
 
 
 class KVBlockLifecycle:
@@ -148,68 +157,100 @@ class KVBlockLifecycle:
         self.allocator.free(np.array(evicted_blocks))
         return len(evicted_blocks)
 
-    def evict_one_kv_group(self) -> int:
-        """Evict one complete shared KV group when it is independently safe.
+    def _make_group_eviction_candidate(self, leaf: Node) -> _GroupEvictionCandidate | None:
+        """Build an independently removable group ending at ``leaf``."""
+        if not self._is_leaf_eviction_candidate(leaf):
+            self.leaves.discard(leaf)
+            return None
 
-        The proof is intentionally conservative: every live physical slot in
-        the candidate group must be represented by an attached trie node with
-        trie-only ownership, and all descendants of those nodes must stay in
-        the same group. This keeps group release atomic without adding an
-        allocator-side reverse index.
+        group_size = self.group_allocator.group_size
+        leaf_offset = self.allocator.get_physical_block(leaf.block_id)
+        group_id = leaf_offset // group_size
+        # KV lifecycle leaves should only reference KV-owned groups. Keep this
+        # boundary guard for stale or corrupted auxiliary entries.
+        if self.group_allocator.group_role(group_id) != 'kv':
+            self.leaves.discard(leaf)
+            return None
+
+        block_ids = self.allocator.logical_blocks_for_group(group_id)
+        if len(block_ids) == 0 or np.any(self.allocator.get_ref_count(block_ids) != 1):
+            return None
+
+        group_nodes = []
+        node = leaf
+        while node.parent is not None:
+            node_offset = self.allocator.get_physical_block(node.block_id)
+            if node_offset // group_size != group_id:
+                break
+            group_nodes.append(node)
+            node = node.parent
+
+        if len(group_nodes) != len(block_ids):
+            return None
+        if set(item.block_id for item in group_nodes) != set(int(block_id) for block_id in block_ids):
+            return None
+        group_nodes_set = set(group_nodes)
+        if any(self.state_checkpoints.is_pinned(item) for item in group_nodes):
+            return None
+        if any(child not in group_nodes_set for item in group_nodes for child in item.children.values()):
+            return None
+
+        access_time = float(self.allocator.get_access_time(block_ids).max())
+        return _GroupEvictionCandidate(access_time, group_id, block_ids, group_nodes)
+
+    def evict_kv_groups(self, max_num_groups: int) -> int:
+        """Evict up to ``max_num_groups`` complete shared KV groups.
+
+        Returns the number of logical KV blocks released, matching the block-based eviction API used by the scheduler.
         """
-        if self.group_allocator is None:
+        if self.group_allocator is None or max_num_groups <= 0:
             return 0
 
-        nodes_by_block: dict[int, Node] = {}
-        visited_nodes: set[Node] = set()
-
-        def visit(node: Node):
-            if node in visited_nodes:
-                return
-            visited_nodes.add(node)
-            for child in node.children.values():
-                nodes_by_block[child.block_id] = child
-                visit(child)
-
-        # Discover roots from the leaf paths because this lifecycle does not
-        # own BlockTrie's adapter-root table.
-        roots: set[Node] = set()
-        for leaf in tuple(self.leaves):
-            node = leaf
-            while node.parent is not None:
-                node = node.parent
-            roots.add(node)
-        for root in roots:
-            visit(root)
-
-        best_candidate = None
-        blocks_by_group = self.allocator.live_logical_blocks_by_group()
-        for group_id, block_ids in blocks_by_group.items():
-            if self.group_allocator.group_role(group_id) != 'kv':
-                continue
-            if np.any(self.allocator.get_ref_count(block_ids) != 1):
-                continue
-            group_nodes = [nodes_by_block.get(int(block_id)) for block_id in block_ids]
-            if any(node is None or not node.is_attached() for node in group_nodes):
-                continue
-            if any(self.state_checkpoints.is_pinned(node) for node in group_nodes):
-                continue
-            group_nodes_set = set(group_nodes)
-            if any(child not in group_nodes_set for node in group_nodes for child in node.children.values()):
-                continue
-            access_time = float(self.allocator.get_access_time(block_ids).max())
-            candidate = (access_time, group_id, block_ids, group_nodes)
-            if best_candidate is None or access_time < best_candidate[0]:
-                best_candidate = candidate
-
-        if best_candidate is None:
+        leaves = [leaf for leaf in self.leaves if self._is_attached_leaf(leaf)]
+        if len(leaves) != len(self.leaves):
+            self.leaves.intersection_update(leaves)
+        if not leaves:
             return 0
-        _, _, block_ids, group_nodes = best_candidate
-        for node in sorted(group_nodes, key=lambda item: item.prefix_len, reverse=True):
-            self.state_checkpoints.release_checkpoint(node)
-            self.leaves.discard(node)
-            if node.children:
-                return 0
-            node.detach_leaf()
-        self.allocator.free(block_ids)
-        return len(block_ids)
+
+        leaf_blocks = np.fromiter((leaf.block_id for leaf in leaves), dtype=np.int64)
+        group_ids = self.allocator.get_physical_blocks(leaf_blocks) // self.group_allocator.group_size
+        # Shared groups are sequence-private, so all blocks in one group form
+        # one linear trie path and one leaf is sufficient to validate it.
+        group_ids, leaf_indices = np.unique(group_ids, return_index=True)
+        leaves = [leaves[int(index)] for index in leaf_indices]
+        access_times = self.allocator.get_group_access_times(group_ids)
+        candidate_heap = [(float(access_time), int(group_id), leaf)
+                          for access_time, group_id, leaf in zip(access_times, group_ids, leaves)]
+        heapq.heapify(candidate_heap)
+        candidate_groups = set(int(group_id) for group_id in group_ids)
+
+        evicted_blocks = 0
+        evicted_groups = 0
+        while candidate_heap and evicted_groups < max_num_groups:
+            _, group_id, leaf = heapq.heappop(candidate_heap)
+            candidate_groups.discard(group_id)
+            candidate = self._make_group_eviction_candidate(leaf)
+            if candidate is None:
+                continue
+            parent = min(candidate.group_nodes, key=lambda item: item.prefix_len).parent
+            for node in sorted(candidate.group_nodes, key=lambda item: item.prefix_len, reverse=True):
+                self.state_checkpoints.release_checkpoint(node)
+                self.leaves.discard(node)
+                if node.children:
+                    raise RuntimeError('Shared KV group eviction order is inconsistent.')
+                node.detach_leaf()
+            self.allocator.free(candidate.block_ids)
+            evicted_blocks += len(candidate.block_ids)
+            evicted_groups += 1
+
+            if parent is None or parent.parent is None or parent.children:
+                continue
+            self.leaves.add(parent)
+            candidate = self._make_group_eviction_candidate(parent)
+            if candidate is None:
+                continue
+            if candidate.group_id not in candidate_groups:
+                heapq.heappush(candidate_heap, (candidate.access_time, candidate.group_id, parent))
+                candidate_groups.add(candidate.group_id)
+
+        return evicted_blocks
