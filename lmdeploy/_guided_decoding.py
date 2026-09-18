@@ -97,10 +97,13 @@ def _grammar_source(response_format: dict[str, Any]) -> tuple[str, str]:
         source = json.dumps({'type': 'object', 'additionalProperties': True})
         schema_type = 'json_schema'
     elif schema_type == 'structural_tag':
-        # Produced by internal tool-call parsers, not by clients. Its own
-        # format tree is recursion-guarded by XGrammar; an embedded schema
-        # goes through the EBNF parser, which rejects nesting beyond a
-        # fixed internal limit.
+        # Built by the tool-call parsers and the gpt-oss response parser (the
+        # latter wraps client-supplied schemas), and also accepted directly by
+        # GenerationConfig. Only the size bound applies here: XGrammar guards
+        # the tag's own format tree with its recursion guard, pydantic
+        # serialization caps how deep the gpt-oss parser can wrap a schema,
+        # and an embedded schema additionally passes the EBNF parser's fixed
+        # nest limit.
         source = json.dumps(response_format, ensure_ascii=False)
     elif schema_type == 'text':
         return schema_type, ''
