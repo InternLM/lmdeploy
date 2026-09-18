@@ -531,7 +531,7 @@ class AsyncEngine:
                 raise RequestError(ErrorCode.INVALID_REQUEST,
                                    'You must specify exactly one of messages or input_ids.')
             if gen_config is not None and gen_config.response_format is not None:
-                ensure_response_format_compilable(gen_config.response_format)
+                await ensure_response_format_compilable(gen_config.response_format)
             if isinstance(session_id, Session):
                 session = session_id
             elif isinstance(session_id, int):
