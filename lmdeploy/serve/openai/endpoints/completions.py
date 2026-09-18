@@ -223,7 +223,7 @@ def register(router: APIRouter, server_context) -> None:
             # First chunk with role
             final_usage = UsageInfo() if include_usage else None
             try:
-                for generator in generators:
+                for generator, session in zip(generators, sessions):
                     async for res in generator:
                         logprobs = None
                         if request.logprobs and res.logprobs:
@@ -243,6 +243,9 @@ def register(router: APIRouter, server_context) -> None:
                             finish_reason=res.finish_reason,
                             logprobs=logprobs)
                         if res.cache_block_ids is not None:
+                            # DistServe cache-free uses the engine session id,
+                            # not the public OpenAI response id.
+                            response_json['cache_session_id'] = session.session_id
                             response_json['cache_block_ids'] = res.cache_block_ids
                             response_json['remote_token_ids'] = res.token_ids
                         yield f'data: {json.dumps(response_json)}\n\n'
@@ -333,6 +336,9 @@ def register(router: APIRouter, server_context) -> None:
         ).model_dump()
 
         if with_cache:
+            # DistServe cache-free uses the engine session id, not the public
+            # OpenAI response id (client session_id, default -1).
+            response['cache_session_id'] = sessions[0].session_id
             response['cache_block_ids'] = cache_block_ids
             response['remote_token_ids'] = remote_token_ids
 
