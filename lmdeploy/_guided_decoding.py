@@ -26,25 +26,34 @@ GRAMMAR_COMPILE_TIMEOUT = 5.0
 
 
 def _max_nesting_depth(value: Any) -> int:
-    """Return the maximum nesting depth of a JSON-like structure.
+    """Return the nesting depth of a JSON-like structure.
 
-    Iterative on purpose: a hostile deeply nested schema must not be able to
-    raise RecursionError here (or inside ``json.dumps`` further down the path).
+    Raises ValueError when the depth exceeds MAX_JSON_NESTING_DEPTH or the
+    structure contains a cycle. Every container type json.dumps serializes
+    (dict, list, tuple) counts toward the depth, and scalars do not.
+
+    Recursive within the cap on purpose: the walk stops at
+    MAX_JSON_NESTING_DEPTH + 1 frames, far below Python's recursion limit,
+    and at the first cycle instead of spinning.
     """
-    max_depth = 0
-    stack = [(value, 1)]
-    while stack:
-        node, depth = stack.pop()
-        if not isinstance(node, (dict, list)):
-            # Scalars (strings, numbers, booleans, None) do not add depth.
-            continue
-        if depth > max_depth:
-            max_depth = depth
-        if isinstance(node, dict):
-            stack.extend((child, depth + 1) for child in node.values())
-        else:
-            stack.extend((child, depth + 1) for child in node)
-    return max_depth
+    active: set[int] = set()
+
+    def visit(node: Any, depth: int) -> int:
+        if not isinstance(node, (dict, list, tuple)):
+            return depth - 1
+        if depth > MAX_JSON_NESTING_DEPTH:
+            raise ValueError(
+                f'json_schema exceeds the maximum nesting depth of {MAX_JSON_NESTING_DEPTH}.')
+        if id(node) in active:
+            raise ValueError('circular reference detected in grammar source')
+        active.add(id(node))
+        try:
+            children = node.values() if isinstance(node, dict) else node
+            return max((visit(child, depth + 1) for child in children), default=depth)
+        finally:
+            active.discard(id(node))
+
+    return visit(value, 1)
 
 
 def _check_source_size(source: str) -> None:
@@ -57,9 +66,7 @@ def _check_source_size(source: str) -> None:
 
 
 def _check_schema_depth(schema: Any) -> None:
-    depth = _max_nesting_depth(schema)
-    if depth > MAX_JSON_NESTING_DEPTH:
-        raise ValueError(f'json_schema exceeds the maximum nesting depth of {MAX_JSON_NESTING_DEPTH}.')
+    _max_nesting_depth(schema)
 
 
 def _json_schema_from_response_format(response_format: dict[str, Any]) -> str:

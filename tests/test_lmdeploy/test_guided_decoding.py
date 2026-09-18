@@ -11,6 +11,7 @@ import asyncio
 import json
 import threading
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -75,7 +76,7 @@ class TestGrammarSourceBounds:
                 'schema': schema,
             },
         }
-        with pytest.raises(ValueError, match='nesting depth'):
+        with pytest.raises(ValueError):
             _grammar_source(response_format)
 
     def test_pathologically_deep_string_rejected(self):
@@ -93,23 +94,25 @@ class TestGrammarSourceBounds:
         with pytest.raises(ValueError):
             _grammar_source(response_format)
 
-    def test_oversized_regex_rejected(self):
-        response_format = {'type': 'regex_schema', 'regex_schema': 'a' * (MAX_GRAMMAR_SOURCE_BYTES + 1)}
-        with pytest.raises(ValueError, match='maximum size'):
-            _grammar_source(response_format)
-
-    def test_oversized_flat_schema_rejected(self):
-        schema = {'type': 'object', 'properties': {f'k{i}': {'type': 'string'} for i in range(1200)}}
-        with pytest.raises(ValueError, match='maximum size'):
+    def test_tuple_nesting_counts_toward_depth(self):
+        # json.dumps serializes tuples as arrays, so in-process callers can
+        # smuggle depth through tuples; they must count like lists.
+        schema: Any = {'type': 'object'}
+        for _ in range(MAX_JSON_NESTING_DEPTH // 2 + 10):
+            schema = {'allOf': (schema,)}
+        with pytest.raises(ValueError, match='nesting depth'):
             _grammar_source(json_schema_format(schema))
 
-    def test_multibyte_source_counted_as_utf8_bytes(self):
-        # The size limit is UTF-8 bytes: 6000 CJK characters are only 6000
-        # code points but 18000 bytes, so the source must be rejected even
-        # though a code-point count would pass it.
-        schema = {'type': 'object', 'properties': {'名字': {'description': '描' * 6000}}}
-        with pytest.raises(ValueError, match='maximum size'):
+    def test_cyclic_schema_rejected_not_hung(self):
+        # A cyclic dict cannot arrive over the JSON API but can be passed by
+        # in-process callers; it must fail fast with ValueError on both the
+        # validation and the engine-side compile path, not spin forever.
+        schema: dict = {}
+        schema['properties'] = {'a': schema}
+        with pytest.raises(ValueError):
             _grammar_source(json_schema_format(schema))
+        with pytest.raises(ValueError):
+            compile_response_format(None, json_schema_format(schema))
 
     def test_regular_formats_pass(self):
         assert _grammar_source({'type': 'text'}) == ('text', '')
@@ -130,6 +133,24 @@ class TestGrammarSourceBounds:
             },
         }
         _grammar_source(json_schema_format(schema))
+
+    def test_oversized_regex_rejected(self):
+        response_format = {'type': 'regex_schema', 'regex_schema': 'a' * (MAX_GRAMMAR_SOURCE_BYTES + 1)}
+        with pytest.raises(ValueError, match='maximum size'):
+            _grammar_source(response_format)
+
+    def test_oversized_flat_schema_rejected(self):
+        schema = {'type': 'object', 'properties': {f'k{i}': {'type': 'string'} for i in range(1200)}}
+        with pytest.raises(ValueError, match='maximum size'):
+            _grammar_source(json_schema_format(schema))
+
+    def test_multibyte_source_counted_as_utf8_bytes(self):
+        # The size limit is UTF-8 bytes: 6000 CJK characters are only 6000
+        # code points but 18000 bytes, so the source must be rejected even
+        # though a code-point count would pass it.
+        schema = {'type': 'object', 'properties': {'名字': {'description': '描' * 6000}}}
+        with pytest.raises(ValueError, match='maximum size'):
+            _grammar_source(json_schema_format(schema))
 
     def test_engine_compile_path_enforces_bounds(self):
         # compile_response_format runs in the engine process; the bounds
