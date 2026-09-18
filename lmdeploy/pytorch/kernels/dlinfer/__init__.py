@@ -7,6 +7,7 @@ from .flash_attention import flash_attention_fwd
 from .fused_moe import DlinferMoECommType, DlinferMoeMetadata, fused_moe, fused_moe_w8a8
 from .lightning_indexer import lightning_indexer
 from .linear import linear
+from .moe_router import moe_gating_top_k
 from .moe_gating_topk_softmax import moe_gating_topk_softmax
 from .pagedattention import paged_attention_fwd
 from .rms_norm import rms_norm
@@ -27,6 +28,7 @@ __all__ = [
     'flash_attention_fwd',
     'lightning_indexer',
     'linear',
+    'moe_gating_top_k',
     'moe_gating_topk_softmax',
     'multinomial_sampling',
     'per_channel_quant',
