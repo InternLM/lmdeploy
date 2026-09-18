@@ -64,7 +64,22 @@ class TestGrammarSourceBounds:
             _grammar_source(nested_object_schema(10000))
 
     def test_deep_schema_as_string_rejected(self):
-        schema = json.dumps(nested_object_schema(1000)['json_schema']['schema'])
+        schema = json.dumps(nested_object_schema(MAX_JSON_NESTING_DEPTH + 1)['json_schema']['schema'])
+        response_format = {
+            'type': 'json_schema',
+            'json_schema': {
+                'name': 't',
+                'schema': schema,
+            },
+        }
+        with pytest.raises(ValueError, match='nesting depth'):
+            _grammar_source(response_format)
+
+    def test_pathologically_deep_string_rejected(self):
+        # Built as a literal so the test itself never recurses. Far beyond
+        # both the depth cap and Python's JSON parser recursion limit: the
+        # source must be rejected cleanly whichever check trips first.
+        schema = '{"a":' * 2000 + '{}' + '}' * 2000
         response_format = {
             'type': 'json_schema',
             'json_schema': {
