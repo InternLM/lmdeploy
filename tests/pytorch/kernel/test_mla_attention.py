@@ -146,6 +146,7 @@ def test_dcp_query_all_gather_preserves_contiguous_head_order(monkeypatch, devic
     if device == 'cuda' and not torch.cuda.is_available():
         pytest.skip('requires CUDA')
     from lmdeploy.pytorch import distributed
+    from lmdeploy.pytorch.backends.communicator import DeviceCommunicator
 
     queries = torch.arange(dcp_size * num_tokens * 3 * 8, device=device, dtype=torch.float32)
     queries = queries.reshape(dcp_size, num_tokens, 3, 8)
@@ -162,7 +163,10 @@ def test_dcp_query_all_gather_preserves_contiguous_head_order(monkeypatch, devic
             source = queries[rank].transpose(0, 1) if strided else queries[rank]
             output[rank * source.size(0):(rank + 1) * source.size(0)].copy_(source)
 
-    monkeypatch.setattr(distributed, 'all_gather_into_tensor', fake_all_gather)
+    monkeypatch.setattr(torch.distributed, 'all_gather_into_tensor', fake_all_gather)
+    monkeypatch.setattr(torch.distributed, 'get_world_size', lambda group: dcp_size)
+    monkeypatch.setattr(distributed.get_dist_manager().current_context().dcp_group,
+                        'communicator', DeviceCommunicator('dcp'))
     gathered = gather_dcp_query(rank0_query, dcp_world_size=dcp_size)
 
     expected = torch.cat(list(queries), dim=1)

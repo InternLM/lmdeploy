@@ -12,6 +12,80 @@ from lmdeploy.pytorch.backends.dlinfer.op_backend import DlinferOpsBackend
 from lmdeploy.pytorch.nn import norm as norm_module
 
 
+def _run_dcp_query_gather(rank, rendezvous, enabled):
+    from datetime import timedelta
+
+    from torch import distributed as dist
+
+    from lmdeploy.pytorch.backends.cuda.attention.cp import gather_dcp_query
+    from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
+    from lmdeploy.pytorch.config import DistConfig
+    from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
+
+    torch.cuda.set_device(rank)
+    communicator_module._envs.enable_symm_mem_dcp = enabled[rank]
+    dist.init_process_group('nccl', init_method=rendezvous, rank=rank, world_size=2,
+                            timeout=timedelta(seconds=60))
+    ctx = DistContext.build(rank, DistConfig(tp=2, dcp=2),
+                            communicator_builder=CudaOpsBackend.build_communicator)
+    try:
+        with get_dist_manager().context(ctx):
+            comm = ctx.dcp_group.communicator
+            comm.prepare_query_gather(32, 576)
+            if all(enabled):
+                assert comm._query_gatherer._state is not None
+            else:
+                assert comm._query_gatherer._state is None
+            assert comm._all_reduce is None
+            query = torch.empty(384, 32, 576, device='cuda', dtype=torch.bfloat16)
+            # Ineligible inputs still return correct results through NCCL.
+            for fallback in (query[:1], query[..., ::2], query.float(),
+                             torch.empty(1024, 32, 576, device='cuda', dtype=query.dtype)):
+                fallback.fill_(rank)
+                output = comm.gather_query(fallback)
+                expected = torch.arange(2, device='cuda', dtype=fallback.dtype)
+                expected = expected.repeat_interleave(32)[None, :, None].expand_as(output)
+                torch.testing.assert_close(output, expected, rtol=0, atol=0)
+            rows = (2, 16, 96, 384)
+            for count in rows:
+                gather_dcp_query(query[:count], dcp_world_size=2)
+            torch.cuda.synchronize()
+            dist.barrier()
+            graph = torch.cuda.CUDAGraph()
+            outputs = []
+            with torch.cuda.graph(graph):
+                for step in range(16):
+                    query.fill_(rank + step * 8)
+                    gathered = gather_dcp_query(query[:rows[step % len(rows)]], dcp_world_size=2)
+                    outputs.append(gathered.clone())
+            for _ in range(3):
+                graph.replay()
+            torch.cuda.synchronize()
+            graph.reset()
+            for step, output in enumerate(outputs):
+                expected = (torch.arange(2, device='cuda', dtype=query.dtype) + step * 8)
+                expected = expected.repeat_interleave(32)[None, :, None].expand_as(output)
+                torch.testing.assert_close(output, expected, rtol=0, atol=0)
+    finally:
+        ctx.close()
+        dist.destroy_process_group()
+
+
+@pytest.mark.skipif(torch.cuda.device_count() < 2, reason='requires two CUDA GPUs')
+@pytest.mark.parametrize('enabled', [(False, False), (True, True), (True, False)],
+                         ids=['nccl', 'symm_mem', 'mixed_flags'])
+def test_dcp_query_gather_graph_reuses_arena(tmp_path, enabled):
+    if all(enabled):
+        from torch.distributed._symmetric_memory import DeviceType, _SymmetricMemory
+        if any(torch.cuda.get_device_capability(i)[0] < 9
+               or not _SymmetricMemory.has_multicast_support(DeviceType.CUDA, i) for i in range(2)):
+            pytest.skip('requires SM90 or newer with multicast support')
+        if not torch.cuda.can_device_access_peer(0, 1):
+            pytest.skip('requires peer access')
+    torch.multiprocessing.spawn(_run_dcp_query_gather,
+                                args=((tmp_path / 'rendezvous').as_uri(), enabled), nprocs=2)
+
+
 class _Collective:
 
     def __init__(self, *, result=None, handled=False):
@@ -41,7 +115,8 @@ def _build_communicator(monkeypatch,
     symm_mem_cls = Mock(return_value=collective)
     monkeypatch.setattr(communicator_module, 'FlashInferAllReduce', flashinfer_cls)
     monkeypatch.setattr(communicator_module, 'SymmetricMemoryAllReduce', symm_mem_cls)
-    communicator = communicator_module.CudaCommunicator(cpu_group='cpu', device_group='gpu')
+    communicator = communicator_module.CudaCommunicator(cpu_group='cpu', device_group='gpu',
+                                                         all_reduce_backend=backend)
     enabled_cls, disabled_cls = ((flashinfer_cls, symm_mem_cls)
                                  if use_flashinfer else (symm_mem_cls, flashinfer_cls))
     enabled_cls.assert_called_once_with('cpu')
@@ -93,7 +168,8 @@ def test_cuda_communicator_rejects_multiple_backends(monkeypatch):
     monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', True)
     monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_allreduce', True)
     with pytest.raises(ValueError, match='cannot be enabled together'):
-        communicator_module.CudaCommunicator(cpu_group='cpu', device_group='gpu')
+        config = SimpleNamespace(dp=1, ep=1, attn_tp=2, dcp=1, enable_microbatch=False)
+        communicator_module.build_cuda_communicator('cpu', 'gpu', config)
 
 
 def test_rms_norm_fuses_or_falls_back(monkeypatch):
@@ -236,17 +312,18 @@ def test_build_cuda_communicator_gates_unsupported_parallelism(monkeypatch):
     monkeypatch.setattr(communicator_module, 'CudaCommunicator', communicator_cls)
 
     for config in (
-            SimpleNamespace(dp=2, ep=1, attn_tp=8, enable_microbatch=False),
-            SimpleNamespace(dp=1, ep=2, attn_tp=8, enable_microbatch=False),
-            SimpleNamespace(dp=1, ep=1, attn_tp=8, enable_microbatch=True),
+            SimpleNamespace(dp=2, ep=1, attn_tp=8, dcp=1, enable_microbatch=False),
+            SimpleNamespace(dp=1, ep=2, attn_tp=8, dcp=1, enable_microbatch=False),
+            SimpleNamespace(dp=1, ep=1, attn_tp=8, dcp=1, enable_microbatch=True),
     ):
         assert communicator_module.build_cuda_communicator('cpu', 'device', config) is None
     communicator_cls.assert_not_called()
 
-    config = SimpleNamespace(dp=1, ep=1, attn_tp=4, enable_microbatch=False)
+    config = SimpleNamespace(dp=1, ep=1, attn_tp=4, dcp=1, enable_microbatch=False)
     communicator = communicator_module.build_cuda_communicator('cpu', 'device', config)
     assert communicator is communicator_cls.return_value
-    communicator_cls.assert_called_once_with(cpu_group='cpu', device_group='device')
+    communicator_cls.assert_called_once_with(cpu_group='cpu', device_group='device',
+                                             all_reduce_backend='flashinfer', symm_mem_query_gather=False)
 
     monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', False)
     monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_allreduce', True)
@@ -254,6 +331,29 @@ def test_build_cuda_communicator_gates_unsupported_parallelism(monkeypatch):
     assert communicator_module.build_cuda_communicator('cpu', 'device', config) is None
     config.attn_tp = 2
     assert communicator_module.build_cuda_communicator('cpu', 'device', config) is communicator_cls.return_value
+
+    # TP all-reduce flags must not allocate all-reduce resources on DCP groups.
+    config.dcp = 2
+    monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_dcp', True)
+    communicator_module.build_cuda_communicator('cpu', 'device', config, group_roles=('dcp', ))
+    communicator_cls.assert_called_with(cpu_group='cpu', device_group='device',
+                                        all_reduce_backend=None, symm_mem_query_gather=True)
+
+
+@pytest.mark.parametrize('shared_dcp_group', [False, True])
+def test_communicator_group_roles(shared_dcp_group):
+    from lmdeploy.pytorch.distributed import DistContext, DistGroup, _build_communicators
+
+    tp_group = DistGroup(cpu_group='tp_cpu', gpu_group='tp_gpu')
+    dcp_group = tp_group if shared_dcp_group else DistGroup(cpu_group='dcp_cpu', gpu_group='dcp_gpu')
+    builder = Mock(side_effect=lambda **kwargs: object())
+    context = DistContext(attn_tp_group=tp_group, mlp_tp_group=tp_group, moe_tp_group=tp_group,
+                          dcp_group=dcp_group, communicator_builder=builder)
+    _build_communicators(context)
+
+    roles = [call.kwargs['group_roles'] for call in builder.call_args_list]
+    assert roles == ([('tp', 'dcp')] if shared_dcp_group else [('tp', ), ('dcp', )])
+    assert (tp_group.communicator is dcp_group.communicator) == shared_dcp_group
 
 
 def test_dlinfer_communicator_rejects_cuda_options(monkeypatch):

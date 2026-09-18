@@ -5,26 +5,16 @@ import torch
 
 
 def gather_dcp_query(query: torch.Tensor, *, dcp_world_size: int) -> torch.Tensor:
-    """Gather [tokens, local_heads, dim] queries along the head axis."""
+    """Gather [tokens, local_heads, dim] queries along the head axis.
+
+    Consume the result on the same stream before the next query gather; the optimized path borrows a shared arena.
+    """
     if dcp_world_size == 1:
         return query
-    from lmdeploy.pytorch.distributed import all_gather_into_tensor
+    from lmdeploy.pytorch.distributed import get_dist_manager
 
-    # Keep the existing packing path for strided queries. Direct gather
-    # saves a copy only when the token-major input is already contiguous.
-    if not query.is_contiguous():
-        transposed = query.transpose(0, 1).contiguous()
-        gathered = transposed.new_empty(
-            dcp_world_size * transposed.size(0), *transposed.shape[1:])
-        all_gather_into_tensor(gathered, transposed, group='dcp')
-        return gathered.transpose(0, 1).contiguous()
-
-    gathered = query.new_empty(dcp_world_size * query.size(0), *query.shape[1:])
-    all_gather_into_tensor(gathered, query, group='dcp')
-    # Gather token-major queries directly, then join rank-local heads.
-    # Contiguous inputs need only this final layout conversion.
-    gathered = gathered.view(dcp_world_size, *query.shape)
-    return gathered.transpose(0, 1).reshape(query.size(0), -1, query.size(2)).contiguous()
+    communicator = get_dist_manager().current_context().dcp_group.communicator
+    return communicator.gather_query(query)
 
 
 def merge_dcp_attention(local_output: torch.Tensor,

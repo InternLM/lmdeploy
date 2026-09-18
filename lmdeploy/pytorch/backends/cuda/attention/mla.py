@@ -254,6 +254,13 @@ class FlashMLAImpl(TritonAttentionImpl):
         assert num_kv_heads == 1, 'MLA requires num kv heads equal to 1'
         self.use_fa3 = use_fa3
 
+        if self.dcp_world_size > 1:
+            from lmdeploy.pytorch.distributed import get_dist_manager
+
+            communicator = get_dist_manager().current_context().dcp_group.communicator
+            if communicator is not None:
+                communicator.prepare_query_gather(num_heads, head_size)
+
     def get_step_metadata_provider(self):
         """Describe metadata required by this selected implementation."""
         return FlashMLAAttentionMetaBuilder(num_attention_heads=self.num_heads)

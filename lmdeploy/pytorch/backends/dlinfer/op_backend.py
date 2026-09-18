@@ -127,15 +127,17 @@ class DlinferOpsBackend(DefaultOpsBackend):
         return DlinferCacheBackend
 
     @classmethod
-    def build_communicator(cls, cpu_group, device_group, dist_config):
+    def build_communicator(cls, cpu_group, device_group, dist_config, *, group_roles=('tp', )):
         """Build a DLInfer communicator."""
         from lmdeploy.pytorch import envs
-        cuda_communicator_enabled = envs.enable_flashinfer_allreduce or envs.enable_symm_mem_allreduce
+        cuda_communicator_enabled = (envs.enable_flashinfer_allreduce or envs.enable_symm_mem_allreduce
+                                    or envs.enable_symm_mem_dcp)
         assert not cuda_communicator_enabled, 'CUDA communicators are not supported by DLInfer.'
         return super().build_communicator(
             cpu_group=cpu_group,
             device_group=device_group,
             dist_config=dist_config,
+            group_roles=group_roles,
         )
 
     @staticmethod
