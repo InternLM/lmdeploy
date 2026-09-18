@@ -92,13 +92,14 @@ class OpsBackend(ABC):
         yield
 
     @classmethod
-    def build_communicator(cls, cpu_group, device_group, dist_config):
+    def build_communicator(cls, cpu_group, device_group, dist_config, *, group_roles=('tp', )):
         """Build a device communicator."""
         from .communicator import build_communicator
         return build_communicator(
             cpu_group=cpu_group,
             device_group=device_group,
             dist_config=dist_config,
+            group_roles=group_roles,
         )
 
     @staticmethod

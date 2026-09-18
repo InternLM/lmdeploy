@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Setup-owned LM-head all-gather with a portable NCCL fallback.
+"""Setup-owned symmetric-memory hidden-axis all-gather.
 
 The optional Triton kernels are imported only during collective preparation. Their SGLang source reference is in
 kernels/cuda/symm_mem_allgather.py.
@@ -10,15 +10,13 @@ import logging
 import torch
 import torch.distributed as dist
 
-from lmdeploy.pytorch import envs as _envs
-
 logger = logging.getLogger(__name__)
 
 
 class MultimemAllGatherer:
-    """Own configuration, TP admission and the symmetric arena for one LM-head.
+    """Own configuration, collective admission and one symmetric arena.
 
-    Construct on every TP rank after process-group setup. Only preparation performs allocation and consensus; forward
+    Construct on every group rank after process-group setup. Only preparation performs allocation and consensus; forward
     never initializes or rebuilds. Call reset_for_weight after coordinated, quiescent device/dtype changes. Runtime rows
     must match across ranks, as required by NCCL all-gather too.
     """
@@ -28,12 +26,13 @@ class MultimemAllGatherer:
     _WORLD_SIZES = {2, 4, 8}
 
     def __init__(self, group: dist.ProcessGroup, rank: int, gathered_width: int,
-                 device: torch.device, dtype: torch.dtype):
+                 device: torch.device, dtype: torch.dtype, *,
+                 enabled: bool, capacity_bytes: int):
         self._group = group
         self._rank = rank
         self._gathered_width = gathered_width
-        self._enabled = _envs.enable_symm_mem_lmhead
-        self._capacity_bytes = _envs.symm_mem_lmhead_max_mb * 1024 * 1024
+        self._enabled = enabled
+        self._capacity_bytes = capacity_bytes
         self._state = None
         self._kernels = None
         self._graph_ready_shapes = set()
@@ -54,7 +53,7 @@ class MultimemAllGatherer:
 
     def _disabled(self, reason: str) -> bool:
         if self._rank == 0:
-            logger.warning('symmetric-memory LM-head disabled: %s', reason)
+            logger.warning('symmetric-memory all-gather disabled: %s', reason)
         return False
 
     def prepare(self, device: torch.device, dtype: torch.dtype) -> bool:
@@ -86,9 +85,9 @@ class MultimemAllGatherer:
                  and self._capacity_bytes >= width * torch.bfloat16.itemsize
                  and capability_ok)
         if not self._agree(valid, device):
-            return self._disabled('unsupported TP, dtype, width, capacity or device')
+            return self._disabled('unsupported group size, dtype, width, capacity or device')
         if not self._same_config((width, self._capacity_bytes), device):
-            return self._disabled('inconsistent TP arena configuration')
+            return self._disabled('inconsistent group arena configuration')
 
         kernels = None
         try:
@@ -110,7 +109,7 @@ class MultimemAllGatherer:
         except Exception as exc:
             logger.debug('Symmetric allocation failed: %s', exc)
         if not self._agree(allocation_ok, device):
-            return self._disabled('a TP rank could not allocate its arena')
+            return self._disabled('a rank could not allocate its arena')
 
         # Once all ranks commit, rendezvous errors are fatal, not a rank-local
         # reason to fall back and strand peers inside a collective.
@@ -144,7 +143,8 @@ class MultimemAllGatherer:
             return False
 
     def reset_for_weight(self, weight: torch.Tensor) -> None:
-        """Notify the provider after a quiescent, TP-wide model transition."""
+        """Notify the provider after a quiescent, group-wide model
+        transition."""
         if (weight.device, weight.dtype) != self._weight_contract:
             self.prepare(weight.device, weight.dtype)
 
@@ -161,23 +161,24 @@ class MultimemAllGatherer:
         self._kernels = None
         self._graph_ready_shapes.clear()
 
-    def __call__(self, x: torch.Tensor) -> torch.Tensor | None:
-        """Gather admitted logits into an owning output; None means NCCL."""
+    def __call__(self, x: torch.Tensor, *, safe: bool = True) -> torch.Tensor | None:
+        """Gather hidden shards; unsafe output is borrowed until the next
+        call."""
         state = self._state
         if state is None:
             return None
         if not (x.dim() == 2 and x.dtype == torch.bfloat16 and x.device == state.device
                 and x.is_contiguous() and x.data_ptr() % 16 == 0
                 and x.shape[-1] * state.world_size == state.hidden_dim):
-            # After static TP admission this is a programming error. A local
+            # After collective admission this is a programming error. A local
             # NCCL fallback could disagree with peers launching multimem.
-            raise RuntimeError('multimem all-gather input contract changed after TP-wide admission')
+            raise RuntimeError('multimem all-gather input contract changed after group-wide admission')
         rows = x.shape[0]
         if not self._MIN_TOKENS <= rows <= state.max_token_num:
             return None
         if rows not in self._graph_ready_shapes and torch.cuda.is_current_stream_capturing():
             return None
         output = self._kernels.all_gather_inner(
-            state, x, tp_hidden_dim=self._gathered_width, safe=True, _validated=True)
+            state, x, tp_hidden_dim=self._gathered_width, safe=safe, _validated=True)
         self._graph_ready_shapes.add(rows)
         return output

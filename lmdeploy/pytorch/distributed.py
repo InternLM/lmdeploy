@@ -237,17 +237,23 @@ def _build_dcp_group(context: 'DistContext', timeout: timedelta,
     )
 
 
-def _build_tp_communicators(context: 'DistContext'):
-    """Attach one communicator to each rank-local, unique TP group."""
+def _build_communicators(context: 'DistContext'):
+    """Attach one communicator to each rank-local, unique TP/DCP group."""
     build_communicator = context.communicator_builder
-    groups = (context.attn_tp_group, context.mlp_tp_group, context.moe_tp_group)
+    tp_groups = (context.attn_tp_group, context.mlp_tp_group, context.moe_tp_group)
+    groups = (*tp_groups, context.dcp_group)
     for group in {id(group): group for group in groups}.values():
         if group.gpu_group is None:
             continue
+        # Aliased groups share one communicator with both operation roles.
+        roles = ('tp', ) if any(group is tp_group for tp_group in tp_groups) else ()
+        if group is context.dcp_group:
+            roles += ('dcp', )
         group.communicator = build_communicator(
             cpu_group=group.cpu_group,
             device_group=group.gpu_group,
             dist_config=context.dist_config,
+            group_roles=roles,
         )
 
 
@@ -330,10 +336,12 @@ class DistContext:
 
         # tp
         _build_tp_group(context, timeout, cpu_backend=cpu_backend, ccl_backend=ccl_backend)
-        _build_tp_communicators(context)
 
         # cp
         _build_dcp_group(context, timeout, cpu_backend=cpu_backend, ccl_backend=ccl_backend)
+
+        # communicator
+        _build_communicators(context)
 
         # ep
         cls._build_ep_group(context, timeout, ccl_backend=ccl_backend)

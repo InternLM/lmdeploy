@@ -106,7 +106,8 @@ def _needs_symm_mem_device_setup(dist_config: DistConfig) -> bool:
     """
     from lmdeploy.pytorch.backends.cuda.comm.communicator import should_try_symm_mem
     return (should_try_symm_mem(dist_config)
-            or (_envs.enable_symm_mem_lmhead and dist_config.attn_tp > 1))
+            or (_envs.enable_symm_mem_lmhead and dist_config.attn_tp > 1)
+            or (_envs.enable_symm_mem_dcp and dist_config.dcp > 1))
 
 
 class RemoteLogger:

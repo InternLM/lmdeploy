@@ -3,6 +3,7 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.cuda.comm.symm_mem_allgather import MultimemAllGatherer
 from lmdeploy.pytorch.backends.embedding import EmbeddingBuildSpec
@@ -157,7 +158,9 @@ class ParallelLMHead(ParallelEmbedding):
         self._symm_mem_gatherer = (
             MultimemAllGatherer(self.tp_group, self.tp_rank,
                                self.tp * self.vocab_size_padded,
-                               self.weight.device, self.weight.dtype)
+                               self.weight.device, self.weight.dtype,
+                               enabled=_envs.enable_symm_mem_lmhead,
+                               capacity_bytes=_envs.symm_mem_lmhead_max_mb * 1024 * 1024)
             if self.all_reduce else None)
 
     def tie_weights(self, embedding: ParallelEmbedding):
