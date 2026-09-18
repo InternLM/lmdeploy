@@ -10,6 +10,7 @@ path. These tests run offline; no model, tokenizer, or GPU is required.
 import asyncio
 import json
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +22,8 @@ from lmdeploy._guided_decoding import (
     compile_response_format,
     ensure_response_format_compilable,
 )
+from lmdeploy.serve.core.async_engine import AsyncEngine, RequestError
+from lmdeploy.serve.managers.session_manager import SessionManager
 
 
 def nested_object_schema(raw_depth: int, key: str = 'a') -> dict:
@@ -206,3 +209,19 @@ class TestAsyncValidation:
         delays = asyncio.run(main())
         assert len(delays) > 3, 'heartbeat stopped ticking during validation'
         assert max(delays) < 1.0, f'event loop stalled for {max(delays):.3f}s during validation'
+
+    def test_failed_validation_removes_passed_session(self):
+        """A rejected response_format must still clean up a session the caller
+        created and registered before preprocess ran (api_server hands Session
+        objects to the engine)."""
+        engine = AsyncEngine.__new__(AsyncEngine)
+        engine.session_mgr = SessionManager()
+        session = engine.session_mgr.get(42)
+        gen_config = SimpleNamespace(response_format=nested_object_schema(MAX_JSON_NESTING_DEPTH + 1))
+        with pytest.raises(RequestError) as exc_info:
+            asyncio.run(
+                engine.preprocess(messages=None, input_ids=[1, 2], gen_config=gen_config, session_id=session))
+        assert 'nesting depth' in str(exc_info.value)
+        assert engine.session_mgr.get(42, create_if_not_exists=False) is None, (
+            'rejected request leaked its session in the SessionManager'
+        )
