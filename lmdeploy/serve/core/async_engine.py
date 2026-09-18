@@ -530,8 +530,6 @@ class AsyncEngine:
             if (messages is not None) ^ (input_ids is None):
                 raise RequestError(ErrorCode.INVALID_REQUEST,
                                    'You must specify exactly one of messages or input_ids.')
-            if gen_config is not None and gen_config.response_format is not None:
-                ensure_response_format_compilable(gen_config.response_format)
             if isinstance(session_id, Session):
                 session = session_id
             elif isinstance(session_id, int):
@@ -545,6 +543,11 @@ class AsyncEngine:
                 raise RequestError(
                     ErrorCode.REQUEST_CONFLICT,
                     f'Session {session.session_id} already has an active request.')
+            if gen_config is not None and gen_config.response_format is not None:
+                # Resolve the session first: a rejected response format raises
+                # ValueError below, and remove_session() can only clean up a
+                # session that this method has already taken charge of.
+                await ensure_response_format_compilable(gen_config.response_format)
 
             chat_template_kwargs = chat_template_kwargs or {}
             if enable_thinking is not None:
