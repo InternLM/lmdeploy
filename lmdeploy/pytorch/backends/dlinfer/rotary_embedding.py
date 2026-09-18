@@ -76,7 +76,7 @@ class DlinferLlamaDynamicNTKScalingRotaryEmbedding(LlamaDynamicNTKScalingRotaryE
     def __init__(self, dim: int, base: int = 10000, scaling_factor: float = 1.0, max_position_embeddings: int = 2048):
         super().__init__(dim, base, scaling_factor, max_position_embeddings)
         self.dim_scale_ratio = self.dim / (self.dim - 2)
-        self.pos_freq_scaling = torch.arange(0, self.dim, 2, dtype=torch.int64).float().cuda() / self.dim
+        self.pos_freq_scaling = torch.arange(0, self.dim, 2, dtype=torch.int64).float() / self.dim
         self.scale_offset = self.scaling_factor - 1
         self.pos_scale_factor = self.scaling_factor / \
             self.max_position_embeddings
@@ -84,7 +84,8 @@ class DlinferLlamaDynamicNTKScalingRotaryEmbedding(LlamaDynamicNTKScalingRotaryE
     def _ntk_inv_freq(self, seq_len: torch.Tensor):
         """Calculate inverse frequency with NTK scaling."""
         base = self.base * ((self.pos_scale_factor * seq_len) - self.scale_offset)**self.dim_scale_ratio
-        inv_freq = 1.0 / (base**self.pos_freq_scaling)
+        pos_freq_scaling = self.pos_freq_scaling.to(seq_len.device)
+        inv_freq = 1.0 / (base**pos_freq_scaling)
         return inv_freq
 
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
