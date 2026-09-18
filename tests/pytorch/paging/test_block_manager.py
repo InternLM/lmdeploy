@@ -5,6 +5,7 @@ import torch
 
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.messages import SequenceMeta
+from lmdeploy.pytorch.paging.block_manager import DefaultBlockManager, build_block_manager
 from lmdeploy.pytorch.paging.block_manager.base_block_manager import LogicalAllocator
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 
@@ -74,6 +75,17 @@ class TestAllocator:
 
 
 class TestDefaultBlockManager:
+
+    def test_build_accepts_unset_window_size(self):
+        cache_config = CacheConfig(max_batches=1,
+                                   block_size=16,
+                                   num_cpu_blocks=0,
+                                   num_gpu_blocks=8,
+                                   window_size=None)
+
+        block_manager = build_block_manager(cache_config)
+
+        assert isinstance(block_manager, DefaultBlockManager)
 
     @pytest.fixture
     def block_size(self):
