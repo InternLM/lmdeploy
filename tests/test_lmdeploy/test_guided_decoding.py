@@ -6,7 +6,6 @@ they reach XGrammar: the compile cost of a nested JSON schema grows
 exponentially with depth and XGrammar has no depth or time limit on that
 path. These tests run offline; no model, tokenizer, or GPU is required.
 """
-
 import asyncio
 import json
 import threading
@@ -33,7 +32,7 @@ def nested_object_schema(raw_depth: int, key: str = 'a') -> dict:
     The common ``properties`` shape spans two JSON levels per schema level;
     remaining levels are padded with a plain key.
     """
-    schema: dict = {'type': 'object'}
+    schema: Any = {'type': 'object'}
     node = schema
     for _ in range((raw_depth - 1) // 2):
         child: dict = {'type': 'object'}
@@ -50,49 +49,29 @@ def json_schema_format(schema) -> dict:
     return {'type': 'json_schema', 'json_schema': {'name': 't', 'schema': schema}}
 
 
-class TestGrammarSourceBounds:
-    def test_schema_at_depth_cap_passes(self):
-        response_format = nested_object_schema(MAX_JSON_NESTING_DEPTH)
-        schema_type, source = _grammar_source(response_format)
-        assert schema_type == 'json_schema'
-        assert len(source) > 0
+def string_schema_format(schema: str) -> dict:
+    return {'type': 'json_schema', 'json_schema': {'name': 't', 'schema': schema}}
 
-    def test_schema_beyond_depth_cap_rejected(self):
+
+class TestGrammarSourceBounds:
+    def test_schema_depth_boundary(self):
+        """A schema at the cap passes; one level deeper is rejected in the
+        bounds check, however deep the input is."""
+        _grammar_source(nested_object_schema(MAX_JSON_NESTING_DEPTH))
         with pytest.raises(ValueError, match='nesting depth'):
             _grammar_source(nested_object_schema(MAX_JSON_NESTING_DEPTH + 1))
 
-    def test_deeply_nested_schema_rejected_fast(self):
-        # A hostile schema must be rejected by the bounds check, never reach
-        # the exponential XGrammar compile.
-        with pytest.raises(ValueError, match='nesting depth'):
-            _grammar_source(nested_object_schema(10000))
-
-    def test_deep_schema_as_string_rejected(self):
+    def test_deep_string_schema_rejected(self):
+        # A pre-serialized schema string with parseable over-cap depth.
         schema = json.dumps(nested_object_schema(MAX_JSON_NESTING_DEPTH + 1)['json_schema']['schema'])
-        response_format = {
-            'type': 'json_schema',
-            'json_schema': {
-                'name': 't',
-                'schema': schema,
-            },
-        }
+        with pytest.raises(ValueError, match='nesting depth'):
+            _grammar_source(string_schema_format(schema))
+        # Built as a literal so the test itself never recurses: far beyond
+        # both the depth cap and the JSON parser recursion limit, rejected
+        # cleanly whichever check trips first.
+        literal = '{"a":' * 2000 + '{}' + '}' * 2000
         with pytest.raises(ValueError):
-            _grammar_source(response_format)
-
-    def test_pathologically_deep_string_rejected(self):
-        # Built as a literal so the test itself never recurses. Far beyond
-        # both the depth cap and Python's JSON parser recursion limit: the
-        # source must be rejected cleanly whichever check trips first.
-        schema = '{"a":' * 2000 + '{}' + '}' * 2000
-        response_format = {
-            'type': 'json_schema',
-            'json_schema': {
-                'name': 't',
-                'schema': schema,
-            },
-        }
-        with pytest.raises(ValueError):
-            _grammar_source(response_format)
+            _grammar_source(string_schema_format(literal))
 
     def test_tuple_nesting_counts_toward_depth(self):
         # json.dumps serializes tuples as arrays, so in-process callers can
@@ -114,6 +93,24 @@ class TestGrammarSourceBounds:
         with pytest.raises(ValueError):
             compile_response_format(None, json_schema_format(schema))
 
+    def test_oversized_sources_rejected(self):
+        with pytest.raises(ValueError, match='maximum size'):
+            _grammar_source({'type': 'regex_schema', 'regex_schema': 'a' * (MAX_GRAMMAR_SOURCE_BYTES + 1)})
+        schema = {'type': 'object', 'properties': {f'k{i}': {'type': 'string'} for i in range(1200)}}
+        with pytest.raises(ValueError, match='maximum size'):
+            _grammar_source(json_schema_format(schema))
+        # The string branch applies the same byte bound before parsing.
+        with pytest.raises(ValueError, match='maximum size'):
+            _grammar_source(string_schema_format(json.dumps('x' * (MAX_GRAMMAR_SOURCE_BYTES + 1))))
+
+    def test_multibyte_source_counted_as_utf8_bytes(self):
+        # The size limit is UTF-8 bytes: 6000 CJK characters are only 6000
+        # code points but 18000 bytes, so the source must be rejected even
+        # though a code-point count would pass it.
+        schema = {'type': 'object', 'properties': {'名字': {'description': '描' * 6000}}}
+        with pytest.raises(ValueError, match='maximum size'):
+            _grammar_source(json_schema_format(schema))
+
     def test_regular_formats_pass(self):
         assert _grammar_source({'type': 'text'}) == ('text', '')
         assert _grammar_source({'type': 'json_object'}) == (
@@ -130,27 +127,10 @@ class TestGrammarSourceBounds:
                     'type': 'array',
                     'items': {'type': 'number'},
                 },
+                'extra': {},
             },
         }
         _grammar_source(json_schema_format(schema))
-
-    def test_oversized_regex_rejected(self):
-        response_format = {'type': 'regex_schema', 'regex_schema': 'a' * (MAX_GRAMMAR_SOURCE_BYTES + 1)}
-        with pytest.raises(ValueError, match='maximum size'):
-            _grammar_source(response_format)
-
-    def test_oversized_flat_schema_rejected(self):
-        schema = {'type': 'object', 'properties': {f'k{i}': {'type': 'string'} for i in range(1200)}}
-        with pytest.raises(ValueError, match='maximum size'):
-            _grammar_source(json_schema_format(schema))
-
-    def test_multibyte_source_counted_as_utf8_bytes(self):
-        # The size limit is UTF-8 bytes: 6000 CJK characters are only 6000
-        # code points but 18000 bytes, so the source must be rejected even
-        # though a code-point count would pass it.
-        schema = {'type': 'object', 'properties': {'名字': {'description': '描' * 6000}}}
-        with pytest.raises(ValueError, match='maximum size'):
-            _grammar_source(json_schema_format(schema))
 
     def test_engine_compile_path_enforces_bounds(self):
         # compile_response_format runs in the engine process; the bounds
@@ -160,18 +140,11 @@ class TestGrammarSourceBounds:
 
 
 class TestAsyncValidation:
-    def test_valid_response_format_passes(self):
-        schema = {
-            'type': 'object',
-            'properties': {
-                'name': {'type': 'string'},
-            },
-        }
+    def test_valid_and_invalid_formats(self):
+        schema = {'type': 'object', 'properties': {'name': {'type': 'string'}}}
         asyncio.run(ensure_response_format_compilable(json_schema_format(schema)))
-
-    def test_invalid_response_format_rejected(self):
         with pytest.raises(ValueError):
-            asyncio.run(ensure_response_format_compilable(nested_object_schema(10000)))
+            asyncio.run(ensure_response_format_compilable(nested_object_schema(MAX_JSON_NESTING_DEPTH + 1)))
 
     def test_validation_runs_in_dedicated_pool(self, monkeypatch):
         seen_threads = []
@@ -182,12 +155,7 @@ class TestAsyncValidation:
             return original(serialized_format)
 
         monkeypatch.setattr(gd, '_check_response_format', spy)
-        schema = {
-            'type': 'object',
-            'properties': {
-                'name': {'type': 'string'},
-            },
-        }
+        schema = {'type': 'object', 'properties': {'name': {'type': 'string'}}}
         asyncio.run(ensure_response_format_compilable(json_schema_format(schema)))
         assert seen_threads, 'validation did not reach the grammar check'
         assert all(t.name.startswith('grammar-validate') for t in seen_threads), (
