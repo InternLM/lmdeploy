@@ -865,10 +865,14 @@ def test_route_major_w4a16_rejects_partial_topk_row():
         )
 
 
-def test_cuda_backend_builds_direct_packed_w4a16():
+@pytest.mark.parametrize('provider', ['auto', 'triton'])
+def test_cuda_backend_builds_direct_packed_w4a16(monkeypatch, provider):
+    from lmdeploy.pytorch import envs
     from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
     from lmdeploy.pytorch.backends.moe import FusedMoEW4A16BuildSpec, FusedMoEW4A16Impl
 
+    # This legacy builder test uses a placeholder hidden_dim, not a CuTe GEMM shape.
+    monkeypatch.setattr(envs, 'w4a16_moe_backend', provider)
     spec_kwargs = dict(
         top_k=2,
         num_experts=4,
