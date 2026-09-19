@@ -8,7 +8,7 @@ def test_pd_dynamic_registration_and_request_routing(mock_workers, router_manage
     _, prefill_urls, _ = mock_workers(n=1)
     _, decode_urls, decode_ids = mock_workers(n=2)
     router = router_manager.start_router(
-        policy='power_of_two',
+        policy='round_robin',
         lmdeploy_pd_disaggregation=True,
         prefill_urls=[],
         decode_urls=[],
