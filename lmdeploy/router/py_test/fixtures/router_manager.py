@@ -5,13 +5,17 @@ from dataclasses import dataclass
 
 import requests
 
-from .ports import find_free_port
+from .ports import find_free_ports
 
 
 @dataclass
 class ProcHandle:
     process: subprocess.Popen
     url: str
+
+
+class RouterStartupError(RuntimeError):
+    """Raised when the router fails before its HTTP server starts."""
 
 
 class RouterManager:
@@ -34,7 +38,41 @@ class RouterManager:
         decode_policy: str | None = None,
     ) -> ProcHandle:
         worker_urls = worker_urls or []
-        port = port or find_free_port()
+        retry_count = 0 if port is not None else 2
+        while True:
+            try:
+                return self._start_router_process(
+                    worker_urls=worker_urls,
+                    policy=policy,
+                    port=port,
+                    extra=extra,
+                    lmdeploy_pd_disaggregation=lmdeploy_pd_disaggregation,
+                    prefill_urls=prefill_urls,
+                    decode_urls=decode_urls,
+                    prefill_policy=prefill_policy,
+                    decode_policy=decode_policy,
+                )
+            except RouterStartupError:
+                if retry_count == 0:
+                    raise
+                retry_count -= 1
+                port = None
+
+    def _start_router_process(
+        self,
+        worker_urls: list[str],
+        policy: str,
+        port: int | None,
+        extra: dict | None,
+        lmdeploy_pd_disaggregation: bool,
+        prefill_urls: list[str] | None,
+        decode_urls: list[str] | None,
+        prefill_policy: str | None,
+        decode_policy: str | None,
+    ) -> ProcHandle:
+        router_port, prom_port = (
+            [port, *find_free_ports(1)] if port is not None else find_free_ports(2)
+        )
         cmd = [
             'python3',
             '-m',
@@ -42,12 +80,11 @@ class RouterManager:
             '--host',
             '127.0.0.1',
             '--port',
-            str(port),
+            str(router_port),
             '--policy',
             policy,
         ]
-        # Avoid Prometheus port collisions by assigning a free port per router
-        prom_port = find_free_port()
+        # Avoid Prometheus port collisions by assigning unique free ports.
         cmd.extend(
             ['--prometheus-port', str(prom_port), '--prometheus-host', '127.0.0.1']
         )
@@ -112,9 +149,21 @@ class RouterManager:
 
         proc = subprocess.Popen(cmd)
         self._children.append(proc)
-        url = f'http://127.0.0.1:{port}'
-        self._wait_health(url)
+        url = f'http://127.0.0.1:{router_port}'
+        try:
+            self._wait_health(url)
+        except TimeoutError:
+            if self._router_failed_before_serving(proc):
+                raise RouterStartupError(f'Router at {url} failed during startup') from None
+            raise
         return ProcHandle(process=proc, url=url)
+
+    @staticmethod
+    def _router_failed_before_serving(process: subprocess.Popen) -> bool:
+        if process.poll() is None:
+            return False
+        stdout, _ = process.communicate(timeout=2)
+        return 'Router ready | workers:' not in stdout
 
     def _wait_health(self, base_url: str, timeout: float = 30.0):
         start = time.time()
