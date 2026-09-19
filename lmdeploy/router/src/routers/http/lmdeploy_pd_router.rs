@@ -720,13 +720,10 @@ impl LMDeployPDRouter {
 
             if !prefill_status.is_success() {
                 RouterMetrics::record_pd_prefill_error(&prefill_base_url);
-                return Err(PDRouterError::NetworkError {
-                    message: format!(
-                        "Prefill server {} returned {}: {}",
-                        prefill_url,
-                        prefill_status,
-                        String::from_utf8_lossy(&prefill_bytes)
-                    ),
+                return Err(PDRouterError::UpstreamResponse {
+                    url: prefill_base_url,
+                    status: prefill_status,
+                    body: prefill_bytes.to_vec(),
                 });
             }
 
@@ -1015,6 +1012,14 @@ impl LMDeployPDRouter {
             .await
         {
             Ok(response) => response,
+            Err(PDRouterError::UpstreamResponse { status, body, .. }) => Response::builder()
+                .status(status)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap_or_else(|error| {
+                    error!("Failed to build upstream response: {}", error);
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }),
             Err(e) => {
                 error!("LMD two-stage processing failed: {}", e);
                 (

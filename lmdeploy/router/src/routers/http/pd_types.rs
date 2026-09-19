@@ -19,6 +19,13 @@ pub enum PDRouterError {
     #[error("Network error: {message}")]
     NetworkError { message: String },
 
+    #[error("Upstream server {url} returned status {status}")]
+    UpstreamResponse {
+        url: String,
+        status: reqwest::StatusCode,
+        body: Vec<u8>,
+    },
+
     #[error("Timeout waiting for worker: {url}")]
     Timeout { url: String },
 }

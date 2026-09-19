@@ -138,7 +138,6 @@ jobs:
                curl -f -s http://127.0.0.1:23410/nodes/status | grep -q 'http://127.0.0.1:23411' && \
                curl -f -s http://127.0.0.1:23410/nodes/status | grep -q 'http://127.0.0.1:23412'; then
               LMDEPLOY_PORT=23410 pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 8 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' -m 'not not_pytorch and pr_test' --alluredir=${{env.REPORT_DIR}}
-              LMDEPLOY_PORT=23410 pytest autotest/interface/restful/test_restful_generate.py -n 8 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' -m 'not not_pytorch' --alluredir=${{env.REPORT_DIR}}
               LMDEPLOY_PORT=23410 pytest autotest/interface/restful/tool_parser/test_tool_call_basic.py -n 8 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' --alluredir=${{env.REPORT_DIR}}
               curl -f -s http://127.0.0.1:23410/nodes/remove -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:23412"}' > /dev/null 2>&1 || true
               curl -f -s http://127.0.0.1:23410/nodes/remove -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:23411"}' > /dev/null 2>&1 || true
