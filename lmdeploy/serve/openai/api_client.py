@@ -156,6 +156,7 @@ class APIClient:
             json objects in openai formats
         """
         pload = {k: v for k, v in locals().copy().items() if k[:2] != '__' and k not in ['self']}
+        pload.update(pload.pop('kwargs'))
         response = requests.post(self.chat_completions_v1_url, headers=self.headers, json=pload, stream=stream)
         for chunk in response.iter_lines(chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
             if chunk:
@@ -231,6 +232,7 @@ class APIClient:
             json objects in openai formats
         """
         pload = {k: v for k, v in locals().copy().items() if k[:2] != '__' and k not in ['self']}
+        pload.update(pload.pop('kwargs'))
         response = requests.post(self.completions_v1_url, headers=self.headers, json=pload, stream=stream)
         for chunk in response.iter_lines(chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
             if chunk:
