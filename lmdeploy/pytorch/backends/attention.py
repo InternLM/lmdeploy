@@ -23,6 +23,13 @@ class AttentionMetadata:
     cu_seqlens_q: torch.Tensor = None
     cu_seqlens_k: torch.Tensor = None
     quant_policy: QuantPolicy = QuantPolicy.NONE
+    # CUDA-graph runners pad sequence tensors to fixed bucket capacities.  The
+    # optional bounds below let model-specific metadata builders size captured
+    # workspaces from those capacities rather than from warmup-only Python
+    # scalars that cannot change on replay.
+    is_cuda_graph: bool = False
+    graph_max_kv_seqlen: int = None
+    graph_sum_kv_seqlen: int = None
 
 
 @dataclass
@@ -50,6 +57,14 @@ class V4AttentionMetadata:
     cu_seqlens_k: torch.Tensor = None
     sum_kv_seqlen: int = None
     start_pos: torch.Tensor = None                      # [bsz] long
+    causal: bool = True
+    # Multi-row speculative blocks enter through the decode scheduler. Causal
+    # target verification may use a packed rectangular-decode executor, while
+    # non-causal draft blocks retain sparse prefill. Keep this distinction
+    # after ``is_decoding`` is rewritten so graph metadata can use the fixed
+    # rectangular token capacity without reading a CUDA scalar.
+    is_rectangular_decode: bool = False
+    is_cuda_graph: bool = False
 
     @classmethod
     def from_step_context(cls, attn_metadata, step_ctx, **kwargs) -> 'V4AttentionMetadata':
@@ -77,6 +92,8 @@ class V4AttentionMetadata:
             sum_kv_seqlen=step_ctx.sum_kv_seqlen,
             cu_seqlens_k=attn_metadata.cu_seqlens_k,
             start_pos=(kv_seqlens.to(torch.long) - q_seqlens.to(torch.long)),
+            causal=kwargs.get('causal', True),
+            is_cuda_graph=getattr(attn_metadata, 'is_cuda_graph', False),
         )
 
     def build_indexer_metadata(self):
@@ -123,6 +140,7 @@ class V4AttentionBuildSpec(BuildSpec[V4AttentionImpl]):
     head_dim: int
     scale: float
     window_size: int
+    ring_storage_capacity: int
     compress_ratio: int
 
 

@@ -13,6 +13,17 @@ def test_arspec_cudagraph_uses_same_allocation_for_full_spec_capture():
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=40) == 40
 
 
+def test_dspark_cudagraph_keeps_target_and_draft_query_widths_distinct():
+    strategy = ARSpecCudagraphStrategy(num_spec_tokens=5, method='dspark')
+
+    # One live request padded to a four-request bucket. The target verifies
+    # N+1 rows while the sample-from-anchor draft queries only N rows.
+    assert strategy.get_max_tokens(batch_size=4, origin_batch_size=1,
+                                   num_tokens=6) == 24
+    assert strategy.get_max_tokens(batch_size=4, origin_batch_size=1,
+                                   num_tokens=5) == 20
+
+
 def test_arspec_cudagraph_keeps_full_spec_capture_for_eagle3():
     strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, method='eagle3')
 
@@ -56,6 +67,7 @@ def test_cudagraph_step_metadata_plan_owns_single_token_capture_buffers(monkeypa
         num_blocks=1,
         is_decoding=True,
         device=torch.device('cpu'),
+        max_kv_seqlen=64,
         input_buffers={},
         output_buffers={},
         use_fa3_decoding=True,
@@ -88,6 +100,9 @@ def test_cudagraph_step_metadata_plan_owns_single_token_capture_buffers(monkeypa
     )
 
     assert plan.max_seqlen_q_calls == [1, 1]
+    assert attn_metadata.is_cuda_graph is True
+    assert attn_metadata.graph_max_kv_seqlen == 64
+    assert attn_metadata.graph_sum_kv_seqlen == 8 * 64
 
 
 def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypatch):
