@@ -11,6 +11,3 @@ h:
   test_coverage:
   - evaluate
   - func
-  gen_config:
-    temperature: 1.0
-    top-p: 1.0

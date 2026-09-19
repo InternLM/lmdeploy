@@ -128,13 +128,6 @@ h:
     - awq
     pytorch:
     - fp8
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
 - model_type:
   - chat
   - vl
@@ -158,13 +151,6 @@ h:
   quantization:
     pytorch:
     - fp8
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
 ascend:
 - model_type:
   - chat
@@ -185,13 +171,6 @@ ascend:
   - mllm_evaluate
   - prefix_cache
   - mllm_evaluate
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
 - model_type:
   - chat
   - vl
@@ -213,10 +192,3 @@ ascend:
   - func
   - longtext_benchmark
   - mllm_evaluate
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
