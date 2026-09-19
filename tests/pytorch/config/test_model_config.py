@@ -1,12 +1,15 @@
+from textwrap import dedent
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 from lmdeploy.hf_configs import config_from_pretrained
 from lmdeploy.hf_configs.configuration_kimi_k2 import KimiK2Config
 from lmdeploy.pytorch.config import CacheConfig, DistConfig, ModelConfig, QuantizationConfig
 from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
 from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as update_deepseek_v4_cache_config
+from lmdeploy.pytorch.nn import RopeType, build_rotary_embedding_from_config, build_rotary_params
 
 
 def _make_model_config(num_attention_heads=32, num_key_value_heads=8, dist_config=None):
@@ -47,6 +50,70 @@ def _make_deepseek_v4_hf_config(compress_ratios, num_hidden_layers=3):
     )
 
 
+def _make_sparse_conceptlm_hf_config():
+    return SimpleNamespace(
+        architectures=['ConceptLMV22VQForCausalLM'],
+        model_type='conceptlm_v22_vq',
+        hidden_size=4096,
+        num_hidden_layers=32,
+        num_layers=32,
+        num_attention_heads=32,
+        kv_channels=128,
+        bos_token_id=100257,
+        eos_token_id=100257,
+        pad_token_id=100277,
+        vocab_size=100278,
+        torch_dtype='bfloat16',
+        concept_chunk_size=4,
+        concept_shift_feature=True,
+        position_embedding_type='yarn',
+        max_position_embeddings=65536,
+        max_sequence_length=65536,
+        rotary_base=500000,
+        rotary_percent=1.0,
+        yarn_rotary_scaling_factor=8.0,
+        yarn_original_max_position_embeddings=8192,
+        yarn_beta_fast=32.0,
+        yarn_beta_slow=1.0,
+        yarn_mscale=1.0,
+        yarn_mscale_all_dim=0.0,
+        yarn_correction_range_round_to_int=True,
+    )
+
+
+def _write_conceptlm_training_config(model_dir):
+    (model_dir / 'training_config.yaml').write_text(
+        dedent("""
+        conceptlm_encoder_layers:
+          value: 16
+        conceptlm_special_layers:
+          value: 8
+        conceptlm_decoder_layers:
+          value: 16
+        conceptlm_chunk_merge_method:
+          value: meanpooling
+        conceptlm_fusion_norm_alpha_init:
+          value: 0.1
+        conceptlm_v22_vq_codebook_size:
+          value: 128
+        conceptlm_v22_vq_num_codebooks:
+          value: 32
+        conceptlm_v21_dd_two_route_add_decoder_use_softmax:
+          value: true
+        conceptlm_v21_enable_concept_read_encoder:
+          value: true
+        conceptlm_v21_enable_decoder_read_encoder:
+          value: true
+        conceptlm_v21_enable_decoder_read_concept:
+          value: true
+        conceptlm_v21_concept_read_encoder_first_n:
+          value: -1
+        conceptlm_v21_decoder_read_encoder_first_n:
+          value: -1
+        """),
+        encoding='utf-8')
+
+
 def test_get_num_qkv_head_by_tp_from_dist_config():
     model_config = _make_model_config(dist_config=DistConfig(tp=4))
 
@@ -76,6 +143,75 @@ def test_from_hf_config_keeps_dist_config_for_head_split():
 
     assert model_config.dist_config.tp == 4
     assert model_config.get_num_qkv_head_by_tp() == (8, 2)
+
+
+def test_conceptlm_model_config_backfills_new_export_training_config(tmp_path):
+    hf_config = _make_sparse_conceptlm_hf_config()
+    _write_conceptlm_training_config(tmp_path)
+
+    model_config = AutoModelConfigBuilder.build(hf_config, str(tmp_path))
+
+    assert hf_config.concept_encoder_layers == 16
+    assert hf_config.concept_special_layers == 8
+    assert hf_config.concept_decoder_layers == 16
+    assert hf_config.concept_v22_vq_codebook_size == 128
+    assert hf_config.concept_v22_vq_num_codebooks == 32
+    assert hf_config.concept_chunk_merge_method == 'meanpooling'
+    assert model_config.num_layers == 40
+    assert model_config.states_shapes == [((16, 4096), torch.float32), ((9, 4096), torch.bfloat16)]
+
+
+def test_conceptlm_model_config_reports_sparse_export_without_training_config(tmp_path):
+    hf_config = _make_sparse_conceptlm_hf_config()
+
+    with pytest.raises(AttributeError, match='training_config.yaml'):
+        AutoModelConfigBuilder.build(hf_config, str(tmp_path))
+
+
+@pytest.mark.parametrize('trust_remote_code', [False, True])
+def test_conceptlm_special_token_fallback_respects_trust_remote_code(tmp_path, monkeypatch, trust_remote_code):
+    hf_config = _make_sparse_conceptlm_hf_config()
+    hf_config.bos_token_id = None
+    hf_config.eos_token_id = None
+    hf_config.pad_token_id = None
+    _write_conceptlm_training_config(tmp_path)
+    tokenizer_calls = []
+
+    def fake_from_pretrained(model_path, trust_remote_code=False):
+        tokenizer_calls.append((model_path, trust_remote_code))
+        return SimpleNamespace(bos_token_id=1, eos_token_id=2, pad_token_id=0)
+
+    monkeypatch.setattr('transformers.AutoTokenizer.from_pretrained', fake_from_pretrained)
+
+    model_config = ModelConfig.from_hf_config(hf_config, str(tmp_path), trust_remote_code=trust_remote_code)
+
+    assert tokenizer_calls == [(str(tmp_path), trust_remote_code)]
+    assert model_config.bos_token_id == 1
+    assert model_config.eos_token_id == [2]
+
+
+def test_conceptlm_yarn_rotary_config_uses_original_context_length(tmp_path):
+    hf_config = _make_sparse_conceptlm_hf_config()
+    _write_conceptlm_training_config(tmp_path)
+    model_config = AutoModelConfigBuilder.build(hf_config, str(tmp_path))
+
+    rotary_params = build_rotary_params(hf_config)
+
+    assert model_config.head_dim == 128
+    assert hf_config.head_dim == 128
+    assert hf_config.rope_theta == 500000
+    assert hf_config.partial_rotary_factor == 1.0
+    assert hf_config.rope_scaling['rope_type'] == 'yarn'
+    assert hf_config.rope_parameters['rope_theta'] == 500000
+    assert rotary_params['emb_type'] is RopeType.Yarn
+    assert rotary_params['scaling_factor'] == 8.0
+    assert rotary_params['max_position_embeddings'] == 8192
+    assert rotary_params['yarn_params'].beta_fast == 32.0
+    assert rotary_params['yarn_params'].beta_slow == 1.0
+    assert rotary_params['yarn_params'].mscale == 1.0
+    assert rotary_params['yarn_params'].mscale_all_dim == 0.0
+    assert rotary_params['yarn_params'].truncate is True
+    assert build_rotary_embedding_from_config(hf_config).base == 500000
 
 
 @pytest.mark.parametrize(
