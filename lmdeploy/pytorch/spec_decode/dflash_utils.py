@@ -32,29 +32,6 @@ def _validate_target_layer_id_order(layer_ids: tuple[int, ...], field_name: str)
         prev_layer_id = layer_id
 
 
-def build_target_layer_ids(num_target_layers: int, num_draft_layers: int) -> tuple[int, ...]:
-    """Select evenly spaced DFlash target layer ids.
-
-    DFlash consumes hidden features sampled from the target model. This fallback matches the SGLang/vLLM convention used
-    when checkpoint metadata does not explicitly list target layers.
-    """
-    if num_target_layers < 1:
-        raise ValueError(f'DFlash num_target_layers must be positive, got {num_target_layers!r}.')
-    if num_draft_layers < 1:
-        raise ValueError(f'DFlash num_hidden_layers must be positive, got {num_draft_layers!r}.')
-    if num_draft_layers == 1:
-        return (num_target_layers // 2,)
-
-    start = 1
-    end = num_target_layers - 3
-    if end < start:
-        raise ValueError(f'DFlash target layer fallback requires at least 4 target layers, got {num_target_layers}.')
-    span = end - start
-    layer_ids = tuple(int(round(start + i * span / (num_draft_layers - 1))) for i in range(num_draft_layers))
-    _validate_target_layer_id_order(layer_ids, 'DFlash fallback target_layer_ids')
-    return layer_ids
-
-
 def _normalize_sliding_window(sliding_window: Any) -> int | None:
     """Normalize the no-window values used by HF and ``ModelConfig``."""
     if sliding_window in (None, 0, -1):
@@ -130,7 +107,6 @@ def _validate_dflash_v1_supported(draft_hf_config: Any, dflash_config: Any) -> N
 def parse_dflash_config(draft_hf_config: Any, num_speculative_tokens: int,
                         target_num_layers: int) -> tuple[tuple[int, ...], int]:
     """Return resolved ``(target_layer_ids, mask_token_id)`` metadata."""
-    num_hidden_layers = draft_hf_config.num_hidden_layers
     num_target_layers = draft_hf_config.num_target_layers
     dflash_config = draft_hf_config.dflash_config
     _validate_dflash_v1_supported(draft_hf_config, dflash_config)
@@ -158,7 +134,12 @@ def parse_dflash_config(draft_hf_config: Any, num_speculative_tokens: int,
 
     target_layer_ids = _parse_layer_ids(dflash_config.get('target_layer_ids'))
     if target_layer_ids is None:
-        target_layer_ids = build_target_layer_ids(num_target_layers, num_hidden_layers)
+        # The tap layers are a training-time choice baked into the checkpoint
+        # (fc input width and which target layers the draft was trained on),
+        # so no load-time guess can be correct; see z-lab/dflash#156. Every
+        # published DFlash checkpoint sets this key.
+        raise ValueError('DFlash checkpoint requires dflash_config.target_layer_ids; '
+                         'a guessed layer list can silently read the wrong target layers.')
     for pos, layer_id in enumerate(target_layer_ids):
         if layer_id < 0 or layer_id >= num_target_layers:
             raise ValueError('DFlash target_layer_ids contains an out-of-range value: '
