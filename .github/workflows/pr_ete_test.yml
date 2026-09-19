@@ -123,8 +123,38 @@ jobs:
           echo "PD lmdeploy-router failed to start"
           cat ${{env.SERVER_LOG}}/pd_router.log
           exit 1
+      - name: Check pytorch PD migration environment
+        run: |
+          echo "::group::Python migration dependencies"
+          python3 - <<'PY'
+          try:
+              import dlslime
+              print(f'dlslime available: {dlslime.__file__}')
+          except Exception as error:
+              print(f'dlslime import failed: {error!r}')
+
+          try:
+              from dlslime import available_nic
+              print(f'dlslime available NICs: {available_nic()}')
+          except Exception as error:
+              print(f'dlslime NIC discovery failed: {error!r}')
+          PY
+          echo "::endgroup::"
+
+          echo "::group::RDMA devices"
+          ibv_devices || true
+          ls -l /dev/infiniband || true
+          echo "::endgroup::"
       - name: Test restful server - pytorch pd Qwen3.5-35B-A3B
         run: |
+          cleanup_pd() {
+            wait "$prefill_pid" 2>/dev/null || true
+            wait "$decode_pid" 2>/dev/null || true
+            cat ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_prefill.log || true
+            cat ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_decode.log || true
+            cat ${{env.SERVER_LOG}}/pd_router.log || true
+          }
+          trap cleanup_pd ERR
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --server-name 127.0.0.1 --server-port 23411 --tp 2 --backend pytorch --role Prefill --proxy-url http://127.0.0.1:23410 > ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_prefill.log 2>&1 &
           prefill_pid=$!
           CUDA_VISIBLE_DEVICES=4,5 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --server-name 127.0.0.1 --server-port 23412 --tp 2 --backend pytorch --role Decode --proxy-url http://127.0.0.1:23410 > ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_decode.log 2>&1 &
