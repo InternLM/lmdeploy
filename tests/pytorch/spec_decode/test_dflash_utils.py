@@ -23,7 +23,6 @@ from lmdeploy.pytorch.models.qwen3_dflash import (
     _resolve_dflash_layer_attention,
 )
 from lmdeploy.pytorch.spec_decode.dflash_utils import (
-    build_target_layer_ids,
     parse_dflash_config,
     validate_dflash_cache_config,
     validate_dflash_dist_config,
@@ -66,6 +65,21 @@ def _parse_dflash(draft_config, num_speculative_tokens, target_num_layers=None):
 
 def test_parse_dflash_config_valid():
     target_layer_ids, mask_token_id = _parse_dflash(_draft_config(), num_speculative_tokens=3)
+
+    assert target_layer_ids == (1, 5, 9, 13)
+    assert mask_token_id == 32001
+
+
+def test_parse_dflash_config_top_level_checkpoint_layout():
+    """Original z-lab DFlash checkpoints (e.g. Qwen3-4B-DFlash-b16) keep
+    block_size at the top level of config.json and nest only mask_token_id and
+    target_layer_ids inside dflash_config."""
+    config = _draft_config(block_size=4,
+                           dflash_config=dict(
+                               mask_token_id=32001,
+                               target_layer_ids=[1, 5, 9, 13],
+                           ))
+    target_layer_ids, mask_token_id = _parse_dflash(config, num_speculative_tokens=3)
 
     assert target_layer_ids == (1, 5, 9, 13)
     assert mask_token_id == 32001
@@ -171,29 +185,32 @@ def test_parse_dflash_config_requires_mask_token_id():
 
 @pytest.mark.parametrize('num_speculative_tokens', [3, 7, 15])
 def test_parse_dflash_config_allows_runtime_query_up_to_checkpoint_block_size(num_speculative_tokens):
-    draft_config = _draft_config(dflash_config=dict(block_size=16, mask_token_id=32001))
+    draft_config = _draft_config(
+        dflash_config=dict(block_size=16, mask_token_id=32001, target_layer_ids=[1, 5, 9, 13]))
 
     target_layer_ids, mask_token_id = _parse_dflash(draft_config,
                                                     num_speculative_tokens=num_speculative_tokens)
 
-    assert target_layer_ids == build_target_layer_ids(16, 4)
+    assert target_layer_ids == (1, 5, 9, 13)
     assert mask_token_id == 32001
 
 
 def test_parse_dflash_config_rejects_query_above_checkpoint_block_size():
-    draft_config = _draft_config(dflash_config=dict(block_size=16, mask_token_id=32001))
+    draft_config = _draft_config(
+        dflash_config=dict(block_size=16, mask_token_id=32001, target_layer_ids=[1, 5, 9, 13]))
 
     with pytest.raises(ValueError, match='must not exceed.*block_size'):
         _parse_dflash(draft_config, num_speculative_tokens=16)
 
 
-def test_parse_dflash_config_resolves_target_layers_from_num_target_layers():
+def test_parse_dflash_config_requires_target_layer_ids():
+    """The tap layers are a training-time choice baked into the checkpoint, so
+    a missing key must fail loudly instead of falling back to a guessed layer
+    list that can silently read the wrong target layers (z-lab/dflash#156)."""
     draft_config = _draft_config(dflash_config=dict(block_size=4, mask_token_id=32001))
 
-    target_layer_ids, mask_token_id = _parse_dflash(draft_config, num_speculative_tokens=3)
-
-    assert target_layer_ids == build_target_layer_ids(16, 4)
-    assert mask_token_id == 32001
+    with pytest.raises(ValueError, match='target_layer_ids'):
+        _parse_dflash(draft_config, num_speculative_tokens=3)
 
 
 def test_parse_dflash_config_rejects_non_increasing_target_layers():
