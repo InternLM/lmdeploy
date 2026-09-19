@@ -1,0 +1,64 @@
+name: router-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: 'Upload lmdeploy-router distributions to PyPI'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: lmdeploy/router
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build router wheel
+        run: |
+          python -m pip install --upgrade build setuptools-rust wheel
+          python -m build --wheel --outdir dist .
+      - name: Inspect distributions
+        run: ls -lh dist/*
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lmdeploy-router-${{ github.sha }}
+          path: lmdeploy/router/dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: ${{ inputs.upload }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: prod
+    steps:
+      - name: Download router artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lmdeploy-router-${{ github.sha }}
+          path: dist
+      - name: Publish lmdeploy-router to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.ROUTER_PYPI_TOKEN }}
+        run: |
+          python -m pip install --upgrade twine
+          twine check dist/*
+          twine upload dist/*

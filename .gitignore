@@ -58,6 +58,9 @@ lmdeploy/turbomind/_turbomind*.so
 lmdeploy/turbomind/_turbomind*.pyd
 lmdeploy/turbomind/lib/
 dist/
+lmdeploy/router/target/
+lmdeploy/router/.pytest_cache/
+lmdeploy/router/.tokenizer_cache/
 examples/cpp/llama/*.csv
 *.npy
 *.weight
@@ -74,6 +77,8 @@ wscripts/
 *.bin
 *config.json
 *generate_config.json
+!lmdeploy/router/examples/configs/*.json
+!lmdeploy/router/test_prompt_input.json
 !lmdeploy/turbomind/hf_repo/config.json
 
 # Pytorch

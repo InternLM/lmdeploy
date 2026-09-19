@@ -95,7 +95,16 @@ class EngineP2PConnection:
             if not self.engine.end_session(session_id=session_id):
                 logger.error(f'invalid free, {remote_engine_id}, {session_id}')
 
-    def zmq_disconnect(self, remote_engine_id: str):
-        self.p2p_receiver[remote_engine_id].close()
-        self.p2p_sender[remote_engine_id].close()
-        self.p2p_conn_ctx[remote_engine_id].term()
+    def zmq_disconnect(self, remote_engine_id: str) -> bool:
+        """Disconnect a peer and return whether it was connected."""
+
+        if remote_engine_id not in self.p2p_receiver:
+            return False
+
+        receiver = self.p2p_receiver.pop(remote_engine_id)
+        sender = self.p2p_sender.pop(remote_engine_id)
+        context = self.p2p_conn_ctx.pop(remote_engine_id)
+        receiver.close()
+        sender.close()
+        context.term()
+        return True

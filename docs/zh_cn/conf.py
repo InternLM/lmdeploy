@@ -24,7 +24,6 @@ sys.path.insert(0, os.path.abspath('../..'))
 from lmdeploy.serve.openai.api_server import ServerContext  # noqa: E402
 from lmdeploy.serve.openai.endpoints import create_openai_router  # noqa: E402
 from lmdeploy.serve.openai.responses import create_responses_router  # noqa: E402
-from lmdeploy.serve.proxy.proxy import app as proxy_server  # noqa: E402
 
 version_file = '../../lmdeploy/version.py'
 with open(version_file) as f:
@@ -73,9 +72,6 @@ spec_dir.mkdir(exist_ok=True)
 
 with open(spec_dir / 'openai.yaml', 'w', encoding='utf-8') as f:
     f.write(safe_dump(openai_server.openapi()))
-
-with open(spec_dir / 'proxy.yaml', 'w', encoding='utf-8') as f:
-    f.write(safe_dump(proxy_server.openapi()))
 
 # -- General configuration ---------------------------------------------------
 
