@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import torch
 
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.config import CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import CacheConfig, ModelConfig, SharedCacheArenaGeometry
 
 from .layout import CacheAllocation, CachePool, PackedBlockCacheLayout, PackedStateCacheLayout
 from .plan import BlockCachePlan
@@ -62,10 +62,7 @@ class SharedCacheArena:
         """Allocate the root for finalized shared-mode capacity."""
         cls.validate_plan(cache_config, model_config, block_cache_plan)
 
-        group_size = cache_config.arena_units_per_group
-        num_gpu_blocks = cache_config.num_gpu_blocks
-        if num_gpu_blocks <= 0 or num_gpu_blocks % group_size:
-            raise ValueError('Shared KV/state cache capacity must be a positive complete-group multiple.')
+        geometry = SharedCacheArenaGeometry.from_cache_config(cache_config, require_capacity=True)
 
         layout = block_cache_plan.layout
         pool_size = sum(spec.desc.aligned_size for spec in layout.tensor_specs)
@@ -76,18 +73,16 @@ class SharedCacheArena:
                 'Shared KV/state cache requires one packed pool with a stable per-block byte footprint: '
                 f'expected {expected_nbytes}, got {kv_block_nbytes}.')
 
-        flexible_groups = num_gpu_blocks // group_size
-        num_groups = flexible_groups + cache_config.arena_num_protected_groups + 1
-        if cache_config.arena_num_groups not in (0, num_groups):
+        if cache_config.arena_num_groups not in (0, geometry.num_groups):
             raise ValueError('Shared arena group metadata does not match num_gpu_blocks.')
-        if cache_config.arena_num_units not in (0, num_groups * group_size):
+        if cache_config.arena_num_units not in (0, geometry.num_units):
             raise ValueError('Shared arena unit metadata does not match num_gpu_blocks.')
-        root = torch.zeros((num_groups, group_size * kv_block_nbytes),
+        root = torch.zeros((geometry.num_groups, geometry.units_per_group * kv_block_nbytes),
                            dtype=torch.uint8,
                            device=device)
         return cls(root=root,
-                   num_groups=num_groups,
-                   group_size=group_size,
+                   num_groups=geometry.num_groups,
+                   group_size=geometry.units_per_group,
                    kv_block_nbytes=kv_block_nbytes)
 
     @property

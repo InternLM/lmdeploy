@@ -3,7 +3,7 @@ import enum
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 import torch
 
@@ -208,6 +208,89 @@ class CacheConfig:
                 'prefix_cache_decode_state_interval must be a multiple of block_size')
         self.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
             self.cudagraph_capture_batch_sizes, self.max_batches)
+
+
+def get_default_num_state_caches(max_batches: int, prefix_cache_state_budget: int) -> int:
+    """Return the default total state-slot count, including reserved slots."""
+    return max_batches + 2 + prefix_cache_state_budget
+
+
+def get_num_runtime_states(num_state_caches: int,
+                           prefix_cache_state_budget: int,
+                           num_reserved_states: int = 1) -> int:
+    """Return state slots available to runtime sequences."""
+    available_states = max(0, num_state_caches - num_reserved_states)
+    return max(0, min(num_state_caches - num_reserved_states - prefix_cache_state_budget, available_states))
+
+
+@dataclass(frozen=True)
+class SharedCacheArenaGeometry:
+    """Derived group geometry for the GPU-only shared cache arena.
+
+    ``num_gpu_blocks`` is the flexible KV capacity. Protected state groups and
+    one padding group are additional physical groups owned by the arena.
+    """
+
+    units_per_group: int
+    num_protected_groups: int
+    num_flexible_groups: int
+    padding_groups: ClassVar[int] = 1
+
+    @classmethod
+    def from_cache_config(cls,
+                          cache_config: CacheConfig,
+                          *,
+                          require_capacity: bool = False) -> 'SharedCacheArenaGeometry':
+        """Derive and validate geometry from the finalized cache config."""
+        units_per_group = cache_config.arena_units_per_group
+        if units_per_group <= 0:
+            raise ValueError('arena_units_per_group must be positive.')
+
+        num_gpu_blocks = cache_config.num_gpu_blocks
+        if num_gpu_blocks < 0:
+            raise ValueError('Shared KV/state cache capacity must not be negative.')
+        if require_capacity and (num_gpu_blocks == 0 or num_gpu_blocks % units_per_group):
+            raise ValueError(
+                'Shared KV/state cache capacity must be a positive multiple of '
+                'arena_units_per_group (a complete-group multiple).')
+        if num_gpu_blocks and num_gpu_blocks % units_per_group:
+            raise ValueError(
+                'Shared KV/state cache num_gpu_blocks must be a positive multiple of '
+                f'arena_units_per_group ({units_per_group}).')
+
+        num_state_caches = cache_config.num_state_caches
+        num_protected_groups = cache_config.arena_num_protected_groups
+        if cache_config.states_shapes or num_state_caches is not None:
+            num_state_caches = num_state_caches or 1
+            num_runtime_states = get_num_runtime_states(num_state_caches, cache_config.prefix_cache_state_budget)
+            num_protected_groups = max(num_protected_groups, 1 + num_runtime_states)
+
+        return cls(
+            units_per_group=units_per_group,
+            num_protected_groups=num_protected_groups,
+            num_flexible_groups=num_gpu_blocks // units_per_group,
+        )
+
+    @property
+    def num_groups(self) -> int:
+        """Return all physical groups, including protected and padding
+        groups."""
+        return self.num_flexible_groups + self.num_protected_groups + self.padding_groups
+
+    @property
+    def num_units(self) -> int:
+        """Return the physical KV-block span of the arena."""
+        return self.num_groups * self.units_per_group
+
+    @property
+    def fixed_groups(self) -> int:
+        """Return protected groups plus the permanently reserved padding
+        group."""
+        return self.num_protected_groups + self.padding_groups
+
+    def fixed_memory_nbytes(self, kv_block_nbytes: int) -> int:
+        """Return fixed arena bytes for one worker's KV block footprint."""
+        return self.fixed_groups * self.units_per_group * kv_block_nbytes
 
 
 class TPMode(enum.Enum):

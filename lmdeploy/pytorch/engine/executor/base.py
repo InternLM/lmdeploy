@@ -5,7 +5,16 @@ import contextlib
 from typing import Any, NamedTuple
 
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    DistConfig,
+    MiscConfig,
+    ModelConfig,
+    SharedCacheArenaGeometry,
+    SpecDecodeConfig,
+    get_default_num_state_caches,
+)
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
@@ -285,8 +294,8 @@ class ExecutorBase:
             # One state slot is reserved for system use. Active sequences need
             # max_batches runtime slots plus one spare for rolling prefill;
             # prefix-cache checkpoints use an explicitly configured extra budget.
-            # TODO: Share memory between state cache and pageable cache
-            num_state_caches = int(cache_config.max_batches + 2 + cache_config.prefix_cache_state_budget)
+            num_state_caches = int(
+                get_default_num_state_caches(cache_config.max_batches, cache_config.prefix_cache_state_budget))
             cache_config.num_state_caches = num_state_caches
 
         if model_config is None:
@@ -399,38 +408,29 @@ class ExecutorBase:
                     f'group_size={group_size}, state_slot_nbytes={state_slot_nbytes}, '
                     f'kv_block_nbytes={min(plan.target for plan in cache_block_sizes)}.')
 
-            num_state_caches = self.cache_config.num_state_caches
-            if num_state_caches is None:
+            if self.cache_config.num_state_caches is None:
                 # Keep this helper usable in isolation as well as from
                 # update_configs(), where _get_state_cache_mem has already
                 # resolved the default.
-                num_state_caches = self.cache_config.max_batches + 2 + self.cache_config.prefix_cache_state_budget
-                self.cache_config.num_state_caches = num_state_caches
-            num_runtime_states = max(
-                0,
-                num_state_caches - 1 - self.cache_config.prefix_cache_state_budget,
-            )
-            required_protected_groups = 1 + num_runtime_states
-            self.cache_config.arena_num_protected_groups = max(
-                self.cache_config.arena_num_protected_groups,
-                required_protected_groups,
-            )
+                self.cache_config.num_state_caches = get_default_num_state_caches(
+                    self.cache_config.max_batches, self.cache_config.prefix_cache_state_budget)
+
+        geometry = SharedCacheArenaGeometry.from_cache_config(self.cache_config)
+        self.cache_config.arena_num_protected_groups = geometry.num_protected_groups
 
     def _get_shared_fixed_mem(self, cache_block_sizes: list[_WorkerCachePlanSizes]) -> list[int]:
         """Return fixed arena bytes for protected and padding groups."""
-        group_size = self.cache_config.arena_units_per_group
-        fixed_groups = self.cache_config.arena_num_protected_groups + 1  # one padding group
-        return [fixed_groups * group_size * plan.target for plan in cache_block_sizes]
+        geometry = SharedCacheArenaGeometry.from_cache_config(self.cache_config)
+        return [geometry.fixed_memory_nbytes(plan.target) for plan in cache_block_sizes]
 
     def _update_shared_arena_capacity_metadata(self) -> None:
         """Publish the physical arena span alongside flexible KV capacity."""
         if not self.cache_config.enable_kv_state_cache_sharing:
             return
-        group_size = self.cache_config.arena_units_per_group
-        flexible_groups = self.cache_config.num_gpu_blocks // group_size
-        num_groups = flexible_groups + self.cache_config.arena_num_protected_groups + 1
-        self.cache_config.arena_num_groups = num_groups
-        self.cache_config.arena_num_units = num_groups * group_size
+        geometry = SharedCacheArenaGeometry.from_cache_config(self.cache_config, require_capacity=True)
+        self.cache_config.arena_num_protected_groups = geometry.num_protected_groups
+        self.cache_config.arena_num_groups = geometry.num_groups
+        self.cache_config.arena_num_units = geometry.num_units
 
     def _sync_spec_cache_block_size(self) -> None:
         """Keep spec cache block sizes aligned with target cache."""
@@ -510,11 +510,6 @@ class ExecutorBase:
             # User supplied an explicit block count. Do not resize it from the
             # current free-memory snapshot.
             if self.cache_config.enable_kv_state_cache_sharing:
-                group_size = self.cache_config.arena_units_per_group
-                if self.cache_config.num_gpu_blocks < group_size or self.cache_config.num_gpu_blocks % group_size:
-                    raise ValueError(
-                        'Shared KV/state cache num_gpu_blocks must be a positive multiple of '
-                        f'arena_units_per_group ({group_size}).')
                 self._update_shared_arena_capacity_metadata()
             if spec_cache_config is not None:
                 spec_cache_config.num_gpu_blocks = self.cache_config.num_gpu_blocks

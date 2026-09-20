@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import numpy as np
 
-from lmdeploy.pytorch.config import CacheConfig
+from lmdeploy.pytorch.config import CacheConfig, get_num_runtime_states
 from lmdeploy.pytorch.messages import SchedulerSequence
 
 from .block_manager.group_allocator import GroupAllocator, GroupHandle
@@ -220,7 +220,8 @@ def build_state_manager(cache_config: CacheConfig,
     # Rows left after reserved rows and explicit checkpoint budget are runtime
     # rows. With ExecutorBase's default sizing this gives max_batches plus one
     # spare runtime row.
-    num_runtime_states = num_state_caches - num_reserved - cache_config.prefix_cache_state_budget
+    num_runtime_states = get_num_runtime_states(
+        num_state_caches, cache_config.prefix_cache_state_budget, num_reserved)
     return StateManager(num_state_caches,
                         num_reserved,
                         num_runtime_states=num_runtime_states,
