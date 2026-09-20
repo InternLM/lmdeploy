@@ -36,7 +36,34 @@ jobs:
       SERVER_LOG: /nvme/qa_test_models/server_log/${{ github.head_ref }}_${{ github.run_id }}
     container:
       image: openmmlab/lmdeploy:dev-cu12.8
-      options: --gpus all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never
+      options: >-
+        --gpus all
+        --ipc host
+        --device /dev/infiniband/rdma_cm
+        --device /dev/infiniband/uverb0
+        --device /dev/infiniband/uverb1
+        --device /dev/infiniband/uverb2
+        --device /dev/infiniband/uverb3
+        --device /dev/infiniband/uverb4
+        --device /dev/infiniband/uverb5
+        --device /dev/infiniband/uverb6
+        --device /dev/infiniband/uverb7
+        --device /dev/infiniband/uverb8
+        --device /dev/infiniband/uverb9
+        --device /dev/infiniband/uverb10
+        --device /dev/infiniband/uverb11
+        --device /dev/infiniband/uverb12
+        --device /dev/infiniband/uverb13
+        --device /dev/infiniband/uverb14
+        --device /dev/infiniband/uverb15
+        --device /dev/infiniband/uverb16
+        --device /dev/infiniband/uverb17
+        --cap-add IPC_LOCK
+        --ulimit memlock=-1
+        --ulimit stack=67108864
+        --user root
+        -e PIP_CACHE_DIR=/root/.cache/pip
+        --pull never
       volumes:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
         - /nvme/share_data/github-actions/packages:/root/packages
@@ -124,6 +151,7 @@ jobs:
           cat ${{env.SERVER_LOG}}/pd_router.log
           exit 1
       - name: Check pytorch PD migration environment
+        shell: bash
         run: |
           echo "::group::Python migration dependencies"
           python3 - <<'PY'
@@ -146,15 +174,8 @@ jobs:
           ls -l /dev/infiniband || true
           echo "::endgroup::"
       - name: Test restful server - pytorch pd Qwen3.5-35B-A3B
+        shell: bash
         run: |
-          cleanup_pd() {
-            wait "$prefill_pid" 2>/dev/null || true
-            wait "$decode_pid" 2>/dev/null || true
-            cat ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_prefill.log || true
-            cat ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_decode.log || true
-            cat ${{env.SERVER_LOG}}/pd_router.log || true
-          }
-          trap cleanup_pd ERR
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --server-name 127.0.0.1 --server-port 23411 --tp 2 --backend pytorch --role Prefill --proxy-url http://127.0.0.1:23410 > ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_prefill.log 2>&1 &
           prefill_pid=$!
           CUDA_VISIBLE_DEVICES=4,5 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --server-name 127.0.0.1 --server-port 23412 --tp 2 --backend pytorch --role Decode --proxy-url http://127.0.0.1:23410 > ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_decode.log 2>&1 &
@@ -167,14 +188,26 @@ jobs:
                curl -f -s http://127.0.0.1:23412/health > /dev/null 2>&1 && \
                curl -f -s http://127.0.0.1:23410/nodes/status | grep -q 'http://127.0.0.1:23411' && \
                curl -f -s http://127.0.0.1:23410/nodes/status | grep -q 'http://127.0.0.1:23412'; then
-              LMDEPLOY_PORT=23410 pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 8 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' -m 'not not_pytorch and pr_test' --alluredir=${{env.REPORT_DIR}}
-              LMDEPLOY_PORT=23410 pytest autotest/interface/restful/tool_parser/test_tool_call_basic.py -n 8 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' --alluredir=${{env.REPORT_DIR}}
+              if ! LMDEPLOY_PORT=23410 pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 8 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' -m 'not not_pytorch and pr_test' --alluredir=${{env.REPORT_DIR}}; then
+                pd_test_status=1
+                break
+              fi
+              if ! LMDEPLOY_PORT=23410 pytest autotest/interface/restful/tool_parser/test_tool_call_basic.py -n 8 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' --alluredir=${{env.REPORT_DIR}}; then
+                pd_test_status=1
+                break
+              fi
               curl -f -s http://127.0.0.1:23410/nodes/remove -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:23412"}' > /dev/null 2>&1 || true
               curl -f -s http://127.0.0.1:23410/nodes/remove -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:23411"}' > /dev/null 2>&1 || true
               curl -f -s http://127.0.0.1:23412/terminate > /dev/null 2>&1
               curl -f -s http://127.0.0.1:23411/terminate > /dev/null 2>&1
               wait $prefill_pid
               wait $decode_pid
+              if [ "$pd_test_status" -ne 0 ]; then
+                cat ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_prefill.log || true
+                cat ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_decode.log || true
+                cat ${{env.SERVER_LOG}}/pd_router.log || true
+                exit 1
+              fi
               exit 0
             fi
           done
