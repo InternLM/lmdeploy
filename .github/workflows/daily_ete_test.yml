@@ -61,6 +61,10 @@ env:
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
   RUN_ID: ${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
+  # git 2.35+: avoid "dubious ownership" when container user ≠ checkout owner.
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: '*'
 
 jobs:
   linux-build:
