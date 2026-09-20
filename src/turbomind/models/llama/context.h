@@ -28,6 +28,7 @@ struct Communicators {
     int              d_cp_group;
     int              d_dp_group;
     int              d_mlp_group;
+    int              d_node_group;
 };
 
 // Execution context for the model

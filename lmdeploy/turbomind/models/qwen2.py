@@ -96,14 +96,14 @@ class Qwen2Model(TextModel):
 
         return m.build()
 
-    def ffn(self, pfx, inter_size, is_expert=False):
+    def ffn(self, pfx, inter_size, is_expert=False, *, tp):
         w1, w3, w2 = [self._linear(pfx + f'{x}_proj') for x in ('gate', 'up', 'down')]
 
         cfg = self._ffn_cfg.clone()
         cfg.inter_size = inter_size
         cfg.is_expert  = is_expert
 
-        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp)
+        m = FfnBuilder(cfg, self._ctx, tp=tp)
         m.add_ffn(w1, w2, w3)
         return m.build()
 
@@ -118,14 +118,15 @@ class Qwen2Model(TextModel):
         for e in m.range(self.cfg.num_experts):
             experts[e] = self.ffn(pfx + 'experts' + e,
                                   self.cfg.moe_intermediate_size,
-                                  is_expert=True)
+                                  is_expert=True, tp=self._mlp_tp)
         m.experts = experts.build()
 
         m.add_gate('shared_gate', self._linear(pfx + 'shared_expert_gate'))
-        shared = self.ffn(pfx + 'shared_expert',
-                          self.cfg.shared_expert_intermediate_size)
+        m.shared = self.ffn(pfx + 'shared_expert',
+                            self.cfg.shared_expert_intermediate_size,
+                            tp=self._mlp_tp)
 
-        return m.build(), shared
+        return m.build()
 
     # ------------------------------------------------------------------
     # layers() — layer dispatch loop
@@ -137,9 +138,10 @@ class Qwen2Model(TextModel):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._ctx)
             d.attention = self.attn(p + 'self_attn')
             if self._n_experts > 0:
-                d.moe_ffn, d.feed_forward = self.moe(p + 'mlp')
+                d.moe_ffn = self.moe(p + 'mlp')
             else:
-                d.feed_forward = self.ffn(p + 'mlp', self.cfg.intermediate_size)
+                d.feed_forward = self.ffn(p + 'mlp', self.cfg.intermediate_size,
+                                          tp=self._mlp_tp)
             d.attention_norm = self.norm(p + 'input_layernorm')
             d.ffn_norm = self.norm(p + 'post_attention_layernorm')
             layers[i] = d.build()

@@ -97,13 +97,13 @@ class Qwen3TextModel(TextModel):
 
         return m.build()
 
-    def ffn(self, pfx, is_expert=False):
+    def ffn(self, pfx, is_expert=False, *, tp):
         w1, w3, w2 = [self._linear(pfx + f'{x}_proj') for x in ('gate', 'up', 'down')]
 
         cfg = self._ffn_cfg.clone()
         cfg.is_expert = is_expert
 
-        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp)
+        m = FfnBuilder(cfg, self._ctx, tp=tp)
         m.add_ffn(w1, w2, w3)
         return m.build()
 
@@ -115,21 +115,30 @@ class Qwen3TextModel(TextModel):
 
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
         for e in m.range(self.cfg.num_experts):
-            experts[e] = self.ffn(pfx + 'experts' + e, is_expert=True)
+            experts[e] = self.ffn(pfx + 'experts' + e, is_expert=True,
+                                  tp=self._mlp_tp)
         m.experts = experts.build()
 
         return m.build()
 
     def layers(self, pfx):
+        mlp_only = set(getattr(self.cfg, 'mlp_only_layers', None) or [])
+        # Dense layers in a MoE model shard node-locally (_dense_tp); a
+        # pure-dense model keeps the historical mlp_tp sharding. Keyed on
+        # whether any layer actually builds MoE — the same fact the C++
+        # decoder keys the dense reduce group on.
+        any_moe = self._n_experts > 0 and any(
+            i not in mlp_only for i in range(self.cfg.num_hidden_layers))
+        dense_tp = self._dense_tp if any_moe else self._mlp_tp
         layers = ModuleListBuilder(ModuleListConfig(), self._ctx)
         for i, p in pfx.slices(0, self.cfg.num_hidden_layers):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._ctx)
             d.attention_norm = self.norm(p + 'input_layernorm')
             d.attention = self.attn(p + 'self_attn')
             d.ffn_norm = self.norm(p + 'post_attention_layernorm')
-            if self._n_experts:
+            if self._n_experts and i not in mlp_only:
                 d.moe_ffn = self.moe(p + 'mlp')
             else:
-                d.feed_forward = self.ffn(p + 'mlp')
+                d.feed_forward = self.ffn(p + 'mlp', tp=dense_tp)
             layers[i] = d.build()
         return layers.build()

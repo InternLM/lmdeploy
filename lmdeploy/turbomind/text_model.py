@@ -41,13 +41,17 @@ class TextModel(ABC):
         return self.cfg.vocab_size
 
     def bind_runtime(self, *, ctx, root_handles,
-                     attn_tp, mlp_tp, ep, model_tp):
+                     attn_tp, mlp_tp, ep, model_tp, dense_tp):
         self._ctx = ctx
         self._root_handles = root_handles
         self._attn_tp = attn_tp
         self._mlp_tp = mlp_tp
         self._ep = ep
         self._model_tp = model_tp
+        # TP group for dense layers inside MoE models — sharded node-locally
+        # by ModelLoader (C++ reduce group: d_node_group). Pure-dense models
+        # use the mlp_tp group.
+        self._dense_tp = dense_tp
 
     def _linear(self, pfx: Prefix, *,
                 optional: bool = False) -> Linear | None:

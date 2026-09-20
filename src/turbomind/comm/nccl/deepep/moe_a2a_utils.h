@@ -46,14 +46,19 @@ void invokeMoeA2AMapping(int*         f2n,
                          int          num_local_experts,
                          cudaStream_t stream);
 
-// Merge the routed result with the in-place shared FFN result:
-//   output = routed + shared_scale * sigmoid(shared_scales) * output
+// Merge the routed result with the shared FFN rows and write back to output.
+// This call is ALSO the routed write-back: when `shared` is empty (nullptr)
+// it degrades to output = routed, so callers must keep it unconditional.
 //
-// shared_scales is optional. When it is null, shared_scale is applied directly.
+//   output = routed + sigmoid(shared_scales) * shared        (shared present)
+//   output = routed                                          (shared == nullptr)
+//
+// shared_scales is optional (gate-less shared experts); when null, the shared
+// term carries weight 1.
 void invokeMoeA2ASharedCombine(Tensor&       output,  //
                                const Tensor& routed,
+                               const Tensor& shared,
                                const float*  shared_scales,
-                               float         shared_scale,
                                cudaStream_t  stream);
 
 }  // namespace turbomind

@@ -1,7 +1,6 @@
 
 
 #include <numeric>
-#include <optional>
 
 #include <cuda_runtime.h>
 
@@ -49,6 +48,7 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
     mlp_tp_size_(engine.mlp_tp_size),
     attn_tp_group_(ctx.comm.d_tp_group),
     mlp_group_(ctx.comm.d_mlp_group),
+    node_group_(ctx.comm.d_node_group),
     d_comm_(ctx.comm.d_comm),
     tune_layer_num_(engine.tune_layer_num),
     is_warm_up_{*ctx.is_warm_up}
@@ -76,6 +76,23 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
 
     if (!moe_weights.empty()) {
         moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(engine, ctx, moe_weights.front());
+    }
+
+    // Per-layer FFN group, used on both sides of the FFN: the pre-FFN gather
+    // assembles exactly the chunks the group's members own, and the post-FFN
+    // reduce sums exactly those chunks. Everything runs over mlp_group_ (the
+    // MoE combine excludes the ep dimension; pure-dense models get the
+    // historical whole-domain allreduce) — except dense layers in a MoE
+    // model, whose weights shard node-locally (Python: _dense_tp) and whose
+    // node collectively holds every row it reduces, so they never pay
+    // cross-node traffic.
+    ffn_group_.assign(model_weight.num_layer, mlp_group_);
+    if (moe_ffn_layer_) {
+        for (int i = 0; i < model_weight.num_layer; ++i) {
+            if (!model_weight.layer(i)->moe_ffn) {
+                ffn_group_[i] = node_group_;
+            }
+        }
     }
 
     if (!ffn_weights.empty()) {
@@ -278,6 +295,10 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
             out_bias = weights.at(layer)->attention->wo->bias;
         }
 
+        // Per-layer FFN group, precomputed in the ctor — the same group is
+        // used for the pre-FFN gather (here) and the post-FFN reduce.
+        const int ffn_group = ffn_group_[layer];
+
         AllreduceResidualRMSnorm(global_hidden_states,
                                  local_residual,
                                  out_bias,
@@ -286,7 +307,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
                                  weights.at(layer)->ffn_norm->zero_centered_,
                                  local_token_num,
                                  attn_tp_group_,
-                                 mlp_group_,
+                                 ffn_group,
                                  local_token_nums.data(),
                                  local_token_nums.size());
 
@@ -296,31 +317,24 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         ////////////////////////////////////////////
         /// feed-forward network
 
-        std::optional<MoeFfnLayer::ForwardParam> moe_fwd_param;
-
         if (weights.at(layer)->moe_ffn) {
-            moe_fwd_param = MoeFfnLayer::ForwardParam{global_hidden_states,
-                                                      global_hidden_states,
-                                                      local_token_nums,
-                                                      weights.at(layer)->moe_ffn.get(),
-                                                      weights.at(layer)->feed_forward ? 1.f : 0.f,
-                                                      layer,
-                                                      (const bool*)args.at("token_mask").buffer().raw_data()};
-            moe_ffn_layer_->Forward(*moe_fwd_param);
+            moe_ffn_layer_->Forward({global_hidden_states,
+                                     global_hidden_states,
+                                     local_token_nums,
+                                     weights.at(layer)->moe_ffn.get(),
+                                     (int)layer,
+                                     (const bool*)args.at("token_mask").buffer().raw_data()});
         }
 
         if (ffn_layer_ && weights.at(layer)->feed_forward) {
-            auto ffn_input_shared = moe_ffn_layer_ ?
-                                        moe_ffn_layer_->GetShardFfnInput(global_hidden_states, local_token_nums) :
-                                        global_hidden_states;
-            if (ffn_input_shared.shape(0) > 0) {
-                ffn_layer_->forward(
-                    {ffn_input_shared, ffn_input_shared, weights.at(layer)->feed_forward.get(), (int)layer});
-            }
-        }
-
-        if (moe_fwd_param) {
-            moe_ffn_layer_->Combine(*moe_fwd_param);
+            // Staging invariant: a layer with both slots means old Python
+            // wiring still parks the shared expert in feed_forward while the
+            // C++ side already reduced into global_hidden_states — fail
+            // loudly instead of running the shared FFN on the combine result.
+            TM_CHECK(!weights.at(layer)->moe_ffn) << "layer " << layer << " has both moe_ffn and feed_forward — "
+                                                  << "the shared expert belongs in moe.shared";
+            ffn_layer_->forward(
+                {global_hidden_states, global_hidden_states, weights.at(layer)->feed_forward.get(), (int)layer});
         }
 
         TM_DEBUG_TENSOR(global_hidden_states, Concat("ffn_block", layer), 2);
@@ -338,7 +352,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
                                  weights.at(layer)->ffn_norm->norm_eps_,
                                  scale_zero_centered,
                                  local_token_num,
-                                 mlp_group_,
+                                 ffn_group,
                                  attn_tp_group_,
                                  local_token_nums.data(),
                                  local_token_nums.size());
