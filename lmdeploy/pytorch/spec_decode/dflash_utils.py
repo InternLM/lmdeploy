@@ -124,8 +124,8 @@ def parse_dflash_config(draft_hf_config: Any, num_speculative_tokens: int,
         raise ValueError('DFlash checkpoint requires block_size in dflash_config or at the top level of its config.')
     query_length = num_speculative_tokens + 1
     if query_length > max_query_length:
-        raise ValueError('DFlash query length (1 + speculative_num_draft_tokens) must not exceed checkpoint '
-                         'dflash_config.block_size. '
+        raise ValueError('DFlash query length (1 + speculative_num_draft_tokens) must not exceed the checkpoint '
+                         'block_size (from dflash_config or the top level of its config). '
                          f'Got block_size={max_query_length}, query_length={query_length}.')
 
     mask_token_id = dflash_config.get('mask_token_id', getattr(draft_hf_config, 'mask_token_id', None))

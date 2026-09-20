@@ -85,6 +85,18 @@ def test_parse_dflash_config_top_level_checkpoint_layout():
     assert mask_token_id == 32001
 
 
+def test_parse_dflash_config_top_level_mask_token_id():
+    """mask_token_id resolves from the top level of the draft config when
+    dflash_config does not carry it, same fallback order as block_size."""
+    config = _draft_config(block_size=4,
+                           mask_token_id=32001,
+                           dflash_config=dict(target_layer_ids=[1, 5, 9, 13], ))
+    target_layer_ids, mask_token_id = _parse_dflash(config, num_speculative_tokens=3)
+
+    assert target_layer_ids == (1, 5, 9, 13)
+    assert mask_token_id == 32001
+
+
 def test_specdecode_config_stores_resolved_dflash_fields_directly():
     target_layer_ids, mask_token_id = _parse_dflash(_draft_config(), num_speculative_tokens=3)
     cfg = SpecDecodeConfig(model='draft-model',
@@ -904,3 +916,43 @@ def test_dflash_prefill_materialize_context_uses_full_block_without_ragged_slice
     assert captured['context_inputs'].input_ids.tolist() == [[10, 11, 12, 20, 21]]
     assert captured['context_inputs'].seq_length.tolist() == [3, 2]
     assert captured['target_hidden'].tolist() == extra_inputs.target_hidden_states.tolist()
+
+
+class TestDFlashDraftModelMixedDtype:
+    """The draft ingests two target-side tensors (shared embeddings and aux
+    hidden states) that may arrive in the target dtype, e.g. a float16 AWQ
+    target with a bfloat16 draft checkpoint.
+
+    Both ingestion boundaries must cast to the draft dtype; running everything in float16 instead is not an option
+    because Qwen3 hidden state outliers overflow float16 during feature fusion (acceptance collapses to near zero).
+    """
+
+    def _make_model(self):
+        from lmdeploy.pytorch.models.qwen3_dflash import DFlashDraftModel
+
+        # bypass __init__: it requires a full engine build context, while
+        # the dtype contract lives entirely in these two methods
+        model = DFlashDraftModel.__new__(DFlashDraftModel)
+        torch.nn.Module.__init__(model)
+        model.dtype = torch.bfloat16
+        return model
+
+    def test_embed_input_ids_casts_to_draft_dtype(self):
+        model = self._make_model()
+        model.embed_tokens = torch.nn.Embedding(8, 4, dtype=torch.float16)
+        model.has_separate_mask_embedding = False
+        model.mask_token_id = None
+
+        embeds = model.embed_input_ids(torch.tensor([[0, 1, 2]]))
+
+        assert embeds.dtype == torch.bfloat16
+
+    def test_project_target_hidden_casts_to_draft_dtype(self):
+        model = self._make_model()
+        model.fc = torch.nn.Linear(8, 4, bias=False, dtype=torch.bfloat16)
+        model.hidden_norm = torch.nn.Identity()
+        model.num_context_features = 2
+
+        out = model.project_target_hidden(torch.randn(3, 8, dtype=torch.float16))
+
+        assert out.dtype == torch.bfloat16
