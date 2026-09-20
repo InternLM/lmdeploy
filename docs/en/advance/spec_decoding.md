@@ -149,10 +149,12 @@ tokens to `block_size - 1`.
 
 DSpark uses a parallel DFlash-style draft backbone followed by a lightweight
 left-to-right Markov correction. The first LMDeploy implementation uses a
-fixed verification window and greedy decoding. It supports external
-Speculators-format drafts and DeepSeek-V4 checkpoints that bundle `mtp.*`
-DSpark weights. For a bundled checkpoint, leave `model` empty so the target
-checkpoint is also used as the draft weight source.
+fixed verification window. Draft proposals are deterministic, while target
+verification supports both greedy and non-greedy sampling through the common
+rejection sampler. It supports external Speculators-format drafts and
+DeepSeek-V4 checkpoints that bundle `mtp.*` DSpark weights. For a bundled
+checkpoint, leave `model` empty so the target checkpoint is also used as the
+draft weight source.
 
 ```python
 from lmdeploy import PytorchEngineConfig, pipeline
@@ -185,12 +187,14 @@ lmdeploy serve api_server deepseek-ai/DeepSeek-V4-Flash-0731 \
 DSpark V1 supports CUDA Graph execution, which is the default and recommended
 performance path. Set `eager_mode=True` or pass `--eager-mode` only as a
 debugging fallback. DSpark V1 requires `dp=1` and `ep=1`. Prefix caching, draft
-KV-cache quantization, guided decoding, output log probabilities, and
-confidence-based dynamic verification are not supported in this fixed-window
-version. Target-only one-token decoding and fixed-window target verification
-can produce different floating-point logits at near ties, so DSpark V1 does
-not currently guarantee bitwise-identical greedy output to target-only
-execution.
+KV-cache quantization, guided decoding, and confidence-based dynamic
+verification are not supported in this fixed-window version. The
+OpenAI-compatible chat endpoint can return output log probabilities when the
+server is configured with an appropriate `--logprobs-mode`, such as
+`raw_logprobs`. Target-only one-token decoding and fixed-window target
+verification can produce different floating-point logits at near ties, so
+DSpark V1 does not currently guarantee bitwise-identical greedy output to
+target-only execution.
 
 ## Guided Decoding with Speculative Decoding
 
