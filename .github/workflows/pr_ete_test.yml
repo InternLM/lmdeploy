@@ -112,6 +112,7 @@ jobs:
         run: |
           lmdeploy-router --host 127.0.0.1 --port 23410 --prometheus-port 29001 --policy round_robin --lmdeploy-pd-disaggregation > ${{env.SERVER_LOG}}/pd_router.log 2>&1 &
           pd_router_pid=$!
+          echo "PD_ROUTER_PID=$pd_router_pid" >> "$GITHUB_ENV"
           for i in $(seq 1 30)
           do
             sleep 1
@@ -199,7 +200,10 @@ jobs:
           cat ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_decode.log
           exit 1
       - name: Stop lmdeploy-router for PD
-        run: kill "$pd_router_pid"
+        shell: bash
+        run: |
+          kill "${PD_ROUTER_PID:?PD router PID was not exported}" || true
+          wait "${PD_ROUTER_PID}" || true
       - name: Test restful server - turbomind Qwen3-32B
         run: |
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-32B --server-name 127.0.0.1 --server-port 23402 --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client --proxy-url http://127.0.0.1:23333 > ${{env.SERVER_LOG}}/turbomind_Qwen3-32B_start_restful.log 2>&1 &
