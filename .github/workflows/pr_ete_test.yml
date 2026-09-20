@@ -36,34 +36,7 @@ jobs:
       SERVER_LOG: /nvme/qa_test_models/server_log/${{ github.head_ref }}_${{ github.run_id }}
     container:
       image: openmmlab/lmdeploy:dev-cu12.8
-      options: >-
-        --gpus all
-        --ipc host
-        --device /dev/infiniband/rdma_cm
-        --device /dev/infiniband/uverb0
-        --device /dev/infiniband/uverb1
-        --device /dev/infiniband/uverb2
-        --device /dev/infiniband/uverb3
-        --device /dev/infiniband/uverb4
-        --device /dev/infiniband/uverb5
-        --device /dev/infiniband/uverb6
-        --device /dev/infiniband/uverb7
-        --device /dev/infiniband/uverb8
-        --device /dev/infiniband/uverb9
-        --device /dev/infiniband/uverb10
-        --device /dev/infiniband/uverb11
-        --device /dev/infiniband/uverb12
-        --device /dev/infiniband/uverb13
-        --device /dev/infiniband/uverb14
-        --device /dev/infiniband/uverb15
-        --device /dev/infiniband/uverb16
-        --device /dev/infiniband/uverb17
-        --cap-add IPC_LOCK
-        --ulimit memlock=-1
-        --ulimit stack=67108864
-        --user root
-        -e PIP_CACHE_DIR=/root/.cache/pip
-        --pull never
+      options: --gpus all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never
       volumes:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
         - /nvme/share_data/github-actions/packages:/root/packages
@@ -176,6 +149,11 @@ jobs:
       - name: Test restful server - pytorch pd Qwen3.5-35B-A3B
         shell: bash
         run: |
+          if ! python3 -c "from dlslime import available_nic; assert available_nic()" 2>/dev/null || [ ! -d /dev/infiniband ]; then
+            echo "Skip pytorch PD test: this runner has no RDMA NIC or /dev/infiniband."
+            exit 0
+          fi
+
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --server-name 127.0.0.1 --server-port 23411 --tp 2 --backend pytorch --role Prefill --proxy-url http://127.0.0.1:23410 > ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_prefill.log 2>&1 &
           prefill_pid=$!
           CUDA_VISIBLE_DEVICES=4,5 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --server-name 127.0.0.1 --server-port 23412 --tp 2 --backend pytorch --role Decode --proxy-url http://127.0.0.1:23410 > ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_decode.log 2>&1 &
