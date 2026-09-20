@@ -187,8 +187,6 @@ class CacheConfig:
     enable_kv_state_cache_sharing: bool = False
     arena_units_per_group: int = 1
     arena_num_protected_groups: int = 0
-    arena_num_groups: int = 0
-    arena_num_units: int = 0
 
     def __post_init__(self):
         """Post init."""
@@ -196,8 +194,6 @@ class CacheConfig:
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
         assert self.arena_units_per_group > 0, 'invalid arena_units_per_group'
         assert self.arena_num_protected_groups >= 0, 'invalid arena_num_protected_groups'
-        assert self.arena_num_groups >= 0, 'invalid arena_num_groups'
-        assert self.arena_num_units >= 0, 'invalid arena_num_units'
         if self.window_size is not None and self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False

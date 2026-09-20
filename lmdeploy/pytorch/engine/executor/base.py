@@ -423,14 +423,12 @@ class ExecutorBase:
         geometry = SharedCacheArenaGeometry.from_cache_config(self.cache_config)
         return [geometry.fixed_memory_nbytes(plan.target) for plan in cache_block_sizes]
 
-    def _update_shared_arena_capacity_metadata(self) -> None:
-        """Publish the physical arena span alongside flexible KV capacity."""
+    def _validate_shared_arena_capacity(self) -> None:
+        """Validate that flexible KV capacity contains complete groups."""
         if not self.cache_config.enable_kv_state_cache_sharing:
             return
         geometry = SharedCacheArenaGeometry.from_cache_config(self.cache_config, require_capacity=True)
         self.cache_config.arena_num_protected_groups = geometry.num_protected_groups
-        self.cache_config.arena_num_groups = geometry.num_groups
-        self.cache_config.arena_num_units = geometry.num_units
 
     def _sync_spec_cache_block_size(self) -> None:
         """Keep spec cache block sizes aligned with target cache."""
@@ -510,7 +508,7 @@ class ExecutorBase:
             # User supplied an explicit block count. Do not resize it from the
             # current free-memory snapshot.
             if self.cache_config.enable_kv_state_cache_sharing:
-                self._update_shared_arena_capacity_metadata()
+                self._validate_shared_arena_capacity()
             if spec_cache_config is not None:
                 spec_cache_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
             return
@@ -521,7 +519,7 @@ class ExecutorBase:
         if self.cache_config.enable_kv_state_cache_sharing:
             group_size = self.cache_config.arena_units_per_group
             self.cache_config.num_gpu_blocks = (self.cache_config.num_gpu_blocks // group_size) * group_size
-            self._update_shared_arena_capacity_metadata()
+            self._validate_shared_arena_capacity()
         if self.cache_config.num_gpu_blocks <= 2:
             raise RuntimeError('No enough gpu memory for kv cache.')
         if spec_cache_config is not None:

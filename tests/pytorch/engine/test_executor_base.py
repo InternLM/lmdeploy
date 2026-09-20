@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from lmdeploy.messages import PytorchEngineConfig, QuantPolicy
-from lmdeploy.pytorch.config import CacheConfig, StateCacheSpec
+from lmdeploy.pytorch.config import CacheConfig, SharedCacheArenaGeometry, StateCacheSpec
 from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as update_deepseek_v4_cache_config
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
@@ -443,9 +443,10 @@ def test_shared_cache_rounds_automatic_capacity_down_to_complete_groups():
 
     executor._update_num_gpu_blocks([10_000], plans, None)
 
+    geometry = SharedCacheArenaGeometry.from_cache_config(executor.cache_config, require_capacity=True)
     assert executor.cache_config.num_gpu_blocks == 36
-    assert executor.cache_config.arena_num_groups == 10
-    assert executor.cache_config.arena_num_units == 40
+    assert geometry.num_groups == 10
+    assert geometry.num_units == 40
 
 
 def test_shared_cache_rejects_explicit_non_multiple_capacity():

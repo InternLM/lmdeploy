@@ -73,10 +73,6 @@ class SharedCacheArena:
                 'Shared KV/state cache requires one packed pool with a stable per-block byte footprint: '
                 f'expected {expected_nbytes}, got {kv_block_nbytes}.')
 
-        if cache_config.arena_num_groups not in (0, geometry.num_groups):
-            raise ValueError('Shared arena group metadata does not match num_gpu_blocks.')
-        if cache_config.arena_num_units not in (0, geometry.num_units):
-            raise ValueError('Shared arena unit metadata does not match num_gpu_blocks.')
         root = torch.zeros((geometry.num_groups, geometry.units_per_group * kv_block_nbytes),
                            dtype=torch.uint8,
                            device=device)
