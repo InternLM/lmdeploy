@@ -175,8 +175,15 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
                 cls._precompute_decode(meta, window_size,
                                        ring_storage_capacity, slot)
             else:
+                # Ragged/chunked prefill is packed, not B * max_q. Its exact
+                # extent is host-known from the input shape. Rectangular draft
+                # decode retains the fixed (including padded rows) graph size.
+                total_q_tokens = (meta.q_seqlens.numel() * meta.max_q_seqlen
+                                  if meta.is_rectangular_decode
+                                  else step_ctx.input_ids.numel())
                 cls._precompute_prefill(meta, window_size,
-                                       ring_storage_capacity, slot)
+                                       ring_storage_capacity, slot,
+                                       total_q_tokens=total_q_tokens)
 
         return meta
 
@@ -283,7 +290,8 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
                         meta, ratio, num_compressed, page_table)
 
     @staticmethod
-    def _precompute_prefill(meta, window_size, ring_storage_capacity, slot):
+    def _precompute_prefill(meta, window_size, ring_storage_capacity, slot,
+                           *, total_q_tokens: int):
         from lmdeploy.pytorch.backends.cuda.attention.v4_utils import (
             build_prefill_token_meta,
         )
@@ -304,13 +312,6 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
         max_q = meta.max_q_seqlen
         max_unkv = min(window_size, max_kv) + max_q
         cu_q_seqlens = meta.cu_q_seqlens
-        # During CUDA-graph capture ``cu_q_seqlens[-1]`` is a device scalar.
-        # Passing it as torch.arange's end performs an unsupported scalar read.
-        # Speculative decode is rectangular and padded to a fixed graph bucket,
-        # so its token capacity is known from static tensor shapes instead.
-        total_q_tokens = None
-        if meta.is_rectangular_decode:
-            total_q_tokens = q_seqlens.numel() * meta.max_q_seqlen
         token_meta = build_prefill_token_meta(
             q_seqlens, cu_q_seqlens, total_tokens=total_q_tokens)
 
