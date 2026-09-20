@@ -10,6 +10,7 @@ import numpy as np
 
 from lmdeploy.utils import get_logger
 
+from ..block_manager.group_allocator import GroupRole
 from .node import Node
 
 if TYPE_CHECKING:
@@ -168,7 +169,7 @@ class KVBlockLifecycle:
         group_id = leaf_offset // group_size
         # KV lifecycle leaves should only reference KV-owned groups. Keep this
         # boundary guard for stale or corrupted auxiliary entries.
-        if self.group_allocator.group_role(group_id) != 'kv':
+        if self.group_allocator.group_role(group_id) != GroupRole.KV:
             self.leaves.discard(leaf)
             return None
 

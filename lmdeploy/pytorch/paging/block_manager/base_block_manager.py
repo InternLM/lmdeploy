@@ -4,7 +4,7 @@ import time
 import numpy as np
 
 from ...messages import SchedulerSequence
-from .group_allocator import GroupAllocator, GroupHandle
+from .group_allocator import GroupAllocator, GroupHandle, GroupRole
 
 
 def _div_up(x, n):
@@ -168,12 +168,12 @@ class LogicalAllocator:
         if self.group_allocator is None:
             raise RuntimeError('Group operations require shared allocation mode.')
 
-    def acquire_group(self, role: str = 'kv') -> GroupHandle:
+    def acquire_group(self, role: GroupRole = GroupRole.KV) -> GroupHandle:
         """Reserve one empty flexible group for ``role``."""
         self._require_shared()
         return self.group_allocator.acquire_group(role)
 
-    def acquire_groups(self, num_groups: int, role: str = 'kv') -> tuple[GroupHandle, ...]:
+    def acquire_groups(self, num_groups: int, role: GroupRole = GroupRole.KV) -> tuple[GroupHandle, ...]:
         """Atomically reserve complete empty groups."""
         self._require_shared()
         return self.group_allocator.acquire_groups(num_groups, role)
@@ -182,7 +182,7 @@ class LogicalAllocator:
         """Release one empty group after validating its generation."""
         self._require_shared()
         current_group_id = group_id.group_id if isinstance(group_id, GroupHandle) else group_id
-        if self.group_allocator.group_role(current_group_id) == 'kv' and not self.is_group_empty(
+        if self.group_allocator.group_role(current_group_id) == GroupRole.KV and not self.is_group_empty(
                 current_group_id):
             raise RuntimeError('Cannot release a shared KV group with live logical blocks.')
         self.group_allocator.release_group(group_id, generation)
@@ -197,7 +197,7 @@ class LogicalAllocator:
         self._require_shared()
         return self.group_allocator.protected_group_handle(group_id)
 
-    def group_role(self, group_id: int) -> str:
+    def group_role(self, group_id: int) -> GroupRole:
         """Return the current role of one physical group."""
         self._require_shared()
         return self.group_allocator.group_role(group_id)
@@ -260,7 +260,7 @@ class LogicalAllocator:
         if len(np.unique(physical_blocks)) != len(physical_blocks):
             raise ValueError('Shared physical block offsets must be unique.')
         group_ids = physical_blocks // self.group_size
-        if np.any(self.group_allocator.group_roles(np.unique(group_ids)) != 'kv'):
+        if np.any(self.group_allocator.group_roles(np.unique(group_ids)) != GroupRole.KV):
             raise ValueError('Shared logical blocks must belong to KV-owned groups.')
         if self._free_count < len(physical_blocks):
             raise MemoryError('No enough free logical blocks.')
@@ -356,7 +356,7 @@ class LogicalAllocator:
         group_ids = np.unique(physical_blocks // self.group_size)
         for group_id in group_ids:
             group_id = int(group_id)
-            if self.group_allocator.group_role(group_id) == 'kv' and self.is_group_empty(group_id):
+            if self.group_allocator.group_role(group_id) == GroupRole.KV and self.is_group_empty(group_id):
                 self.release_group(self.group_handle(group_id))
 
     def _free_dense(self, blocks: np.ndarray):

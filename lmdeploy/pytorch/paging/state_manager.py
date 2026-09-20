@@ -4,7 +4,7 @@ import numpy as np
 from lmdeploy.pytorch.config import CacheConfig, get_num_runtime_states
 from lmdeploy.pytorch.messages import SchedulerSequence
 
-from .block_manager.group_allocator import GroupAllocator, GroupHandle
+from .block_manager.group_allocator import GroupAllocator, GroupHandle, GroupRole
 
 
 class StateAllocator:
@@ -78,13 +78,8 @@ class StateManager:
         self._state_groups: dict[int, GroupHandle] = {}
         if group_allocator is not None:
             num_protected_state_groups = num_reserved + num_runtime_states
-            if group_allocator.num_protected_groups < num_protected_state_groups + int(
-                    group_allocator.padding_group_id is not None):
-                raise ValueError('Shared allocator does not contain enough protected state groups.')
-            state_group_offset = int(group_allocator.padding_group_id is not None)
-            for state_id in range(num_reserved + num_runtime_states):
-                group_id = state_group_offset + state_id
-                self._state_groups[state_id] = group_allocator.protected_group_handle(group_id)
+            state_group_handles = group_allocator.protected_group_handles(num_protected_state_groups)
+            self._state_groups.update(enumerate(state_group_handles))
         self._runtime_states: set[int] = set()
         self._checkpoint_states: set[int] = set()
 
@@ -135,7 +130,7 @@ class StateManager:
                 state_id = int(self.allocator.allocate())
             if state_id >= self._protected_state_limit:
                 try:
-                    self._state_groups[state_id] = self.group_allocator.acquire_group(role='state')
+                    self._state_groups[state_id] = self.group_allocator.acquire_group(role=GroupRole.STATE)
                 except Exception:
                     self.allocator.free(state_id)
                     raise

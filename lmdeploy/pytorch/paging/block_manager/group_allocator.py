@@ -3,18 +3,18 @@
 
 from collections import deque
 from dataclasses import dataclass
-from enum import Enum
+from enum import IntEnum
 
 import numpy as np
 
 
-class _GroupRole(Enum):
+class GroupRole(IntEnum):
     """Role of one physical shared-cache group."""
 
-    PROTECTED = 'protected'
-    EMPTY = 'empty'
-    KV = 'kv'
-    STATE = 'state'
+    PROTECTED = 0
+    EMPTY = 1
+    KV = 2
+    STATE = 3
 
 
 @dataclass(frozen=True)
@@ -47,9 +47,9 @@ class GroupAllocator:
         self.group_size = group_size
         self.num_groups = num_gpu_blocks // group_size + num_protected_groups + int(reserve_padding_group)
         self.num_protected_groups = num_protected_groups + int(reserve_padding_group)
-        self.padding_group_id = 0 if reserve_padding_group else None
-        self._group_roles = np.full((self.num_groups, ), _GroupRole.EMPTY.value, dtype='<U9')
-        self._group_roles[:self.num_protected_groups] = _GroupRole.PROTECTED.value
+        self._padding_group_id = 0 if reserve_padding_group else None
+        self._group_roles = np.full((self.num_groups, ), GroupRole.EMPTY, dtype=np.int8)
+        self._group_roles[:self.num_protected_groups] = GroupRole.PROTECTED
         # Fresh groups are consumed in order. Recycled groups stay in a FIFO
         # queue, preserving the old deque allocation order without making the
         # common fresh-allocation path pop one item at a time.
@@ -68,12 +68,16 @@ class GroupAllocator:
         return (self.num_groups - self._next_flexible_group + len(self._recycled_flexible_groups))
 
     @staticmethod
-    def _validate_role(role: str) -> str:
-        if role not in ('kv', 'state'):
+    def _validate_role(role: GroupRole) -> GroupRole:
+        try:
+            role = GroupRole(role)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'Unsupported shared group role: {role}.') from exc
+        if role not in (GroupRole.KV, GroupRole.STATE):
             raise ValueError(f'Unsupported shared group role: {role}.')
         return role
 
-    def acquire_group(self, role: str = 'kv') -> GroupHandle:
+    def acquire_group(self, role: GroupRole = GroupRole.KV) -> GroupHandle:
         """Reserve one empty flexible group for ``role``."""
         role = self._validate_role(role)
         if self.num_empty_groups == 0:
@@ -87,7 +91,7 @@ class GroupAllocator:
         self._group_generation[group_id] += 1
         return GroupHandle(group_id, int(self._group_generation[group_id]))
 
-    def acquire_groups(self, num_groups: int, role: str = 'kv') -> tuple[GroupHandle, ...]:
+    def acquire_groups(self, num_groups: int, role: GroupRole = GroupRole.KV) -> tuple[GroupHandle, ...]:
         """Atomically reserve complete empty groups."""
         if num_groups < 0:
             raise ValueError('num_groups must be non-negative.')
@@ -115,20 +119,20 @@ class GroupAllocator:
             raise TypeError('generation is required when releasing a shared group.')
         if not 0 <= group_id < self.num_groups:
             raise RuntimeError('Cannot release an out-of-range shared group.')
-        role = _GroupRole(str(self._group_roles[group_id]))
-        if role not in (_GroupRole.KV, _GroupRole.STATE):
+        role = GroupRole(self._group_roles[group_id])
+        if role not in (GroupRole.KV, GroupRole.STATE):
             raise RuntimeError('Cannot release a non-owned shared group.')
         if int(self._group_generation[group_id]) != int(generation):
             raise RuntimeError('Cannot release a stale shared group handle.')
-        self._group_roles[group_id] = _GroupRole.EMPTY.value
+        self._group_roles[group_id] = GroupRole.EMPTY
         self._recycled_flexible_groups.append(group_id)
 
     def group_handle(self, group_id: int) -> GroupHandle:
         """Return the current handle for one owned group."""
         if not 0 <= group_id < self.num_groups:
             raise ValueError('group_id is out of range.')
-        role = _GroupRole(str(self._group_roles[group_id]))
-        if role not in (_GroupRole.KV, _GroupRole.STATE):
+        role = GroupRole(self._group_roles[group_id])
+        if role not in (GroupRole.KV, GroupRole.STATE):
             raise ValueError('group_id is not currently owned.')
         return GroupHandle(group_id, int(self._group_generation[group_id]))
 
@@ -136,18 +140,30 @@ class GroupAllocator:
         """Return the stable handle for one protected group."""
         if not 0 <= group_id < self.num_groups:
             raise ValueError('group_id is out of range.')
-        if _GroupRole(str(self._group_roles[group_id])) != _GroupRole.PROTECTED:
+        if GroupRole(self._group_roles[group_id]) != GroupRole.PROTECTED:
             raise ValueError('group_id is not protected.')
         return GroupHandle(group_id, int(self._group_generation[group_id]))
 
-    def group_role(self, group_id: int) -> str:
+    def protected_group_handles(self, num_groups: int) -> tuple[GroupHandle, ...]:
+        """Return stable handles for protected data groups in allocator
+        order."""
+        if num_groups < 0:
+            raise ValueError('num_groups must be non-negative.')
+        protected_ids = np.flatnonzero(self._group_roles == GroupRole.PROTECTED)
+        if self._padding_group_id is not None:
+            protected_ids = protected_ids[protected_ids != self._padding_group_id]
+        if num_groups > len(protected_ids):
+            raise ValueError('Shared allocator does not contain enough protected data groups.')
+        return tuple(self.protected_group_handle(int(group_id)) for group_id in protected_ids[:num_groups])
+
+    def group_role(self, group_id: int) -> GroupRole:
         """Return the current role of one physical group."""
         if not 0 <= group_id < self.num_groups:
             raise ValueError('group_id is out of range.')
-        return str(self._group_roles[group_id])
+        return GroupRole(self._group_roles[group_id])
 
     def group_roles(self, group_ids: np.ndarray) -> np.ndarray:
-        """Return the current roles for several physical groups."""
+        """Return integer role tags for several physical groups."""
         group_ids = np.asarray(group_ids, dtype=np.int64).reshape(-1)
         if np.any(group_ids < 0) or np.any(group_ids >= self.num_groups):
             raise ValueError('group_id is out of range.')

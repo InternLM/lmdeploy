@@ -7,7 +7,7 @@ import numpy as np
 
 from ...messages import SchedulerSequence
 from .base_block_manager import BaseBlockManager, _div_up, _num_required_blocks
-from .group_allocator import GroupAllocator, GroupHandle
+from .group_allocator import GroupAllocator, GroupHandle, GroupRole
 
 
 @dataclass
@@ -92,8 +92,8 @@ class SharedBlockManager(BaseBlockManager):
         while groups:
             group = groups[-1]
             try:
-                is_current = (self.group_allocator.group_role(group.handle.group_id) == 'kv'
-                              and self.group_allocator.group_handle(group.handle.group_id) == group.handle)
+                is_current = (self.group_allocator.group_role(group.handle.group_id) == GroupRole.KV
+                               and self.group_allocator.group_handle(group.handle.group_id) == group.handle)
             except ValueError:
                 is_current = False
             if is_current:
@@ -121,7 +121,7 @@ class SharedBlockManager(BaseBlockManager):
         groups_needed = _div_up(num_required_blocks, self.group_allocator.group_size)
         new_groups = ()
         try:
-            new_groups = self.group_allocator.acquire_groups(groups_needed, role='kv')
+            new_groups = self.group_allocator.acquire_groups(groups_needed, role=GroupRole.KV)
             groups.extend(_AppendGroup(handle) for handle in new_groups)
             if new_groups:
                 group_ids = np.fromiter((handle.group_id for handle in new_groups), dtype=np.int64)

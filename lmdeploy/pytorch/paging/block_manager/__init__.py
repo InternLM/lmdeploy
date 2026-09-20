@@ -2,13 +2,13 @@
 from ...config import CacheConfig, SharedCacheArenaGeometry
 from .base_block_manager import BaseBlockManager
 from .default_block_manager import DefaultBlockManager
-from .group_allocator import GroupAllocator
+from .group_allocator import GroupAllocator, GroupRole
 from .shared_block_manager import SharedBlockManager
 from .window_block_manager import WindowBlockManager
 
 __all__ = [
-    'BaseBlockManager', 'DefaultBlockManager', 'GroupAllocator', 'SharedBlockManager', 'WindowBlockManager',
-    'build_block_manager'
+    'BaseBlockManager', 'DefaultBlockManager', 'GroupAllocator', 'GroupRole', 'SharedBlockManager',
+    'WindowBlockManager', 'build_block_manager'
 ]
 
 

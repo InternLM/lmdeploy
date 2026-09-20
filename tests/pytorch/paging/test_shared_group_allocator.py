@@ -7,11 +7,24 @@ from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.messages import SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.paging.block_manager import DefaultBlockManager, SharedBlockManager, build_block_manager
 from lmdeploy.pytorch.paging.block_manager.base_block_manager import LogicalAllocator
-from lmdeploy.pytorch.paging.block_manager.group_allocator import GroupAllocator
+from lmdeploy.pytorch.paging.block_manager.group_allocator import GroupAllocator, GroupRole
 from lmdeploy.pytorch.paging.eviction_helper.recompute_eviction_helper import RecomputeEvictionHelper
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.paging.state_manager import build_state_manager
 from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+
+
+def test_group_allocator_exposes_protected_data_handles_without_padding():
+    allocator = GroupAllocator(num_gpu_blocks=4,
+                               group_size=2,
+                               num_protected_groups=2,
+                               reserve_padding_group=True)
+
+    handles = allocator.protected_group_handles(2)
+
+    assert [handle.group_id for handle in handles] == [1, 2]
+    assert all(handle.generation == 0 for handle in handles)
+    assert allocator.group_role(0) == GroupRole.PROTECTED
 
 
 def test_group_allocator_keeps_tail_private_and_releases_whole_group():
@@ -31,7 +44,7 @@ def test_group_allocator_keeps_tail_private_and_releases_whole_group():
     assert np.array_equal(allocator.get_physical_blocks(first_blocks), [4, 5])
 
     allocator.free(first_blocks)
-    assert group_allocator.group_role(first.group_id) == 'empty'
+    assert group_allocator.group_role(first.group_id) == GroupRole.EMPTY
     current = group_allocator.acquire_group()
     assert current.group_id == first.group_id
     with pytest.raises(RuntimeError, match='stale shared group'):
@@ -219,14 +232,14 @@ def test_shared_checkpoint_borrow_keeps_protected_runtime_mapping():
     checkpoint_state = state_manager.allocate_checkpoint_state()
     assert checkpoint_state == 1
     assert state_manager.get_physical_state_id(checkpoint_state) == 2
-    assert manager.group_allocator.group_role(2) == 'protected'
+    assert manager.group_allocator.group_role(2) == GroupRole.PROTECTED
 
     state_manager.free_checkpoint_state(checkpoint_state)
     runtime = type('Sequence', (), {'logical_state': -1})()
     state_manager.allocate(runtime)
     assert runtime.logical_state == checkpoint_state
     assert state_manager.get_physical_state_id(runtime.logical_state) == 2
-    assert manager.group_allocator.group_role(2) == 'protected'
+    assert manager.group_allocator.group_role(2) == GroupRole.PROTECTED
 
 
 def test_shared_runtime_state_reuses_protected_slot_after_flexible_release():
@@ -253,7 +266,7 @@ def test_shared_runtime_state_reuses_protected_slot_after_flexible_release():
     recycled_runtime = state_manager.allocate_state()
     assert recycled_runtime == runtime_states[0]
     assert state_manager.get_physical_state_id(recycled_runtime) == 2
-    assert manager.group_allocator.group_role(2) == 'protected'
+    assert manager.group_allocator.group_role(2) == GroupRole.PROTECTED
 
 
 def test_shared_partial_checkpoint_owns_and_releases_a_private_group():
@@ -278,9 +291,9 @@ def test_shared_partial_checkpoint_owns_and_releases_a_private_group():
 
     assert scheduler.block_trie.state_checkpoints.publish_save(seq)
     session.remove_sequence(seq)
-    assert manager.group_allocator.group_role(frozen_group) == 'kv'
+    assert manager.group_allocator.group_role(frozen_group) == GroupRole.KV
     assert scheduler.block_trie.evict_for_capacity(1)
-    assert manager.group_allocator.group_role(frozen_group) == 'empty'
+    assert manager.group_allocator.group_role(frozen_group) == GroupRole.EMPTY
 
 
 def test_shared_reset_cache_releases_trie_and_checkpoint_groups():
