@@ -855,6 +855,65 @@ class TestFillKVCacheFP8E5M2Scalar(TestFillKVCacheFP8Scalar):
         yield QuantPolicy.FP8_E5M2
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+@pytest.mark.parametrize(('quant_policy', 'cache_dtype'), [
+    (QuantPolicy.FP8, torch.float8_e4m3fn), (QuantPolicy.FP8_E5M2, torch.float8_e5m2)])
+@pytest.mark.parametrize('dcp_size', [2, 4])
+@pytest.mark.parametrize('kv_layout', ['bshd', 'bhsd'])
+@pytest.mark.parametrize('q_lengths', [[1, 1, 1, 1], [0, 1, 5, 35]])
+def test_fill_fp8_dcp_matches_unsharded_bytes(quant_policy, cache_dtype, dcp_size, kv_layout, q_lengths):
+    """Check ownership and untouched slots with unequal K/V widths and strided
+    inputs."""
+    from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
+
+    _skip_unsupported_triton_fp8_dtype(cache_dtype)
+    torch.manual_seed(101)
+    block_size, num_heads = 16, 2
+    history = [0, 31, 32, 65]
+    kv_lengths = [h + q for h, q in zip(history, q_lengths)]
+    q_lens = torch.tensor(q_lengths, device='cuda', dtype=torch.int32)
+    kv_lens = torch.tensor(kv_lengths, device='cuda', dtype=torch.int32)
+    starts = torch.nn.functional.pad(q_lens.cumsum(0, dtype=torch.int32), (1, 0))[:-1]
+    k = torch.randn(sum(q_lengths) * 2, num_heads, 128, device='cuda', dtype=torch.bfloat16)[::2]
+    v = torch.randn(sum(q_lengths) * 2, num_heads, 96, device='cuda', dtype=torch.bfloat16)[::2]
+    # Exercise saturation as well as non-unit, independent K/V scales.
+    k[0, 0, :2] = torch.tensor([1e5, -1e5], device='cuda')
+    scales = dict(k_scales_zeros=torch.tensor(0.25, device='cuda'),
+                  v_scales_zeros=torch.tensor(0.5, device='cuda'))
+    global_blocks, global_count = _dcp_block_offsets(kv_lengths, block_size, 1, k.device)
+    local_blocks, local_count = _dcp_block_offsets(kv_lengths, block_size, dcp_size, k.device)
+
+    def allocate(count, width):
+        cache = torch.full((count, block_size, num_heads, width), 7, device='cuda', dtype=cache_dtype)
+        return cache if kv_layout == 'bshd' else cache.transpose(1, 2).contiguous()
+
+    def canonical(cache):
+        return cache if kv_layout == 'bshd' else cache.transpose(1, 2)
+
+    global_k, global_v = allocate(global_count, 128), allocate(global_count, 96)
+    fill_kv_cache(k, v, global_k, global_v, starts, q_lens, kv_lens, max(q_lengths), global_blocks,
+                  quant_policy=quant_policy, kv_layout=kv_layout, **scales)
+    for rank in range(dcp_size):
+        local_k, local_v = allocate(local_count, 128), allocate(local_count, 96)
+        fill_kv_cache(k, v, local_k, local_v, starts, q_lens, kv_lens, max(q_lengths), local_blocks,
+                      quant_policy=quant_policy, kv_layout=kv_layout, dcp_size=dcp_size, dcp_rank=rank, **scales)
+        for actual, global_cache in [(local_k, global_k), (local_v, global_v)]:
+            expected = torch.full_like(canonical(actual).view(torch.uint8),
+                                       torch.tensor(7, dtype=cache_dtype).view(torch.uint8).item())
+            for request, kv_len in enumerate(kv_lengths):
+                num_global = _div_up(kv_len, block_size)
+                num_local = _div_up(kv_len, block_size * dcp_size)
+                if num_local == 0:
+                    continue
+                global_ids = global_blocks[request, :num_global]
+                local_ids = local_blocks[request, :num_local]
+                owned = canonical(global_cache).view(torch.uint8)[global_ids].flatten(0, 1)[rank::dcp_size]
+                padded = expected[local_ids].flatten(0, 1)
+                padded[:owned.size(0)] = owned
+                expected[local_ids] = padded.view(num_local, block_size, num_heads, -1)
+            assert torch.equal(canonical(actual).view(torch.uint8), expected)
+
+
 def _dcp_owned_current_tokens(states, q_seqlens, history_lens, dcp_size,
                               dcp_rank):
     """Pack current-chunk tokens owned by one interleaved DCP rank."""

@@ -168,6 +168,8 @@ def _fill_kv_cache_fp8_scalar_kernel(
     stride_vch: tl.constexpr,
     stride_vcd: tl.constexpr,
     stride_boff,
+    DCP_SIZE: tl.constexpr,
+    DCP_RANK: tl.constexpr,
     BLOCK: tl.constexpr,
     BLOCK_D: tl.constexpr,
     BLOCK_DV: tl.constexpr,
@@ -181,23 +183,22 @@ def _fill_kv_cache_fp8_scalar_kernel(
     q_seqlen = tl.load(QSeqLens + batch_id)
     kv_seqlen = tl.load(KVSeqLens + batch_id)
     history_seqlen = kv_seqlen - q_seqlen
-    kv_block_id = history_seqlen // BLOCK + block_id
+    kv_block_id = history_seqlen // (BLOCK * DCP_SIZE) + block_id
 
     if kv_seqlen <= 0:
         return
-    if kv_block_id * BLOCK >= kv_seqlen:
+    if kv_block_id * BLOCK * DCP_SIZE >= kv_seqlen:
         return
 
     if is_decoding:
-        page_offs = tl.full((1, ), history_seqlen % BLOCK, dtype=tl.int32)
-        kv_mask = tl.full((1, ), 1, dtype=tl.int1)
+        page_offs = tl.full((1, ), (history_seqlen // DCP_SIZE) % BLOCK, dtype=tl.int32)
+        kv_mask = tl.full((1, ), history_seqlen % DCP_SIZE == DCP_RANK, dtype=tl.int1)
         q_offs = tl.full((1, ), q_startloc, dtype=tl.int32)
     else:
         page_offs = tl.arange(0, BLOCK)
-        kv_offs = kv_block_id * BLOCK + page_offs
+        kv_offs = (kv_block_id * BLOCK + page_offs) * DCP_SIZE + DCP_RANK
         kv_mask = (kv_offs >= history_seqlen) & (kv_offs < kv_seqlen)
-        token_off = q_startloc + kv_block_id * BLOCK - history_seqlen
-        q_offs = token_off + page_offs
+        q_offs = q_startloc + kv_offs - history_seqlen
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
     block_off = block_off.to(tl.int64)
@@ -830,8 +831,8 @@ def fill_kv_cache(k_states: Tensor,
     if v_states.size(-1) == 0:
         head_dim_v = 0
 
-    if dcp_size > 1 and quant_policy != QuantPolicy.NONE:
-        raise ValueError('DCP generic KV fill currently supports only unquantized cache payloads')
+    if dcp_size > 1 and quant_policy not in (QuantPolicy.NONE, QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
+        raise ValueError('DCP generic KV fill supports only unquantized or per-tensor FP8 cache payloads')
     if max_q_seq_length == 1:
         max_num_blocks = 1
     else:
@@ -952,6 +953,8 @@ def fill_kv_cache(k_states: Tensor,
             stride_vch=v_caches.stride(h_dim),
             stride_vcd=v_caches.stride(d_dim),
             stride_boff=block_offsets.stride(0),
+            DCP_SIZE=dcp_size,
+            DCP_RANK=dcp_rank,
             BLOCK=BLOCK,
             BLOCK_D=BLOCK_D,
             BLOCK_DV=BLOCK_DV,

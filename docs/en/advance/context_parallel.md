@@ -34,12 +34,16 @@ lmdeploy serve api_server Qwen/Qwen3-235B-A22B --tp 8 --cp 2
 
 ## PyTorch decode context parallelism
 
-PyTorch DCP distributes MLA KV cache across existing TP ranks, increasing
+PyTorch DCP distributes replicated KV cache across existing TP ranks, increasing
 effective cache capacity without additional GPUs. It supports FlashMLA-backed
-dense MLA and sparse DSA models.
+dense MLA, sparse DSA, and GQA with replicated KV heads.
 
 ```bash
 lmdeploy serve api_server <mla-model> --backend pytorch --tp 4 --dcp 2
+
+# Both Qwen3 models have four KV heads; TP=8 replicates each head twice.
+lmdeploy serve api_server Qwen/Qwen3-30B-A3B --backend pytorch --tp 8 --dcp 2
+lmdeploy serve api_server Qwen/Qwen3-235B-A22B --backend pytorch --tp 8 --dcp 2
 ```
 
 For Python, use `PytorchEngineConfig(tp=4, dcp=2)`. The default `dcp=1`
@@ -47,13 +51,21 @@ disables DCP.
 
 ### Requirements and supported features
 
-- Requires NVIDIA Hopper/SM90 GPUs, FlashMLA, and BF16 activations.
+- MLA requires NVIDIA Hopper/SM90 GPUs, FlashMLA, and BF16 activations.
   Sparse DSA also requires compatible DeepGEMM and TileLang top-k kernels
   (top-k 512 or 2048).
+- GQA uses Triton for decode and FlashAttention-3, when available, for prefill,
+  with a Triton prefill fallback. It supports BF16/FP16 activations and
+  unquantized or per-tensor FP8 KV cache (`--quant-policy fp8` for E4M3,
+  `--quant-policy fp8_e5m2` for E5M2). Cached-prefix chunks are dequantized
+  before gathering. INT8, INT4, TurboQuant, ALiBi, and attention sinks are not supported.
 - `dcp` must divide the attention TP size and replicated KV-head count;
   `dp=1` and `ep=1` are required.
 - Prefix caching and `deepseek_mtp` are supported for compatible MLA models,
   including DeepSeek V3/V3.1, DeepSeek V3.2, and GLM DSA.
+- GQA prefill retains local query heads and gathers cached K/V in bounded
+  chunks. Decode gathers query heads within each replicated-KV group and
+  merges shard outputs using their softmax normalization factors.
 - BF16 KV cache is supported. Sparse MLA also supports FP8 KV cache via
   `--quant-policy fp8`.
 - Sliding-window attention, MemDecode, prefill/decode disaggregation,

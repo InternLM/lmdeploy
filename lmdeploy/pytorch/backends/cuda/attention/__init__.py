@@ -126,6 +126,11 @@ def _build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl
         logger.debug('Build FlashMLAImpl Attention')
         from .mla import FlashMLAImpl
         return FlashMLAImpl(use_fa3=use_fa3, **common_args)
+
+    from lmdeploy.pytorch.distributed import get_dcp_world_rank
+    if get_dcp_world_rank()[0] > 1:
+        from .cp import DCPAttentionImpl
+        return DCPAttentionImpl(use_fa3=enable_fa3, **common_args)
     elif enable_fa3:
         logger.debug('Build FA3Impl Attention')
         from .fa3 import FA3Impl

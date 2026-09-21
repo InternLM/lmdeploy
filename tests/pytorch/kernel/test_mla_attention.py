@@ -494,7 +494,8 @@ def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse,
                            max_q_seqlen=3,
                            input_ids=torch.zeros(1, 5),
                            cache_config=SimpleNamespace(block_size=64),
-                           model_config=SimpleNamespace(head_dim=576, mla_index_topk=512 if sparse else None),
+                           model_config=SimpleNamespace(head_dim=576, use_flash_mla=True,
+                                                        mla_index_topk=512 if sparse else None),
                            kv_quant_policy=0)
     monkeypatch.setattr(distributed, 'get_dcp_world_rank', lambda: (dcp_size, 0))
     # One virtual block per chunk, with an empty second request in every chunk.
@@ -631,8 +632,11 @@ def test_dcp_attention_correction_kernel_matches_torch(dtype):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
 @pytest.mark.parametrize('dcp_size', [2, 4])
-def test_reorder_dcp_prefill_kv_handles_uneven_requests(monkeypatch, dcp_size):
+@pytest.mark.parametrize('gather_prefix', [False, True], ids=['kernel', 'gather'])
+def test_reorder_dcp_prefill_kv_handles_uneven_requests(monkeypatch, dcp_size, gather_prefix):
+    from lmdeploy.pytorch import distributed
     from lmdeploy.pytorch.backends import cp_utils
+    from lmdeploy.pytorch.backends.cuda.attention.cp import gather_dcp_prefix_kv
     from lmdeploy.pytorch.kernels.cuda.dcp import reorder_dcp_prefill_kv
 
     device = 'cuda'
@@ -643,7 +647,7 @@ def test_reorder_dcp_prefill_kv_handles_uneven_requests(monkeypatch, dcp_size):
                         lambda **kwargs: len(lengths) * (1 + 2 * dcp_size) * 2)
     chunks = cp_utils.build_dcp_prefix_chunks(
         prefix_lens=prefix_lens, prefix_limit=max(lengths), block_size=1,
-        head_dim=1, dcp_world_rank=(dcp_size, 0))
+        kv_width=1, dcp_world_rank=(dcp_size, 0))
     for chunk in chunks:
         values = [request * 100 + torch.arange(length, device=device)[chunk.start:chunk.start + chunk.size]
                   for request, length in enumerate(lengths)]
@@ -653,15 +657,24 @@ def test_reorder_dcp_prefill_kv_handles_uneven_requests(monkeypatch, dcp_size):
             owned = torch.cat([value[rank::dcp_size] for value in values])
             gathered[rank, :owned.numel(), 0] = owned
         output = torch.full((len(lengths) * chunk.size, 1), -99, dtype=torch.int32, device=device)
-        expected = torch.full_like(output, -99)
+        expected = torch.full_like(output, 0 if gather_prefix else -99)
         valid_values = torch.cat(values)
         expected[:valid_values.numel(), 0] = valid_values
         gathered = gathered.flatten(0, 1)
-        reorder_dcp_prefill_kv(gathered,
-                               output,
-                               chunk_kv_seqlens=chunk.kv_seqlens,
-                               kv_start_loc=chunk.cu_seqlens[:-1],
-                               local_lens=chunk.local_kv_seqlens)
+        if gather_prefix:
+            def all_gather(destination, local, *, group):
+                assert group == 'dcp'
+                assert local.size(0) == local_capacity
+                destination.copy_(gathered)
+
+            monkeypatch.setattr(distributed, 'all_gather_into_tensor', all_gather)
+            output = gather_dcp_prefix_kv(gathered[:local_capacity], chunk, zero_padding=True)
+        else:
+            reorder_dcp_prefill_kv(gathered,
+                                   output,
+                                   chunk_kv_seqlens=chunk.kv_seqlens,
+                                   kv_start_loc=chunk.cu_seqlens[:-1],
+                                   local_lens=chunk.local_kv_seqlens)
         assert torch.equal(output, expected)
 
 

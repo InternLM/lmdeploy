@@ -620,7 +620,11 @@ class ModelConfig:
         model_config.dist_config = dist_config
 
         if dist_config.dcp > 1:
-            assert model_config.use_flash_mla, 'DCP requires FlashMLA attention'
+            if not model_config.use_flash_mla:
+                replicas = model_config.num_replicate_key_value_heads
+                assert replicas % dist_config.dcp == 0, (
+                    'GQA DCP groups must share replicated KV heads: '
+                    f'KV replication factor {replicas} must be divisible by dcp {dist_config.dcp}')
             assert model_config.sliding_window < 0, 'DCP does not support sliding-window attention'
             if model_config.mla_index_topk is not None:
                 from lmdeploy.pytorch import envs
