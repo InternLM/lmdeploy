@@ -221,7 +221,7 @@ class ExecutorBase:
         if self.cache_config.dcp <= 1:
             return 0
 
-        from lmdeploy.pytorch.backends.cp_utils import get_dcp_workspace_size
+        from lmdeploy.pytorch.backends.cp_utils import get_dcp_kv_width, get_dcp_workspace_size
 
         config = self.cache_config
         model = self.model_config
@@ -240,6 +240,7 @@ class ExecutorBase:
             dcp_size=config.dcp,
             topk=model.mla_index_topk,
             score_workspace_bytes=self._get_dsa_score_workspace_size(),
+            kv_width=get_dcp_kv_width(model),
         )
 
     def _get_runtime_size(self, free_mems: list[int], cache_block_sizes: list[_WorkerCachePlanSizes],

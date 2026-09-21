@@ -107,6 +107,9 @@ def build_executor(
 
     # Finalize cache policy before any executor copies configs to workers or
     # builds backend operators. Target and memory models share CacheConfig.
+    if (dist_config.dcp > 1 and not model_config.use_flash_mla
+            and cache_config.quant_policy not in (QuantPolicy.NONE, QuantPolicy.FP8, QuantPolicy.FP8_E5M2)):
+        raise ValueError('GQA DCP supports only unquantized or per-tensor FP8 KV cache')
     shared_cache_models = [model_config]
     if memdecode_config := misc_config.memdecode_config:
         shared_cache_models.append(memdecode_config.memory_model_config)
