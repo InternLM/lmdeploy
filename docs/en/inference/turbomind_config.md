@@ -139,6 +139,15 @@ pipe = pipeline('your-model', backend_config=backend_config)
 - `cache_prompt_boundary_skip`: number of trailing prompt tokens treated as the volatile generation-prompt suffix (e.g. a chat template's `<think>\n`) and excluded from the reusable prompt-boundary node, moving it to `prompt_len - cache_prompt_boundary_skip`. Applies when `cache_prompt` is `'all'` or `'auto'`. Default 1 (exclude only the last token). Increase it for thinking models whose chat template appends a multi-token suffix that the next turn drops from history.
 - `cache_generation`: generated-block caching mode, `'all'`, `'auto'` (default), or `'none'`. `'all'` indexes full generated blocks and the terminal partial block, and adopts the terminal recurrent frontier checkpoint (exact multi-turn resume). `'auto'` indexes full generated blocks only. `'none'` indexes no generated blocks. Costs one partial cache block when `'all'` indexes a terminal partial block. Full-block checkpoints at block boundaries are always published regardless of this setting.
 
+### LMCache external KV cache
+
+Set `TurbomindEngineConfig.lmcache_addr` to an LMCache multiprocess-server endpoint,
+such as `'tcp://127.0.0.1:5558'`, to enable KV cache LOOKUP, STORE and RETRIEVE.
+The default is `None`, which disables LMCache. For API serving, use
+`--lmcache-addr`; `enable_prefix_caching` independently controls local GPU reuse.
+See the [LMCache user guide](../advance/lmcache.md) for the required server version,
+installation, launch commands and configuration details.
+
 ### kv quantization and inference switch
 
 - `quant_policy=4` means 4bit k/v quantization and inference

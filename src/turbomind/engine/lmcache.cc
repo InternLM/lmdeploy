@@ -111,11 +111,7 @@ public:
          const int&         is_warm_up,
          int                block_size,
          int                phases):
-        tp_group_{group},
-        rank_{group->rank()},
-        is_warm_up_{is_warm_up},
-        block_size_{block_size},
-        batches_(phases)
+        tp_group_{group}, rank_{group->rank()}, is_warm_up_{is_warm_up}, block_size_{block_size}, batches_(phases)
     {
         lmcache::ConnectorConfig config;
         config.server_addr = addr;

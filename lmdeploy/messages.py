@@ -371,7 +371,7 @@ class TurbomindEngineConfig:
             It can be used to override the default config of the model
         enable_metrics: enable metrics system
         lmcache_addr: LMCache multiprocess-server endpoint. A non-empty value
-            enables LMCache LOOKUP for the TurboMind backend.
+            enables LMCache for the TurboMind backend.
     """
 
     dtype: str = 'auto'
