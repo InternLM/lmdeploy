@@ -213,8 +213,13 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
 
         linear_config, linear_layer_ids, full_attention_layer_ids = (
             _resolve_glm5_linear_config(text_config))
+        is_draft = kwargs.get('is_draft_model', False)
+        num_spec_tokens = kwargs.get('num_spec_tokens', 0)
+        if is_draft and getattr(text_config, 'num_nextn_predict_layers', 0) != 1:
+            raise ValueError('GLM-5.3 MTP requires one checkpoint predictor layer.')
         config = DeepseekV32ModelConfigBuilder.build(
-            text_config, model_path=model_path, **kwargs)
+            text_config, model_path=model_path,
+            **dict(kwargs, is_draft_model=False))
 
         tp = kwargs.get('tp', 1)
         device_type = kwargs.get('device_type', 'auto')
@@ -239,26 +244,29 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         # unset also preserves the BF16 latent MLA cache policy.
         config.mla_index_topk = None
         config.k_head_dim = text_config.kv_lora_rank + 64
+        # Keep a complete state after each verified token. Accepted sequence
+        # lengths select the correct ring slot after rejection sampling.
+        ring_shape = (num_spec_tokens + 1,) if num_spec_tokens else ()
         config.state_cache_specs = [
             StateCacheSpec(
                 GLM5_KDA_CONV_STATE,
-                (num_linear_layers, conv_dim, conv_kernel_size),
+                (num_linear_layers, *ring_shape, conv_dim, conv_kernel_size),
                 torch.bfloat16,
             ),
             StateCacheSpec(
                 GLM5_KDA_RECURRENT_STATE,
-                (num_linear_layers, local_heads, head_dim, head_dim),
+                (num_linear_layers, *ring_shape, local_heads, head_dim, head_dim),
                 torch.float32,
             ),
             StateCacheSpec(
                 GLM5_KPOOL_TAIL_K_STATE,
-                (num_full_layers, text_config.index_kpool,
+                (num_full_layers, *ring_shape, text_config.index_kpool,
                  text_config.index_head_dim),
                 torch.bfloat16,
             ),
             StateCacheSpec(
                 GLM5_KPOOL_TAIL_SCORE_STATE,
-                (num_full_layers, text_config.index_kpool,
+                (num_full_layers, *ring_shape, text_config.index_kpool,
                  text_config.index_head_dim),
                 torch.bfloat16,
             ),
@@ -276,6 +284,16 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         config.check_env_func = _check_env_glm5_next
         config.hf_config = hf_config
         config.llm_config = text_config
+        if is_draft:
+            # The predictor has MLA/KPool but no KDA or mHC. Its unfinished
+            # KPool tail is reconstructed from its own pageable token cache.
+            hf_config.architectures = ['Glm5NextMTPModel']
+            if hasattr(hf_config, 'auto_map'):
+                del hf_config.auto_map
+            config.num_layers = 1
+            config.state_cache_specs = []
+            config.states_shapes = []
+            config.is_gated_delta = False
 
         text_dtype = getattr(text_config, 'dtype', None)
         if text_dtype is not None:

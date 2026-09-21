@@ -30,7 +30,8 @@ from lmdeploy.pytorch.consts import (
     GLM5_KPOOL_TAIL_SCORE_STATE,
 )
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
-from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheRequest
+from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import (
     FlashAttention,
     FP32LayerNorm,
@@ -69,6 +70,7 @@ from .glm4_1v import (
     Glm4vVisionPatchEmbed,
     Glm4vVisionRotaryEmbedding,
 )
+from .glm_moe_dsa_mtp import GlmMoeDsaMTPModel, GlmMoeDsaMultiTokenPredictor
 from .qwen3_vl import Qwen3VLInputProcessor
 from .utils.model import build_embedding, vlm_model
 
@@ -513,8 +515,9 @@ class Glm5NextMoE(DeepseekV2MoE):
     fused_moe_output_scale = 2.5
     shared_expert_cls = Glm5NextMLP
 
-    def __init__(self, config: Any, *args, **kwargs):
-        super().__init__(config, *args, **kwargs)
+    def __init__(self, config: Any, layer_idx: int, *args, **kwargs):
+        kwargs.setdefault('prefix', f'model.layers.{layer_idx}.mlp')
+        super().__init__(config, layer_idx, *args, **kwargs)
         if self.gate.fake_eplb or self.gate.eplb_dispatch_info is not None:
             raise RuntimeError(
                 'The GLM-5.3 router does not permit fake '
@@ -741,7 +744,8 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                          layer_idx,
                          dtype=dtype,
                          device=device,
-                         all_reduce=all_reduce)
+                         all_reduce=all_reduce,
+                         prefix=f'model.layers.{layer_idx}.self_attn')
         # DeepSeek keeps these latent-norm parameters in FP32.  GLM-5.3's
         # checkpoint and SGLang runtime keep them in the activation dtype;
         # rebuild only these two containers before weight loading.
@@ -753,8 +757,11 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         self.index_topk = config.index_topk
         self.index_kpool = config.index_kpool
         try:
-            self.cache_layer_idx = config.full_attention_layer_ids.index(
-                layer_idx)
+            full_layer_ids = list(config.full_attention_layer_ids)
+            full_layer_ids.extend(range(config.num_hidden_layers,
+                                        config.num_hidden_layers +
+                                        getattr(config, 'num_nextn_predict_layers', 0)))
+            self.cache_layer_idx = full_layer_ids.index(layer_idx)
         except ValueError as error:
             raise ValueError(
                 f'GLM-5.3 full-attention layer {layer_idx} is missing from '
@@ -851,44 +858,58 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             raise RuntimeError('GLM-5.3 KPool requires stable state cache ids.')
 
         tail_k_state, tail_score_state = tail_state
+        history_lengths = attn_metadata.kv_seqlens - attn_metadata.q_seqlens
+        ring_states = None
+        if tail_k_state.ndim == 4:
+            ring_states = tail_state
+            ring_size = tail_k_state.size(1)
+            request_ids = state_ids.clamp_min(0).long()
+            valid_requests = state_ids >= 0
+            read_slots = history_lengths.long().remainder(ring_size)
+            tail_k_state = tail_k_state[request_ids, read_slots].clone()
+            tail_score_state = tail_score_state[request_ids, read_slots].clone()
+            local_ids = torch.arange(state_ids.numel(), device=state_ids.device)
+            # Padding uses its own scratch row, never live request row zero.
+            state_ids = local_ids
+
+        def save_ring(lengths):
+            if ring_states is None:
+                return
+            slots = lengths.long().remainder(ring_size)
+            for state, value in zip(ring_states, (tail_k_state, tail_score_state)):
+                previous = state[request_ids, slots]
+                state[request_ids, slots] = torch.where(
+                    valid_requests[:, None, None], value, previous)
+
         indexer_k_cache = self.indexer.get_block_cache()
         key = self.indexer.project_key(hidden_states)[0]
         score = self.indexer.project_compress_score(hidden_states)[0]
         if attn_metadata.is_decoding:
-            if key.size(0) != state_ids.numel():
+            batch_size = state_ids.numel()
+            if key.size(0) % batch_size:
                 raise RuntimeError(
-                    'KPool decode requires one token per request state.')
-            history_lengths = (attn_metadata.kv_seqlens
-                               - attn_metadata.q_seqlens)
-            update = kpool_decode_update(
-                key,
-                score,
-                tail_k_state,
-                tail_score_state,
-                state_ids,
-                history_lengths,
-                self.index_kpool,
-            )
-            pooled_fp8, pooled_scale = kpool_compress_quantize_cuda(
-                update.closed_keys,
-                update.closed_scores,
-                self.indexer.index_kpool_compress_ape,
-                mode='decode',
-                round_scale=self.indexer.scale_fmt is not None,
-            )
-            kpool_write_packed_cache_batched(
-                indexer_k_cache,
-                attn_metadata.block_offsets,
-                update.group_ids,
-                pooled_fp8,
-                pooled_scale,
-                self.index_kpool,
-                update.should_close,
-            )
-            tail_k_state.index_copy_(0, update.safe_state_ids,
-                                     update.next_tail_keys)
-            tail_score_state.index_copy_(0, update.safe_state_ids,
-                                         update.next_tail_scores)
+                    'KPool decode rows must be divisible by request count.')
+            steps = key.size(0) // batch_size
+            key = key.unflatten(0, (batch_size, steps))
+            score = score.unflatten(0, (batch_size, steps))
+            for step in range(steps):
+                update = kpool_decode_update(
+                    key[:, step], score[:, step], tail_k_state,
+                    tail_score_state, state_ids, history_lengths + step,
+                    self.index_kpool)
+                pooled_fp8, pooled_scale = kpool_compress_quantize_cuda(
+                    update.closed_keys, update.closed_scores,
+                    self.indexer.index_kpool_compress_ape,
+                    mode='decode', round_scale=self.indexer.scale_fmt is not None)
+                kpool_write_packed_cache_batched(
+                    indexer_k_cache, attn_metadata.block_offsets,
+                    update.group_ids, pooled_fp8, pooled_scale,
+                    self.index_kpool, update.should_close)
+                tail_k_state.index_copy_(0, update.safe_state_ids,
+                                        update.next_tail_keys)
+                tail_score_state.index_copy_(0, update.safe_state_ids,
+                                            update.next_tail_scores)
+                save_ring(history_lengths + step + 1)
             return indexer_k_cache
 
         q_seqlens = attn_metadata.q_seqlens.tolist()
@@ -963,6 +984,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             raise RuntimeError(
                 f'KPool metadata accounts for {token_offset} tokens, '
                 f'but projections contain {key.size(0)}.')
+        save_ring(attn_metadata.kv_seqlens)
         return indexer_k_cache
 
     def _select_kpool_indices(
@@ -987,14 +1009,18 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             query_weight = (head_gate * query_scale.squeeze(-1)
                             * self.indexer.softmax_scale)
             if attn_metadata.is_decoding:
-                seq_lens = attn_metadata.kv_seqlens.to(torch.int64)
+                batch_size = attn_metadata.kv_seqlens.numel()
+                steps = total_rows // batch_size
+                history = attn_metadata.kv_seqlens - attn_metadata.q_seqlens
+                step_ids = torch.arange(1, steps + 1, device=query_fp8.device)
+                seq_lens = (history[:, None] + step_ids).flatten().to(torch.int64)
                 group_lengths = torch.div(
                     seq_lens,
                     self.index_kpool,
                     rounding_mode='floor',
                 )
                 pooled_block_offsets = kpool_pooled_block_offsets(
-                    attn_metadata.block_offsets,
+                    attn_metadata.block_offsets.repeat_interleave(steps, dim=0),
                     self.index_kpool,
                 )
                 logits = kpool_score_paged_cuda(
@@ -1288,7 +1314,8 @@ class Glm5NextDecoderLayer(nn.Module):
                          and layer_idx % config.moe_layer_freq == 0)
         self.mlp = (Glm5NextMoE(config, layer_idx, dtype=dtype, device=device)
                     if is_sparse else Glm5NextMLP(
-                        config, dtype=dtype, device=device))
+                        config, dtype=dtype, device=device,
+                        prefix=f'model.layers.{layer_idx}.mlp'))
 
         self.input_layernorm = RMSNorm(config.hidden_size,
                                        config.rms_norm_eps,
@@ -1498,6 +1525,7 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM):
         vision_groups: list[dict[str, Any]] | None = None,
         vision_prompt_order: list[int] | None = None,
         multimodal_mask: torch.Tensor | None = None,
+        return_input_embeds: bool = False,
         **kwargs,
     ) -> torch.Tensor:
         if inputs_embeds is None and (vision_groups or
@@ -1533,13 +1561,19 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM):
                 inputs_embeds)
             inputs_embeds = inputs_embeds.masked_scatter(
                 scatter_mask, vision_embeddings.to(inputs_embeds))
-        return self.model(input_ids=input_ids,
+        if return_input_embeds and inputs_embeds is None:
+            inputs_embeds = self.get_input_embeddings()(input_ids)
+        hidden_states = self.model(input_ids=input_ids,
                           position_ids=position_ids,
                           past_key_values=past_key_values,
                           attn_metadata=attn_metadata,
                           inputs_embeds=inputs_embeds,
                           state_ids=state_ids,
                           kpool_tail_states=kpool_tail_states)
+        if return_input_embeds:
+            return dict(hidden_states=hidden_states,
+                        target_inputs_embeds=inputs_embeds)
+        return hidden_states
 
     def get_input_embeddings(self):
         return self.model.get_input_embeddings()
@@ -1739,14 +1773,18 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM):
                     grid_thw=grid_thw,
                     vision_groups=vision_groups,
                     vision_prompt_order=vision_prompt_order,
-                    multimodal_mask=multimodal_mask)
+                    multimodal_mask=multimodal_mask,
+                    return_input_embeds=(
+                        self.ctx_mgr.build_ctx.num_spec_tokens > 0
+                        and not context.is_decoding))
 
     @staticmethod
     def _layer_idx(name: str) -> int | None:
         match = re.search(r'\.layers\.(\d+)\.', name)
         return None if match is None else int(match.group(1))
 
-    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]], *,
+                     is_mtp: bool = False):
         """Load both towers through LMDeploy's TP-aware weight loaders."""
         stacked_params_mapping = [
             ('.gate_up_proj', '.gate_proj', 0),
@@ -1782,8 +1820,12 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM):
                 name = checkpoint_name.replace('model.language_model.',
                                                'model.', 1)
             layer_idx = self._layer_idx(name)
-            if layer_idx is not None and layer_idx >= self.config.num_hidden_layers:
-                # MTP layer 45 is a separate milestone.
+            if is_mtp:
+                if layer_idx != self.config.num_hidden_layers:
+                    continue
+                name = self._rewrite_spec_layer_name(layer_idx, name)
+            elif layer_idx is not None and layer_idx >= self.config.num_hidden_layers:
+                # Predictor weights are loaded by Glm5NextMTPModel.
                 continue
             if 'rotary_emb.' in name:
                 continue
@@ -1841,3 +1883,116 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM):
                 break
             else:
                 load_weight(params_dict[name], loaded_weight)
+
+
+class Glm5NextMTPAttention(Glm5NextSparseAttention):
+    """The predictor's KPool tail is reconstructed from pageable token data.
+
+    Draft forwards can revisit accepted positions after multiple proposals.
+    Keeping raw index keys/scores in its cache avoids private mutable request
+    state and reuses the normal cache allocation, sizing and sleep lifecycle.
+    Only the single MTP layer requests this additional cache.
+    """
+
+    _TOKEN_CACHE = 'glm5_mtp_kpool_tokens'
+
+    def get_block_cache_requests(self, context):
+        return (BlockCacheRequest(
+            name=self._TOKEN_CACHE,
+            shape=(context.geometry.kernel_block_size, 2, self.indexer.head_dim),
+            dtype=torch.bfloat16,
+            per_row_contiguous=True),)
+
+    def bind_block_cache(self, binding):
+        if binding.cache_name != self._TOKEN_CACHE:
+            raise ValueError(f'Unexpected MTP token cache: {binding.cache_name}')
+        self._token_cache_binding = binding
+
+    def _update_kpool_cache(self, hidden_states, tail_state, state_ids,
+                            attn_metadata):
+        binding = self._token_cache_binding
+        caches = get_step_ctx_manager().current_context().block_caches
+        cache = (caches.row(binding.cache_name, binding.consumer_row)
+                 if hasattr(caches, 'row') else
+                 caches[binding.cache_name][binding.consumer_row])
+        block_size = cache.size(1)
+        history = (attn_metadata.kv_seqlens - attn_metadata.q_seqlens).long()
+        tail_length = history.remainder(self.index_kpool)
+        slots = torch.arange(self.index_kpool, device=history.device)
+        positions = history[:, None] - tail_length[:, None] + slots
+        block_offsets = attn_metadata.block_offsets.long()
+        blocks = block_offsets.gather(1, positions.div(block_size, rounding_mode='floor'))
+        tails = cache[blocks, positions.remainder(block_size)]
+        tails = tails.masked_fill((slots >= tail_length[:, None])[..., None, None], 0)
+        state_ids = torch.arange(history.numel(), device=history.device)
+        result = super()._update_kpool_cache(
+            hidden_states, (tails[:, :, 0].contiguous(), tails[:, :, 1].contiguous()),
+            state_ids, attn_metadata)
+
+        # Write raw projected tokens after reading the pre-forward tail.
+        # Rejected positions are overwritten on their next visit.
+        total_tokens = hidden_states.size(1)
+        batch = state_ids.repeat_interleave(attn_metadata.q_seqlens,
+                                           output_size=total_tokens)
+        token_ids = torch.arange(total_tokens, device=history.device)
+        positions = history[batch] + token_ids - attn_metadata.cu_seqlens_q[batch]
+        blocks = block_offsets[batch, positions.div(block_size, rounding_mode='floor')]
+        key = self.indexer.project_key(hidden_states)[0]
+        score = self.indexer.project_compress_score(hidden_states)[0]
+        cache[blocks, positions.remainder(block_size)] = torch.stack((key, score), dim=1)
+        return result
+
+
+class Glm5NextMTPDecoderLayer(nn.Module):
+    """Checkpoint predictor block: GLM MLA/MoE with plain residuals, no mHC."""
+
+    def __init__(self, config, layer_idx, dtype=None, device=None):
+        super().__init__()
+        self.self_attn = Glm5NextMTPAttention(config, layer_idx, dtype=dtype, device=device)
+        self.mlp = Glm5NextMoE(config, layer_idx, dtype=dtype, device=device)
+        self.input_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps,
+                                       dtype=dtype, device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps,
+                                                dtype=dtype, device=device)
+
+    def forward(self, hidden_states, rotary_pos_emb, past_key_value,
+                attn_metadata=None, **kwargs):
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
+        hidden_states = self.self_attn(hidden_states, past_key_value, attn_metadata)
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        return self.mlp(hidden_states), residual
+
+
+class Glm5NextMTPModel(GlmMoeDsaMTPModel):
+    """Reuse the shared GLM/DeepSeek predictor, proposer and CUDA Graph flow."""
+
+    uses_shared_input_embeddings = True
+
+    def __init__(self, config, ctx_mgr, dtype=None, device=None):
+        nn.Module.__init__(self)
+        self.config = config.text_config
+        self.quantization_config = getattr(config, 'quantization_config', None)
+        if self.quantization_config is not None:
+            self.config.quantization_config = self.quantization_config
+        self.dtype = dtype
+        self.ctx_mgr = ctx_mgr
+        self.model = GlmMoeDsaMultiTokenPredictor(
+            self.config, dtype=dtype, device=device,
+            decoder_layer_cls=Glm5NextMTPDecoderLayer)
+        self.uses_dsa_topk_buffer = False
+        self.topk_indices_buffer = None
+        self._load_buffers = {}
+
+    def prepare_inputs_for_generation(self, past_key_values, inputs_embeds=None,
+                                      context=None):
+        if context.target_inputs_embeds is not None:
+            inputs_embeds = context.target_inputs_embeds
+        return super().prepare_inputs_for_generation(past_key_values, inputs_embeds, context)
+
+    _layer_idx = staticmethod(Glm5NextForConditionalGeneration._layer_idx)
+
+    def load_weights(self, weights):
+        weights = ((name, weight) for name, weight in weights
+                   if self._layer_idx(name) == self.config.num_hidden_layers)
+        Glm5NextForConditionalGeneration.load_weights(self, weights, is_mtp=True)

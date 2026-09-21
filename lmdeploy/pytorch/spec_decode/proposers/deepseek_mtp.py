@@ -15,7 +15,8 @@ class DeepseekMTP(BaseSpecProposer):
         super().build_model(empty_init, target_model=target_model, build_model_ctx=build_model_ctx)
         draft_model = self.model
         if (getattr(draft_model, 'uses_dsa_topk_buffer', False)
-                and hasattr(draft_model, 'set_input_embeddings')):
+                or getattr(draft_model, 'uses_shared_input_embeddings', False)) and hasattr(
+                    draft_model, 'set_input_embeddings'):
             draft_model.set_input_embeddings(target_model.get_input_embeddings())
 
     async def get_outputs(self,

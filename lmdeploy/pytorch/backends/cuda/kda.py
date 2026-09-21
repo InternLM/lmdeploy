@@ -6,6 +6,7 @@ does not need copied GLM kernels. This adapter owns only LMDeploy cache/state
 semantics and delegates convolution and recurrence to FLA.
 """
 
+from copy import copy
 from typing import Any
 
 import torch
@@ -58,6 +59,57 @@ class CudaKdaImpl(KdaImpl):
     def get_step_metadata_provider(self):
         """Reuse FLA chunk-index preparation outside model forward."""
         return GatedDeltaStepMetaUpdater()
+
+    def _forward_spec(self, mixed_qkv, raw_gate, raw_beta, conv_state,
+                      recurrent_state, metadata, **kwargs):
+        """Reuse single-step FLA kernels, checkpointing every verified token.
+
+        State is addressed by accepted history length, not the last proposed
+        length. The ring therefore also handles zero/partial acceptance and
+        request reordering without a scheduler-side rollback hook.
+        """
+        history = metadata.cache_seqlens.long()
+        ring_size = metadata.num_spec_tokens + 1
+        ids = metadata.state_ids.long()
+        read_slot = history.remainder(ring_size)
+        conv = conv_state[ids, read_slot].clone()
+        recurrent = recurrent_state[ids, read_slot].clone()
+        local = copy(metadata)
+        local.num_spec_tokens = 0
+        local.spec_state_offsets = None
+        local.spec_conv_offsets = None
+        local.state_ids = torch.arange(ids.numel(), device=ids.device)
+
+        def store(state, values, lengths):
+            slots = lengths.remainder(ring_size)
+            previous = state[ids, slots]
+            valid = metadata.valid_state.reshape(-1, *([1] * (values.ndim - 1)))
+            state[ids, slots] = torch.where(valid, values.to(state.dtype), previous)
+
+        if not metadata.is_decoding:
+            output = self.forward(mixed_qkv, raw_gate, raw_beta,
+                                  conv_state=conv, recurrent_state=recurrent,
+                                  metadata=local, **kwargs)
+            lengths = history + metadata.cu_seqlens.diff()
+            store(conv_state, conv, lengths)
+            store(recurrent_state, recurrent, lengths)
+            return output
+
+        batch_size = ids.numel()
+        steps = mixed_qkv.size(1) // batch_size
+        if steps > ring_size:
+            raise ValueError('KDA verification exceeds the configured state ring.')
+        inputs = [x.unflatten(1, (batch_size, steps))
+                  for x in (mixed_qkv, raw_gate, raw_beta)]
+        outputs = []
+        for step in range(steps):
+            output = self.forward(*(x[:, :, step].contiguous() for x in inputs),
+                                  conv_state=conv, recurrent_state=recurrent,
+                                  metadata=local, **kwargs)
+            store(conv_state, conv, history + step + 1)
+            store(recurrent_state, recurrent, history + step + 1)
+            outputs.append(output)
+        return torch.stack(outputs, dim=2).flatten(1, 2)
 
     def _conv(
         self,
@@ -112,10 +164,12 @@ class CudaKdaImpl(KdaImpl):
         head_dim: int,
         lower_bound: float,
     ) -> torch.Tensor:
-        if (metadata.spec_state_offsets is not None
-                or (getattr(metadata, 'num_spec_tokens', 0) or 0) > 0):
-            raise NotImplementedError(
-                'GLM-5.3 KDA speculative state rollback is not implemented.')
+        if (getattr(metadata, 'num_spec_tokens', 0) or 0) > 0:
+            return self._forward_spec(
+                mixed_qkv, raw_gate, raw_beta, conv_state, recurrent_state,
+                metadata, conv_weight=conv_weight, conv_bias=conv_bias,
+                a_log=a_log, dt_bias=dt_bias, num_heads=num_heads,
+                head_dim=head_dim, lower_bound=lower_bound)
         batch_size = metadata.state_ids.numel()
         if metadata.is_decoding:
             query_length = mixed_qkv.size(1) // batch_size
