@@ -40,6 +40,7 @@ def draft_model_forward(
             model_config=model_config,
             cache_config=cache_engine.cache_config,
             kv_caches=kv_caches,
+            kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
         context.block_caches = cache_engine.block_caches
         with ctx_mgr.context(context):
