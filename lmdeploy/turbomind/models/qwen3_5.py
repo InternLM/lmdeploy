@@ -204,7 +204,7 @@ class Qwen3_5TextModel(TextModel):
     # FFN / MoE factories
     # ------------------------------------------------------------------
 
-    def ffn(self, pfx, inter_size, is_expert=False):
+    def ffn(self, pfx, inter_size, is_expert=False, *, tp):
         try:
             w1, w3, w2 = [self._linear(pfx + f'{x}_proj')
                           for x in ('gate', 'up', 'down')]
@@ -215,7 +215,7 @@ class Qwen3_5TextModel(TextModel):
         cfg.inter_size = inter_size
         cfg.is_expert  = is_expert
 
-        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp)
+        m = FfnBuilder(cfg, self._ctx, tp=tp)
         m.add_ffn(w1, w2, w3)
         return m.build()
 
@@ -234,9 +234,13 @@ class Qwen3_5TextModel(TextModel):
         m.experts = experts.build()
 
         m.add_gate('shared_gate', self._linear(pfx + 'shared_expert_gate'))
-        shared = self.ffn(pfx + 'shared_expert', self.cfg.shared_expert_intermediate_size)
+        shared = self.ffn(pfx + 'shared_expert',
+                          self.cfg.shared_expert_intermediate_size,
+                          tp=self._mlp_tp)
+        if shared is not None:
+            m.shared = shared
 
-        return m.build(), shared
+        return m.build()
 
     def _packed_moe_ffn(self, experts_pfx, expert_idx, inter_size):
         w1, w2, w3 = read_packed_moe_expert(
@@ -254,7 +258,8 @@ class Qwen3_5TextModel(TextModel):
 
     def _moe_expert_ffn(self, experts_pfx, expert_idx, inter_size):
         expert_pfx = experts_pfx + expert_idx
-        return (self.ffn(expert_pfx, inter_size, is_expert=True)
+        return (self.ffn(expert_pfx, inter_size, is_expert=True,
+                       tp=self._mlp_tp)
                 or self._packed_moe_ffn(experts_pfx, expert_idx, inter_size))
 
     # ------------------------------------------------------------------
@@ -270,9 +275,10 @@ class Qwen3_5TextModel(TextModel):
             else:
                 d.attention = self.attn(p + 'self_attn')
             if self._n_experts > 0:
-                d.moe_ffn, d.feed_forward = self.moe(p + 'mlp')
+                d.moe_ffn = self.moe(p + 'mlp')
             else:
-                d.feed_forward = self.ffn(p + 'mlp', self.cfg.intermediate_size)
+                d.feed_forward = self.ffn(p + 'mlp', self.cfg.intermediate_size,
+                                          tp=self._mlp_tp)
             d.attention_norm = self.norm(
                 p + 'input_layernorm',
                 zero_centered=True,
@@ -602,7 +608,7 @@ class Qwen3_5Model:
             self._vision_data_type = vision_data_type
 
     def bind_runtime(self, *, ctx, root_handles,
-                     attn_tp, mlp_tp, ep, model_tp):
+                     attn_tp, mlp_tp, ep, model_tp, dense_tp):
         self.text_model.bind_runtime(
             ctx=ctx,
             root_handles=root_handles,
@@ -610,6 +616,7 @@ class Qwen3_5Model:
             mlp_tp=mlp_tp,
             ep=ep,
             model_tp=model_tp,
+            dense_tp=dense_tp,
         )
 
         if self.vision_model is not None:

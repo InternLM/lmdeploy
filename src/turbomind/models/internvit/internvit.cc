@@ -96,9 +96,6 @@ struct InternVit::Impl {
         const auto& cfg = weights.config();
         for (int i = 0; i < phases; ++i) {
             auto& d           = data_.emplace_back();
-            d.batch_input     = {{engine.max_forward_token_num, cfg.in_channels, cfg.image_height, cfg.image_width},
-                             cfg.data_type,
-                             kCPUpinned};
             d.attn_cu_seqlens = Tensor_<int>{{engine.max_forward_token_num + 1}, kDEVICE};
             d.attn_finished   = Tensor_<bool>{{engine.max_forward_token_num}, kDEVICE};
         }
@@ -281,7 +278,7 @@ struct InternVit::Impl {
 
         if (d.batch_size > 0) {
             // batch input
-            if (d.batch_size > d.batch_input.shape(0)) {
+            if (!d.batch_input || d.batch_size > d.batch_input.shape(0)) {
                 core::ContextGuard ctx{Allocator{kCPUpinned}};
                 Layout             layout{d.batch_size, cfg.in_channels, cfg.image_height, cfg.image_width};
                 d.batch_input = {layout, cfg.data_type, kCPUpinned};

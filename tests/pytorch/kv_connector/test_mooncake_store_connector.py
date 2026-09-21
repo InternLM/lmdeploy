@@ -117,7 +117,9 @@ def test_scheduler_without_transfer_work_is_fail_closed(cache_config):
     request = MagicMock(seq_id=17)
     request.history_multimodals.empty.return_value = True
     request.history_embeddings = []
-    request.get_prefix_cache_max_match_step.return_value = 0
+    request.get_prefix_cache_max_candidate_step.return_value = 0
+    request.clamp_prefix_cache_match_step.return_value = 0
+    request.prefix_cache.recompute_overlap.recompute_blocks = 0
 
     assert connector.get_num_new_matched_tokens(request, 0) == (0, False)
     assert connector.update_state_after_alloc(request, [1, 2], 0) is None

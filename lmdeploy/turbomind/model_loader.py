@@ -50,6 +50,15 @@ class ModelLoader:
         model_tp = ParallelGroup(ec.attn_tp_size * ec.attn_cp_size,
                                  [mc.model_tp_rank(g) for g in range(self.gpu_count)])
 
+        # Dense (non-expert) FFN TP: node-local — one node's ranks within
+        # the comm domain (shard index = inner_rank % domain_size,
+        # inner_rank = ep_rank * mlp_tp_size + mlp_tp_rank).
+        dense_size = min(mlp_tp.size * ep.size, self.gpu_count)
+        dense_tp = ParallelGroup(
+            dense_size,
+            [(e * mlp_tp.size + m) % dense_size
+             for e, m in zip(ep.ranks, mlp_tp.ranks)])
+
         self.model.bind_runtime(
             ctx=ctx,
             root_handles=[mc.root(g) for g in range(self.gpu_count)],
@@ -57,6 +66,7 @@ class ModelLoader:
             mlp_tp=mlp_tp,
             ep=ep,
             model_tp=model_tp,
+            dense_tp=dense_tp,
         )
 
     def export(self):

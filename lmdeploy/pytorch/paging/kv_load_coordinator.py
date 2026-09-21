@@ -428,6 +428,13 @@ class KVLoadCoordinator:
         seq.kv_token_limit = record.remote_step
         if self.block_trie.enabled:
             self.block_trie.allocate(seq)
+            # The connector excluded the overlap from its reusable boundary.
+            # Keep that suffix private when allocating the remaining prefill:
+            # another request may have published matching target blocks while
+            # this load was pending, with different MTP boundary contents.
+            overlap = seq.prefix_cache.recompute_overlap
+            start_block = record.remote_step // seq.block_size
+            overlap.set_fresh_block_range(start_block, start_block + overlap.recompute_blocks)
         seq.set_step(record.remote_step)
         seq.kv_token_limit = None
         if seq.prefix_cache.match_start_step < 0:

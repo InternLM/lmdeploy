@@ -24,6 +24,9 @@ def prepare_kv_connector_config(
     if transfer_config is None or not transfer_config.is_kv_transfer_instance:
         return
     if transfer_config.kv_connector == 'MooncakeStoreConnector':
+        if cache_config.num_cpu_blocks > 0:
+            raise ValueError(
+                'Mooncake Store does not support CPU KV paging; set num_cpu_blocks=0')
         if distributed_executor_backend == 'mp':
             raise ValueError(
                 'Mooncake Store does not support distributed_executor_backend="mp"; '

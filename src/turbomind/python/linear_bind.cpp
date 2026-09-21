@@ -167,6 +167,10 @@ void bind_linear(py::module_& m)
         .def_readwrite("k_desc", &LinearWeight::k_desc)
         .def_readwrite("q_desc", &LinearWeight::q_desc);
 
+    py::class_<gemm::Workspace>(m, "GemmWorkspace").def(py::init<>([](std::uintptr_t stream) {
+        return std::make_unique<gemm::Workspace>(reinterpret_cast<cudaStream_t>(stream));
+    }));
+
     py::class_<LlamaLinear, std::shared_ptr<LlamaLinear>>(m, "LlamaLinear")
         .def(py::init<>())
         .def(
@@ -176,13 +180,16 @@ void bind_linear(py::module_& m)
         .def(
             "get_exec_plan",
             [](LlamaLinear&                  self,
+               gemm::Workspace&              workspace,
                const LinearWeight&           weight,
                std::shared_ptr<core::Tensor> input,
                std::shared_ptr<core::Tensor> indices,
                std::shared_ptr<core::Tensor> offsets) {
+                auto lifetime = self.With(workspace);
                 return self.GetExecPlan(
                     TensorFromShared(input, "input"), weight, IntBufferOrEmpty(indices), IntBufferOrEmpty(offsets));
             },
+            py::arg("workspace"),
             py::arg("weight"),
             py::arg("input"),
             py::arg("indices") = py::none(),
@@ -201,19 +208,21 @@ void bind_linear(py::module_& m)
         .def(
             "forward_dense",
             [](LlamaLinear&                  self,
+               gemm::Workspace&              workspace,
                const gemm::ExecPlan&         plan,
                std::shared_ptr<core::Tensor> input,
                LinearWeight&                 weight,
                std::shared_ptr<core::Tensor> output,
                std::shared_ptr<core::Tensor> input_scales,
                std::shared_ptr<core::Tensor> output_scales) {
-                core::Tensor           in    = TensorFromShared(input, "input");
-                core::Tensor           out   = TensorFromShared(output, "output");
-                core::Tensor           in_s  = TensorOrEmpty(input_scales);
-                core::Tensor           out_s = TensorOrEmpty(output_scales);
-                py::gil_scoped_release release;
+                core::Tensor in       = TensorFromShared(input, "input");
+                core::Tensor out      = TensorFromShared(output, "output");
+                core::Tensor in_s     = TensorOrEmpty(input_scales);
+                core::Tensor out_s    = TensorOrEmpty(output_scales);
+                auto         lifetime = self.With(workspace);
                 self.Forward(plan, in, in_s, weight, {}, {}, out, out_s);
             },
+            py::arg("workspace"),
             py::arg("plan"),
             py::arg("input"),
             py::arg("weight"),
@@ -223,6 +232,7 @@ void bind_linear(py::module_& m)
         .def(
             "forward_moe",
             [](LlamaLinear&                  self,
+               gemm::Workspace&              workspace,
                const gemm::ExecPlan&         plan,
                std::shared_ptr<core::Tensor> input,
                LinearWeight&                 weight,
@@ -231,15 +241,16 @@ void bind_linear(py::module_& m)
                std::shared_ptr<core::Tensor> output,
                std::shared_ptr<core::Tensor> input_scales,
                std::shared_ptr<core::Tensor> output_scales) {
-                core::Tensor           in            = TensorFromShared(input, "input");
-                core::Tensor           out           = TensorFromShared(output, "output");
-                core::Tensor           in_s          = TensorOrEmpty(input_scales);
-                core::Tensor           out_s         = TensorOrEmpty(output_scales);
-                Buffer_<int>           index_buffer  = IntBufferOrEmpty(indices);
-                Buffer_<int>           offset_buffer = IntBufferOrEmpty(offsets);
-                py::gil_scoped_release release;
+                core::Tensor in            = TensorFromShared(input, "input");
+                core::Tensor out           = TensorFromShared(output, "output");
+                core::Tensor in_s          = TensorOrEmpty(input_scales);
+                core::Tensor out_s         = TensorOrEmpty(output_scales);
+                Buffer_<int> index_buffer  = IntBufferOrEmpty(indices);
+                Buffer_<int> offset_buffer = IntBufferOrEmpty(offsets);
+                auto         lifetime      = self.With(workspace);
                 self.Forward(plan, in, in_s, weight, index_buffer, offset_buffer, out, out_s);
             },
+            py::arg("workspace"),
             py::arg("plan"),
             py::arg("input"),
             py::arg("weight"),
@@ -251,6 +262,7 @@ void bind_linear(py::module_& m)
         .def(
             "tune",
             [](LlamaLinear&                  self,
+               gemm::Workspace&              workspace,
                std::shared_ptr<core::Tensor> input,
                LinearWeight&                 weight,
                std::shared_ptr<core::Tensor> indices,
@@ -258,15 +270,16 @@ void bind_linear(py::module_& m)
                std::shared_ptr<core::Tensor> output,
                std::shared_ptr<core::Tensor> input_scales,
                std::shared_ptr<core::Tensor> output_scales) {
-                core::Tensor           in            = TensorFromShared(input, "input");
-                core::Tensor           out           = TensorFromShared(output, "output");
-                core::Tensor           in_s          = TensorOrEmpty(input_scales);
-                core::Tensor           out_s         = TensorOrEmpty(output_scales);
-                Buffer_<int>           index_buffer  = IntBufferOrEmpty(indices);
-                Buffer_<int>           offset_buffer = IntBufferOrEmpty(offsets);
-                py::gil_scoped_release release;
+                core::Tensor in            = TensorFromShared(input, "input");
+                core::Tensor out           = TensorFromShared(output, "output");
+                core::Tensor in_s          = TensorOrEmpty(input_scales);
+                core::Tensor out_s         = TensorOrEmpty(output_scales);
+                Buffer_<int> index_buffer  = IntBufferOrEmpty(indices);
+                Buffer_<int> offset_buffer = IntBufferOrEmpty(offsets);
+                auto         lifetime      = self.With(workspace);
                 return self.Tune(in, in_s, weight, index_buffer, offset_buffer, out, out_s);
             },
+            py::arg("workspace"),
             py::arg("input"),
             py::arg("weight"),
             py::arg("indices") = py::none(),
@@ -435,12 +448,19 @@ void bind_linear(py::module_& m)
            std::shared_ptr<core::Tensor> dst_scales,
            int                           experts_per_token,
            float                         bscale,
-           float                         dst_scale) {
+           std::shared_ptr<core::Tensor> shared_src,
+           int                           shared_begin,
+           int                           shared_end) {
             core::Tensor o              = TensorOrEmpty(out);
             const float* scales_ptr     = (scales && *scales) ? scales->data<float>() : nullptr;
             const int*   en2f_ptr       = (en2f && *en2f) ? (const int*)en2f->raw_data() : nullptr;
             const int*   f2E_ptr        = (f2E && *f2E) ? (const int*)f2E->raw_data() : nullptr;
             const float* dst_scales_ptr = (dst_scales && *dst_scales) ? dst_scales->data<float>() : nullptr;
+            // dst is write-only; dst_scales (gate logits) scales the
+            // shared-base term only, and is inert without shared_src.
+            // shared_src folds over [shared_begin, shared_end) — passing
+            // shared_src without an explicit range (defaults 0, 0) folds
+            // nothing. dtype mismatches abort in Buffer::data<T>().
             invokeMoeCombine(o,
                              TensorFromShared(src, "src"),
                              TensorOrEmpty(bias),
@@ -450,7 +470,9 @@ void bind_linear(py::module_& m)
                              dst_scales_ptr,
                              experts_per_token,
                              bscale,
-                             dst_scale,
+                             shared_src ? TensorOrEmpty(shared_src) : core::Tensor{},
+                             shared_begin,
+                             shared_end,
                              DefaultStream());
             return std::make_shared<core::Tensor>(o);
         },
@@ -462,8 +484,10 @@ void bind_linear(py::module_& m)
         py::arg("f2E")        = py::none(),
         py::arg("dst_scales") = py::none(),
         py::arg("experts_per_token"),
-        py::arg("bscale")    = 1.f,
-        py::arg("dst_scale") = 0.f,
+        py::arg("bscale")       = 1.f,
+        py::arg("shared_src")   = py::none(),
+        py::arg("shared_begin") = 0,
+        py::arg("shared_end")   = 0,
         py::call_guard<py::gil_scoped_release>());
 }
 

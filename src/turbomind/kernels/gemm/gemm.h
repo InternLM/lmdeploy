@@ -20,9 +20,6 @@ namespace turbomind::gemm {
 
 class Gemm {
 public:
-    static constexpr size_t kBarriersSize = 1 << 20;
-    static constexpr size_t kPartialsSize = 32 << 20;
-
     Gemm();
 
     ~Gemm();
@@ -47,7 +44,7 @@ public:
         MatrixLayout Ddesc{};
         void*        W{};
         MatrixLayout Wdesc{};
-        Workspace    workspace{};
+        Workspace*   workspace{};
         cudaStream_t stream{};
     };
 

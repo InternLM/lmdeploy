@@ -26,36 +26,6 @@ using namespace gemm;
 
 struct LlamaLinear::Impl {
 
-    explicit Impl()
-    {
-        workspace_ = {};
-
-        workspace_.barriers_size   = gemm::Gemm::kBarriersSize;
-        workspace_.partials_size   = gemm::Gemm::kPartialsSize;
-        workspace_.tensormaps_size = 8192 * 128;  // maximum 4096 tensor maps
-
-        auto st = core::Context::stream().handle();
-
-        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.barriers, workspace_.barriers_size, st));
-        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.partials, workspace_.partials_size, st));
-        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.tensormaps, workspace_.partials_size, st));
-        TM_CUDA_CHECK(cudaMemsetAsync(workspace_.barriers, 0, workspace_.barriers_size, st));
-        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.flags, sizeof(int), st));
-
-        core::Context::stream().Sync();
-    }
-
-    ~Impl()
-    {
-        auto st = core::Context::stream().handle();
-
-        cudaFreeAsync(workspace_.barriers, st);
-        cudaFreeAsync(workspace_.partials, st);
-        cudaFreeAsync(workspace_.tensormaps, st);
-        cudaFreeAsync(workspace_.flags, st);
-        workspace_ = {};
-    }
-
     std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandB(const LinearWeight& weight)
     {
         const Tensor& B      = weight.weight;
@@ -139,6 +109,8 @@ struct LlamaLinear::Impl {
                                  Tensor&             output,
                                  Tensor&             output_scales)
     {
+        TM_CHECK(workspace_);
+
         Tensor       in = input.view({-1, input.shape(-1)});
         MatrixLayout desc_A;
         MatrixLayout desc_U;
@@ -232,10 +204,26 @@ struct LlamaLinear::Impl {
     gemm::Gemm           gemm_;
     gemm::DispatchPolicy dispatch_policy_{gemm::DispatchPolicy::kDefault};
 
-    gemm::Workspace workspace_;
+    gemm::Workspace* workspace_ = nullptr;
 };
 
 LlamaLinear::LlamaLinear(): impl_{std::make_shared<Impl>()} {}
+
+LlamaLinear::WorkspaceScope LlamaLinear::With(gemm::Workspace& workspace)
+{
+    return WorkspaceScope{*this, workspace};
+}
+
+LlamaLinear::WorkspaceScope::WorkspaceScope(LlamaLinear& linear, gemm::Workspace& workspace):
+    linear_(&linear), prev_(linear.impl_->workspace_)
+{
+    linear.impl_->workspace_ = &workspace;
+}
+
+LlamaLinear::WorkspaceScope::~WorkspaceScope()
+{
+    linear_->impl_->workspace_ = prev_;
+}
 
 gemm::Gemm& LlamaLinear::gemm() noexcept
 {
@@ -320,6 +308,8 @@ std::optional<ExecPlan> LlamaLinear::GetExecPlan(const Tensor&       input,
                                                  const Buffer_<int>& indices,
                                                  const Buffer_<int>& offsets)
 {
+    TM_CHECK(impl_->workspace_);
+
     const bool indexed = static_cast<bool>(indices) && indices.size() > 0;
     const int  k       = input.shape(-1);
     const int  m       = indexed ? indices.size() : input.size() / k;
