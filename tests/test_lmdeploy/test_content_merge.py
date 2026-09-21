@@ -584,3 +584,29 @@ def test_batch_message_processing():
 
     # Should pass model.py assertion
     assert all(isinstance(m, dict) and 'role' in m and 'content' in m for m in processed)
+
+
+def test_parse_multimodal_item_normalizes_missing_content():
+    """Assistant messages with only tool_calls may omit the content key.
+
+    The anthropic adapter emits this shape for pure tool_use turns; _parse_multimodal_item must not raise and must
+    normalize content to '' so model.messages2prompt's per-message assertion holds.
+    """
+    messages = [{
+        'role': 'assistant',
+        'tool_calls': [{
+            'id': 'chatcmpl-tool-xyz',
+            'type': 'function',
+            'function': {
+                'name': 'Bash',
+                'arguments': '{}'
+            }
+        }]
+    }]
+    out_messages = [None]
+
+    MultimodalProcessor._parse_multimodal_item(0, messages, out_messages, {})
+
+    assert out_messages[0]['content'] == ''
+    assert out_messages[0]['tool_calls'] == messages[0]['tool_calls']
+    assert all(isinstance(m, dict) and 'role' in m and 'content' in m for m in out_messages)
