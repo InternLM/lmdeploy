@@ -113,13 +113,21 @@ class MultimodalProcessor:
                                allowed_media_domains: list[str] | None = None):
         """Synchronous helper to parse a single multimodal message item."""
         role = in_messages[i]['role']
-        content = in_messages[i]['content']
+        # OpenAI protocol allows tool_call messages without a content key;
+        # the anthropic adapter emits exactly that for pure tool_use turns.
+        # Normalize those to content='' so downstream chat-template asserts
+        # (model.messages2prompt requires the key on every message) hold.
+        content = in_messages[i].get('content')
 
-        if role not in ('user', 'tool') or isinstance(content, str):
+        if role not in ('user', 'tool') or not isinstance(content, list):
+            if 'content' not in in_messages[i]:
+                normalized = dict(in_messages[i])
+                normalized['content'] = ''
+                out_messages[i] = normalized
+                return
             out_messages[i] = in_messages[i]
             return
 
-        assert isinstance(content, list)
         out_message = dict(in_messages[i])
         out_message['content'] = []
 
