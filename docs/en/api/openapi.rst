@@ -14,11 +14,3 @@ OpenAI Compatible API Endpoints
 .. openapi:: ../_static/openai.yaml
     :request:
     :paths: /v1/responses
-
-
-Proxy Server API
-----------------
-
-.. openapi:: ../_static/proxy.yaml
-    :request:
-    :examples:

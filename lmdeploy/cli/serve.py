@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import argparse
+
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.utils import get_max_batch_size
 
@@ -6,7 +8,6 @@ from .cli import CLI
 from .utils import (
     ArgumentHelper,
     DefaultsAndTypesHelpFormatter,
-    convert_args,
     get_chat_template,
     get_lora_adapters,
     get_speculative_config,
@@ -189,7 +190,7 @@ class SubCliServe:
 
     @staticmethod
     def add_parser_proxy():
-        """Add parser for proxy server command."""
+        """Add parser for router server command."""
         parser = SubCliServe.subparsers.add_parser('proxy',
                                                    formatter_class=DefaultsAndTypesHelpFormatter,
                                                    description=SubCliServe.proxy.__doc__,
@@ -197,6 +198,16 @@ class SubCliServe:
         parser.set_defaults(run=SubCliServe.proxy)
         parser.add_argument('--server-name', type=str, default='0.0.0.0', help='Host ip for proxy serving')
         parser.add_argument('--server-port', type=int, default=8000, help='Server port of the proxy')
+        parser.add_argument(
+            '--routing-strategy',
+            type=str,
+            choices=[
+                'random', 'round_robin', 'cache_aware', 'power_of_two', 'consistent_hash',
+                'rendezvous_hash', 'min_expected_latency', 'min_observed_latency'
+            ],
+            default='cache_aware',
+            help='The strategy to dispatch requests to nodes. min_expected_latency and '
+            'min_observed_latency are mapped to cache_aware for compatibility.')
         parser.add_argument('--serving-strategy',
                             type=str,
                             choices=['Hybrid', 'DistServe'],
@@ -204,16 +215,9 @@ class SubCliServe:
                             help='the strategy to serve, Hybrid for colocating Prefill and Decode'
                             'workloads into same engine, DistServe for Prefill-Decode Disaggregation')
         parser.add_argument('--dummy-prefill', action='store_true', help='dummy prefill for performance profiler')
-        parser.add_argument('--routing-strategy',
-                            type=str,
-                            choices=['random', 'min_expected_latency', 'min_observed_latency'],
-                            default='min_expected_latency',
-                            help='the strategy to dispatch requests to nodes')
         parser.add_argument('--disable-cache-status',
                             action='store_true',
-                            help='Whether to disable cache status of the '
-                            'proxy. If set, the proxy will forget the status '
-                            'of the previous time')
+                            help=argparse.SUPPRESS)
 
         # For Disaggregation
         parser.add_argument('--migration-protocol',
@@ -387,10 +391,42 @@ class SubCliServe:
 
     @staticmethod
     def proxy(args):
-        """Proxy server that manages distributed api_server nodes."""
-        from lmdeploy.serve.proxy.proxy import proxy
-        kwargs = convert_args(args)
-        proxy(**kwargs)
+        """Router server that manages distributed api_server nodes."""
+        try:
+            from lmdeploy_router.launch_router import launch_router
+        except ImportError as exc:
+            raise ImportError(
+                'lmdeploy serve proxy requires the lmdeploy-router package. '
+                'Install it with `pip install lmdeploy-router`.') from exc
+
+        launch_router(SubCliServe.build_router_args(args))
+
+    @staticmethod
+    def build_router_args(args):
+        """Translate the legacy proxy CLI arguments into router arguments."""
+        if args.ssl:
+            raise ValueError('lmdeploy-router does not currently support TLS at the router ingress. '
+                             'Terminate TLS in a front proxy or use the standalone lmdeploy-router CLI.')
+        if args.api_keys and len(args.api_keys) > 1:
+            raise ValueError('lmdeploy-router currently supports one API key; '
+                             'pass only one --api-keys value.')
+
+        routing_strategy = args.routing_strategy
+        if routing_strategy in ('min_expected_latency', 'min_observed_latency'):
+            routing_strategy = 'cache_aware'
+
+        return argparse.Namespace(
+            host=args.server_name,
+            port=args.server_port,
+            lmdeploy_pd_disaggregation=args.serving_strategy == 'DistServe',
+            policy=routing_strategy,
+            lmdeploy_migration_protocol=args.migration_protocol.lower(),
+            lmdeploy_rdma_link_type=args.link_type.lower(),
+            lmdeploy_dummy_prefill=args.dummy_prefill,
+            lmdeploy_disable_gdr=args.disable_gdr,
+            api_key=args.api_keys[0] if args.api_keys else None,
+            log_level=args.log_level.lower(),
+        )
 
     @staticmethod
     def add_parsers():

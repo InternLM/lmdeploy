@@ -1,0 +1,126 @@
+# LMDeploy Router Makefile
+# Provides convenient shortcuts for common development tasks
+
+# Check if sccache is available and set RUSTC_WRAPPER accordingly
+SCCACHE := $(shell which sccache 2>/dev/null)
+ifdef SCCACHE
+    export RUSTC_WRAPPER := $(SCCACHE)
+    $(info Using sccache for compilation caching)
+else
+    $(info sccache not found. Install it for faster builds: cargo install sccache)
+endif
+
+.PHONY: help test build clean docs check fmt dev-setup bench-ci bench-report bench-clean perf-monitor setup-sccache sccache-stats sccache-clean sccache-stop
+
+help: ## Show this help message
+	@echo "LMDeploy Router Development Commands"
+	@echo "=================================="
+	@echo ""
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+
+build: ## Build the project in release mode
+	@echo "Building LMDeploy Router..."
+	@cargo build --release
+
+test: ## Run all tests
+	@echo "Running tests..."
+	@cargo test
+
+bench: ## Run full benchmark suite
+	@cargo bench
+
+bench-quick: ## Run quick benchmark benchmarks
+	@cargo bench --bench request_processing -- --quick
+
+bench-baseline: ## Save current performance as baseline
+	@cargo bench -- --save-baseline main
+
+bench-compare: ## Compare with saved baseline
+	@cargo bench -- --baseline main
+
+bench-ci: ## Run benchmarks suitable for CI
+	@cargo bench --bench request_processing -- --quick
+
+clean: ## Clean build artifacts
+	@echo "Cleaning build artifacts..."
+	@cargo clean
+
+docs: ## Generate and open documentation
+	@echo "Generating documentation..."
+	@cargo doc --open
+
+check: ## Run cargo check and clippy with CI settings
+	@echo "Running cargo check..."
+	@cargo check --locked --all-targets
+	@echo "Running clippy..."
+	@cargo clippy --all-targets --locked -- -D warnings
+
+fmt: ## Format code with rustfmt
+	@echo "Formatting code..."
+	@cargo fmt
+
+# Development workflow shortcuts
+dev-setup: build test ## Set up development environment
+	@echo "Development environment ready!"
+
+pre-commit: fmt check test bench-quick ## Run router pre-commit checks
+	@echo "Pre-commit checks passed!"
+
+# Benchmark analysis shortcuts
+bench-report: ## Open benchmark HTML report
+	@if [ -f "target/criterion/request_processing/report/index.html" ]; then \
+		echo "Opening benchmark report..."; \
+		if command -v xdg-open >/dev/null 2>&1; then \
+			xdg-open target/criterion/request_processing/report/index.html; \
+		elif command -v open >/dev/null 2>&1; then \
+			open target/criterion/request_processing/report/index.html; \
+		else \
+			echo "Please open target/criterion/request_processing/report/index.html in your browser"; \
+		fi \
+	else \
+		echo "No benchmark report found. Run 'make bench' first."; \
+	fi
+
+bench-clean: ## Clean benchmark results
+	@echo "Cleaning benchmark results..."
+	@rm -rf target/criterion
+
+# Performance monitoring
+perf-monitor: ## Run continuous performance monitoring
+	@echo "Starting performance monitoring..."
+	@if command -v watch >/dev/null 2>&1; then \
+		watch -n 300 'make bench-quick'; \
+	else \
+		echo "Warning: 'watch' command not found. Install it or run 'make bench-quick' manually."; \
+	fi
+
+# sccache management targets
+setup-sccache: ## Install and configure sccache
+	@echo "Setting up sccache..."
+	@./scripts/setup-sccache.sh
+
+sccache-stats: ## Show sccache statistics
+	@if [ -n "$(SCCACHE)" ]; then \
+		echo "sccache statistics:"; \
+		sccache -s; \
+	else \
+		echo "sccache not installed. Run 'make setup-sccache' to install it."; \
+	fi
+
+sccache-clean: ## Clear sccache cache
+	@if [ -n "$(SCCACHE)" ]; then \
+		echo "Clearing sccache cache..."; \
+		sccache -C; \
+		echo "sccache cache cleared"; \
+	else \
+		echo "sccache not installed"; \
+	fi
+
+sccache-stop: ## Stop the sccache server
+	@if [ -n "$(SCCACHE)" ]; then \
+		echo "Stopping sccache server..."; \
+		sccache --stop-server || true; \
+	else \
+		echo "sccache not installed"; \
+	fi

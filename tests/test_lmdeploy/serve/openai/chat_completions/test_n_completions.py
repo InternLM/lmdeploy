@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.responses import JSONResponse
 
+from lmdeploy.pytorch.disagg.config import ServingStrategy
 from lmdeploy.serve.openai.chat_completions.fanout import _batch_stream_payloads
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
@@ -194,21 +195,16 @@ def test_handler_rejects_cache_migration_for_multiple_choices(
     assert context.async_engine.call_count == 0
 
 
-def test_distserve_proxy_rejects_multiple_choices(monkeypatch):
-    from lmdeploy.pytorch.disagg.config import ServingStrategy
-    from lmdeploy.serve.proxy import proxy
+def test_distserve_validation_rejects_multiple_choices(chat_endpoint, fake_raw_request):
+    endpoint, context = chat_endpoint
+    request = _request(n=2)
+    fake_raw_request._payload = {'with_cache': True}
 
-    async def model_exists(model):
-        return None
-
-    monkeypatch.setattr(proxy.node_manager, 'check_request_model',
-                        model_exists)
-    monkeypatch.setattr(proxy.node_manager, 'serving_strategy',
-                        ServingStrategy.DistServe)
-    response = asyncio.run(proxy.chat_completions_v1(_request(n=2)))
+    context.serving_strategy = ServingStrategy.DistServe
+    response = asyncio.run(endpoint(request, fake_raw_request))
     assert isinstance(response, JSONResponse)
     assert response.status_code == 400
-    assert 'DistServe' in response.body.decode()
+    assert 'cache migration' in response.body.decode()
 
 
 def test_prompt_cache_usage_is_counted_once(chat_endpoint, fake_raw_request):

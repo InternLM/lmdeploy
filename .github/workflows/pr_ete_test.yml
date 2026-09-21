@@ -48,12 +48,15 @@ jobs:
     steps:
       - name: Clone repository
         uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
       - name: Install lmdeploy
         run: |
           python3 -m pip install --upgrade -r requirements/runtime_cuda.txt
           python3 -m pip install -r requirements/lite.txt
           python3 -m pip install -r requirements/test.txt
           python3 -m pip install -e .
+          python3 -m pip install -e lmdeploy/router
       - name: Check env
         run: |
           python3 -m pip list
@@ -65,147 +68,290 @@ jobs:
         run: |
           pytest autotest -m 'pr_test and gpu_num_2' -x --alluredir=${{env.REPORT_DIR}} --clean-alluredir
           pytest autotest -m 'pr_test and gpu_num_1' -n 2 -x --alluredir=${{env.REPORT_DIR}}
+      - name: Start lmdeploy-router
+        run: |
+          lmdeploy-router --host 127.0.0.1 --port 23333 --policy cache_aware > ${{env.SERVER_LOG}}/router.log 2>&1 &
+          router_pid=$!
+          for i in $(seq 1 30)
+          do
+            sleep 1
+            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
+              echo "lmdeploy-router is ready"
+              exit 0
+            fi
+          done
+          echo "lmdeploy-router failed to start"
+          cat ${{env.SERVER_LOG}}/router.log
+          exit 1
       - name: Test restful server - pytorch Qwen3.5-35B-A3B
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts --reasoning-parser qwen-qwq --tool-call-parser qwen3coder --speculative-algorithm qwen3_5_mtp --speculative-num-draft-tokens 4 --max-batch-size 256 --allow-terminate-by-client > ${{env.SERVER_LOG}}/pytorch_Qwen3.5-35B-A3B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --server-name 127.0.0.1 --server-port 23401 --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts --reasoning-parser qwen-qwq --tool-call-parser qwen3coder --speculative-algorithm qwen3_5_mtp --speculative-num-draft-tokens 4 --max-batch-size 256 --allow-terminate-by-client --proxy-url http://127.0.0.1:23333 > ${{env.SERVER_LOG}}/pytorch_Qwen3.5-35B-A3B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
             echo "health check try $i"
-            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
+            if curl -f -s http://127.0.0.1:23401/health > /dev/null 2>&1 && \
+               curl -f -s http://127.0.0.1:23333/nodes/status | grep -q 'http://127.0.0.1:23401'; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' -m 'not not_pytorch and pr_test' --alluredir=${{env.REPORT_DIR}}
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' -m 'not not_pytorch' --alluredir=${{env.REPORT_DIR}}
               pytest autotest/interface/restful/tool_parser/test_tool_call_basic.py -n 20 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' --alluredir=${{env.REPORT_DIR}}
-              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+              curl -f -s http://127.0.0.1:23333/nodes/remove -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:23401"}' > /dev/null 2>&1 || true
+              curl -f -s http://127.0.0.1:23401/terminate > /dev/null 2>&1
+              wait $restful_pid
               exit 0
             fi
           done
 
           echo "health check fail"
-          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          curl -f -s http://127.0.0.1:23401/terminate > /dev/null 2>&1
+          wait $restful_pid
           cat ${{env.SERVER_LOG}}/pytorch_Qwen3.5-35B-A3B_start_restful.log
           exit 1
+      - name: Start lmdeploy-router for PD
+        run: |
+          lmdeploy-router --host 127.0.0.1 --port 23410 --prometheus-port 29001 --policy round_robin --lmdeploy-pd-disaggregation > ${{env.SERVER_LOG}}/pd_router.log 2>&1 &
+          pd_router_pid=$!
+          echo "PD_ROUTER_PID=$pd_router_pid" >> "$GITHUB_ENV"
+          for i in $(seq 1 30)
+          do
+            sleep 1
+            if curl -f -s http://127.0.0.1:23410/health > /dev/null 2>&1; then
+              echo "PD lmdeploy-router is ready"
+              exit 0
+            fi
+          done
+          echo "PD lmdeploy-router failed to start"
+          cat ${{env.SERVER_LOG}}/pd_router.log
+          exit 1
+      - name: Check pytorch PD migration environment
+        shell: bash
+        run: |
+          echo "::group::Python migration dependencies"
+          python3 - <<'PY'
+          try:
+              import dlslime
+              print(f'dlslime available: {dlslime.__file__}')
+          except Exception as error:
+              print(f'dlslime import failed: {error!r}')
+
+          try:
+              from dlslime import available_nic
+              print(f'dlslime available NICs: {available_nic()}')
+          except Exception as error:
+              print(f'dlslime NIC discovery failed: {error!r}')
+          PY
+          echo "::endgroup::"
+
+          echo "::group::RDMA devices"
+          ibv_devices || true
+          ls -l /dev/infiniband || true
+          echo "::endgroup::"
+      - name: Test restful server - pytorch pd Qwen3.5-35B-A3B
+        shell: bash
+        run: |
+          if ! python3 -c "from dlslime import available_nic; assert available_nic()" 2>/dev/null || [ ! -d /dev/infiniband ]; then
+            echo "Skip pytorch PD test: this runner has no RDMA NIC or /dev/infiniband."
+            exit 0
+          fi
+
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --server-name 127.0.0.1 --server-port 23411 --tp 2 --backend pytorch --role Prefill --proxy-url http://127.0.0.1:23410 > ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_prefill.log 2>&1 &
+          prefill_pid=$!
+          CUDA_VISIBLE_DEVICES=4,5 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --server-name 127.0.0.1 --server-port 23412 --tp 2 --backend pytorch --role Decode --proxy-url http://127.0.0.1:23410 > ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_decode.log 2>&1 &
+          decode_pid=$!
+          for i in $(seq 1 240)
+          do
+            sleep 5
+            echo "health check try $i"
+            if curl -f -s http://127.0.0.1:23411/health > /dev/null 2>&1 && \
+               curl -f -s http://127.0.0.1:23412/health > /dev/null 2>&1 && \
+               curl -f -s http://127.0.0.1:23410/nodes/status | grep -q 'http://127.0.0.1:23411' && \
+               curl -f -s http://127.0.0.1:23410/nodes/status | grep -q 'http://127.0.0.1:23412'; then
+              if ! LMDEPLOY_PORT=23410 pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 8 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' -m 'not not_pytorch and pr_test' --alluredir=${{env.REPORT_DIR}}; then
+                pd_test_status=1
+                break
+              fi
+              if ! LMDEPLOY_PORT=23410 pytest autotest/interface/restful/tool_parser/test_tool_call_basic.py -n 8 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' --alluredir=${{env.REPORT_DIR}}; then
+                pd_test_status=1
+                break
+              fi
+              curl -f -s http://127.0.0.1:23410/nodes/remove -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:23412"}' > /dev/null 2>&1 || true
+              curl -f -s http://127.0.0.1:23410/nodes/remove -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:23411"}' > /dev/null 2>&1 || true
+              curl -f -s http://127.0.0.1:23412/terminate > /dev/null 2>&1
+              curl -f -s http://127.0.0.1:23411/terminate > /dev/null 2>&1
+              wait $prefill_pid
+              wait $decode_pid
+              if [ "$pd_test_status" -ne 0 ]; then
+                cat ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_prefill.log || true
+                cat ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_decode.log || true
+                cat ${{env.SERVER_LOG}}/pd_router.log || true
+                exit 1
+              fi
+              exit 0
+            fi
+          done
+
+          echo "health check fail"
+          curl -f -s http://127.0.0.1:23412/terminate > /dev/null 2>&1
+          curl -f -s http://127.0.0.1:23411/terminate > /dev/null 2>&1
+          wait $prefill_pid
+          wait $decode_pid
+          cat ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_prefill.log
+          cat ${{env.SERVER_LOG}}/pytorch_pd_Qwen3.5-35B-A3B_decode.log
+          exit 1
+      - name: Stop lmdeploy-router for PD
+        shell: bash
+        run: |
+          kill "${PD_ROUTER_PID:?PD router PID was not exported}" || true
+          wait "${PD_ROUTER_PID}" || true
       - name: Test restful server - turbomind Qwen3-32B
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-32B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client > ${{env.SERVER_LOG}}/turbomind_Qwen3-32B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-32B --server-name 127.0.0.1 --server-port 23402 --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client --proxy-url http://127.0.0.1:23333 > ${{env.SERVER_LOG}}/turbomind_Qwen3-32B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
             echo "health check try $i"
-            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
+            if curl -f -s http://127.0.0.1:23402/health > /dev/null 2>&1 && \
+               curl -f -s http://127.0.0.1:23333/nodes/status | grep -q 'http://127.0.0.1:23402'; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-32B and turbomind' -m 'not not_turbomind and pr_test' --alluredir=${{env.REPORT_DIR}}
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-32B and turbomind' -m 'not not_turbomind and not experts' --alluredir=${{env.REPORT_DIR}}
-              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+              curl -f -s http://127.0.0.1:23333/nodes/remove -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:23402"}' > /dev/null 2>&1 || true
+              curl -f -s http://127.0.0.1:23402/terminate > /dev/null 2>&1
+              wait $restful_pid
               exit 0
             fi
           done
 
           echo "health check fail"
-          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          curl -f -s http://127.0.0.1:23402/terminate > /dev/null 2>&1
+          wait $restful_pid
           cat ${{env.SERVER_LOG}}/turbomind_Qwen3-32B_start_restful.log
           exit 1
       - name: Test restful server - turbomind InternVL3-38B
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3-38B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client --trust-remote-code > ${{env.SERVER_LOG}}/turbomind_InternVL3-38B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3-38B --server-name 127.0.0.1 --server-port 23403 --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client --trust-remote-code --proxy-url http://127.0.0.1:23333 > ${{env.SERVER_LOG}}/turbomind_InternVL3-38B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
             echo "health check try $i"
-            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
+            if curl -f -s http://127.0.0.1:23403/health > /dev/null 2>&1 && \
+               curl -f -s http://127.0.0.1:23333/nodes/status | grep -q 'http://127.0.0.1:23403'; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'OpenGVLab/InternVL3-38B and turbomind' -m 'not not_turbomind and pr_test' --alluredir=${{env.REPORT_DIR}}
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'OpenGVLab/InternVL3-38B and turbomind' -m 'not not_turbomind and not experts' --alluredir=${{env.REPORT_DIR}}
-              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+              curl -f -s http://127.0.0.1:23333/nodes/remove -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:23403"}' > /dev/null 2>&1 || true
+              curl -f -s http://127.0.0.1:23403/terminate > /dev/null 2>&1
+              wait $restful_pid
               exit 0
             fi
           done
 
           echo "health check fail"
-          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          curl -f -s http://127.0.0.1:23403/terminate > /dev/null 2>&1
+          wait $restful_pid
           cat ${{env.SERVER_LOG}}/turbomind_InternVL3-38B_start_restful.log
           exit 1
       - name: Test restful server - turbomind Qwen3-30B-A3B
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend turbomind --logprobs-mode raw_logprobs  --allow-terminate-by-client> ${{env.SERVER_LOG}}/turbomind_Qwen3-30B-A3B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --server-name 127.0.0.1 --server-port 23404 --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client --proxy-url http://127.0.0.1:23333 > ${{env.SERVER_LOG}}/turbomind_Qwen3-30B-A3B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
             echo "health check try $i"
-            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
+            if curl -f -s http://127.0.0.1:23404/health > /dev/null 2>&1 && \
+               curl -f -s http://127.0.0.1:23333/nodes/status | grep -q 'http://127.0.0.1:23404'; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-30B-A3B and turbomind' -m 'not not_turbomind and pr_test' --alluredir=${{env.REPORT_DIR}}
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-30B-A3B and turbomind' -m 'not not_turbomind and not experts' --alluredir=${{env.REPORT_DIR}}
-              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+              curl -f -s http://127.0.0.1:23333/nodes/remove -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:23404"}' > /dev/null 2>&1 || true
+              curl -f -s http://127.0.0.1:23404/terminate > /dev/null 2>&1
+              wait $restful_pid
               exit 0
             fi
           done
 
           echo "health check fail"
-          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          curl -f -s http://127.0.0.1:23404/terminate > /dev/null 2>&1
+          wait $restful_pid
           cat ${{env.SERVER_LOG}}/turbomind_Qwen3-30B-A3B_start_restful.log
           exit 1
       - name: Test restful server - pytorch Qwen3-30B-A3B
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts --allow-terminate-by-client > ${{env.SERVER_LOG}}/pytorch_Qwen3-30B-A3B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --server-name 127.0.0.1 --server-port 23405 --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts --allow-terminate-by-client --proxy-url http://127.0.0.1:23333 > ${{env.SERVER_LOG}}/pytorch_Qwen3-30B-A3B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
             echo "health check try $i"
-            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
+            if curl -f -s http://127.0.0.1:23405/health > /dev/null 2>&1 && \
+               curl -f -s http://127.0.0.1:23333/nodes/status | grep -q 'http://127.0.0.1:23405'; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-30B-A3B and pytorch' -m 'not not_pytorch and pr_test' --alluredir=${{env.REPORT_DIR}}
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-30B-A3B and pytorch' -m 'not not_pytorch' --alluredir=${{env.REPORT_DIR}}
-              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+              curl -f -s http://127.0.0.1:23333/nodes/remove -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:23405"}' > /dev/null 2>&1 || true
+              curl -f -s http://127.0.0.1:23405/terminate > /dev/null 2>&1
+              wait $restful_pid
               exit 0
             fi
           done
 
           echo "health check fail"
-          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          curl -f -s http://127.0.0.1:23405/terminate > /dev/null 2>&1
+          wait $restful_pid
           cat ${{env.SERVER_LOG}}/pytorch_Qwen3-30B-A3B_start_restful.log
           exit 1
       - name: Test restful server - pytorch Qwen3-VL-30B-A3B-Instruct
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-VL-30B-A3B-Instruct --tp 2 --backend pytorch --logprobs-mode raw_logprobs --allow-terminate-by-client > ${{env.SERVER_LOG}}/pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-VL-30B-A3B-Instruct --server-name 127.0.0.1 --server-port 23406 --tp 2 --backend pytorch --logprobs-mode raw_logprobs --allow-terminate-by-client --proxy-url http://127.0.0.1:23333 > ${{env.SERVER_LOG}}/pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
             echo "health check try $i"
-            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
+            if curl -f -s http://127.0.0.1:23406/health > /dev/null 2>&1 && \
+               curl -f -s http://127.0.0.1:23333/nodes/status | grep -q 'http://127.0.0.1:23406'; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-VL-30B-A3B-Instruct and pytorch' -m 'not not_pytorch and pr_test' --alluredir=${{env.REPORT_DIR}}
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-VL-30B-A3B-Instruct and pytorch' -m 'not not_pytorch and not experts' --alluredir=${{env.REPORT_DIR}}
-              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+              curl -f -s http://127.0.0.1:23333/nodes/remove -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:23406"}' > /dev/null 2>&1 || true
+              curl -f -s http://127.0.0.1:23406/terminate > /dev/null 2>&1
+              wait $restful_pid
               exit 0
             fi
           done
 
           echo "health check fail"
-          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          curl -f -s http://127.0.0.1:23406/terminate > /dev/null 2>&1
+          wait $restful_pid
           cat ${{env.SERVER_LOG}}/pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log
           exit 1
       - name: Test restful server - pytorch InternVL3_5-30B-A3B
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3_5-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs  --allow-terminate-by-client --trust-remote-code > ${{env.SERVER_LOG}}/pytorch_InternVL3_5-30B-A3B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3_5-30B-A3B --server-name 127.0.0.1 --server-port 23407 --tp 2 --backend pytorch --logprobs-mode raw_logprobs --allow-terminate-by-client --trust-remote-code --proxy-url http://127.0.0.1:23333 > ${{env.SERVER_LOG}}/pytorch_InternVL3_5-30B-A3B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
             echo "health check try $i"
-            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
+            if curl -f -s http://127.0.0.1:23407/health > /dev/null 2>&1 && \
+               curl -f -s http://127.0.0.1:23333/nodes/status | grep -q 'http://127.0.0.1:23407'; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'OpenGVLab/InternVL3_5-30B-A3B and pytorch' -m 'not not_pytorch and pr_test' --alluredir=${{env.REPORT_DIR}}
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'OpenGVLab/InternVL3_5-30B-A3B and pytorch' -m 'not not_pytorch and not experts' --alluredir=${{env.REPORT_DIR}}
-              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+              curl -f -s http://127.0.0.1:23333/nodes/remove -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:23407"}' > /dev/null 2>&1 || true
+              curl -f -s http://127.0.0.1:23407/terminate > /dev/null 2>&1
+              wait $restful_pid
               exit 0
             fi
           done
 
           echo "health check fail"
-          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          curl -f -s http://127.0.0.1:23407/terminate > /dev/null 2>&1
+          wait $restful_pid
           cat ${{env.SERVER_LOG}}/pytorch_InternVL3_5-30B-A3B_start_restful.log
           exit 1
+      - name: Stop lmdeploy-router
+        if: always()
+        run: |
+          kill "$router_pid" 2>/dev/null || true
       - name: Clear workfile
         if: always()
         run: |
