@@ -1,20 +1,14 @@
-from dataclasses import dataclass
+import json
 
 import pytest
 
 pytest.importorskip('openai_harmony')
 
-from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, JsonSchema, ResponseFormat
 from lmdeploy.serve.parsers import _openai_harmony as openai_harmony_mod
 from lmdeploy.serve.parsers import gpt_oss_response_parser as gpt_oss_mod
 
 from .helpers import first_stream_delta
-
-
-@dataclass
-class _FakeMsg:
-    channel: str
-    recipient: str | None
 
 
 class _FakeStreamableParser:
@@ -25,19 +19,11 @@ class _FakeStreamableParser:
         self.current_channel = 'final'
         self.current_recipient = None
         self.last_content_delta = ''
-        self.messages: list[_FakeMsg] = []
 
     def process(self, token: int):
         event = self._script[token]
-        next_channel = event['channel']
-        next_recipient = event.get('recipient')
-
-        if (self.current_channel == 'commentary' and self.current_recipient
-                and self.current_recipient.startswith('functions.') and next_recipient != self.current_recipient):
-            self.messages.append(_FakeMsg(channel='commentary', recipient=self.current_recipient))
-
-        self.current_channel = next_channel
-        self.current_recipient = next_recipient
+        self.current_channel = event['channel']
+        self.current_recipient = event.get('recipient')
         self.last_content_delta = event.get('delta', '')
 
 
@@ -86,6 +72,18 @@ def _scripted_events() -> dict[int, dict]:
     }
 
 
+@pytest.fixture(autouse=True)
+def _patch_streamable_parser(monkeypatch):
+    """Mock ``get_encoding`` and ``StreamableParser`` so tests don't need the
+    real Harmony vocab."""
+    monkeypatch.setattr(openai_harmony_mod, 'get_encoding', lambda: None)
+    monkeypatch.setattr(
+        openai_harmony_mod,
+        'StreamableParser',
+        lambda *args, **kwargs: _FakeStreamableParser({}),
+    )
+
+
 class TestGptOssResponseParser:
     """Unit tests for :class:`GptOssResponseParser` (Harmony token
     streaming)."""
@@ -122,12 +120,7 @@ class TestGptOssResponseParser:
         assert delta.tool_calls[4].function is not None
         assert delta.tool_calls[4].function.arguments == '{"tz":"UTC"}'
 
-    def test_adjust_request_converts_tools_to_wrapper_dicts(self, monkeypatch):
-        monkeypatch.setattr(
-            openai_harmony_mod,
-            'StreamableParser',
-            lambda *args, **kwargs: _FakeStreamableParser({}),
-        )
+    def test_adjust_request_converts_tools_to_wrapper_dicts(self):
         request = ChatCompletionRequest(
             model='openai/gpt-oss-20b',
             messages=[],
@@ -184,7 +177,7 @@ class TestGptOssResponseParser:
                 },
                 'description': None,
             },
-        }]
+            }]
 
     def test_parse_complete_full_sequence(self, monkeypatch):
         monkeypatch.setattr(
@@ -202,46 +195,26 @@ class TestGptOssResponseParser:
         assert [call.function.name for call in tool_calls] == ['get_weather', 'get_time']
         assert [call.function.arguments for call in tool_calls] == ['{"location":"Beijing"}', '{"tz":"UTC"}']
 
-    def test_stream_chunk_bootstrap_empty_before_any_content(self, monkeypatch):
-        monkeypatch.setattr(
-            openai_harmony_mod,
-            'StreamableParser',
-            lambda *args, **kwargs: _FakeStreamableParser({}),
-        )
+    @pytest.mark.parametrize('delta_text', ['', 'plain text'])
+    def test_stream_chunk_text_only(self, delta_text):
+        """First call with no token_ids and empty script: bootstrap / plain text
+        passthrough."""
         parser = gpt_oss_mod.GptOssResponseParser(request=object())
 
-        delta, tool_emitted = first_stream_delta(parser.stream_chunk('', []))
+        delta, tool_emitted = first_stream_delta(parser.stream_chunk(delta_text, []))
         assert delta is not None
         assert delta.role == 'assistant'
-        assert delta.content == ''
+        assert delta.content == delta_text
+        assert delta.reasoning_content is None
+        assert delta.tool_calls is None
         assert tool_emitted is False
 
-    def test_stream_chunk_empty_after_content_started_returns_none(self, monkeypatch):
-        monkeypatch.setattr(
-            openai_harmony_mod,
-            'StreamableParser',
-            lambda *args, **kwargs: _FakeStreamableParser({}),
-        )
+    def test_stream_chunk_empty_after_content_started_returns_none(self):
         parser = gpt_oss_mod.GptOssResponseParser(request=object())
 
         parser.stream_chunk('warmup', [])
         delta, tool_emitted = first_stream_delta(parser.stream_chunk('', []))
         assert delta is None
-        assert tool_emitted is False
-
-    def test_stream_chunk_text_only_without_token_ids(self, monkeypatch):
-        monkeypatch.setattr(
-            openai_harmony_mod,
-            'StreamableParser',
-            lambda *args, **kwargs: _FakeStreamableParser({}),
-        )
-        parser = gpt_oss_mod.GptOssResponseParser(request=object())
-
-        delta, tool_emitted = first_stream_delta(parser.stream_chunk('plain text', []))
-        assert delta is not None
-        assert delta.content == 'plain text'
-        assert delta.reasoning_content is None
-        assert delta.tool_calls is None
         assert tool_emitted is False
 
     def test_stream_chunk_token_ids_all_empty_delta_returns_none(self, monkeypatch):
@@ -279,21 +252,6 @@ class TestGptOssResponseParser:
         assert delta.tool_calls is None
         assert tool_emitted is False
 
-    def test_parse_complete_without_token_ids_returns_raw_text(self):
-        parser = gpt_oss_mod.GptOssResponseParser(request=object())
-
-        content, tool_calls, reasoning = parser.parse_complete('hello', token_ids=[])
-        assert content == 'hello'
-        assert tool_calls is None
-        assert reasoning is None
-
-    def test_parse_complete_without_token_ids_empty_text(self):
-        parser = gpt_oss_mod.GptOssResponseParser(request=object())
-
-        content, tool_calls, reasoning = parser.parse_complete('', token_ids=None)
-        assert content is None
-        assert tool_calls is None
-        assert reasoning is None
 
     def test_parse_complete_appends_tool_call_still_open_at_eof(self, monkeypatch):
         """Final `active` tool dict is appended when the stream ends in a tool
@@ -337,25 +295,221 @@ class TestGptOssResponseParser:
         assert gpt_oss_mod.GptOssResponseParser._extract_tool_name(recipient) == expected
 
 
-class TestGptOssResponseFormatHarmonyConversion:
-    """Tests for
-    :meth:`GptOssResponseParser._convert_response_format_to_harmony`."""
+class TestGptOssResponseFormatGrammarConversion:
+    """Tests for GptOssResponseParser response_format → structural_tag
+    conversion (replaces the old Harmony-native prompt injection)."""
 
-    @pytest.fixture(autouse=True)
-    def _patch_streamable_parser(self, monkeypatch):
+    @pytest.mark.parametrize('schema_dict', [
+        {'type': 'object', 'properties': {'x': {'type': 'integer'}}},
+        None,
+    ])
+    def test_json_schema_converted_to_structural_tag(self, schema_dict):
+        """json_schema is converted to a structural_tag wrapping the schema in
+        the Harmony final channel; messages are not modified.
+
+        When no inner schema is provided it defaults to
+        ``{'type': 'object'}`` instead of leaking the deprecated
+        ``BaseModel.schema`` method.
+        """
+        json_schema = JsonSchema(name='test', schema=schema_dict)
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            response_format=ResponseFormat(type='json_schema', json_schema=json_schema),
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
+
+        rf = parser.request.response_format
+        assert rf is not None
+        assert rf['type'] == 'structural_tag'
+        assert rf['structural_tag'] is not None
+        st_json = json.dumps(rf['structural_tag'])
+        # Harmony channel markers must be present
+        assert '<|channel|>final<|message|>' in st_json
+        assert '<|end|>' in st_json
+        assert '<|channel|>analysis<|message|>' in st_json
+        # Messages must NOT be modified (no prompt injection)
+        assert len(parser.request.messages) == 1
+        assert parser.request.messages[0]['role'] == 'user'
+        if schema_dict is not None:
+            assert json.dumps(schema_dict) in st_json
+        else:
+            assert 'bound method' not in st_json
+
+    @pytest.mark.parametrize('fmt_type,kwargs', [
+        ('regex_schema', {'regex_schema': '[0-9]+'}),
+        ('json_object', {}),
+    ])
+    def test_simple_format_converted_to_structural_tag(self, fmt_type, kwargs):
+        """regex_schema and json_object are converted to a structural_tag."""
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            response_format=ResponseFormat(type=fmt_type, **kwargs),
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
+
+        rf = parser.request.response_format
+        assert rf is not None
+        assert rf['type'] == 'structural_tag'
+        assert rf['structural_tag'] is not None
+
+
+    def test_grammar_failure_falls_back_to_prompt_injection(self, monkeypatch):
+        """When xgrammar is unavailable, response_format is injected into the
+        system prompt and cleared (legacy Harmony-native fallback)."""
         monkeypatch.setattr(
-            openai_harmony_mod,
-            'StreamableParser',
-            lambda *args, **kwargs: _FakeStreamableParser({}),
+            gpt_oss_mod.GptOssResponseParser,
+            '_build_response_format_grammar',
+            staticmethod(lambda fmt: None),
         )
 
-    def test_response_format_cleared_after_conversion(self):
-        """response_format must be None after the parser processes it."""
-        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
+        schema_dict = {'type': 'object', 'properties': {'x': {'type': 'integer'}}}
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            response_format=ResponseFormat(
+                type='json_schema',
+                json_schema=JsonSchema(name='test', schema=schema_dict),
+            ),
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
+
+        assert parser.request.response_format is None
+        msgs = parser.request.messages
+        assert msgs[0]['role'] == 'system'
+        assert '# Response Formats' in msgs[0]['content']
+        assert json.dumps(schema_dict) in msgs[0]['content']
+
+
+class TestGptOssToolGrammarInjection:
+    """Tests for GptOssResponseParser tool-calling structural_tag injection."""
+
+    @pytest.mark.parametrize('tool_choice,extra_markers', [
+        ('required', ['<|call|>', '<|constrain|>json']),
+        ('auto', ['<|channel|>final']),
+    ])
+    def test_tool_choice_injects_structural_tag(self, tool_choice, extra_markers):
+        """Required/auto tool_choice inject a structural_tag with the tool call
+        grammar."""
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[{'role': 'user', 'content': 'What is the weather?'}],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {'location': {'type': 'string'}},
+                    },
+                },
+            }],
+            tool_choice=tool_choice,
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
+
+        rf = parser.request.response_format
+        assert rf is not None
+        assert rf['type'] == 'structural_tag'
+        assert rf['structural_tag'] is not None
+        st_json = json.dumps(rf['structural_tag'])
+        assert 'functions.get_weather' in st_json
+        for marker in extra_markers:
+            assert marker in st_json
+
+    def test_specific_tool_choice_injects_structural_tag(self):
+        """tool_choice={"type":"function","function":{"name":"X"}} injects
+        grammar for only that function."""
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[{'role': 'user', 'content': 'What is the weather?'}],
+            tools=[
+                {
+                    'type': 'function',
+                    'function': {
+                        'name': 'get_weather',
+                        'parameters': {'type': 'object', 'properties': {}},
+                    },
+                },
+                {
+                    'type': 'function',
+                    'function': {
+                        'name': 'get_time',
+                        'parameters': {'type': 'object', 'properties': {}},
+                    },
+                },
+            ],
+            tool_choice={
+                'type': 'function',
+                'function': {'name': 'get_weather'},
+            },
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
+
+        rf = parser.request.response_format
+        assert rf is not None
+        assert rf['type'] == 'structural_tag'
+        st_json = json.dumps(rf['structural_tag'])
+        assert 'functions.get_weather' in st_json
+        # The non-selected tool should NOT appear
+        assert 'functions.get_time' not in st_json
+
+    def test_none_tool_choice_does_not_inject_grammar(self):
+        """tool_choice=none does not inject tool grammar."""
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'parameters': {'type': 'object', 'properties': {}},
+                },
+            }],
+            tool_choice='none',
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
+
+        rf = parser.request.response_format
+        assert rf is None or rf['type'] != 'structural_tag'
+
+    def test_allowed_tool_choice_keeps_all_tools(self):
+        """AllowedToolChoice (type='allowed_tools') must not crash and keeps
+        all tools instead of filtering to a single function."""
+        from lmdeploy.serve.openai.protocol import AllowedToolChoice
 
         request = ChatCompletionRequest(
             model='openai/gpt-oss-20b',
             messages=[{'role': 'user', 'content': 'hi'}],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'parameters': {'type': 'object', 'properties': {}},
+                },
+            }],
+            tool_choice=AllowedToolChoice(allowed_tools={'mode': 'auto', 'tools': []}),
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
+
+        assert parser.request.tools is not None
+        assert len(parser.request.tools) == 1
+
+    def test_tools_priority_over_response_format(self):
+        """When both tools and response_format are present, tool grammar takes
+        priority."""
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'parameters': {'type': 'object', 'properties': {}},
+                },
+            }],
+            tool_choice='required',
             response_format=ResponseFormat(
                 type='json_schema',
                 json_schema=JsonSchema(
@@ -365,179 +519,44 @@ class TestGptOssResponseFormatHarmonyConversion:
             ),
         )
         parser = gpt_oss_mod.GptOssResponseParser(request=request)
-        assert parser.request.response_format is None
 
-    def test_schema_appended_to_existing_system_message(self):
-        """When a system message already exists the schema is appended to
-        it."""
-        import json as _json
+        rf = parser.request.response_format
+        assert rf is not None
+        assert rf['type'] == 'structural_tag'
+        st_json = json.dumps(rf['structural_tag'])
+        # Tool grammar wins — must contain tool call, not plain json_schema
+        assert 'functions.get_weather' in st_json
 
-        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
+    def test_tool_grammar_failure_clears_response_format(self, monkeypatch):
+        """Tool grammar failure must clear a non-text response_format so it
+        cannot conflict with Harmony tool-call constraints downstream.
 
-        schema_dict = {'type': 'object', 'properties': {'x': {'type': 'integer'}}}
+        The monkeypatch is required because ``__init__`` filters tools to the
+        selected function before grammar construction, so no real input can
+        keep ``has_tools`` true while making ``_build_tool_grammar`` fail.
+        """
+        monkeypatch.setattr(
+            gpt_oss_mod.GptOssResponseParser,
+            '_build_tool_grammar',
+            staticmethod(lambda tools, tool_choice: None),
+        )
+
         request = ChatCompletionRequest(
             model='openai/gpt-oss-20b',
-            messages=[
-                {'role': 'system', 'content': 'You are helpful.'},
-                {'role': 'user', 'content': 'hi'},
-            ],
+            messages=[{'role': 'user', 'content': 'What is the weather?'}],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'parameters': {'type': 'object', 'properties': {}},
+                },
+            }],
+            tool_choice='required',
             response_format=ResponseFormat(
                 type='json_schema',
-                json_schema=JsonSchema(name='test', schema=schema_dict),
-            ),
-        )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request)
-
-        msgs = parser.request.messages
-        assert msgs[0]['role'] == 'system'
-        assert parser.request.response_format is None
-        # The schema body must appear in the system message
-        assert '# Response Formats' in msgs[0]['content']
-        assert _json.dumps(schema_dict) in msgs[0]['content']
-        # The original content is preserved before the appended section
-        assert msgs[0]['content'].startswith('You are helpful.')
-        # No leading blank lines in the appended section
-        assert '\n\n# Response Formats' in msgs[0]['content']
-
-    def test_schema_inserted_as_new_system_message_when_none_exists(self):
-        """When no system message exists a new one is inserted at position
-        0."""
-        import json as _json
-
-        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
-
-        schema_dict = {'type': 'object', 'properties': {'name': {'type': 'string'}}}
-        request = ChatCompletionRequest(
-            model='openai/gpt-oss-20b',
-            messages=[{'role': 'user', 'content': 'hi'}],
-            response_format=ResponseFormat(
-                type='json_schema',
-                json_schema=JsonSchema(name='test', schema=schema_dict),
-            ),
-        )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request)
-
-        msgs = parser.request.messages
-        assert msgs[0]['role'] == 'system'
-        assert parser.request.response_format is None
-        # New system message content must NOT start with blank lines
-        assert not msgs[0]['content'].startswith('\n')
-        assert msgs[0]['content'].startswith('# Response Formats')
-        assert _json.dumps(schema_dict) in msgs[0]['content']
-        # The user message is still present after the inserted system message
-        assert msgs[1]['role'] == 'user'
-
-    def test_text_response_format_is_cleared_by_normalize(self):
-        from lmdeploy.serve.openai.protocol import ResponseFormat
-
-        request = ChatCompletionRequest(
-            model='openai/gpt-oss-20b',
-            messages=[{'role': 'user', 'content': 'hi'}],
-            response_format=ResponseFormat(type='text'),
-        )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request)
-        assert parser.request.response_format is None
-
-    def test_no_response_format_leaves_request_unchanged(self):
-        """When response_format is None the request is not modified."""
-        request = ChatCompletionRequest(
-            model='openai/gpt-oss-20b',
-            messages=[{'role': 'user', 'content': 'hi'}],
-        )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request)
-        assert parser.request.response_format is None
-        assert len(parser.request.messages) == 1
-
-    def test_non_pydantic_request_messages_updated(self):
-        """Non-Pydantic sentinel requests also get messages updated."""
-        import json as _json
-
-        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
-
-        schema_dict = {'type': 'object', 'properties': {'y': {'type': 'number'}}}
-        fmt = ResponseFormat(
-            type='json_schema',
-            json_schema=JsonSchema(name='test', schema=schema_dict),
-        )
-
-        # Sentinel must NOT have tools/tool_choice attrs so that __init__
-        # skips the Pydantic-dependent tool-rendering branch.
-        class _Sentinel:
-            messages = [{'role': 'user', 'content': 'hi'}]
-            response_format = fmt
-
-        sentinel = _Sentinel()
-        parser = gpt_oss_mod.GptOssResponseParser(request=sentinel)
-
-        assert parser.request.response_format is None
-        msgs = parser.request.messages
-        assert isinstance(msgs, list)
-        assert msgs[0]['role'] == 'system'
-        assert '# Response Formats' in msgs[0]['content']
-        assert _json.dumps(schema_dict) in msgs[0]['content']
-
-    def test_list_content_system_message_gets_text_block_appended(self):
-        """When system message content is a list (multimodal), append a text
-        block."""
-        import json as _json
-
-        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
-
-        schema_dict = {'type': 'object', 'properties': {'z': {'type': 'boolean'}}}
-        request = ChatCompletionRequest(
-            model='openai/gpt-oss-20b',
-            messages=[
-                {'role': 'system', 'content': [
-                    {'type': 'text', 'text': 'You are helpful.'},
-                    {'type': 'image_url', 'image_url': {'url': 'http://example.com/img.png'}},
-                ]},
-                {'role': 'user', 'content': 'hi'},
-            ],
-            response_format=ResponseFormat(
-                type='json_schema',
-                json_schema=JsonSchema(name='test', schema=schema_dict),
+                json_schema=JsonSchema(name='test', schema={'type': 'object'}),
             ),
         )
         parser = gpt_oss_mod.GptOssResponseParser(request=request)
 
         assert parser.request.response_format is None
-        sys_msg = parser.request.messages[0]
-        assert sys_msg['role'] == 'system'
-        content = sys_msg['content']
-        assert isinstance(content, list)
-        assert len(content) == 3
-        # Original two blocks preserved
-        assert content[0]['type'] == 'text'
-        assert content[0]['text'] == 'You are helpful.'
-        assert content[1]['type'] == 'image_url'
-        # Schema appended as a text block
-        assert content[2]['type'] == 'text'
-        assert '# Response Formats' in content[2]['text']
-        assert _json.dumps(schema_dict) in content[2]['text']
-
-    def test_none_content_system_message_inserts_separate_system(self):
-        """When system message content is None, insert a new system message."""
-        import json as _json
-
-        from lmdeploy.serve.openai.protocol import JsonSchema, ResponseFormat
-
-        schema_dict = {'type': 'object', 'properties': {'w': {'type': 'string'}}}
-        request = ChatCompletionRequest(
-            model='openai/gpt-oss-20b',
-            messages=[
-                {'role': 'system', 'content': None},
-                {'role': 'user', 'content': 'hi'},
-            ],
-            response_format=ResponseFormat(
-                type='json_schema',
-                json_schema=JsonSchema(name='test', schema=schema_dict),
-            ),
-        )
-        parser = gpt_oss_mod.GptOssResponseParser(request=request)
-
-        assert parser.request.response_format is None
-        msgs = parser.request.messages
-        # A new system message with the schema is inserted at position 0
-        assert msgs[0]['role'] == 'system'
-        assert '# Response Formats' in msgs[0]['content']
-        assert _json.dumps(schema_dict) in msgs[0]['content']

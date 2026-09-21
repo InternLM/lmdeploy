@@ -245,9 +245,10 @@ void TurboMind::Impl::CreateContext(int index)
     if (comm_size_ > 1) {
         c.d_comm = CreateDeviceCommunicator(communicator_type_, comm_size_, inner_rank, c.h_comm);
 
-        c.d_tp_group = 0;
-        c.d_cp_group = 0;
-        c.d_dp_group = 0;
+        c.d_tp_group   = 0;
+        c.d_cp_group   = 0;
+        c.d_dp_group   = 0;
+        c.d_node_group = 0;
 
         if (p.attn_dp_size > 1) {  // has attn_dp
             c.d_tp_group   = c.d_comm->Split(tp_color, 0, 0);
@@ -264,6 +265,19 @@ void TurboMind::Impl::CreateContext(int index)
         p.attn_tp_rank  = p.model_tp_rank / p.attn_cp_size;
         p.mlp_tp_rank   = inner_rank % p.mlp_tp_size;
         p.ep_rank       = inner_rank / p.mlp_tp_size;
+
+        // Node domain: ranks of one node within the comm domain. Dense FFN
+        // shards node-locally (Python: dense_tp), so its partials reduce
+        // within the node and never pay cross-node traffic. When the comm
+        // domain fits in one node, group 0 — the whole domain — serves.
+        const int node_size = (int)p.devices.size();
+        if (comm_size_ > node_size) {
+            // Node-local dense sharding requires the comm domain to tile the
+            // node: shard index is inner_rank % node_size, so a partial node
+            // tail would reduce an incomplete shard set.
+            TM_CHECK(comm_size_ % node_size == 0);
+            c.d_node_group = c.d_comm->Split(inner_rank / node_size, 0, 0);
+        }
         // Layout: (outer, ep, mlp_tp)
         c.d_mlp_group = 0;
         if (p.ep_size > 1) {

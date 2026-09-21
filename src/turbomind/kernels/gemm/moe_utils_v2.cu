@@ -1396,26 +1396,39 @@ void invokeMoeDispatchScales(Ref<Tensor>   out_,
 }
 
 template<int vec_size, int exp_k, bool has_bias, int block_dim, class T>
-__global__ void MoeReduceKernel(T*           dst,         // [  n, d]
+__global__ void MoeReduceKernel(T*           dst,         // [  n, d]  write-only
                                 const T*     src,         // [e*n, d]
                                 const T*     bias,        // [  E, d]
                                 const float* scales,      // [  e, n]
                                 const int*   en2f,        // [  e, n] :: (e,n) -> e*n
                                 const int*   f2E,         // [  e* n]
-                                const float* dst_scales,  // [n]
+                                const float* dst_scales,  // [n]      INERT without shared_src
+                                const T*     shared_src,  // [  n, d] or nullptr
+                                int          shared_begin,
+                                int          shared_end,
                                 int          dim,
                                 int          tokens,
-                                T            bscale,
-                                float        dst_scale)
+                                T            bscale)
 {
     if constexpr (TURBOMIND_ARCH_DTYPE_GUARD(data_type_v<T>)) {
         const int64_t ti = blockIdx.x;
 
         dst += (int64_t)dim * ti;
 
+        // 1.f when a shared expert exists (every in-tree caller guards the
+        // whole shared block on moe.shared); sigmoid(gate) folds in below.
+        float dst_scale = 1.f;
         if (dst_scales) {
             const float scale = dst_scales[ti];
             dst_scale *= fdividef(1.f, 1.f + expf(-scale));
+        }
+
+        // Block-uniform ownership test: the null pointer carries "not owned".
+        // Unowned rows contribute no shared term — the same net effect as
+        // today's zero-filled complement rows, without any Clear.
+        const T* shared_row = nullptr;
+        if (shared_src && ti >= shared_begin && ti < shared_end) {
+            shared_row = shared_src + (int64_t)dim * ti;
         }
 
         // Should be warp uniforms
@@ -1440,9 +1453,9 @@ __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
 
         for (int i = threadIdx.x * vec_size; i < dim; i += block_dim * vec_size) {
             Array<float, vec_size> accum{};
-            if (dst_scale) {
+            if (shared_row) {
                 Vec v;
-                Load(v, &dst[i]);
+                Load(v, &shared_row[i]);
                 using namespace ops;
                 accum = cast<float>(v) * dst_scale;
             }
@@ -1478,11 +1491,13 @@ void invokeMoeReduce(T*           dst,
                      const int*   en2f,
                      const int*   f2E,
                      const float* dst_scales,
+                     const T*     shared_src,
+                     int          shared_begin,
+                     int          shared_end,
                      int          tokens,
                      int          experts_per_token,
                      int          dim,
                      T            bscale,
-                     float        dst_scale,
                      cudaStream_t st)
 {
     const auto invoke = [&](auto e) {
@@ -1497,10 +1512,12 @@ void invokeMoeReduce(T*           dst,
             en2f,
             f2E,
             dst_scales,
+            shared_src,
+            shared_begin,
+            shared_end,
             dim,
             tokens,
-            bscale,
-            dst_scale);
+            bscale);
         TM_CUDA_CHECK(cudaGetLastError());
     };
 
@@ -1538,13 +1555,22 @@ void invokeMoeCombine(Ref<Tensor>   out_,
                       const float*  dst_scales,
                       int           experts_per_token,
                       float         bscale,
-                      float         dst_scale,
+                      const Tensor& shared_src,
+                      int           shared_begin,
+                      int           shared_end,
                       cudaStream_t  st)
 {
     auto& out = out_.get();
 
     const int tokens = out.shape(0);
     TM_CHECK_EQ(src.shape(0), tokens * experts_per_token);
+    // dst_scales only scales the shared-base term; passing gate logits with
+    // no shared source is almost certainly a caller bug.
+    TM_CHECK(!dst_scales || shared_src);
+    if (shared_src) {
+        TM_CHECK_EQ(shared_src.shape(0), tokens);
+        TM_CHECK_EQ(shared_src.shape(1), src.shape(1));
+    }
 
     auto invoke = [&](auto has_bias, auto t) {
         using T = decltype(t);
@@ -1555,11 +1581,13 @@ void invokeMoeCombine(Ref<Tensor>   out_,
                                         en2f,
                                         f2E,
                                         dst_scales,
+                                        shared_src.data_or((T*)nullptr),
+                                        shared_begin,
+                                        shared_end,
                                         tokens,
                                         experts_per_token,
                                         src.shape(1),
                                         (T)bscale,
-                                        dst_scale,
                                         st);
     };
 

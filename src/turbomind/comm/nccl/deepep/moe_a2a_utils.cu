@@ -184,16 +184,23 @@ void invokeMoeA2AMapping(int*         f2n,
 template<class T, int vec_size>
 __global__ void MoeA2ASharedCombineKernel(T*           output,  //
                                           const T*     routed,
+                                          const T*     shared,  // this rank's shared FFN rows, or nullptr
                                           const float* shared_scales,
-                                          int          hidden_dim,
-                                          float        shared_scale)
+                                          int          hidden_dim)
 {
     const int token_idx = blockIdx.x;
 
     output += (int64_t)token_idx * hidden_dim;
     routed += (int64_t)token_idx * hidden_dim;
 
-    if (shared_scales) {
+    // Nullability lives in the kernel, not the caller: this kernel is also
+    // the routed write-back (the Store below is unconditional), so the
+    // caller must stay unconditional and pass nullptr when there is no
+    // shared expert.
+    const T* shared_row = shared ? shared + (int64_t)token_idx * hidden_dim : nullptr;
+
+    float shared_scale = 1.f;
+    if (shared_scales) {  // null for gate-less shared experts
         shared_scale *= fdividef(1.f, 1.f + expf(-__ldg(shared_scales + token_idx)));
     }
 
@@ -203,21 +210,20 @@ __global__ void MoeA2ASharedCombineKernel(T*           output,  //
         Vec routed_vec;
         Load(routed_vec, routed + i);
         auto result = cast<float>(routed_vec);
-
-        if (shared_scale != 0.f) {
+        if (shared_row) {
             Vec shared_vec;
-            Load(shared_vec, output + i);
+            Load(shared_vec, shared_row + i);  // was: in-place read from output
             using namespace ops;
             result = result + cast<float>(shared_vec) * shared_scale;
         }
-        Store(output + i, cast<T>(result));
+        Store(output + i, cast<T>(result));  // ALWAYS executed — the routed write-back
     }
 }
 
 void invokeMoeA2ASharedCombine(core::Tensor&       output,
                                const core::Tensor& routed,
+                               const core::Tensor& shared,
                                const float*        shared_scales,
-                               float               shared_scale,
                                cudaStream_t        stream)
 {
     const int tokens = output.shape(0);
@@ -231,7 +237,7 @@ void invokeMoeA2ASharedCombine(core::Tensor&       output,
         constexpr int vec_size  = 16 / sizeof(T);
         constexpr int block_dim = 256;
         MoeA2ASharedCombineKernel<T, vec_size><<<tokens, block_dim, 0, stream>>>(
-            output.data<T>(), routed.data<T>(), shared_scales, hidden_dim, shared_scale);
+            output.data<T>(), routed.data<T>(), shared.data_or((T*)nullptr), shared_scales, hidden_dim);
         TM_CUDA_CHECK(cudaGetLastError());
     };
 

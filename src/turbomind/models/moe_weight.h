@@ -74,6 +74,7 @@ public:
 #define MOE_WEIGHT_CHILDREN(X)                                                                                         \
     X(LinearWeight, gate)                                                                                              \
     X(LinearWeight, shared_gate)                                                                                       \
+    X(FfnWeight, shared)                                                                                               \
     X(core::ModuleList, experts)
 
 #define MOE_WEIGHT_PARAMS(X) X(score_correction_bias)
