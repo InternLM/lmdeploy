@@ -52,7 +52,9 @@ class CudaKdaImpl(KdaImpl):
         self.causal_conv1d_fwd = causal_conv1d_fwd
         self.causal_conv1d_update = causal_conv1d_update
         self.chunk_kda = chunk_kda
+        from lmdeploy.pytorch.kernels.cuda.causal_conv1d import causal_conv1d_update as shared_conv_update
         from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
+        self.shared_conv_update = shared_conv_update
         self.kda_gate = kda_gate_fwd
         self.recurrent_func = fused_recurrent_gated_delta_rule
         self.fused_recurrent_kda = self._decode_recurrent
@@ -77,7 +79,13 @@ class CudaKdaImpl(KdaImpl):
         ring_size = metadata.num_spec_tokens + 1
         ids = torch.where(metadata.valid_state, metadata.state_ids, -1).long()
         read_slot = history.remainder(ring_size)
-        conv = _state_select(conv_state, ids, read_slot)
+        # FLA prefill consumes a chronological window; the persistent cache
+        # uses the same compact token ring as Qwen3.5's causal convolution.
+        conv_cache = _select_state(conv_state, metadata)
+        width = kwargs['conv_weight'].shape[-1]
+        offsets = torch.arange(-width, 0, device=ids.device)
+        read_offsets = (history[:, None] + offsets).remainder(conv_state.size(-1))
+        conv = conv_cache.gather(2, read_offsets[:, None].expand(-1, conv_cache.size(1), -1))
         recurrent = _state_select(recurrent_state, ids, read_slot)
         local = copy(metadata)
         local.num_spec_tokens = 0
@@ -93,7 +101,9 @@ class CudaKdaImpl(KdaImpl):
                               conv_state=conv, recurrent_state=recurrent,
                               metadata=local, **kwargs)
         lengths = history + metadata.cu_seqlens.diff()
-        store(conv_state, conv, lengths)
+        write_offsets = (lengths[:, None] + offsets).remainder(conv_state.size(-1))
+        conv_cache.scatter_(2, write_offsets[:, None].expand(-1, conv_cache.size(1), -1), conv)
+        _store_state(conv_state, conv_cache, metadata)
         store(recurrent_state, recurrent, lengths)
         return output
 
@@ -107,7 +117,7 @@ class CudaKdaImpl(KdaImpl):
 
     def _forward_spec_decode(self, mixed_qkv, raw_gate, raw_beta, conv_state,
                              recurrent_state, metadata, **kwargs):
-        """Batch convolution windows and verify all tokens in one recurrence.
+        """Reuse causal-convolution token rings and one verification recurrence.
 
         The recurrence is parallel across state tiles, not across causally
         dependent timesteps. Each timestep is saved for partial acceptance.
@@ -120,21 +130,17 @@ class CudaKdaImpl(KdaImpl):
             raise ValueError('KDA verification exceeds the configured state ring.')
         history = metadata.cache_seqlens
         signed_ids = torch.where(metadata.valid_state, ids, -1)
-        conv = _state_select(conv_state, signed_ids, history.long().remainder(ring))
-        values = mixed_qkv.reshape(batch, steps, -1).transpose(1, 2)
-        width = conv.shape[-1]
-        windows = torch.cat((conv, values), dim=-1).unfold(-1, width, 1)
-        windows = windows[:, :, :steps].permute(0, 2, 1, 3).reshape(batch * steps, -1, width).contiguous()
+        values = mixed_qkv.reshape(batch, steps, -1).transpose(1, 2).contiguous()
         weight = kwargs['conv_weight']
         if weight.ndim == 3:
             if weight.size(1) != 1:
                 raise ValueError('KDA depthwise convolution weight must have shape [D, 1, K].')
             weight = weight.squeeze(1)
-        mixed, conv_out = self.causal_conv1d_update(mixed_qkv, windows, weight=weight,
-                                                    bias=kwargs['conv_bias'], activation='silu')
-        slots = (history[:, None] + torch.arange(1, steps + 1, device=ids.device)).remainder(ring)
-        _state_scatter(conv_state, signed_ids[:, None].expand(-1, steps).reshape(-1).contiguous(),
-                       slots.flatten().contiguous(), conv_out)
+        mixed = self.shared_conv_update(values, conv_state, weight,
+                                        bias=kwargs['conv_bias'], activation='silu',
+                                        conv_state_indices=signed_ids.to(torch.int32),
+                                        cache_seqlens=history)
+        mixed = mixed.transpose(1, 2)
         heads, dim = kwargs['num_heads'], kwargs['head_dim']
         q, k, v = [x.reshape(batch, steps, heads, dim).contiguous()
                    for x in mixed.split(heads * dim, dim=-1)]

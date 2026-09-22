@@ -244,13 +244,13 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         # unset also preserves the BF16 latent MLA cache policy.
         config.mla_index_topk = None
         config.k_head_dim = text_config.kv_lora_rank + 64
-        # Keep a complete state after each verified token. Accepted sequence
-        # lengths select the correct ring slot after rejection sampling.
+        # Reuse Qwen3.5's token ring for convolution; recurrent/KPool states
+        # keep a complete checkpoint after each verified token.
         ring_shape = (num_spec_tokens + 1,) if num_spec_tokens else ()
         config.state_cache_specs = [
             StateCacheSpec(
                 GLM5_KDA_CONV_STATE,
-                (num_linear_layers, *ring_shape, conv_dim, conv_kernel_size),
+                (num_linear_layers, conv_dim, conv_kernel_size + num_spec_tokens),
                 torch.bfloat16,
             ),
             StateCacheSpec(
