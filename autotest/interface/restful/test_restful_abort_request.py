@@ -10,10 +10,12 @@ from datetime import datetime
 import allure
 import pytest
 import requests
-from lmdeploy.serve.openai.api_client import APIClient
 from utils.config_utils import get_abort_request_model_list
 from utils.constant import BACKEND_LIST, BASE_URL
-from utils.restful_return_check import assert_chat_completions_batch_return
+from utils.restful_return_check import (
+    assert_chat_completions_batch_return,
+    get_client_and_model,
+)
 
 JSON_HEADERS = {'Content-Type': 'application/json'}
 _REQUEST_TIMEOUT = 300
@@ -324,8 +326,7 @@ class TestRestfulAbortRequest:
             )
 
     def test_abort_running_stream_chat_request_returns_abort_finish_reason(self, backend, model_case):
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
+        _, model_name = get_client_and_model(BASE_URL)
         session_id = 8_000_000 + random.randint(0, 99_999)
 
         stream_payload = {
@@ -355,8 +356,7 @@ class TestRestfulAbortRequest:
         _assert_session_reusable_after_abort(model_name, session_id)
 
     def test_abort_running_stream_generate_request_returns_abort_finish_reason(self, backend, model_case):
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
+        _, model_name = get_client_and_model(BASE_URL)
         session_id = 7_000_000 + random.randint(0, 99_999)
 
         stream_payload = {
@@ -385,8 +385,7 @@ class TestRestfulAbortRequest:
         _assert_session_reusable_after_abort(model_name, session_id)
 
     def test_abort_running_stream_completions_request_returns_abort_finish_reason(self, backend, model_case):
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
+        _, model_name = get_client_and_model(BASE_URL)
         session_id = 6_000_000 + random.randint(0, 99_999)
 
         stream_payload = {
@@ -416,8 +415,7 @@ class TestRestfulAbortRequest:
         _assert_session_reusable_after_abort(model_name, session_id)
 
     def test_abort_running_non_stream_chat_request_returns_abort_finish_reason(self, backend, model_case):
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
+        _, model_name = get_client_and_model(BASE_URL)
         session_id = 5_000_000 + random.randint(0, 99_999)
 
         results = {'resp': None, 'exc': None, 'completed': False}
@@ -449,8 +447,7 @@ class TestRestfulAbortRequest:
         _assert_session_reusable_after_abort(model_name, session_id)
 
     def test_abort_running_non_stream_generate_request_returns_abort_finish_reason(self, backend, model_case):
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
+        _, model_name = get_client_and_model(BASE_URL)
         session_id = 5_000_001 + random.randint(0, 99_999)
 
         results = {'resp': None, 'exc': None, 'completed': False}
@@ -482,8 +479,7 @@ class TestRestfulAbortRequest:
         _assert_session_reusable_after_abort(model_name, session_id)
 
     def test_abort_running_non_stream_completions_request_returns_abort_finish_reason(self, backend, model_case):
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
+        _, model_name = get_client_and_model(BASE_URL)
         session_id = 5_000_002 + random.randint(0, 99_999)
 
         results = {'resp': None, 'exc': None, 'completed': False}
@@ -539,8 +535,7 @@ class TestRestfulAbortRequest:
                 f'expected 400 or 422 for invalid session_id, got {abort_r.status_code}')
 
     def test_abort_all_terminates_multiple_requests_with_abort_finish_reason(self, backend, model_case):
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
+        _, model_name = get_client_and_model(BASE_URL)
 
         sessions = [5_000_000 + random.randint(0, 99_999) for _ in range(3)]
         responses = []
@@ -577,8 +572,7 @@ class TestRestfulAbortRequest:
             _assert_session_reusable_after_abort(model_name, session_id)
 
     def test_abort_all_terminates_non_stream_requests_with_abort_finish_reason(self, backend, model_case):
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
+        _, model_name = get_client_and_model(BASE_URL)
         sessions = [3_000_000 + random.randint(0, 99_999) for _ in range(2)]
         results_list = []
 
@@ -611,8 +605,7 @@ class TestRestfulAbortRequest:
             _assert_session_reusable_after_abort(model_name, session_id)
 
     def test_session_immediately_reusable_after_abort(self, backend, model_case):
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
+        _, model_name = get_client_and_model(BASE_URL)
         session_id = 4_000_000 + random.randint(0, 99_999)
 
         stream_payload = {

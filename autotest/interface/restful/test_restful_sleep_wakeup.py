@@ -4,10 +4,12 @@ from pathlib import Path
 import pytest
 import requests
 import torch
-from lmdeploy.serve.openai.api_client import APIClient
 from utils.config_utils import get_sleep_wakeup_model_list
 from utils.constant import BACKEND_LIST, BASE_URL
-from utils.restful_return_check import assert_chat_completions_batch_return
+from utils.restful_return_check import (
+    assert_chat_completions_batch_return,
+    get_client_and_model,
+)
 from utils.sleep_utils import (
     LEVEL2_BASELINE_RUNS,
     LEVEL2_GREEDY_MESSAGES,
@@ -108,17 +110,17 @@ def _ensure_awake(max_attempts: int = 8) -> None:
         f'BASE_URL={BASE_URL!r}')
 
 
-def _chat_completion_collect(api_client: APIClient, model_name: str, **kwargs) -> dict:
-    kw = dict(kwargs)
-    kw['stream'] = False
-    output = None
-    for output in api_client.chat_completions_v1(model=model_name, **kw):
-        continue
-    assert output is not None, 'chat_completions_v1 returned no chunk'
-    return output
+def _chat_completion_collect(client, model_name: str, **kwargs) -> dict:
+    extra = {}
+    if 'top_k' in kwargs:
+        extra['top_k'] = kwargs.pop('top_k')
+    create_kw = dict(model=model_name, stream=False, **kwargs)
+    if extra:
+        create_kw['extra_body'] = extra
+    return client.chat.completions.create(**create_kw).model_dump()
 
 
-def _assert_level2_greedy_baseline_stable(api_client: APIClient, model_name: str, *, label: str) -> dict:
+def _assert_level2_greedy_baseline_stable(client, model_name: str, *, label: str) -> dict:
     kwargs = dict(
         messages=LEVEL2_GREEDY_MESSAGES,
         max_tokens=LEVEL2_MAX_TOKENS,
@@ -129,7 +131,7 @@ def _assert_level2_greedy_baseline_stable(api_client: APIClient, model_name: str
     refs: list[dict] = []
     contents: list[str] = []
     for i in range(LEVEL2_BASELINE_RUNS):
-        out = _chat_completion_collect(api_client, model_name, **kwargs)
+        out = _chat_completion_collect(client, model_name, **kwargs)
         assert_chat_completions_batch_return(out, model_name)
         text = assistant_content_from_openai_completion_dict(out)
         assert_assistant_not_degenerate(text, label=f'{label} baseline run {i + 1}')
@@ -174,16 +176,14 @@ class TestRestfulSleepWakeup:
             _assert_status_200(r_wake)
             assert _fetch_is_sleeping() is False
 
-            api_client = APIClient(BASE_URL)
-            model_name = api_client.available_models[0]
-            output = None
-            for output in api_client.chat_completions_v1(
-                    model=model_name,
-                    messages=[{'role': 'user', 'content': 'Hi, reply with one short sentence.'}],
-                    max_tokens=32,
-                    temperature=0.01):
-                continue
-            assert output is not None
+            client, model_name = get_client_and_model(BASE_URL)
+            output = _chat_completion_collect(
+                client,
+                model_name,
+                messages=[{'role': 'user', 'content': 'Hi, reply with one short sentence.'}],
+                max_tokens=32,
+                temperature=0.01,
+            )
             assert_chat_completions_batch_return(output, model_name)
         finally:
             _ensure_awake()
@@ -245,16 +245,14 @@ class TestRestfulSleepWakeup:
             _assert_status_200(_post_wakeup(tags=['weights', 'kv_cache']))
             assert _fetch_is_sleeping() is False
 
-            api_client = APIClient(BASE_URL)
-            model_name = api_client.available_models[0]
-            output = None
-            for output in api_client.chat_completions_v1(
-                    model=model_name,
-                    messages=[{'role': 'user', 'content': 'Hi, reply with one short sentence.'}],
-                    max_tokens=32,
-                    temperature=0.01):
-                continue
-            assert output is not None
+            client, model_name = get_client_and_model(BASE_URL)
+            output = _chat_completion_collect(
+                client,
+                model_name,
+                messages=[{'role': 'user', 'content': 'Hi, reply with one short sentence.'}],
+                max_tokens=32,
+                temperature=0.01,
+            )
             assert_chat_completions_batch_return(output, model_name)
         finally:
             _ensure_awake()
@@ -331,11 +329,10 @@ class TestRestfulSleepWakeup:
     def test_sleep_level_2_full_wakeup_and_chat(self, model_case, backend, config):
         try:
             _ensure_awake()
-            api_client = APIClient(BASE_URL)
-            model_name = api_client.available_models[0]
+            client, model_name = get_client_and_model(BASE_URL)
 
             baseline = _assert_level2_greedy_baseline_stable(
-                api_client, model_name, label='level2 REST')
+                client, model_name, label='level2 REST')
 
             _assert_status_200(_post_sleep_level2())
             assert _fetch_is_sleeping() is True
@@ -348,7 +345,7 @@ class TestRestfulSleepWakeup:
             assert _fetch_is_sleeping() is False
 
             after = _chat_completion_collect(
-                api_client,
+                client,
                 model_name,
                 messages=LEVEL2_GREEDY_MESSAGES,
                 max_tokens=LEVEL2_MAX_TOKENS,
@@ -363,7 +360,7 @@ class TestRestfulSleepWakeup:
             assert_chat_decode_unchanged(baseline, after, label='level2 REST 1st infer after staged wakeup')
 
             after2 = _chat_completion_collect(
-                api_client,
+                client,
                 model_name,
                 messages=LEVEL2_GREEDY_MESSAGES,
                 max_tokens=LEVEL2_MAX_TOKENS,
@@ -383,7 +380,7 @@ class TestRestfulSleepWakeup:
             assert _fetch_is_sleeping() is False
 
             after_full = _chat_completion_collect(
-                api_client,
+                client,
                 model_name,
                 messages=LEVEL2_GREEDY_MESSAGES,
                 max_tokens=LEVEL2_MAX_TOKENS,
@@ -395,14 +392,13 @@ class TestRestfulSleepWakeup:
             label2 = 'level2 REST infer after 2nd sleep cycle (staged wakeup)'
             assert_chat_decode_unchanged(baseline, after_full, label=label2)
 
-            output = None
-            for output in api_client.chat_completions_v1(
-                    model=model_name,
-                    messages=[{'role': 'user', 'content': 'Hi, reply with one short sentence.'}],
-                    max_tokens=32,
-                    temperature=0.01):
-                continue
-            assert output is not None
+            output = _chat_completion_collect(
+                client,
+                model_name,
+                messages=[{'role': 'user', 'content': 'Hi, reply with one short sentence.'}],
+                max_tokens=32,
+                temperature=0.01,
+            )
             assert_chat_completions_batch_return(output, model_name)
         finally:
             _ensure_awake()
