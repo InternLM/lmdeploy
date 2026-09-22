@@ -168,9 +168,9 @@ class NodeManager:
             self.update_config_file()
             return
         try:
-            from lmdeploy.serve.openai.api_client import APIClient
-            client = APIClient(api_server_url=node_url)
-            status.models = client.available_models
+            response = requests.get(f'{node_url}/v1/models', headers={'accept': 'application/json'})
+            response.raise_for_status()
+            status.models = [model['id'] for model in response.json()['data']]
             self.nodes[node_url] = status
         except requests.exceptions.RequestException as e:  # noqa
             logger.error(f'exception happened when adding node {node_url}, {e}')

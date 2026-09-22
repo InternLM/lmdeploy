@@ -134,29 +134,6 @@ asyncio.run(main())
 
 关于其他 openai 接口的调用，也可以如法炮制。详情请参考 openai 官方[文档](https://platform.openai.com/docs/guides/text-generation)
 
-### 使用 lmdeploy `APIClient` 接口
-
-如果你想用 `/v1/chat/completions` 接口，你可以尝试下面代码：
-
-```python
-from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient(f'http://{server_ip}:{server_port}')
-model_name = api_client.available_models[0]
-messages = [{"role": "user", "content": "Say this is a test!"}]
-for item in api_client.chat_completions_v1(model=model_name, messages=messages):
-    print(item)
-```
-
-如果你想用 `/v1/completions` 接口，你可以尝试：
-
-```python
-from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient(f'http://{server_ip}:{server_port}')
-model_name = api_client.available_models[0]
-for item in api_client.completions_v1(model=model_name, prompt='hi'):
-    print(item)
-```
-
 ### 工具调用
 
 参考 [api_server_tools](./api_server_tools.md)。
