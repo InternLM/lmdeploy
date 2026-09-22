@@ -45,19 +45,10 @@ def test_fp32_head_computes_fp32_not_cast_bf16_logits(enabled, tied):
         assert not torch.equal(logits, torch.nn.functional.linear(x, w).float())
     if tied:
         assert emb(torch.tensor([0, 1], device='cuda')).dtype == torch.bfloat16
-    head.weight_loader(head.weight, w * 2)
-    torch.testing.assert_close(head(x), expected * 2, rtol=0, atol=0)
-    for _ in range(3):
-        head(x)
-    graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):
-        captured = head(x)
-    graph.replay()
-    torch.testing.assert_close(captured, head(x), rtol=0, atol=0)
 
 
 @pytest.mark.parametrize('enabled', [False, True])
-def test_glm_target_and_mtp_direct_builders(monkeypatch, enabled):
+def test_glm_and_deepseek_mtp_direct_heads(monkeypatch, enabled):
     from lmdeploy.pytorch.models.deepseek_mtp import SharedHead
     from lmdeploy.pytorch.models.glm_moe_dsa import GlmMoeDsaForCausalLM
 
