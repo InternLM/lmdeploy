@@ -70,6 +70,7 @@ from .glm4_1v import (
     Glm4vVisionPatchEmbed,
     Glm4vVisionRotaryEmbedding,
 )
+from .glm_moe_dsa import DSATopKIndicesBuffer
 from .glm_moe_dsa_mtp import GlmMoeDsaMTPModel, GlmMoeDsaMultiTokenPredictor
 from .qwen3_vl import Qwen3VLInputProcessor
 from .utils.model import build_embedding, vlm_model
@@ -435,6 +436,8 @@ class Glm5NextMLP(DeepseekV2MLP):
     def __init__(self, config: Any, *args, **kwargs):
         super().__init__(config, *args, **kwargs)
         self.swiglu_limit = config.swiglu_limit
+        if get_dist_manager().current_config().dp == 1:
+            self.down_proj.tp_reduce_dtype = torch.float32
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate_up = self.gate_up_proj(x)
@@ -518,6 +521,11 @@ class Glm5NextMoE(DeepseekV2MoE):
     def __init__(self, config: Any, layer_idx: int, *args, **kwargs):
         kwargs.setdefault('prefix', f'model.layers.{layer_idx}.mlp')
         super().__init__(config, layer_idx, *args, **kwargs)
+        # Keep the shared+routed local sum and the generic expert kernels.
+        # Promote only the final TP collective: BF16 collective reduction
+        # order depends on message size (AR versus multi-token verification).
+        self._fp32_tp_reduce = self._all_reduce
+        self._all_reduce = False
         if self.gate.fake_eplb or self.gate.eplb_dispatch_info is not None:
             raise RuntimeError(
                 'The GLM-5.3 router does not permit fake '
@@ -532,7 +540,13 @@ class Glm5NextMoE(DeepseekV2MoE):
         if all_routed_experts is not None:
             raise RuntimeError(
                 'GLM-5.3 routed-expert capture is not supported.')
-        return super().forward(hidden_states, all_routed_experts=None)
+        out = super().forward(hidden_states, all_routed_experts=None)
+        if self._fp32_tp_reduce:
+            output_dtype = out.dtype
+            out = out.float()
+            dist.all_reduce(out, group=self.experts.tp_group)
+            out = out.to(output_dtype)
+        return out
 
 
 def _load_vector_shard(param: nn.Parameter,
@@ -694,6 +708,8 @@ class Glm5NextLinearAttention(nn.Module):
             is_tp=True,
             all_reduce=all_reduce,
         )
+        if get_dist_manager().current_config().dp == 1:
+            self.o_proj.tp_reduce_dtype = torch.float32
         self.kda = Kda()
 
     def forward(self, hidden_states: torch.Tensor,
@@ -746,6 +762,8 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                          device=device,
                          all_reduce=all_reduce,
                          prefix=f'model.layers.{layer_idx}.self_attn')
+        if get_dist_manager().current_config().dp == 1:
+            self.o_proj.tp_reduce_dtype = torch.float32
         # DeepSeek keeps these latent-norm parameters in FP32.  GLM-5.3's
         # checkpoint and SGLang runtime keep them in the activation dtype;
         # rebuild only these two containers before weight loading.
@@ -769,7 +787,8 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
 
         # Keep the checkpoint's BF16 KV-B projection alongside the absorbed
         # KC/VC views. Short prefill uses the former to reproduce SGLang's
-        # decompressed dense MHA; decode continues to use KC/VC.
+        # decompressed dense MHA; decode continues to use KC/VC. Both must
+        # shard by attention TP, including when attention DP is enabled.
         self.kv_b_proj = build_colwise_linear(
             self.kv_lora_rank,
             self.num_heads * (self.qk_nope_head_dim + self.v_head_dim),
@@ -778,7 +797,6 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             device=device,
             is_tp=True,
             quant_config=None,
-            dp_disable_tp=True,
         )
         self.prefill_attn_fwd = FlashAttention(
             self.num_heads,
@@ -1134,13 +1152,23 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         state_ids: torch.Tensor,
         attn_metadata: Any,
         return_indices: bool,
+        topk_indices_buffer: DSATopKIndicesBuffer | None = None,
+        skip_topk: bool = False,
     ) -> torch.Tensor | None:
         indexer_k_cache = self._update_kpool_cache(
             hidden_states, tail_state, state_ids, attn_metadata)
-        if not return_indices:
+        if topk_indices_buffer is not None and skip_topk:
+            return (topk_indices_buffer.read(hidden_states.size(1), hidden_states.device)
+                    if return_indices else None)
+        if not return_indices and topk_indices_buffer is None:
             return None
-        return self._select_kpool_indices(
+        indices = self._select_kpool_indices(
             hidden_states, q_lora, indexer_k_cache, attn_metadata)
+        if topk_indices_buffer is not None:
+            # MTP needs seed indices even for dense short prefill: subsequent
+            # draft steps reuse its last-token rows through the shared proposer.
+            indices = topk_indices_buffer.write(indices)
+        return indices if return_indices else None
 
     def _absorbed_query(self, query: torch.Tensor,
                         num_heads: int) -> torch.Tensor:
@@ -1199,6 +1227,8 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         attn_metadata: Any = None,
         kpool_tail_state: Sequence[torch.Tensor] | None = None,
         state_ids: torch.Tensor | None = None,
+        topk_indices_buffer: DSATopKIndicesBuffer | None = None,
+        skip_topk: bool = False,
     ) -> torch.Tensor:
         dist_ctx = get_dist_manager().current_context()
         num_heads = self.num_heads // dist_ctx.dist_config.attn_tp
@@ -1221,6 +1251,8 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                 state_ids,
                 attn_metadata,
                 return_indices=use_sparse,
+                topk_indices_buffer=topk_indices_buffer,
+                skip_topk=skip_topk,
             )
             if not use_sparse:
                 return self._forward_prefill_mha(
@@ -1258,6 +1290,8 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             state_ids,
             attn_metadata,
             return_indices=True,
+            topk_indices_buffer=topk_indices_buffer,
+            skip_topk=skip_topk,
         )
         # GLM has no RoPE tail, so the absorbed query contains exactly 512
         # values; the cache retains its 576-wide FlashMLA storage alignment.
@@ -1329,7 +1363,8 @@ class Glm5NextDecoderLayer(nn.Module):
                                                 device=device)
         self.hc_prepost = HcPrePost(config.hc_mult,
                                     config.hc_sinkhorn_iters,
-                                    config.hc_eps)
+                                    config.hc_eps,
+                                    avoid_gemv=True)
         mix_hc = (2 + config.hc_mult) * config.hc_mult
         hc_dim = config.hc_mult * config.hidden_size
         self.hc_attn_fn = nn.Parameter(torch.empty(mix_hc,
@@ -1956,10 +1991,13 @@ class Glm5NextMTPDecoderLayer(nn.Module):
                                                 dtype=dtype, device=device)
 
     def forward(self, hidden_states, rotary_pos_emb, past_key_value,
-                attn_metadata=None, **kwargs):
+                attn_metadata=None, topk_indices_buffer=None,
+                skip_topk=False, **kwargs):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.self_attn(hidden_states, past_key_value, attn_metadata)
+        hidden_states = self.self_attn(
+            hidden_states, past_key_value, attn_metadata,
+            topk_indices_buffer=topk_indices_buffer, skip_topk=skip_topk)
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         return self.mlp(hidden_states), residual
 
@@ -1980,8 +2018,10 @@ class Glm5NextMTPModel(GlmMoeDsaMTPModel):
         self.model = GlmMoeDsaMultiTokenPredictor(
             self.config, dtype=dtype, device=device,
             decoder_layer_cls=Glm5NextMTPDecoderLayer)
-        self.uses_dsa_topk_buffer = False
-        self.topk_indices_buffer = None
+        self.uses_dsa_topk_buffer = getattr(self.config, 'index_share_for_mtp_iteration', False)
+        self.topk_indices_buffer = (
+            DSATopKIndicesBuffer(self.config.index_topk + self.config.index_kpool - 1)
+            if self.uses_dsa_topk_buffer else None)
         self._load_buffers = {}
 
     def prepare_inputs_for_generation(self, past_key_values, inputs_embeds=None,

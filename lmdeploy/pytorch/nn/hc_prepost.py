@@ -11,8 +11,9 @@ from lmdeploy.pytorch.models.patch import get_build_model_context
 class HcPrePost(nn.Module):
     """DeepSeek-V4 hyper-connection pre/post reduction wrapper."""
 
-    def __init__(self, hc_mult: int, sinkhorn_iters: int = 20, eps: float = 1e-6):
+    def __init__(self, hc_mult: int, sinkhorn_iters: int = 20, eps: float = 1e-6, *, avoid_gemv: bool = False):
         super().__init__()
+        self.avoid_gemv = avoid_gemv
         self.impl = get_backend().build_op(
             HCPrePostBuildSpec(hc_mult=hc_mult, sinkhorn_iters=sinkhorn_iters, eps=eps),
             enable_deterministic=get_build_model_context().enable_deterministic,
@@ -29,7 +30,13 @@ class HcPrePost(nn.Module):
         from lmdeploy.pytorch.nn.norm import rms_scale
         shape, dtype = x.size(), x.dtype
         x = x.flatten(2).float()
-        mixes = rms_scale(F.linear(x, hc_fn), x, eps=norm_eps)
+        if self.avoid_gemv and x.size(0) == 1 and x.size(1) == 1:
+            # Single-token decode otherwise selects GEMV, whose reduction
+            # order can differ from multi-token speculative verification.
+            mixes = F.linear(F.pad(x, (0, 0, 0, 1)), hc_fn)[:, :1].contiguous()
+        else:
+            mixes = F.linear(x, hc_fn)
+        mixes = rms_scale(mixes, x, eps=norm_eps)
         return self.impl.pre(x.view(shape), mixes, hc_scale, hc_base, dtype)
 
     def pre_reduce(self, x: torch.Tensor, pre: torch.Tensor, out_dtype: torch.dtype) -> torch.Tensor:

@@ -239,8 +239,14 @@ class GlmMoeDsaMTPModel(DeepseekMTPModel):
         )
 
     def get_cudagraph_extra_key(self, skip_topk: bool = False, **kwargs) -> tuple:
-        """Separate graphs that compute and reuse DSA top-k indices."""
-        return (skip_topk, )
+        """Separate seed/reuse graphs and invalidate captured grown buffers."""
+        buffer = getattr(self, 'topk_indices_buffer', None)
+        # The final shifted MTP chunk can exceed max_prefill_token_num by one;
+        # large multimodal spans can grow it further. A captured graph retains
+        # the old allocation, so do not replay it after the buffer grows.
+        capacity = (0 if buffer is None or buffer.indices is None
+                    else buffer.indices.size(0))
+        return (capacity, skip_topk)
 
     def prepare_inputs_for_generation(
         self,

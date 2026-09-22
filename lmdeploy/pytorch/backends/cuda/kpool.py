@@ -110,6 +110,9 @@ def kpool_select_groups_cuda(
         fill=-1,
         descending=True,
         sorted=False,
+        # The BF16 sparse-MLA consumer is sensitive to index tile ordering.
+        # Keep the same selected set/order across AR and MTP verification.
+        deterministic=True,
     )
 
 
