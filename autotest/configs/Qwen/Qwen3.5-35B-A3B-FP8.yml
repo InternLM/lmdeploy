@@ -32,6 +32,10 @@ a100:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
 h:
 - model_type:
   - chat
@@ -64,6 +68,29 @@ h:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 2
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  interface:
+    pytorch:
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
+    - suites:
+      - sleep
 - model_type:
   - chat
   - vl
@@ -84,3 +111,11 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
+  interface:
+    pytorch:
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
+    - suites:
+      - sleep

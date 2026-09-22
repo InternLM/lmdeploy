@@ -34,6 +34,12 @@ a100:
       extra:
         logprobs-mode: raw_logprobs
         enable-return-routed-experts: true
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
+    - suites:
+      - sleep
     turbomind:
     - suites:
       - base
@@ -48,6 +54,10 @@ a100:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
   quantization:
     turbomind:
     - kvint8
@@ -69,6 +79,14 @@ a100:
     - nccl
   test_coverage:
   - func
+  interface:
+    pytorch:
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
+    - suites:
+      - sleep
 h:
 - model_type:
   - chat
@@ -109,6 +127,12 @@ h:
       extra:
         logprobs-mode: raw_logprobs
         enable-return-routed-experts: true
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
+    - suites:
+      - sleep
     turbomind:
     - suites:
       - base
@@ -123,6 +147,10 @@ h:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
   quantization:
     turbomind:
     - awq
@@ -148,6 +176,14 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
+  interface:
+    pytorch:
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
+    - suites:
+      - sleep
   quantization:
     pytorch:
     - fp8

@@ -217,14 +217,6 @@ MLLM_EVAL_CONFIGS = {
     }
 }
 
-SLEEP_WAKEUP_MODEL_LIST = [
-    'Qwen/Qwen3.5-35B-A3B',
-    'Qwen/Qwen3.5-35B-A3B-FP8',
-    'Qwen/Qwen3.5-122B-A10B',
-]
-
-SLEEP_WAKEUP_BACKENDS = ['pytorch']
-
 BACKEND_LIST = ['turbomind', 'pytorch']
 
 SUFFIX_INNER_AWQ = '-inner-4bits'

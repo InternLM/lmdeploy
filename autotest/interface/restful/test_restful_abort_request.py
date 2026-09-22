@@ -10,12 +10,11 @@ from datetime import datetime
 import allure
 import pytest
 import requests
-from utils.constant import BACKEND_LIST, DEFAULT_PORT, DEFAULT_SERVER, RESTFUL_MODEL_LIST
+from lmdeploy.serve.openai.api_client import APIClient
+from utils.config_utils import get_abort_request_model_list
+from utils.constant import BACKEND_LIST, BASE_URL
 from utils.restful_return_check import assert_chat_completions_batch_return
 
-from lmdeploy.serve.openai.api_client import APIClient
-
-BASE_URL = f'http://{DEFAULT_SERVER}:{DEFAULT_PORT}'
 JSON_HEADERS = {'Content-Type': 'application/json'}
 _REQUEST_TIMEOUT = 300
 _ABORT_TIMEOUT = 60
@@ -295,7 +294,7 @@ def _send_nonstream_request_with_abort(model_name: str, session_id: int, endpoin
 @pytest.mark.order(9)
 @pytest.mark.flaky(reruns=2)
 @pytest.mark.parametrize('backend', BACKEND_LIST)
-@pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
+@pytest.mark.parametrize('model_case', get_abort_request_model_list())
 class TestRestfulAbortRequest:
 
     @pytest.fixture(autouse=True)

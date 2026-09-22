@@ -4,12 +4,9 @@ from pathlib import Path
 import pytest
 import requests
 import torch
-from utils.constant import (
-    DEFAULT_PORT,
-    DEFAULT_SERVER,
-    SLEEP_WAKEUP_BACKENDS,
-    SLEEP_WAKEUP_MODEL_LIST,
-)
+from lmdeploy.serve.openai.api_client import APIClient
+from utils.config_utils import get_sleep_wakeup_model_list
+from utils.constant import BACKEND_LIST, BASE_URL
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.sleep_utils import (
     LEVEL2_BASELINE_RUNS,
@@ -23,9 +20,6 @@ from utils.sleep_utils import (
     resolve_hf_checkpoint_dir,
 )
 
-from lmdeploy.serve.openai.api_client import APIClient
-
-BASE_URL = f'http://{DEFAULT_SERVER}:{DEFAULT_PORT}'
 JSON_HEADERS = {'Content-Type': 'application/json'}
 _REQUEST_TIMEOUT = 120
 _UPDATE_WEIGHTS_TIMEOUT = 600
@@ -149,8 +143,8 @@ def _assert_level2_greedy_baseline_stable(api_client: APIClient, model_name: str
 
 @pytest.mark.order(8)
 @pytest.mark.flaky(reruns=2)
-@pytest.mark.parametrize('backend', SLEEP_WAKEUP_BACKENDS)
-@pytest.mark.parametrize('model_case', SLEEP_WAKEUP_MODEL_LIST)
+@pytest.mark.parametrize('backend', BACKEND_LIST)
+@pytest.mark.parametrize('model_case', get_sleep_wakeup_model_list())
 class TestRestfulSleepWakeup:
 
     def test_sleep_wakeup_is_sleeping_roundtrip(self, model_case, backend):
