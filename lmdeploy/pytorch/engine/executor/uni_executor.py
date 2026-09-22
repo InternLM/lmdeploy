@@ -8,7 +8,7 @@ from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
 from lmdeploy.utils import get_logger
 
-from .base import ExecutorBase
+from .base import ExecutorBase, _WorkerCachePlanSizes
 
 logger = get_logger('lmdeploy')
 
@@ -73,6 +73,12 @@ class UniExecutor(ExecutorBase):
         """Set all cache config."""
         self.model_agent.set_model_config(model_config, spec_model_config)
 
+    def _prepare_worker_cache_plans(self, cache_config: CacheConfig,
+                                    spec_cache_config: CacheConfig | None = None) -> list[_WorkerCachePlanSizes]:
+        """Prepare the local model agent's cache plans."""
+        sizes = self.model_agent.build_cache_plans(cache_config, spec_cache_config)
+        return [_WorkerCachePlanSizes(*sizes)]
+
     def build_graph_runner(self):
         """Build graph runner."""
         self.model_agent.build_graph_runner()
@@ -80,6 +86,14 @@ class UniExecutor(ExecutorBase):
     def build_cache_engine(self):
         """Build cache engine."""
         self.model_agent.build_cache_engine()
+
+    def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness."""
+        return [self.model_agent.get_checkpoint_engine_status()]
+
+    def update_weights_from_ipc(self, request, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        return self.model_agent.update_weights_from_ipc(request, reject_reason)
 
     def warmup(self):
         self.model_agent.warmup()

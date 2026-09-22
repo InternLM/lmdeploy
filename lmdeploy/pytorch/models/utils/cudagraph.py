@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from torch import Tensor
@@ -8,47 +8,10 @@ from torch.profiler import record_function
 
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 
+if TYPE_CHECKING:
+    from lmdeploy.pytorch.backends.cuda.step_metadata import CudaStepMetaGraphBuffers, CudaStepMetaPlan
+
 BuffType = dict[str, Tensor]
-
-
-def _get_meta_flashattn(
-        batch_size: int,
-        max_seqlen_q: int,
-        max_seqlen_k: int,
-        num_heads_q: int,
-        num_heads_kv: int,
-        headdim: int,
-        cache_seqlens: torch.Tensor,
-        qkv_dtype=torch.bfloat16,
-        headdim_v=None,
-        cu_seqlens_q: torch.Tensor | None = None,
-        cu_seqlens_k_new: torch.Tensor | None = None,
-        page_size: int | None = None,
-        causal=True,
-        window_size=(-1, -1),  # -1 means infinite context window
-        num_splits=0,
-):
-    """Get scheduler metadata for flash attn."""
-    from flash_attn_interface import get_scheduler_metadata
-
-    metadata = get_scheduler_metadata(
-        batch_size,
-        max_seqlen_q,
-        max_seqlen_k,
-        num_heads_q,
-        num_heads_kv,
-        headdim,
-        cache_seqlens,
-        qkv_dtype=qkv_dtype,
-        headdim_v=headdim_v,
-        cu_seqlens_q=cu_seqlens_q,
-        cu_seqlens_k_new=cu_seqlens_k_new,
-        page_size=page_size,
-        causal=causal,
-        window_size=window_size,
-        num_splits=num_splits,
-    )
-    return metadata
 
 
 def next_power_of_2(n: int):
@@ -78,19 +41,21 @@ class CudaGraphMeta:
     use_mla_fp8_cache: bool = False
     use_flash_mla: bool = False
     mla_index_topk: int | None = None
+    decode_query_len: int = 1
     use_fa3_decoding: bool = False
     is_ssm: bool = False
     use_mrope: bool = False
     block_size: int = 64
-
-
-def get_graph_decode_query_len(graph_meta: CudaGraphMeta) -> int:
-    """Get decode query length from padded graph buffers."""
-    return graph_meta.max_tokens // graph_meta.max_batchs
+    step_meta_plan: 'CudaStepMetaPlan | None' = None
+    step_meta_buffers: 'CudaStepMetaGraphBuffers | None' = None
 
 
 class CudaGraphMixin:
     """Mixin class to support cudagraph."""
+
+    def get_cudagraph_extra_key(self, **kwargs) -> tuple:
+        """Get model-specific CUDA graph keys."""
+        return ()
 
     def support_cuda_graph(
         self,
@@ -102,7 +67,8 @@ class CudaGraphMixin:
         **kwargs,
     ):
         """Return True is model support cudagraph."""
-        return attn_metadata.is_decoding
+        context = get_step_ctx_manager().current_context()
+        return context.global_is_decoding()
 
     def make_output_buffers(self, output):
         """Make output buffers."""
@@ -115,36 +81,19 @@ class CudaGraphMixin:
 
     def update_meta_flashattn(self, batch_size: int, max_seqlen_q: int, block_size: int, max_seqlen_k: int,
                               cache_seqlens: torch.Tensor):
-        """Update meta flashattn."""
-        ctx_mgr = get_step_ctx_manager()
-        step_ctx = ctx_mgr.current_context()
-        model_config = step_ctx.model_config
-        sliding_window = model_config.sliding_window
-        num_attention_heads = model_config.num_attention_heads
-        num_key_value_heads = model_config.num_key_value_heads
-        headdim = model_config.head_dim
-        torch_dtype = model_config.dtype
-        if sliding_window is None:
-            window_size = (-1, -1)
-        elif isinstance(sliding_window, int):
-            window_size = (sliding_window, sliding_window)
-        else:
-            window_size = sliding_window
+        """Build legacy FA3 graph metadata through the CUDA operator owner."""
+        from lmdeploy.pytorch.backends.cuda.attention.fa3 import build_fa3_graph_metadata
 
-        cache_seqlens = cache_seqlens.to(torch.int32)
-        scheduler_metadata = _get_meta_flashattn(
-            batch_size=batch_size,
+        step_ctx = get_step_ctx_manager().current_context()
+        metadata = build_fa3_graph_metadata(
+            step_ctx,
+            batch_size,
+            cache_seqlens,
+            block_size=block_size,
             max_seqlen_q=max_seqlen_q,
             max_seqlen_k=max_seqlen_k,
-            num_heads_q=num_attention_heads,
-            num_heads_kv=num_key_value_heads,
-            headdim=headdim,
-            cache_seqlens=cache_seqlens,
-            qkv_dtype=torch_dtype,
-            page_size=block_size,
-            window_size=window_size,
         )
-        return scheduler_metadata
+        return metadata.scheduler_metadata
 
     def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
                                past_key_values: list[list[torch.Tensor]], attn_metadata: Any,
@@ -154,7 +103,7 @@ class CudaGraphMixin:
         max_tokens = graph_meta.max_tokens
         num_blocks = graph_meta.num_blocks
         device = graph_meta.device
-        decode_query_len = get_graph_decode_query_len(graph_meta)
+        decode_query_len = graph_meta.decode_query_len
 
         input_buffers: BuffType = dict()
         input_buffers['input_ids'] = torch.randint(0,
@@ -177,26 +126,31 @@ class CudaGraphMixin:
         input_buffers['cu_seqlens_q'] = input_buffers['cu_seqlens'][0]
         input_buffers['cu_seqlens_k'] = input_buffers['cu_seqlens'][1]
 
-        if graph_meta.use_flash_mla is True:
-            import flash_mla
+        if graph_meta.step_meta_plan is not None:
+            step_ctx = get_step_ctx_manager().current_context()
+            graph_meta.step_meta_buffers = graph_meta.step_meta_plan.make_cudagraph_buffers(
+                graph_meta, input_buffers, step_ctx)
 
-            # create buffers for flash mla
-            num_attention_heads = self.config.num_attention_heads
-            index_topk = graph_meta.mla_index_topk
-            num_heads_q = None if index_topk is None else num_attention_heads
-            input_buffers['tile_scheduler_metadata'], input_buffers['num_splits'] = flash_mla.get_mla_metadata(
+        # Compatibility path for backends that reuse CUDAGraphRunner without
+        # installing the CUDA implementation-derived metadata plan.
+        elif (graph_meta.use_flash_mla is True
+              and (graph_meta.use_mla_fp8_cache or graph_meta.mla_index_topk is None)):
+            from lmdeploy.pytorch.backends.cuda.attention.mla import build_flash_mla_graph_metadata
+
+            step_ctx = get_step_ctx_manager().current_context()
+            metadata = build_flash_mla_graph_metadata(
+                step_ctx,
                 torch.ones(max_batches, dtype=torch.int32, device=device),
-                num_attention_heads * decode_query_len,
-                num_heads_k=1,
-                num_heads_q=num_heads_q,
-                is_fp8_kvcache=graph_meta.use_mla_fp8_cache,
-                topk=index_topk)
+                decoding_query_len=decode_query_len,
+            )
+            input_buffers['tile_scheduler_metadata'] = metadata.tile_scheduler_metadata
+            input_buffers['num_splits'] = metadata.num_splits
 
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
             max_seqlen_k = graph_meta.num_blocks * graph_meta.block_size
             input_buffers['scheduler_metadata'] = self.update_meta_flashattn(graph_meta.max_batchs,
-                                                                             decode_query_len,
+                                                                             graph_meta.decode_query_len,
                                                                              block_size=graph_meta.block_size,
                                                                              max_seqlen_k=max_seqlen_k,
                                                                              cache_seqlens=input_buffers['kv_seqlens'])
@@ -224,26 +178,29 @@ class CudaGraphMixin:
         kv_seqlens: Tensor = attn_metadata.kv_seqlens
         input_buffers: BuffType = graph_meta.input_buffers
 
-        batch_size, num_blocks = block_offsets.size()
         num_tokens = input_ids.size(-1)
-        decode_query_len = get_graph_decode_query_len(graph_meta)
+        decode_query_len = graph_meta.decode_query_len
         # fill buffer
+        # Random padding balances MoE routing; the fused deterministic fill
+        # below overwrites only the real token prefix.
         input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
-        input_buffers['input_ids'][:, :num_tokens] = input_ids
-        input_buffers['position_ids'][:, :num_tokens] = position_ids
-        # 0 is reserved for padding requests
-        # fill zero to prevent writing to the unexpected blocks
-        input_buffers['block_offsets'].zero_()
-        input_buffers['block_offsets'][:batch_size, :num_blocks] = block_offsets
-
-        qkv = torch.stack((q_start_loc, q_seqlens, kv_seqlens))
-        input_buffers['qkv_lens'].zero_()
-        # initialize q_seqlens and kv_seqlens to max_tokens // max_batchs
-        # to avoid out of bound in flash attention kernels
-        # padding kv should be the same as padding q so q-kv=0
-        input_buffers['qkv_seqlens'].fill_(graph_meta.max_tokens // graph_meta.max_batchs)
-        input_buffers['qkv_lens'][:, :batch_size] = qkv
-        input_buffers['cu_seqlens'][:, 1:] = input_buffers['qkv_seqlens'].cumsum(1)
+        from lmdeploy.pytorch.kernels.cuda.step_metadata.fill_graph_common_inputs import (
+            fill_graph_common_inputs,
+        )
+        fill_graph_common_inputs(
+            input_ids,
+            position_ids,
+            block_offsets,
+            q_start_loc,
+            q_seqlens,
+            kv_seqlens,
+            input_buffers['input_ids'],
+            input_buffers['position_ids'],
+            input_buffers['block_offsets'],
+            input_buffers['qkv_lens'],
+            input_buffers['cu_seqlens'],
+            decode_query_len,
+        )
         if inputs_embeds is not None:
             emb_size = inputs_embeds.size(-1)
             if 'inputs_embeds' not in input_buffers:
@@ -260,22 +217,39 @@ class CudaGraphMixin:
         attn_metadata.cu_seqlens_q = input_buffers['cu_seqlens_q']
         attn_metadata.cu_seqlens_k = input_buffers['cu_seqlens_k']
 
-        if graph_meta.use_flash_mla is True:
-            import flash_mla
-            num_attention_heads = self.config.num_attention_heads
-            index_topk = graph_meta.mla_index_topk
-            num_heads_q = None if index_topk is None else num_attention_heads
-            tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
-                attn_metadata.kv_seqlens.to(torch.int32),
-                num_attention_heads * decode_query_len,
-                num_heads_k=1,
-                num_heads_q=num_heads_q,
-                is_fp8_kvcache=graph_meta.use_mla_fp8_cache,
-                topk=index_topk)
-            # here we use copy_ instead of = to avoid using new allocated mem for cuda graph
-            input_buffers['tile_scheduler_metadata'].copy_(tile_scheduler_metadata)
-            input_buffers['num_splits'][:new_batch_size + 1].copy_(num_splits[:new_batch_size + 1])
-            attn_metadata.tile_scheduler_metadata = input_buffers['tile_scheduler_metadata']
+        if graph_meta.step_meta_plan is not None:
+            step_ctx = get_step_ctx_manager().current_context()
+            assert graph_meta.step_meta_buffers is not None
+            graph_meta.step_meta_plan.fill_cudagraph_buffers(
+                graph_meta,
+                input_buffers,
+                step_ctx,
+                graph_meta.step_meta_buffers,
+                attn_metadata,
+            )
+
+        # Compatibility path for backends that reuse CUDAGraphRunner without
+        # installing the CUDA implementation-derived metadata plan.
+        elif (graph_meta.use_flash_mla is True
+              and (graph_meta.use_mla_fp8_cache or graph_meta.mla_index_topk is None)):
+            from lmdeploy.pytorch.backends.cuda.attention.mla import build_flash_mla_graph_metadata
+
+            step_ctx = get_step_ctx_manager().current_context()
+            scheduler_buffer = input_buffers['tile_scheduler_metadata']
+            # The old API returns tensor metadata that must be refreshed while
+            # preserving its CUDA graph address. The new FlashMLASchedMeta API
+            # owns and initializes its metadata object on first use.
+            if isinstance(scheduler_buffer, torch.Tensor):
+                metadata = build_flash_mla_graph_metadata(
+                    step_ctx,
+                    attn_metadata.kv_seqlens,
+                    decoding_query_len=decode_query_len,
+                )
+                # Keep graph input addresses stable for the old FlashMLA metadata API.
+                scheduler_buffer.copy_(metadata.tile_scheduler_metadata)
+                input_buffers['num_splits'][:new_batch_size + 1].copy_(
+                    metadata.num_splits[:new_batch_size + 1])
+            attn_metadata.tile_scheduler_metadata = scheduler_buffer
             attn_metadata.num_splits = input_buffers['num_splits']
 
         # use fa3 decode kernel for spec decode
@@ -340,6 +314,7 @@ class CudaGraphMixin:
         context.q_seqlens = input_buffers['q_seqlens']
         context.kv_seqlens = input_buffers['kv_seqlens']
         context.q_start_loc = input_buffers['q_start_loc']
+        context.block_offsets = input_buffers['block_offsets']
 
         # mrope
         if graph_meta.use_mrope:
@@ -357,3 +332,11 @@ class CudaGraphMixin:
         if output_buffers.get('all_routed_experts', None) is not None:
             outputs['all_routed_experts'] = output_buffers['all_routed_experts'][:num_tokens, ...].clone()
         return outputs
+
+
+class PiecewiseCudaGraphMixin(CudaGraphMixin):
+    """Opt a standard decoder model into the shared piecewise graph path.
+
+    Models using this mixin must expose the conventional decoder forward inputs, an input embedding, and the existing
+    CUDA graph output-buffer contract. Selected CUDA operators own any required eager boundaries.
+    """

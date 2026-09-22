@@ -31,7 +31,7 @@ jobs:
         with:
           ref: ${{ github.event.inputs.repo_ref || 'main' }}
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main
         with:
           # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
           tool-cache: false
@@ -42,6 +42,12 @@ jobs:
           haskell: true
           large-packages: true
           swap-storage: false
+      - name: Add swap for CUDA compilation
+        run: |
+          sudo fallocate -l 32G /swapfile-lmdeploy-build
+          sudo chmod 600 /swapfile-lmdeploy-build
+          sudo mkswap /swapfile-lmdeploy-build
+          sudo swapon /swapfile-lmdeploy-build
       - name: Get docker info
         run: |
           docker info

@@ -209,14 +209,6 @@ class LlavaVisionModel(LlavaHfVisionModel):
         """Check whether the config match the model."""
         arch = config.architectures[0] if config.architectures else None
         if arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
-            # internvl-llava has vision_tower of OpenGVLab/xxx
-            mm_vision_tower = getattr(config, 'mm_vision_tower', '')
-            # yi-vl has projector type of xxx_Norm
-            projector_type = getattr(config, 'mm_projector_type', 'linear')
-            if '_Norm' in projector_type:
-                return False
-            if 'OpenGVLab' in mm_vision_tower:
-                return False
             return True
         return False
 

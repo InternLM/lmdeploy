@@ -2,6 +2,17 @@
 
 LMDeploy exposes a set of metrics via Prometheus, and provides visualization via Grafana.
 
+For the PyTorch backend, `lmdeploy:gpu_cache_usage_perc` reports logical GPU blocks referenced by live requests. Blocks
+shared by multiple requests are counted once, while blocks held only by the prefix cache or stopped sessions are
+excluded. This default is useful for comparing request load when routing across replicas. Set
+`LMDEPLOY_ENABLE_REQUEST_CACHE_USAGE_METRIC=0` before starting the server to report total logical GPU-block occupancy
+instead, including blocks retained for prefix reuse.
+
+For the Turbomind backend, `lmdeploy:gpu_cache_usage_perc` is the number of bytes held by live prefix-cache and
+checkpoint objects divided by the configured cache-region size. Prefix-cache hit metrics count prompt tokens that
+the engine actually skips when a request is first scheduled. Turbomind currently reports scheduler metrics for DP 1;
+per-rank Turbomind metrics with DP greater than 1 are not yet supported.
+
 ## Setup Guide
 
 This section describes how to set up the monitoring stack (Prometheus + Grafana) provided in the `lmdeploy/monitoring` directory.
@@ -17,7 +28,7 @@ This section describes how to set up the monitoring stack (Prometheus + Grafana)
 1. **Start your LMDeploy server with metrics enabled**
 
 ```
-lmdeploy serve api_server Qwen/Qwen2.5-7B-Instruct --enable-metrics
+lmdeploy serve api_server Qwen/Qwen2.5-7B-Instruct
 ```
 
 Replace the model path according to your needs.
@@ -73,8 +84,7 @@ lmdeploy serve api_server \
     --dp 2 \
     --proxy-url http://0.0.0.0:8000 \
     --nnodes 1 \
-    --node-rank 0 \
-    --enable-metrics
+    --node-rank 0
 ```
 
 You should be able to see multiple API servers added to the proxy server list. Details can be found in `lmdeploy/serve/proxy/proxy_config.json`.

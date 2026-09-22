@@ -7,10 +7,6 @@ import sys
 from collections import defaultdict
 from typing import Any
 
-from lmdeploy.utils import get_logger
-
-logger = get_logger('lmdeploy')
-
 
 class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
     """Formatter to output default value and type in help information."""
@@ -68,12 +64,12 @@ def get_lora_adapters(adapters: list[str]):
     return output
 
 
-def get_chat_template(chat_template: str, model_path: str = None):
+def get_chat_template(chat_template: str | None, model_path: str | None = None):
     """Get chat template config.
 
     Args:
-        chat_template(str): it could be a builtin chat template name, or a chat template json file
-        model_path(str): the model path, used to check deprecated chat template names
+        chat_template(str | None): it could be a builtin chat template name, or a chat template json file
+        model_path(str | None): the model path, passed through to the chat template config
     """
     import os
 
@@ -82,14 +78,7 @@ def get_chat_template(chat_template: str, model_path: str = None):
         if os.path.isfile(chat_template):
             return ChatTemplateConfig.from_json(chat_template)
         else:
-            from lmdeploy.model import DEPRECATED_CHAT_TEMPLATE_NAMES, MODELS, REMOVED_CHAT_TEMPLATE_NAMES
-            if chat_template in REMOVED_CHAT_TEMPLATE_NAMES:
-                raise ValueError(f"The chat template '{chat_template}' has been removed. "
-                                 f'Please refer to the latest chat templates in '
-                                 f'https://lmdeploy.readthedocs.io/en/latest/advance/chat_template.html')
-            if chat_template in DEPRECATED_CHAT_TEMPLATE_NAMES:
-                logger.warning(f"The chat template '{chat_template}' is deprecated and fallback to hf chat template.")
-                chat_template = 'hf'
+            from lmdeploy.model import MODELS
             assert chat_template in MODELS.module_dict.keys(), \
                 f"chat template '{chat_template}' is not " \
                 f'registered. The builtin chat templates are: ' \
@@ -103,12 +92,16 @@ def get_speculative_config(args):
     """Get speculative config from args."""
     from lmdeploy.messages import SpeculativeConfig
     speculative_config = None
+    dflash_block_size = getattr(args, 'speculative_dflash_block_size', None)
     if args.speculative_algorithm is not None:
         speculative_config = SpeculativeConfig(
             method=args.speculative_algorithm,
             model=args.speculative_draft_model,
             num_speculative_tokens=args.speculative_num_draft_tokens,
+            dflash_block_size=dflash_block_size,
         )
+    elif dflash_block_size is not None:
+        raise ValueError('--speculative-dflash-block-size requires --speculative-algorithm dflash.')
     return speculative_config
 
 
@@ -285,7 +278,8 @@ class ArgumentHelper:
                                    type=_parse,
                                    default=default,
                                    help='KV cache quant policy: none/int4/int8/fp8/fp8_e5m2/'
-                                   'turbo_quant (or 0/4/8/16/17/42). fp8 defaults to fp8_e4m3.')
+                                   'turbo_quant (or 0/4/8/16/17/42). For DSA models, fp8 uses the '
+                                   'fp8_ds_mla layout.')
 
     @staticmethod
     def rope_scaling_factor(parser):
@@ -300,6 +294,18 @@ class ArgumentHelper:
                                    type=json.loads,
                                    default=None,
                                    help='Extra arguments to be forwarded to the HuggingFace config.')
+
+    @staticmethod
+    def generation_config(parser):
+        """Add argument generation_config to parser."""
+        return parser.add_argument(
+            '--generation-config',
+            type=str,
+            default='auto',
+            help='The folder path to the generation config. Defaults to "auto", the '
+            'generation config will be loaded from model path. If set to "lmdeploy", no '
+            'generation config is loaded, lmdeploy defaults will be used. If set to a folder '
+            'path, the generation config will be loaded from the specified folder path.')
 
     @staticmethod
     def use_logn_attn(parser):
@@ -477,14 +483,13 @@ class ArgumentHelper:
     @staticmethod
     def reasoning_parser(parser):
         """Add reasoning parser to parser."""
-        legacy_names = ['qwen-qwq', 'intern-s1', 'deepseek-r1']
-        from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
+        from lmdeploy.serve.parsers.reasoning_parser import LEGACY_REASONING_PARSER_NAMES, ReasoningParserManager
         return parser.add_argument(
             '--reasoning-parser',
             type=str,
             default=None,
             help=f'The registered reasoning parser name: {ReasoningParserManager.module_dict.keys()}. '
-            f'Legacy names: {legacy_names}. '
+            f'Legacy names: {list(LEGACY_REASONING_PARSER_NAMES)}. '
             'Default to None.')
 
     @staticmethod
@@ -526,6 +531,16 @@ class ArgumentHelper:
                                    default=0.8,
                                    help='The percentage of free gpu memory occupied by the k/v '
                                    'cache, excluding weights ')
+
+    @staticmethod
+    def num_gpu_blocks(parser):
+        """Add argument num_gpu_blocks to parser."""
+
+        return parser.add_argument('--num-gpu-blocks',
+                                   type=int,
+                                   default=0,
+                                   help='Explicit number of GPU KV cache blocks for PyTorch engine. '
+                                   'Use 0 to auto-size from cache-max-entry-count.')
 
     @staticmethod
     def adapters(parser):
@@ -586,6 +601,30 @@ class ArgumentHelper:
                                    help='Enable cache and match prefix')
 
     @staticmethod
+    def prefix_cache_state_budget(parser):
+        """Add argument prefix_cache_state_budget to parser."""
+
+        return parser.add_argument('--prefix-cache-state-budget',
+                                   type=int,
+                                   default=0,
+                                   help='Extra SSM state-cache slots budgeted for prefix-cache checkpoints. '
+                                   '0 adds no extra slots, but checkpoints may borrow idle runtime state slots. '
+                                   'Only used by the PyTorch engine.')
+
+    @staticmethod
+    def prefix_cache_decode_state_interval(parser):
+        """Add argument prefix_cache_decode_state_interval to parser."""
+
+        return parser.add_argument('--prefix-cache-decode-state-interval',
+                                   type=int,
+                                   default=0,
+                                   help='Token interval for SSM decode-state prefix-cache checkpoints. '
+                                   '0 disables decode checkpoint saves while keeping prefill/chunk checkpoints. '
+                                   'Use a positive multiple of block size only for long SSM decoding where later '
+                                   'requests can reuse decode prefixes; smaller values improve hit granularity '
+                                   'but use more checkpoint memory and copy work. Only used by the PyTorch engine.')
+
+    @staticmethod
     def num_tokens_per_iter(parser):
         return parser.add_argument('--num-tokens-per-iter',
                                    type=int,
@@ -615,6 +654,25 @@ class ArgumentHelper:
                                    type=int,
                                    default=8192,
                                    help='the max number of tokens per iteration during prefill')
+
+    @staticmethod
+    def piecewise_cudagraph_max_tokens(parser):
+        return parser.add_argument('--piecewise-cudagraph-max-tokens',
+                                   type=int,
+                                   default=None,
+                                   help='Enable piecewise CUDA graph in the PyTorch engine and capture prefill '
+                                   'token buckets up to this value. If not specified, piecewise CUDA graph is '
+                                   'disabled')
+
+    @staticmethod
+    def cudagraph_capture_batch_sizes(parser):
+        return parser.add_argument('--cudagraph-capture-batch-sizes',
+                                   type=int,
+                                   nargs='+',
+                                   default=None,
+                                   help='Batch sizes to capture CUDA graphs for in the PyTorch engine. '
+                                   'If not specified, the engine infers them from max_batch_size. '
+                                   'max_batch_size is always captured')
 
     @staticmethod
     def vision_max_batch_size(parser):
@@ -647,6 +705,16 @@ class ArgumentHelper:
                                    'If True, cuda graph would be disabled')
 
     @staticmethod
+    def empty_init(parser):
+        """Add the PyTorch empty-weight initialization argument."""
+        return parser.add_argument(
+            '--empty-init',
+            action='store_true',
+            default=False,
+            help='Build the PyTorch runtime without loading model weights or KV cache. '
+            'Use checkpoint-engine IPC to load weights, then wake kv_cache explicitly.')
+
+    @staticmethod
     def communicator(parser):
         return parser.add_argument('--communicator',
                                    type=str,
@@ -654,6 +722,15 @@ class ArgumentHelper:
                                    choices=['nccl', 'native', 'cuda-ipc'],
                                    help='Communication backend for multi-GPU inference. The "native" option is '
                                    'deprecated and serves as an alias for "cuda-ipc"')
+
+    @staticmethod
+    def moe_a2a_backend(parser):
+        return parser.add_argument('--moe-a2a-backend',
+                                   type=str,
+                                   default='auto',
+                                   choices=['auto', 'default', 'deepep'],
+                                   help='Communication backend for MoE all-to-all. The "auto" option selects '
+                                   '"default" for single-node inference and "deepep" for multi-node inference')
 
     @staticmethod
     def enable_microbatch(parser):
@@ -697,12 +774,12 @@ class ArgumentHelper:
                                    help='kvcache migration management backend when PD disaggregation')
 
     @staticmethod
-    def disable_vision_encoder(parser):
-        """Disable loading vision encoder."""
-        return parser.add_argument('--disable-vision-encoder',
+    def language_model_only(parser):
+        """Run as text-only LLM without loading vision/multimodal encoder."""
+        return parser.add_argument('--language-model-only',
                                    action='store_true',
                                    default=False,
-                                   help='disable multimodal encoder')
+                                   help='Run as text-only LLM: do not load vision/multimodal encoder modules.')
 
     @staticmethod
     def logprobs_mode(parser):
@@ -758,7 +835,7 @@ class ArgumentHelper:
         spec_group.add_argument('--speculative-algorithm',
                                 type=str,
                                 default=None,
-                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'qwen3_5_mtp'],
+                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'hy3_mtp', 'qwen3_5_mtp', 'dflash'],
                                 help='The speculative algorithm to use. `None` means speculative decoding is disabled')
 
         spec_group.add_argument('--speculative-draft-model',
@@ -770,6 +847,14 @@ class ArgumentHelper:
                                 type=int,
                                 default=1,
                                 help='The number of speculative tokens to generate per step')
+
+        spec_group.add_argument(
+            '--speculative-dflash-block-size',
+            type=int,
+            default=None,
+            help='DFlash only. Runtime draft block length, including the current target token. '
+            'Overrides --speculative-num-draft-tokens with block_size - 1 proposed tokens and must not exceed '
+            'the DFlash checkpoint block_size.')
 
         return spec_group
 
@@ -789,6 +874,20 @@ class ArgumentHelper:
                                    action='store_true',
                                    default=False,
                                    help='Whether to trust remote code from model repositories.')
+
+    @staticmethod
+    def kv_transfer_config(parser):
+        """Add external KV-cache connector configuration."""
+        return parser.add_argument(
+            '--kv-transfer-config',
+            type=json.loads,
+            default=None,
+            help='External KV-cache connector configuration for the PyTorch engine. '
+            'Mooncake Store requires MOONCAKE_CONFIG_PATH (or '
+            'kv_connector_extra_config.mooncake_config_path) and does not support '
+            'distributed_executor_backend="mp". '
+            'Example: '
+            "'{\"kv_connector\":\"MooncakeStoreConnector\",\"kv_role\":\"kv_both\"}'.")
 
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py

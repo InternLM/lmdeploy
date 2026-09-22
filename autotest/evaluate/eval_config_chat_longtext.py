@@ -1,5 +1,8 @@
 # flake8: noqa
 
+# Underscore alias: plain ``import os`` breaks ``Config.dump()`` after lazy build.
+import os as _os
+
 from mmengine.config import read_base
 from opencompass.models import OpenAISDK
 from opencompass.partitioners import NaivePartitioner, NumWorkerPartitioner
@@ -97,8 +100,8 @@ models = [
          retry=3,
          run_cfg=dict(num_gpus=0),
          meta_template=api_meta_template,
-         timeout=10800,
-         max_workers=1024,
+         timeout=40800,
+         max_workers=256,
          pred_postprocessor=dict(type=extract_non_reasoning_content))
 ]
 
@@ -167,8 +170,19 @@ for item in datasets:
     if 'max_out_len' in item['infer_cfg']['inferencer']:
         del item['infer_cfg']['inferencer']['max_out_len']
 
+# Cache under REPORT_DIR's parent so chat / longtext / local_run share one file.
+# dirname('.') is ''; fall back to '.' so the path stays under cwd.
+_dataset_size_root = _os.path.dirname(
+    _os.environ.get('REPORT_DIR', '.').rstrip('/') or '.') or '.'
+_dataset_type = _os.environ.get('CHAT_TYPE', 'longtext-256k').rstrip('/')
+dataset_size_path = f'{_dataset_size_root}/dataset_size_{_dataset_type}.json'
+
 infer = dict(
-    partitioner=dict(type=NumWorkerPartitioner, num_worker=1),
+    partitioner=dict(
+        type=NumWorkerPartitioner,
+        num_worker=1,
+        dataset_size_path=dataset_size_path,
+    ),
     runner=dict(
         type=LocalRunner,
         max_num_workers=64,

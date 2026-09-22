@@ -6,18 +6,18 @@ Starting from v0.1.0, Turbomind adds the ability to pre-process the model parame
 
 Currently, Turbomind support loading three types of model:
 
-1. A lmdeploy-quantized model hosted on huggingface.co, such as [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit), [internlm-chat-20b-4bit](https://huggingface.co/internlm/internlm-chat-20b-4bit), etc.
-2. Other LM models on huggingface.co like Qwen/Qwen-7B-Chat
+1. A lmdeploy-quantized model hosted on huggingface.co, such as [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit), etc.
+2. Other LM models on huggingface.co like Qwen/Qwen2.5-7B-Instruct
 
 ## Usage
 
 ### 1) A lmdeploy-quantized model
 
-For models quantized by `lmdeploy.lite` such as [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit), [internlm-chat-20b-4bit](https://huggingface.co/internlm/internlm-chat-20b-4bit), etc.
+For models quantized by `lmdeploy.lite` such as [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit), etc.
 
 ```
-repo_id=internlm/internlm-chat-20b-4bit
-model_name=internlm-chat-20b
+repo_id=lmdeploy/llama2-chat-70b-4bit
+model_name=llama2-chat-70b
 # or
 # repo_id=/path/to/downloaded_model
 
@@ -30,13 +30,13 @@ lmdeploy serve api_server $repo_id --model-name $model_name --tp 1
 
 ### 2) Other LM models
 
-For other LM models such as Qwen/Qwen-7B-Chat or baichuan-inc/Baichuan2-7B-Chat. LMDeploy supported models can be viewed through `lmdeploy list`.
+For other LM models such as Qwen/Qwen2.5-7B-Instruct or internlm/internlm2-chat-7b. LMDeploy supported models can be viewed through `lmdeploy list`.
 
 ```
-repo_id=Qwen/Qwen-7B-Chat
-model_name=qwen-7b
+repo_id=Qwen/Qwen2.5-7B-Instruct
+model_name=qwen2.5-7b
 # or
-# repo_id=/path/to/Qwen-7B-Chat/local_path
+# repo_id=/path/to/Qwen2.5-7B-Instruct/local_path
 
 # Inference by TurboMind
 lmdeploy chat $repo_id --model-name $model_name

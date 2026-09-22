@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
 import json
+import os
 import uuid
 from typing import Literal
 
@@ -140,33 +141,25 @@ class BaseChatTemplate:
         self.stop_words = stop_words
         self.capability = capability
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def get_prompt(self, prompt):
         """Return the prompt that is concatenated with other elements in the
         chat template.
 
         Args:
             prompt (str): user's input prompt
-            sequence_start (bool): indicator for the first round chat of a
-               session sequence
         Returns:
             str: the concatenated prompt
         """
         if self.capability == 'completion':
             return prompt
-        if sequence_start:
-            # None is different from ''
-            if self.meta_instruction is not None:
-                return f'{self.system}{self.meta_instruction}{self.eosys}' \
-                    f'{self.user}{prompt}{self.eoh}' \
-                    f'{self.assistant}'
-            else:
-                return f'{self.user}{prompt}{self.eoh}' \
-                       f'{self.assistant}'
-        else:
-            return f'{self.separator}{self.user}{prompt}{self.eoh}' \
-                   f'{self.assistant}'
+        # None is different from ''
+        if self.meta_instruction is not None:
+            return f'{self.system}{self.meta_instruction}{self.eosys}' \
+                f'{self.user}{prompt}{self.eoh}' \
+                f'{self.assistant}'
+        return f'{self.user}{prompt}{self.eoh}{self.assistant}'
 
-    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+    def messages2prompt(self, messages, **kwargs):
         """Return the prompt that is concatenated with other elements in the
         chat template.
 
@@ -176,19 +169,21 @@ class BaseChatTemplate:
             str: the concatenated prompt
         """
         if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
+            return self.get_prompt(messages)
         box_map = dict(user=self.user, assistant=self.assistant, system=self.system, tool=self.tool)
         eox_map = dict(user=self.eoh, assistant=self.eoa + self.separator, system=self.eosys, tool=self.eotool)
         ret = ''
-        if self.meta_instruction is not None and sequence_start:
+        if self.meta_instruction is not None:
             if len(messages) and messages[0]['role'] != 'system':
                 ret += f'{self.system}{self.meta_instruction}{self.eosys}'
         for message in messages:
             role = message['role']
             content = get_text(message['content'])
             ret += f'{box_map[role]}{content}{eox_map[role]}'
-        if len(messages) and messages[-1]['role'] == 'assistant' and len(eox_map['assistant']) > 0:
-            return ret[:-len(eox_map['assistant'])]  # prefix of response
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            if len(eox_map['assistant']) > 0:
+                return ret[:-len(eox_map['assistant'])]  # prefix of response
+            return ret
         ret += f'{self.assistant}'
         return ret
 
@@ -261,15 +256,18 @@ class Vicuna(BaseChatTemplate):
                          stop_words=stop_words,
                          **kwargs)
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def get_prompt(self, prompt):
         if self.capability == 'chat':
-            return super().get_prompt(prompt, sequence_start)[:-1]
-        return super().get_prompt(prompt, sequence_start)
+            return super().get_prompt(prompt)[:-1]
+        return super().get_prompt(prompt)
 
-    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+    def messages2prompt(self, messages, **kwargs):
         if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
-        return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
+            return self.get_prompt(messages)
+        prompt = super().messages2prompt(messages, **kwargs)
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return prompt
+        return prompt[:-1]
 
     @classmethod
     def match(cls, model_path: str, **kwargs) -> str | None:
@@ -308,69 +306,6 @@ class Llavav1(Vicuna):
             return 'llava-v1'
         elif 'llava-1.5' in path:
             return 'llava-v1'
-
-
-@MODELS.register_module(name='internlm')
-class InternLMChat7B(BaseChatTemplate):
-    """Chat template of InternLM model."""
-
-    def __init__(
-            self,
-            system='<|System|>:',
-            meta_instruction="""You are an AI assistant whose name is InternLM (书生·浦语).
-- InternLM (书生·浦语) is a conversational language model that is developed by Shanghai AI Laboratory (上海人工智能实验室). It is designed to be helpful, honest, and harmless.
-- InternLM (书生·浦语) can understand and communicate fluently in the language chosen by the user such as English and 中文.
-""",  # noqa: E501
-            eosys='\n',
-            user='<|User|>:',
-            eoh='\n',
-            assistant='<|Bot|>:',
-            eoa='<eoa>',
-            separator='\n',
-            stop_words=['<eoa>'],
-            **kwargs):
-        super().__init__(system=system,
-                         meta_instruction=meta_instruction,
-                         eosys=eosys,
-                         user=user,
-                         eoh=eoh,
-                         assistant=assistant,
-                         eoa=eoa,
-                         separator=separator,
-                         stop_words=stop_words,
-                         **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str, **kwargs) -> str | None:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if all([c not in path for c in ['internlm3', 'internlm2', '8k']]) and \
-                all([c in path for c in ['internlm', 'chat']]):
-            return 'internlm'
-
-
-@MODELS.register_module(name='baichuan2')
-class Baichuan2(BaseChatTemplate):
-    """Chat template and generation parameters of Baichuan2-7B-Base and
-    Baichuan2-7B-Chat models."""
-
-    def __init__(self, user='<reserved_106>', assistant='<reserved_107>', **kwargs):
-        super().__init__(user=user, assistant=assistant, **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str, **kwargs) -> str | None:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'baichuan2' in path and 'chat' in path:
-            return 'baichuan2'
 
 
 @MODELS.register_module(name='llama2')
@@ -426,11 +361,11 @@ class CodeLlama(Llama2):
             if self.stop_words is None:
                 self.stop_words = ['<EOT>']
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def get_prompt(self, prompt):
         if self.capability == 'infilling':
             return self._infill_prompt(prompt)
         elif self.capability == 'chat':
-            return super().get_prompt(prompt, sequence_start)
+            return super().get_prompt(prompt)
         else:  # python speicalist
             return prompt
 
@@ -464,23 +399,21 @@ class ChatGLM2(BaseChatTemplate):
         self._assistant = assistant
         self._eoh = eoh
         self._eoa = eoa
-        self.count = 0
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def get_prompt(self, prompt):
         """Get prompt."""
         # need more check
         # https://github.com/THUDM/ChatGLM2-6B/issues/48
         # [64790, 64792] to be prepended
-        self.count += 1
-        ret = f'[Round {self.count}]\n\n'
+        ret = '[Round 1]\n\n'
         ret += f'{self._user}{prompt}{self._eoh}'
         ret += f'{self._assistant}'
         return ret
 
-    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+    def messages2prompt(self, messages, **kwargs):
         """Message to prompt."""
         if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
+            return self.get_prompt(messages)
         ret = ''
         count = 0
         for message in messages:
@@ -539,15 +472,18 @@ class InternVLZH(BaseChatTemplate):
     def __init__(self, user='<human>: ', eoh=' ', assistant='<bot>: ', eoa='</s>', **kwargs):
         super().__init__(user=user, eoh=eoh, assistant=assistant, eoa=eoa, **kwargs)
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def get_prompt(self, prompt):
         if self.capability == 'chat':
-            return super().get_prompt(prompt, sequence_start)[:-1]
-        return super().get_prompt(prompt, sequence_start)
+            return super().get_prompt(prompt)[:-1]
+        return super().get_prompt(prompt)
 
-    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+    def messages2prompt(self, messages, **kwargs):
         if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
-        return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
+            return self.get_prompt(messages)
+        prompt = super().messages2prompt(messages, **kwargs)
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return prompt
+        return prompt[:-1]
 
     @classmethod
     def match(cls, model_path: str, **kwargs) -> str | None:
@@ -581,15 +517,18 @@ class DeepseekVL(BaseChatTemplate):
                          eoa=eoa,
                          **kwargs)
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def get_prompt(self, prompt):
         if self.capability == 'chat':
-            return super().get_prompt(prompt, sequence_start)[:-1]
-        return super().get_prompt(prompt, sequence_start)
+            return super().get_prompt(prompt)[:-1]
+        return super().get_prompt(prompt)
 
-    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+    def messages2prompt(self, messages, **kwargs):
         if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
-        return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
+            return self.get_prompt(messages)
+        prompt = super().messages2prompt(messages, **kwargs)
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return prompt
+        return prompt[:-1]
 
     @classmethod
     def match(cls, model_path: str, **kwargs) -> str | None:
@@ -622,13 +561,16 @@ class DeepseekVL2(BaseChatTemplate):
                          eoa=eoa,
                          **kwargs)
 
-    def get_prompt(self, prompt, sequence_start=True):
-        return super().get_prompt(prompt, sequence_start)[:-1]
+    def get_prompt(self, prompt):
+        return super().get_prompt(prompt)[:-1]
 
-    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+    def messages2prompt(self, messages, **kwargs):
         if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
-        return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
+            return self.get_prompt(messages)
+        prompt = super().messages2prompt(messages, **kwargs)
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return prompt
+        return prompt[:-1]
 
     @classmethod
     def match(cls, model_path: str, **kwargs) -> str | None:
@@ -640,6 +582,142 @@ class DeepseekVL2(BaseChatTemplate):
         path = model_path.lower()
         if 'deepseek-vl2' in path:
             return 'deepseek-vl2'
+
+
+@MODELS.register_module(name=['deepseek-v4'])
+class DeepseekV4ChatTemplate(BaseChatTemplate):
+    """Chat template of DeepSeek-V4 models."""
+
+    def __init__(self, eoa='<｜end▁of▁sentence｜>', stop_words=['<｜end▁of▁sentence｜>'], **kwargs):
+        super().__init__(eoa=eoa, stop_words=stop_words, **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True, **kwargs):
+        messages = [{'role': 'user', 'content': prompt}]
+        return self.messages2prompt(messages, sequence_start, **kwargs)
+
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+        from lmdeploy.deepseek_v4_encoding import encode_messages
+
+        if isinstance(messages, str):
+            messages = [{'role': 'user', 'content': messages}]
+
+        tools = self._normalize_tools(kwargs.pop('tools', None))
+        messages = self._with_tools(messages, tools) if tools else list(messages)
+
+        reasoning_effort = kwargs.pop('reasoning_effort', None)
+        if reasoning_effort not in ('high', 'max'):
+            reasoning_effort = None
+
+        thinking = kwargs.pop('thinking', False)
+        enable_thinking = kwargs.pop('enable_thinking', False)
+        thinking = thinking or enable_thinking
+
+        drop_thinking = kwargs.pop('drop_thinking', True)
+        return encode_messages(messages,
+                               thinking_mode='thinking' if thinking else 'chat',
+                               drop_thinking=drop_thinking,
+                               add_default_bos_token=sequence_start,
+                               reasoning_effort=reasoning_effort)
+
+    @staticmethod
+    def _normalize_tools(tools):
+        if not tools:
+            return None
+
+        normalized = []
+        for tool in tools:
+            if hasattr(tool, 'model_dump'):
+                tool = tool.model_dump()
+            if not isinstance(tool, dict):
+                continue
+            if 'function' in tool:
+                normalized.append(tool)
+            else:
+                normalized.append({'type': 'function', 'function': tool})
+        return normalized or None
+
+    @staticmethod
+    def _with_tools(messages, tools):
+        messages = [dict(message) for message in messages]
+        for message in messages:
+            if message.get('role') in ('system', 'developer'):
+                message['tools'] = tools
+                return messages
+        return [{'role': 'system', 'content': '', 'tools': tools}] + messages
+
+    @classmethod
+    def match(cls, model_path: str, trust_remote_code: bool = False, **kwargs) -> str | None:
+        try:
+            arch, cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
+            cfg_dict = cfg.to_dict()
+        except Exception:
+            cfg_dict = {}
+            config_path = os.path.join(model_path, 'config.json')
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, encoding='utf-8') as f:
+                        cfg_dict = json.load(f)
+                except Exception:
+                    cfg_dict = {}
+            arch = (cfg_dict.get('architectures') or [None])[0]
+
+        if arch == 'DeepseekV4ForCausalLM' or cfg_dict.get('model_type') == 'deepseek_v4':
+            return 'deepseek-v4'
+        return None
+
+
+@MODELS.register_module(name=['deepseek-v32', 'deepseek-v3.2'])
+class DeepseekV32ChatTemplate(BaseChatTemplate):
+    """Chat template of DeepSeek-V3.2 models."""
+
+    def __init__(self, eoa='<｜end▁of▁sentence｜>', stop_words=['<｜end▁of▁sentence｜>'], **kwargs):
+        super().__init__(eoa=eoa, stop_words=stop_words, **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True, **kwargs):
+        messages = [{'role': 'user', 'content': prompt}]
+        return self.messages2prompt(messages, sequence_start, **kwargs)
+
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+        from lmdeploy.deepseek_v32_encoding import encode_messages
+
+        if isinstance(messages, str):
+            messages = [{'role': 'user', 'content': messages}]
+
+        tools = DeepseekV4ChatTemplate._normalize_tools(kwargs.pop('tools', None))
+        messages = DeepseekV4ChatTemplate._with_tools(messages, tools) if tools else list(messages)
+
+        thinking = kwargs.pop('thinking', False)
+        enable_thinking = kwargs.pop('enable_thinking', False)
+        thinking = thinking or enable_thinking
+
+        drop_thinking = kwargs.pop('drop_thinking', None)
+        if drop_thinking is None:
+            drop_thinking = bool(messages and messages[-1].get('role') == 'user')
+
+        return encode_messages(messages,
+                               thinking_mode='thinking' if thinking else 'chat',
+                               drop_thinking=drop_thinking,
+                               add_default_bos_token=sequence_start)
+
+    @classmethod
+    def match(cls, model_path: str, trust_remote_code: bool = False, **kwargs) -> str | None:
+        try:
+            arch, cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
+            cfg_dict = cfg.to_dict()
+        except Exception:
+            cfg_dict = {}
+            config_path = os.path.join(model_path, 'config.json')
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, encoding='utf-8') as f:
+                        cfg_dict = json.load(f)
+                except Exception:
+                    cfg_dict = {}
+            arch = (cfg_dict.get('architectures') or [None])[0]
+
+        if arch == 'DeepseekV32ForCausalLM' or cfg_dict.get('model_type') == 'deepseek_v32':
+            return 'deepseek-v32'
+        return None
 
 
 @MODELS.register_module(name=['llava-chatml'])
@@ -703,7 +781,6 @@ class HFChatTemplate(BaseChatTemplate):
             # Verify if the model can perform apply_chat_template with different roles.
             self.user_start, self.user_end, _, _ = self._user_instruction()
             self.assistant_start, self.assistant_end, _, _ = self._assistant_instruction()
-            _, _, self.sentinel_system_messages, self.sentinel_system_prompt = self._system_instruction()
             self.stop_words = []
             if hasattr(self.tokenizer, 'eos_token') and self.tokenizer.eos_token is not None:
                 self.stop_words.append(self.tokenizer.eos_token)
@@ -716,11 +793,11 @@ class HFChatTemplate(BaseChatTemplate):
         except Exception as e:
             raise ValueError(f'Try apply_chat_template failed: {e}')
 
-    def get_prompt(self, prompt, sequence_start=True, **kwargs):
+    def get_prompt(self, prompt, **kwargs):
         messages = [{'role': 'user', 'content': prompt}]
-        return self.messages2prompt(messages, sequence_start, **kwargs)
+        return self.messages2prompt(messages, **kwargs)
 
-    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+    def messages2prompt(self, messages, **kwargs):
         if isinstance(messages, str):
             messages = [{'role': 'user', 'content': messages}]
         assert all(isinstance(m, dict) and 'role' in m and 'content' in m for m in messages), \
@@ -733,21 +810,10 @@ class HFChatTemplate(BaseChatTemplate):
         if 'reasoning_effort' in kwargs and kwargs['reasoning_effort'] is None:
             kwargs.pop('reasoning_effort')
         add_generation_prompt = messages[-1]['role'] != 'assistant'
-        if sequence_start:
-            prompt = self.tokenizer.apply_chat_template(messages,
-                                                        tokenize=False,
-                                                        add_generation_prompt=add_generation_prompt,
-                                                        **kwargs)
-        else:
-            # Use a sentinel position to avoid the influence of default system role in the tokenizer's chat template
-            # in interactive chat mode
-            messages = self.sentinel_system_messages + messages if self.sentinel_system_messages else messages
-            prompt = self.tokenizer.apply_chat_template(messages,
-                                                        tokenize=False,
-                                                        add_generation_prompt=add_generation_prompt,
-                                                        **kwargs)
-            # Remove the sentinel part.
-            prompt = prompt[len(self.sentinel_system_prompt):] if len(self.sentinel_system_prompt) > 0 else prompt
+        prompt = self.tokenizer.apply_chat_template(messages,
+                                                    tokenize=False,
+                                                    add_generation_prompt=add_generation_prompt,
+                                                    **kwargs)
         if messages[-1]['role'] == 'assistant' and len(self.assistant_end) > 0:
             prompt = prompt[:-len(self.assistant_end)]  # prefix of response to let the model complete the response
         if self.is_gpt_oss and not kwargs.get('tools'):

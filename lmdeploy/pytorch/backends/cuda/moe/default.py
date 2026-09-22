@@ -6,13 +6,14 @@ import torch
 
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
-from lmdeploy.pytorch.backends.moe import FusedMoEBuilder, FusedMoEImpl
+from lmdeploy.pytorch.backends.moe import FusedMoEBuildSpec, FusedMoEImpl
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda import fused_moe
-from lmdeploy.pytorch.kernels.cuda.fused_moe import _renormalize
+from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _renormalize
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
+from ..step_metadata import register_piecewise_graph_impl
 from .ep_utils import gather_outputs_by_attn_tp, split_inputs_by_attn_tp
 
 logger = get_logger('lmdeploy')
@@ -81,8 +82,9 @@ class FusedMoENormal:
         layer_index: int = 0,
         top_k: int = 8,
         out_dtype: torch.dtype = torch.bfloat16,
+        num_max_dispatch_tokens_per_rank: int = 128,
     ):
-        from dlblas.layers.moe.token_dispatcher import DeepEPTokenDispatcherNormal
+        from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherNormal
         self.layer_index = layer_index
         self.top_k = top_k
         self.num_experts = num_experts
@@ -94,6 +96,7 @@ class FusedMoENormal:
             num_local_experts=self.num_local_experts,
             hidden_size=hidden_dim,
             params_dtype=out_dtype,
+            num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
         )
 
     def forward(
@@ -106,7 +109,7 @@ class FusedMoENormal:
         expert_list: list[int] = None,
     ):
         """forward."""
-        from lmdeploy.pytorch.kernels.cuda.fused_moe_ep import fused_moe_v3
+        from lmdeploy.pytorch.kernels.cuda.moe.ep import fused_moe_v3
         x, recv_topk_ids, recv_topk_weights, recv_tokens_per_expert = self.token_dispatcher.dispatch(
             hidden_states,
             topk_ids,
@@ -142,13 +145,13 @@ class FusedMoENormal:
         return self.token_dispatcher.release()
 
     def fusedmoe_forward(self, state, up_weight, down_weight):
-        from lmdeploy.pytorch.kernels.cuda.fused_moe_ep import fused_moe_v3
+        from lmdeploy.pytorch.kernels.cuda.moe.ep import fused_moe_v3
         return fused_moe_v3(state['recv_hidden_states'], state['recv_topk_idx'], state['recv_topk_weights'], up_weight,
                             down_weight, state['recv_tokens_per_expert'])
 
 
 def _disposible_tensor(tensor):
-    from dlblas.utils.utils import DisposibleTensor
+    from lmdeploy.pytorch.backends.cuda.token_dispatcher import DisposibleTensor
     if isinstance(tensor, torch.Tensor):
         tensor = DisposibleTensor(tensor)
     else:
@@ -237,8 +240,9 @@ class FusedMoELowLatency:
         hidden_dim: int,
         layer_index: int,
         out_dtype: torch.dtype = torch.bfloat16,
+        num_max_dispatch_tokens_per_rank: int = 128,
     ):
-        from dlblas.layers.moe.token_dispatcher import DeepEPTokenDispatcherLowLatency
+        from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherLowLatency
         self.num_experts = num_experts
         self.layer_index = layer_index
         self.out_dtype = out_dtype
@@ -248,6 +252,7 @@ class FusedMoELowLatency:
             num_local_experts=num_experts // ep_size,
             hidden_size=hidden_dim,
             params_dtype=out_dtype,
+            num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
         )
 
     def experts(
@@ -258,8 +263,7 @@ class FusedMoELowLatency:
         masked_m: torch.Tensor,
         expected_m: int,
     ):
-        from dlblas.utils.utils import DisposibleTensor
-
+        from lmdeploy.pytorch.backends.cuda.token_dispatcher import DisposibleTensor
         from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul_moe_ep
         from lmdeploy.pytorch.third_party.deep_gemm import m_grouped_bf16_gemm_nt_masked
         num_groups, m, _ = hidden_states.shape
@@ -330,7 +334,7 @@ class FusedMoELowLatency:
         return self.experts(recv_hidden_states, up_weight, down_weight, masked_m, expected_m)
 
 
-def build_deepep_moe(
+def _build_deepep_moe(
     low_latency_mode: bool,
     ep_size: int,
     ep_group: dist.ProcessGroup,
@@ -339,6 +343,7 @@ def build_deepep_moe(
     top_k: int,
     layer_idx: int = 0,
     out_dtype: torch.dtype = torch.bfloat16,
+    num_max_dispatch_tokens_per_rank: int = 128,
 ):
     if low_latency_mode:
         return FusedMoELowLatency(ep_size=ep_size,
@@ -346,7 +351,8 @@ def build_deepep_moe(
                                   num_experts=num_experts,
                                   hidden_dim=hidden_dim,
                                   layer_index=layer_idx,
-                                  out_dtype=out_dtype)
+                                  out_dtype=out_dtype,
+                                  num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank)
     else:
         return FusedMoENormal(ep_size=ep_size,
                               ep_group=ep_group,
@@ -354,7 +360,8 @@ def build_deepep_moe(
                               hidden_dim=hidden_dim,
                               layer_index=layer_idx,
                               top_k=top_k,
-                              out_dtype=out_dtype)
+                              out_dtype=out_dtype,
+                              num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank)
 
 
 class FusedMoEEPImpl(TritonFusedMoEImpl):
@@ -370,6 +377,7 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         renormalize: bool = False,
         layer_idx: int = 0,
         out_dtype: torch.dtype = torch.bfloat16,
+        num_max_dispatch_tokens_per_rank: int = 128,
     ):
         super().__init__(top_k, num_experts, renormalize)
         self.num_experts = num_experts
@@ -378,25 +386,54 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         self.hidden_dim = hidden_dim
         self.layer_idx = layer_idx
         self.out_dtype = out_dtype
+        self.num_max_dispatch_tokens_per_rank = num_max_dispatch_tokens_per_rank
 
         try:
             import deep_gemm  # noqa: F401
         except ImportError:
             logger.exception('DeepGEMM is required for DeepEP MoE implementation.')
+            raise
 
-        try:
-            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode, use_deepep  # noqa: F401
-            get_deepep_state().enable()
-            if hasattr(DeepEPBuffer, 'set_explicitly_destroy'):
-                DeepEPBuffer.set_explicitly_destroy()
-        except ImportError:
-            logger.warning('For higher performance, please install DeepEP https://github.com/deepseek-ai/DeepEP')
+        from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer, use_deepep
+        if not use_deepep:
+            raise ImportError('DeepEP is required for DeepEP MoE implementation. Please install '
+                              'https://github.com/deepseek-ai/DeepEP.')
+        get_deepep_state().enable()
+        if hasattr(DeepEPBuffer, 'set_explicitly_destroy'):
+            DeepEPBuffer.set_explicitly_destroy()
 
         # pre-allocate buffer
         self.fusedmoe_build(True)
 
+        self._piecewise_forward: Callable[..., torch.Tensor] | None = None
+        register_piecewise_graph_impl(self)
+
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
         return gate_up_weights, down_weights
+
+    def _forward_moe(self,
+                     hidden_states: torch.Tensor,
+                     topk_weights: torch.Tensor,
+                     topk_ids: torch.LongTensor,
+                     gate_up_weights: torch.Tensor,
+                     down_weights: torch.Tensor,
+                     gate_up_bias: torch.Tensor = None,
+                     down_bias: torch.Tensor = None,
+                     expert_list: list[int] = None,
+                     act_func: Callable = None):
+        """forward."""
+        assert act_func is None, 'Activation function is not supported in DeepEP MoE.'
+        hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights,
+                                                                                    topk_ids)
+
+        topk_weights = self.do_renormalize(topk_weights)
+        step_ctx = get_step_ctx_manager().current_context()
+        low_latency_mode = step_ctx.global_is_decoding()
+        moe = self.fusedmoe_build(low_latency_mode)
+        out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, down_weights, expert_list)
+
+        out_states = gather_outputs_by_attn_tp(out_states, split_size)
+        return out_states
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -409,18 +446,66 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
                 expert_list: list[int] = None,
                 act_func: Callable = None):
         """forward."""
-        assert act_func is None, 'Activation function is not supported in DeepEP MoE.'
-        hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights,
-                                                                                    topk_ids)
+        if self._piecewise_forward is not None:
+            return self._piecewise_forward(hidden_states, topk_weights, topk_ids, gate_up_weights, down_weights,
+                                           gate_up_bias, down_bias, expert_list, act_func)
+        return self._forward_moe(hidden_states, topk_weights, topk_ids, gate_up_weights, down_weights, gate_up_bias,
+                                 down_bias, expert_list, act_func)
 
-        topk_weights = self.do_renormalize(topk_weights)
-        step_ctx = get_step_ctx_manager().current_context()
-        low_latency_mode = step_ctx.is_decoding
-        moe = self.fusedmoe_build(low_latency_mode)
-        out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, down_weights, expert_list)
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Return whether this DeepEP MoE implementation supports PCG."""
+        return True
 
-        out_states = gather_outputs_by_attn_tp(out_states, split_size)
-        return out_states
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Install the DeepEP MoE eager boundary owned by this CUDA op."""
+        if self._piecewise_forward is not None:
+            return
+
+        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            ViewTolerantPaddedAdapter,
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        @eager_boundary(
+            adapter_factory=ViewTolerantPaddedAdapter,
+            reuse_bridge_after_next_step=True,
+        )
+        def run_eager_moe(
+            hidden_states: torch.Tensor,
+            topk_weights: torch.Tensor,
+            topk_ids: torch.LongTensor,
+            gate_up_weights: torch.Tensor,
+            down_weights: torch.Tensor,
+            gate_up_bias: torch.Tensor = None,
+            down_bias: torch.Tensor = None,
+            expert_list: list[int] = None,
+            act_func: Callable = None,
+        ):
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            raw_tokens = execution.raw_tokens
+            return self._forward_moe(hidden_states[:raw_tokens], topk_weights[:raw_tokens], topk_ids[:raw_tokens],
+                                     gate_up_weights, down_weights, gate_up_bias, down_bias, expert_list, act_func)
+
+        def piecewise_forward(
+            hidden_states: torch.Tensor,
+            topk_weights: torch.Tensor,
+            topk_ids: torch.LongTensor,
+            gate_up_weights: torch.Tensor,
+            down_weights: torch.Tensor,
+            gate_up_bias: torch.Tensor = None,
+            down_bias: torch.Tensor = None,
+            expert_list: list[int] = None,
+            act_func: Callable = None,
+        ):
+            if get_piecewise_graph_execution() is None:
+                return self._forward_moe(hidden_states, topk_weights, topk_ids, gate_up_weights, down_weights,
+                                         gate_up_bias, down_bias, expert_list, act_func)
+            return run_eager_moe(hidden_states, topk_weights, topk_ids, gate_up_weights, down_weights, gate_up_bias,
+                                 down_bias, expert_list, act_func)
+
+        self._piecewise_forward = piecewise_forward
 
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
@@ -433,39 +518,34 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         return _renormalize(topk_weights, self.renormalize)
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
-        deepep_moe = build_deepep_moe(low_latency_mode,
-                                      self.ep_size,
-                                      self.ep_group,
-                                      self.num_experts,
-                                      self.hidden_dim,
-                                      self.top_k,
-                                      layer_idx=self.layer_idx,
-                                      out_dtype=self.out_dtype)
+        deepep_moe = _build_deepep_moe(low_latency_mode,
+                                       self.ep_size,
+                                       self.ep_group,
+                                       self.num_experts,
+                                       self.hidden_dim,
+                                       self.top_k,
+                                       layer_idx=self.layer_idx,
+                                       out_dtype=self.out_dtype,
+                                       num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank)
         return deepep_moe
 
 
-class TritonFusedMoEBuilder(FusedMoEBuilder):
-    """Triton fused moe builder."""
-
-    @staticmethod
-    def build(
-        top_k: int,
-        num_experts: int,
-        renormalize: bool = False,
-        hidden_dim: int = 1,
-        ep_size: int = 1,
-        ep_group: dist.ProcessGroup = None,
-        layer_idx: int = 0,
-        out_dtype: torch.dtype = torch.bfloat16,
-    ):
-        """Build from mlp."""
-        if ep_size > 1:
-            return FusedMoEEPImpl(ep_size=ep_size,
-                                  ep_group=ep_group,
-                                  top_k=top_k,
-                                  num_experts=num_experts,
-                                  hidden_dim=hidden_dim,
-                                  renormalize=renormalize,
-                                  layer_idx=layer_idx,
-                                  out_dtype=out_dtype)
-        return TritonFusedMoEImpl(top_k=top_k, num_experts=num_experts, renormalize=renormalize)
+def _build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
+    """Build a CUDA fused MoE implementation."""
+    if spec.ep_size > 1:
+        return FusedMoEEPImpl(
+            ep_size=spec.ep_size,
+            ep_group=spec.ep_group,
+            top_k=spec.top_k,
+            num_experts=spec.num_experts,
+            hidden_dim=spec.hidden_dim,
+            renormalize=spec.renormalize,
+            layer_idx=spec.layer_idx,
+            out_dtype=spec.output_dtype,
+            num_max_dispatch_tokens_per_rank=spec.num_max_dispatch_tokens_per_rank,
+        )
+    return TritonFusedMoEImpl(
+        top_k=spec.top_k,
+        num_experts=spec.num_experts,
+        renormalize=spec.renormalize,
+    )

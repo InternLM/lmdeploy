@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from lmdeploy.serve.anthropic.adapter import to_openai_messages
+from lmdeploy.serve.anthropic.adapter import (
+    to_lmdeploy_messages,
+    to_openai_messages,
+)
 from lmdeploy.serve.anthropic.protocol import MessagesRequest
 
 
@@ -17,6 +20,78 @@ def _make_request(*, messages, system=None):
 def test_to_openai_messages_keeps_plain_text_messages():
     request = _make_request(messages=[{'role': 'user', 'content': 'hello'}])
     assert to_openai_messages(request) == [{'role': 'user', 'content': 'hello'}]
+
+
+def test_to_openai_messages_preserves_system_role_message_order():
+    request = _make_request(
+        messages=[
+            {
+                'role': 'user',
+                'content': 'first',
+            },
+            {
+                'role': 'system',
+                'content': 'mid-conversation instruction',
+            },
+            {
+                'role': 'user',
+                'content': 'second',
+            },
+        ])
+    assert to_openai_messages(request) == [
+        {
+            'role': 'user',
+            'content': 'first',
+        },
+        {
+            'role': 'system',
+            'content': 'mid-conversation instruction',
+        },
+        {
+            'role': 'user',
+            'content': 'second',
+        },
+    ]
+
+
+def test_to_openai_messages_merges_inline_system_messages_at_the_front():
+    request = _make_request(
+        system='Top-level.',
+        messages=[
+            {
+                'role': 'user',
+                'content': 'first',
+            },
+            {
+                'role': 'system',
+                'content': 'Inline one.',
+            },
+            {
+                'role': 'assistant',
+                'content': 'ack',
+            },
+            {
+                'role': 'system',
+                'content': 'Inline two.',
+            },
+        ])
+
+    expected = [
+        {
+            'role': 'system',
+            'content': 'Top-level.Inline one.Inline two.',
+        },
+        {
+            'role': 'user',
+            'content': 'first',
+        },
+        {
+            'role': 'assistant',
+            'content': 'ack',
+        },
+    ]
+    assert to_openai_messages(request, merge_inline_system=True) == expected
+    assert to_lmdeploy_messages(request, merge_inline_system=True) == expected
 
 
 def test_to_openai_messages_converts_system_text_blocks():
@@ -249,13 +324,14 @@ def test_to_openai_messages_puts_assistant_tool_result_into_content():
     }]
 
 
-def test_to_openai_messages_maps_thinking_block_to_reasoning_content():
+def test_to_openai_messages_maps_signed_thinking_block_to_reasoning_content():
     request = _make_request(
         messages=[{
             'role': 'assistant',
             'content': [{
                 'type': 'thinking',
                 'thinking': 'internal chain',
+                'signature': 'lmdeploy-local',
             }],
         }])
     messages = to_openai_messages(request)

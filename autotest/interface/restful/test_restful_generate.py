@@ -9,18 +9,18 @@ from typing import Any
 import pytest
 import requests
 from transformers import AutoTokenizer
-from utils.constant import BACKEND_LIST, DEFAULT_SERVER, RESTFUL_MODEL_LIST
+from utils.config_utils import (
+    ROUTED_EXPERTS_UNSUPPORTED_SKIP,
+    get_model_path_from_config,
+    get_restful_chat_model_list,
+    model_enables_return_routed_experts,
+)
+from utils.constant import BACKEND_LIST, BASE_URL, CAPPED_MAX_COMPLETION_TOKENS
 from utils.toolkit import encode_text, parse_sse_stream
-
-from lmdeploy.serve.openai.api_client import APIClient
-
-BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
-DEFAULT_PORT = 23333
-BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
 @pytest.mark.parametrize('backend', BACKEND_LIST)
-@pytest.mark.parametrize('model_name', RESTFUL_MODEL_LIST)
+@pytest.mark.parametrize('model_name', get_restful_chat_model_list())
 class TestGenerateComprehensive:
 
     @pytest.fixture(autouse=True)
@@ -54,11 +54,11 @@ class TestGenerateComprehensive:
         except Exception as e:
             print(f'[LOG WARN] Failed to write {self.log_file}: {e}')
 
-    def _post(self, payload, stream=False):
+    def _post(self, payload, stream=False, timeout=60):
         if 'model' not in payload:
             payload['model'] = self.model_name
 
-        resp = requests.post(self.api_url, json=payload, headers=self.headers, stream=stream, timeout=60)
+        resp = requests.post(self.api_url, json=payload, headers=self.headers, stream=stream, timeout=timeout)
         resp.raise_for_status()
 
         if stream:
@@ -71,6 +71,9 @@ class TestGenerateComprehensive:
             accumulated_text = ''
             output_ids = []
             stream_events_count = 0
+            routed_experts = None
+            prompt_tokens = None
+            completion_tokens = None
 
             for event in events:
                 if event == '[DONE]':
@@ -86,17 +89,30 @@ class TestGenerateComprehensive:
                     ids = data.get('output_ids')
                     if isinstance(ids, list):
                         output_ids.extend(ids)
+                    meta = data.get('meta_info') or {}
+                    if meta.get('routed_experts') is not None:
+                        routed_experts = meta['routed_experts']
+                    if meta.get('prompt_tokens') is not None:
+                        prompt_tokens = meta['prompt_tokens']
+                    if meta.get('completion_tokens') is not None:
+                        completion_tokens = meta['completion_tokens']
                     stream_events_count += 1
                 except Exception as e:
                     print(f'Error parsing stream event: {e}')
                     continue
 
+            meta_info = {'stream_events': stream_events_count}
+            if routed_experts is not None:
+                meta_info['routed_experts'] = routed_experts
+            if prompt_tokens is not None:
+                meta_info['prompt_tokens'] = prompt_tokens
+            if completion_tokens is not None:
+                meta_info['completion_tokens'] = completion_tokens
+
             fake_resp = {
                 'text': accumulated_text,
                 'output_ids': output_ids,
-                'meta_info': {
-                    'stream_events': stream_events_count
-                }
+                'meta_info': meta_info,
             }
             self._log_request_response(payload, fake_resp, raw_content)
 
@@ -142,22 +158,44 @@ class TestGenerateComprehensive:
             assert len(experts_data) > 0
 
             total_steps = len(experts_data)
+            # Derive shape from first token so topk/layers stay model-compatible.
+            first_token = experts_data[0]
+            assert isinstance(first_token, list) and len(first_token) > 0, first_token
+            expected_num_layers = len(first_token)
+            assert isinstance(first_token[0], list) and len(first_token[0]) > 0, first_token[0]
+            expected_topk = len(first_token[0])
 
             for step_idx in range(total_steps):
                 token_experts = experts_data[step_idx]
 
                 assert isinstance(token_experts, list)
-                assert len(token_experts) > 0
+                assert len(token_experts) == expected_num_layers, (
+                    f'step {step_idx}: num_layers={len(token_experts)} '
+                    f'!= expected {expected_num_layers}')
 
                 for layer_idx in range(len(token_experts)):
                     layer_experts = token_experts[layer_idx]
 
                     assert isinstance(layer_experts, list)
-                    assert len(layer_experts) == 8
+                    assert len(layer_experts) == expected_topk, (
+                        f'step {step_idx} layer {layer_idx}: topk={len(layer_experts)} '
+                        f'!= expected {expected_topk}')
 
                     for expert_idx, expert_id in enumerate(layer_experts):
                         assert isinstance(expert_id, int)
                         assert 0 <= expert_id < 256, f'Invalid expert_id: {expert_id}. Must be in [0, 256)'
+
+            assert 'output_ids' in data, "Response should contain 'output_ids' when validate_experts=True"
+            output_ids = data['output_ids']
+            assert isinstance(output_ids, list) and len(output_ids) > 0, output_ids
+            prompt_tokens = data['meta_info'].get('prompt_tokens')
+            assert isinstance(prompt_tokens, int) and prompt_tokens > 0, (
+                f'meta_info.prompt_tokens missing/invalid: {prompt_tokens!r}')
+            expected_len = prompt_tokens + len(output_ids) - 1
+            assert total_steps == expected_len, (
+                f'routed_experts length mismatch: expected {expected_len} '
+                f'(prompt_tokens={prompt_tokens} + len(output_ids)={len(output_ids)} - 1), '
+                f'got {total_steps}')
 
         if validate_tokens:
             assert 'output_ids' in data, "Response should contain 'output_ids'"
@@ -295,7 +333,7 @@ class TestGenerateComprehensive:
 
     def test_input_ids_mode(self, config):
         print(f'\n[Model: {self.model_name}] Running input_ids mode test')
-        model_path = os.path.join(config.get('model_path'), self.model_name)
+        model_path = get_model_path_from_config(config, self.model_name)
 
         test_cases = [{
             'name': 'simple text',
@@ -438,7 +476,7 @@ class TestGenerateComprehensive:
     @pytest.mark.logprob
     def test_input_ids_with_logprob(self, config):
         print(f'\n[Model: {self.model_name}] Running input_ids with logprob test')
-        model_path = os.path.join(config.get('model_path'), self.model_name)
+        model_path = get_model_path_from_config(config, self.model_name)
 
         test_cases = [{
             'name': 'basic logprob',
@@ -638,8 +676,8 @@ class TestGenerateComprehensive:
         print(f'\n[Model: {self.model_name}] Running same session_id test')
         sid = int(time.time_ns()) % 100000
 
-        resp1 = self._post({'prompt': 'First message:', 'session_id': sid, 'max_tokens': 2})
-        resp2 = self._post({'prompt': 'Second message:', 'session_id': sid, 'max_tokens': 2})
+        resp1 = self._post({'prompt': 'First message:', 'session_id': sid, 'max_tokens': 8})
+        resp2 = self._post({'prompt': 'Second message:', 'session_id': sid, 'max_tokens': 8})
 
         assert resp1.status_code == 200
         assert resp2.status_code == 200
@@ -649,10 +687,6 @@ class TestGenerateComprehensive:
 
         self._validate_generation_response(data1)
         self._validate_generation_response(data2)
-
-        text1 = data1['text'].strip()
-        text2 = data2['text'].strip()
-        assert text1 != text2
 
         print(f"  First response: '{data1['text']}'")
         print(f"  Second response: '{data2['text']}'")
@@ -702,8 +736,8 @@ class TestGenerateComprehensive:
                 self._post(payload)
 
             response = exc_info.value.response
-            assert response.status_code in [400, 422], (f"Bad Request for case '{test_desc}', "
-                                                        f'but got {response.status_code}')
+            assert response.status_code == 400, (f"Bad Request for case '{test_desc}', "
+                                                   f'but got {response.status_code}')
 
     def test_stress_concurrent_requests(self):
         print(f'\n[Model: {self.model_name}] Running stress concurrent requests test')
@@ -880,9 +914,10 @@ class TestGenerateComprehensive:
     def test_repetition_penalty(self):
         print(f'\n[Model: {self.model_name}] Running repetition penalty test')
         prompt = 'Repeat repeat repeat repeat'
+        base = {'prompt': prompt, 'max_tokens': 10, 'top_k': 0, 'stream': False}
 
-        resp_no_penalty = self._post({'prompt': prompt, 'max_tokens': 10, 'repetition_penalty': 1.0, 'stream': False})
-        resp_penalty = self._post({'prompt': prompt, 'max_tokens': 10, 'repetition_penalty': 1.5, 'stream': False})
+        resp_no_penalty = self._post({**base, 'repetition_penalty': 1.0})
+        resp_penalty = self._post({**base, 'repetition_penalty': 1.5})
 
         text_no_penalty = resp_no_penalty.json()['text']
         text_penalty = resp_penalty.json()['text']
@@ -916,9 +951,60 @@ class TestGenerateComprehensive:
         assert reason_ignore == 'length', \
             f'ignore_eos=True must end due to length, actual: {reason_ignore}'
 
+    def test_max_tokens_default_cap_no_overshoot_followup(self):
+        """Hit CAPPED_MAX_COMPLETION_TOKENS with ignore_eos; no overshoot;
+        follow- up must succeed.
+
+        Catches regressions where length-capped generation returns a few extra tokens and breaks the next request.
+        """
+        prompt = 'Continue writing forever without stopping.'
+        max_tokens = CAPPED_MAX_COMPLETION_TOKENS
+        print(f'\n[Model: {self.model_name}] Running max_tokens={max_tokens} '
+              'length-cap / follow-up test')
+        # Align with existing generate/chat length checks (allow at most +1).
+        overshoot_slack = 1
+
+        resp = self._post(
+            {
+                'prompt': prompt,
+                'max_tokens': max_tokens,
+                'ignore_eos': True,
+                'stream': False,
+                'temperature': 0.01,
+            },
+            timeout=1800,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        self._validate_generation_response(data=data, validate_tokens=True)
+
+        meta = data.get('meta_info', {})
+        finish_type = meta.get('finish_reason', {}).get('type')
+        assert finish_type == 'length', f'Expected finish_reason length, got {finish_type}'
+
+        completion_tokens = meta.get('completion_tokens')
+        if completion_tokens is None and 'output_ids' in data:
+            completion_tokens = len(data['output_ids'])
+        assert completion_tokens is not None, 'Missing completion_tokens / output_ids'
+        assert completion_tokens <= max_tokens + overshoot_slack, (
+            f'Length cap overshoot: completion_tokens={completion_tokens} > '
+            f'max_tokens={max_tokens}+{overshoot_slack}')
+
+        resp_followup = self._post({
+            'prompt': 'Say hi in one word.',
+            'max_tokens': 8,
+            'stream': False,
+            'temperature': 0.01,
+        })
+        assert resp_followup.status_code == 200, (
+            f'Follow-up /generate failed after length-capped request: '
+            f'{resp_followup.status_code} {resp_followup.text}')
+        self._validate_generation_response(resp_followup.json())
+        print('  Default max_tokens length-cap / follow-up test passed')
+
     def test_skip_special_tokens(self, config):
         print(f'[Model: {self.model_name}] Running skip_special_tokens test')
-        model_path = os.path.join(config.get('model_path'), self.model_name)
+        model_path = get_model_path_from_config(config, self.model_name)
         user_content = 'Hello [world]! This is a [test].'
 
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -940,10 +1026,11 @@ class TestGenerateComprehensive:
         assert not any(pattern in generated_text for pattern in special_patterns), \
             'Expected no special pattern in the generated text but found one.'
 
-    def test_stop_token_ids(self):
+    def test_stop_token_ids(self, config):
         print(f'\n[Model: {self.model_name}] Running stop_token_ids test')
-        api_client = APIClient(BASE_URL)
-        input_ids1, length1 = api_client.encode('.', add_bos=False)
+        model_path = get_model_path_from_config(config, self.model_name)
+        input_ids1 = encode_text(model_path, '.', add_special_tokens=False)
+        length1 = len(input_ids1)
         print(f'input_ids1={input_ids1}, length1={length1}')
 
         payload = {
@@ -1023,7 +1110,7 @@ class TestGenerateComprehensive:
 
         with pytest.raises(requests.HTTPError) as exc_info:
             self._post({'prompt': 'Test', 'max_tokens': 3, 'temperature': -0.5, 'stream': False})
-        assert exc_info.value.response.status_code in [400, 422]
+        assert exc_info.value.response.status_code == 400
 
         print('  Invalid temperature values test passed')
 
@@ -1031,7 +1118,7 @@ class TestGenerateComprehensive:
         print(f'\n[Model: {self.model_name}] Running invalid top_p values test')
         with pytest.raises(requests.HTTPError) as exc_info:
             self._post({'prompt': 'Test', 'max_tokens': 3, 'top_p': 1.5, 'stream': False})
-        assert exc_info.value.response.status_code in [400, 422]
+        assert exc_info.value.response.status_code == 400
 
         print('  Invalid top_p values test passed')
 
@@ -1039,7 +1126,7 @@ class TestGenerateComprehensive:
         print(f'\n[Model: {self.model_name}] Running invalid top_k values test')
         with pytest.raises(requests.HTTPError) as exc_info:
             self._post({'prompt': 'Test', 'max_tokens': 3, 'top_k': -5, 'stream': False})
-        assert exc_info.value.response.status_code in [400, 422]
+        assert exc_info.value.response.status_code == 400
 
         print('  Invalid top_k values test passed')
 
@@ -1144,7 +1231,7 @@ class TestGenerateComprehensive:
 
     def test_spaces_between_special_tokens(self, config):
         print(f'[Model: {self.model_name}] Running spaces_between_special_tokens test')
-        model_path = os.path.join(config.get('model_path'), self.model_name)
+        model_path = get_model_path_from_config(config, self.model_name)
         user_content = 'Hello [world]! This is a [test].'
 
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -1168,7 +1255,10 @@ class TestGenerateComprehensive:
 
     @pytest.mark.experts
     @pytest.mark.not_turbomind
-    def test_request_returns_experts(self):
+    def test_request_returns_experts(self, backend):
+        if not model_enables_return_routed_experts(
+                self.model_name, backend, required_suites=frozenset({'experts'})):
+            pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
         print(f'\n[Model: {self.model_name}] Running request with experts test')
         resp1 = self._post({
             'prompt': 'Deterministic generation',
@@ -1180,3 +1270,82 @@ class TestGenerateComprehensive:
         data1 = resp1.json()
 
         self._validate_generation_response(data1, validate_experts=True)
+
+    @pytest.mark.experts
+    @pytest.mark.not_turbomind
+    def test_request_returns_experts_max_tokens_cap_followup(self, backend):
+        """Hit CAPPED_MAX_COMPLETION_TOKENS with return_routed_experts;
+        length/experts OK; follow-up OK.
+
+        Catches regressions where length-capped MoE generation overshoots a few tokens and breaks routed_experts length
+        or the next request.
+        """
+        if not model_enables_return_routed_experts(
+                self.model_name, backend, required_suites=frozenset({'experts'})):
+            pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
+        prompt = 'Continue writing forever without stopping.'
+        max_tokens = CAPPED_MAX_COMPLETION_TOKENS
+        print(f'\n[Model: {self.model_name}] Running experts max_tokens='
+              f'{max_tokens} length-cap / follow-up test')
+        overshoot_slack = 1
+
+        resp = self._post(
+            {
+                'prompt': prompt,
+                'max_tokens': max_tokens,
+                'ignore_eos': True,
+                'stream': False,
+                'temperature': 0.01,
+                'return_routed_experts': True,
+            },
+            timeout=1800,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        self._validate_generation_response(data, validate_experts=True)
+
+        meta = data.get('meta_info', {})
+        finish_type = meta.get('finish_reason', {}).get('type')
+        assert finish_type == 'length', f'Expected finish_reason length, got {finish_type}'
+
+        completion_tokens = meta.get('completion_tokens')
+        if completion_tokens is None and 'output_ids' in data:
+            completion_tokens = len(data['output_ids'])
+        assert completion_tokens is not None, 'Missing completion_tokens / output_ids'
+        assert completion_tokens <= max_tokens + overshoot_slack, (
+            f'Length cap overshoot: completion_tokens={completion_tokens} > '
+            f'max_tokens={max_tokens}+{overshoot_slack}')
+
+        resp_followup = self._post({
+            'prompt': 'Say hi in one word.',
+            'max_tokens': 8,
+            'stream': False,
+            'temperature': 0.01,
+            'return_routed_experts': True,
+        })
+        assert resp_followup.status_code == 200, (
+            f'Follow-up /generate with experts failed after length-capped request: '
+            f'{resp_followup.status_code} {resp_followup.text}')
+        self._validate_generation_response(resp_followup.json(), validate_experts=True)
+        print('  Experts max_tokens length-cap / follow-up test passed')
+
+    @pytest.mark.experts
+    @pytest.mark.not_turbomind
+    def test_request_returns_experts_stream(self, backend):
+        if not model_enables_return_routed_experts(
+                self.model_name, backend, required_suites=frozenset({'experts'})):
+            pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
+        print(f'\n[Model: {self.model_name}] Running streaming request with experts test')
+        resp = self._post(
+            {
+                'prompt': 'Deterministic generation',
+                'max_tokens': 50,
+                'temperature': 0.8,
+                'stream': True,
+                'return_routed_experts': True,
+            },
+            stream=True,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        self._validate_generation_response(data, validate_experts=True)

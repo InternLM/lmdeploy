@@ -6,12 +6,13 @@ from abc import ABC
 from typing import TYPE_CHECKING
 
 from .builders import NormBuilder, make_norm_config
+from .builders.linear import _build_linear
 
 if TYPE_CHECKING:
     from transformers import PretrainedConfig
 
+    from .builders.linear import Linear
     from .checkpoint import Prefix
-    from .linear import Linear
 
 
 class TextModel(ABC):
@@ -40,24 +41,33 @@ class TextModel(ABC):
         return self.cfg.vocab_size
 
     def bind_runtime(self, *, ctx, root_handles,
-                     attn_tp, mlp_tp, model_tp):
+                     attn_tp, mlp_tp, ep, model_tp, dense_tp):
         self._ctx = ctx
         self._root_handles = root_handles
         self._attn_tp = attn_tp
         self._mlp_tp = mlp_tp
+        self._ep = ep
         self._model_tp = model_tp
+        # TP group for dense layers inside MoE models — sharded node-locally
+        # by ModelLoader (C++ reduce group: d_node_group). Pure-dense models
+        # use the mlp_tp group.
+        self._dense_tp = dense_tp
 
     def _linear(self, pfx: Prefix, *,
                 optional: bool = False) -> Linear | None:
-        return self._resolver.resolve(pfx, optional=optional)
+        resolved = self._resolver.resolve(pfx, optional=optional)
+        if resolved is None:
+            return None
+        return _build_linear(*resolved)
 
-    def norm(self, pfx, transform=None):
+    def norm(self, pfx, transform=None, *, zero_centered=False):
         weight = pfx.pop('weight')
         if transform is not None:
             weight = transform(weight)
         cfg = make_norm_config(
             dim=weight.shape[-1],
             norm_eps=self.cfg.rms_norm_eps,
+            zero_centered=zero_centered,
         )
         m = NormBuilder(cfg, self._ctx)
         m.set_weight(weight)

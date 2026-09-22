@@ -1,8 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
+
+from .base import BuildSpec
 
 
 class EmbeddingImpl(ABC):
@@ -14,11 +17,9 @@ class EmbeddingImpl(ABC):
         raise NotImplementedError
 
 
-class EmbeddingBuilder(ABC):
-    """Embedding implementation builder."""
+@dataclass(frozen=True)
+class EmbeddingBuildSpec(BuildSpec[EmbeddingImpl]):
+    """Immutable requirements for constructing an embedding operator."""
 
-    @staticmethod
-    @abstractmethod
-    def build(start_index: int, end_index: int):
-        """build."""
-        raise NotImplementedError
+    start_index: int
+    end_index: int

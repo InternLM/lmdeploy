@@ -2,17 +2,38 @@
 
 #include <algorithm>
 #include <iostream>
-#include <numeric>
 #include <sstream>
 
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/desc.h"
+#include "src/turbomind/kernels/gemm/family.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind::gemm {
+
+Kernel::Kernel(const Family& family): family_{family}, desc_{}, info_{}
+{
+    desc_.family = family.id;
+}
+
+bool Kernel::CheckArch()
+{
+    checked_arch_ = getSMVersion() * 10;
+    available_    = is_arch_compatible(desc_.arch, checked_arch_);
+    return available_;
+}
+
+bool Kernel::is_available(int arch) const noexcept
+{
+    if (checked_arch_ >= 0 && arch == checked_arch_) {
+        return available_;
+    }
+    return is_arch_compatible(desc_.arch, arch);
+}
 
 bool accept(Striding a, Striding b)
 {
@@ -48,6 +69,14 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
         printf("S\n");
 
     // printf("%d %d\n", desc.arch, desc_.arch);
+
+    if (desc.family && desc.family != family().id) {
+        return false;
+    }
+
+    if ((int)desc.epilogue & ~(int)desc_.supported_epilogues) {
+        return false;
+    }
 
     if (!is_arch_compatible(desc_.arch, desc.arch)) {
         return false;
@@ -153,25 +182,33 @@ std::string Kernel::GetName() const
        << "_" << desc_.cluster_shape.x << "x" << desc_.cluster_shape.y                   //
        << "_" << to_string(desc_.op_class)                                               //
        << "_" << desc_.mma_tile.x << "x" << desc_.mma_tile.y << "x" << desc_.mma_tile.z;
+    if (desc_.atom_layout.x) {
+        ss << "_atom" << desc_.atom_layout.x << "x" << desc_.atom_layout.y << "x" << desc_.atom_layout.z;
+    }
+    if ((desc_.supported_epilogues & Epilogue::kGatedSilu) != Epilogue::kNone) {
+        ss << "_fused_silu";
+    }
     if (desc_.group_axis >= 0) {
         ss << "_"
            << "mn"[desc_.group_axis] << "group";
     }
-    ss << "_c" << desc_.c_tile.x << "x" << desc_.c_tile.y                        //
-       << "_a" << desc_.align.x << "x" << desc_.align.y << "x" << desc_.align.z  //
-       << "_" << desc_.policy_a << desc_.policy_b;
+    ss << "_c" << desc_.c_tile.x << "x" << desc_.c_tile.y  //
+       << "_a" << desc_.align.x << "x" << desc_.align.y << "x" << desc_.align.z;
+    if (desc_.algo) {
+        ss << "_algo" << std::hex << desc_.algo << std::dec  //
+           << "_" << (desc_.raster == kRowMajor ? 'r' : 'c');
+    }
+    ss << "_" << desc_.policy_a << desc_.policy_b;
 
     return ss.str();
 }
 
 class TransposedKernel: public Kernel {
 public:
-    explicit TransposedKernel(Kernel& kernel): kernel_(&kernel)
+    explicit TransposedKernel(Kernel& kernel): Kernel{kernel}, kernel_(&kernel)
     {
-        desc_ = kernel.desc();
-        info_ = kernel.info();
-
-        desc_.transpose = !desc_.transpose;
+        desc_.transpose           = !desc_.transpose;
+        desc_.supported_epilogues = static_cast<Epilogue>((int)desc_.supported_epilogues & ~(int)Epilogue::kGatedSilu);
     }
 
     int Launch(const Operation&    operation,
@@ -184,11 +221,15 @@ public:
                const MatrixLayout& Bdesc,
                const void*         V,
                const MatrixLayout& Vdesc,
+               const void*         global_scale,
+               const MatrixLayout& global_scale_desc,
                float               beta,
                const void*         C,
                const MatrixLayout& Cdesc,
                void*               D,
                const MatrixLayout& Ddesc,
+               void*               W,
+               const MatrixLayout& Wdesc,
                int                 swizzle,
                int                 splits,
                Workspace&          workspace,
@@ -204,11 +245,15 @@ public:
                                transpose(Adesc),
                                U,
                                transpose(Udesc),
+                               global_scale,
+                               global_scale_desc,
                                beta,
                                C,
                                transpose(Cdesc),
                                D,
                                transpose(Ddesc),
+                               W,
+                               Wdesc,
                                swizzle,
                                splits,
                                workspace,
@@ -217,6 +262,9 @@ public:
 
     bool is_feasible(const GemmDesc& desc) const noexcept override
     {
+        if ((int)desc.epilogue & ~(int)desc_.supported_epilogues) {
+            return false;
+        }
         return kernel_->is_feasible(desc);
     }
 

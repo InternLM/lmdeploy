@@ -21,7 +21,7 @@ def _validate_headers(raw_request: Request):
     return None
 
 
-def register(router: APIRouter, server_context) -> None:
+def register(router: APIRouter, server_context, *, merge_inline_system: bool = False) -> None:
     """Register endpoint onto router."""
 
     @router.post('/v1/messages/count_tokens', dependencies=[Depends(validate_json_request)])
@@ -38,7 +38,7 @@ def register(router: APIRouter, server_context) -> None:
             )
 
         try:
-            messages = to_lmdeploy_messages(request)
+            messages = to_lmdeploy_messages(request, merge_inline_system=merge_inline_system)
             input_tokens = count_input_tokens(server_context.async_engine, messages)
         except ValueError as err:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(err))

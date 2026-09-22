@@ -53,9 +53,19 @@ class DistServeEngineEndpointInfo(BaseModel):
     zmq_address: str
 
 
+class DistServeCachePoolInfo(BaseModel):
+    """Serializable physical layout of one registered cache pool."""
+
+    shape: tuple[int, ...]
+    dtype: str
+    element_size: int
+    entry_axis: int
+
+
 class DistServeKVTransferEndpointInfo(BaseModel):
     protocol: MigrationProtocol
     endpoint_info: str
+    cache_pools: tuple[DistServeCachePoolInfo, ...] | None = None
 
 
 class DistServeInitResponse(BaseModel):

@@ -82,6 +82,10 @@ class DeployModelMixin:
         """Update quant config."""
         if quant_config is None:
             return
+        if quant_config.quant_method == 'compressed-tensors':
+            # CT ignore rules are evaluated against canonical checkpoint FQNs.
+            # Treating `re:` rules as literal weight names would corrupt them.
+            return quant_config
         if getattr(quant_config, 'ignored_layers', None) is None:
             return quant_config
         ignored_layers = [cls.rename_weight(name) for name in quant_config.ignored_layers]
@@ -181,8 +185,8 @@ def vlm_model(vlm_cls):
     @functools.wraps(vlm_cls)
     def wrapper(*args, **kwargs):
         bm_ctx = get_build_model_context()
-        disable_vision_encoder = bm_ctx.disable_vision_encoder
-        if disable_vision_encoder:
+        language_model_only = bm_ctx.language_model_only
+        if language_model_only:
             mod = torch.nn.Identity()
             mod._is_dummy_mod = True
             return mod

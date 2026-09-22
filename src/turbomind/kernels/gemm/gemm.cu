@@ -11,7 +11,11 @@
 #include "src/turbomind/kernels/gemm/tuner/params.h"
 #include "src/turbomind/kernels/gemm/tuner/sampler.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <algorithm>
+#include <cstdlib>
+#include <iostream>
 #include <iterator>
 #include <memory>
 #include <numeric>
@@ -38,6 +42,63 @@ std::vector<int> ArgSort(size_t size, const Cmp& cmp)
 }
 
 }  // namespace
+
+Workspace::Workspace(cudaStream_t stream):
+    barriers_size{kBarriersSize}, partials_size{kPartialsSize}, tensormaps_size{kTensormapsSize}
+{
+    TM_CUDA_CHECK(cudaMallocAsync(&barriers, barriers_size, stream));
+    TM_CUDA_CHECK(cudaMallocAsync(&partials, partials_size, stream));
+    TM_CUDA_CHECK(cudaMallocAsync(&tensormaps, tensormaps_size, stream));
+    TM_CUDA_CHECK(cudaMemsetAsync(barriers, 0, barriers_size, stream));
+    TM_CUDA_CHECK(cudaMallocAsync(&flags, sizeof(int), stream));
+    // The stream is not retained: publish allocation/initialization readiness
+    // for first use on any stream.
+    TM_CUDA_CHECK(cudaStreamSynchronize(stream));
+}
+
+Workspace::~Workspace()
+{
+    // Plain cudaFree: stream-ordered (cudaMallocAsync) memory gets no implicit
+    // synchronization. Only safe once all work using this workspace has
+    // completed — owners on a live stream should Release() first instead.
+    cudaFree(barriers);
+    cudaFree(partials);
+    cudaFree(tensormaps);
+    cudaFree(flags);
+    barriers        = nullptr;
+    barriers_size   = 0;
+    partials        = nullptr;
+    partials_size   = 0;
+    tensormaps      = nullptr;
+    tensormaps_size = 0;
+    flags           = nullptr;
+}
+
+void Workspace::Release(cudaStream_t stream)
+{
+    cudaFreeAsync(barriers, stream);
+    cudaFreeAsync(partials, stream);
+    cudaFreeAsync(tensormaps, stream);
+    cudaFreeAsync(flags, stream);
+    barriers        = nullptr;
+    barriers_size   = 0;
+    partials        = nullptr;
+    partials_size   = 0;
+    tensormaps      = nullptr;
+    tensormaps_size = 0;
+    flags           = nullptr;
+}
+
+Workspace::Workspace(Workspace&& other) noexcept:
+    barriers{std::exchange(other.barriers, nullptr)},
+    barriers_size{std::exchange(other.barriers_size, 0)},
+    partials{std::exchange(other.partials, nullptr)},
+    partials_size{std::exchange(other.partials_size, 0)},
+    tensormaps{std::exchange(other.tensormaps, nullptr)},
+    tensormaps_size{std::exchange(other.tensormaps_size, 0)},
+    flags{std::exchange(other.flags, nullptr)}
+{
+}
 
 struct Gemm::Impl {
 
@@ -86,6 +147,43 @@ struct Gemm::Impl {
             return specs.front();
         }
         return {};
+    }
+
+    int Launch(const LaunchSpec& spec, const Arguments& args, cudaStream_t stream)
+    {
+        auto& workspace = *args.workspace;
+        return spec.kernel->Launch(args.operation,
+                                   args.alpha,
+                                   args.A,
+                                   args.Adesc,
+                                   args.U,
+                                   args.Udesc,
+                                   args.B,
+                                   args.Bdesc,
+                                   args.V,
+                                   args.Vdesc,
+                                   args.global_scale,
+                                   args.global_scale_desc,
+                                   args.beta,
+                                   args.C,
+                                   args.Cdesc,
+                                   args.D,
+                                   args.Ddesc,
+                                   args.W,
+                                   args.Wdesc,
+                                   spec.swizzle,
+                                   spec.splits,
+                                   workspace,
+                                   stream);
+    }
+
+    void PrintSelection(const char* kind, const GemmDesc& desc, const LaunchSpec& spec) const
+    {
+        if (verbose_) {
+            std::cout << "[Gemm] " << kind << " " << to_string(desc) << " " << spec.kernel->name()
+                      << " family=" << spec.kernel->desc().family << " backend=" << spec.kernel->desc().backend
+                      << " splits=" << spec.splits << " swizzle=" << spec.swizzle << "\n";
+        }
     }
 
     std::vector<LaunchSpec> Find(Context& ctx, size_t barrier_size, size_t partials_size, int top_k)
@@ -174,43 +272,34 @@ struct Gemm::Impl {
     }
 
     template<class LaunchFunc>
-    int Measure(
-        Context& ctx, size_t barriers_size, size_t partials_size, int top_k, LaunchFunc launch_func, cudaStream_t st)
+    std::optional<LaunchSpec>
+    Measure(Context& ctx, size_t barriers_size, size_t partials_size, LaunchFunc launch_func, cudaStream_t stream)
     {
-        // Early exit on exact match
-        if (cache_.Find(ctx.desc())) {
-            return 0;
-        }
-        // std::cerr << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
-
-        const auto tmp = Find(ctx, barriers_size, partials_size, tuning_.top_k);
+        const auto candidates = Find(ctx, barriers_size, partials_size, tuning_.top_k);
 
         std::vector<LaunchSpec> specs;
-        for (const auto& spec : tmp) {
-            // populate swizzle parameters
-            const auto swis = ctx.Swizzle(spec, tuning_.swizzle);
-            specs.insert(specs.end(), swis.begin(), swis.end());
+        for (const auto& candidate : candidates) {
+            auto swizzled = ctx.Swizzle(candidate, tuning_.swizzle);
+            specs.insert(specs.end(), swizzled.begin(), swizzled.end());
         }
 
-        specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
+        specs = Sampler{*measurer_, tuning_.clusters}.Run(std::move(specs), launch_func, stream);
 
-        // for (const auto& s : specs) {
-        //     std::cout << s.kernel->name()          //
-        //               << " swizzle=" << s.swizzle  //
-        //               << ", splits=" << s.splits   //
-        //               << ", measured=" << s.measured << "ms\n";
-        //     break;
-        // }
-
-        if (!specs.empty()) {
-            cache_.Insert(ctx.desc(), specs.front());
+        if (verbose_) {
+            for (const auto& spec : specs) {
+                std::cout << "[tune] " << to_string(ctx.desc()) << " " << spec.kernel->name()
+                          << " swizzle=" << spec.swizzle << " splits=" << spec.splits << " measured=" << spec.measured
+                          << "\n";
+            }
         }
-        else {
+
+        if (specs.empty()) {
             std::cerr << "No valid kernel found for the problem\n";
-            return -1;
+            return std::nullopt;
         }
 
-        return 0;
+        cache_.Insert(ctx.desc(), specs.front());
+        return specs.front();
     }
 
     /// TODO: move to cuda utils
@@ -233,6 +322,8 @@ struct Gemm::Impl {
 
     bool warn_cache_miss_{};
 
+    const bool verbose_{std::getenv("TM_GEMM_VERBOSE") != nullptr};
+
     std::optional<Measurer> measurer_;
 
     DispatchCache cache_;
@@ -244,89 +335,109 @@ Gemm::Gemm(): impl_{new Impl{}} {}
 
 Gemm::~Gemm() = default;
 
-int Gemm::Run(const Operation&    operation,
-              float               alpha,
-              const void*         A,
-              const MatrixLayout& Adesc,
-              const void*         U,
-              const MatrixLayout& Udesc,
-              const void*         B,
-              const MatrixLayout& Bdesc,
-              const void*         V,
-              const MatrixLayout& Vdesc,
-              float               beta,
-              const void*         C,
-              const MatrixLayout& Cdesc,
-              void*               D,
-              const MatrixLayout& Ddesc,
-              const Workspace&    workspace,
-              cudaStream_t        stream)
+std::optional<WeightPlan> Gemm::GetWeightPlan(const WeightQuery& query) const
 {
+    const Family* selected{};
+    WeightBridge  selected_bridge{};
+    bool          selected_preferred{};
+    bool          ambiguous{};
+
+    for (const Family* family : impl_->registry_.families()) {
+        auto bridge = family->supports(query.weight_format, query.data_type, query.output_dtype, query.grouped);
+        if (!bridge) {
+            continue;
+        }
+        const bool preferred = query.input_dtype != kNull && family->input_format().dtype == query.input_dtype;
+        if (!selected || preferred > selected_preferred
+            || (preferred == selected_preferred && family->priority > selected->priority)) {
+            selected           = family;
+            selected_bridge    = *bridge;
+            selected_preferred = preferred;
+            ambiguous          = false;
+        }
+        else if (preferred == selected_preferred && family->priority == selected->priority) {
+            ambiguous = true;
+        }
+    }
+
+    if (!selected || ambiguous) {
+        return std::nullopt;
+    }
+    WeightPlan plan;
+    plan.family_        = selected;
+    plan.bridge_        = selected_bridge;
+    plan.output_format_ = selected->output_format(Epilogue::kNone);
+    return plan;
+}
+
+std::vector<DataType> Gemm::DataTypes(const DataFormat& weight_format) const
+{
+    std::vector<DataType> dtypes;
+    for (const Family* family : impl_->registry_.families()) {
+        const DataType dtype = family->data_type();
+        if (family->supports(weight_format, dtype, kNull, false)
+            && std::find(dtypes.begin(), dtypes.end(), dtype) == dtypes.end()) {
+            dtypes.push_back(dtype);
+        }
+    }
+    return dtypes;
+}
+
+std::optional<ExecPlan> Gemm::GetExecPlan(const Arguments& args)
+{
+    TM_CHECK(args.workspace);
 
     Context context{*impl_->props_};
-
-    const auto desc = context.Init(operation, Adesc, Udesc, Bdesc, Vdesc, Cdesc, Ddesc);
-
-    if (!desc) {
-        TM_LOG_FATAL("invalid argument");
-        return -1;
+    if (!context.Init(args.operation, args.Adesc, args.Udesc, args.Bdesc, args.Vdesc, args.Cdesc, args.Ddesc)) {
+        return std::nullopt;
     }
 
-    const auto launch = [=](LaunchSpec spec, cudaStream_t st) {
-        auto _workspace = workspace;
-        return spec.kernel->Launch(operation,
-                                   alpha,
-                                   A,
-                                   Adesc,
-                                   U,
-                                   Udesc,
-                                   B,
-                                   Bdesc,
-                                   V,
-                                   Vdesc,
-                                   beta,
-                                   C,
-                                   Cdesc,
-                                   D,
-                                   Ddesc,
-                                   spec.swizzle,
-                                   spec.splits,
-                                   _workspace,
-                                   st);
-    };
+    LaunchSpec launch =
+        impl_->Dispatch(context, args.operation.dispatch, args.workspace->barriers_size, args.workspace->partials_size);
+    if (!launch.kernel) {
+        return std::nullopt;
+    }
 
-#if 0
-    if (operation.reserved) {
-        auto specs = impl_->Find(context, workspace.barriers_size, workspace.partials_size, 0);
-        auto cases = (std::vector<std::function<LaunchSpec()>>*)operation.reserved;
-        for (const auto& spec : specs) {
-            cases->push_back([=] {
-                launch(spec, stream);
-                return spec;
-            });
+    impl_->PrintSelection("plan", context.desc(), launch);
+    return ExecPlan{context.desc(), launch};
+}
+
+std::optional<ExecPlan> Gemm::Tune(const Arguments& args)
+{
+    TM_CHECK(args.workspace);
+
+    Context context{*impl_->props_};
+    if (!context.Init(args.operation, args.Adesc, args.Udesc, args.Bdesc, args.Vdesc, args.Cdesc, args.Ddesc)) {
+        return std::nullopt;
+    }
+
+    if (args.operation.dispatch & DispatchPolicy::kReuse) {
+        if (auto selected = impl_->cache_.Find(context.desc())) {
+            impl_->PrintSelection("plan", context.desc(), *selected);
+            return ExecPlan{context.desc(), *selected};
         }
+    }
+
+    const auto launch = [&](LaunchSpec spec, cudaStream_t stream) { return impl_->Launch(spec, args, stream); };
+
+    std::optional<LaunchSpec> selected =
+        impl_->Measure(context, args.workspace->barriers_size, args.workspace->partials_size, launch, args.stream);
+    if (!selected) {
+        return std::nullopt;
+    }
+    impl_->PrintSelection("tune", context.desc(), *selected);
+    return ExecPlan{context.desc(), *selected};
+}
+
+int Gemm::Run(const ExecPlan& plan, const Arguments& args)
+{
+    TM_CHECK(args.workspace);
+
+    if (!plan.launch_.kernel) {
+        TM_LOG_FATAL("No feasible kernel found for the problem: {}", to_string(plan.desc_));
         return -1;
     }
-#endif
-
-    LaunchSpec spec{};
-
-    if (operation.dispatch & DispatchPolicy::kMeasure) {
-        impl_->Measure(context, workspace.barriers_size, workspace.partials_size, 1, launch, stream);
-    }
-
-    spec = impl_->Dispatch(context, operation.dispatch, workspace.barriers_size, workspace.partials_size);
-
-    if (spec.kernel) {
-        // std::cout << "[Gemm] dispatch: " << spec.kernel->name()  //
-        //           << " split_k=" << spec.splits                  //
-        //           << " swizzle=" << spec.swizzle << std::endl;
-        return launch(spec, stream);
-    }
-
-    TM_LOG_FATAL("No feasible kernel found for the problem: {}", to_string(context.desc()));
-
-    return -1;
+    return impl_->Launch(plan.launch_, args, args.stream);
 }
 
 int Gemm::Export(std::ostream& os)

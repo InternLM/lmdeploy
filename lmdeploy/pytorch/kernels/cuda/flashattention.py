@@ -5,17 +5,13 @@ from collections.abc import Sequence
 import torch
 import triton
 import triton.language as tl
-from packaging import version
 from torch import Tensor
 
 from lmdeploy.utils import get_logger
 
-logger = get_logger('lmdeploy')
+from .utils import get_device_props
 
-TRITON_VERSION = version.parse(triton.__version__)
-VERSION_300 = version.parse('3.0.0')
-VERSION_320 = version.parse('3.2.0')
-assert TRITON_VERSION >= VERSION_300
+logger = get_logger('lmdeploy')
 
 # TODO: fast op might not work on non-nv device
 tanh = tl.extra.cuda.libdevice.tanh
@@ -379,9 +375,6 @@ def _flash_prefill_fwd_kernel(
     tl.store(out_ptrs, acc, mask=(offs_m[:, None] < q_seqlen) & mask_dv[None, :])
 
 
-_nv_cap = None
-
-
 def _kernel_meta_sm7x(BLOCK_DK):
     num_warps = 4
     num_stages = min(4, max(2, 768 // BLOCK_DK))
@@ -426,11 +419,6 @@ def _kernel_meta_sm9x(BLOCK_DK: int, shared_kv: bool):
     BLOCK_M = 128 if BLOCK_DK <= 256 else 64
     if not shared_kv and BLOCK_DK >= 512:
         BLOCK_M = 32
-
-    # fix crash on triton<3.2.0
-    if BLOCK_DK >= 512 and TRITON_VERSION < VERSION_320:
-        BLOCK_M = 32
-        num_warps = 4
 
     BLOCK_N = 128 if BLOCK_DK <= 128 else 64
 
@@ -500,10 +488,6 @@ def flash_attn_varlen_func(
     Support sliding window, softcapping.
     """
 
-    global _nv_cap
-    if _nv_cap is None:
-        _nv_cap = torch.cuda.get_device_capability()
-
     def grid(args):
         return (triton.cdiv(max_seqlen_q, args['BLOCK_M']), num_heads, batch)
 
@@ -559,14 +543,15 @@ def flash_attn_varlen_func(
     if hip_mode:
         BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_rocm(BLOCK_DK, shared_kv)
     else:
-        if _nv_cap[0] < 8:
+        nv_cap = get_device_props(q.device.index)['compute_capability']
+        if nv_cap[0] < 8:
             BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm7x(BLOCK_DK)
-        elif _nv_cap[0] < 9:
-            if _nv_cap[1] in [6, 9]:
+        elif nv_cap[0] < 9:
+            if nv_cap[1] in [6, 9]:
                 BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm86(BLOCK_DK, shared_kv)
             else:
                 BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
-        elif _nv_cap[0] < 10:
+        elif nv_cap[0] < 10:
             BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK, shared_kv)
         else:
             BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm12x(BLOCK_DK, shared_kv)

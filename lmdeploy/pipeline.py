@@ -12,13 +12,13 @@ from queue import Queue
 from threading import Thread
 from typing import TYPE_CHECKING
 
-import torch
 import tqdm
 from typing_extensions import deprecated
 
 from .archs import autoget_backend_config, get_task
 from .messages import GenerationConfig, PytorchEngineConfig, Response, SpeculativeConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
+from .serve.core.exceptions import ErrorCode, RequestError
 from .serve.processors import MultimodalProcessor
 from .utils import get_logger, get_model
 
@@ -41,6 +41,7 @@ class Pipeline:
                  max_log_len: int | None = None,
                  trust_remote_code: bool = False,
                  speculative_config: SpeculativeConfig | None = None,
+                 allowed_media_domains: list[str] | None = None,
                  **kwargs):
         """Initialize Pipeline.
 
@@ -52,6 +53,7 @@ class Pipeline:
             max_log_len: Max number of prompt characters or prompt tokens being printed in log.
             trust_remote_code: whether to trust remote code from model repositories.
             speculative_config: Speculative decoding configuration.
+            allowed_media_domains: Optional HTTP(S) media URL domain allowlist.
             **kwargs: Additional keyword arguments.
         """
 
@@ -83,6 +85,7 @@ class Pipeline:
                                            max_log_len=max_log_len,
                                            trust_remote_code=trust_remote_code,
                                            speculative_config=speculative_config,
+                                           allowed_media_domains=allowed_media_domains,
                                            **kwargs)
         self.internal_thread = _EventLoopThread(daemon=True)
         self.limiter: asyncio.Semaphore = None
@@ -178,6 +181,26 @@ class Pipeline:
         self.internal_thread.close()
         self.async_engine.close()
 
+    @staticmethod
+    def _history_to_messages(history, prompt):
+        def _messages(prompt):
+            messages = []
+            for item in MultimodalProcessor.format_prompts(prompt):
+                if isinstance(item, str):
+                    messages.append({'role': 'user', 'content': item})
+                elif isinstance(item, dict):
+                    messages.append(item)
+                else:
+                    messages.extend(item)
+            return messages
+
+        messages = []
+        for user_prompt, assistant_text in history:
+            messages.extend(_messages(user_prompt))
+            messages.append({'role': 'assistant', 'content': assistant_text})
+        messages.extend(_messages(prompt))
+        return messages
+
     def chat(self,
              prompt: str | tuple[str, Image | list[Image]],
              session=None,
@@ -202,18 +225,13 @@ class Pipeline:
             session = self.session_mgr.get()
         session.update(prompt=prompt, response=None)
 
-        prompt = MultimodalProcessor.format_prompts(prompt)
-
-        sequence_start = session.step == 0
-        generator = self.stream_infer(prompts=prompt,
+        messages = self._history_to_messages(session.history, prompt)
+        generator = self.stream_infer(prompts=messages,
                                       sessions=session,
                                       gen_config=gen_config,
                                       stream_response=stream_response,
                                       adapter_name=adapter_name,
                                       multiplex=True,
-                                      sequence_start=sequence_start,
-                                      sequence_end=False,
-                                      step=session.step,
                                       **kwargs)
 
         def _gen():
@@ -227,7 +245,6 @@ class Pipeline:
                 raise
             else:
                 session.response = resp
-                session.step += resp.generate_token_len + resp.input_token_len
                 session.history.append((session.prompt, resp.text))
 
         if stream_response:
@@ -269,8 +286,7 @@ class Pipeline:
         return scores
 
     def get_ppl(self, input_ids: list[int] | list[list[int]]) -> list[float]:
-        """Get perplexity scores given a list of input tokens that have to be
-        of the same length.
+        """Get perplexity scores given a list of input tokens.
 
         Args:
             input_ids: the batch of input token ids.
@@ -283,40 +299,17 @@ class Pipeline:
             input_ids = [input_ids]
         assert all(len(_) > 1 for _ in input_ids)
 
-        # TODO: a better way to determine `max_input_len`, at most allocate
-        # 2G mem for logits with shape [bs, max_input_len, vocab_size]
-        vocab_size = self.async_engine.hf_cfg.vocab_size
-        max_input_len = 2 * 1024**3 // (vocab_size * 4)
-        sizes = [len(_) for _ in input_ids]
-        result = []
-        sorted_index_values = sorted(list(enumerate(sizes)), key=lambda x: x[1], reverse=True)
-        sizes = [value for index, value in sorted_index_values]
-        indices = [index for index, value in sorted_index_values]
-        logger.info(f'sorted sizes: {sizes}')
-        logger.info(f'sorted indices: {indices}')
-        for (start, end) in self._batch_iterator(sizes, max_input_len):
-            logger.info(f'start: {start}, end: {end}')
-            if start == end:
-                _input_ids = input_ids[indices[start]]
-                session = self.session_mgr.get()
-                res = self._get_long_text_ppl(session, input_ids=_input_ids, max_input_len=max_input_len)
-                result.append(res)
-                self.session_mgr.remove(session)
-            else:
-                _input_ids = [input_ids[indices[i]] for i in range(start, end)]
-                sessions = [self.session_mgr.get() for _ in range(start, end)]
-                res = self._get_ppl(
-                    sessions=sessions,
-                    input_ids=_input_ids,
-                    max_input_len=max_input_len,
-                )
-                result.extend(res)
-                for session in sessions:
-                    self.session_mgr.remove(session)
-        output = list(range(len(result)))
-        for index, sorted_index in enumerate(indices):
-            output[sorted_index] = result[index]
-        return output
+        engine = self.async_engine
+
+        async def _get_one(ids):
+            async with self._get_limiter():
+                return await engine.async_get_ppl(ids)
+
+        async def _gather():
+            return await asyncio.gather(*[_get_one(ids) for ids in input_ids])
+
+        results = self._run(coro=_gather()).result()
+        return results
 
     def __call__(self,
                  prompts: list[str] | str | list[dict] | list[list[dict]],
@@ -334,9 +327,11 @@ class Pipeline:
     async def generate(self, *args, **kwargs):
         """Generate responses as an async generator.
 
-        This method delegates to async_engine.generate and forwards all yielded values.
+        This method preprocesses the input and forwards generated values.
         """
-        async for item in self.async_engine.generate(*args, **kwargs):
+        stream_response = kwargs.pop('stream_response', True)
+        request = await self.async_engine.preprocess(*args, **kwargs)
+        async for item in self.async_engine.generate(request, stream_response=stream_response):
             yield item
 
     @staticmethod
@@ -378,8 +373,7 @@ class Pipeline:
 
         for prompt, gen_cfg, session in zip(prompts, gen_configs, sessions):
             # Use session_id is for backward compatibility. We will remove it in the future.
-            # Since AsyncEngine.generate defines session_id in the argument lists, here we
-            # use session_id to pass the session to the AsyncEngine.generate. It's
+            # AsyncEngine.preprocess accepts session_id, so use that name to pass the session.
             yield dict(session_id=session, messages=prompt, gen_config=gen_cfg, **kwargs)
 
     def _get_limiter(self):
@@ -389,14 +383,43 @@ class Pipeline:
 
     def _infer(self, requests: Iterator[dict], multiplex: bool, pbar=None, loop=None) -> Iterator[Iterator[Response]]:
 
-        async def _sync_resp(g, que: Queue, idx: int, sem: asyncio.Semaphore):
-            async for out in g:
-                que.put(out.to_response(idx))
-            sem.release()
-            if not multiplex:
-                que.put(None)  # sentinel of inner generator
-            if pbar:
-                pbar.update(1)
+        async def _sync_resp(req: dict, que: Queue, idx: int, sem: asyncio.Semaphore):
+            input_token_len = 0
+            try:
+                req = dict(req)
+                stream_response = req.pop('stream_response', True)
+                request = await self.async_engine.preprocess(**req)
+                input_token_len = request.input_token_len
+                async for out in self.async_engine.generate(request, stream_response=stream_response):
+                    que.put(out.to_response(idx))
+            except RequestError as e:
+                que.put(
+                    Response(text='',
+                             generate_token_len=0,
+                             input_token_len=input_token_len,
+                             finish_reason='error',
+                             token_ids=[],
+                             index=idx,
+                             error_code=e.code.value,
+                             error_message=e.message))
+            except Exception:
+                logger.exception('Unexpected Pipeline inference error')
+                error = RequestError(ErrorCode.INTERNAL_ERROR)
+                que.put(
+                    Response(text='',
+                             generate_token_len=0,
+                             input_token_len=input_token_len,
+                             finish_reason='error',
+                             token_ids=[],
+                             index=idx,
+                             error_code=error.code.value,
+                             error_message=error.message))
+            finally:
+                sem.release()
+                if not multiplex:
+                    que.put(None)  # sentinel of inner generator
+                if pbar:
+                    pbar.update(1)
 
         que = Queue()
 
@@ -405,12 +428,11 @@ class Pipeline:
             tasks = []
             for idx, req in enumerate(requests):
                 await sem.acquire()
-                gen = self.async_engine.generate(**req)
                 dst = que if multiplex else Queue()
                 if not multiplex:
                     que.put(iter(dst.get, None))
                 # create a task to send the responses
-                task = asyncio.create_task(_sync_resp(gen, dst, idx, sem))
+                task = asyncio.create_task(_sync_resp(req, dst, idx, sem))
                 tasks.append(task)
             if not multiplex:  # sentinel of outer generator
                 que.put(None)
@@ -435,104 +457,6 @@ class Pipeline:
 
             coro = _coro()
         return asyncio.run_coroutine_threadsafe(coro, loop)
-
-    def _batch_iterator(self, sizes, max_value):
-        """Return an iterator that calculates intervals (start, end) of a
-        descend-order list, in which the sum of values in the range is the
-        maximum number not less than max_value. By "the sum of values",
-
-        here it means $$len(sizes[start:end]) * sizes[start]$$
-        """
-        i = 0
-        while i < len(sizes):
-            current_sum = 0
-            start_index = i
-
-            while i < len(sizes) and current_sum + sizes[start_index] <= max_value:
-                current_sum += sizes[start_index]
-                i += 1
-
-            yield (start_index, i)
-            if i > start_index:
-                continue
-            else:
-                i += 1
-
-    def _get_long_text_ppl(self, session, input_ids, max_input_len):
-        assert all(isinstance(_, int) for _ in input_ids)
-        seq_len = len(input_ids)
-        assert seq_len > max_input_len
-        logger.info(f'get long text ppl: seq_len {seq_len}')
-
-        losses = []
-        target_counts = []
-        for i in range(0, seq_len, max_input_len):
-            token_ids = input_ids[i:i + max_input_len]
-            session.update(step=i)
-            # shift token_ids by 1 to the left
-            target_ids = input_ids[i + 1:i + 1 + max_input_len]
-            loss = self._get_ppl(sessions=[session],
-                                 input_ids=[token_ids],
-                                 max_input_len=len(token_ids),
-                                 target_ids=[target_ids],
-                                 sequence_start=(i == 0),
-                                 sequence_end=False)
-            losses.extend(loss)
-            target_counts.append(len(target_ids))
-        losses = [loss * target_count for loss, target_count in zip(losses, target_counts)]
-        loss_sum = sum(losses)
-        target_count = sum(target_counts)
-        return loss_sum / target_count
-
-    def _get_ppl(self,
-                 sessions: list[Session],
-                 input_ids: list[list[int]],
-                 max_input_len: int,
-                 target_ids=None,
-                 sequence_start: bool = True,
-                 sequence_end: bool = True):
-        assert (isinstance(input_ids, list) and all(isinstance(_, list) for _ in input_ids))
-        assert target_ids is None or len(target_ids) == len(input_ids)
-        assert len(sessions) == len(input_ids)
-
-        lens = [len(_) for _ in input_ids]
-        total_len = sum(lens)
-        assert sum(lens) <= max_input_len
-
-        logger.info(f'get_ppl: bs: {len(input_ids)}, lens: {lens}, '
-                    f'total_len: {total_len}')
-        torch.cuda.empty_cache()
-
-        logits = self._run(coro=self.async_engine.async_get_logits(
-            input_ids=input_ids, sessions=sessions, sequence_start=sequence_start, sequence_end=sequence_end)).result()
-        padding_token_id = -100
-        if target_ids is None:
-            target_ids = [x[1:] + [padding_token_id] for x in input_ids]
-        else:
-            target_ids = [
-                target_ids[i] + [padding_token_id] if len(target_ids[i]) < len(input_ids[i]) else target_ids[i]
-                for i in range(len(input_ids))
-            ]
-        target_ids = [torch.Tensor(torch.LongTensor(_target_ids)) for _target_ids in target_ids]
-
-        result = []
-        for _logits, _target_ids in zip(logits, target_ids):
-            _logits = _logits.float()
-            vocab_size = _logits.shape[-1]
-            _target_ids = _target_ids.to(_logits.device)
-            target_mask = _target_ids != padding_token_id
-            # compute cross entropy loss
-            flat_logits = _logits.contiguous().view(-1, vocab_size)
-            flat_target_ids = _target_ids.contiguous().view(-1)
-            flat_loss_matrix = torch.nn.functional.cross_entropy(flat_logits,
-                                                                 flat_target_ids,
-                                                                 reduction='none',
-                                                                 ignore_index=padding_token_id)
-            loss = flat_loss_matrix.sum()
-            target_count = target_mask.sum()
-            result.append(loss.item() / target_count.item())
-        logger.info(f'ppl result: {result}')
-        return result
 
 
 class _EventLoopThread:

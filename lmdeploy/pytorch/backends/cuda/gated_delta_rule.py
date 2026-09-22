@@ -1,12 +1,133 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from functools import lru_cache
+from collections.abc import Callable, Hashable
+from dataclasses import dataclass
+from functools import lru_cache, partial
+from typing import Any, ClassVar
 
 import torch
 import triton
 import triton.language as tl
 
-from ..gated_delta_rule import GatedDeltaRuleBuilder, GatedDeltaRuleImpl
+from lmdeploy.utils import get_logger
+
+from ..gated_delta_rule import (
+    GatedDeltaMeta,
+    GatedDeltaMetaImpl,
+    GatedDeltaRuleImpl,
+)
+from .step_metadata import CudaStepMetaUpdater, register_piecewise_graph_impl, register_step_metadata_impl
 from .utils import has_tilelang
+
+logger = get_logger('lmdeploy')
+
+
+def prepare_chunked_gated_delta_rule(cu_seqlens_q: torch.Tensor) -> None:
+    """Populate FLA's chunk-index cache for the current sequence lengths."""
+    try:
+        from fla.ops.utils import prepare_chunk_indices
+    except ImportError:
+        logger.warning(
+            'Failed to import fla.ops.utils.prepare_chunk_indices for gated delta rule. '
+            'Please make sure the version of fla is installed, up to date and compatible with lmdeploy.'
+        )
+        return
+
+    # prepare_chunk_indices forces a stream synchronization. Retaining CPU
+    # cumulative lengths is a separate follow-up optimization.
+    try:
+        chunk_size = 64
+        try:
+            prepare_chunk_indices(cu_seqlens_q, chunk_size, cu_seqlens_cpu=None)
+        except TypeError:
+            prepare_chunk_indices(cu_seqlens_q, chunk_size)
+    except Exception as exc:
+        logger.exception(
+            'Unexpected error while preparing chunk indices for gated delta rule. '
+            'Please make sure the version of fla is up to date and compatible with lmdeploy.'
+        )
+        raise RuntimeError('Failed to prepare chunk indices for gated delta rule; see logs for details.') from exc
+
+
+@dataclass(frozen=True)
+class GatedDeltaStepMetaUpdater(CudaStepMetaUpdater):
+    """Prepare step-local state owned by the selected CUDA gated-delta op."""
+
+    output_key: ClassVar[str] = 'gated_delta'
+    priority: ClassVar[int] = 20
+
+    @property
+    def key(self) -> Hashable:
+        return type(self)
+
+    def update(self, step_context, sequence_metadata) -> None:
+        if not step_context.is_decoding:
+            prepare_chunked_gated_delta_rule(sequence_metadata.cu_seqlens_q)
+
+
+class CudaGatedDeltaMetaImpl(GatedDeltaMetaImpl):
+    """Build explicit gated-delta metadata, eagerly during piecewise
+    prefill."""
+
+    def __init__(self) -> None:
+        self._piecewise_forward: Callable[..., GatedDeltaMeta] | None = None
+        register_piecewise_graph_impl(self)
+
+    @staticmethod
+    def _build(
+        num_tokens: int,
+        conv_kernel_size: int,
+        state_ids: torch.Tensor,
+        attn_metadata: Any,
+    ) -> GatedDeltaMeta:
+        return GatedDeltaMeta(num_tokens, conv_kernel_size, state_ids, attn_metadata)
+
+    def forward(
+        self,
+        num_tokens: int,
+        conv_kernel_size: int,
+        state_ids: torch.Tensor,
+        attn_metadata: Any,
+    ) -> GatedDeltaMeta:
+        if self._piecewise_forward is None:
+            return self._build(num_tokens, conv_kernel_size, state_ids, attn_metadata)
+        return self._piecewise_forward(num_tokens, conv_kernel_size, state_ids, attn_metadata)
+
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Return whether metadata can be produced outside graph pieces."""
+        return True
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Install an eager producer whose result stays outside graph
+        pieces."""
+        if self._piecewise_forward is not None:
+            return
+
+        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        @eager_boundary(eager_only_output=True)
+        def build_eager(
+            conv_kernel_size: int,
+            state_ids: torch.Tensor,
+            attn_metadata: Any,
+        ) -> GatedDeltaMeta:
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            return self._build(execution.raw_tokens, conv_kernel_size, state_ids, attn_metadata)
+
+        def piecewise_forward(
+            num_tokens: int,
+            conv_kernel_size: int,
+            state_ids: torch.Tensor,
+            attn_metadata: Any,
+        ) -> GatedDeltaMeta:
+            if get_piecewise_graph_execution() is None:
+                return self._build(num_tokens, conv_kernel_size, state_ids, attn_metadata)
+            return build_eager(conv_kernel_size, state_ids, attn_metadata)
+
+        self._piecewise_forward = piecewise_forward
 
 
 @lru_cache
@@ -153,6 +274,159 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
         self.chunk_func = chunk_gated_delta_rule
         self.recurrent_func = fused_recurrent_gated_delta_rule
+        self._piecewise_forward: Callable[..., torch.Tensor] | None = None
+
+        register_step_metadata_impl(self)
+
+    def get_step_metadata_provider(self):
+        """Describe preparation required by this selected implementation."""
+        return GatedDeltaStepMetaUpdater()
+
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Return whether this CUDA implementation can run in an eager
+        island."""
+        return True
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Install the phase-dispatching gated-delta boundary used by PCG.
+
+        Wraps ``forward`` (the decode/prefill dispatcher) so a replaying plan
+        runs the phase-appropriate rule eagerly from live metadata. This keeps
+        decode requests on the recurrent decode kernel for batch-invariant
+        outputs while still letting DP hybrid decode ranks share the prefill
+        plan. Mirrors the CUDA attention boundary.
+        """
+        if self._piecewise_forward is not None:
+            return
+
+        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            PaddedTensorOutputAdapter,
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        original_forward = self.forward
+
+        @eager_boundary(
+            adapter_factory=partial(PaddedTensorOutputAdapter, token_axis=1),
+            reuse_bridge_after_next_step=True,
+        )
+        def run_eager(
+            query: torch.Tensor,
+            key: torch.Tensor,
+            value: torch.Tensor,
+            b: torch.Tensor,
+            a: torch.Tensor,
+            dt_bias: torch.Tensor,
+            a_log_exp: torch.Tensor,
+            recurrent_state: torch.Tensor,
+            gated_delta_meta: GatedDeltaMeta,
+            kv_ratio: int,
+            use_qk_l2norm_in_kernel: bool,
+        ) -> torch.Tensor:
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            raw_tokens = execution.raw_tokens
+            return original_forward(
+                query[:, :raw_tokens],
+                key[:, :raw_tokens],
+                value[:, :raw_tokens],
+                b[:, :raw_tokens],
+                a[:, :raw_tokens],
+                dt_bias,
+                a_log_exp,
+                recurrent_state,
+                gated_delta_meta,
+                kv_ratio,
+                use_qk_l2norm_in_kernel,
+            )
+
+        def piecewise_forward(
+            query: torch.Tensor,
+            key: torch.Tensor,
+            value: torch.Tensor,
+            b: torch.Tensor,
+            a: torch.Tensor,
+            dt_bias: torch.Tensor,
+            a_log_exp: torch.Tensor,
+            recurrent_state: torch.Tensor,
+            gated_delta_meta: GatedDeltaMeta,
+            kv_ratio: int,
+            use_qk_l2norm_in_kernel: bool,
+        ) -> torch.Tensor:
+            if get_piecewise_graph_execution() is None:
+                return original_forward(
+                    query,
+                    key,
+                    value,
+                    b,
+                    a,
+                    dt_bias,
+                    a_log_exp,
+                    recurrent_state,
+                    gated_delta_meta,
+                    kv_ratio,
+                    use_qk_l2norm_in_kernel,
+                )
+            return run_eager(
+                query,
+                key,
+                value,
+                b,
+                a,
+                dt_bias,
+                a_log_exp,
+                recurrent_state,
+                gated_delta_meta,
+                kv_ratio,
+                use_qk_l2norm_in_kernel,
+            )
+
+        self._piecewise_forward = piecewise_forward
+        self.forward = piecewise_forward
+
+    def prepare_inputs(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        b: torch.Tensor,
+        a: torch.Tensor,
+        dt_bias: torch.Tensor,
+        a_log_exp: torch.Tensor,
+        kv_ratio: int,
+        use_qk_l2norm_in_kernel: bool = False,
+        is_decoding: bool = False,
+        init_token_mask: torch.Tensor | None = None,
+    ):
+        """Prepare q/k/g/beta for gated delta rule."""
+        if use_qk_l2norm_in_kernel:
+            from lmdeploy.pytorch.kernels.cuda.gated_delta_preprocess import gated_delta_preprocess
+            init_token_mask = None if is_decoding else init_token_mask
+            apply_qk_l2norm = not is_decoding
+            q, k, beta, g = gated_delta_preprocess(
+                q,
+                k,
+                b,
+                a,
+                dt_bias,
+                a_log_exp,
+                kv_ratio,
+                init_token_mask=init_token_mask,
+                apply_qk_l2norm=apply_qk_l2norm,
+            )
+            return q, k, g, beta, apply_qk_l2norm
+        return super().prepare_inputs(
+            q,
+            k,
+            b,
+            a,
+            dt_bias,
+            a_log_exp,
+            kv_ratio,
+            use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
+            is_decoding=is_decoding,
+            init_token_mask=init_token_mask,
+        )
 
     def chunk_gated_delta_rule(
         self,
@@ -168,6 +442,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         cu_seqlens: torch.Tensor | None = None,
         output_final_state: bool = False,
         spec_state_offsets: torch.Tensor | None = None,
+        transpose_state_layout: bool = False,
     ):
 
         assert initial_state is not None
@@ -195,6 +470,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             output_final_state=output_final_state,
             use_qk_l2norm_in_kernel=False,
             cu_seqlens=cu_seqlens,
+            transpose_state_layout=transpose_state_layout,
         )
         if spec_state_offsets is not None:
             # write to next slots
@@ -219,6 +495,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         use_qk_l2norm_in_kernel: bool = False,
         output_final_state: bool = False,
         cache_seqlens: torch.Tensor | None = None,
+        transpose_state_layout: bool = False,
     ):
         return self.recurrent_func(
             q,
@@ -232,11 +509,5 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
             output_final_state=output_final_state,
             cache_seqlens=cache_seqlens,
+            transpose_state_layout=transpose_state_layout,
         )
-
-
-class CudaGatedDeltaRuleBuilder(GatedDeltaRuleBuilder):
-
-    @staticmethod
-    def build() -> GatedDeltaRuleImpl:
-        return CudaGatedDeltaRuleImpl()

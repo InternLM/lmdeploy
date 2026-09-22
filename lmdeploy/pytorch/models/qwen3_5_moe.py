@@ -9,7 +9,8 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.model_inputs import StepContextManager
-from lmdeploy.pytorch.nn import RMSNorm
+from lmdeploy.pytorch.nn import RMSNorm, build_rotary_embedding_from_config
+from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMetaBuilder
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -23,7 +24,6 @@ from .qwen3_5 import (
     Qwen3_5MLP,
     Qwen3_5Model,
     Qwen3_5TextModel,
-    Qwen3_5TextRotaryEmbedding,
 )
 from .qwen3_5 import Qwen3_5VisionModel as Qwen3_5MoeVisionModel
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5MoeInputProcessor
@@ -207,12 +207,17 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
                                    prefix=add_prefix(f'layers.{layer_idx}', prefix))
             for layer_idx in range(self.config.num_hidden_layers)
         ])
+        self.aux_hidden_state_layers: tuple[int, ...] = \
+            get_build_model_context().spec_model_ctx.target_aux_hidden_state_layers
+        self._aux_hidden_state_layers_set: frozenset[int] = frozenset(self.aux_hidden_state_layers)
 
         # build norm
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
-        self.rotary_emb = Qwen3_5TextRotaryEmbedding(config, device=device)
+        self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
+
+        self.gated_delta_meta_builder = GatedDeltaMetaBuilder()
 
 
 class Qwen3_5MoeModel(Qwen3_5Model):
@@ -276,7 +281,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
         # for router replay
         bm_ctx = get_build_model_context()
         self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
-        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
+        self.is_spec_decoding = bm_ctx.num_spec_tokens > 0
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter]):
         """Load weight experts."""
@@ -362,6 +367,8 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
                 continue
 
             if 'mtp.' in name:
+                continue
+            if name.startswith(('model.time_series.', 'time_series_forecaster.')):
                 continue
             if 'rotary_emb.inv_freq' in name:
                 continue

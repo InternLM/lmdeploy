@@ -51,7 +51,8 @@ public:
 #define MODEL_WEIGHT_CHILDREN(X)                                                                                       \
     X(LinearWeight, output)                                                                                            \
     X(NormWeight, norm)                                                                                                \
-    X(core::ModuleList, layers)
+    X(core::ModuleList, layers)                                                                                        \
+    X(core::ModuleList, meta_experts)
 
 #define MODEL_WEIGHT_PARAMS(X) X(tok_embeddings)
 

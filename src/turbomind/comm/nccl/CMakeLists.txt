@@ -8,3 +8,6 @@ target_include_directories(nccl_comm PRIVATE ${NCCL_INCLUDE_DIRS})
 
 set_property(TARGET nccl_comm PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET nccl_comm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_subdirectory(deepep)
+target_link_libraries(nccl_comm PRIVATE token_dispatcher)

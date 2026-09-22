@@ -7,22 +7,46 @@ import time
 import allure
 import psutil
 import requests
-from openai import APIStatusError, BadRequestError, OpenAI
+from openai import APIStatusError, BadRequestError
 from pytest_assume.plugin import assume
+from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_multinode_env
 from utils.config_utils import (
     get_case_str_by_config,
     get_cli_common_param,
     get_cuda_prefix_by_workerid,
+    get_model_path_from_config,
     get_workerid,
     resolve_extra_params,
 )
 from utils.constant import DEFAULT_PORT, DEFAULT_SERVER, MM_DEMO_TOMB_USER_PROMPT
-from utils.restful_return_check import assert_chat_completions_batch_return
+from utils.restful_return_check import assert_chat_completions_batch_return, get_client_and_model
 from utils.rule_condition_assert import assert_result
 
-from lmdeploy.serve.openai.api_client import APIClient
+from lmdeploy.serve.parsers.response_parser import _parse_tool_call_arguments_dict
 
 BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
+
+_STDERR_NOISE_MARKERS = (
+    '[transformers]',
+    'You are using a model of type',
+    'This may be expected if you are loading a checkpoint',
+    'The argument `trust_remote_code` is to be used with Auto classes',
+)
+
+
+def _sanitize_server_log(content: str) -> str:
+    """Prefer real errors over leading HF/transformers warning noise."""
+    if not content:
+        return content
+    lines = content.splitlines()
+    useful = [ln for ln in lines if not any(m in ln for m in _STDERR_NOISE_MARKERS)]
+    if not useful:
+        return content.strip()[-4000:]
+    for i, ln in enumerate(useful):
+        if ('Traceback ' in ln or 'ERROR' in ln or 'Error:' in ln or 'RuntimeError' in ln
+                or 'lmdeploy: error:' in ln):
+            return '\n'.join(useful[i:]).strip()[-4000:]
+    return '\n'.join(useful).strip()[-4000:]
 
 
 def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
@@ -35,7 +59,7 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
     if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
         model_path = model
     else:
-        model_path = os.path.join(config.get('model_path'), model)
+        model_path = get_model_path_from_config(config, model)
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
 
@@ -43,7 +67,8 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
     if 'extra_params' not in run_config:
         run_config['extra_params'] = {}
 
-    resolve_extra_params(run_config['extra_params'], config.get('model_path'))
+    resolve_extra_params(run_config['extra_params'], config)
+    ensure_ascend_multinode_env(config, run_config)
 
     run_config['extra_params']['server-port'] = str(port)
     run_config['extra_params']['allow-terminate-by-client'] = None
@@ -54,7 +79,7 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
         get_cli_common_param(run_config), f'--model-name {model_name}'
     ]).strip()
 
-    env = os.environ.copy()
+    env = build_ascend_multinode_env(config, run_config)
     env['MASTER_PORT'] = str(get_workerid(worker_id) + 29500)
     env.update(run_config.get('env', {}))
 
@@ -108,18 +133,21 @@ def stop_restful_api(pid, startRes):
 
 
 def terminate_restful_api(worker_id):
+    """Ask api_server to exit. Treat already-dead servers as success.
+
+    Concurrent/xdist runs often kill the process before ``/terminate``; asserting on Connection refused turns cleanup
+    into a false failure.
+    """
     port = DEFAULT_PORT + get_workerid(worker_id)
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
-    response = None
-    request_error = None
     try:
-        response = requests.get(f'{http_url}/terminate')
+        response = requests.get(f'{http_url}/terminate', timeout=10)
     except requests.exceptions.RequestException as exc:
-        request_error = exc
-    if request_error is not None:
-        assert False, f'terminate request failed: {request_error}'
-    assert response is not None and response.status_code == 200, f'terminate with {response}'
+        print(f'terminate skipped (server likely already stopped): {exc}')
+        return
+    if response.status_code != 200:
+        print(f'terminate returned unexpected status {response.status_code}: {response.text[:200]}')
 
 
 def run_all_step(log_path, case_name, cases_info, port: int = DEFAULT_PORT):
@@ -149,8 +177,7 @@ def open_chat_test(log_path, case_name, case_info, url):
 
     result = True
 
-    client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{url}/v1')
-    model_name = client.models.list().data[0].id
+    client, model_name = get_client_and_model(url)
 
     messages = []
     msg = ''
@@ -199,16 +226,13 @@ def open_chat_test(log_path, case_name, case_info, url):
 
 def health_check(url, model_name):
     try:
-        api_client = APIClient(url)
-        model_name_current = api_client.available_models[0]
-        messages = []
-        messages.append({'role': 'user', 'content': '你好'})
-        for output in api_client.chat_completions_v1(model=model_name, messages=messages, top_k=1):
-            if output.get('code') is not None and output.get('code') != 0:
-                return False
-            # Return True on first successful response
-            return model_name == model_name_current
-        return False  # No output received
+        client, model_name_current = get_client_and_model(url)
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[{'role': 'user', 'content': '你好'}],
+            extra_body={'top_k': 1},
+        )
+        return model_name == model_name_current and response.choices is not None
     except Exception:
         return False
 
@@ -216,28 +240,34 @@ def health_check(url, model_name):
 def get_model(url):
     print(url)
     try:
-        api_client = APIClient(url)
-        model_name = api_client.available_models[0]
+        _, model_name = get_client_and_model(url)
         return model_name.split('/')[-1]
     except Exception:
         return None
 
 
+def _require_client_and_model(url):
+    """Return ``(client, model_name, short_model_name)``; fail if server is
+    down."""
+    try:
+        client, model_name = get_client_and_model(url)
+    except Exception:
+        assert False, 'server not start correctly'
+    return client, model_name, model_name.split('/')[-1]
+
+
 def _run_logprobs_test(port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
-    api_client = APIClient(http_url)
-    model_name = api_client.available_models[0]
-    output = None
-    for output in api_client.chat_completions_v1(model=model_name,
-                                                 messages='Hi, pls intro yourself',
-                                                 max_tokens=5,
-                                                 temperature=0.01,
-                                                 logprobs=True,
-                                                 top_logprobs=10):
-        continue
-    if output is None:
-        assert False, 'No output received from logprobs test'
-    print(output)
+    client, model_name = get_client_and_model(http_url)
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[{'role': 'user', 'content': 'Hi, pls intro yourself'}],
+        max_tokens=5,
+        temperature=0.01,
+        logprobs=True,
+        top_logprobs=10,
+    )
+    output = response.model_dump()
     assert_chat_completions_batch_return(output, model_name, check_logprobs=True, logprobs_num=10)
     assert output.get('choices')[0].get('finish_reason') == 'length'
     assert output.get('usage').get('completion_tokens') == 6 or output.get('usage').get('completion_tokens') == 5
@@ -311,7 +341,7 @@ def _video_extra_body(num_frames: int) -> dict:
 
 def _assert_vl_species_response(resp) -> None:
     content = resp.choices[0].message.content
-    finish = resp.choices[0]['finish_reason']
+    finish = resp.choices[0].finish_reason
     assert _vl_video_stream_finish_assert(finish, content), resp
 
 
@@ -397,7 +427,7 @@ def _mm_demo_public_answer_text(text: str) -> str:
 
 def _mm_demo_tomb_answer_assert(text: str) -> bool:
     """Tomb/MCQ: visible tail mentions scene, a digit, or an MCQ-style letter
-    (A–D)."""
+    (A-D)."""
     raw = _mm_demo_public_answer_text(text).strip()
     if not raw:
         return False
@@ -474,16 +504,10 @@ def _is_video_mixed_whitelist_model(model_name: str) -> bool:
 def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
-    model = get_model(http_url)
-    if model is None:
-        assert False, 'server not start correctly'
-
-    client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
-    model_name = client.models.list().data[0].id
+    client, model_name, simple_model_name = _require_client_and_model(http_url)
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
 
-    simple_model_name = model_name.split('/')[-1]
     restful_log = os.path.join(log_path, f'restful_vl_{simple_model_name}_{str(port)}_{timestamp}.log')  # noqa
     file = open(restful_log, 'w')
 
@@ -509,12 +533,6 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
     response = client.chat.completions.create(model=model_name, messages=prompt_messages, temperature=0.8, top_p=0.8)
     file.writelines(str(response).lower() + '\n')
 
-    api_client = APIClient(http_url)
-    model_name = api_client.available_models[0]
-    for item in api_client.chat_completions_v1(model=model_name, messages=prompt_messages):
-        continue
-    file.writelines(str(item) + '\n')
-
     enable_video_mixed = _is_video_mixed_whitelist_model(model_name)
     if not enable_video_mixed:
         file.writelines(
@@ -529,11 +547,6 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
             assert (
                 'tiger' in resp_lower or '虎' in resp_lower or 'ski' in resp_lower or '滑雪' in resp_lower
             ), response
-        with assume:
-            item_lower = str(item).lower()
-            assert (
-                'tiger' in item_lower or '虎' in item_lower or 'ski' in item_lower or '滑雪' in item_lower
-            ), item
         return
 
     video_path = os.path.join(resource_path, VIDEO)
@@ -683,7 +696,7 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
         else:
             file.writelines('[video mm_processor non-stream] ' + str(mm_resp).lower() + '\n')
             mm_text = mm_resp.choices[0].message.content
-            mm_fr = mm_resp.choices[0]['finish_reason']
+            mm_fr = mm_resp.choices[0].finish_reason
             with assume:
                 assert _mm_demo_tomb_run_assert(mm_fr, mm_text), (mm_fr, mm_text[:2000])
 
@@ -793,7 +806,7 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
                 assert ('tiger' in mix_content.lower() or '虎' in mix_content or 'ski' in mix_content.lower()
                         or '滑雪' in mix_content), mix_resp
             with assume:
-                assert _vl_video_stream_finish_assert(mix_resp.choices[0]['finish_reason'], mix_content), mix_resp
+                assert _vl_video_stream_finish_assert(mix_resp.choices[0].finish_reason, mix_content), mix_resp
 
     file.close()
 
@@ -802,25 +815,16 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
     with assume:
         assert 'tiger' in str(response).lower() or '虎' in str(response).lower() or 'ski' in str(
             response).lower() or '滑雪' in str(response).lower(), response
-    with assume:
-        assert 'tiger' in str(item).lower() or '虎' in str(item).lower() or 'ski' in str(item).lower() or '滑雪' in str(
-            item).lower(), item
 
 
 def _run_reasoning_case(log_path, port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
-    model = get_model(http_url)
-
-    if model is None:
-        assert False, 'server not start correctly'
+    client, model_name, model = _require_client_and_model(http_url)
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     restful_log = os.path.join(log_path, f'restful_reasoning_{model}_{str(port)}_{timestamp}.log')
     file = open(restful_log, 'w')
-
-    client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
-    model_name = client.models.list().data[0].id
 
     with allure.step('step1 - stream'):
         messages = [{'role': 'user', 'content': '9.11 and 9.8, which is greater?'}]
@@ -1074,7 +1078,9 @@ def test_qwen_multiple_round_prompt(client, model):
     messages.append(response.choices[0].message)
 
     for tool_call in response.choices[0].message.tool_calls:
-        tool_call_args = json.loads(tool_call.function.arguments)
+        tool_call_args = _parse_tool_call_arguments_dict(tool_call.function.arguments)
+        assert tool_call_args is not None, (
+            f'tool call arguments must be a JSON object string, got {tool_call.function.arguments!r}')
         tool_call_result = get_function_by_name(tool_call.function.name)(**tool_call_args)
         messages.append({
             'role': 'tool',
@@ -1101,15 +1107,10 @@ def test_qwen_multiple_round_prompt(client, model):
 def _run_tools_case(log_path, port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
-    model = get_model(http_url)
-
-    if model is None:
-        assert False, 'server not start correctly'
+    client, model_name, model = _require_client_and_model(http_url)
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     restful_log = os.path.join(log_path, f'restful_toolcall_{model}_{str(port)}_{timestamp}.log')
-    client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
-    model_name = client.models.list().data[0].id
 
     with open(restful_log, 'a') as file:
         with allure.step('step1 - one_round_prompt'):
@@ -1288,7 +1289,7 @@ def run_llm_test(config, run_config, common_case_config, worker_id):
                          common_case_config,
                          port=DEFAULT_PORT + get_workerid(worker_id))
         else:
-            assert False, f'Failed to start RESTful API server: {content}'
+            assert False, f'Failed to start RESTful API server: {_sanitize_server_log(content)}'
     finally:
         if pid > 0:
             terminate_restful_api(worker_id)
@@ -1302,7 +1303,7 @@ def run_mllm_test(config, run_config, worker_id):
                             config.get('resource_path'),
                             port=DEFAULT_PORT + get_workerid(worker_id))
         else:
-            assert False, f'Failed to start RESTful API server: {content}'
+            assert False, f'Failed to start RESTful API server: {_sanitize_server_log(content)}'
     finally:
         if pid > 0:
             terminate_restful_api(worker_id)
@@ -1314,7 +1315,7 @@ def run_reasoning_case(config, run_config, worker_id):
         if pid > 0:
             _run_reasoning_case(config.get('log_path'), port=DEFAULT_PORT + get_workerid(worker_id))
         else:
-            assert False, f'Failed to start RESTful API server: {content}'
+            assert False, f'Failed to start RESTful API server: {_sanitize_server_log(content)}'
     finally:
         if pid > 0:
             terminate_restful_api(worker_id)
@@ -1326,7 +1327,7 @@ def run_tools_case(config, run_config, worker_id):
         if pid > 0:
             _run_tools_case(config.get('log_path'), port=DEFAULT_PORT + get_workerid(worker_id))
         else:
-            assert False, f'Failed to start RESTful API server: {content}'
+            assert False, f'Failed to start RESTful API server: {_sanitize_server_log(content)}'
     finally:
         if pid > 0:
             terminate_restful_api(worker_id)
@@ -1338,7 +1339,7 @@ def run_logprob_test(config, run_config, worker_id):
         if pid > 0:
             _run_logprobs_test(port=DEFAULT_PORT + get_workerid(worker_id))
         else:
-            assert False, f'Failed to start RESTful API server: {content}'
+            assert False, f'Failed to start RESTful API server: {_sanitize_server_log(content)}'
     finally:
         if pid > 0:
             terminate_restful_api(worker_id)

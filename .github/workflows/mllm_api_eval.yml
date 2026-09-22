@@ -56,6 +56,9 @@ env:
   HF_HUB_OFFLINE: 1
   HF_EVALUATE_OFFLINE: 1
   RUN_ID: ${{ inputs.repo_ref }}_${{ github.run_id }}
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: '*'
 
 jobs:
   linux-build:
@@ -66,12 +69,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
-      PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.8
+      PLAT_NAME: manylinux_2_28_x86_64
+      DOCKER_TAG: manylinux_2_28-cuda12.8
       OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
     steps:
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main
         with:
           # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
           tool-cache: false
@@ -157,10 +160,7 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
-        transformers: ["", "legacy"]
-    env:
-      TEST_ENV: ${{ matrix.transformers }}
+        layout: ['tp1', 'tp2', 'tp4', 'tp8']
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -193,10 +193,6 @@ jobs:
           apt update && apt install -y libgl1 libglib2.0-0
           cp -r /nvme/qa_test_models/offline_pkg/VLMEvalKit .
           cd VLMEvalKit && pip install .
-      - name: Downgrade transformers
-        if: ${{matrix.transformers == 'legacy'}}
-        run: |
-          pip install transformers==4.57.6
       - name: Check env
         run: |
           python3 -m pip list
@@ -211,10 +207,10 @@ jobs:
           execution_mode="${{ github.event.inputs.execution_mode || 'both' }}"
           ulimit -n 65535
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "infer" ]; then
-            pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and infer" --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.layout}} and ${{matrix.backend}} and infer" --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "eval" ]; then
-            pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and eval" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.layout}} and ${{matrix.backend}} and eval" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi
           exit $overall_exit
       - name: Clear workspace

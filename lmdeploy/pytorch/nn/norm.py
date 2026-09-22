@@ -3,11 +3,28 @@
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.distributed import get_dist_group, get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
-from ..backends import OpType, get_backend
+from ..backends import get_backend
+from ..backends.norm import LayerNormBuildSpec, RMSNormBuildSpec
+from ..backends.qmodules import RMSNormW8A8BuildSpec
 from .utils import chunk_aligned, get_distribute_size
+
+
+@torch.compile(dynamic=True)
+def rms_scale(a: torch.Tensor, b: torch.Tensor, dim: int = -1, eps: float = 1e-6,
+              out_dtype: torch.dtype | None = None, use_fp32: bool = True) -> torch.Tensor:
+    """A * rsqrt(B.square().mean(dim, keepdim=True) + eps).
+
+    Computation is done in float32. Output dtype is out_dtype if given, else b.dtype.
+    """
+    result_dtype = out_dtype if out_dtype is not None else b.dtype
+    if use_fp32:
+        a = a.float()
+        b = b.float()
+    out = a * torch.rsqrt(b.square().mean(dim, keepdim=True) + eps)
+    return out.to(result_dtype)
 
 
 class RMSNorm(nn.Module):
@@ -23,6 +40,7 @@ class RMSNorm(nn.Module):
         tp: bool = False,
         align: int = 1,
         prefix: str = '',
+        all_reduce_group: str | None = None,
     ):
         super().__init__()
         backend = get_backend()
@@ -30,14 +48,9 @@ class RMSNorm(nn.Module):
         quant_method = None
         if quant_config is not None:
             quant_config = get_build_model_context().quant_config
-            quant_method = quant_config.get_quant_method(prefix)
+            quant_method = quant_config.get_quant_method(prefix, module_kind='norm')
 
         w8a8_flag = quant_method == 'smooth_quant'
-
-        if w8a8_flag:
-            builder = backend.get_layer_impl_builder(OpType.RMSNormW8A8)
-        else:
-            builder = backend.get_layer_impl_builder(OpType.RMSNorm)
 
         if tp:
             world_size, rank = get_tp_world_rank('attn')
@@ -45,13 +58,29 @@ class RMSNorm(nn.Module):
 
         self.register_parameter('weight', self.create_weight(hidden_size, dtype, device))
         if w8a8_flag:
-            self.impl = builder.build(hidden_size, eps, quant_dtype=quant_config.quant_dtype)
+            spec = RMSNormW8A8BuildSpec(hidden_size, eps, quant_dtype=quant_config.quant_dtype)
         else:
-            self.impl = builder.build(hidden_size, eps)
+            spec = RMSNormBuildSpec(hidden_size, eps)
+        self.impl = backend.build_op(
+            spec,
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
         if tp:
             self.weight.weight_loader = self.weight_loader
         self.align = align
+        self.eps = eps
+        self._all_reduce_group = None
+        self._fuse_all_reduce = False
+        if all_reduce_group is not None and self.can_handle_all_reduce(all_reduce_group):
+            group = get_dist_group(all_reduce_group)
+            self._all_reduce_group = group
+            self._fuse_all_reduce = group.supports_fused_all_reduce_residual_rms_norm()
+
+    @staticmethod
+    def can_handle_all_reduce(layer_type: str) -> bool:
+        """Whether this norm can consume a pending all-reduce."""
+        return get_dist_group(layer_type).supports_optimized_all_reduce()
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
@@ -71,6 +100,17 @@ class RMSNorm(nn.Module):
 
     def forward(self, x: torch.Tensor, residual: torch.Tensor = None):
         """forward."""
+        if residual is not None and self._all_reduce_group is not None:
+            if self._fuse_all_reduce:
+                output = self._all_reduce_group.try_fused_all_reduce_residual_rms_norm(
+                    input=x,
+                    residual=residual,
+                    weight=self.weight,
+                    eps=self.eps,
+                )
+                if output is not None:
+                    return output
+            self._all_reduce_group.all_reduce_(x)
         return self.impl.forward(x, self.weight, residual)
 
 
@@ -84,12 +124,13 @@ class LayerNorm(nn.Module):
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None):
         super().__init__()
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.LayerNorm)
         weight, bias = self.create_weight(hidden_size, bias, dtype, device)
         self.register_parameter('weight', weight)
         self.register_parameter('bias', bias)
-        self.impl = builder.build(hidden_size, eps)
+        self.impl = get_backend().build_op(
+            LayerNormBuildSpec(hidden_size, eps),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     @staticmethod
     def create_weight(hidden_size: int,

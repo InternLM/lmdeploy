@@ -1,8 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Literal
 
-from transformers import AutoConfig
-
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
 from .utils import get_logger
 
@@ -20,38 +18,28 @@ def autoget_backend(model_path: str, trust_remote_code: bool = False):
                     ii) and iii).
                 - ii) The model_id of a lmdeploy-quantized model hosted
                     inside a model repo on huggingface.co, such as
-                    "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "internlm/internlm-chat-7b",
-                    "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                    on huggingface.co, such as "internlm/internlm2-chat-7b",
+                    "Qwen/Qwen2.5-7B-Instruct"
                     and so on.
 
     Returns:
         str: the backend type.
     """
 
+    from lmdeploy import turbomind
+
     turbomind_has = False
-    is_turbomind_installed = True
-    try:
+    if turbomind.is_available():
         from lmdeploy.turbomind.supported_models import is_supported as is_supported_turbomind
         turbomind_has = is_supported_turbomind(model_path, trust_remote_code=trust_remote_code)
-    except ImportError:
-        is_turbomind_installed = False
-
-    if is_turbomind_installed:
         if not turbomind_has:
-            logger.warning('Fallback to pytorch engine because '
-                           f'{model_path!r} not supported by turbomind'
-                           ' engine.')
+            logger.warning(f'Fallback to pytorch engine because {model_path!r} not supported by turbomind engine.')
     else:
-        logger.warning('Fallback to pytorch engine because turbomind engine is not '
-                       'installed correctly. If you insist to use turbomind engine, '
-                       'you may need to reinstall lmdeploy from pypi or build from '
-                       'source and try again.')
+        logger.warning('Fallback to pytorch engine because turbomind is not built.')
 
-    backend = 'turbomind' if turbomind_has else 'pytorch'
-    return backend
+    return 'turbomind' if turbomind_has else 'pytorch'
 
 
 def autoget_backend_config(
@@ -95,31 +83,26 @@ def autoget_backend_config(
 
 def check_vl_llm(backend: str, config: dict) -> bool:
     """Check if the model is a vl model from model config."""
-    if 'auto_map' in config:
-        for _, v in config['auto_map'].items():
-            if 'InternLMXComposer2ForCausalLM' in v:
-                return True
-
     if 'language_config' in config and 'vision_config' in config and config['language_config'].get(
             'architectures', [None])[0] == 'DeepseekV2ForCausalLM':
         return True
 
     arch = config['architectures'][0]
     supported_archs = set([
-        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternLMXComposer2ForCausalLM',
-        'InternVLChatModel', 'MiniCPMV', 'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration',
-        'Phi3VForCausalLM', 'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration',
-        'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'Qwen3_5ForConditionalGeneration',
-        'Qwen3_5MoeForConditionalGeneration', 'Qwen3OmniMoeForConditionalGeneration', 'MllamaForConditionalGeneration',
-        'MolmoForCausalLM', 'Gemma3ForConditionalGeneration', 'Llama4ForConditionalGeneration',
-        'InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration', 'InternS1ProForConditionalGeneration',
+        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternVLChatModel', 'MiniCPMV',
+        'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM',
+        'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration', 'Qwen3VLForConditionalGeneration',
+        'Qwen3VLMoeForConditionalGeneration', 'Qwen3_5ForConditionalGeneration',
+        'Qwen3_5MoeForConditionalGeneration', 'Qwen3OmniMoeForConditionalGeneration', 'MolmoForCausalLM',
+        'Gemma3ForConditionalGeneration', 'Llama4ForConditionalGeneration', 'InternVLForConditionalGeneration',
+        'InternS1ForConditionalGeneration', 'InternS1ProForConditionalGeneration',
         'InternS1_1_ForConditionalGeneration', 'Glm4vForConditionalGeneration',
+        'InternS2MobiusForConditionalGeneration', 'InternS2MobiusForCausalLM',
         'InternS2PreviewForConditionalGeneration', 'InternS2PreviewForCausalLM',
+        'KimiK25ForConditionalGeneration', 'Kimi_K25ForConditionalGeneration',
     ])
     turbomind_unsupported_archs = []
-    if arch == 'QWenLMHeadModel' and 'visual' in config:
-        return True
-    elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
+    if arch == 'MultiModalityCausalLM' and 'language_config' in config:
         return True
     elif arch in ['ChatGLMModel', 'ChatGLMForConditionalGeneration'] and 'vision_config' in config:
         return True
@@ -137,7 +120,7 @@ def get_task(backend: str,
     """Get pipeline type and pipeline class from model config."""
     from lmdeploy.serve.core import AsyncEngine
 
-    if backend_config and backend_config.disable_vision_encoder:
+    if backend_config and backend_config.language_model_only:
         return 'llm', AsyncEngine
     _, config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
     if check_vl_llm(backend, config.to_dict()):
@@ -154,19 +137,13 @@ def get_model_arch(model_path: str, trust_remote_code: bool = False):
     Args:
         model_path(str): the model path
     """
-    try:
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
-    except Exception as e:  # noqa
-        from transformers import PretrainedConfig
-        cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
+    from lmdeploy.hf_configs import config_from_pretrained
+
+    cfg = config_from_pretrained(model_path, trust_remote_code=trust_remote_code)
 
     _cfg = cfg.to_dict()
     if _cfg.get('architectures', None):
         arch = _cfg['architectures'][0]
-        if _cfg.get('auto_map'):
-            for _, v in _cfg['auto_map'].items():
-                if 'InternLMXComposer2ForCausalLM' in v:
-                    arch = 'InternLMXComposer2ForCausalLM'
     elif _cfg.get('auto_map', None) and 'AutoModelForCausalLM' in _cfg['auto_map']:
         arch = _cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
     elif _cfg.get('language_config', None) and _cfg['language_config'].get(

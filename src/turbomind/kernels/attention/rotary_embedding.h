@@ -82,8 +82,8 @@ struct FastRoPE {
         }
         // mrope is an operation applied on top of any base rope type
         if (param_.mrope_mode != MropeMode::kNone) {
-            param_.mrope.position_ids += batch_idx * param_.mrope.stride;
             param_.mrope.position_delta += batch_idx;
+            param_.mrope.position_offsets += batch_idx;
             param_.mrope.length += batch_idx;
         }
     }
@@ -110,7 +110,7 @@ struct FastRoPE {
     }
 
     template<typename T>
-    __device__ void apply(Array<T, N>& x, float timestep)
+    __device__ void apply(Array<T, N>& x, float timestep, int token_idx)
     {
         if (param_.mrope_mode == MropeMode::kNone) {
             // Most models apply rotary embedding in half precision
@@ -120,17 +120,18 @@ struct FastRoPE {
             }
         }
         else if (param_.mrope_mode == MropeMode::kChunked) {
-            apply_mrope_impl<MropeMode::kChunked>(x, timestep);
+            apply_mrope_impl<MropeMode::kChunked>(x, timestep, token_idx);
         }
         else if (param_.mrope_mode == MropeMode::kInterleaved) {
-            apply_mrope_impl<MropeMode::kInterleaved>(x, timestep);
+            apply_mrope_impl<MropeMode::kInterleaved>(x, timestep, token_idx);
         }
     }
 
-    __device__ __forceinline__ MropeCoord get_mrope_coord(float timestep) const
+    __device__ __forceinline__ MropeCoord get_mrope_coord(float timestep, int token_idx) const
     {
-        if (timestep < *param_.mrope.length) {
-            const int* t = param_.mrope.position_ids + 3 * (int)timestep;
+        if (token_idx < *param_.mrope.length) {
+            const int  row = *param_.mrope.position_offsets + token_idx;
+            const int* t   = param_.mrope.position_ids + 3 * row;
             return {t[0], t[1], t[2]};
         }
         const int pos = (int)timestep + (*param_.mrope.position_delta);
@@ -180,9 +181,9 @@ struct FastRoPE {
     }
 
     template<MropeMode mode, typename T>
-    __device__ __forceinline__ void apply_mrope_impl(Array<T, N>& x, float timestep) const
+    __device__ __forceinline__ void apply_mrope_impl(Array<T, N>& x, float timestep, int token_idx) const
     {
-        const MropeCoord coord = get_mrope_coord(timestep);
+        const MropeCoord coord = get_mrope_coord(timestep, token_idx);
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
             const int pair_idx = (i + idx_) >> 1;

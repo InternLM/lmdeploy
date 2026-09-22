@@ -1,11 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends.attention import AttentionImpl, AttentionMetadata
 from lmdeploy.utils import get_logger
+
+from ..step_metadata import CudaAttentionMetaBuilder, CudaSequenceMetadata, register_step_metadata_impl
 
 logger = get_logger('lmdeploy')
 
@@ -51,6 +55,26 @@ class TritonAttentionMetadata(AttentionMetadata):
     scheduler_metadata: torch.Tensor = None
     max_kv_seqlen: int = None
     max_q_seqlen: int = None
+    kernel_metadata: tuple[Any, ...] = ()
+
+
+def build_triton_attention_metadata(attn_meta_cls, step_context,
+                                    sequence_metadata: CudaSequenceMetadata) -> TritonAttentionMetadata:
+    """Project CUDA sequence layout into compatible attention metadata."""
+    return attn_meta_cls(
+        is_decoding=step_context.is_decoding,
+        block_offsets=sequence_metadata.block_offsets,
+        q_start_loc=sequence_metadata.q_start_loc,
+        q_seqlens=sequence_metadata.q_seqlens,
+        kv_start_loc=sequence_metadata.kv_start_loc,
+        kv_seqlens=sequence_metadata.kv_seqlens,
+        kv_flatten_size=sequence_metadata.kv_flatten_size,
+        quant_policy=step_context.kv_quant_policy,
+        cu_seqlens_q=sequence_metadata.cu_seqlens_q,
+        cu_seqlens_k=sequence_metadata.cu_seqlens_k,
+        max_kv_seqlen=sequence_metadata.max_kv_seqlen,
+        max_q_seqlen=step_context.max_q_seqlen,
+    )
 
 
 def _cdiv(a, b):
@@ -66,6 +90,28 @@ def _cdiv(a, b):
     return (a + b - 1) // b
 
 
+@dataclass(frozen=True)
+class TritonAttentionMetaBuilder(CudaAttentionMetaBuilder[None, None]):
+    """Describe the default attention implementation's common-only metadata."""
+
+    @property
+    def key(self) -> Hashable:
+        return type(self)
+
+    def build(self, step_context, sequence_metadata) -> None:
+        return None
+
+    def apply_legacy_metadata(self, attn_metadata, metadata: None) -> None:
+        pass
+
+    def make_cudagraph_buffer(self, graph_meta, input_buffers, step_context) -> None:
+        return None
+
+    def fill_cudagraph_buffer(self, graph_meta, input_buffers, step_context,
+                              buffer: None) -> None:
+        return None
+
+
 class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
     """Triton attention implementation."""
 
@@ -77,7 +123,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         num_kv_heads: int = None,
         v_head_size: int = None,
         alibi: bool = False,
-        sliding_window: int = None,
+        sliding_window: tuple[int, int] | None = None,
         logit_softcapping: float = 0.0,
         causal: bool = True,
         block_sparse_size: int = 1,
@@ -111,6 +157,80 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         self.flash_attention_fwd = flash_attn_varlen_func
 
         self.block_sparse_size = block_sparse_size
+        self._step_meta_group: int | None = None
+        self._piecewise_forward: Callable[..., torch.Tensor] | None = None
+
+        register_step_metadata_impl(self)
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Run this CUDA attention implementation as a PCG eager boundary."""
+        if self._piecewise_forward is not None:
+            return
+
+        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            PaddedTensorOutputAdapter,
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        original_forward = self.forward
+
+        @eager_boundary(
+            adapter_factory=PaddedTensorOutputAdapter,
+            reuse_bridge_after_next_step=True,
+        )
+        def run_eager_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor,
+                                v_cache: torch.Tensor, attn_metadata: TritonAttentionMetadata,
+                                **kwargs) -> torch.Tensor:
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            raw_tokens = execution.raw_tokens
+            query = query[:raw_tokens]
+            key = key[:raw_tokens]
+            value = value[:raw_tokens]
+
+            output = original_forward(query, key, value, k_cache, v_cache, attn_metadata, **kwargs)
+            # Speculative decode returns [batch, query_len, heads, dim], while
+            # prefill and the following captured projection use flat tokens.
+            if output.ndim == 4:
+                output = output.flatten(0, 1)
+            return output
+
+        def piecewise_forward(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor,
+                              v_cache: torch.Tensor, attn_metadata: TritonAttentionMetadata,
+                              **kwargs) -> torch.Tensor:
+            if get_piecewise_graph_execution() is None:
+                return original_forward(query, key, value, k_cache, v_cache, attn_metadata, **kwargs)
+
+            return run_eager_attention(query, key, value, k_cache, v_cache, attn_metadata, **kwargs)
+
+        self._piecewise_forward = piecewise_forward
+        self.forward = piecewise_forward
+
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Return whether this selected implementation supports PCG."""
+        return type(self) is TritonAttentionImpl
+
+    def get_step_metadata_provider(self):
+        """Describe metadata required by this selected implementation."""
+        # Unknown subclasses keep the legacy model-config-driven path unless
+        # they explicitly provide their own metadata contract.
+        if type(self) is not TritonAttentionImpl:
+            return None
+
+        return TritonAttentionMetaBuilder()
+
+    def bind_step_meta_group(self, group_id: int) -> None:
+        """Bind this implementation to its deduplicated metadata group."""
+        self._step_meta_group = group_id
+
+    def get_step_kernel_metadata(self, attn_metadata: TritonAttentionMetadata) -> Any | None:
+        """Return group-specific metadata when a model uses multiple groups."""
+        kernel_metadata = attn_metadata.kernel_metadata
+        group_id = self._step_meta_group
+        if len(kernel_metadata) <= 1 or group_id is None:
+            return None
+        return kernel_metadata[group_id]
 
     def _get_max_q_seqlen(
         self,

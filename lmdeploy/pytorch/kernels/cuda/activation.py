@@ -2,16 +2,10 @@
 import torch
 import triton
 import triton.language as tl
-from packaging import version
 
 from .utils import get_device_props
 
-TRITON_VERSION = version.parse(triton.__version__)
-
-if TRITON_VERSION >= version.parse('3.0.0'):
-    fast_expf = tl.math.exp
-else:
-    fast_expf = tl.math.fast_expf
+fast_expf = tl.math.exp
 
 
 @triton.jit
@@ -197,3 +191,22 @@ def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.
                                       num_stages=num_stages)
 
     return out
+
+
+def silu_and_mul_masked_post_quant_fwd(input: torch.Tensor, output: torch.Tensor, output_scale: torch.Tensor,
+                                       quant_group_size: int, masked_m: torch.Tensor):
+    """Apply masked MoE SiLU-and-mul, then quantize to the preallocated FP8
+    output."""
+    assert input.is_contiguous()
+    assert output.is_contiguous()
+    assert input.dim() == 3
+    assert input.shape[0] == masked_m.shape[0]
+    assert input.shape[-1] % 2 == 0
+    size_n = input.shape[-1] // 2
+    assert size_n % quant_group_size == 0
+    activated = silu_and_mul_moe_ep(input, masked_m)
+    from .blocked_gemm_fp8 import _quant_fp8_launcher
+    _quant_fp8_launcher(activated.reshape(-1, size_n),
+                        quant_group_size,
+                        output.reshape(-1, size_n),
+                        output_scale.reshape(-1, size_n // quant_group_size))

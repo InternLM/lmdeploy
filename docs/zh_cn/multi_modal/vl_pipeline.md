@@ -237,3 +237,27 @@ import gc
 torch.cuda.empty_cache()
 gc.collect()
 ```
+
+## 纯语言模型模式（language-model-only）
+
+对于同时支持视觉和文本的混合模型（如 Qwen3-VL、Qwen3.5、InternVL），可以只加载语言模型部分，不加载视觉/多模态编码器，从而释放更多 GPU 显存给 KV cache。
+
+**CLI（serve）：**
+
+```bash
+lmdeploy serve api_server Qwen/Qwen3-VL-8B-Instruct --backend pytorch --language-model-only
+```
+
+**Python API：**
+
+```python
+from lmdeploy import pipeline
+from lmdeploy.messages import PytorchEngineConfig
+
+pipe = pipeline(
+    'Qwen/Qwen3-VL-8B-Instruct',
+    backend_config=PytorchEngineConfig(language_model_only=True),
+)
+```
+
+此模式下，多模态输入会被忽略并打印警告。

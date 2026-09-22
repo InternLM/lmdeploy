@@ -2,9 +2,6 @@
 
 #include "src/turbomind/models/ffn_weight.h"
 
-#include "src/turbomind/core/registry.h"
-#include "src/turbomind/kernels/gemm/types.h"
-
 namespace turbomind {
 
 FfnWeight::FfnWeight(const core::FfnConfig& cfg):
@@ -21,24 +18,7 @@ FfnWeight::FfnWeight(const core::FfnConfig& cfg):
 
 void FfnWeight::prepare()
 {
-    // Set epilogue on existing w1w3 child if fused silu is active.
-    if (w1w3) {
-        auto* fused = static_cast<LinearWeight*>(w1w3.get());
-        if (is_fused_silu) {
-            fused->epilogue = gemm::Epilogue::kGatedSilu;
-        }
-    }
-
-    // Propagate grouped-GEMM flag for MoE expert weights
-    if (is_expert_) {
-        for_each_child([](const char*, Module* m) {
-            if (auto* linear = dynamic_cast<LinearWeight*>(m)) {
-                linear->set_grouped(true);
-            }
-        });
-    }
-
-    Module::prepare();  // recurse into children
+    Module::prepare();
 }
 
 TM_MODULE_REGISTER(FfnWeight, core::FfnConfig);

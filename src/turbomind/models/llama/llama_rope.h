@@ -39,9 +39,9 @@ struct Llama3RopeKernelParam {
 struct MropeRopeKernelParam {
     int3 section;
 
-    int  stride{};
     int* position_ids{};
     int* position_delta{};
+    int* position_offsets{};
     int* length{};
 };
 

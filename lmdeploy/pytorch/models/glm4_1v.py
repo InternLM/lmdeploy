@@ -2,7 +2,7 @@
 # adapted from:
 # https://github.com/huggingface/transformers/blob/main/src/transformers/models/glm4v/modeling_glm4v.py
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 import numpy as np
@@ -23,35 +23,12 @@ from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixin, vlm_model
 
 
-def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: list[int],
-                           position_ids: torch.Tensor, rotary_emb_func: Callable):
-    _mrope_position_ids = torch.zeros(3, position_ids.shape[-1], dtype=position_ids.dtype, device=position_ids.device)
-    _mrope_position_ids[:, :mrope_position_ids.shape[-1]] = mrope_position_ids
-    cos, sin = rotary_emb_func(hidden_states, _mrope_position_ids)
-    _cos = torch.zeros(cos.shape[1], cos.shape[-1], dtype=cos.dtype, device=cos.device)
-    _sin = torch.zeros_like(_cos)
-    mrope_section = mrope_section * 2
-
-    def _apply_split(src, dst):
-        start = 0
-        for i, m in enumerate(src.split(mrope_section, dim=-1)):
-            dst[:, start:start + mrope_section[i]] = m[i % 3]
-            start += mrope_section[i]
-
-    _apply_split(cos, _cos)
-    _apply_split(sin, _sin)
-
-    return _cos, _sin
-
-
 class Glm4vTextModel(nn.Module):
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        self.mrope_section = config.rope_scaling['mrope_section']
-
         self.embed_tokens = nn.Embedding(config.vocab_size,
                                          config.hidden_size,
                                          self.padding_idx,
@@ -92,8 +69,7 @@ class Glm4vTextModel(nn.Module):
             cos, sin = self.rotary_emb(hidden_states, position_ids)
             cos, sin = cos[0], sin[0]
         else:
-            cos, sin = _apply_mrope_selection(hidden_states, mrope_position_ids, self.mrope_section, position_ids,
-                                              self.rotary_emb)
+            cos, sin = self.rotary_emb(hidden_states, mrope_position_ids)
         rotary_pos_emb = (cos, sin)
 
         # decoding

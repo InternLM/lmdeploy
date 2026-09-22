@@ -14,6 +14,7 @@ a100:
     - nccl
   test_coverage:
   - func
+  - evaluate
   quantization:
     turbomind:
     - kvint8
@@ -33,6 +34,7 @@ h:
     - nccl
   test_coverage:
   - func
+  - evaluate
   quantization:
     turbomind:
     - kvint8

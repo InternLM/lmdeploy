@@ -31,6 +31,12 @@ namespace turbomind {
 
 struct SamplingData {
 
+    struct LogprobOutput {
+        int                      row;
+        int                      offset;
+        std::shared_ptr<Request> request;
+    };
+
     explicit SamplingData(int max_batch_size, DeviceType device)
     {
         top_k_buf = {max_batch_size, device};
@@ -54,14 +60,17 @@ struct SamplingData {
 
     Buffer_<int> kept_buf;  // kept sample
 
-    bool output_logprobs = 0;
+    int                        generation_size = 0;
+    bool                       output_logprobs = 0;
+    std::vector<LogprobOutput> logprob_outputs;
 
     Buffer_<float> sampled_logprobs;
     Buffer_<int>   sampled_indices;
     Buffer_<int>   sampled_nums;
 };
 
-Sampling::Sampling(const BaseGenerationParam& base, int phases): BaseGenerationParam{base}
+Sampling::Sampling(const BaseGenerationParam& base, int phases, int tp_rank):
+    BaseGenerationParam{base}, tp_rank_{tp_rank}
 {
     top_k_ = {max_batch_size_, kCPUpinned};
     top_p_ = {max_batch_size_, kCPUpinned};
@@ -152,14 +161,15 @@ void Sampling::Forward(int phase, TensorMap& args)
     // sample
     {
         SamplingParams params{};
-        params.logits          = logits.data();
-        params.stride          = vocab_size_padded_;
-        params.indices         = indices.data();
-        params.kept            = d.kept_buf.data();
-        params.curandstate     = (curandState_t*)args.at("curand_state").raw_data();
-        params.batch_size      = bsz;
-        params.output_ids      = args.at("output_ids").data<int>();  // (B, 1)
-        params.sequence_length = args.at("sequence_length").data<int>();
+        params.logits              = logits.data();
+        params.stride              = vocab_size_padded_;
+        params.indices             = indices.data();
+        params.kept                = d.kept_buf.data();
+        params.curandstate         = (curandState_t*)args.at("curand_state").raw_data();
+        params.curandstate_indices = args.at("curand_state_indices").data<int>();
+        params.batch_size          = bsz;
+        params.output_ids          = args.at("output_ids").data<int>();  // (B, 1)
+        params.sequence_length     = args.at("sequence_length").data<int>();
 
         if (d.output_logprobs) {
             params.sampled_logprobs = d.sampled_logprobs.data();
@@ -177,18 +187,42 @@ void Sampling::Setup(int phase, TensorMap& env)
 {
     TM_FUNCTION_SCOPE();
 
-    const auto& rc   = env.at("batch").data<BatchData*>()[0]->rc;
-    auto&       copy = *env.at("copy").data<BatchCopy*>()[0];
+    // const auto& rc   = env.at("batch").data<BatchData*>()[0]->rc;
+    Buffer_<Sequence*> rc = env.at("requests").buffer();
 
-    const auto bsz = rc.size();
-
-    for (int i = 0; i < bsz; ++i) {
-        top_k_[i] = rc[i]->gen_cfg.top_k;
-        top_p_[i] = rc[i]->gen_cfg.top_p;
-        min_p_[i] = rc[i]->gen_cfg.min_p;
-    }
+    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
     auto& d = *data_.at(phase);
+
+    d.generation_size = 0;
+    d.output_logprobs = false;
+    d.logprob_outputs.clear();
+
+    for (int i = 0; i < rc.size(); ++i) {
+        auto& c = *rc[i];
+        if (!c.generating) {
+            continue;
+        }
+
+        const int row = d.generation_size++;
+
+        top_k_[row] = c.gen_cfg.top_k;
+        top_p_[row] = c.gen_cfg.top_p;
+        min_p_[row] = c.gen_cfg.min_p;
+
+        if (c.gen_cfg.output_logprobs) {
+            d.output_logprobs = true;
+            d.logprob_outputs.push_back({row, c.seq_len + c.inflight_new_tokens - c.prompt_len, c.req});
+        }
+    }
+
+    const int bsz = d.generation_size;
+    if (bsz == 0) {
+        d.max_topk = d.min_topk = 0;
+        d.min_topp              = 0.f;
+        d.max_minp              = 0.f;
+        return;
+    }
 
     d.max_topk = *std::max_element(top_k_.begin(), top_k_.begin() + bsz);
     d.min_topk = *std::min_element(top_k_.begin(), top_k_.begin() + bsz);
@@ -200,47 +234,48 @@ void Sampling::Setup(int phase, TensorMap& env)
 
     copy(min_p_.data(), bsz, d.min_p_buf.data());
     copy(kept_.data(), bsz, d.kept_buf.data());
-
-    d.output_logprobs = std::any_of(rc.begin(), rc.end(), [](auto& x) { return x->gen_cfg.output_logprobs; });
 }
 
 void Sampling::Fetch(int phase, TensorMap& env)
 {
     TM_FUNCTION_SCOPE();
     auto& d    = *data_.at(phase);
-    auto& b    = *env.at("batch").data<BatchData*>()[0];
     auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
     if (d.output_logprobs) {
-        copy(d.sampled_logprobs, b.bsz * kMaxLogProb, sampled_logprobs_buf_);
-        copy(d.sampled_indices, b.bsz * kMaxLogProb, sampled_indices_buf_);
-        copy(d.sampled_nums, b.bsz, sampled_nums_buf_);
+        copy(d.sampled_logprobs, d.generation_size * kMaxLogProb, sampled_logprobs_buf_);
+        copy(d.sampled_indices, d.generation_size * kMaxLogProb, sampled_indices_buf_);
+        copy(d.sampled_nums, d.generation_size, sampled_nums_buf_);
     }
 }
 
 void Sampling::Update(int phase, TensorMap& env)
 {
     TM_FUNCTION_SCOPE();
-    auto& d = *data_.at(phase);
-    auto& b = *env.at("batch").data<BatchData*>()[0];
+    (void)env;
 
-    if (d.output_logprobs) {
-        float* logprob_buf = sampled_logprobs_buf_.data();
-        int*   indices_buf = sampled_indices_buf_.data();
-        int*   n_buf       = sampled_nums_buf_.data();
-        for (int i = 0; i < b.rc.size(); ++i) {
-            if (auto& x = *b.rc[i]; x.gen_cfg.output_logprobs) {
-                // output buffers
-                auto logprob_out = x.req->outputs.at("logprob_vals").data<float>();
-                auto indices_out = x.req->outputs.at("logprob_indexes").data<int>();
-                auto n_out       = x.req->outputs.at("logprob_nums").data<int>();
-                // offset into output buffers
-                const int offset = x.seq_len - x.prompt_len;
-                std::copy_n(logprob_buf + i * kMaxLogProb, n_buf[i], logprob_out + offset * kMaxLogProb);
-                std::copy_n(indices_buf + i * kMaxLogProb, n_buf[i], indices_out + offset * kMaxLogProb);
-                n_out[offset] = n_buf[i];
-            }
-        }
+    if (tp_rank_ != 0) {
+        return;
+    }
+
+    auto& d = *data_.at(phase);
+    if (!d.output_logprobs) {
+        return;
+    }
+
+    float* logprob_buf = sampled_logprobs_buf_.data();
+    int*   indices_buf = sampled_indices_buf_.data();
+    int*   n_buf       = sampled_nums_buf_.data();
+
+    for (const auto& x : d.logprob_outputs) {
+        auto logprob_out = x.request->outputs.at("logprob_vals").data<float>();
+        auto indices_out = x.request->outputs.at("logprob_indexes").data<int>();
+        auto n_out       = x.request->outputs.at("logprob_nums").data<int>();
+
+        const int n = n_buf[x.row];
+        std::copy_n(logprob_buf + x.row * kMaxLogProb, n, logprob_out + x.offset * kMaxLogProb);
+        std::copy_n(indices_buf + x.row * kMaxLogProb, n, indices_out + x.offset * kMaxLogProb);
+        n_out[x.offset] = n;
     }
 }
 

@@ -13,12 +13,54 @@ import torch.distributed as dist
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.distributed import get_dist_manager
+from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
 from ..moe import DlinferMoECommType, DlinferMoeMetadata
 from ..op_backend import DlinferOpsBackend
 
 logger = get_logger('lmdeploy')
+
+
+def _get_cpu_attention_metadata(cu_seqlens_q: torch.Tensor,
+                                kv_seqlens: torch.Tensor):
+    kv_seqlens_cpu = kv_seqlens.cpu()
+    cu_seqlens_q_cpu = cu_seqlens_q.cpu()
+    return cu_seqlens_q_cpu, kv_seqlens_cpu
+
+
+def _is_sparse_attention(model_config: ModelConfig) -> bool:
+    """Whether all model attention layers use the NSA/DSA sparse path."""
+    return getattr(model_config, 'mla_index_topk', None) is not None
+
+
+def _get_device_kv_start_indices(
+    q_seqlens: torch.Tensor,
+    kv_seqlens: torch.Tensor,
+    cu_seqlens_q: torch.Tensor,
+    block_offsets: torch.Tensor,
+    block_size: int,
+    num_tokens: int,
+) -> torch.Tensor:
+    """Map flattened query tokens to paged-cache slots on device."""
+    num_reqs = q_seqlens.numel()
+    request_ids = torch.repeat_interleave(
+        torch.arange(num_reqs, device=q_seqlens.device),
+        q_seqlens,
+        output_size=num_tokens,
+    )
+    query_offsets = (
+        torch.arange(num_tokens,
+                     device=q_seqlens.device,
+                     dtype=torch.int32) - cu_seqlens_q[request_ids])
+    logical_positions = (kv_seqlens[request_ids] -
+                         q_seqlens[request_ids] + query_offsets)
+    logical_blocks = torch.div(logical_positions,
+                               block_size,
+                               rounding_mode='floor').long()
+    physical_blocks = block_offsets[request_ids, logical_blocks]
+    return (physical_blocks * block_size +
+            logical_positions.remainder(block_size))
 
 
 class SocVersion:
@@ -120,6 +162,7 @@ class AscendOpsBackend(DlinferOpsBackend):
     total_slots = None
     max_batches = None
     dist_meta: DistMeta = None
+    fia_causal_masks: dict[torch.device, torch.Tensor] = {}
 
     @staticmethod
     def get_name() -> str:
@@ -155,15 +198,43 @@ class AscendOpsBackend(DlinferOpsBackend):
         """Update step context."""
 
         block_num, block_size, *_ = step_context.kv_caches[0][0].shape
-        is_prefill_no_cache = False
-        if not step_context.is_decoding:
-            is_prefill_no_cache = all((step_context.q_seqlens == step_context.kv_seqlens).tolist())
+        num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
+
+        # MoE EP dispatch/combine and graph capture are collective ops shared by all
+        # DP ranks, so they must agree on decode-vs-prefill. Use the DP-global state
+        # (if any rank is prefill, all ranks are prefill) for those paths; the local
+        # is_decoding / is_multi_token_decoding above stay rank-local for attention.
+        global_is_decoding = step_context.global_is_decoding()
+
         if step_context.block_offsets.dtype != torch.int32:
             step_context.block_offsets = step_context.block_offsets.to(torch.int32)
         if step_context.kv_seqlens.dtype != torch.int32:
             step_context.kv_seqlens = step_context.kv_seqlens.to(torch.int32)
         if step_context.q_seqlens.dtype != torch.int32:
             step_context.q_seqlens = step_context.q_seqlens.to(torch.int32)
+
+        kv_seqlens = step_context.kv_seqlens
+        cu_seqlens_q = torch.nn.functional.pad(
+            torch.cumsum(step_context.q_seqlens, dim=0, dtype=torch.int32),
+            (1, 0),
+        )
+        is_sparse_attention = _is_sparse_attention(step_context.model_config)
+        if is_sparse_attention:
+            cu_seqlens_q_cpu, kv_seqlens_cpu = None, None
+        else:
+            cu_seqlens_q_cpu, kv_seqlens_cpu = _get_cpu_attention_metadata(cu_seqlens_q, kv_seqlens)
+
+        if not step_context.is_decoding:
+            is_prefill_no_cache = (
+                False if is_sparse_attention else torch.equal(
+                    step_context.q_seqlens, step_context.kv_seqlens))
+            is_multi_token_decoding = False
+            is_decoding = False
+        else:
+            is_prefill_no_cache = False
+            is_multi_token_decoding = step_context.max_q_seqlen > 1
+            # is_decoding: True only for regular single-token decode (original semantics)
+            is_decoding = not is_multi_token_decoding
 
         def get_total_slots():
             if cls.total_slots is None:
@@ -173,56 +244,33 @@ class AscendOpsBackend(DlinferOpsBackend):
                 cls.total_slots = cls.total_slots.view(block_num, block_size)
             return cls.total_slots
 
-        def get_cpu_seqlens(is_decoding, is_prefill_no_cache):
-            """Get sequence lengths on CPU.
+        def get_fia_causal_mask():
+            device = step_context.block_offsets.device
+            mask = cls.fia_causal_masks.get(device)
+            if mask is None:
+                mask = torch.triu(torch.ones(2048, 2048, dtype=torch.int8, device=device), diagonal=1)
+                cls.fia_causal_masks[device] = mask
+            return mask
 
-            Returns:
-                q_seqlens_cpu: query sequence lengths (per sequence).
-                kv_seqlens_cpu: kv sequence lengths (per sequence), used for
-                    list/max seqlens calculation.
-                kv_seqlens_expanded: kv sequence lengths expanded per token via
-                    repeat_interleave, used for attention metadata.
-            """
-            if is_decoding:
-                q_seqlens_cpu = None
-                kv_seqlens_cpu = step_context.kv_seqlens.cpu()
-            elif is_prefill_no_cache:
-                q_seqlens_cpu = step_context.q_seqlens.cpu()
-                kv_seqlens_cpu = q_seqlens_cpu
-            else:
-                q_seqlens_cpu = step_context.q_seqlens.cpu()
-                kv_seqlens_cpu = step_context.kv_seqlens.cpu()
-            return q_seqlens_cpu, kv_seqlens_cpu
-
-        def get_list_seqlens(is_decoding, is_prefill_no_cache, q_seqlens_cpu=None, kv_seqlens_cpu=None):
+        def get_list_seqlens(is_decoding,
+                             is_prefill_no_cache,
+                             cu_seqlens_q_cpu=None,
+                             kv_seqlens_cpu=None):
             if is_decoding:
                 q_seqlens_list, kv_seqlens_list = None, None
-            elif is_prefill_no_cache:
-                q_seqlens_list = kv_seqlens_list = q_seqlens_cpu.tolist()
             else:
-                q_seqlens_list, kv_seqlens_list = q_seqlens_cpu.tolist(), kv_seqlens_cpu.tolist()
+                cu_seqlens_q_list = cu_seqlens_q_cpu.tolist()
+                q_seqlens_list = [
+                    end - start for start, end in zip(cu_seqlens_q_list,
+                                                      cu_seqlens_q_list[1:])
+                ]
+                if is_prefill_no_cache:
+                    kv_seqlens_list = q_seqlens_list
+                else:
+                    kv_seqlens_list = kv_seqlens_cpu.tolist()
             return q_seqlens_list, kv_seqlens_list
 
-        def get_max_seqlens(is_decoding, is_prefill_no_cache, q_seqlens_list=None, kv_seqlens_list=None):
-            if is_decoding:
-                max_q_seq_len, max_kv_seq_len = 1, None
-            elif is_prefill_no_cache:
-                max_q_seq_len = max_kv_seq_len = max(q_seqlens_list)
-            else:
-                max_q_seq_len = max(q_seqlens_list)
-                max_kv_seq_len = max(kv_seqlens_list)
-            return max_q_seq_len, max_kv_seq_len
-
-        def update_q_seqlens(is_decoding, is_prefill_no_cache, q_seqlens_cpu=None):
-            if is_decoding:
-                batch_size = step_context.q_seqlens.size(0)
-                return torch.arange(1, batch_size + 1, dtype=torch.int32)
-            elif is_prefill_no_cache:
-                return q_seqlens_cpu
-            return q_seqlens_cpu.cumsum(dim=0)
-
-        def get_kv_start_indices_and_attention_mask(is_decoding, is_prefill_no_cache, q_seqlens_list, kv_seqlens_list,
-                                                    max_q_seq_len, max_kv_seq_len):
+        def get_kv_start_indices_and_attention_mask(is_decoding, q_seqlens_list, kv_seqlens_list):
             kv_start_indices, attention_mask = [], []
             if is_decoding:
                 idx = (step_context.kv_seqlens - 1) % block_size
@@ -230,7 +278,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                 last_block = step_context.block_offsets.gather(1, block_num.view(-1, 1)).view(-1)
                 kv_start_indices = last_block * block_size + idx
             else:
-                for i in range(step_context.q_start_loc.size(0)):
+                for i in range(len(q_seqlens_list)):
                     q_seq_len = q_seqlens_list[i]
                     kv_seq_len = kv_seqlens_list[i]
 
@@ -240,17 +288,10 @@ class AscendOpsBackend(DlinferOpsBackend):
                     slots = slot_tables[history_length:kv_seq_len]
                     kv_start_indices.append(slots)
 
-                if is_prefill_no_cache:
-                    attention_mask.append(
-                        torch.triu(torch.ones(max_q_seq_len,
-                                              max_kv_seq_len,
-                                              dtype=step_context.kv_caches[0][0].dtype,
-                                              device=step_context.block_offsets.device),
-                                   diagonal=max_kv_seq_len - max_q_seq_len + 1))
-                else:
-                    attention_mask.append(
-                        torch.triu(torch.ones(2048, 2048, dtype=torch.bool, device=step_context.block_offsets.device),
-                                   diagonal=1))
+                # Standard GQA/MHA, MLA and paged prefill all use FIA sparse
+                # mode 3. Reuse the fixed split-fuse causal-mask template
+                # across all steps, following vllm-ascend.
+                attention_mask.append(get_fia_causal_mask())
 
                 kv_start_indices = torch.cat(kv_start_indices)
 
@@ -277,14 +318,31 @@ class AscendOpsBackend(DlinferOpsBackend):
             if ep_size <= 1:
                 return 0, 0, 0
             # get padded_tokens_current_rank
-            is_graph = cls.enable_graph and step_context.is_decoding
+            is_graph = cls.enable_graph and global_is_decoding and (is_decoding or is_multi_token_decoding)
             if is_graph:
                 from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
-                actual_tokens_current_rank = step_context.q_seqlens.shape[0]
-                padded_tokens_current_rank = min(get_ascend_compatible_size(actual_tokens_current_rank),
-                                                 cls.max_batches)
+                # The cudagraph is keyed/captured on the GLOBAL padded batch
+                # (max over all DP ranks), so every DP rank executes the MoE with
+                # the same global token count. padded_tokens_current_rank must
+                # therefore mirror that global captured size; deriving it from this
+                # rank's local batch makes DP ranks disagree on the MC2
+                # dispatch/combine token count and corrupts the collective
+                # (MoeDistributeCombineV2 AICORE out-of-bounds). dp_meta.dp_batches
+                # holds the per-rank sequence counts; its max is the global batch
+                # the graph capture uses.
+                dp_meta = step_context.dp_meta
+                if dp_meta is not None and dp_meta.dp_batches:
+                    global_batch = max(dp_meta.dp_batches)
+                else:
+                    global_batch = step_context.q_seqlens.shape[0]
+                query_len = (num_spec_tokens + 1) if is_multi_token_decoding else 1
+                # actual tokens: this rank's real (non-padded) token count, used to
+                # build x_active_mask so MC2 ignores the graph padding region.
+                actual_tokens_current_rank = step_context.input_ids.numel()
+                padded_tokens_current_rank = min(get_ascend_compatible_size(global_batch),
+                                                 cls.max_batches) * query_len
             else:
-                actual_tokens_current_rank = step_context.q_seqlens.sum().item()
+                actual_tokens_current_rank = step_context.input_ids.numel()
                 padded_tokens_current_rank = actual_tokens_current_rank
             # get max_tokens_across_dp
             if dp_size > 1:
@@ -301,9 +359,8 @@ class AscendOpsBackend(DlinferOpsBackend):
                 max_tokens_across_dp = padded_tokens_current_rank
             return actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp
 
-        @lru_cache
         def init_mc2_token_capacity(tp_size):
-            max_num_tokens = min(cls.max_batches, 512)
+            max_num_tokens = min(cls.max_batches * (num_spec_tokens + 1), 512)
             num_tokens_per_tp_rank = (max_num_tokens + tp_size - 1) // tp_size
             return num_tokens_per_tp_rank * tp_size
 
@@ -311,7 +368,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             if ep_size <= 1:
                 return DlinferMoECommType.ALLGATHER
             mc2_token_capacity = init_mc2_token_capacity(tp_size)
-            is_graph = cls.enable_graph and step_context.is_decoding
+            is_graph = cls.enable_graph and global_is_decoding and (is_decoding or is_multi_token_decoding)
             if is_graph:
                 max_tokens_across_dp = math.ceil(max_tokens_across_dp / tp_size) * tp_size
             if SocVersion.is_A2():
@@ -320,7 +377,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                 else:
                     return DlinferMoECommType.ALLGATHER
             elif SocVersion.is_A3():
-                if max_tokens_across_dp <= mc2_token_capacity:
+                if max_tokens_across_dp <= mc2_token_capacity and global_is_decoding:
                     return DlinferMoECommType.MC2
                 else:
                     return DlinferMoECommType.ALLTOALL
@@ -337,7 +394,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                                            dtype=torch.bool,
                                            device=torch.npu.current_device())
             elif moe_comm_type == DlinferMoECommType.ALLTOALL:
-                pad_size = tp_size - padded_tokens_current_rank
+                pad_size = (-padded_tokens_current_rank) % tp_size
             elif moe_comm_type == DlinferMoECommType.ALLGATHER:
                 pad_size = max_tokens_across_dp - padded_tokens_current_rank
             else:
@@ -353,16 +410,26 @@ class AscendOpsBackend(DlinferOpsBackend):
             group_name = backend.get_hccl_comm_name(local_rank)
             return group_name
 
-        q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(step_context.is_decoding, is_prefill_no_cache)
-        q_seqlens_list, kv_seqlens_list = get_list_seqlens(step_context.is_decoding, is_prefill_no_cache, q_seqlens_cpu,
-                                                           kv_seqlens_cpu)
-        max_q_seq_len, max_kv_seq_len = get_max_seqlens(step_context.is_decoding, is_prefill_no_cache, q_seqlens_list,
-                                                        kv_seqlens_list)
-        kv_start_indices, attention_mask = get_kv_start_indices_and_attention_mask(step_context.is_decoding,
-                                                                                   is_prefill_no_cache, q_seqlens_list,
-                                                                                   kv_seqlens_list, max_q_seq_len,
-                                                                                   max_kv_seq_len)
-        q_seqlens_cpu = update_q_seqlens(step_context.is_decoding, is_prefill_no_cache, q_seqlens_cpu)
+        max_q_seqlen = step_context.max_q_seqlen
+        max_kv_seq_len = step_context.max_kv_seqlen
+        if is_sparse_attention:
+            kv_start_indices = _get_device_kv_start_indices(
+                step_context.q_seqlens,
+                step_context.kv_seqlens,
+                cu_seqlens_q,
+                step_context.block_offsets,
+                block_size,
+                step_context.input_ids.numel(),
+            )
+            attention_mask = []
+        else:
+            q_seqlens_list, kv_seqlens_list = get_list_seqlens(
+                is_decoding, is_prefill_no_cache, cu_seqlens_q_cpu,
+                kv_seqlens_cpu)
+            kv_start_indices, attention_mask = \
+                get_kv_start_indices_and_attention_mask(
+                    is_decoding, q_seqlens_list, kv_seqlens_list,)
+        kv_flatten_size = step_context.sum_kv_seqlen
 
         if not cls.enable_graph and step_context.kv_quant_policy == 8:
             record_file = os.getenv('ASCEND_QUANT_RECORD_FILE')
@@ -377,35 +444,74 @@ class AscendOpsBackend(DlinferOpsBackend):
                 AscendKVQuantMeta.set_value(step_context.block_offsets.device, step_context.model_config.dtype,
                                             record_file, total_layers)
 
-        cu_seqlens = None
         has_initial_state = None
-
+        spec_conv_offsets = None
+        spec_state_offsets = None
+        cache_seqlens = None
         is_gated_delta = step_context.model_config.is_gated_delta
         if is_gated_delta:
-            q_start_loc = step_context.q_start_loc.to(dtype=step_context.q_seqlens.dtype,
-                                                      device=step_context.q_seqlens.device)
-            cu_seqlens = torch.cat((q_start_loc, step_context.q_seqlens.sum().unsqueeze(0))).int()
-            if not step_context.is_decoding:
-                has_initial_state = ~(step_context.q_seqlens == step_context.kv_seqlens)
+            q_seqlens = step_context.q_seqlens
+            kv_seqlens = step_context.kv_seqlens
+            cache_seqlens = (kv_seqlens - q_seqlens).contiguous()
+
+            states_shapes = step_context.model_config.states_shapes
+            if not is_decoding and not is_multi_token_decoding and len(states_shapes) > 0:
+                has_initial_state = ~(q_seqlens == kv_seqlens)
+                # # Conv ring buffer: conv_state_len = conv_kernel_size + num_spec_tokens.
+                conv_state_len = states_shapes[0][0][0]
+                conv_kernel_size = conv_state_len - num_spec_tokens
+
+                if num_spec_tokens > 0:
+                    state_slots = 1 + num_spec_tokens
+                    spec_state_offsets = (
+                        torch.remainder(cache_seqlens, state_slots),
+                        torch.remainder(kv_seqlens, state_slots),
+                    )
+
+                    range_idx = torch.arange(
+                        -conv_kernel_size,
+                        0,
+                        device=cache_seqlens.device,
+                        dtype=torch.int32,
+                    )
+                    # Read the (conv_kernel_size - 1) tokens preceding the current write
+                    # window from the circular buffer.
+                    read_conv_offsets = torch.remainder(
+                        cache_seqlens[:, None] + range_idx[1:][None],
+                        conv_state_len,
+                    ).to(torch.int64)
+                    # Write the last conv_kernel_size tokens of this prefill batch into
+                    # circular-buffer slots so the next decode read aligns naturally.
+                    write_conv_offsets = torch.remainder(
+                        kv_seqlens[:, None] + range_idx[None],
+                        conv_state_len,
+                    ).to(torch.int64)
+                    spec_conv_offsets = (read_conv_offsets, write_conv_offsets)
 
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(
-            step_context.is_decoding,
+            is_decoding,
             step_context.block_offsets,
-            # cu_seqlens is only used in GDN and is passed down via q_start_loc.
-            # Otherwise, q_start_loc is None.
-            q_start_loc=cu_seqlens,
-            q_seqlens=q_seqlens_cpu,
-            kv_seqlens=kv_seqlens_cpu,
+            q_start_loc=cu_seqlens_q[:-1],
+            q_seqlens=step_context.q_seqlens,
+            kv_seqlens=step_context.kv_seqlens,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_q_cpu=cu_seqlens_q_cpu,
+            kv_seqlens_cpu=kv_seqlens_cpu,
             kv_start_indices=kv_start_indices,
             block_size=block_size,
             attention_mask=attention_mask,
             is_prefill_no_cache=is_prefill_no_cache,
-            max_q_seq_len=max_q_seq_len,
+            max_q_seqlen=max_q_seqlen,
             max_kv_seq_len=max_kv_seq_len,
+            kv_flatten_size=kv_flatten_size,
             quant_policy=step_context.kv_quant_policy,
             quant_meta=AscendKVQuantMeta.quant_meta,
             has_initial_state=has_initial_state,
+            is_multi_token_decoding=is_multi_token_decoding,
+            spec_conv_offsets=spec_conv_offsets,
+            spec_state_offsets=spec_state_offsets,
+            cache_seqlens=cache_seqlens,
         )
         step_context.attn_metadata = attn_metadata
 
@@ -442,7 +548,8 @@ class AscendOpsBackend(DlinferOpsBackend):
         AscendOpsBackend.enable_graph = not backend_config.eager_mode
         AscendOpsBackend.max_batches = cache_config.max_batches
         from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import AscendGraphRunner
-        return AscendGraphRunner(model, model_config, cache_config, backend_config, device)
+        is_mla = model_config.k_head_dim != model_config.v_head_dim
+        return AscendGraphRunner(model, model_config, cache_config, backend_config, device, is_mla=is_mla)
 
     @staticmethod
     def init():
@@ -453,6 +560,10 @@ class AscendOpsBackend(DlinferOpsBackend):
         is emitted but non-linear-attention models are unaffected.
         """
 
+        from dlinfer.vendor.ascend.version import ensure_ascend_runtime
+
+        ensure_ascend_runtime()
+
         try:
             from torch_npu.contrib import transfer_to_npu  # noqa: F401
         except ImportError:
@@ -462,6 +573,14 @@ class AscendOpsBackend(DlinferOpsBackend):
             logger.warning(f'Error during Ascend initialization: {str(e)}. '
                            'Please check your Ascend environment configuration.')
 
+        try:
+            import dlinfer.framework.lmdeploy_ext.device  # noqa: F401 — triggers vendor_device_init()
+        except ImportError:
+            logger.warning('dlinfer framework extensions not found. '
+                           'Ascend-specific model patches will not be applied.')
+        except Exception as e:
+            logger.warning(f'Error during dlinfer extension initialization: {str(e)}. '
+                           'Ascend-specific model patches may not be applied.')
         try:
             from dlinfer.vendor.ascend.triton_ops.triton_utils import init_device_properties_triton
             init_device_properties_triton()

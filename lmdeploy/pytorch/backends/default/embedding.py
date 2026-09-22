@@ -3,7 +3,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from ..embedding import EmbeddingBuilder, EmbeddingImpl
+from ..embedding import EmbeddingImpl
 
 
 def get_masked_input_and_mask(input: torch.Tensor, start_index: int, end_index: int):
@@ -31,12 +31,3 @@ class DefaultEmbeddingImpl(EmbeddingImpl):
             out = F.embedding(x, weight)
 
         return out
-
-
-class DefaultEmbeddingBuilder(EmbeddingBuilder):
-    """Embedding implementation builder."""
-
-    @staticmethod
-    def build(start_index: int, end_index: int):
-        """build."""
-        return DefaultEmbeddingImpl(start_index=start_index, end_index=end_index)

@@ -10,6 +10,8 @@ if TYPE_CHECKING:
 
 ReasoningParserManager = Registry('reasoning_parser', locations=['lmdeploy.serve.parsers.reasoning_parser'])
 
+LEGACY_REASONING_PARSER_NAMES = ('qwen-qwq', 'intern-s1', 'deepseek-r1')
+
 
 @ReasoningParserManager.register_module(name='default')
 class ReasoningParser:

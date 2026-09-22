@@ -15,6 +15,7 @@ struct EngineParam: EngineConfig {
     int attn_tp_rank  = 0;
     int attn_cp_rank  = 0;
     int mlp_tp_rank   = 0;
+    int ep_rank       = 0;
     int model_tp_rank = 0;  // rank(d_tp_group), in [0, attn_tp_size × attn_cp_size)
 
     // Derived field (set in Impl ctor)

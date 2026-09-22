@@ -8,12 +8,12 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import RMSNorm
+from lmdeploy.pytorch.nn import RMSNorm, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import add_prefix, get_build_model_context
-from .qwen3_5 import Qwen3_5Attention, Qwen3_5DecoderLayer, Qwen3_5MLP, Qwen3_5TextRotaryEmbedding
+from .qwen3_5 import Qwen3_5Attention, Qwen3_5DecoderLayer, Qwen3_5MLP
 from .qwen3_5_moe import Qwen3_5MoeSparseMoeBlock
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 
@@ -41,7 +41,7 @@ class Qwen3_5MtpDecoderLayer(Qwen3_5DecoderLayer):
                                           )
 
         # build MLP
-        if 'moe' in config.model_type.lower():
+        if 'moe' in config.model_type.lower() or hasattr(config, 'moe_intermediate_size'):
             self.mlp = Qwen3_5MoeSparseMoeBlock(config,
                                                 layer_idx,
                                                 dtype=dtype,
@@ -112,7 +112,7 @@ class Qwen3_5MultiTokenPredictor(nn.Module):
         )
 
         # build rotary embedding
-        self.rotary_emb = Qwen3_5TextRotaryEmbedding(config, device=device)
+        self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
 
     def get_input_embeddings(self):
         """Get input embeddings."""

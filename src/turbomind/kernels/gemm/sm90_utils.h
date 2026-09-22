@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "cute/arch/copy_sm90_desc.hpp"
 #include "cute/arch/mma_sm90_gmma.hpp"
 #include "cute/atom/mma_traits.hpp"
 #include "cute/atom/mma_traits_sm90_gmma.hpp"
@@ -15,6 +16,24 @@
 namespace turbomind::gemm {
 
 namespace GMMA = cute::SM90::GMMA;
+
+namespace detail {
+
+__device__ __forceinline__ void replace_tma_global_stride(CUtensorMap* desc, uint64_t stride_bytes)
+{
+    uint32_t uint_ptr = cast_smem_ptr_to_uint(desc);
+    // CUDA < 12.5 omits the four zero alignment bits; CUDA >= 12.5 takes bytes.
+#if ((__CUDACC_VER_MAJOR__ > 12) || ((__CUDACC_VER_MAJOR__ == 12) && (__CUDACC_VER_MINOR__ >= 5)))
+    const uint64_t encoded_stride = stride_bytes;
+#else
+    const uint64_t encoded_stride = stride_bytes >> 4;
+#endif
+    asm volatile("tensormap.replace.tile.global_stride.shared::cta.b1024.b64 [%0], 0, %1;"
+                 :
+                 : "r"(uint_ptr), "l"(encoded_stride));
+}
+
+}  // namespace detail
 
 inline __device__ cute::GmmaDescriptor make_smem_desc(void* smem_ptr, int layout_type)
 {

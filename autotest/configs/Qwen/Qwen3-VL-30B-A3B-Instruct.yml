@@ -13,6 +13,21 @@ a100:
   test_coverage:
   - func
   - mllm_evaluate
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+    turbomind:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     pytorch:
     - kvint8
@@ -29,6 +44,14 @@ h:
   test_coverage:
   - func
   - mllm_evaluate
+  interface:
+    pytorch:
+      suites:
+      - base
+      - logprob
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
   quantization:
     pytorch:
     - kvint8

@@ -5,7 +5,13 @@ import time
 import allure
 import utils.constant as constant
 from utils.common_utils import execute_command_with_logging
-from utils.config_utils import get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid, get_workerid
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_cli_common_param,
+    get_cuda_prefix_by_workerid,
+    get_model_path_from_config,
+    get_workerid,
+)
 from utils.run_restful_chat import health_check, start_openai_service, terminate_restful_api
 
 SERVE_ONLY_PARAMS = {  # yapf: disable
@@ -16,7 +22,7 @@ SERVE_ONLY_PARAMS = {  # yapf: disable
 
 def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = False):
     model = run_config.get('model')
-    model_path = os.path.join(config.get('model_path'), model)
+    model_path = get_model_path_from_config(config, model)
     dataset_path = config.get('dataset_path')
 
     case_name = get_case_str_by_config(run_config)
@@ -66,7 +72,7 @@ def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = Fa
 
 def longtext_throughput_test(config, run_config, worker_id: str = ''):
     model = run_config.get('model')
-    model_path = os.path.join(config.get('model_path'), model)
+    model_path = get_model_path_from_config(config, model)
     dataset_path = config.get('dataset_path')
 
     case_name = get_case_str_by_config(run_config)
@@ -147,7 +153,7 @@ BASE_HTTP_URL = f'http://{constant.DEFAULT_SERVER}'
 
 
 def restful_profile(config, run_config, port, is_smoke: bool = False):
-    model_path = os.path.join(config.get('model_path'), run_config.get('model'))
+    model_path = get_model_path_from_config(config, run_config.get('model'))
     case_name = get_case_str_by_config(run_config)
     dataset_path = config.get('dataset_path')
     benchmark_path = os.path.join(config.get('benchmark_path'), 'restful')
@@ -179,7 +185,7 @@ def restful_profile(config, run_config, port, is_smoke: bool = False):
 
 
 def mllm_restful_profile(config, run_config, port, is_smoke: bool = False):
-    model_path = os.path.join(config.get('model_path'), run_config.get('model'))
+    model_path = get_model_path_from_config(config, run_config.get('model'))
     case_name = get_case_str_by_config(run_config)
     benchmark_path = os.path.join(config.get('benchmark_path'), 'mllm_restful')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
@@ -211,7 +217,7 @@ def mllm_restful_profile(config, run_config, port, is_smoke: bool = False):
 
 def prefixcache_throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = False):
     model = run_config.get('model')
-    model_path = os.path.join(config.get('model_path'), model)
+    model_path = get_model_path_from_config(config, model)
     dataset_path = config.get('prefix_dataset_path')
 
     case_name = get_case_str_by_config(run_config)

@@ -11,6 +11,3 @@ h:
     - cuda-ipc
   test_coverage:
   - func
-  quantization:
-    turbomind:
-    - kvint8

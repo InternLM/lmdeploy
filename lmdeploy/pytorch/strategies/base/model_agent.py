@@ -35,6 +35,13 @@ class ExtraInputs(ABC):
         """To device."""
         return to_device(self, device, non_blocking)
 
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of tensor fields."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, torch.Tensor) and value.is_cuda:
+                value.record_stream(stream)
+
     def broadcast(self, src: int, group, async_op=False):
         """Broadcast extra inputs."""
         pass
@@ -110,6 +117,13 @@ class StoppingCriteria(ABC):
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
         return to_device(self, device, non_blocking)
+
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of tensor fields."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, torch.Tensor) and value.is_cuda:
+                value.record_stream(stream)
 
 
 class ModelAgentStrategy(ABC):

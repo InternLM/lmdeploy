@@ -1,15 +1,20 @@
 # Base images
 ARG IMAGE_TYPE=final
-ARG CUDA_VERSION=cu12
+ARG CUDA_VERSION=cu128
 
-FROM nvidia/cuda:13.0.2-devel-ubuntu22.04 AS cu13
+FROM nvidia/cuda:13.0.3-devel-ubuntu24.04 AS cu130
 ENV CUDA_VERSION_SHORT=cu130
+ENV PYTORCH_CUDA_VERSION=cu130
 
-FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS cu12.8
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS cu128
 ENV CUDA_VERSION_SHORT=cu128
+# PyTorch 2.12 no longer publishes cu128 wheels; cu126 is its CUDA 12 build.
+ENV PYTORCH_CUDA_VERSION=cu126
 
-FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS cu12
-ENV CUDA_VERSION_SHORT=cu126
+# Backward-compatible stage aliases.
+FROM cu130 AS cu13
+FROM cu128 AS cu12.8
+FROM cu128 AS cu12
 
 # Builder image
 FROM ${CUDA_VERSION} AS dev
@@ -20,7 +25,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 
 RUN --mount=type=cache,target=/root/.cache \
-    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
+    if [ -f /etc/apt/sources.list ]; then \
+        sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list; \
+    fi && \
+    if [ -d /etc/apt/sources.list.d ]; then \
+        find /etc/apt/sources.list.d -type f -name '*.sources' -exec \
+            sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' {} +; \
+    fi && \
     apt-get update -y && \
     apt-get install -y --no-install-recommends \
         tzdata wget curl openssh-server ssh sudo git-core \
@@ -40,7 +51,9 @@ ENV PYTHON_VERSION=${PYTHON_VERSION}
 COPY requirements/common.txt requirements/runtime_cuda.txt /tmp/requirements/
 
 RUN --mount=type=cache,target=/root/.cache \
-    pip install -r /tmp/requirements/runtime_cuda.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
+    grep -E '^torch(vision)?([<>=]|$)' /tmp/requirements/runtime_cuda.txt > /tmp/requirements/torch.txt && \
+    pip install -r /tmp/requirements/torch.txt --index-url https://download.pytorch.org/whl/${PYTORCH_CUDA_VERSION} && \
+    pip install -r /tmp/requirements/runtime_cuda.txt
 
 RUN mkdir -p /wheels
 
@@ -52,8 +65,13 @@ COPY docker/prepare_3rdparty_wheel.sh /tmp/prepare_3rdparty_wheel.sh
 RUN --mount=type=cache,target=/root/.cache \
     bash /tmp/prepare_3rdparty_wheel.sh
 
-# Full tree for local package build
-FROM runtime-deps-pip AS lmdeploy-wheel
+# Full tree for local package build.
+# Base on thirdparty-wheels (not runtime-deps-pip) to force buildx to build
+# this stage only after thirdparty-wheels finishes. Both stages run heavy nvcc
+# compilation; building them in parallel OOMs the 16GB CI runner (exit 143 /
+# runner shutdown). Serializing halves peak memory. Only /wheels is consumed
+# downstream, so the final image is unchanged.
+FROM thirdparty-wheels AS lmdeploy-wheel
 
 COPY . /opt/lmdeploy
 WORKDIR /opt/lmdeploy
@@ -67,24 +85,30 @@ COPY --from=thirdparty-wheels /wheels /wheels
 COPY --from=lmdeploy-wheel /wheels /wheels
 
 # Runtime image
-FROM nvidia/cuda:13.0.2-base-ubuntu22.04 AS cu13-base
+FROM nvidia/cuda:13.0.3-base-ubuntu24.04 AS cu130-base
 ENV CUDA_VERSION_SHORT=cu130
+ENV PYTORCH_CUDA_VERSION=cu130
 
-FROM nvidia/cuda:12.8.1-base-ubuntu22.04 AS cu12.8-base
+FROM nvidia/cuda:12.8.1-base-ubuntu24.04 AS cu128-base
 ENV CUDA_VERSION_SHORT=cu128
+ENV PYTORCH_CUDA_VERSION=cu126
 
-FROM nvidia/cuda:12.6.3-base-ubuntu22.04 AS cu12-base
-ENV CUDA_VERSION_SHORT=cu126
+# Backward-compatible stage aliases.
+FROM cu130-base AS cu13-base
+FROM cu128-base AS cu12.8-base
+FROM cu128-base AS cu12-base
 
 FROM ${CUDA_VERSION}-base AS final
 ARG PYTHON_VERSION=3.12
 ENV PYTHON_VERSION=${PYTHON_VERSION}
 
+# Install the CUDA runtime requirements explicitly so torch is selected from
+# the matching PyTorch CUDA index before local wheels resolve dependencies.
 # Some dependencies such as timm (required by InternVL models) are listed in requirements/serve.txt.
-COPY requirements/serve.txt /tmp/requirements/serve.txt
+COPY requirements/common.txt requirements/runtime_cuda.txt requirements/serve.txt /tmp/requirements/
 COPY docker/install.sh /tmp/install.sh
 RUN --mount=type=cache,target=/root/.cache \
-    --mount=type=cache,target=/wheels,from=wheels,source=/wheels \
+    --mount=type=bind,target=/wheels,from=wheels,source=/wheels \
     /tmp/install.sh
 
 # explicitly set ptxas path for triton

@@ -177,6 +177,13 @@ public:
         return slot_ ? *slot_ : Tensor{};
     }
 
+    /// Replace the parameter slot (e.g. after quant alloc or MakeStridedPtrs).
+    void set(Tensor t)
+    {
+        TM_CHECK(slot_ != nullptr);
+        *slot_ = std::move(t);
+    }
+
     explicit operator bool() const
     {
         return slot_ && static_cast<bool>(*slot_);

@@ -16,6 +16,7 @@ void invokeReduceV3(T*           out,
                     float*       partial_ML,
                     float*       partial_O,
                     const int*   split_cnt,
+                    const bool*  token_mask,  // optional [query_num] per-token validity mask
                     int          partial_len,
                     int          max_split_cnt,
                     int          cp_size,

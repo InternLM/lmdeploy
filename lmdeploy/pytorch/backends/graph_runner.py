@@ -1,10 +1,17 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 import torch
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    ModelConfig,
+    normalize_cudagraph_capture_batch_sizes,
+)
 from lmdeploy.pytorch.model_inputs import StepContext
 
 
@@ -23,6 +30,29 @@ def _get_capture_batch_size_impl(max_batches: int):
         batch_size *= 2
     ret.append(max_batches)
     return ret
+
+
+_preparing_prefill: ContextVar[bool] = ContextVar('graph_runner_preparing_prefill', default=False)
+
+
+@contextmanager
+def prefill_preparation_scope():
+    """Mark ModelAgent-controlled graph-runner prefill warmup.
+
+    Only ModelAgent warmup enters this scope, during startup or an explicit graph refresh.
+
+    The CUDA runner may build missing piecewise plans here. Serving-time dummy ranks never capture.
+    """
+    token = _preparing_prefill.set(True)
+    try:
+        yield
+    finally:
+        _preparing_prefill.reset(token)
+
+
+def is_preparing_prefill() -> bool:
+    """Return whether ModelAgent prefill preparation is active."""
+    return _preparing_prefill.get()
 
 
 class GraphRunner:
@@ -90,7 +120,7 @@ class GraphRunner:
 
     def reset(self):
         """Remove all graphs to prevent hanging on exit."""
-        pass
+        self._runner_meta.padding_batch_size = None
 
     def get_meta(self):
         """Get graphrunner meta."""
@@ -101,4 +131,12 @@ class GraphRunner:
 
     def get_capture_batch_sizes(self) -> list[int]:
         """Capture batch sizes."""
+        if self.cache_config.cudagraph_capture_batch_sizes is not None:
+            self.cache_config.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+                self.cache_config.cudagraph_capture_batch_sizes, self.cache_config.max_batches)
+            return self.cache_config.cudagraph_capture_batch_sizes
         return _get_capture_batch_size_impl(self.cache_config.max_batches)
+
+    def get_prefill_warmup_token_sizes(self) -> list[int]:
+        """Return extra single-batch token sizes to warm up before serving."""
+        return []

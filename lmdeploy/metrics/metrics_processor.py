@@ -52,6 +52,7 @@ class MetricsProcessor:
 
                 # update request stats
                 if outputs and outputs.req_metrics:
+                    req_stats.cached_tokens = outputs.req_metrics.cached_tokens
                     # when users visit "/abort_request" endpoint, `req_metrics` might be None
                     req_stats.update_from_events(outputs.req_metrics.engine_events)
 

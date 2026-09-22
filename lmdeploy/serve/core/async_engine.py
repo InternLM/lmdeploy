@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 import torch
 
+from lmdeploy._guided_decoding import ensure_response_format_compilable
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (
@@ -35,7 +36,7 @@ from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
-from .exceptions import SafeRunException
+from .exceptions import ErrorCode, RequestError, SafeRunException
 
 logger = get_logger('lmdeploy')
 
@@ -44,7 +45,6 @@ logger = get_logger('lmdeploy')
 class GenOut:
     """Pack all response information together."""
     response: str
-    history_token_len: int
     input_token_len: int
     generate_token_len: int
     finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
@@ -54,6 +54,9 @@ class GenOut:
     last_hidden_state: Any = None
     cache_block_ids: list[int] | None = None  # for disaggregation
     routed_experts: Any = None  # for RL router replay
+    cached_tokens: int = 0
+    # Token ids aligned 1:1 with input-scoring logprobs rows.
+    logprob_token_ids: list[int] | None = None
 
     def to_response(self, index: int = 0) -> Response:
         """Convert GenOut to Response object.
@@ -70,7 +73,20 @@ class GenOut:
                         last_hidden_state=self.last_hidden_state,
                         logits=self.logits,
                         routed_experts=self.routed_experts,
+                        cached_tokens=self.cached_tokens,
                         index=index)
+
+
+@dataclasses.dataclass(slots=True)
+class PreprocessedRequest:
+    """Single-use request produced by :meth:`AsyncEngine.preprocess`."""
+
+    session: Session
+    inputs: dict[str, Any]
+    input_token_len: int
+    gen_config: GenerationConfig
+    adapter_name: str | None
+    consumed: bool = False
 
 
 # class AsyncEngine(LogitsMixin):
@@ -85,15 +101,14 @@ class AsyncEngine:
                     ii) and iii).
                 - ii) The model_id of a lmdeploy-quantized model hosted
                     inside a model repo on huggingface.co, such as
-                    "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "internlm/internlm-chat-7b",
-                    "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                    on huggingface.co, such as "internlm/internlm2-chat-7b",
+                    "Qwen/Qwen2.5-7B-Instruct"
                     and so on.
         model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "internlm/internlm-chat-7b",
-            "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
+            huggingface.co, such as "internlm/internlm2-chat-7b",
+            "Qwen/Qwen2.5-7B-Instruct" and so on.
         backend (str): either `turbomind` or `pytorch` backend. Default to
             `turbomind` backend.
         backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
@@ -113,6 +128,7 @@ class AsyncEngine:
                  max_log_len: int | None = None,
                  trust_remote_code: bool = False,
                  speculative_config: SpeculativeConfig | None = None,
+                 allowed_media_domains: list[str] | None = None,
                  **kwargs) -> None:
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'speculative_config={speculative_config}')
@@ -121,7 +137,9 @@ class AsyncEngine:
         self.model_name = model_name if model_name else model_path
         self.chat_template = get_chat_template(model_path, chat_template_config, trust_remote_code=trust_remote_code)
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
-        self.prompt_processor = MultimodalProcessor(self.tokenizer, self.chat_template)
+        self.prompt_processor = MultimodalProcessor(self.tokenizer,
+                                                    self.chat_template,
+                                                    allowed_media_domains=allowed_media_domains)
         self.hf_gen_cfg = get_hf_gen_cfg(model_path, trust_remote_code=trust_remote_code)
         self.arch, self.hf_cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
         self.session_len = (_get_and_verify_max_len(self.hf_cfg, None)
@@ -144,6 +162,7 @@ class AsyncEngine:
         else:
             raise ValueError(f'unsupported backend {backend}')
         self.backend_config = self.engine.engine_config
+        self.speculative_config = speculative_config
         self.is_sleeping = backend_config.empty_init
         self.sleeping_tags: set[str] = set() if not backend_config.empty_init else {'weights', 'kv_cache'}
         logger.info(f'updated backend_config={self.backend_config}')
@@ -164,7 +183,6 @@ class AsyncEngine:
         # build stat loggers
         self._build_stat_loggers()
         self.epoch = 0
-        self._health_probe_task: asyncio.Task | None = None
         self._last_scheduler_tick: int | None = None
         self._last_scheduler_tick_time: float = time.monotonic()
         self._dispatched_start_time: float | None = None
@@ -186,11 +204,14 @@ class AsyncEngine:
                          trust_remote_code: bool = False,
                          **kwargs):
         """Inner build method for turbomind backend."""
-        from lmdeploy import turbomind as tm
-        return tm.TurboMind.from_pretrained(model_path,
-                                            engine_config=backend_config,
-                                            trust_remote_code=trust_remote_code,
-                                            **kwargs)
+        from lmdeploy import turbomind
+        if not turbomind.is_available():
+            raise RuntimeError(
+                'TurboMind was requested but its native module is unavailable.'
+            ) from turbomind._import_error
+        return turbomind.TurboMind.from_pretrained(
+            model_path, engine_config=backend_config, trust_remote_code=trust_remote_code, **kwargs
+        )
 
     def _build_pytorch(self,
                        model_path: str,
@@ -235,7 +256,6 @@ class AsyncEngine:
         logger.info(f'[generate] drop stale session {session.session_id} '
                     f'(session.epoch={epoch}, async_engine.epoch={self.epoch})')
         return GenOut(response='',
-                      history_token_len=session.step,
                       input_token_len=input_token_len,
                       generate_token_len=0,
                       finish_reason='abort',
@@ -280,44 +300,15 @@ class AsyncEngine:
     def _make_health_result(status: str, message: str) -> dict:
         return dict(status=status, message=message)
 
-    async def health_probe(self, timeout: float = 2.0, scheduler_stall_timeout: float = 15.0) -> dict:
-        """Probe backend health with a bounded, non-overlapping call."""
+    async def health_probe(self, scheduler_stall_timeout: float) -> dict:
+        """Probe backend health and validate scheduler progress."""
         if self.is_sleeping:
             return self._make_health_result(
                 status='sleeping',
                 message='Engine is sleeping.',
             )
 
-        if self._health_probe_task is not None:
-            if not self._health_probe_task.done():
-                return self._make_health_result(
-                    status='unhealthy',
-                    message='Previous backend health probe is still pending.',
-                )
-            try:
-                self._health_probe_task.result()
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-            self._health_probe_task = None
-
-        self._health_probe_task = asyncio.create_task(self.engine.get_health_status(), name='EngineHealthProbe')
-        try:
-            backend_status = await asyncio.wait_for(asyncio.shield(self._health_probe_task), timeout=timeout)
-        except asyncio.TimeoutError:
-            return self._make_health_result(
-                status='unhealthy',
-                message=f'Backend health probe timed out after {timeout:.1f}s.',
-            )
-        except Exception as e:
-            self._health_probe_task = None
-            return self._make_health_result(
-                status='unhealthy',
-                message=f'Backend health probe failed: {e}',
-            )
-
-        self._health_probe_task = None
+        backend_status = await self.engine.get_health_status()
         if not backend_status['alive']:
             return self._make_health_result(
                 status='unhealthy',
@@ -400,7 +391,17 @@ class AsyncEngine:
         self.sleeping_tags = self.sleeping_tags - set(tags)
         self.is_sleeping = bool(self.sleeping_tags)
 
-    def _determine_gen_config(self, session, input_ids, gen_config: GenerationConfig | None = None) -> GenerationConfig:
+    def complete_weights_update(self):
+        """Record that externally supplied weights are ready.
+
+        This does not wake the KV cache or enable inference. The caller must
+        explicitly wake ``kv_cache`` after the weight update succeeds.
+        """
+        self.engine.complete_weights_update()
+        self.sleeping_tags.discard('weights')
+        self.is_sleeping = bool(self.sleeping_tags)
+
+    def _determine_gen_config(self, input_ids, gen_config: GenerationConfig | None = None) -> GenerationConfig:
         """Determine the generation configuration."""
         gen_config = deepcopy(gen_config) or GenerationConfig()
         gen_config.convert_stop_bad_words_to_ids(self.tokenizer)
@@ -412,227 +413,292 @@ class AsyncEngine:
             # avoid unnecessary process
             gen_config.temperature = 1.0
             gen_config.repetition_penalty = 1.0
-        # set random if it is not set and sequence_start is True
-        elif gen_config.random_seed is None and session.step == 0:
+        elif gen_config.random_seed is None:
             gen_config.random_seed = random.getrandbits(64)
         if gen_config.n > 1:
             logger.warning(f'n({gen_config.n}) > 1 hasn\'t been supported yet. Fallback to 1')
             gen_config.n = 1
         if gen_config.max_new_tokens is None:
-            gen_config.max_new_tokens = max(0, self.session_len - session.step - len(input_ids))
+            gen_config.max_new_tokens = max(0, self.session_len - len(input_ids))
         return gen_config
 
     @asynccontextmanager
     async def safe_run(self, handle, session, **kwargs):
         generator = handle.async_stream_infer(session.session_id, **kwargs)
-        try:
-            metrics_processor.increase_api_routed_requests()
-            yield generator
-        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.exception(f'[safe_run] session {session.session_id} exception caught: {e}')
-            metrics_processor.increase_failed_requests('cancel')
+        # async_stream_infer captured its own kwargs; do not retain large multimodal data here.
+        kwargs.pop('multimodal', None)
+
+        async def cleanup_after_exception():
             # Use asyncio.shield to protect cleanup coroutines from being cancelled.
             # When a task is in cancelling state, bare `await` raises CancelledError
             # immediately. shield ensures the inner coroutine runs to completion.
-            # The outer `except (asyncio.CancelledError, Exception)` catches the
-            # CancelledError that shield itself re-raises at the await point.
             try:
                 await asyncio.shield(handle.async_cancel(session.session_id))
-            except (asyncio.CancelledError, Exception) as cancel_e:
-                logger.debug(f'[safe_run] session {session.session_id} async_cancel exception caught: {cancel_e}')
-            if self.backend == 'pytorch':
-                logger.info(f'[safe_run] session {session.session_id} ending session')
-                try:
-                    await asyncio.shield(handle.async_end(session.session_id))
-                except (asyncio.CancelledError, Exception) as end_e:
-                    logger.debug(f'[safe_run] session {session.session_id} async_end exception caught: {end_e}')
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception(f'[safe_run] session {session.session_id} async_cancel failed.')
+
+        try:
+            metrics_processor.increase_api_routed_requests()
+            yield generator
+        except (asyncio.CancelledError, GeneratorExit) as e:
+            logger.info(f'[safe_run] session {session.session_id} cancelled: {type(e).__name__}')
+            metrics_processor.increase_failed_requests('cancel')
+            await cleanup_after_exception()
             # Wrap as SafeRunException so that the outer `request_handle` context
             # manager in `session_manager.py` can distinguish a handled cancellation (caught by
             # `except SafeRunException: pass`) from an unexpected CancelledError.
             # Without this, the suppressed exception leaves the task in cancelling
             # state, causing a second CancelledError at the next await point.
             raise SafeRunException(f'Safe run exception for session {session.session_id}') from e
+        except Exception as e:
+            logger.exception(f'[safe_run] session {session.session_id} exception caught: {e}')
+            metrics_processor.increase_failed_requests('error')
+            await cleanup_after_exception()
+            raise RequestError(ErrorCode.INTERNAL_ERROR) from e
         finally:
             await generator.aclose()
             metrics_processor.decrease_api_routed_requests()
 
-    async def generate(
+    async def preprocess(
             self,
             messages,
             session_id: int | Session,
             gen_config: GenerationConfig | None = None,
             tools: list[object] | None = None,
-            reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
-            stream_response: bool = True,
-            sequence_start: bool = True,
-            sequence_end: bool = True,  # no interactive mode by default
-            step: int = 0,
+            reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None,
             do_preprocess: bool = True,
             adapter_name: str | None = None,
-            rewind_stop_tokens: bool = False,
             input_ids: list | None = None,
             enable_thinking: bool | None = None,
             chat_template_kwargs: dict | None = None,
             media_io_kwargs: dict[str, Any] | None = None,
             mm_processor_kwargs: dict[str, Any] | None = None,
-            **kwargs):
-        """Generate responses.
+            **kwargs) -> PreprocessedRequest:
+        """Validate and prepare one request before generation starts.
 
-        Args:
-            messages (str | List): chat history or prompt
-            session_id (int | Session): the session id or instance of Session
-            gen_config (GenerationConfig | None): a instance of
-                GenerationConfig. Default to None.
-            stream_response (bool): whether return responses streamingly
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
-            step (int): the offset of the k/v cache
-            do_preprocess (bool): whether pre-process the messages. Default to
-                True, which means chat_template will be applied.
+        Exactly one of ``messages`` and ``input_ids`` must be supplied. Chat
+        rendering, tokenization, multimodal processing, generation-config
+        normalization, and context checks all complete before this coroutine
+        returns.
+
+        Returns:
+            A single-use request accepted by :meth:`generate`.
+
+        Raises:
+            RequestError: If validation or preprocessing fails.
         """
-        metrics_processor.increase_total_requests()
+        session = None
+        remove_session_on_error = True
 
-        if (messages is not None) ^ (input_ids is None):
-            raise ValueError('You must specify exactly one of messages or input_ids')
-        if isinstance(session_id, Session):
-            session = session_id
-        elif isinstance(session_id, int):
-            session = self.session_mgr.get(session_id, step=step)
-        else:
-            raise ValueError(f'Invalid session_id: {session_id}. It should be an instance of Session or an integer.')
-        session_id = session.session_id
-        chat_template_kwargs = chat_template_kwargs or {}
-        if enable_thinking is not None:
-            logger.warning('enable_thinking is deprecated, use chat_template_kwargs["enable_thinking"] instead')
-            if chat_template_kwargs.get('enable_thinking') is None:
-                chat_template_kwargs['enable_thinking'] = enable_thinking
+        def remove_session():
+            if session is not None and remove_session_on_error:
+                self.session_mgr.remove(session)
+
+        try:
+            if (messages is not None) ^ (input_ids is None):
+                raise RequestError(ErrorCode.INVALID_REQUEST,
+                                   'You must specify exactly one of messages or input_ids.')
+            if gen_config is not None and gen_config.response_format is not None:
+                ensure_response_format_compilable(gen_config.response_format)
+            if isinstance(session_id, Session):
+                session = session_id
+            elif isinstance(session_id, int):
+                session = self.session_mgr.get(session_id)
             else:
-                logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
-                               'the value will not be overwritten by enable_thinking')
-        if messages:
-            try:
-                prompt = messages
-                self.request_logger.log_prompt(session, prompt=prompt)
-                prompt_input = await self.prompt_processor.get_prompt_input(prompt=prompt,
-                                                                            do_preprocess=do_preprocess,
-                                                                            sequence_start=sequence_start,
-                                                                            adapter_name=adapter_name,
-                                                                            tools=tools,
-                                                                            reasoning_effort=reasoning_effort,
-                                                                            chat_template_kwargs=chat_template_kwargs,
-                                                                            media_io_kwargs=media_io_kwargs,
-                                                                            mm_processor_kwargs=mm_processor_kwargs,
-                                                                            **kwargs)
+                raise RequestError(
+                    ErrorCode.INVALID_REQUEST,
+                    f'Invalid session_id: {session_id}. It must be a Session or an integer.')
+            if session._handle is not None:
+                remove_session_on_error = False
+                raise RequestError(
+                    ErrorCode.REQUEST_CONFLICT,
+                    f'Session {session.session_id} already has an active request.')
+
+            chat_template_kwargs = chat_template_kwargs or {}
+            if enable_thinking is not None:
+                logger.warning('enable_thinking is deprecated, use chat_template_kwargs["enable_thinking"] instead')
+                if chat_template_kwargs.get('enable_thinking') is None:
+                    chat_template_kwargs['enable_thinking'] = enable_thinking
+                else:
+                    logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
+                                   'the value will not be overwritten by enable_thinking')
+
+            if messages is not None:
+                self.request_logger.log_prompt(session, prompt=messages)
+                prompt_input = await self.prompt_processor.get_prompt_input(
+                    prompt=messages,
+                    do_preprocess=do_preprocess,
+                    adapter_name=adapter_name,
+                    tools=tools,
+                    reasoning_effort=reasoning_effort,
+                    chat_template_kwargs=chat_template_kwargs,
+                    media_io_kwargs=media_io_kwargs,
+                    mm_processor_kwargs=mm_processor_kwargs,
+                    **kwargs)
                 prompt = prompt_input.get('prompt')
                 input_ids = prompt_input.get('input_ids')
-                self.request_logger.log_inputs(session,
-                                            prompt=prompt,
-                                            prompt_token_ids=input_ids,
-                                            gen_config=gen_config,
-                                            adapter_name=adapter_name)
-            except Exception:
-                logger.exception('[generate] error in prompt processing')
-                metrics_processor.increase_failed_requests('error')
-                yield GenOut(response='in prompt processing error',
-                             history_token_len=session.step,
-                             input_token_len=len(input_ids) if input_ids is not None else 0,
-                             generate_token_len=0,
-                             finish_reason='error',
-                             token_ids=[])
-                return
-        else:
-            # TODO(lvhan) VLM doesn't support input_ids as an argument.
-            # Figure out a graceful way to handle the invalid input
-            prompt_input = dict(input_ids=input_ids)
+            else:
+                prompt = None
+                prompt_input = dict(input_ids=input_ids)
 
-        gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
+            if input_ids is None:
+                raise RequestError(ErrorCode.PREPROCESS_FAILED)
+            input_len = len(input_ids)
+            if input_len >= self.session_len:
+                raise RequestError(
+                    ErrorCode.CONTEXT_LENGTH_EXCEEDED,
+                    f'Input length ({input_len}) must be smaller than the model context length ({self.session_len}).')
 
-        if gen_config.max_new_tokens == 0:
-            logger.info(f'run out of tokens. session={session_id}.')
+            gen_config = self._determine_gen_config(input_ids, gen_config=gen_config)
+            input_logprobs_requested = gen_config.logprob_start_len >= 0
+            if input_logprobs_requested and gen_config.logprob_start_len >= input_len:
+                raise RequestError(
+                    ErrorCode.INVALID_REQUEST,
+                    f'logprob_start_len({gen_config.logprob_start_len}) exceeds '
+                    f'the last source position for processed input_ids length({input_len}).')
+            if input_logprobs_requested and gen_config.max_new_tokens != 0:
+                raise RequestError(ErrorCode.INVALID_REQUEST, 'logprob_start_len requires max_new_tokens=0.')
+            if gen_config.max_new_tokens < 1 and not input_logprobs_requested:
+                raise RequestError(
+                    ErrorCode.INVALID_REQUEST,
+                    f'max_new_tokens must be at least 1, got {gen_config.max_new_tokens}.')
+            if self.backend_config.enable_prefix_caching and (gen_config.output_last_hidden_state == 'all'
+                                                              or gen_config.output_logits == 'all'):
+                raise RequestError(
+                    ErrorCode.UNSUPPORTED_FEATURE,
+                    "Outputting all tokens' logits or last_hidden_state is not supported when prefix caching is on.")
+
+            self.request_logger.log_inputs(session,
+                                           prompt=prompt,
+                                           prompt_token_ids=input_ids,
+                                           gen_config=gen_config,
+                                           adapter_name=adapter_name)
+            logger.info(f'session={session.session_id}, '
+                        f'input_tokens={input_len}, '
+                        f'max_new_tokens={gen_config.max_new_tokens}, '
+                        f'prep={do_preprocess}')
+            return PreprocessedRequest(session=session,
+                                       inputs=prompt_input,
+                                       input_token_len=input_len,
+                                       gen_config=gen_config,
+                                       adapter_name=adapter_name)
+        except (asyncio.CancelledError, GeneratorExit):
+            metrics_processor.increase_total_requests()
+            metrics_processor.increase_failed_requests('cancel')
+            remove_session()
+            raise
+        except RequestError:
+            metrics_processor.increase_total_requests()
             metrics_processor.increase_failed_requests('error')
-            yield GenOut(response='',
-                         history_token_len=session.step,
-                         input_token_len=len(input_ids),
-                         generate_token_len=0,
-                         finish_reason='length',
-                         token_ids=[])
-            if sequence_end is True and sequence_start is False:
-                await session.async_close()
-            return
-
-        if self.backend_config.enable_prefix_caching and (gen_config.output_last_hidden_state == 'all'
-                                                          or gen_config.output_logits == 'all'):
-            errmsg = ('lmdeploy does not support outputting all token\'s logits or last_hidden_state '
-                      'when prefix caching is ON')
+            remove_session()
+            raise
+        except (TypeError, ValueError) as e:
+            metrics_processor.increase_total_requests()
             metrics_processor.increase_failed_requests('error')
-            yield GenOut(response=errmsg,
-                         history_token_len=session.step,
-                         input_token_len=len(input_ids),
-                         generate_token_len=0,
-                         finish_reason='error',
-                         token_ids=[])
-            return
-        logger.info(f'session={session_id}, '
-                    f'history_tokens={session.step}, '
-                    f'input_tokens={len(input_ids)}, '
-                    f'max_new_tokens={gen_config.max_new_tokens}, '
-                    f'seq_start={sequence_start}, seq_end={sequence_end}, '
-                    f'step={step}, prep={do_preprocess}')
+            remove_session()
+            raise RequestError(ErrorCode.INVALID_REQUEST, str(e)) from e
+        except Exception as e:
+            logger.exception('[preprocess] request preprocessing failed')
+            metrics_processor.increase_total_requests()
+            metrics_processor.increase_failed_requests('error')
+            remove_session()
+            raise RequestError(ErrorCode.PREPROCESS_FAILED) from e
 
+    @staticmethod
+    def _request_error_from_status(status: ResponseType) -> RequestError:
+        if status == ResponseType.INPUT_LENGTH_ERROR:
+            return RequestError(ErrorCode.CONTEXT_LENGTH_EXCEEDED)
+        if status == ResponseType.NOT_SUPPORTED:
+            return RequestError(ErrorCode.UNSUPPORTED_FEATURE)
+        if status in (ResponseType.SESSION_REPEAT, ResponseType.PREFIX_CACHE_CONFLICT):
+            return RequestError(ErrorCode.REQUEST_CONFLICT)
+        if status in (ResponseType.ENGINE_STOP_ERROR, ResponseType.SESSION_NOT_EXIST, ResponseType.HANDLER_NOT_EXIST,
+                      ResponseType.NO_QUEUE):
+            return RequestError(ErrorCode.ENGINE_UNAVAILABLE)
+        return RequestError(ErrorCode.INTERNAL_ERROR)
+
+    async def generate(self, request: PreprocessedRequest, stream_response: bool = True):
+        """Generate responses from a single-use preprocessed request.
+
+        Raw prompts are intentionally rejected; call :meth:`preprocess` first.
+        """
+        if not isinstance(request, PreprocessedRequest):
+            raise TypeError('generate requires a PreprocessedRequest returned by preprocess')
+        if request.consumed:
+            raise RequestError(ErrorCode.REQUEST_CONFLICT, 'The preprocessed request has already been consumed.')
+        request.consumed = True
+        metrics_processor.increase_total_requests()
+
+        session = request.session
+        session_id = session.session_id
+        prompt_input = request.inputs
+        input_ids = prompt_input['input_ids']
+        gen_config = request.gen_config
+        adapter_name = request.adapter_name
+        input_len = request.input_token_len
+        session_removed = False
+
+        def remove_session_once():
+            nonlocal session_removed
+            if not session_removed:
+                self.session_mgr.remove(session)
+                session_removed = True
+
+        input_logprobs_requested = gen_config.logprob_start_len >= 0
+        logprob_token_ids = (input_ids[gen_config.logprob_start_len + 1:]
+                             if input_logprobs_requested else None)
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
 
         stop_ids = []
         if not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
-
-
-        stale = self._if_session_stale(session, len(prompt_input['input_ids']))
+        stale = self._if_session_stale(session, input_len)
         if stale is not None:
             metrics_processor.increase_failed_requests('abort')
+            remove_session_once()
             yield stale
-            if sequence_end:
-                self.session_mgr.remove(session)
             return
+        session._remove_on_request_exit = True
+        runtime_error = None
         async with session.request_handle() as handle:
             if session.epoch is not None and session.epoch != self.epoch:
                 logger.info(f'[generate] session {session_id} got aborted before starting inference, '
                                f'session.epoch={session.epoch}, async_engine.epoch={self.epoch}')
                 metrics_processor.increase_failed_requests('abort')
+                remove_session_once()
                 yield GenOut(response='',
-                             history_token_len=0,
-                             input_token_len=len(input_ids),
+                             input_token_len=input_len,
                              generate_token_len=0,
                              finish_reason='abort',
                              token_ids=[])
-                if sequence_end:
-                    self.session_mgr.remove(session)
                 return
             token_ids = input_ids.copy()
-            history_len = session.step
-            input_len = len(input_ids)
             output_len, gen_len = 0, 0
             state = DetokenizeState(input_len)
             response = ''
             response_chunks = []
             finish_reason = None
+            cached_tokens = 0
             async with self.safe_run(handle,
                                      session=session,
                                      **prompt_input,
                                      gen_config=gen_config,
                                      adapter_name=adapter_name,
-                                     stream_output=stream_response,
-                                     sequence_start=sequence_start,
-                                     sequence_end=sequence_end,
-                                     step=history_len) as gen:
+                                     stream_output=stream_response) as gen:
+                # The engine has accepted multimodal data; avoid retaining preprocessed tensors here.
+                prompt_input.pop('multimodal', None)
                 logger.debug(f'[generate] session {session_id} started')
                 hit_stop_token = 0
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
-
                 # We use this as default outputs in case the async_stream_infer of the Engine yields empty generator.
                 outputs = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
 
                 async for outputs in gen:
+                    req_metrics = outputs.req_metrics
+                    cached_tokens = req_metrics.cached_tokens if req_metrics is not None else 0
                     iteration_stats = IterationStats()  # per-iteration stats
                     specdecode_stats = SpeculativeDecodingStats(
                         self.num_spec_token) if self.num_spec_token > 0 else None
@@ -662,13 +728,14 @@ class AsyncEngine:
                     res = token_ids[ids_offset:]
 
                     out = GenOut(response,
-                                 history_len,
                                  input_len,
                                  gen_len,
                                  finish_reason,
                                  token_ids=res,
+                                 logprob_token_ids=logprob_token_ids,
                                  routed_experts=outputs.routed_experts,
-                                 cache_block_ids=outputs.cache_block_ids)
+                                 cache_block_ids=outputs.cache_block_ids,
+                                 cached_tokens=cached_tokens)
                     if outputs.logprobs is not None:
                         out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
                     if outputs.last_hidden_state is not None:
@@ -685,7 +752,8 @@ class AsyncEngine:
                         finish_reason = 'abort'
                         metrics_processor.increase_failed_requests('abort')
                     else:
-                        finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+                        finish_reason = ('stop' if outputs.token_ids
+                                         and outputs.token_ids[-1] in stop_ids else 'length')
                         metrics_processor.increase_succeeded_requests()
 
                     # utf-8 char at the end means it's a potential unfinished byte sequence
@@ -693,7 +761,9 @@ class AsyncEngine:
                         # avoid returning the last response twice
                         response = ''
                     token_ids, logits, last_hidden_state, logprobs = [], None, None, None
-                    if gen_config.include_stop_str_in_output and finish_reason == 'stop':
+                    if input_logprobs_requested:
+                        logprobs = outputs.logprobs
+                    elif gen_config.include_stop_str_in_output and finish_reason == 'stop':
                         # return the eos token id (MUST be in a list), eos string, eos token's logits and so on
                         token_ids = outputs.token_ids[-1:]
                         response = self.tokenizer.decode(token_ids, skip_special_tokens=False)
@@ -710,44 +780,27 @@ class AsyncEngine:
 
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
-                                f'{len(input_ids)}, output_tokens {gen_len}')
+                                f'{input_len}, output_tokens {gen_len}')
                     yield GenOut(response,
-                                 session.step,
-                                 len(input_ids),
+                                 input_len,
                                  gen_len,
                                  finish_reason,
                                  token_ids=token_ids,
+                                 logprob_token_ids=logprob_token_ids,
                                  logprobs=logprobs,
                                  logits=logits,
                                  last_hidden_state=last_hidden_state,
                                  routed_experts=routed_experts,
-                                 cache_block_ids=outputs.cache_block_ids)
-                    # Note: We remove the session step update here. Let the caller(e.g., pipeline.chat) take care of it.
+                                 cache_block_ids=outputs.cache_block_ids,
+                                 cached_tokens=cached_tokens)
                 else:
                     logger.error(f'session {session_id} finished, {outputs.status}, '
                                  'reason "error"')
                     metrics_processor.increase_failed_requests('error')
-                    yield GenOut(response=f'internal error happened, status code {outputs.status}',
-                                 history_token_len=session.step,
-                                 input_token_len=len(input_ids),
-                                 generate_token_len=0,
-                                 finish_reason='error',
-                                 token_ids=[])
-            # update step
-            if sequence_end:
-                if self.backend == 'pytorch':
-                    # manually end pytorch session
-                    # note: Using session.async_abort() here results in deadlock
-                    # because it waits for session's _active event to be set, but the event won't be set
-                    # until the session is finished, i.e., session.request_handle() context exits.
-                    await handle.async_end(session.session_id)
-                self.session_mgr.remove(session)
-        # if sequence_end:
-        #     if self.backend == 'pytorch':
-        #         # manually end pytorch session. session cannot be ended until session.request_handle()
-        #         # context exits
-        #         await session.async_close()
-        #     self.session_mgr.remove(session)
+                    runtime_error = self._request_error_from_status(outputs.status)
+        remove_session_once()
+        if runtime_error is not None:
+            raise runtime_error
 
     def start_loop(self, loop, use_async_api=False):
         """Start engine loop.
@@ -812,9 +865,7 @@ class AsyncEngine:
 
     async def async_get_logits(self,
                                input_ids,
-                               sessions: list['Session'] | None = None,
-                               sequence_start: bool = True,
-                               sequence_end: bool = True) -> list[torch.Tensor]:
+                               sessions: list['Session'] | None = None) -> list[torch.Tensor]:
         assert input_ids and all(isinstance(_, list) for _ in input_ids)
         assert sessions is None or (len(sessions) == len(input_ids))
 
@@ -832,15 +883,10 @@ class AsyncEngine:
                                          session=session,
                                          input_ids=input_ids[i],
                                          gen_config=gen_config,
-                                         stream_output=False,
-                                         sequence_start=sequence_start,
-                                         sequence_end=sequence_end,
-                                         step=session.step) as gen:
+                                         stream_output=False) as gen:
                     async for outputs in gen:
                         pass
                     logits[i] = outputs.logits[:input_len, :]
-                if sequence_end and self.backend == 'pytorch':
-                    await handle.async_end(session.session_id)
 
         create_sessions = False
         if sessions is None:
@@ -848,7 +894,49 @@ class AsyncEngine:
             sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
         tasks = [_proc(session, i) for i, session in enumerate(sessions)]
         await asyncio.gather(*tasks)
-        if sequence_end and create_sessions:
+        if create_sessions:
             for session in sessions:
                 self.session_mgr.remove(session)
         return logits
+
+    async def async_get_ppl(self, input_ids: list[int]) -> float:
+        """Get the perplexity (mean cross-entropy loss) of a single input
+        prompt.
+
+        Args:
+            input_ids (list[int]): the input token ids to score.
+
+        Returns:
+            float: the mean cross-entropy loss of the input, matching
+                ``Pipeline.get_ppl``.
+        """
+        if self.backend_config.enable_prefix_caching:
+            raise ValueError('async_get_ppl is not supported when prefix caching is on.')
+        if self.speculative_config is not None:
+            raise ValueError('async_get_ppl is not supported when speculative decoding is on.')
+        # position i predicts token i+1, so the last position has no target
+        num_scored = len(input_ids) - 1
+        if num_scored < 1:
+            raise ValueError('input must have at least 2 tokens to compute ppl.')
+
+        ce_loss = None
+        session = self.session_mgr.get()
+        try:
+            async with session.request_handle() as handle:
+                # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
+                # when perform inference on a reward model.
+                gen_config = GenerationConfig(max_new_tokens=1, return_ppl=True, top_k=1)
+                async with self.safe_run(handle,
+                                         session=session,
+                                         input_ids=input_ids,
+                                         gen_config=gen_config,
+                                         stream_output=False) as gen:
+                    async for outputs in gen:
+                        pass
+                    ce_loss = outputs.ce_loss
+        finally:
+            self.session_mgr.remove(session)
+        if ce_loss is None:
+            raise ValueError('async_get_ppl failed to compute ce_loss.')
+        # normalize the summed NLL by the number of scored tokens
+        return ce_loss / num_scored

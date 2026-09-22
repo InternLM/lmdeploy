@@ -22,13 +22,15 @@ from lmdeploy.utils import get_logger, get_model
 
 from ..adapter.adapter import AdapterManager
 from ..config import CacheConfig, ModelConfig
-from ..messages import SchedulerSequence, UpdateTokenMode
+from ..kv_connector import KVConnectorRole, build_kv_connector, prepare_kv_connector_config
+from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
+from ..multimodal.data_type import ensure_multimodal_content_hashes
 from ..paging import Scheduler
 from ..strategies import build_strategy_factory
 from .base import EngineBase
 from .config_builder import ConfigBuilder
 from .engine_checker import EngineChecker
-from .executor import build_executor
+from .executor import build_executor, get_distributed_executor_backend
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
@@ -58,7 +60,10 @@ class InferOutput:
     req_metrics: RequestMetrics = None
 
     # expert ids
-    routed_experts: torch.Tensor = None
+    routed_experts: np.ndarray = None
+
+    # summed, unnormalized cross-entropy (NLL) of the input prompt
+    ce_loss: float = None
 
 
 def _build_seq_meta(model_config: ModelConfig, cache_config: CacheConfig, seq_strategy: Any, sampling_strategy: Any):
@@ -134,7 +139,32 @@ class Engine(EngineBase):
         cache_config = ConfigBuilder.build_cache_config(engine_config)
         backend_config = ConfigBuilder.build_backend_config(engine_config)
         dist_config = ConfigBuilder.build_dist_config(engine_config)
+        distributed_executor_backend = engine_config.distributed_executor_backend
+        transfer_config = cache_config.kv_transfer_config
+        if (distributed_executor_backend is None and transfer_config is not None
+                and transfer_config.is_kv_transfer_instance):
+            distributed_executor_backend = get_distributed_executor_backend(
+                dist_config.world_size,
+                dist_config.dp,
+                engine_config.device_type,
+                logger,
+            )
+        prepare_kv_connector_config(
+            cache_config,
+            model_path=model_path,
+            dist_config=dist_config,
+            distributed_executor_backend=distributed_executor_backend,
+        )
+        memdecode_config = ConfigBuilder.build_memdecode_config(model_path,
+                                                                engine_config,
+                                                                cache_config,
+                                                                dist_config,
+                                                                trust_remote_code=trust_remote_code,
+                                                                )
+        if memdecode_config is not None and speculative_config is not None:
+            raise ValueError('MemDecode and speculative decoding cannot be enabled together.')
         misc_config = ConfigBuilder.build_misc_config(engine_config)
+        misc_config.memdecode_config = memdecode_config
         # spec decode
         self.specdecode_config = ConfigBuilder.build_specdecode_config(model_path,
                                                                        speculative_config,
@@ -153,7 +183,7 @@ class Engine(EngineBase):
             misc_config=misc_config,
             adapters=adapters,
             device_type=engine_config.device_type,
-            distributed_executor_backend=engine_config.distributed_executor_backend,
+            distributed_executor_backend=distributed_executor_backend,
             dtype=engine_config.dtype,
             specdecode_config=self.specdecode_config,
             trust_remote_code=trust_remote_code,
@@ -176,7 +206,18 @@ class Engine(EngineBase):
                                         cache_config=cache_config,
                                         seq_strategy=self.seq_strategy,
                                         sampling_strategy=self.sampling_strategy)
-        self.scheduler = Scheduler(scheduler_config, cache_config, seq_meta=self.seq_meta)
+        scheduler_connector = build_kv_connector(
+            KVConnectorRole.SCHEDULER,
+            cache_config,
+            tp_size=dist_config.attn_tp,
+            kv_head_replica_num=self.model_config.num_replicate_key_value_heads,
+        )
+        self.scheduler = Scheduler(
+            scheduler_config,
+            cache_config,
+            seq_meta=self.seq_meta,
+            kv_connector=scheduler_connector,
+        )
 
         # engine args
         self.model_path = model_path
@@ -191,10 +232,12 @@ class Engine(EngineBase):
         self.engine_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
 
         self.req_manager = self._bind_request_manager()
-        # This state tracks only explicit Engine.sleep()/wakeup() calls. Do not
-        # infer sleeping from empty_init: empty_init still builds runtime
-        # resources and has its own weight-update workflow.
-        self._sleeping_tags = set()
+        # Empty init deliberately omits weights and KV cache readiness. Keep
+        # internal requests blocked until both resources have been completed.
+        self._sleeping_tags = _SLEEPING_TAGS.copy() if self.misc_config.empty_init else set()
+        if self._sleeping_tags:
+            self._block_new_inputs()
+        self._weights_update_lock: asyncio.Lock | None = None
         self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
         self._multimodal_session_end_count = 0
 
@@ -225,11 +268,10 @@ class Engine(EngineBase):
                 It could be one of the following options:
                     - i) The model_id of a lmdeploy-quantized model hosted
                       inside a model repo on huggingface.co, such as
-                      "InternLM/internlm-chat-20b-4bit",
                       "lmdeploy/llama2-chat-70b-4bit", etc.
                     - ii) The model_id of a model hosted inside a model repo
-                      on huggingface.co, such as "InternLM/internlm-chat-7b",
-                      "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                      on huggingface.co, such as "internlm/internlm2-chat-7b",
+                      "Qwen/Qwen2.5-7B-Instruct"
                       and so on.
             engine_config (PytorchEngineConfig): Pytorch engine config.
             trust_remote_code (bool): Trust remote code
@@ -304,7 +346,7 @@ class Engine(EngineBase):
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_REPEAT
-            if session_id not in self.scheduler.sessions:
+            if self.scheduler.get_session(session_id) is None:
                 self.scheduler.add_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
@@ -316,12 +358,19 @@ class Engine(EngineBase):
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
-            if session_id in self.scheduler.sessions:
-                self.scheduler.stop_session(session_id)
-                session = self.scheduler.sessions[session_id]
+            session = self.scheduler.get_session(session_id)
+            if session is not None:
+                stopped_resp_ids = set()
                 for seq in session.sequences.values():
+                    if seq.status not in (MessageStatus.STOPPED, MessageStatus.TO_BE_MIGRATED):
+                        continue
                     _resp: Response = getattr(seq, 'resp', None)
                     if _resp is not None:
+                        stopped_resp_ids.add(id(_resp))
+                self.scheduler.stop_session(session_id)
+                for seq in session.sequences.values():
+                    _resp: Response = getattr(seq, 'resp', None)
+                    if _resp is not None and id(_resp) not in stopped_resp_ids:
                         self.req_manager.reject_request(_resp)
                 resp_type = ResponseType.SUCCESS
             if resp:
@@ -364,10 +413,11 @@ class Engine(EngineBase):
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
-            if session_id in self.scheduler.sessions:
-                msgs = list(self.scheduler.sessions[session_id].sequences.values())
+            session = self.scheduler.get_session(session_id)
+            if session is not None:
+                msgs = list(session.sequences.values())
                 if len(msgs) > 0 and msgs[0].preserve_cache:
-                    msgs[0].state.finish()
+                    msgs[0].finish()
                 else:
                     self.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
@@ -380,7 +430,7 @@ class Engine(EngineBase):
         for req in reqs:
             req_data = req.data
             session_id = req_data['session_id']
-            if self.scheduler and session_id not in self.scheduler.sessions:
+            if self.scheduler and self.scheduler.get_session(session_id) is None:
                 self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
             valid_reqs.append(req)
@@ -395,16 +445,18 @@ class Engine(EngineBase):
                 req_data['input_multimodals'] = None
                 continue
 
-            if self.engine_config.disable_vision_encoder:
+            if self.engine_config.language_model_only:
                 # ignore multimodal inputs
                 req_data['input_multimodals'] = None
-                logger.warning('Vision encoder has not been loaded, multimodal inputs will be ignored.')
+                logger.warning('Running in language-model-only mode; multimodal inputs will be ignored.')
                 continue
 
             result = self.input_processor.preprocess_input(input_ids, input_multimodals)
 
             input_ids = result.input_ids
             input_multimodals = result.input_multimodals
+            if self.cache_config.enable_prefix_caching:
+                input_multimodals = ensure_multimodal_content_hashes(input_multimodals)
 
             req_data['token_ids'] = input_ids
             req_data['input_multimodals'] = input_multimodals
@@ -431,7 +483,7 @@ class Engine(EngineBase):
         scheduler = self.scheduler
         for req in reqs:
             session_id = req.data['session_id']
-            sess = scheduler.sessions.get(session_id, None)
+            sess = scheduler.get_session(session_id)
             if sess is None:
                 self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
@@ -460,7 +512,7 @@ class Engine(EngineBase):
                     mode=UpdateTokenMode.INPUTS,
                 )
                 msg.sampling_param = sampling_param
-                msg.state.activate()
+                msg.activate()
 
             __update_max_new_tokens(msg)
             msg.resp = req.resp
@@ -483,11 +535,48 @@ class Engine(EngineBase):
         """Finally process for dist."""
         logger.info('Cleanup executor.')
         self.migration_event = None
+        self.scheduler.shutdown()
         self.executor.release()
 
     def update_params(self, request: Any):
         """Update params."""
         self.executor.update_params(request)
+
+    def _get_weights_update_lock(self):
+        """Get the disaggregated weights-update lock."""
+        if self._weights_update_lock is None:
+            self._weights_update_lock = asyncio.Lock()
+        return self._weights_update_lock
+
+    async def _run_weights_update(self, func, *args):
+        """Run one serialized disaggregated weights-update operation."""
+        async with self._get_weights_update_lock():
+            return await asyncio.to_thread(func, *args)
+
+    async def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness from all local model workers."""
+        return await asyncio.to_thread(self.executor.get_checkpoint_engine_status)
+
+    async def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        return await self._run_weights_update(self.executor.update_weights_from_ipc,
+                                              request, reject_reason)
+
+    def complete_weights_update(self):
+        """Record successful initialization/update without waking KV cache."""
+        self._sleeping_tags.discard('weights')
+
+    async def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        return await self._run_weights_update(self.executor.init_weights_update_group, request)
+
+    async def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        return await self._run_weights_update(self.executor.update_weights_from_distributed, request)
+
+    async def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        return await self._run_weights_update(self.executor.destroy_weights_update_group, request)
 
     def _block_new_inputs(self):
         """Block new inference work from engine instances."""
@@ -502,8 +591,9 @@ class Engine(EngineBase):
     def _cancel_and_end_all_sessions(self):
         """Cancel active responses and remove all scheduler sessions."""
         num_cancelled = 0
-        session_ids = list(self.scheduler.sessions.keys())
-        for session in list(self.scheduler.sessions.values()):
+        sessions = self.scheduler.get_sessions()
+        session_ids = [session.session_id for session in sessions]
+        for session in sessions:
             for seq in list(session.sequences.values()):
                 resp: Response = getattr(seq, 'resp', None)
                 if resp is None or resp.is_done:
@@ -531,6 +621,9 @@ class Engine(EngineBase):
         # cancel all remain sessions
         self._cancel_and_end_all_sessions()
         await self.executor.sleep(level)
+        self.scheduler.finish_kv_transfers_after_worker_drain()
+        if self._engine_loop is not None:
+            self._engine_loop.reset_runtime_state()
         logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))
 
     def wakeup(self, tags: list[str] | None = None):
@@ -539,8 +632,6 @@ class Engine(EngineBase):
         logger.info('PyTorch engine wakeup requested: tags=%s, sleeping_tags=%s.',
                     wakeup_tags, sorted(self._sleeping_tags))
         self.executor.wakeup(wakeup_tags)
-        if wakeup_tags is None or 'kv_cache' in wakeup_tags:
-            self.executor.warmup()
         if wakeup_tags is None:
             self._sleeping_tags.clear()
         else:
@@ -639,8 +730,9 @@ class Engine(EngineBase):
 
     def end_session(self, session_id: int):
         """End session."""
-        if session_id in self.scheduler.sessions:
-            has_multimodal = self._has_multimodal_session(self.scheduler.sessions[session_id])
+        session = self.scheduler.get_session(session_id)
+        if session is not None:
+            has_multimodal = self._has_multimodal_session(session)
             self.scheduler.end_session(session_id)
             self._maybe_trim_multimodal_session(has_multimodal)
             return True
@@ -660,8 +752,8 @@ class Engine(EngineBase):
                 done_tasks.append(task.get_name())
         return len(done_tasks) == 0, done_tasks
 
-    async def get_health_status(self) -> dict:
-        """Get lightweight health status.
+    def get_local_health_status(self) -> dict:
+        """Get a synchronous lightweight health snapshot.
 
         Scheduler metrics alone can still be readable after runtime failure, so this also checks Engine-owned loop tasks
         before returning metrics.
@@ -687,3 +779,7 @@ class Engine(EngineBase):
         return dict(alive=True,
                     message='PyTorch engine is healthy.',
                     schedule_metrics=self.get_schedule_metrics())
+
+    async def get_health_status(self) -> dict:
+        """Get backend health status."""
+        return self.get_local_health_status()

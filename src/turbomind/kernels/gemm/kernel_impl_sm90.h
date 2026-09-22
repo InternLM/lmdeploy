@@ -2,6 +2,10 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cstring>
+#include <type_traits>
+
 #include "cute/util/debug.hpp"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/kernels/core/common.h"
@@ -32,7 +36,7 @@
 
 namespace turbomind::gemm {
 
-extern __shared__ char smem_buf[];
+extern __shared__ __align__(1024) char smem_buf[];
 
 template<class Kernel>
 __global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_name(const __grid_constant__ CUtensorMap tm_a,
@@ -45,6 +49,8 @@ __global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_name(const __
                                                                         const MatrixParam                   param_U,
                                                                         const MatrixParam                   param_V,
                                                                         const MatrixParam                   param_C,
+                                                                        const MatrixParam                   param_W,
+                                                                        bool                                fuse_silu,
                                                                         typename Kernel::Scheduler          sched,
                                                                         void* tensormap_buf)
 {
@@ -62,6 +68,8 @@ __global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_name(const __
                param_U,
                param_V,
                param_C,
+               param_W,
+               fuse_silu,
                sched,
                (CUtensorMap*)tensormap_buf,
                smem_buf);
@@ -79,19 +87,34 @@ public:
 
     static constexpr auto is_grouped_gemm = Gemm::is_grouped_gemm;
 
-    KernelImplSm90()
+    struct AlgoBits {
+        uint32_t family : 8;
+        uint32_t math_wgs : 8;
+        uint32_t : 16;
+
+        uint32_t u32() const
+        {
+            static_assert(sizeof(AlgoBits) == sizeof(uint32_t));
+            uint32_t v;
+            std::memcpy(&v, this, sizeof(v));
+            return v;
+        }
+    };
+
+    explicit KernelImplSm90(const Family& family): Kernel{family}
     {
         desc_.order_a = kRowMajor;  // m, k
         desc_.order_b = kColMajor;  // k, n
         desc_.order_c = kRowMajor;
 
-        desc_.type_a = data_type_v<typename Gemm::Ta>;
-        desc_.type_b = data_type_v<typename Gemm::Tb>;
-        desc_.type_c = data_type_v<typename Gemm::Tc>;
+        desc_.type_a              = data_type_v<typename Gemm::Ta>;
+        desc_.type_b              = data_type_v<typename Gemm::Tb>;
+        desc_.type_c              = data_type_v<typename Gemm::Tc>;
+        desc_.supported_epilogues = Gemm::kSupportsFusedSilu ? Epilogue::kGatedSilu : Epilogue::kNone;
 
-        desc_.striding_a = {is_grouped_gemm ? Striding::kBlocked : Striding::kFlat};  // IterA::kMode;
-        desc_.striding_b = {is_grouped_gemm ? Striding::kBlocked : Striding::kFlat};  // IterB::kMode;
-        desc_.striding_c = {is_grouped_gemm ? Striding::kBlocked : Striding::kFlat};  // Gemm::Epilogue::kMode;
+        desc_.striding_a = Gemm::kStridingA;
+        desc_.striding_b = Gemm::kStridingB;
+        desc_.striding_c = Gemm::kStridingC;
 
         desc_.pack_a = {};  // OpA::kPack;
         desc_.pack_b = {};  // OpB::kPack;
@@ -106,14 +129,20 @@ public:
 
         info_.chunk_size_k = Gemm::TILE_K;
 
-        desc_.align.x = 1;  // OpA::kOrder == kColMajor ? IterA::ThreadMap::kAccessC : 1;
-        desc_.align.y = 1;  // OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
-        desc_.align.z = 1;  // Gemm::TILE_K;
+        desc_.align.x = 1;    // OpA::kOrder == kColMajor ? IterA::ThreadMap::kAccessC : 1;
+        desc_.align.y = 1;    // OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
+        desc_.align.z = 128;  // QuantType::kB, group size 128.
 
         desc_.policy_a = 0;                 // (int)IterA::Policy::kEvictPolicy;
         desc_.policy_b = 0;                 // (int)IterB::Policy::kEvictPolicy;
         desc_.c_tile   = {TILE_M, TILE_N};  // {Gemm::Epilogue::TM, Gemm::Epilogue::TN};
-        desc_.op_class = OpClass::kGMMA_s64n16;
+        desc_.op_class = OpClass::kGMMA_q64n32;
+        desc_.raster   = Gemm::kRasterOrder;
+
+        AlgoBits algo{};
+        algo.family   = Gemm::kAlgoFamily;
+        algo.math_wgs = Gemm::WARPGROUPS;
+        desc_.algo    = algo.u32();
 
         desc_.cluster_shape = {Gemm::Cluster::M, Gemm::Cluster::N};
 
@@ -125,6 +154,10 @@ public:
 
         desc_.arch = Gemm::Arch::value;
 
+        if (!CheckArch()) {
+            return;
+        }
+
         auto func = gemm_kernel_name<Gemm>;
 
         cudaFuncGetAttributes(&info_.attr, func);
@@ -133,9 +166,7 @@ public:
             cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, info_.dynamic_smem_size);
         }
 
-        if (1) {
-            cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
-        }
+        cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
 
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(
             &info_.max_active_ctas, func, Gemm::CTA_SIZE, info_.dynamic_smem_size);
@@ -155,23 +186,31 @@ public:
                const MatrixLayout& _Bdesc,
                const void*         V,
                const MatrixLayout& _Vdesc,
+               const void*         global_scale,
+               const MatrixLayout& global_scale_desc,
                float               beta,
                const void*         C,
                const MatrixLayout& Cdesc,
                void*               D,
                const MatrixLayout& Ddesc,
+               void*               W,
+               const MatrixLayout& Wdesc,
                int                 swizzle,
                int                 splits,
                Workspace&          workspace,
                cudaStream_t        stream) override
     {
+        (void)global_scale;
+        (void)global_scale_desc;
         using Sched = typename Gemm::Scheduler;
 
         MatrixLayout Adesc = _Adesc;
 
-        [[maybe_unused]] const int m = Ddesc.rows;
-        [[maybe_unused]] const int n = Ddesc.cols;
-        [[maybe_unused]] const int k = Adesc.cols;
+        const int  m          = Ddesc.rows;
+        const int  n          = Ddesc.cols;
+        const int  k          = Adesc.cols;
+        const int  num_groups = is_grouped_gemm ? std::max(Adesc.num, 1) : Adesc.num;
+        const bool fuse_silu  = ((int)operation.epilogue & (int)Epilogue::kGatedSilu) != 0;
 
         TM_CHECK_GE(cdiv(k, TILE_K), 2) << "The kernel requires at least 2 k-tiles to work";
 
@@ -189,7 +228,7 @@ public:
 
         auto sched = [&] {
             const int2 tiles = get_tiled_shape(m, n, TILE_M, TILE_N);
-            const int4 shape{m, n, k, Adesc.num};
+            const int4 shape{m, n, k, num_groups};
 
             swizzle = Sched::get_log_tile(tiles, 1 << swizzle);
 
@@ -198,7 +237,7 @@ public:
 
             sched.next_cluster_id_ = TM_CHECK_NOTNULL(workspace.flags);
 
-            sched.offsets_ = Adesc.offsets;
+            sched.offsets_ = nullptr;
 
             return sched;
         }();
@@ -214,8 +253,11 @@ public:
             TM_CUDA_CHECK(cudaMemsetAsync(workspace.flags, 0, sizeof(int), stream));
         }
 
-        // std::cout << "A: " << Adesc << "\n";
-        auto tm_a = make_2d_tma_desc((void*)A, Adesc, {kTileM / kMulticastA, TILE_K}, CU_TENSOR_MAP_SWIZZLE_128B);
+        // Indexed-A: gather activations in-kernel; host A TMA template unused.
+        auto tm_a = make_2d_tma_desc(Gemm::kStridingA == Striding::kIndexed ? nullptr : (void*)A,
+                                     Adesc,
+                                     {kTileM / kMulticastA, TILE_K},
+                                     CU_TENSOR_MAP_SWIZZLE_128B);
 
         // std::cout << "B: " << Bdesc << "\n";
         auto tm_b = make_2d_tma_desc(Gemm::is_grouped_gemm ? nullptr : (void*)B,
@@ -224,22 +266,60 @@ public:
                                      CU_TENSOR_MAP_SWIZZLE_128B);
 
         // std::cout << "C: " << Cdesc << "\n";
-        using LayoutC = typename Gemm::LayoutC;
-        auto tm_c     = make_2d_tma_desc((void*)C, Cdesc, {LayoutC::S0, LayoutC::C0}, get_tma_swizzle(Gemm::kSwizzleC));
+        auto make_tm_c = [&](auto fused_silu) {
+            constexpr bool kFuseSilu = decltype(fused_silu)::value;
+            using Output             = typename Gemm::template Output<kFuseSilu>;
+            using LayoutC            = typename Output::LayoutC;
+
+            MatrixLayout Cdesc_tma = Cdesc;
+            if constexpr (kFuseSilu) {
+                TM_CHECK_EQ(Cdesc_tma.cols % 2, 0);
+                Cdesc_tma.cols /= 2;
+            }
+            return make_2d_tma_desc(
+                (void*)C, Cdesc_tma, {LayoutC::S0, LayoutC::C0}, get_tma_swizzle(Output::kSwizzleC));
+        };
+
+        CUtensorMap tm_c;
+        if constexpr (Gemm::kSupportsFusedSilu) {
+            tm_c = fuse_silu ? make_tm_c(std::true_type{}) : make_tm_c(std::false_type{});
+        }
+        else {
+            tm_c = make_tm_c(std::false_type{});
+        }
 
         CUtensorMap tm_u{};
-        if (U) {
-            // std::cout << "U: " << Udesc << "\n";
+        // Indexed-A also gathers U by idxs; no U TMA template.
+        if (Gemm::kStridingA != Striding::kIndexed) {
             tm_u = make_2d_tma_desc((void*)U, Udesc, {Gemm::kBoxU / kMulticastU, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
-        CUtensorMap            tm_v{};
-        [[maybe_unused]] uint2 box_v{};
-        if (V) {
-            // std::cout << "V: " << Vdesc << "\n";
-            // box_v = {(uint32_t)round_up(cdiv(k, 128), 4), 2};
-            // std::cout << "V: " << Vdesc << ", box: " << box_v.x << "," << box_v.y << "\n";
-            // tm_v = make_2d_tma_desc((void*)V, Vdesc, {box_v.y, box_v.x}, CU_TENSOR_MAP_SWIZZLE_NONE);
+        CUtensorMap tm_v{};
+
+        const auto param_A = to_param((void*)A, Adesc);
+        const auto param_B = to_param((void*)B, Bdesc);
+        const auto param_U = to_param((void*)U, Udesc);
+        const auto param_V = to_param((void*)V, Vdesc);
+        const auto param_C = to_param((void*)D, Ddesc);
+        const auto param_W = to_param((void*)W, Wdesc);
+
+        // Grouped: prepare_moe_tma_descs rebases per-expert A/B/U/C before GEMM launch.
+        if constexpr (is_grouped_gemm) {
+            sched.offsets_ = Gemm::PrepareTmaDescs(tm_a,
+                                                   tm_b,
+                                                   tm_u,
+                                                   tm_c,
+                                                   param_A,
+                                                   param_B,
+                                                   param_U,
+                                                   param_C,
+                                                   fuse_silu,
+                                                   (CUtensorMap*)workspace.tensormaps,
+                                                   num_groups,
+                                                   m,
+                                                   n,
+                                                   stream);
+            TM_CUDA_CHECK(cudaGetLastError());
         }
 
         const int sm_count = sm_count_;
@@ -252,17 +332,10 @@ public:
         cudaLaunchConfig_t config{};
         config.gridDim          = grid;
         config.blockDim         = block;
-        config.dynamicSmemBytes = info_.dynamic_smem_size;
+        config.dynamicSmemBytes = Gemm::GetSmemSize(fuse_silu);
         config.stream           = stream;
 
         auto func = gemm_kernel_name<Gemm>;
-
-        [[maybe_unused]] static bool _ = [&] {
-            int max_cluster_size = 0;
-            cudaOccupancyMaxPotentialClusterSize(&max_cluster_size, func, &config);
-            // std::cout << "max cluster size: " << max_cluster_size << "\n";
-            return false;
-        }();
 
         cudaLaunchAttribute attrs[1];
 
@@ -289,11 +362,13 @@ public:
                                      tm_c,
                                      tm_u,
                                      tm_v,
-                                     to_param((void*)A, Adesc),
-                                     to_param((void*)B, Bdesc),
-                                     to_param((void*)U, Udesc),
-                                     to_param((void*)V, Vdesc),
-                                     to_param((void*)D, Ddesc),
+                                     param_A,
+                                     param_B,
+                                     param_U,
+                                     param_V,
+                                     param_C,
+                                     param_W,
+                                     fuse_silu,
                                      sched,
                                      workspace.tensormaps);
         TM_CUDA_CHECK(ec);
@@ -303,15 +378,8 @@ public:
 
     std::array<size_t, 2> GetWorkspaceSize(int tiles, int splits) const
     {
-        static constexpr bool kSerial = true;
-
         size_t barriers_size = sizeof(int) * tiles;
         size_t partials_size = sizeof(float) * TILE_M * TILE_N * tiles;
-
-        if constexpr (!kSerial) {
-            barriers_size *= splits;
-            partials_size *= splits;
-        }
 
         return {barriers_size, partials_size};
     }
@@ -331,14 +399,22 @@ public:
 
     bool is_feasible(const GemmDesc& desc) const noexcept override
     {
-        if (desc.striding_a != desc_.striding_a) {
+        const bool fuse_silu = ((int)desc.epilogue & (int)Epilogue::kGatedSilu) != 0;
+        if (fuse_silu) {
+            if (!Gemm::kSupportsFusedSilu || desc.type_c != kFloat8_e4m3) {
+                return false;
+            }
+        }
+        // A/B strides span K, C stride spans N (half-width for fused SiLU).
+        const int c_ld = fuse_silu ? desc.n / 2 : desc.n;
+        if (!is_tma_stride_feasible(desc.type_a, desc.k) || !is_tma_stride_feasible(desc.type_b, desc.k)
+            || !is_tma_stride_feasible(desc.type_c, c_ld)) {
             return false;
         }
-        if (desc.striding_b != desc_.striding_b) {
-            return false;
-        }
-        if (desc.striding_c != desc_.striding_c) {
-            return false;
+        if (fuse_silu) {
+            GemmDesc canonical = desc;
+            canonical.type_c   = desc_.type_c;
+            return Kernel::is_feasible(canonical);
         }
         return Kernel::is_feasible(desc);
     }

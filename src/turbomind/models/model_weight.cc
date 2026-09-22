@@ -14,9 +14,15 @@ ModelWeight::ModelWeight(const core::ModelWeightConfig& cfg):
 
 void ModelWeight::prepare()
 {
-    for_each_child([](const char* /*name*/, Module* child) {
-        if (child)
+    // The shared meta-MoE packs must be fully prepared before any layer
+    // weight aliases their routed gate/expert tensors (MoeWeight::prepare).
+    if (meta_experts) {
+        meta_experts->prepare();
+    }
+    for_each_child([this](const char* /*name*/, Module* child) {
+        if (child && child != meta_experts.get()) {
             child->prepare();
+        }
     });
 
     auto* l0 = layer(0);

@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from ..norm import LayerNormBuilder, LayerNormImpl, RMSNormBuilder, RMSNormImpl
+from ..norm import LayerNormImpl, RMSNormImpl
 
 
 class DefaultRMSNormImpl(RMSNormImpl):
@@ -18,21 +18,13 @@ class DefaultRMSNormImpl(RMSNormImpl):
             x = x + residual
             residual = x
         x = x.to(torch.float32)
-        variance = x.pow(2).mean(-1, keepdim=True)
+        variance = x.square().mean(-1, keepdim=True)
         x = x * torch.rsqrt(variance + self.eps)
-        x = weight * x.to(input_dtype)
+        x = weight.to(torch.float32) * x
+        x = x.to(input_dtype)
         if residual is None:
             return x
         return x, residual
-
-
-class DefaultRMSNormBuilder(RMSNormBuilder):
-    """RMS norm implementation builder."""
-
-    @staticmethod
-    def build(hidden_size: int, eps: float = 1e-6):
-        """build."""
-        return DefaultRMSNormImpl(hidden_size, eps)
 
 
 class DefaultLayerNormImpl(LayerNormImpl):
@@ -57,12 +49,3 @@ class DefaultLayerNormImpl(LayerNormImpl):
         if residual is None:
             return x
         return x, residual
-
-
-class DefaultLayerNormBuilder(LayerNormBuilder):
-    """RMS norm implementation builder."""
-
-    @staticmethod
-    def build(normalized_shape: int, eps: float = 1e-6):
-        """build."""
-        return DefaultLayerNormImpl(normalized_shape, eps)

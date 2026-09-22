@@ -6,17 +6,27 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 
-import lmdeploy.pytorch.nn.gated_delta as gated_delta_util
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, LayerNorm, RMSNorm, SiluAndMul
-from lmdeploy.pytorch.nn.gated_delta import CausalConv1d, GatedDelta, GatedDeltaMeta, build_rmsnorm_gated
+from lmdeploy.pytorch.nn import (
+    ApplyRotaryEmb,
+    Attention,
+    LayerNorm,
+    RMSNorm,
+    SiluAndMul,
+    build_rotary_embedding_from_config,
+)
+from lmdeploy.pytorch.nn.gated_delta import (
+    CausalConv1d,
+    GatedDelta,
+    GatedDeltaMeta,
+    GatedDeltaMetaBuilder,
+    build_rmsnorm_gated,
+)
 from lmdeploy.pytorch.nn.linear import (
     build_colwise_linear,
     build_merged_colwise_linear,
@@ -24,7 +34,6 @@ from lmdeploy.pytorch.nn.linear import (
     build_qkv_proj,
     build_rowwise_linear,
 )
-from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 from lmdeploy.vl.constants import Modality
 
@@ -32,7 +41,7 @@ from .patch import add_prefix, get_build_model_context
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3_5VisionRotaryEmbedding
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3_5VisionAttention
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5InputProcessor
-from .utils.cudagraph import CudaGraphMixin
+from .utils.cudagraph import PiecewiseCudaGraphMixin
 from .utils.model import DeployModelMixinV1, vlm_model
 
 
@@ -525,20 +534,16 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         b, a = torch.split(mixed_ba, split_arg_list_ba, dim=-1)
         return b, a
 
-    def _load_state(self, past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
-        """Load states from cache."""
-        return gated_delta_util.load_state(past_key_value=past_key_value, gated_delta_meta=gated_delta_meta)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
         past_key_value: tuple[torch.Tensor, torch.Tensor],
         gated_delta_meta: GatedDeltaMeta,
-    ):
+    ) -> torch.Tensor:
         """forward."""
 
         # load states
-        conv_state, recurrent_state = self._load_state(past_key_value, gated_delta_meta)
+        conv_state, recurrent_state = past_key_value[:2]
 
         # inputs proj
         projected_states_qkv = self.in_proj_qkv(hidden_states)
@@ -549,7 +554,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         b, a = self.fix_ba_ordering(projected_states_ba)
 
         mixed_qkv = projected_states_qkv
-        mixed_qkv, conv_state = self.conv1d(mixed_qkv, conv_state, gated_delta_meta=gated_delta_meta)
+        mixed_qkv = self.conv1d(mixed_qkv, conv_state, gated_delta_meta)
 
         tp = (self.key_dim * 2 + self.value_dim) // mixed_qkv.size(-1)
         query, key, value = torch.split(
@@ -565,16 +570,14 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         key = key.unflatten(-1, (-1, self.head_k_dim))
         value = value.unflatten(-1, (-1, self.head_v_dim))
 
-        beta = b.sigmoid()
-        # If the model is loaded in fp16, without the .float() here, A might be -inf
-        g = self.get_A_log_exp() * F.softplus(a.float() + self.dt_bias)
-
-        core_attn_out, recurrent_state = self.gated_delta(
+        core_attn_out = self.gated_delta(
             query,
             key,
             value,
-            g=g,
-            beta=beta,
+            b=b,
+            a=a,
+            dt_bias=self.dt_bias,
+            a_log_exp=self.get_A_log_exp(),
             recurrent_state=recurrent_state,
             gated_delta_meta=gated_delta_meta,
             kv_ratio=self.kv_ratio,
@@ -805,99 +808,6 @@ class Qwen3_5DecoderLayer(nn.Module):
         return outputs
 
 
-class Qwen3_5TextRotaryEmbedding(nn.Module):
-    inv_freq: torch.Tensor  # fix linting for `register_buffer`
-
-    def __init__(self, config: PretrainedConfig, device=None):
-        super().__init__()
-        rope_scaling = get_rope_parameters(config)
-        assert rope_scaling is not None, 'RoPE scaling parameters must be provided in the config for Qwen3.5 models.'
-        self.rope_type = rope_scaling.get('rope_type', 'default')
-
-        self.max_seq_len_cached = config.max_position_embeddings
-        self.original_max_seq_len = config.max_position_embeddings
-
-        self.config = config
-        if self.rope_type != 'default':
-            self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
-        else:
-            self.rope_init_fn = self.compute_default_rope_parameters
-
-        inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
-        self.register_buffer('inv_freq', inv_freq, persistent=False)
-        self.original_inv_freq = self.inv_freq
-
-        self.mrope_section = rope_scaling.get('mrope_section', [11, 11, 10])
-
-    @staticmethod
-    def compute_default_rope_parameters(
-        config: PretrainedConfig | None = None,
-        device: torch.device | None = None,
-        seq_len: int | None = None,
-    ) -> tuple['torch.Tensor', float]:
-        """
-        Computes the inverse frequencies according to the original RoPE implementation
-        Args:
-            config ([`~transformers.PreTrainedConfig`]):
-                The model configuration.
-            device (`torch.device`):
-                The device to use for initialization of the inverse frequencies.
-            seq_len (`int`, *optional*):
-                The current sequence length. Unused for this type of RoPE.
-        Returns:
-            Tuple of (`torch.Tensor`, `float`), containing the inverse frequencies for the RoPE embeddings and the
-            post-processing scaling factor applied to the computed cos/sin (unused in this type of RoPE).
-        """
-        rope_parameters = get_rope_parameters(config)
-        base = rope_parameters['rope_theta']
-        partial_rotary_factor = rope_parameters.get('partial_rotary_factor', 1.0)
-        head_dim = getattr(config, 'head_dim', None) or config.hidden_size // config.num_attention_heads
-        dim = int(head_dim * partial_rotary_factor)
-
-        attention_factor = 1.0  # Unused in this type of RoPE
-
-        # Compute the inverse frequencies
-        inv_freq = 1.0 / (base**(torch.arange(0, dim, 2, dtype=torch.int64).to(dtype=torch.float) / dim))
-        inv_freq = inv_freq.to(device=device)
-        return inv_freq, attention_factor
-
-    def apply_interleaved_mrope(self, freqs, mrope_section):
-        """Apply interleaved MRoPE to 3D rotary embeddings.
-
-        Reorganizes frequency layout from chunked [TTT...HHH...WWW] to
-        interleaved [THTHWHTHW...TT], preserving frequency continuity.
-        args:
-            x: (3, bs, seq_len, head_dim // 2)
-            mrope_section: (3,)
-        returns:
-            x_t: (bs, seq_len, head_dim // 2)
-        """
-        freqs_t = freqs[0]  # just overwrite the first dimension T
-        for dim, offset in enumerate((1, 2), start=1):  # H, W
-            length = mrope_section[dim] * 3
-            idx = slice(offset, length, 3)
-            freqs_t[..., idx] = freqs[dim, ..., idx]
-        return freqs_t
-
-    @torch.no_grad()
-    @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
-    def forward(self, x, position_ids):
-        # In contrast to other models, Qwen3VL has different position ids for the grids
-        # So we expand the inv_freq to shape (3, ...)
-        if position_ids.ndim == 2:
-            position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
-        inv_freq_expanded = self.inv_freq[None, None, :, None].float().expand(3, position_ids.shape[1], -1, 1)
-        position_ids_expanded = position_ids[:, :, None, :].float()  # shape (3, bs, 1, positions)
-
-        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
-        freqs = self.apply_interleaved_mrope(freqs, self.mrope_section)
-        emb = torch.cat((freqs, freqs), dim=-1)
-        cos = emb.cos() * self.attention_scaling
-        sin = emb.sin() * self.attention_scaling
-
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
-
-
 class Qwen3_5TextModel(nn.Module):
     """qwen3.5 text model."""
 
@@ -927,12 +837,17 @@ class Qwen3_5TextModel(nn.Module):
                                 prefix=add_prefix(f'layers.{layer_idx}', prefix))
             for layer_idx in range(self.config.num_hidden_layers)
         ])
+        self.aux_hidden_state_layers: tuple[int, ...] = \
+            get_build_model_context().spec_model_ctx.target_aux_hidden_state_layers
+        self._aux_hidden_state_layers_set: frozenset[int] = frozenset(self.aux_hidden_state_layers)
 
         # build norm
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
-        self.rotary_emb = Qwen3_5TextRotaryEmbedding(config, device=device)
+        self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
+
+        self.gated_delta_meta_builder = GatedDeltaMetaBuilder()
 
     def forward(
         self,
@@ -963,11 +878,11 @@ class Qwen3_5TextModel(nn.Module):
         cos, sin = cos[0], sin[0]
         rotary_pos_emb = (cos, sin)
 
-        # make seq_idx
-        gated_delta_meta = GatedDeltaMeta(hidden_states.size(1), self.config.linear_conv_kernel_dim, state_ids,
-                                          attn_metadata)
+        gated_delta_meta = self.gated_delta_meta_builder(hidden_states.size(1),
+                                                         self.config.linear_conv_kernel_dim, state_ids, attn_metadata)
 
         # decoding
+        aux_hidden_states = []
         residual = None
         for idx, decoder_layer in enumerate(self.layers):
             hidden_states, residual = decoder_layer(
@@ -979,10 +894,14 @@ class Qwen3_5TextModel(nn.Module):
                 gated_delta_meta=gated_delta_meta,
                 all_routed_experts=all_routed_experts,
             )
+            if idx in self._aux_hidden_state_layers_set:
+                aux_hidden_states.append(hidden_states if residual is None else hidden_states + residual)
 
         # norm
         hidden_states, _ = self.norm(hidden_states, residual)
 
+        if len(aux_hidden_states) > 0:
+            return dict(hidden_states=hidden_states, aux_hidden_states=torch.cat(aux_hidden_states, dim=-1))
         return hidden_states
 
     def get_input_embeddings(self):
@@ -1063,7 +982,7 @@ class Qwen3_5Model(nn.Module):
 
         output_inputs_embeds = inputs_embeds if return_input_embeds else None
 
-        hidden_states = self.language_model(
+        language_outputs = self.language_model(
             input_ids=input_ids,
             position_ids=position_ids,
             past_key_values=past_key_values,
@@ -1073,14 +992,20 @@ class Qwen3_5Model(nn.Module):
             mrope_position_ids=mrope_position_ids,
             all_routed_experts=all_routed_experts,
         )
-        return hidden_states, output_inputs_embeds
+        aux_hidden_states = None
+        if isinstance(language_outputs, dict):
+            hidden_states = language_outputs['hidden_states']
+            aux_hidden_states = language_outputs.get('aux_hidden_states')
+        else:
+            hidden_states = language_outputs
+        return hidden_states, output_inputs_embeds, aux_hidden_states
 
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.language_model.get_input_embeddings()
 
 
-class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
+class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, PiecewiseCudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -1118,8 +1043,8 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                                           device=device)
         # dense model
         self.enable_return_routed_experts = False
-        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
-
+        bm_ctx = get_build_model_context()
+        self.is_spec_decoding = bm_ctx.num_spec_tokens > 0
 
     def forward(
         self,
@@ -1151,7 +1076,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             all_routed_experts = position_ids.new_empty(
                 (num_tokens, config.num_hidden_layers, config.num_experts_per_tok), dtype=torch.uint16)
 
-        hidden_states, target_inputs_embeds = self.model(
+        hidden_states, target_inputs_embeds, aux_hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
             past_key_values=past_key_values,
@@ -1172,13 +1097,24 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             ts_lens=ts_lens,
             ts_sr=ts_sr,
         )
-        return dict(hidden_states=hidden_states,
-                    all_routed_experts=all_routed_experts,
-                    target_inputs_embeds=target_inputs_embeds)
+        outputs = dict(hidden_states=hidden_states,
+                       all_routed_experts=all_routed_experts,
+                       target_inputs_embeds=target_inputs_embeds)
+        if aux_hidden_states is not None:
+            outputs['aux_hidden_states'] = aux_hidden_states
+        return outputs
 
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
+
+    def get_outputs_cudagraph(self, output_buffers: dict[str, torch.Tensor], input_ids: torch.Tensor, **kwargs):
+        """Return Qwen3.5 target outputs captured by a decode graph."""
+        outputs = super().get_outputs_cudagraph(output_buffers, input_ids, **kwargs)
+        aux_hidden_states = output_buffers.get('aux_hidden_states')
+        if aux_hidden_states is not None:
+            outputs['aux_hidden_states'] = aux_hidden_states[:, :input_ids.size(-1)]
+        return outputs
 
     def prepare_inputs_for_generation(
         self,

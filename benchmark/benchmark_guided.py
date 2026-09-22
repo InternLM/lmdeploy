@@ -527,6 +527,7 @@ def run_once(engine: Engine, requests, temperature, top_p, top_k,
 def main():
     args = parse_args()
     random.seed(args.seed)
+    np.random.seed(args.seed)
     os.environ['TM_LOG_LEVEL'] = args.log_level
 
     json_schema = None

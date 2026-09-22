@@ -5,6 +5,8 @@
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -27,7 +29,10 @@ namespace turbomind::gemm {
 static inline decltype(auto) as_tuple(const KernelDesc& d)
 {
     return std::tie(d.arch,
+                    d.family,
                     d.op_class,
+                    d.algo,
+                    d.raster,
                     d.type_a,
                     d.type_b,
                     d.type_c,
@@ -47,11 +52,13 @@ static inline decltype(auto) as_tuple(const KernelDesc& d)
                     d.policy_b,
                     d.cta_tile,
                     d.mma_tile,
+                    d.atom_layout,
                     d.cluster_shape,
                     d.align,
                     d.c_tile,
                     d.stages,
                     d.split_k,
+                    d.supported_epilogues,
                     d.backend,
                     d.transpose,
                     d.group_axis);
@@ -69,6 +76,16 @@ static inline bool operator==(const KernelDesc& a, const KernelDesc& b)
 
 namespace {
 
+constexpr char          kDispatchCacheMagic[8] = {'T', 'M', 'G', 'E', 'M', 'M', '2', '\0'};
+constexpr std::uint32_t kDispatchCacheVersion  = 6;
+
+struct Header {
+    char          magic[sizeof(kDispatchCacheMagic)];
+    std::uint32_t version;
+    std::uint32_t record_size;
+    std::uint64_t record_count;
+};
+
 struct Record {
     GemmDesc   gemm;
     KernelDesc kernel;
@@ -81,6 +98,12 @@ struct Record {
 
 void ExportDispatchCache(std::ostream& os, const std::vector<std::pair<GemmDesc, LaunchSpec>>& entries)
 {
+    Header header{};
+    std::memcpy(header.magic, kDispatchCacheMagic, sizeof(header.magic));
+    header.version      = kDispatchCacheVersion;
+    header.record_size  = sizeof(Record);
+    header.record_count = entries.size();
+    os.write((const char*)&header, sizeof(header));
 
     for (const auto& [g, spec] : entries) {
         Record record{};
@@ -98,16 +121,30 @@ void ImportDispatchCache(std::istream&                                 is,
                          const std::vector<Kernel*>&                   kernels)
 {
     is.seekg(0, is.end);
-    const auto size_in_bytes = is.tellg();
+    const std::streamoff size_in_bytes = is.tellg();
     is.seekg(0, is.beg);
 
-    if (size_in_bytes % sizeof(Record)) {
-        std::cerr << "File size is not a multiple of record size, faild to import records.\n";
+    if (size_in_bytes < static_cast<std::streamoff>(sizeof(Header))) {
+        std::cerr << "Dispatch cache has no supported format header.\n";
+        return;
     }
 
-    const int n = size_in_bytes / sizeof(Record);
+    Header header{};
+    is.read((char*)&header, sizeof(header));
+    if (std::memcmp(header.magic, kDispatchCacheMagic, sizeof(header.magic)) != 0
+        || header.version != kDispatchCacheVersion) {
+        std::cerr << "Unsupported dispatch cache format.\n";
+        return;
+    }
 
-    for (int i = 0; i < n; ++i) {
+    const std::streamoff payload_size = size_in_bytes - sizeof(Header);
+    if (header.record_size != sizeof(Record) || payload_size % sizeof(Record)
+        || header.record_count != static_cast<std::uint64_t>(payload_size / sizeof(Record))) {
+        std::cerr << "Dispatch cache size does not match its header.\n";
+        return;
+    }
+
+    for (std::uint64_t i = 0; i < header.record_count; ++i) {
         Record record;
         is.read((char*)&record, sizeof(Record));
 
@@ -134,7 +171,8 @@ namespace {
 
 inline decltype(auto) as_tuple(const GemmDesc& d)
 {
-    return std::tie(d.arch,
+    return std::tie(d.family,
+                    d.arch,
                     d.type_a,
                     d.type_b,
                     d.type_c,
@@ -152,13 +190,13 @@ inline decltype(auto) as_tuple(const GemmDesc& d)
                     d.quant_a.group_size,
                     d.quant_b.type,
                     d.quant_b.group_size,
+                    d.epilogue,
                     d.batch_dim,
                     d.group_axis,
                     d.m,
                     d.n,
                     d.k,
                     d.num);
-    // Note: `d.epilogue` is not used yet
 }
 
 }  // namespace
@@ -226,8 +264,9 @@ struct DispatchCache::Impl {
             std::lower_bound(idxs.begin(), idxs.end(), std::make_pair(batch_size, 0), [](auto& a, auto& b) {  //
                 return a.first < b.first;
             });
-        // Exact match, skip
+        // Exact match, replace
         if (p != idxs.end() && p->first == batch_size) {
+            specs[p->second] = spec;
             return false;
         }
         // Insert
@@ -256,30 +295,8 @@ struct DispatchCache::Impl {
         std::vector<std::pair<GemmDesc, LaunchSpec>> entries;
         ImportDispatchCache(is, entries, kernels_);
         Summary(entries);
-        for (auto [desc, spec] : entries) {
-            const int batch_size = extract_batch_size(desc);
-            auto      it         = cache_.find(desc);
-            if (it == cache_.end()) {
-                it = cache_.emplace_hint(it, desc, Flat{});
-            }
-            auto& [idxs, specs] = it->second;
-            // Order is not maintained at this point
-            idxs.emplace_back(batch_size, (int)specs.size());
-            specs.push_back(spec);
-        }
-        // Sort indices and deduplicate
-        for (auto& [desc, flat] : cache_) {
-            auto& [idxs, specs] = flat;
-            std::stable_sort(idxs.begin(), idxs.end(), [](auto a, auto b) { return a.first < b.first; });
-            idxs.erase(std::unique(idxs.begin(), idxs.end(), [](auto a, auto b) { return a.first == b.first; }),
-                       idxs.end());
-            // Remove unreferenced specs and update spec indices
-            std::vector<LaunchSpec> tmp;
-            for (auto& [key, val] : idxs) {
-                int old = std::exchange(val, tmp.size());
-                tmp.push_back(specs[old]);
-            }
-            specs = std::move(tmp);
+        for (const auto& [desc, spec] : entries) {
+            Insert(desc, spec);
         }
         return entries.size();
     }

@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import contextlib
-import json
 import os
+from collections import deque
 from typing import Any
 
 import ray
@@ -17,15 +17,19 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, Misc
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.kv_connector import KVConnectorOutputAggregator
 from lmdeploy.pytorch.ray import RayContext, get_device_str
 from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.utils import get_logger, try_import_deeplink
 
-from .base import ExecutorBase
+from .base import ExecutorBase, _WorkerCachePlanSizes
 from .base_worker import WorkerWrapperBase
 from .dist_utils import find_available_port
 
 logger = get_logger('lmdeploy')
+
+_DEFAULT_WORKER_RELEASE_TIMEOUT = 5.0
+_KV_CONNECTOR_WORKER_RELEASE_TIMEOUT = 45.0
 
 
 def _get_master_addr():
@@ -44,42 +48,6 @@ def _get_master_port():
     if port is not None:
         return port
     return find_available_port()
-
-
-def get_ascend_device_rank_mapping(master_addr):
-    rank_table_file = _envs.ascend_rank_table_file
-    if not rank_table_file:
-        raise ValueError('ASCEND_RANK_TABLE_FILE_PATH is not set')
-    with open(rank_table_file) as f:
-        rank_table = json.load(f)
-    try:
-        assert master_addr == rank_table['server_list'][0]['server_id'], 'Master address does not match rank table'
-        rank_mapping: dict[int, int] = {}
-        worker_ip_by_rank: dict[int, str] = {}
-        for server in rank_table['server_list']:
-            node_ip = server['server_id']
-            for idx, device in enumerate(server['device']):
-                # Prefer explicit device_id if present; fall back to enumeration order.
-                local_rank = int(device.get('device_id', idx))
-                global_rank = int(device['rank_id'])
-                rank_mapping[global_rank] = local_rank
-                worker_ip_by_rank[global_rank] = node_ip
-
-        if len(worker_ip_by_rank) == 0:
-            raise ValueError('Rank table contains no devices.')
-
-        ranks = sorted(worker_ip_by_rank.keys())
-        if ranks[0] != 0 or ranks[-1] != len(ranks) - 1:
-            raise ValueError(f'Rank ids are not contiguous starting from 0: {ranks[:8]}...{ranks[-8:]}')
-        worker_ips = [worker_ip_by_rank[r] for r in range(len(ranks))]
-    except Exception as e:
-        logger.error(f'Parse rank table file({rank_table})  failed')
-        raise e
-
-    envs = {
-        'ASCEND_RANK_TABLE_FILE_PATH': rank_table_file,
-    }
-    return rank_mapping, worker_ips, envs
 
 
 def _update_env_cuda_alloc_conf(env_vars: dict):
@@ -127,6 +95,18 @@ def _update_runtime_env_nsys(runtime_env: dict):
         nsight_env['o'] = f'{prefix_path}%p'
     runtime_env['nsight'] = nsight_env
     return runtime_env
+
+
+def _needs_symm_mem_device_setup(dist_config: DistConfig) -> bool:
+    """Whether Ray workers must preserve peer CUDA-device visibility.
+
+    Ray normally narrows every actor to one visible GPU, which remaps that device to local ordinal zero. CUDA symmetric-
+    memory rendezvous identifies allocations by the process-local device ordinal, so TP actors on one host must instead
+    inherit the full visibility and select their assigned GPU.
+    """
+    from lmdeploy.pytorch.backends.cuda.comm.communicator import should_try_symm_mem
+    return (should_try_symm_mem(dist_config)
+            or (_envs.enable_symm_mem_lmhead and dist_config.attn_tp > 1))
 
 
 class RemoteLogger:
@@ -193,6 +173,24 @@ class RayWorkerWrapper(WorkerWrapperBase):
         """Set worker local rank."""
         torch.cuda.set_device(local_rank)
 
+    def set_assigned_cuda_device(self):
+        """Select Ray's assigned GPU when it does not rewrite visibility."""
+        gpu_ids = ray.get_runtime_context().get_accelerator_ids()['GPU']
+        assert len(gpu_ids) == 1
+        physical_device_id = str(gpu_ids[0])
+        visible_devices = os.environ.get('CUDA_VISIBLE_DEVICES')
+        # Ray reports a physical ID; torch expects its local ordinal when the
+        # actor inherits a user-provided CUDA_VISIBLE_DEVICES subset.
+        local_rank = (visible_devices.split(',').index(physical_device_id)
+                      if visible_devices else int(physical_device_id))
+        self.set_device(local_rank)
+        return {
+            'node_ip': self.node_ip,
+            'ray_gpu_ids': [str(gpu_id) for gpu_id in gpu_ids],
+            'cuda_visible_devices': visible_devices,
+            'current_device': torch.cuda.current_device(),
+        }
+
     def set_env(self, envs: dict[str, str]):
         for key, value in envs.items():
             os.environ[key] = value
@@ -233,6 +231,16 @@ class RayWorkerWrapper(WorkerWrapperBase):
 class RayExecutor(ExecutorBase):
     """Ray executor."""
 
+    @staticmethod
+    def _get_worker_release_timeout(cache_config: CacheConfig | None) -> float:
+        """Allow external buffer registrations to be released before killing
+        workers."""
+        if cache_config is not None:
+            transfer_config = cache_config.kv_transfer_config
+            if transfer_config is not None and transfer_config.is_kv_transfer_instance:
+                return _KV_CONNECTOR_WORKER_RELEASE_TIMEOUT
+        return _DEFAULT_WORKER_RELEASE_TIMEOUT
+
     def __init__(
         self,
         model_path: str,
@@ -263,6 +271,9 @@ class RayExecutor(ExecutorBase):
 
         device_ctx = DeviceContext(device_type)
         with get_device_manager().context(device_ctx):
+            self._needs_symm_mem_device_setup = False
+            if device_type == 'cuda':
+                self._needs_symm_mem_device_setup = _needs_symm_mem_device_setup(dist_config)
             logger.info('Init ray cluster.')
             attn_tp = dist_config.attn_tp
             self.ray_ctx = RayContext(attn_tp, dp=dist_config.dp, device_type=device_type)
@@ -299,6 +310,12 @@ class RayExecutor(ExecutorBase):
             self.dag = None
             self._prefetch_task: asyncio.Task = None
             self.remote_outs: asyncio.Queue = None
+            # Forwards and outputs are consumed in FIFO order. Remember which
+            # queued steps need all TP outputs instead of only the TP leader's.
+            self._connector_steps: deque[bool] = deque()
+            # Rank-local connector completions may arrive on different steps.
+            # Keep partial reports here until every worker has reported an ID.
+            self._kv_output_aggregator = KVConnectorOutputAggregator(len(self.workers))
 
             logger.info('Init distributed environment by device.')
             self.rank_offset = dist_config.dp_rank * attn_tp
@@ -313,6 +330,18 @@ class RayExecutor(ExecutorBase):
             if self.dist_config.world_size > 1:
                 logger.info('Warming up distribute environment, this might take long time, please waiting...')
                 ray.get([worker.warmup_dist.remote() for worker in self.workers])
+
+    def init(self):
+        """Initialize workers and abort all of them if initialization fails."""
+        try:
+            super().init()
+        except BaseException:
+            for worker in self.workers:
+                with contextlib.suppress(Exception):
+                    ray.kill(worker)
+            with contextlib.suppress(Exception):
+                self.ray_ctx.shutdown()
+            raise
 
     def collective_rpc(self,
                        method: str,
@@ -354,6 +383,12 @@ class RayExecutor(ExecutorBase):
         """Set all model config."""
         self.collective_rpc('set_model_config', (model_config, spec_model_config))
 
+    def _prepare_worker_cache_plans(self, cache_config: CacheConfig,
+                                    spec_cache_config: CacheConfig | None = None) -> list[_WorkerCachePlanSizes]:
+        """Prepare and size rank-local cache plans on every worker."""
+        worker_sizes = self.collective_rpc('build_cache_plans', (cache_config, spec_cache_config))
+        return [_WorkerCachePlanSizes(*sizes) for sizes in worker_sizes]
+
     def build_graph_runner(self):
         """Build graph runner."""
         self.collective_rpc('build_graph_runner')
@@ -366,6 +401,38 @@ class RayExecutor(ExecutorBase):
         """Update params."""
         self.collective_rpc('update_params', (request, ))
 
+    def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness from all workers."""
+        return self.collective_rpc('get_checkpoint_engine_status')
+
+    def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        results = self.collective_rpc('update_weights_from_ipc', (request, reject_reason))
+        return self._reduce_worker_status(results, 'update_weights_from_ipc')
+
+    def _reduce_worker_status(self, results: list[tuple[bool, str]], op_name: str) -> tuple[bool, str]:
+        """Reduce worker status results."""
+        successes, messages = zip(*results)
+        if all(successes):
+            return True, messages[0]
+        message = ' | '.join(f'rank{idx}: {message}' for idx, message in enumerate(messages))
+        return False, f'{op_name}: {message}'
+
+    def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        results = self.collective_rpc('init_weights_update_group', (request, ))
+        return self._reduce_worker_status(results, 'init_weights_update_group')
+
+    def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        results = self.collective_rpc('update_weights_from_distributed', (request, ))
+        return self._reduce_worker_status(results, 'update_weights_from_distributed')
+
+    def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        results = self.collective_rpc('destroy_weights_update_group', (request, ))
+        return self._reduce_worker_status(results, 'destroy_weights_update_group')
+
     def warmup(self):
         """Build cache engine."""
         self.collective_rpc('warmup')
@@ -373,6 +440,10 @@ class RayExecutor(ExecutorBase):
     async def sleep(self, level: int = 1):
         """Sleep."""
         await self.collective_rpc_async('sleep', (level, ))
+        # Workers drain their queues while sleeping, so their driver-side step
+        # markers and partially aggregated completions are stale as well.
+        self._connector_steps.clear()
+        self._kv_output_aggregator.clear()
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
@@ -465,16 +536,30 @@ class RayExecutor(ExecutorBase):
             ray.timeline(_envs.ray_timeline_output_path)
 
         if self.dp == 1:
+            release_timeout = self._get_worker_release_timeout(self.cache_config)
             try:
-                self.collective_rpc('release', timeout=5.0)
+                self.collective_rpc('release', timeout=release_timeout)
                 logger.debug('RayExecutor workers released.')
             except ray.exceptions.ActorDiedError:
                 logger.info('RayExecutor worker has been killed before finish release.')
                 [ray.kill(worker) for worker in self.workers]
             except ray.exceptions.GetTimeoutError:
-                logger.info('Ray release timeout, killing workers')
+                logger.info('Ray release timeout after %.1f seconds, killing workers.', release_timeout)
                 [ray.kill(worker) for worker in self.workers]
         else:
+            transfer_config = self.cache_config.kv_transfer_config
+            if transfer_config is not None and transfer_config.is_kv_transfer_instance:
+                release_timeout = self._get_worker_release_timeout(self.cache_config)
+                try:
+                    self.collective_rpc('shutdown_kv_connector', timeout=release_timeout)
+                    logger.debug('RayExecutor DP worker connectors shut down.')
+                except ray.exceptions.ActorDiedError:
+                    logger.info('RayExecutor worker died before connector shutdown finished.')
+                except ray.exceptions.GetTimeoutError:
+                    logger.info(
+                        'Ray connector shutdown timeout after %.1f seconds, killing workers.',
+                        release_timeout,
+                    )
             [ray.kill(worker) for worker in self.workers]
 
         self.ray_ctx.shutdown()
@@ -499,8 +584,11 @@ class RayExecutor(ExecutorBase):
 
         if self._prev_out is not None:
             try:
-                ray.get(self._prev_out)
-            except SystemExit:
+                # Await (instead of blocking ray.get) so the engine event loop is yielded while the
+                # previous forward runs. Blocking here stalls the whole loop, starving co-located
+                # async tasks such as the health probe.
+                await asyncio.gather(*self._prev_out)
+            except (SystemExit, ray.exceptions.RayActorError):
                 logger.error('Ray worker exited.')
                 raise
             finally:
@@ -515,12 +603,29 @@ class RayExecutor(ExecutorBase):
         self._prev_out = [
             worker.forward_async.remote(self._prev_inputs) for worker in self.workers
         ]
+        self._connector_steps.append(inputs.get('kv_connector_metadata') is not None)
 
     async def get_output_async(self):
         """Get output async."""
-        ret = await self.workers[0].get_outputs.remote()
-        ret = ret.to_tensor()
-        return ret
+        connector_step = self._connector_steps.popleft()
+        if not connector_step:
+            ret = await self.workers[0].get_outputs.remote()
+            return ret.to_tensor()
+
+        outputs = await asyncio.gather(*[
+            worker.get_outputs.remote()
+            for worker in self.workers
+        ])
+        outputs = [output.to_tensor() for output in outputs]
+        connector_output = self._kv_output_aggregator.aggregate([
+            output.kv_connector_output
+            for output in outputs
+        ])
+        # Model output is produced by the TP leader; only connector progress
+        # needs to be replaced with the all-worker aggregate.
+        output = outputs[0]
+        output.kv_connector_output = connector_output
+        return output
 
     @contextlib.contextmanager
     def remote_log(self, msg: str):
@@ -637,6 +742,10 @@ class RayExecutor(ExecutorBase):
             if device_str == 'GPU':
                 runtime_env = dict()
                 runtime_env = _update_runtime_envs(runtime_env)
+                if self._needs_symm_mem_device_setup:
+                    # Symmetric-memory IPC needs peer TP GPUs to stay visible.
+                    # Keep the inherited visibility and bind each actor below.
+                    runtime_env['env_vars']['RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES'] = '1'
                 if _envs.ray_nsys_enable:
                     runtime_env = _update_runtime_env_nsys(runtime_env)
                 worker = ray.remote(
@@ -646,11 +755,14 @@ class RayExecutor(ExecutorBase):
                     runtime_env=runtime_env,
                 )(RayWorkerWrapper).remote(**worker_kwargs)
             else:
+                runtime_env = dict()
+                runtime_env = _update_runtime_envs(runtime_env)
                 worker = ray.remote(
                     num_cpus=0,
                     num_gpus=0,
                     resources={device_str: 0.01},
                     scheduling_strategy=scheduling_strategy,
+                    runtime_env=runtime_env,
                 )(RayWorkerWrapper).remote(**worker_kwargs)
             workers.append(worker)
         return workers
@@ -660,6 +772,20 @@ class RayExecutor(ExecutorBase):
         driver_ip = _get_master_addr()
         if device_str == 'cuda':
             self.workers = self._sort_workers(driver_ip, self.workers)
+            if self._needs_symm_mem_device_setup:
+                # Ray did not narrow CUDA visibility, so select each actor's
+                # placement-group assignment before distributed initialization.
+                bindings = ray.get([
+                    worker.set_assigned_cuda_device.remote()
+                    for worker in self.workers
+                ])
+                device_keys = {
+                    (binding['node_ip'], binding['current_device'])
+                    for binding in bindings
+                }
+                if len(device_keys) != len(bindings):
+                    raise RuntimeError('Ray symmetric-memory workers must bind unique CUDA '
+                                       f'devices on each node, got: {bindings}')
 
         elif device_str == 'ascend':
             self._init_ascend_distributed_environment(driver_ip)
@@ -671,33 +797,40 @@ class RayExecutor(ExecutorBase):
 
     def _init_ascend_distributed_environment(self, driver_ip):
         """Init ascend distributed environment."""
-        rank_table_file = _envs.ascend_rank_table_file
+        from collections import defaultdict
+
         set_rt_visable_devices_by_ray = _envs.ascend_set_rt_visable_devices_by_ray
+        self.workers = self._sort_workers(driver_ip, self.workers)
 
-        if rank_table_file:
-            # if rank table file is set, use it to get rank mapping, multiple nodes
-            rank_mapping, worker_ips, envs = get_ascend_device_rank_mapping(driver_ip)
-            rank_start = self.rank_offset
-            rank_end = rank_start + len(self.workers)
-            if rank_end > len(worker_ips):
-                raise ValueError(
-                    'Rank table world_size is smaller than required ranks for current dp_rank. '
-                    f'rank_table_world_size={len(worker_ips)}, required_rank_range=[{rank_start}, {rank_end})')
+        if set_rt_visable_devices_by_ray:
+            # Ray populated ASCEND_RT_VISIBLE_DEVICES per actor; no set_device.
+            return
 
-            # In dp mode each process only owns a slice of global ranks.
-            expected_worker_ips = worker_ips[rank_start:rank_end]
-            self.workers = self._sort_workers_by_ip(expected_worker_ips, self.workers)
+        worker_ips = ray.get([w.get_node_ip.remote() for w in self.workers])
+        is_multi_node_pg = len(set(worker_ips)) > 1
 
-            ray.get(
-                [worker.set_device.remote(rank_mapping[rank_start + idx]) for idx, worker in enumerate(self.workers)])
-            ray.get([worker.set_env.remote(envs) for worker in self.workers])
-        elif not set_rt_visable_devices_by_ray:
-            # if rank table file is not set, treat as single node
-            # simply set device by index, this is for single node, multiple devices
-            self.workers = self._sort_workers(driver_ip, self.workers)
-            ray.get([worker.set_device.remote(idx + self.rank_offset) for idx, worker in enumerate(self.workers)])
+        if is_multi_node_pg:
+            # Cross-node TP: each worker uses its index within its own node.
+            local_indices: list[int] = []
+            counts: dict[str, int] = defaultdict(int)
+            for ip in worker_ips:
+                local_indices.append(counts[ip])
+                counts[ip] += 1
+            ray.get([w.set_device.remote(local_indices[idx]) for idx, w in enumerate(self.workers)])
+            return
+
+        # Single-node PG below.
+        if 'ASCEND_RT_VISIBLE_DEVICES' in os.environ:
+            ray.get([w.set_device.remote(idx + self.rank_offset) for idx, w in enumerate(self.workers)])
         else:
-            self.workers = self._sort_workers(driver_ip, self.workers)
+            local_npu_count = torch.npu.device_count()
+            if local_npu_count <= 0:
+                raise RuntimeError(
+                    'torch.npu.device_count() returned a non-positive value; '
+                    'cannot derive local NPU offset. Please set '
+                    'ASCEND_RT_VISIBLE_DEVICES explicitly.')
+            local_offset = self.rank_offset % local_npu_count
+            ray.get([w.set_device.remote(idx + local_offset) for idx, w in enumerate(self.workers)])
 
     """ PD Disaggregation API Begin """
 

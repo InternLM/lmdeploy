@@ -32,13 +32,14 @@ def get_version():
             assert False, f'No version found {file_path}'
 
 
-def get_turbomind_deps():
-    if os.name == 'nt':
-        return []
-
+def get_cuda_version():
     CUDA_COMPILER = os.getenv('CUDACXX', os.getenv('CMAKE_CUDA_COMPILER', 'nvcc'))
     nvcc_output = subprocess.check_output([CUDA_COMPILER, '--version'], stderr=subprocess.DEVNULL).decode()
     CUDAVER, = re.search(r'release\s+(\d+).', nvcc_output).groups()
+    return int(CUDAVER)
+
+
+def get_turbomind_deps(CUDAVER: int):
     if int(CUDAVER) >= 13:
         return [
             f'nvidia-nccl-cu{CUDAVER}',
@@ -53,6 +54,10 @@ def get_turbomind_deps():
             f'nvidia-cublas-cu{CUDAVER}',
             f'nvidia-curand-cu{CUDAVER}',
         ]
+
+
+def get_extra_setup_deps(CUDAVER: int):
+    return [f'nvidia-nccl-cu{CUDAVER}>=2.30.4']
 
 
 def parse_requirements(fname='requirements.txt', with_version=True):
@@ -136,8 +141,7 @@ if get_target_device() == 'cuda' and os.getenv('DISABLE_TURBOMIND', '').lower() 
 
     ext_modules = [
         cmake_build_extension.CMakeExtension(
-            name='_turbomind',
-            install_prefix='lmdeploy/lib',
+            name='lmdeploy.turbomind._turbomind',
             cmake_depends_on=['pybind11'],
             source_dir=str(Path(__file__).parent.absolute()),
             cmake_generator=None if os.name == 'nt' else 'Ninja',
@@ -145,7 +149,6 @@ if get_target_device() == 'cuda' and os.getenv('DISABLE_TURBOMIND', '').lower() 
             cmake_configure_options=[
                 f'-DPython3_ROOT_DIR={Path(sys.prefix)}',
                 f'-DPYTHON_EXECUTABLE={Path(sys.executable)}',
-                '-DCALL_FROM_SETUP_PY:BOOL=ON',
                 '-DBUILD_SHARED_LIBS:BOOL=OFF',
                 # Select the bindings implementation
                 '-DBUILD_PY_FFI=ON',
@@ -154,12 +157,15 @@ if get_target_device() == 'cuda' and os.getenv('DISABLE_TURBOMIND', '').lower() 
             ],
         ),
     ]
-    extra_deps = get_turbomind_deps()
+    cuda_version = None if os.name == 'nt' else get_cuda_version()
+    extra_deps = [] if os.name == 'nt' else get_turbomind_deps(cuda_version)
+    extra_setup_deps = [] if os.name == 'nt' else get_extra_setup_deps(cuda_version)
     cmdclass = dict(build_ext=cmake_build_extension.BuildExtension, )
 else:
     ext_modules = []
     cmdclass = {}
     extra_deps = []
+    extra_setup_deps = []
 
 if __name__ == '__main__':
     setup(
@@ -172,7 +178,7 @@ if __name__ == '__main__':
         author_email='openmmlab@gmail.com',
         packages=find_packages(exclude=()),
         include_package_data=True,
-        setup_requires=parse_requirements('requirements/build.txt'),
+        setup_requires=parse_requirements('requirements/build.txt') + extra_setup_deps,
         tests_require=parse_requirements('requirements/test.txt'),
         install_requires=parse_requirements(f'requirements/runtime_{get_target_device()}.txt') + extra_deps,
         extras_require={

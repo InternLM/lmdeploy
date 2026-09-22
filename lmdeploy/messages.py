@@ -22,9 +22,52 @@ class QuantPolicy(enum.IntEnum):
     NONE = 0
     INT4 = 4  # 4-bit KV cache
     INT8 = 8  # 8-bit KV cache
-    FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale)
+    FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale. DSA uses the fp8_ds_mla layout)
     FP8_E5M2 = 17  # FP8 KV cache (float8_e5m2, per-tensor scale)
     TURBO_QUANT = 42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
+
+
+KVTransferRole = Literal['kv_producer', 'kv_consumer', 'kv_both']
+
+
+@dataclass
+class KVTransferConfig:
+    """Configuration for an external KV-cache connector."""
+
+    kv_connector: str | None = None
+    kv_role: KVTransferRole | None = None
+    kv_connector_extra_config: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Validate connector configuration."""
+        supported_roles = ('kv_producer', 'kv_consumer', 'kv_both')
+        if self.kv_connector is None and self.kv_role is not None:
+            raise ValueError('kv_connector must be specified when kv_role is set')
+        if self.kv_connector is not None:
+            if not isinstance(self.kv_connector, str) or not self.kv_connector.strip():
+                raise ValueError('kv_connector must be a non-empty string')
+            if self.kv_role is None:
+                raise ValueError('kv_role must be specified when kv_connector is set')
+        if self.kv_role is not None and self.kv_role not in supported_roles:
+            raise ValueError(f'unsupported kv_role: {self.kv_role}; supported roles are {supported_roles}')
+        if not isinstance(self.kv_connector_extra_config, dict):
+            raise TypeError('kv_connector_extra_config must be a dict')
+
+    @property
+    def is_kv_transfer_instance(self) -> bool:
+        """Return whether a connector is enabled for this engine."""
+        return self.kv_connector is not None and self.kv_role is not None
+
+    @property
+    def is_kv_producer(self) -> bool:
+        """Return whether this engine saves KV cache through the connector."""
+        return self.kv_connector is not None and self.kv_role in ('kv_producer', 'kv_both')
+
+    @property
+    def is_kv_consumer(self) -> bool:
+        """Return whether this engine loads KV cache through the connector."""
+        return self.kv_connector is not None and self.kv_role in ('kv_consumer', 'kv_both')
+
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
@@ -74,6 +117,10 @@ class GenerationConfig:
             around special tokens. The behavior of Fast tokenizers is to have
             this to False. This is setup to True in slow tokenizers.
         logprobs: Number of log probabilities to return per output token.
+        logprob_start_len: Source-token boundary in the current
+            model-processed input after multimodal expansion. Rows are returned
+            for tokens after this boundary. ``-1`` disables input logprobs
+            while preserving generated-token logprobs.
         response_format: Generate responses according to given formatting.
             Examples:
 
@@ -105,6 +152,23 @@ class GenerationConfig:
                     "regex_schema": "call me [A-Za-z]{1,10}"
                 }
 
+            or, an XGrammar structural tag:
+
+            .. code-block:: json
+
+                {
+                    "type": "structural_tag",
+                    "format": {
+                        "type": "tag",
+                        "begin": "<answer>",
+                        "content": {
+                            "type": "regex",
+                            "pattern": "[0-9]{1,3}"
+                        },
+                        "end": "</answer>"
+                    }
+                }
+
         logits_processors: Custom logit processors.
         repetition_ngram_size: The size of n-grams to consider for repetition early stop.
             Must be non-negative; values below 0 are treated as 0.
@@ -130,11 +194,15 @@ class GenerationConfig:
     skip_special_tokens: bool = True
     spaces_between_special_tokens: bool = True
     logprobs: int = None
+    logprob_start_len: int = -1
     response_format: dict | None = None
     logits_processors: list[LogitsProcessor] | None = None
     output_logits: Literal['all', 'generation'] = None
     output_last_hidden_state: Literal['all', 'generation'] = None
     include_stop_str_in_output: bool = False
+
+    # return the perplexity (mean cross-entropy loss) of the input prompt,
+    return_ppl: bool = False
 
     # for disaggregation
     with_cache: bool = False
@@ -178,8 +246,7 @@ class GenerationConfig:
         if tokenizer_eos_token_id is not None:
             stop_token_ids.add(tokenizer_eos_token_id)
 
-        # add eos_token_id from model's generation_config.json file if there
-        # is any.
+        # add eos_token_id from the model's generation config, if any.
         eos_token_id = generation_config.get('eos_token_id')
         if eos_token_id is not None:
             if isinstance(eos_token_id, int):
@@ -197,6 +264,10 @@ class GenerationConfig:
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
+        if self.logprob_start_len < -1:
+            raise ValueError('logprob_start_len must be greater than or equal to -1')
+        if self.logprob_start_len >= 0 and (self.logprobs is None or self.logprobs < 0):
+            raise ValueError('logprobs must be non-negative when logprob_start_len is non-negative')
         if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:
             self.repetition_ngram_size = 0
             self.repetition_ngram_threshold = 0
@@ -211,6 +282,9 @@ class TurbomindEngineConfig:
             one of the following values, ['auto', 'float16', 'bfloat16']
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
+        gemm_input_dtype: preferred GEMM input dtype. It can be None,
+            'float16', 'bfloat16', or 'float8_e4m3'. This reorders eligible
+            kernel families without changing the model dtype contract.
         model_format: the layout of the deployed model. It can be one
             of the following values [hf, awq, gptq, compressed-tensors,
             fp8, mxfp4]. `hf` means a Hugging Face model (.bin,
@@ -244,6 +318,29 @@ class TurbomindEngineConfig:
             a k/v block, default to 64
         enable_prefix_caching: enable cache prompts for block reuse,
             default to False
+        cache_checkpoint_interval: minimum token gap between reusable
+            recurrent-state checkpoints (CacheRegistry checkpoint_min_interval).
+            Must be > 0. Default 4096.
+        cache_prompt: partial prompt-boundary publication mode, one of
+            'all' | 'auto'. 'all' publishes the reusable partial fork_to node at
+            B = prompt_len - cache_prompt_boundary_skip whenever B is mid-block
+            (and arms a recurrent-state checkpoint clamp when B is block-aligned),
+            so a duplicate prompt skips prefill (costs one extra prefill forward +
+            a partial block). 'auto' (default) does that only when the partial
+            block holds image tokens (reusing vision-encoded KV) and is inert for
+            text-only prompts. Requires enable_prefix_caching.
+        cache_prompt_boundary_skip: number of trailing prompt tokens treated as
+            the volatile generation-prompt suffix (e.g. a chat template's
+            `<think>\n`) and excluded from the reusable prompt-boundary node, so
+            the node ends at prompt_len - cache_prompt_boundary_skip. Default 1
+            (exclude only the last token). Applies when cache_prompt is 'all' or
+            'auto'.
+        cache_generation: generated-block caching mode, one of
+            'all' | 'auto' | 'none'. 'all' indexes full generated blocks and the
+            terminal partial block, and adopts the terminal recurrent frontier
+            checkpoint (exact multi-turn resume, costs a partial block). 'auto'
+            (default) indexes full generated blocks only. 'none' indexes no
+            generated blocks at all. Requires enable_prefix_caching.
         quant_policy: default to 0. For TurboMind, when k/v is quantized
             into int4 or int8, set it to 4 or 8, respectively
         rope_scaling_factor: scaling factor used for dynamic ntk,
@@ -266,17 +363,25 @@ class TurbomindEngineConfig:
         devices: the used devices
         empty_init: Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
-        disable_vision_encoder: Whether to disable loading vision encoder.
+        language_model_only: Whether to run as text-only LLM without loading
+            vision/multimodal encoder modules.
+        communicator: collective communicator, It can be one of the following values,
+            ['nccl', 'cuda-ipc']. The `cuda-ipc` option only supports single-node
+            multi-gpu communication.
+        moe_a2a_backend: the backend of moe a2a communication, It can be one of the
+            following values, ['auto', 'default', 'deepep'].
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model
         enable_metrics: enable metrics system
     """
 
     dtype: str = 'auto'
+    gemm_input_dtype: str | None = None
     model_format: str | None = None
     tp: int = 1
     dp: int = 1
     cp: int = 1
+    ep: int = 1
     device_num: int = None
     attn_tp_size: int = None
     attn_cp_size: int = None
@@ -294,6 +399,10 @@ class TurbomindEngineConfig:
     cache_chunk_size: int = -1
     cache_block_seq_len: int = 64
     enable_prefix_caching: bool = False
+    cache_checkpoint_interval: int = 4096
+    cache_prompt: str = 'auto'
+    cache_prompt_boundary_skip: int = 1
+    cache_generation: str = 'auto'
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
@@ -305,15 +414,18 @@ class TurbomindEngineConfig:
     async_: int = 1
     devices: list[int] | None = None
     empty_init: bool = False
-    disable_vision_encoder: bool = False
+    language_model_only: bool = False
     communicator: str = 'nccl'
+    moe_a2a_backend: str = 'auto'
     hf_overrides: dict[str, Any] | None = None
     enable_metrics: bool = True
 
     def __post_init__(self):
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
+        assert self.gemm_input_dtype in (None, 'float16', 'bfloat16', 'float8_e4m3')
         assert self.tp >= 1, 'tp must be a positive integer'
+        assert self.ep >= 1, 'ep must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
         try:
             self.quant_policy = QuantPolicy(self.quant_policy)
@@ -327,7 +439,13 @@ class TurbomindEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
+        assert self.cache_prompt in ('all', 'auto'), 'invalid cache_prompt'
+        assert self.cache_generation in ('all', 'auto', 'none'), 'invalid cache_generation'
+        assert self.cache_checkpoint_interval > 0, 'invalid cache_checkpoint_interval'
+        assert self.cache_prompt_boundary_skip >= 1, 'invalid cache_prompt_boundary_skip'
         assert self.async_ in (0, 1), 'async_ must be 0 (disabled) or 1 (enabled)'
+        assert self.moe_a2a_backend in ('auto', 'default', 'deepep'), \
+            'invalid moe_a2a_backend'
 
 
 @dataclass
@@ -362,8 +480,25 @@ class PytorchEngineConfig:
             would be allocate according to current environment.
         adapters: The path configs to lora adapters.
         max_prefill_token_num: tokens per iteration.
+        piecewise_cudagraph_max_tokens: Enable piecewise CUDA graph and set its
+            maximum captured prefill token bucket. If not specified, piecewise
+            CUDA graph is disabled.
+        cudagraph_capture_batch_sizes: Batch sizes to capture CUDA graphs for.
+            If not specified, the engine will infer them from max_batch_size.
+            max_batch_size is always captured.
         thread_safe: thread safe engine instance.
         enable_prefix_caching: Enable token match and sharing caches.
+        prefix_cache_state_budget: Extra SSM state-cache slots budgeted for
+            prefix-cache checkpoints. 0 adds no extra slots, but SSM
+            checkpoints may still borrow idle runtime state slots.
+        prefix_cache_decode_state_interval: Token interval for SSM decode
+            state checkpoints. 0 disables decode-state checkpoint saves; prefill
+            and chunk checkpoints may still be saved. Keep 0 unless the workload
+            has long SSM decoding and repeated continuations that can reuse
+            decode checkpoints. Smaller positive values create more hit points
+            but use more checkpoint memory and copy work; larger values reduce
+            overhead but make decode-prefix hits less likely. Positive values
+            must be multiples of the cache block size.
         device_type: The inference device type, options ['cuda']
         eager_mode: Enable "eager" mode or not
         custom_module_map: nn module map customized by users. Once
@@ -376,7 +511,7 @@ class PytorchEngineConfig:
             If unspecified, will use the default version.
         quant_policy: default to 0. When k/v is quantized into int4,
             int8, fp8, or fp8_e5m2, set it to 4, 8, 16, or 17,
-            respectively
+            respectively. For DSA models, fp8 selects the fp8_ds_mla layout.
         distributed_executor_backend: backend of distributed backend,
             options: ['uni', 'mp', 'ray']
         empty_init: Whether to load the model weights, you should set
@@ -394,8 +529,8 @@ class PytorchEngineConfig:
         model_format: weight quantization policy, options: ['fp8'].
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model,
-        disable_vision_encoder: Whether to disable loading vision
-            encoder. Default to False.
+        language_model_only: Whether to run as text-only LLM without loading
+            vision/multimodal encoder modules. Default to False.
         logprobs_mode: The mode of logprob, options: ['raw_logits', 'raw_logprobs']
         dllm_block_length: Block size of block diffusion model.
         dllm_unmasking_strategy: Dllm unmasking strategy, options:
@@ -403,6 +538,9 @@ class PytorchEngineConfig:
         dllm_denoising_steps: Dllm denoising steps.
         dllm_confidence_threshold: dllm unmasking threshold for
             dynamic unmasking.
+        kv_transfer_config: External KV-cache connector configuration. This is
+            supported only by the PyTorch engine. ``None`` disables external
+            KV-cache transfer.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -422,8 +560,11 @@ class PytorchEngineConfig:
     num_gpu_blocks: int = 0
     adapters: dict[str, str] = None
     max_prefill_token_num: int = 8192
+    cudagraph_capture_batch_sizes: list[int] | None = None
     thread_safe: bool = False
     enable_prefix_caching: bool = False
+    prefix_cache_state_budget: int = 0
+    prefix_cache_decode_state_interval: int = 0
     device_type: str = 'cuda'
     eager_mode: bool = False
     custom_module_map: dict[str, str] = None
@@ -439,7 +580,7 @@ class PytorchEngineConfig:
     model_format: str = None
     enable_metrics: bool = True
     hf_overrides: dict[str, Any] | None = None
-    disable_vision_encoder: bool = False
+    language_model_only: bool = False
     logprobs_mode: str = None
     # router replay
     enable_return_routed_experts: bool = False
@@ -453,6 +594,8 @@ class PytorchEngineConfig:
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
+    kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
+    piecewise_cudagraph_max_tokens: int | None = None
 
     def __post_init__(self):
         """Check input validation."""
@@ -467,7 +610,11 @@ class PytorchEngineConfig:
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
+        assert (self.piecewise_cudagraph_max_tokens is None
+                or self.piecewise_cudagraph_max_tokens > 0), 'invalid piecewise_cudagraph_max_tokens'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
+        assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
+        assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
         try:
             self.quant_policy = QuantPolicy(self.quant_policy)
         except ValueError as e:
@@ -481,6 +628,9 @@ class PytorchEngineConfig:
                (f'block_size must be >= kernel_block_size and an integer multiple '
                 f'of kernel_block_size, but got block_size {self.block_size} '
                 f'and kernel_block_size {self.kernel_block_size}')
+        if self.prefix_cache_decode_state_interval > 0:
+            assert self.prefix_cache_decode_state_interval % self.block_size == 0, (
+                'prefix_cache_decode_state_interval must be a multiple of block_size')
         if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
             assert False, \
                    'kv cache quantization only works for CUDA and ASCEND.'
@@ -489,6 +639,10 @@ class PytorchEngineConfig:
             self.kernel_block_size = 16
             logger.warning('Currently, camb device requires block_size and kernel_block_size to be 16, '
                            'setting both to 16.')
+        if isinstance(self.kv_transfer_config, dict):
+            self.kv_transfer_config = KVTransferConfig(**self.kv_transfer_config)
+        elif self.kv_transfer_config is not None and not isinstance(self.kv_transfer_config, KVTransferConfig):
+            raise TypeError('kv_transfer_config must be a KVTransferConfig, dict, or None')
 
 
 class ResponseType(enum.Enum):
@@ -503,8 +657,10 @@ class ResponseType(enum.Enum):
     INPUT_LENGTH_ERROR = enum.auto()
     INTERNAL_ENGINE_ERROR = enum.auto()
     CANCEL = enum.auto()
-    PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE = enum.auto()
+    PREFIX_CACHE_CONFLICT = enum.auto()
     NO_QUEUE = enum.auto()
+    NOT_SUPPORTED = enum.auto()
+    OUT_OF_MEMORY = enum.auto()
 
 
 @dataclass
@@ -523,19 +679,24 @@ class Response:
             stop point or a provided stop sequence, 'length' if the maximum
             number of tokens specified in the request was reached.
         token_ids: the output token ids.
-        logprobs: the top logprobs for each output position.
+        logprobs: the top logprobs for each output position. For a scoring-only
+            input-logprob request, this field carries the complete ordered
+            input-token rows on the terminal response.
         index: it refers to the position index of the input request batch.
     """
     text: str
     generate_token_len: int
     input_token_len: int
-    finish_reason: Literal['stop', 'length'] | None = None
+    finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
     token_ids: list[int] = field(default_factory=list)
     logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
     index: int = 0
     routed_experts: Any = None
+    cached_tokens: int = 0
+    error_code: str | None = None
+    error_message: str | None = None
 
     def __str__(self):
         return f'text={self.text}\n{self._format_none_text_fields()}'
@@ -587,10 +748,12 @@ class Response:
         self.index = other.index
         if other.token_ids:
             self.token_ids += other.token_ids
-        if other.logprobs:
+        if other.logprobs is not None:
             self.logprobs = self.logprobs or []
             self.logprobs += other.logprobs
         self.routed_experts = other.routed_experts
+        self.error_code = other.error_code
+        self.error_message = other.error_message
         return self
 
 
@@ -632,10 +795,7 @@ class EngineEvent:
 class ScheduleMetrics:
     active_seqs: int = 0
     waiting_seqs: int = 0
-    total_blocks: int = 0
-    active_blocks: int = 0
-    cached_blocks: int = 0
-    free_blocks: int = 0
+    cache_usage: float = 0.0
     prefix_cache_hit_rate: float = 0
     scheduler_tick: int = 0
 
@@ -651,6 +811,7 @@ class RequestMetrics:
     token_timestamp: float = 0.0
     engine_events: list[EngineEvent] = field(default_factory=list)
     spec_info: dict[str, Any] | None = None
+    cached_tokens: int = 0
 
 
 @dataclass
@@ -660,11 +821,14 @@ class EngineOutput:
     Args:
         status: the response type.
         token_ids: the newly generated token ids in each iteration.
-        logprobs: the top logprobs for each output
-            position.
+        logprobs: the top logprobs for each output position. For a scoring-only
+            input-logprob request, this internal field carries the complete
+            ordered input-token rows on its terminal output.
         cache_block_ids: send cache blocks back for migration in
             Disaggregated LLM Serving when Prefill Engine is Done.
         req_metrics: request metrics information
+        ce_loss: the summed, unnormalized cross-entropy (NLL) of the input
+            prompt, available when ``GenerationConfig.return_ppl`` is set.
     """
     status: ResponseType
     token_ids: list[int]
@@ -674,6 +838,7 @@ class EngineOutput:
     cache_block_ids: list[int] | None = None
     req_metrics: RequestMetrics | None = None
     routed_experts: torch.Tensor = None
+    ce_loss: float = None
 
 
 @dataclass
@@ -700,7 +865,22 @@ class SpeculativeConfig:
         method: the speculative decoding method.
         model: the path of speculative model.
         num_speculative_tokens: number of generated token of draft model per step
+        dflash_block_size: DFlash query/verify window length. When set, this
+            DFlash-specific value overrides ``num_speculative_tokens`` using
+            ``num_speculative_tokens = dflash_block_size - 1``.
     """
     method: str
     model: str = ''
     num_speculative_tokens: int = 1
+    dflash_block_size: int | None = None
+
+    def __post_init__(self):
+        """Resolve the DFlash block-size override."""
+        if self.dflash_block_size is not None:
+            if self.method != 'dflash':
+                raise ValueError('dflash_block_size is supported only when method="dflash".')
+            if self.dflash_block_size < 2:
+                raise ValueError('dflash_block_size must be an integer greater than or equal to 2.')
+            # DFlash's complete query contains the current/next target token in
+            # slot zero followed by the newly proposed draft tokens.
+            self.num_speculative_tokens = self.dflash_block_size - 1

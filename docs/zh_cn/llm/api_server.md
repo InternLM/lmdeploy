@@ -134,32 +134,43 @@ asyncio.run(main())
 
 关于其他 openai 接口的调用，也可以如法炮制。详情请参考 openai 官方[文档](https://platform.openai.com/docs/guides/text-generation)
 
-### 使用 lmdeploy `APIClient` 接口
-
-如果你想用 `/v1/chat/completions` 接口，你可以尝试下面代码：
-
-```python
-from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient(f'http://{server_ip}:{server_port}')
-model_name = api_client.available_models[0]
-messages = [{"role": "user", "content": "Say this is a test!"}]
-for item in api_client.chat_completions_v1(model=model_name, messages=messages):
-    print(item)
-```
-
-如果你想用 `/v1/completions` 接口，你可以尝试：
-
-```python
-from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient(f'http://{server_ip}:{server_port}')
-model_name = api_client.available_models[0]
-for item in api_client.completions_v1(model=model_name, prompt='hi'):
-    print(item)
-```
-
 ### 工具调用
 
 参考 [api_server_tools](./api_server_tools.md)。
+
+### Anthropic 兼容接口
+
+参考 [api_server_anthropic](./api_server_anthropic.md)。
+
+### OpenAI Responses 兼容接口
+
+参考 [api_server_responses](./api_server_responses.md)。
+
+### 使用 `/generate` 计算输入 token 的 logprob
+
+使用 `--backend pytorch --logprobs-mode raw_logprobs` 启动服务，然后在直接
+`/generate` 请求中设置 `return_logprob` 和 `logprob_start_len`：
+
+```bash
+curl http://{server_ip}:{server_port}/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "input_ids": [1234, 5678, 9012],
+    "return_logprob": true,
+    "logprob_start_len": 0,
+    "max_tokens": 0
+  }'
+```
+
+`meta_info.input_token_logprobs` 只发送一次。对于
+`N=logprob_start_len`，返回行对应位置 `N` 之后的已处理源 token ids，每项为
+`[value, token_id]`。如果直接传入 `input_ids`，即对应
+`input_ids[N + 1:]`；如果传入 `prompt` 或图像输入，则在分词和 VLM 占位符扩展后
+检查边界。边界后必须至少有一个 token，否则端点会拒绝该请求。流式和非流式都只返回一个终止
+payload，流式随后发送 `[DONE]`。
+
+此直接接口要求设置 `max_tokens=0` 并禁用推测解码。TurboMind、DistServe、代理
+`/generate` 以及 OpenAI、Anthropic 和 Responses 协议暂不支持输入 logprob。
 
 ### 使用 Java/Golang/Rust
 
@@ -196,7 +207,7 @@ curl http://{server_ip}:{server_port}/v1/models
 curl http://{server_ip}:{server_port}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "internlm-chat-7b",
+    "model": "intern-s2-preview",
     "messages": [{"role": "user", "content": "Hello! How are you?"}]
   }'
 ```

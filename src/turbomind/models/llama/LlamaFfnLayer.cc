@@ -45,13 +45,21 @@ void LlamaFfnLayer::forward(ForwardParam param)
     auto* fused     = mlp.w1w3.get();
     bool  use_fused = fused && fused->weight;
 
+    Tensor inter_scales;
+    Tensor unused_scales;
+
     if (use_fused) {
         Tensor mix;
-        TM_SCOPE_CALL(linear_.Forward(param.input, *fused, mix));
-
-        gating = mix.slice({0, 0}, {(int)token_num, inter_size});
-        if (!mlp.is_fused_silu) {
-            inter = mix.slice({0, inter_size}, {(ssize_t)token_num, inter_size});
+        if (mlp.is_fused_silu && fused->output_dtype() == kFloat8_e4m3) {
+            TM_SCOPE_CALL(linear_.Forward(param.input, unused_scales, *fused, mix, inter_scales));
+            gating = mix;  // FP8 fused output is already half-N (inter_size)
+        }
+        else {
+            TM_SCOPE_CALL(linear_.Forward(param.input, *fused, mix));
+            gating = mix.slice({0, 0}, {(int)token_num, inter_size});
+            if (!mlp.is_fused_silu) {
+                inter = mix.slice({0, inter_size}, {(ssize_t)token_num, inter_size});
+            }
         }
     }
     else {
@@ -73,7 +81,12 @@ void LlamaFfnLayer::forward(ForwardParam param)
 
     {  // w2(x)
         NvtxScope scope("w2");
-        TM_SCOPE_CALL(linear_.Forward(gating, *mlp.w2, param.output));
+        if (inter_scales) {
+            TM_SCOPE_CALL(linear_.Forward(gating, inter_scales, *mlp.w2, param.output, unused_scales));
+        }
+        else {
+            TM_SCOPE_CALL(linear_.Forward(gating, *mlp.w2, param.output));
+        }
     }
 }
 

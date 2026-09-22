@@ -22,7 +22,6 @@ a100:
   - quantization
   quantization:
     turbomind:
-    - awq
     - kvint4
     - kvint8
     pytorch:

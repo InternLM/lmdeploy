@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
@@ -24,7 +25,6 @@ class DPMeta:
     tp_sizes: list[int] = None
     moe_tp_sizes: list[int] = None
     # added extra info for spec decoding
-    is_decoding: bool = False
     dp_is_decoding: bool = False
     dp_batches: list[int] = None
     dp_draft_num_tokens: list[int] = None
@@ -101,6 +101,29 @@ class VisionModelInputs:
 
         return VisionModelInputs(**out_dict)
 
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of vision tensor fields."""
+        for f in fields(self):
+            key = f.name
+            value = getattr(self, key)
+            if isinstance(value, torch.Tensor):
+                if value.is_cuda:
+                    value.record_stream(stream)
+            elif key == 'input_embedding_ranges':
+                for tensor in value or ():
+                    if tensor.is_cuda:
+                        tensor.record_stream(stream)
+            elif key == 'input_embeddings':
+                for tensors in value or ():
+                    for tensor in tensors:
+                        if tensor.is_cuda:
+                            tensor.record_stream(stream)
+            elif key == 'input_multimodals':
+                for multimodals in value or ():
+                    for items in multimodals.values():
+                        for item in items:
+                            item.record_stream(stream)
+
     def get_inputs(self, history_lengths: torch.Tensor, seq_lengths: torch.Tensor):
         """Get vision embedding inputs."""
         input_embeddings = None
@@ -169,6 +192,13 @@ class ModelInputsDelta:
 
         return ModelInputsDelta(**out_dict)
 
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of tensor fields."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, torch.Tensor) and value.is_cuda:
+                value.record_stream(stream)
+
     def log_info(self):
         """Get log info."""
         ret = (f'num_tokens={self.indices.numel()}, batch_size={self.indices.numel()}'
@@ -194,10 +224,15 @@ class ModelInputs:
     dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
     is_dummy: bool = False
+    # Runtime SSM state slot ids for each sequence in the batch.
     state_offsets: torch.Tensor | None = None
     target_hidden_states: torch.Tensor | None = None
     target_position_ids: torch.Tensor | None = None
     target_inputs_embeds: torch.Tensor | None = None
+    # Hidden-state positions requiring lm-head projection.
+    logits_indices: torch.LongTensor | None = None
+    # Number of compact logprob rows emitted for each sequence.
+    seq_logit_length: torch.LongTensor | None = None
     is_chunk: bool = False
     is_first_chunk: bool = False
     is_last_chunk: bool = False
@@ -224,6 +259,8 @@ class ModelInputs:
             history_lengths=self.history_lengths + step_seqlens,
             max_kv_seqlen=self.max_kv_seqlen + self.max_q_seqlen,
             sum_kv_seqlen=self.sum_kv_seqlen + self.max_q_seqlen * self.seq_length.numel(),
+            logits_indices=None,
+            seq_logit_length=None,
             mrope_pos_ids=mrope_pos_ids,
         )
 
@@ -242,9 +279,25 @@ class ModelInputs:
 
         return ModelInputs(**out_dict)
 
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Record forward-stream use of model tensor fields."""
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, torch.Tensor):
+                if value.is_cuda:
+                    value.record_stream(stream)
+            elif isinstance(value, VisionModelInputs):
+                value.record_stream(stream)
+
     def build_dp_meta(self, num_tokens: list[int]):
         """Build dp meta."""
         self.dp_meta = DPMeta.build(self.input_ids.numel(), num_tokens)
+
+    def global_is_decoding(self) -> bool:
+        """Check whether all DP ranks are decoding."""
+        if self.dp_meta is None:
+            return self.is_decoding
+        return self.dp_meta.dp_is_decoding
 
     def log_info(self):
         """Get log info."""
@@ -278,6 +331,7 @@ class StepContext:
     is_decoding: bool
     sum_kv_seqlen: int
     max_kv_seqlen: int | None = None
+    max_q_seqlen: int | None = None
     local_adapter_ids: torch.LongTensor | None = None
     input_embeddings: torch.Tensor | None = None
     input_embedding_indexing: torch.Tensor | None = None
@@ -296,13 +350,19 @@ class StepContext:
     state_caches: list | None = None
     state_offsets: torch.LongTensor | None = None
 
+    # named views for operator-owned block caches and configured state caches
+    block_caches: Mapping[str, torch.Tensor] | None = None
+    named_state_caches: Mapping[str, torch.Tensor] | None = None
+
     # mrope
     mrope_position_ids: torch.Tensor | None = None
 
-    _outputs: dict = field(default_factory=dict)
-
     # chunk with multimodal
     is_chunk_multimodal: bool = False
+    is_dummy: bool = False
+    is_chunk: bool = False
+    is_first_chunk: bool = False
+    is_last_chunk: bool = False
 
     @classmethod
     def new(
@@ -335,11 +395,12 @@ class StepContext:
 
         # position ids
         attention_mask, position_ids = cls.get_mask_and_position_ids(inputs)
-        q_start_loc = q_seqlens.cumsum(0) - q_seqlens
+        q_start_loc = cls._get_q_start_loc(inputs)
 
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
-        kv_seqlens -= inputs.num_ignored_history
+        if cache_config.window_size > 0:
+            kv_seqlens -= inputs.num_ignored_history
 
         ret = StepContext(
             input_ids=inputs.input_ids,
@@ -358,6 +419,7 @@ class StepContext:
             is_decoding=inputs.is_decoding,
             sum_kv_seqlen=inputs.sum_kv_seqlen,
             max_kv_seqlen=inputs.max_kv_seqlen,
+            max_q_seqlen=inputs.max_q_seqlen,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,
@@ -370,10 +432,37 @@ class StepContext:
             target_inputs_embeds=inputs.target_inputs_embeds,
             mrope_position_ids=inputs.mrope_pos_ids,
             is_chunk_multimodal=inputs.is_chunk_multimodal,
+            is_dummy=inputs.is_dummy,
+            is_chunk=inputs.is_chunk,
+            is_first_chunk=inputs.is_first_chunk,
+            is_last_chunk=inputs.is_last_chunk,
         )
 
         ret = get_backend().update_step_context(ret)
         return ret
+
+    def global_is_decoding(self) -> bool:
+        """Check whether all DP ranks are decoding."""
+        if self.dp_meta is None:
+            return self.is_decoding
+        return self.dp_meta.dp_is_decoding
+
+    @staticmethod
+    def _get_q_start_loc(inputs: ModelInputs):
+        """Build query offsets, avoiding a scan for uniform layouts."""
+        q_seqlens = inputs.seq_length
+        num_tokens = inputs.input_ids.numel()
+        max_q_seqlen = inputs.max_q_seqlen
+        if max_q_seqlen * q_seqlens.numel() == num_tokens:
+            return torch.arange(
+                0,
+                num_tokens,
+                max_q_seqlen,
+                dtype=torch.long,
+                device=q_seqlens.device,
+            )
+
+        return q_seqlens.cumsum(0) - q_seqlens
 
     @classmethod
     def get_mask_and_position_ids(cls, inputs: ModelInputs):
@@ -422,10 +511,19 @@ class StepContext:
         return attention_mask, position_ids
 
 
+@dataclass(frozen=True)
+class SpecModelBuildContext:
+    """Speculative-decoding metadata needed while building models."""
+
+    target_aux_hidden_state_layers: tuple[int, ...] = ()
+    speculative_mask_token_id: int | None = None
+
+
 @dataclass
 class BuildModelContext:
     """Context for building model."""
-    disable_vision_encoder: bool = False
+    language_model_only: bool = False
+    enable_deterministic: bool = False
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False
@@ -433,6 +531,15 @@ class BuildModelContext:
     fp32_lm_head: bool = False
     tie_word_embeddings: bool = False
     num_spec_tokens: int = 0
+    max_batch_size: int = 0
+    spec_model_ctx: SpecModelBuildContext = field(default_factory=SpecModelBuildContext)
+
+    @property
+    def deep_ep_max_tokens_per_rank(self) -> int:
+        """Infer DeepEP low-latency max dispatch tokens per rank."""
+        if self.max_batch_size <= 0:
+            return 128
+        return self.max_batch_size * (1 + self.num_spec_tokens)
 
 
 class StepContextManager(CtxMgrBase[StepContext]):
@@ -441,6 +548,7 @@ class StepContextManager(CtxMgrBase[StepContext]):
         super().__init__(None)
         build_ctx = build_ctx or BuildModelContext()
         self.build_ctx = build_ctx
+        self.backend_step_meta_plan: object | None = None
 
     @record_function('build_step_context')
     def build_context(

@@ -2,8 +2,9 @@
 
 import pytest
 
+from lmdeploy.messages import EngineOutput, RequestMetrics, ResponseType
 from lmdeploy.metrics.loggers import PrometheusStatLogger
-from lmdeploy.metrics.stats import SpeculativeDecodingStats
+from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDecodingStats
 
 prometheus_client = pytest.importorskip('prometheus_client')
 
@@ -42,3 +43,22 @@ def test_prometheus_stat_logger_records_specdecode_metrics():
     position_labels = labels | {'position': '2'}
     assert _get_sample_value('lmdeploy:spec_decode_num_accepted_tokens_per_pos_total', position_labels) == 0
     assert _get_sample_value('lmdeploy:spec_decode_per_position_accept_rate', position_labels) == 0
+
+
+def test_zero_token_finish_records_request_reason():
+    req_stats = RequestStats(prompt_tokens=4)
+    iteration_stats = IterationStats()
+    req_stats.scheduled_time = iteration_stats.iteration_timestamp - 2
+    output = EngineOutput(ResponseType.FINISH, [], req_metrics=RequestMetrics())
+
+    iteration_stats.update_from_output(output, req_stats)
+
+    assert iteration_stats.new_generation_tokens == 0
+    assert req_stats.generation_tokens == 0
+    assert req_stats.finish_reason == ResponseType.FINISH
+    assert req_stats.finish_time == iteration_stats.iteration_timestamp
+    assert req_stats.first_token_time == req_stats.finish_time
+    assert req_stats.prefill_time_interval == pytest.approx(2)
+    assert req_stats.decode_time_interval == 0
+    assert iteration_stats.prompt_tokens == 4
+    assert iteration_stats.ttft is None

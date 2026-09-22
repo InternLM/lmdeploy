@@ -139,9 +139,16 @@ class Engine:
                  trust_remote_code: bool = False):
         self.tokenizer = Tokenizer(model_path)
         if isinstance(engine_config, TurbomindEngineConfig):
+            from lmdeploy import turbomind
+            if not turbomind.is_available():
+                raise RuntimeError(
+                    'TurboMind was requested but its native module is unavailable.'
+                ) from turbomind._import_error
             from lmdeploy.turbomind import TurboMind
-            tm_model = TurboMind.from_pretrained(model_path, engine_config=engine_config,
-                                                 trust_remote_code=trust_remote_code)
+
+            tm_model = TurboMind.from_pretrained(
+                model_path, engine_config=engine_config, trust_remote_code=trust_remote_code
+            )
             self.backend = 'turbomind'
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine
@@ -179,8 +186,6 @@ class Engine:
                                                                                   top_p=top_p,
                                                                                   top_k=top_k,
                                                                                   ignore_eos=True),
-                                                      sequence_start=True,
-                                                      sequence_end=True,
                                                       stream_output=stream_output)
             try:
                 async for outputs in generator:
@@ -194,10 +199,6 @@ class Engine:
                 sess.finish(Session.SUCCESS)
             finally:
                 await generator.aclose()
-
-            # for pytorch engine to restart a session
-            if self.backend == 'pytorch':
-                await model_inst.async_end(session_id)
 
             self.pbar.update(1)
             session_id += concurrency
@@ -312,11 +313,14 @@ def parse_args():
 
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
+    ArgumentHelper.device(pt_group)
     ArgumentHelper.eager_mode(pt_group)
     ArgumentHelper.dllm_block_length(pt_group)
     ArgumentHelper.dllm_unmasking_strategy(pt_group)
     ArgumentHelper.dllm_denoising_steps(pt_group)
     ArgumentHelper.dllm_confidence_threshold(pt_group)
+    ArgumentHelper.max_prefill_token_num(pt_group)
+    ArgumentHelper.piecewise_cudagraph_max_tokens(pt_group)
 
     # spec decode
     ArgumentHelper.add_spec_group(parser)
@@ -352,6 +356,7 @@ def parse_args():
 def main():
     args = parse_args()
     random.seed(args.seed)
+    np.random.seed(args.seed)
     if args.backend == 'turbomind':
         engine_config = TurbomindEngineConfig(
             max_batch_size=args.concurrency // args.dp,
@@ -375,11 +380,14 @@ def main():
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
+            device_type=args.device,
             eager_mode=args.eager_mode,
             enable_prefix_caching=args.enable_prefix_caching,
             quant_policy=args.quant_policy,
             dtype=args.dtype,
             distributed_executor_backend=args.distributed_executor_backend,
+            max_prefill_token_num=args.max_prefill_token_num,
+            piecewise_cudagraph_max_tokens=args.piecewise_cudagraph_max_tokens,
             dllm_block_length=args.dllm_block_length,
             dllm_unmasking_strategy=args.dllm_unmasking_strategy,
             dllm_denoising_steps=args.dllm_denoising_steps,

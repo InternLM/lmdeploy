@@ -226,7 +226,7 @@ class CalibrationContext:
     def calibrate(self, data):
         """Forward pass through the model in inference mode with given data."""
 
-        if type(self.model).__name__ in ('QWenLMHeadModel', 'ChatGLMForConditionalGeneration'):
+        if type(self.model).__name__ == 'ChatGLMForConditionalGeneration':
             model = self.model.transformer
         else:
             model = self.model.model
@@ -323,12 +323,6 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat, mod
         if module2inspect is None:
             assert len(layers) == 1
             module2inspect = layers[0]
-        # internlm-xcomposer2-vl applies plora, which requires im_mask arg
-        if module2inspect._get_name() == 'InternLM2MLP':
-            from inspect import signature
-            if 'im_mask' in signature(module2inspect.forward).parameters:
-                kwargs['im_mask'] = None
-
         best_ratio = _search_module_scale(module2inspect, layers, inp.value, kwargs)
         inp.save_ratio(best_ratio)
 

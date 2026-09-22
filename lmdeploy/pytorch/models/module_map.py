@@ -10,6 +10,16 @@ CAMB_MODULE_MAP = dict()
 
 DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP, maca=MACA_MODULE_MAP, camb=CAMB_MODULE_MAP)
 
+REMOVED_MODEL_MAP = {
+    'InternLMForCausalLM': 'InternLM',
+    'QWenLMHeadModel': 'Qwen and Qwen-VL',
+    'BaiChuanForCausalLM': 'Baichuan',
+    'BaichuanForCausalLM': 'Baichuan and Baichuan2',
+    'Starcoder2ForCausalLM': 'StarCoder2',
+    'InternLM2VEForCausalLM': 'Mono-InternVL',
+    'MllamaForConditionalGeneration': 'mllama',
+}
+
 # llama
 MODULE_MAP.update({
     'LlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaForCausalLM',
@@ -19,11 +29,6 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'Llama4ForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama4.Llama4ForConditionalGeneration',
-})
-
-# baichuan
-MODULE_MAP.update({
-    'BaichuanForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.BaichuanForCausalLM',
 })
 
 # chatglm
@@ -49,20 +54,13 @@ MODULE_MAP.update({
 })
 
 # glm4.7
-
-MODULE_MAP.update({'Glm4MoeLiteForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'})
-
-# glm4.7 mtp
 MODULE_MAP.update({
-    'Glm4MoeMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm4moe_mtp.Glm4MoeMTPModel',
+    'Glm4MoeLiteForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM',
 })
 
 # glm5
-MODULE_MAP.update({'GlmMoeDsaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32.DeepseekV32ForCausalLM'})
-
-# internlm
 MODULE_MAP.update({
-    'InternLMForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm.InternLMForCausalLM',
+    'GlmMoeDsaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm_moe_dsa.GlmMoeDsaForCausalLM',
 })
 
 # internlm2
@@ -107,27 +105,48 @@ MODULE_MAP.update({
 })
 
 # deepseek-v2
-MODULE_MAP.update({'DeepseekV2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'})
+MODULE_MAP.update({
+    'DeepseekV2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM',
+})
 
 # deepseek-v3
-MODULE_MAP.update({'DeepseekV3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'})
+MODULE_MAP.update({
+    'DeepseekV3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM',
+})
+
+# kimi-k2.5/k2.6
+MODULE_MAP.update({
+    'KimiK25ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.kimi_k25.KimiK25ForConditionalGeneration',
+    'Kimi_K25ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.kimi_k25.KimiK25ForConditionalGeneration',
+})
 
 # deepseek-v32
-MODULE_MAP.update({'DeepseekV32ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32.DeepseekV32ForCausalLM'})
+MODULE_MAP.update({
+    'DeepseekV32ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32.DeepseekV32ForCausalLM',
+})
+
+# deepseek-v4
+MODULE_MAP.update({
+    'DeepseekV4ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v4.DeepseekV4ForCausalLM',
+})
 
 # deepseek-vl2
-MODULE_MAP.update({'DeepseekVLV2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_vl2.DeepseekVLV2ForCausalLM'})
+MODULE_MAP.update({
+    'DeepseekVLV2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_vl2.DeepseekVLV2ForCausalLM',
+})
+
+# hy3
+MODULE_MAP.update({
+    'HYV3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.hy3.HYV3ForCausalLM',
+})
 
 # llava
 MODULE_MAP.update({
     'LlavaForConditionalGeneration': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration',  # noqa: E501
     'LlavaNextForConditionalGeneration':  # noqa: E501
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaNextForConditionalGeneration'  # noqa: E501
-})
-
-# qwen
-MODULE_MAP.update({
-    'QWenLMHeadModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.QWenLMHeadModel',
 })
 
 # qwen1.5
@@ -190,14 +209,18 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'InternS2PreviewForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
-})
-MODULE_MAP.update({
     'InternS2PreviewForCausalLM':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
 })
 
+# meta moe / interns2 mobius
 MODULE_MAP.update({
-    'Qwen3_5MTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_mtp.Qwen3_5MTPModel',
+    'MetaMoeForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.meta_moe.MetaMoeForConditionalGeneration',
+    'InternS2MobiusForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns2_mobius.InternS2MobiusForConditionalGeneration',
+    'InternS2MobiusForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns2_mobius.InternS2MobiusForConditionalGeneration',
 })
 
 # qwen3 omni moe thinker
@@ -205,11 +228,6 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'Qwen3OmniMoeForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_omni_moe_thinker.Qwen3OmniMoeThinkerForConditionalGeneration',
-})
-
-# starcoder2
-MODULE_MAP.update({
-    'Starcoder2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.Starcoder2ForCausalLM',
 })
 
 # phi-3
@@ -223,7 +241,9 @@ MODULE_MAP.update({
 })
 
 # internvl
-MODULE_MAP.update({'InternVLChatModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.InternVLChatModel'})
+MODULE_MAP.update({
+    'InternVLChatModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.InternVLChatModel',
+})
 
 # internvl3-hf
 MODULE_MAP.update({
@@ -241,15 +261,8 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'InternS1ProForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns1_pro.InternS1ProForConditionalGeneration',
-})
-MODULE_MAP.update({
     'InternS1_1_ForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns1_pro.InternS1ProForConditionalGeneration',
-})
-
-# mono-internvl
-MODULE_MAP.update({
-    'InternLM2VEForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2_ve.InternLM2VEForCausalLM',
 })
 
 # phi3 vision
@@ -278,11 +291,14 @@ MODULE_MAP.update({
 })
 
 # internlm2 reward model
-MODULE_MAP.update(
-    {'InternLM2ForRewardModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2_reward.InternLM2ForRewardModel'})
+MODULE_MAP.update({
+    'InternLM2ForRewardModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2_reward.InternLM2ForRewardModel',
+})
 
 # qwen2 reward model
-MODULE_MAP.update({'Qwen2ForRewardModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_reward.Qwen2ForRewardModel'})
+MODULE_MAP.update({
+    'Qwen2ForRewardModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_reward.Qwen2ForRewardModel',
+})
 
 # gpt-oss
 MODULE_MAP.update({
@@ -302,12 +318,32 @@ MODULE_MAP.update({
 
 CUSTOM_MODULE_MAP = dict()
 
-# spec models
+# speculative models
 # eagle llama
-MODULE_MAP.update({'EagleLlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama_eagle.EagleLlamaForCausalLM'})
+MODULE_MAP.update({
+    'EagleLlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama_eagle.EagleLlamaForCausalLM',
+})
 
 # eagle3 llama
-MODULE_MAP.update({'Eagle3LlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama_eagle3.Eagle3LlamaForCausalLM'})
+MODULE_MAP.update({
+    'Eagle3LlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama_eagle3.Eagle3LlamaForCausalLM',
+})
 
-# deepseek mtp
-MODULE_MAP.update({'DeepseekMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_mtp.DeepseekMTPModel'})
+# eagle3 kimi-k2/deepseek MLA
+MODULE_MAP.update({
+    'Eagle3DeepseekV2ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.kimi_k25_eagle3.Eagle3DeepseekV2ForCausalLM'
+})
+
+# mtp models
+MODULE_MAP.update({
+    'DeepseekMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_mtp.DeepseekMTPModel',
+    'DeepseekV32MTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32_mtp.DeepseekV32MTPModel',
+    'Glm4MoeMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm4_moe_mtp.Glm4MoeMTPModel',
+    'GlmMoeDsaMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm_moe_dsa_mtp.GlmMoeDsaMTPModel',
+    'HYV3MTP': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.hy3_mtp.HYV3MTP',
+    'Qwen3_5MTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_mtp.Qwen3_5MTPModel',
+})
+
+# dflash qwen
+MODULE_MAP.update({'DFlashDraftModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_dflash.DFlashDraftModel'})

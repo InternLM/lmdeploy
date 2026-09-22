@@ -13,6 +13,40 @@ a100:
     - nccl
   test_coverage:
   - func
+  - evaluate
+  interface:
+    pytorch:
+      suites:
+      - base
+    turbomind:
+      suites:
+      - base
+  quantization:
+    turbomind:
+    - kvint8
+    pytorch:
+    - kvint8
+h:
+- model_type: base
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - func
+  - evaluate
+  interface:
+    pytorch:
+      suites:
+      - base
+    turbomind:
+      suites:
+      - base
   quantization:
     turbomind:
     - kvint8

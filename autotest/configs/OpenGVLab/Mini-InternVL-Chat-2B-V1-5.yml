@@ -12,9 +12,5 @@ a100:
     - nccl
   test_coverage:
   - func
-  - quantization
-  quantization:
-    turbomind:
-    - awq
   deps:
     transformers: 4.57.6

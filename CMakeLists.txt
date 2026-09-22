@@ -12,16 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.25.2 FATAL_ERROR)
 cmake_policy(SET CMP0074 NEW)
 cmake_policy(SET CMP0104 OLD)
 project(TurboMind LANGUAGES CXX CUDA)
+
+if(CMAKE_CUDA_COMPILER_VERSION VERSION_LESS "12.0")
+    message(FATAL_ERROR "TurboMind C++20 requires CUDA 12.0 or newer")
+endif()
 
 if (MSVC)
     # use standard conformant preprocessor
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor -Xcompiler=/Zc:__cplusplus")
+    # C++20 enables MSVC's strict template lookup, which rejects NVCC-generated
+    # CuTe code. Preserve the previous lookup mode only for the CUDA host pass.
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:twoPhase-")
     # nvcc's front-end has a known bug (fixed in NVCC 13.1) where the fmt 11.x
     # literal-encoding probe (fmt/base.h:is_utf8_enabled) always returns false,
     # causing a static_assert failure.  Disable fmt's Unicode check project-wide;
@@ -43,6 +50,8 @@ option(BUILD_PY_FFI "Build python ffi" ON)
 option(BUILD_TEST "Build tests" OFF)
 option(SPARSITY_SUPPORT "Build project with Ampere sparsity feature support" OFF)
 option(BUILD_FAST_MATH "Build in fast math mode" ON)
+
+set(NVCC_THREADS 8 CACHE STRING "NVCC threads for compiling target architectures in parallel (0 = all CPUs)")
 
 include(FetchContent)
 
@@ -101,7 +110,7 @@ FetchContent_MakeAvailable(yaml-cpp)
 FetchContent_Declare(
   xgrammar
   GIT_REPOSITORY          https://github.com/mlc-ai/xgrammar.git
-  GIT_TAG                 v0.1.27
+  GIT_TAG                 v0.2.1
   GIT_SUBMODULES          "3rdparty/dlpack"
   GIT_PROGRESS            TRUE
   USES_TERMINAL_DOWNLOAD  TRUE
@@ -178,17 +187,6 @@ if(BUILD_MULTI_GPU)
 endif()
 
 
-set(CXX_STD "17" CACHE STRING "C++ standard")
-# enable gold linker for binary and .so
-if(NOT MSVC)
-  find_program(GOLD_PATH ld.gold REQUIRED)
-  if(NOT GOLD_PATH)
-    message(FATAL_ERROR "GNU gold linker is required but not found. "
-                         "Please install binutils-gold package.")
-  endif()
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=gold")
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fuse-ld=gold")
-endif()
 set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 
 set(CUSPARSELT_PATH "" CACHE STRING "cuSPARSELt path")
@@ -204,7 +202,6 @@ endif()
 
 # setting compiler flags
 set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}")
-set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wall -ldl") # -Xptxas -v
 
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
@@ -287,16 +284,13 @@ set(CMAKE_CXX_FLAGS_DEBUG  "${CMAKE_CXX_FLAGS_DEBUG}  -Wall -O0")
 # set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -O0 -G -Xcompiler -Wall  --ptxas-options=-v --resource-usage")
 set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -O0 -G -Xcompiler -Wall")
 
-set(CMAKE_CXX_STANDARD "${CXX_STD}")
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --std=c++${CXX_STD}")
 # Suppress nvcc warning 128 (loop not reachable) in fmt headers - nvcc false positive
 # Suppress nvcc warning 27 (character value out of range) from fmt/format.h's
 # fractional_part_rounding_thresholds which uses U32 string literals with values
 # exceeding 0x10FFFF - harmless, pending fix in fmtlib (PR #4719)
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress=128 --diag-suppress=27")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress=128 --diag-suppress=27 --diag-suppress=2417")
 
 string(REPLACE "-O2" "" CMAKE_CXX_FLAGS_RELEASE         "${CMAKE_CXX_FLAGS_RELEASE}")
 string(REPLACE "-O2" "" CMAKE_CUDA_FLAGS_RELEASE        "${CMAKE_CUDA_FLAGS_RELEASE}")
@@ -371,19 +365,43 @@ link_directories(
   ${COMMON_LIB_DIRS}
 )
 
+# Apply TurboMind's language requirements after configuring external dependencies.
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CUDA_STANDARD 20)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_EXTENSIONS OFF)
+
 add_subdirectory(src)
 
-# if(BUILD_TEST)
-#     add_subdirectory(tests/csrc)
-# endif()
-
 # install python api
-if (BUILD_PY_FFI)
-  if (CALL_FROM_SETUP_PY)
-    install(TARGETS _turbomind DESTINATION ${CMAKE_INSTALL_PREFIX})
-    install(TARGETS _xgrammar DESTINATION ${CMAKE_INSTALL_PREFIX})
-  else()
-    install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
-    install(TARGETS _xgrammar DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+if(BUILD_PY_FFI)
+  set(_TURBOMIND_PYTHON_PACKAGE_DIR "${CMAKE_SOURCE_DIR}/lmdeploy/turbomind")
+
+  set_target_properties(
+    _turbomind
+    PROPERTIES
+      LIBRARY_OUTPUT_DIRECTORY "$<1:${_TURBOMIND_PYTHON_PACKAGE_DIR}>"
+      RUNTIME_OUTPUT_DIRECTORY "$<1:${_TURBOMIND_PYTHON_PACKAGE_DIR}>")
+
+  if(TARGET turbomind_nccl_stub)
+    set_target_properties(
+      turbomind_nccl_stub
+      PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "$<1:${_TURBOMIND_PYTHON_PACKAGE_DIR}/lib>"
+        RUNTIME_OUTPUT_DIRECTORY "$<1:${_TURBOMIND_PYTHON_PACKAGE_DIR}/lib>")
   endif()
-endif ()
+
+  install(
+    TARGETS _turbomind
+    LIBRARY DESTINATION .
+    RUNTIME DESTINATION .)
+
+  if(TARGET turbomind_nccl_stub)
+    install(
+      TARGETS turbomind_nccl_stub
+      LIBRARY DESTINATION lib
+      RUNTIME DESTINATION lib)
+  endif()
+endif()

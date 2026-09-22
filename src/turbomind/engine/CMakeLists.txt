@@ -3,9 +3,12 @@
 cmake_minimum_required(VERSION 3.25)
 
 add_library(engine STATIC
+    block.cc
+    cache_registry.cc
     gateway.cc
     request.cc
     request_queue.cc
+    scheduler.cc
     model_request.cc
     model_executor.cc
     engine.cc
@@ -13,3 +16,8 @@ add_library(engine STATIC
 target_link_libraries(engine PRIVATE xgrammar core)
 set_property(TARGET engine PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET engine PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+if (BUILD_TEST)
+    add_executable(test_prefix_trie test_prefix_trie.cc)
+    target_link_libraries(test_prefix_trie PRIVATE engine memory core Catch2::Catch2WithMain)
+endif ()

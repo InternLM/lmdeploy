@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from torch import Tensor
 
-from ..flash_attention import FlashAttentionBuilder, FlashAttentionImpl
+from ..flash_attention import FlashAttentionImpl
 
 
 class DlinferFlashAttentionImpl(FlashAttentionImpl):
@@ -15,7 +15,7 @@ class DlinferFlashAttentionImpl(FlashAttentionImpl):
         num_kv_heads: int = None,
         v_head_dim: int = None,
         causal: bool = True,
-        sliding_window: int = None,
+        sliding_window: int | tuple[int, int] | None = None,
         logit_softcapping: float = None,
     ):
         if scale is None:
@@ -66,31 +66,3 @@ class DlinferFlashAttentionImpl(FlashAttentionImpl):
             causal=self.causal,
         )
         return out
-
-
-class DlinferFlashAttentionBuilder(FlashAttentionBuilder):
-    """Dlinfer attention builder."""
-
-    @staticmethod
-    def build(
-        num_heads: int,
-        head_dim: int,
-        scale: float = None,
-        num_kv_heads: int = None,
-        v_head_dim: int = None,
-        causal: bool = True,
-        sliding_window: int = None,
-        logit_softcapping: float = None,
-        **kwargs,
-    ) -> FlashAttentionImpl:
-        """build."""
-        return DlinferFlashAttentionImpl(
-            num_heads=num_heads,
-            head_dim=head_dim,
-            scale=scale,
-            num_kv_heads=num_kv_heads,
-            v_head_dim=v_head_dim,
-            causal=causal,
-            sliding_window=sliding_window,
-            logit_softcapping=logit_softcapping,
-        )

@@ -2,10 +2,24 @@ import os
 
 import pytest
 import yaml
+from utils.ascend_multinode_utils import bootstrap_ascend_session_env
 from utils.config_utils import get_config
 from utils.constant import DEFAULT_SERVER
 from utils.proxy_distributed_utils import ProxyDistributedManager
+from utils.pytest_layout_utils import all_layout_mark_names
 from utils.ray_distributed_utils import RayLMDeployManager
+
+
+def pytest_configure(config):
+    for name in sorted(all_layout_mark_names()):
+        config.addinivalue_line(
+            'markers',
+            f'{name}: autotest parallel layout ({name})',
+        )
+    config.addinivalue_line(
+        'markers',
+        'distributed: multi-node runner (ray or proxy), not single-machine layout',
+    )
 
 cli_prompt_case_file = 'autotest/chat_prompt_case.yml'
 common_prompt_case_file = 'autotest/prompt_case.yml'
@@ -15,8 +29,11 @@ PROXY_PORT = 8000
 
 @pytest.fixture(scope='session')
 def config():
-    # Use device-specific config file if DEVICE environment variable is set
-    return get_config()
+    cfg = get_config()
+    device = cfg.get('device')
+    if device:
+        os.environ.setdefault('DEVICE', device)
+    return cfg
 
 
 @pytest.fixture(scope='session')
@@ -36,8 +53,9 @@ def common_case_config():
 
 
 @pytest.fixture(scope='session')
-def shared_ray_manager():
-    master_addr = DEFAULT_SERVER
+def shared_ray_manager(config):
+    bootstrap_ascend_session_env(config)
+    master_addr = os.getenv('MASTER_ADDR', DEFAULT_SERVER)
     env_config = get_config()
     run_id = os.environ.get('RUN_ID', 'local_run')
     log_dir = os.path.join(env_config.get('server_log_path', '/tmp/lmdeploy_test'), str(run_id).replace('/', '_'))
@@ -56,14 +74,13 @@ def shared_ray_manager():
 
 
 @pytest.fixture(scope='session')
-def shared_proxy_manager():
-    master_addr = DEFAULT_SERVER
-
+def shared_proxy_manager(config):
+    bootstrap_ascend_session_env(config)
     manager = ProxyDistributedManager()
 
+    manager.start()
     if manager.is_master:
-        manager.start()
-        print(f'🎯 Master node: LMDeploy Proxy started on {master_addr}:{manager.proxy_port}')
+        print(f'🎯 Master node: LMDeploy Proxy started on {manager.master_addr}:{manager.proxy_port}')
         print('⏳ Waiting for worker nodes to connect...')
 
     yield manager

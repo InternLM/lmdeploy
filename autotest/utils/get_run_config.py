@@ -37,10 +37,6 @@ def get_model_name(model):
         return 'internvl-internlm2'
     if ('internlm2') in model_name:
         return 'internlm2'
-    if ('internlm-xcomposer2d5') in model_name:
-        return 'internlm-xcomposer2d5'
-    if ('internlm-xcomposer2') in model_name:
-        return 'internlm-xcomposer2'
     if ('glm-4') in model_name:
         return 'glm4'
     if len(model_name.split('-')) > 2 and '-'.join(model_name.split('-')[0:2]) in model_names:

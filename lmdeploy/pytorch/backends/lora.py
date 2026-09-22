@@ -6,6 +6,8 @@ import torch
 
 from lmdeploy.pytorch.model_inputs import StepContextManager
 
+from .base import BuildSpec
+
 
 @dataclass
 class AdapterInfo:
@@ -33,9 +35,9 @@ class LoRAImpl(ABC):
     @abstractmethod
     def forward(self,
                 x: torch.Tensor,
-                base_output: torch.Tensor,
                 lora_A: torch.Tensor,
                 lora_B: torch.Tensor,
+                base_output: torch.Tensor,
                 adapter_info: AdapterInfo,
                 ctx_mgr: StepContextManager,
                 colwise: bool,
@@ -44,11 +46,6 @@ class LoRAImpl(ABC):
         raise NotImplementedError
 
 
-class LoRABuilder(ABC):
-    """Lora implementation builder."""
-
-    @staticmethod
-    @abstractmethod
-    def build():
-        """build."""
-        raise NotImplementedError
+@dataclass(frozen=True)
+class LoRABuildSpec(BuildSpec[LoRAImpl]):
+    """Immutable requirements for constructing a LoRA operator."""

@@ -1,17 +1,80 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, QuantPolicy
+from lmdeploy.messages import KVTransferConfig, PytorchEngineConfig, QuantPolicy
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
 from lmdeploy.utils import get_logger, is_bf16_supported
 
 logger = get_logger('lmdeploy')
+
+
+def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
+    """Parse the pre-packed W4A16 metadata needed by the inference backend."""
+    if quant_config.get('format') != 'pack-quantized':
+        raise ValueError('Only compressed-tensors `pack-quantized` format is supported.')
+    if quant_config.get('quantization_status') != 'compressed':
+        raise ValueError('Compressed-tensors checkpoint must have `compressed` status.')
+
+    config_groups = quant_config.get('config_groups')
+    if not isinstance(config_groups, Mapping) or set(config_groups) != {'group_0'}:
+        raise ValueError('Compressed-tensors config must contain exactly `config_groups.group_0`.')
+    group = config_groups['group_0']
+    if not isinstance(group, Mapping) or group.get('targets') != ['Linear']:
+        raise ValueError('Compressed-tensors `group_0` must target `Linear`.')
+    if group.get('input_activations') is not None or group.get('output_activations') is not None:
+        raise ValueError('Compressed-tensors activation quantization is not supported.')
+
+    weights = group.get('weights')
+    expected_weights = {
+        'num_bits': 4,
+        'group_size': 32,
+        'strategy': 'group',
+        'symmetric': True,
+        'dynamic': False,
+        'type': 'int',
+    }
+    if not isinstance(weights, Mapping):
+        raise ValueError('Compressed-tensors `group_0.weights` must be an object.')
+    for key, expected in expected_weights.items():
+        if weights.get(key) != expected:
+            raise ValueError(
+                f'Unsupported compressed-tensors `{key}`: expected {expected!r}, got {weights.get(key)!r}.')
+
+    ignored_layers = quant_config.get('ignore', [])
+    if not isinstance(ignored_layers, list) or not all(isinstance(rule, str) for rule in ignored_layers):
+        raise ValueError('Compressed-tensors `ignore` must be a list of strings.')
+    return weights['num_bits'], weights['group_size'], ignored_layers
+
+
+def _matches_compressed_tensors_ignore(rule: str, prefix: str) -> bool:
+    if rule.startswith('re:'):
+        return re.match(rule[3:], prefix) is not None
+    return rule == prefix
+
+
+def normalize_cudagraph_capture_batch_sizes(capture_sizes: list[int] | None, max_batches: int) -> list[int] | None:
+    """Normalize configured cudagraph capture batch sizes."""
+    if capture_sizes is None:
+        return None
+
+    assert len(capture_sizes) > 0, 'cudagraph_capture_batch_sizes should not be empty'
+    assert all(isinstance(size, int) and size > 0 for size in capture_sizes), (
+        'cudagraph_capture_batch_sizes should be positive integers')
+
+    capture_sizes = sorted({size for size in capture_sizes if size <= max_batches})
+    assert len(capture_sizes) > 0, (
+        'cudagraph_capture_batch_sizes should contain at least one value '
+        f'<= max_batch_size ({max_batches})')
+    if capture_sizes[-1] != max_batches:
+        capture_sizes.append(max_batches)
+    return capture_sizes
 
 
 def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'auto'):
@@ -72,6 +135,8 @@ class BackendConfig:
     """Backend config."""
     eager_mode: bool = True
     device_type: str = 'cuda'
+    piecewise_cudagraph_max_tokens: int | None = None
+    enable_deterministic: bool = False
 
 
 @dataclass
@@ -98,10 +163,13 @@ class CacheConfig:
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 8192
+    cudagraph_capture_batch_sizes: list[int] | None = None
     enable_prefix_caching: bool = False
     quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
     num_state_caches: int = None
+    prefix_cache_state_budget: int = 0
+    prefix_cache_decode_state_interval: int = 0
     states_shapes: list[tuple] = field(default_factory=list)
 
     # reserved blocks for dummy inputs, init to 0 for unit test.
@@ -110,14 +178,22 @@ class CacheConfig:
     # For PD Disaggregation
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
+    kv_transfer_config: KVTransferConfig | None = None
 
     def __post_init__(self):
         """Post init."""
+        assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
+        assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
         if self.kernel_block_size == -1:
             self.kernel_block_size = self.block_size
+        if self.prefix_cache_decode_state_interval > 0:
+            assert self.prefix_cache_decode_state_interval % self.block_size == 0, (
+                'prefix_cache_decode_state_interval must be a multiple of block_size')
+        self.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
+            self.cudagraph_capture_batch_sizes, self.max_batches)
 
 
 class TPMode(enum.Enum):
@@ -292,7 +368,11 @@ def _patch_quantization_config(hf_config: Any, model_format: str = None):
     if model_format == 'fp8':
         logger.debug('Patch quantization config for fp8.')
         from lmdeploy.pytorch.envs import scale_fmt
-        quantization_config = dict(quant_method='fp8', fmt='e4m3', weight_block_size=[128, 128], scale_fmt=scale_fmt)
+        quantization_config = dict(quant_method='fp8',
+                                   fmt='e4m3',
+                                   weight_block_size=[128, 128],
+                                   scale_fmt=scale_fmt,
+                                   lmdeploy_patched=True)
     else:
         raise RuntimeError(f'Unsupported weight quantization method: {model_format}')
 
@@ -304,6 +384,37 @@ def _patch_quantization_config(hf_config: Any, model_format: str = None):
         hf_config.llm_config.quantization_config = quantization_config
 
     return hf_config
+
+
+@dataclass
+class MemDecodeConfig:
+    """Configuration for MemDecode auxiliary memory model and fusion."""
+
+    memory_model_path: str
+    memory_model_config: 'ModelConfig'
+    lambda_value: float = 1.0
+    adaptive_router: bool = True
+    router_path: str | None = None
+    lambda_base_only_threshold: float = -1.0
+
+    def __post_init__(self):
+        self.lambda_value = float(self.lambda_value)
+        self.lambda_base_only_threshold = float(self.lambda_base_only_threshold)
+        if not 0.0 <= self.lambda_value <= 1.0:
+            raise ValueError(f'lambda_value must be in [0, 1], got {self.lambda_value}')
+        if self.adaptive_router and self.router_path is None:
+            raise ValueError('router_path is required when adaptive_router is enabled.')
+
+
+@dataclass
+class StateCacheSpec:
+    """Spec for a named sequence-scoped state cache (e.g. compressor
+    scratch)."""
+    name: str
+    shape: tuple[int, ...]
+    dtype: torch.dtype
+    layer_ids: list[int] | None = None
+    alignment: int = 256
 
 
 @dataclass
@@ -324,12 +435,13 @@ class ModelConfig:
     vocab_size: int = 40000
     hf_config: Any = None
     llm_config: Any = None
+    dist_config: DistConfig = None
     cogvlm_style: bool = False
     custom_module_map: dict[str, setattr] = None
 
     # flash mla
     use_flash_mla: bool = False
-    use_mla_fp8_cache: bool = False
+    mla_kv_cache_dtype: str | None = None
     mla_index_topk: int | None = None
 
     # dllm
@@ -337,15 +449,16 @@ class ModelConfig:
     dllm_mask_token: int = 0
     dllm_block_length: int = None
 
-    # Added for deepseekv3.2 nsa index
-    # caches would be added after kv cache
-    cache_shapes: list[tuple[list[int], torch.dtype]] = field(default_factory=list)
     # added for qwen3_next
     # could used for any SSM model.
     states_shapes: list[tuple[tuple[int], torch.dtype]] = field(default_factory=list)
     # flag to indicate that the model uses gated delta rule layers
     # and requires prepare_chunk_indices during prefill
     is_gated_delta: bool = False
+
+    # Named state-cache specs for models that need layered sequence state.
+    state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
+    use_standard_kv_cache: bool = True
 
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
@@ -360,9 +473,33 @@ class ModelConfig:
     # flags mark if this model use mrope
     use_mrope: bool = False
 
+    # update cache config
+    update_cache_config_func: Any = None
+
+    # Number of contiguous TP ranks that own the same logical KV-head shard.
+    num_replicate_key_value_heads: int = 1
+
+    @property
+    def use_mla_fp8_cache(self):
+        """Whether MLA uses the DeepSeek-V3.2 FP8 cache layout."""
+        return self.mla_kv_cache_dtype == 'fp8_ds_mla'
+
     def get_head_size(self):
         """Get head size."""
         return self.head_dim
+
+    def get_num_qkv_head_by_tp(self):
+        """Get q and kv heads per TP rank."""
+        dist_config = self.dist_config or DistConfig()
+        tp = dist_config.attn_tp
+        assert self.num_attention_heads % tp == 0
+        if self.num_key_value_heads >= tp:
+            assert self.num_key_value_heads % tp == 0
+        else:
+            assert tp % self.num_key_value_heads == 0
+        num_q_heads = self.num_attention_heads // tp
+        num_kv_heads = max(self.num_key_value_heads // tp, 1)
+        return num_q_heads, num_kv_heads
 
     @classmethod
     def from_pretrained(
@@ -415,7 +552,7 @@ class ModelConfig:
         fp32_lm_head = False
         if hf_overrides is not None:
             logger.warning(f'Overriding HF config with {hf_overrides}')
-            fp32_lm_head = hf_overrides.pop('fp32_lm_head', False)
+            fp32_lm_head = hf_overrides.get('fp32_lm_head', False)
             override_hf_config(model_config.hf_config, hf_overrides)
 
         # for fp32 head
@@ -471,9 +608,13 @@ class ModelConfig:
             assert model_config.num_key_value_heads % tp == 0
         else:
             assert tp % model_config.num_key_value_heads == 0
+        model_config.dist_config = dist_config
 
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config, dtype, device_type=device_type)
+
+        if spec_method == 'dflash':
+            model_config.model_paradigm = 'ar_spec'
 
         # update eos_token_id to list
         if isinstance(model_config.eos_token_id, int):
@@ -521,11 +662,12 @@ class MiscConfig:
     empty_init: bool = False
     model_format: str = None
     hf_overrides: dict[str, Any] = None
-    disable_vision_encoder: bool = False
+    language_model_only: bool = False
     logprobs_mode: str = None
     dllm_config: DLLMConfig = None
     enable_return_routed_experts: bool = False
     enable_chunked_prefill: bool = False
+    memdecode_config: MemDecodeConfig = None
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
@@ -541,7 +683,7 @@ class MiscConfig:
             prefill_interval=engine_config.prefill_interval,
             model_format=engine_config.model_format,
             hf_overrides=engine_config.hf_overrides,
-            disable_vision_encoder=engine_config.disable_vision_encoder,
+            language_model_only=engine_config.language_model_only,
             logprobs_mode=engine_config.logprobs_mode,
             dllm_config=dllm_config,
             enable_return_routed_experts=engine_config.enable_return_routed_experts,
@@ -558,6 +700,8 @@ class SpecDecodeConfig:
     num_speculative_tokens: int = 1
     model_config: ModelConfig = None
     dist_config: DistConfig = field(default_factory=DistConfig)
+    target_layer_ids: tuple[int, ...] | None = None
+    mask_token_id: int | None = None
 
     @classmethod
     def from_config(
@@ -573,9 +717,9 @@ class SpecDecodeConfig:
         hf_overrides: dict[str, Any] = None,
         dist_config: DistConfig = None,
     ):
-        model = model or target_model
+        draft_model = model or target_model
         dist_config = dist_config or DistConfig()
-        model_config = ModelConfig.from_pretrained(model,
+        model_config = ModelConfig.from_pretrained(draft_model,
                                                    trust_remote_code=trust_remote_code,
                                                    dtype=dtype,
                                                    dist_config=dist_config,
@@ -584,7 +728,44 @@ class SpecDecodeConfig:
                                                    block_size=target_cache_cfg.block_size,
                                                    model_format=model_format,
                                                    hf_overrides=hf_overrides,
+                                                   device_type=target_cache_cfg.device_type,
                                                    )
+        target_layer_ids = None
+        mask_token_id = None
+        if method == 'dflash':
+            from lmdeploy.pytorch.spec_decode.dflash_utils import (
+                parse_dflash_config,
+                validate_dflash_cache_config,
+                validate_dflash_runtime_config,
+            )
+            validate_dflash_cache_config(target_cache_cfg)
+            validate_dflash_runtime_config(cache_config=target_cache_cfg)
+            if target_model is None:
+                raise ValueError('DFlash requires an explicit target_model for checkpoint compatibility checks.')
+            target_model_config = ModelConfig.from_pretrained(
+                target_model,
+                trust_remote_code=trust_remote_code,
+                dtype=dtype,
+                dist_config=dist_config,
+                is_draft_model=False,
+                spec_method=method,
+                num_spec_tokens=num_speculative_tokens,
+                model_format=model_format,
+                hf_overrides=hf_overrides,
+                device_type=target_cache_cfg.device_type,
+                block_size=target_cache_cfg.block_size,
+            )
+            # Hybrid target configs use ``ModelConfig.num_layers`` for the
+            # number of KV-cache attention layers, while DFlash layer ids
+            # address every transformer layer. Prefer the underlying text
+            # config depth and fall back to the generic ModelConfig field.
+            target_num_layers = getattr(target_model_config.llm_config, 'num_hidden_layers',
+                                        target_model_config.num_layers)
+            target_layer_ids, mask_token_id = parse_dflash_config(
+                model_config.hf_config,
+                num_speculative_tokens,
+                target_num_layers=target_num_layers,
+            )
         cache_config = None
         # include medusa
         no_caches = ['medusa']
@@ -596,16 +777,19 @@ class SpecDecodeConfig:
                                        num_gpu_blocks=target_cache_cfg.num_gpu_blocks,
                                        cache_max_entry_count=target_cache_cfg.cache_max_entry_count,
                                        max_prefill_token_num=target_cache_cfg.max_prefill_token_num,
+                                       cudagraph_capture_batch_sizes=target_cache_cfg.cudagraph_capture_batch_sizes,
                                        device_type=target_cache_cfg.device_type,
                                        quant_policy=target_cache_cfg.quant_policy,
                                        migration_backend=target_cache_cfg.migration_backend)
         obj = cls(
-            model=model,
+            model=draft_model,
             method=method,
             cache_config=cache_config,
             model_config=model_config,
             dist_config=dist_config,
             num_speculative_tokens=num_speculative_tokens,
+            target_layer_ids=target_layer_ids,
+            mask_token_id=mask_token_id,
         )
         return obj
 
@@ -620,30 +804,55 @@ class QuantizationConfig:
     weight_block_size: tuple[int] = None
     activation_scheme: str = None
     ignored_layers: list[str] = field(default_factory=list)
+    fp8_quant_scope: str | None = None
     hf_quant_config: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Validate quantization scope."""
+        if self.fp8_quant_scope not in {None, 'moe_only'}:
+            raise ValueError(f'Unsupported fp8 quant scope: {self.fp8_quant_scope}')
+        if self.fp8_quant_scope is not None and self.quant_method != 'fp8':
+            raise ValueError('fp8_quant_scope is only supported for fp8 quantization.')
 
     @classmethod
     def from_config(cls, hf_config: Any):
+        quant_sources = []
         quant_config = getattr(hf_config, 'quantization_config', None)
-
-        if quant_config is None:
-            if hasattr(hf_config, 'llm_config') and hasattr(hf_config.llm_config, 'quantization_config'):
-                quant_config = hf_config.llm_config.quantization_config
-            elif hasattr(hf_config, 'text_config') and hasattr(hf_config.text_config, 'quantization_config'):
-                quant_config = hf_config.text_config.quantization_config
+        if quant_config is not None:
+            quant_sources.append(('quantization_config', quant_config))
+        for config_name in ('llm_config', 'text_config'):
+            nested_config = getattr(hf_config, config_name, None)
+            nested_quant_config = getattr(nested_config, 'quantization_config', None)
+            if nested_quant_config is not None:
+                quant_sources.append((f'{config_name}.quantization_config', nested_quant_config))
 
         # no quant config found in hf config
-        if quant_config is None:
+        if not quant_sources:
             return cls()
+
+        quant_config = quant_sources[0][1]
+        compressed_sources = [(path, config) for path, config in quant_sources
+                              if isinstance(config, Mapping) and config.get('quant_method') == 'compressed-tensors']
+        if compressed_sources:
+            if len(compressed_sources) != len(quant_sources):
+                paths = [path for path, _ in quant_sources]
+                raise ValueError(f'Conflicting quantization configs found at {paths}: compressed-tensors cannot be '
+                                 'combined with another quantization method')
+            quant_config = compressed_sources[0][1]
+            for path, candidate in compressed_sources[1:]:
+                if candidate != quant_config:
+                    raise ValueError(f'Conflicting compressed-tensors config found at `{path}`')
 
         quant_method = quant_config['quant_method']
         quant_dtype = quant_config.get('quant_dtype', None)
         scale_fmt = quant_config.get('scale_fmt', None)
         weight_block_size = quant_config.get('weight_block_size', None)
         activation_scheme = quant_config.get('activation_scheme', None)
+        fp8_quant_scope = quant_config.get('fp8_quant_scope', None)
 
         bits = None
         group_size = None
+        ignored_layers = None
 
         if quant_method == 'awq':
             bits = quant_config.get('bits', 4)
@@ -662,18 +871,22 @@ class QuantizationConfig:
                 quant_dtype = 'float8_e5m2'
             else:
                 raise TypeError(f'Unsupported fp8 fmt: {fmt}')
+        elif quant_method == 'compressed-tensors':
+            bits, group_size, ignored_layers = _parse_compressed_tensors_config(quant_config)
         else:
             raise TypeError(f'Unsupported quant method: {quant_method}')
 
-        resolved_quant_dtype = getattr(torch, quant_dtype, None)
-        if not isinstance(resolved_quant_dtype, torch.dtype):
-            raise ValueError(f'Invalid quant dtype "{quant_dtype}" resolved from model config; '
-                             'expected a torch.dtype attribute on torch.')
-        quant_dtype = resolved_quant_dtype
+        if quant_dtype is not None:
+            resolved_quant_dtype = getattr(torch, quant_dtype, None)
+            if not isinstance(resolved_quant_dtype, torch.dtype):
+                raise ValueError(f'Invalid quant dtype "{quant_dtype}" resolved from model config; '
+                                 'expected a torch.dtype attribute on torch.')
+            quant_dtype = resolved_quant_dtype
 
-        ignored_layers = quant_config.get('ignored_layers', [])
-        if not ignored_layers:
-            ignored_layers = quant_config.get('modules_to_not_convert', [])
+        if ignored_layers is None:
+            ignored_layers = quant_config.get('ignored_layers', [])
+            if not ignored_layers:
+                ignored_layers = quant_config.get('modules_to_not_convert', [])
 
         return cls(
             quant_method=quant_method,
@@ -684,13 +897,27 @@ class QuantizationConfig:
             weight_block_size=weight_block_size,
             activation_scheme=activation_scheme,
             ignored_layers=ignored_layers,
+            fp8_quant_scope=fp8_quant_scope,
             hf_quant_config=quant_config,
         )
 
-    def get_quant_method(self, prefix: str = ''):
+    def get_quant_method(self, prefix: str = '', module_kind: str = 'linear'):
         """Get quant method for module."""
+        if module_kind not in {'linear', 'moe', 'norm'}:
+            raise ValueError(f'Unsupported quant module kind: {module_kind}')
+        if self.quant_method == 'compressed-tensors':
+            if module_kind == 'norm':
+                return None
+            if not prefix:
+                raise ValueError('compressed-tensors dispatch requires a non-empty canonical module prefix')
+            is_ignored = any(_matches_compressed_tensors_ignore(rule, prefix) for rule in self.ignored_layers)
+            return None if is_ignored else self.quant_method
+        if self.quant_method == 'fp8' and self.fp8_quant_scope == 'moe_only' and module_kind != 'moe':
+            quant_method = None
+            return quant_method
         if not prefix or not self.ignored_layers:
-            return self.quant_method
+            quant_method = self.quant_method
+            return quant_method
 
         is_ignore = any([prefix in layer_name for layer_name in self.ignored_layers])
         quant_method = None if is_ignore else self.quant_method

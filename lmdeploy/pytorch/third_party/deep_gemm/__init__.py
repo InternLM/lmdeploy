@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 
+import torch
+
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -9,6 +11,23 @@ try:
     import deep_gemm  # noqa: F401
 except ImportError:
     logger.exception('DeepGemm is not installed. Please install https://github.com/deepseek-ai/DeepGEMM.')
+    raise
+
+
+def _enable_pdl() -> bool:
+    """Enable DeepGEMM PDL when supported by the runtime and device."""
+    set_pdl = getattr(deep_gemm, 'set_pdl', None)
+    if set_pdl is None or not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9:
+        return False
+    try:
+        set_pdl(True)
+    except Exception as e:
+        logger.warning(f'Failed to enable DeepGEMM PDL: {e}')
+        return False
+    return True
+
+
+PDL_ENABLED = _enable_pdl()
 
 from deep_gemm import ceil_div, get_m_alignment_for_contiguous_layout  # noqa: F401, E402
 

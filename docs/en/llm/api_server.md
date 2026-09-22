@@ -115,31 +115,6 @@ asyncio.run(main())
 
 You can invoke other OpenAI interfaces using similar methods. For more detailed information, please refer to the [OpenAI API guide](https://platform.openai.com/docs/guides/text-generation)
 
-### Integrate with lmdeploy `APIClient`
-
-Below are some examples demonstrating how to visit the service through `APIClient`
-
-If you want to use the `/v1/chat/completions` endpoint, you can try the following code:
-
-```python
-from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient('http://{server_ip}:{server_port}')
-model_name = api_client.available_models[0]
-messages = [{"role": "user", "content": "Say this is a test!"}]
-for item in api_client.chat_completions_v1(model=model_name, messages=messages):
-    print(item)
-```
-
-For the `/v1/completions` endpoint, you can try:
-
-```python
-from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient('http://{server_ip}:{server_port}')
-model_name = api_client.available_models[0]
-for item in api_client.completions_v1(model=model_name, prompt='hi'):
-    print(item)
-```
-
 ### Tools
 
 May refer to [api_server_tools](./api_server_tools.md).
@@ -147,6 +122,10 @@ May refer to [api_server_tools](./api_server_tools.md).
 ### Anthropic-Compatible Endpoints
 
 May refer to [api_server_anthropic](./api_server_anthropic.md).
+
+### OpenAI Responses-Compatible Endpoint
+
+May refer to [api_server_responses](./api_server_responses.md).
 
 ### Integrate with Java/Golang/Rust
 
@@ -183,7 +162,7 @@ curl http://{server_ip}:{server_port}/v1/models
 curl http://{server_ip}:{server_port}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "internlm-chat-7b",
+    "model": "intern-s2-preview",
     "messages": [{"role": "user", "content": "Hello! How are you?"}]
   }'
 ```
@@ -198,6 +177,35 @@ curl http://{server_ip}:{server_port}/v1/completions \
   "prompt": "two steps to build a house:"
 }'
 ```
+
+- score input tokens with the direct PyTorch `/generate` endpoint
+
+Start the server with `--backend pytorch --logprobs-mode raw_logprobs`, then
+set `return_logprob` and `logprob_start_len`:
+
+```bash
+curl http://{server_ip}:{server_port}/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "input_ids": [1234, 5678, 9012],
+    "return_logprob": true,
+    "logprob_start_len": 0,
+    "max_tokens": 0
+  }'
+```
+
+`meta_info.input_token_logprobs` is emitted once. For
+`N=logprob_start_len`, rows align with the processed source token ids after
+position `N`, and every entry is `[value, token_id]`; the boundary token itself
+is not emitted. With direct `input_ids`, this is `input_ids[N + 1:]`; with
+`prompt` or image input, the boundary is checked after tokenization and VLM
+placeholder expansion. At least one token must follow the boundary; otherwise
+the endpoint rejects the request. Both streaming and non-streaming forms return
+one terminal payload; streaming then emits `[DONE]`.
+
+This direct route requires `max_tokens=0` and speculative decoding disabled.
+Input scoring is not available for TurboMind, DistServe, proxy `/generate`, or
+the OpenAI/Anthropic/Responses schemas.
 
 ## Launch multiple api servers
 

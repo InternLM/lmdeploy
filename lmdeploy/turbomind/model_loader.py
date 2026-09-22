@@ -2,6 +2,7 @@
 """ModelLoader: coordinates loading a model's weights into the TurboMind runtime."""
 import torch
 
+from . import _tm
 from .builders._base import Context, ParallelGroup
 from .checkpoint import Prefix, create_checkpoint
 
@@ -26,9 +27,17 @@ class ModelLoader:
 
     def _bind_runtime(self):
         mc = self.model_comm
+        gemm_input_dtype = {
+            None: _tm.DataType.TYPE_INVALID,
+            'float16': _tm.DataType.TYPE_FP16,
+            'bfloat16': _tm.DataType.TYPE_BF16,
+            'float8_e4m3': _tm.DataType.TYPE_FP8_E4M3,
+        }[self.engine_config.gemm_input_dtype]
         ctx = Context(
             [mc.context(g) for g in range(self.gpu_count)],
+            mc.gemm(0),
             data_type=self.data_type,
+            gemm_input_dtype=gemm_input_dtype,
         )
         ec = self.engine_config
 
@@ -36,15 +45,28 @@ class ModelLoader:
                                 [mc.attn_tp_rank(g) for g in range(self.gpu_count)])
         mlp_tp = ParallelGroup(ec.mlp_tp_size,
                                [mc.mlp_tp_rank(g) for g in range(self.gpu_count)])
+        ep = ParallelGroup(ec.ep,
+                           [mc.ep_rank(g) for g in range(self.gpu_count)])
         model_tp = ParallelGroup(ec.attn_tp_size * ec.attn_cp_size,
                                  [mc.model_tp_rank(g) for g in range(self.gpu_count)])
+
+        # Dense (non-expert) FFN TP: node-local — one node's ranks within
+        # the comm domain (shard index = inner_rank % domain_size,
+        # inner_rank = ep_rank * mlp_tp_size + mlp_tp_rank).
+        dense_size = min(mlp_tp.size * ep.size, self.gpu_count)
+        dense_tp = ParallelGroup(
+            dense_size,
+            [(e * mlp_tp.size + m) % dense_size
+             for e, m in zip(ep.ranks, mlp_tp.ranks)])
 
         self.model.bind_runtime(
             ctx=ctx,
             root_handles=[mc.root(g) for g in range(self.gpu_count)],
             attn_tp=attn_tp,
             mlp_tp=mlp_tp,
+            ep=ep,
             model_tp=model_tp,
+            dense_tp=dense_tp,
         )
 
     def export(self):

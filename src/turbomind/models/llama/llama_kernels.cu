@@ -602,4 +602,56 @@ void invokeSigmoidGateMultiply(
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
+namespace {
+
+__global__ void ClearTokenMaskKernel(bool*                      token_mask,
+                                     const bool*                finished,
+                                     const int*                 q_offsets,
+                                     size_t                     rank_stride,
+                                     Array<int, kMaxAttnDPSize> token_base)
+{
+    const int r = blockIdx.y;
+    const int s = blockIdx.x;
+
+    // Select this rank's metadata block (no-op when attn_dp == 1: rank_stride is 0).
+    finished  = (const bool*)((const char*)finished + r * rank_stride);
+    q_offsets = (const int*)((const char*)q_offsets + r * rank_stride);
+
+    if (!finished[s]) {
+        return;
+    }
+    const int begin = __ldg(q_offsets + s);
+    const int end   = __ldg(q_offsets + s + 1);
+    bool*     out   = token_mask + token_base[r];
+    for (int t = begin + threadIdx.x; t < end; t += blockDim.x) {
+        out[t] = false;
+    }
+}
+
+}  // namespace
+
+void invokeBuildTokenMask(bool*        token_mask,
+                          const bool*  finished,
+                          const int*   q_offsets,
+                          size_t       rank_stride,
+                          const int*   token_base,
+                          int          attn_dp_size,
+                          int          batch_size,
+                          int          global_token_num,
+                          cudaStream_t stream)
+{
+    if (global_token_num == 0) {
+        return;
+    }
+    // Every forward token is valid by default; invalidate the token ranges owned
+    // by finished sequences (`q_offsets` maps slot -> [begin, end) token range).
+    TM_CHECK_LE(attn_dp_size, kMaxAttnDPSize);
+    Array<int, kMaxAttnDPSize> base{};
+    std::copy_n(token_base, attn_dp_size, &base[0]);
+    TM_CUDA_CHECK(cudaMemsetAsync(token_mask, 1, global_token_num, stream));
+    ClearTokenMaskKernel<<<dim3(batch_size, attn_dp_size), 128, 0, stream>>>(
+        token_mask, finished, q_offsets, rank_stride, base);
+    TM_CUDA_CHECK(cudaGetLastError());
+}
+
 }  // namespace turbomind

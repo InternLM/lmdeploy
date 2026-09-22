@@ -1,7 +1,9 @@
 # HF model id: Qwen/Qwen3.5-0.8B
 
 a100:
-- model_type: chat
+- model_type:
+  - chat
+  - vl
   engine_config:
     tp: 1
   backends:
@@ -16,17 +18,5 @@ a100:
   quantization:
     turbomind:
     - kvint8
-    pytorch:
-    - kvint8
-- model_type: vl
-  engine_config:
-    tp: 1
-  backends:
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - func
-  quantization:
     pytorch:
     - kvint8

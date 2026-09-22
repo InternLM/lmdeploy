@@ -2,6 +2,9 @@
 
 LMDeploy supports update model weights online for scenes such as RL training. Here are the steps to do so.
 
+For checkpoint-engine Broadcast and Mooncake P2P updates, see
+[Updating PyTorch weights with checkpoint-engine](./checkpoint_engine.md).
+
 ## Step 1: Launch server
 
 For pytorch backend you have to add `--distributed-executor-backend ray`.

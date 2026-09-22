@@ -1,3 +1,4 @@
+import pytest
 import torch
 from transformers import AutoConfig
 
@@ -87,3 +88,30 @@ def test_get_and_verify_max_len():
     assert (_get_and_verify_max_len(config, None) == 32768)
     assert (_get_and_verify_max_len(config, 1024) == 1024)
     assert (_get_and_verify_max_len(config, 102400) == 102400)
+
+
+def test_get_chat_template_builtin_name():
+    """A builtin chat-template name must resolve without crashing.
+
+    Regression for #4533: get_chat_template imported DEPRECATED_CHAT_TEMPLATE_NAMES / REMOVED_CHAT_TEMPLATE_NAMES from
+    lmdeploy.model, which were removed in #4252, so any non-file --chat-template value raised ImportError before
+    reaching the registry check.
+    """
+    from lmdeploy.cli.utils import get_chat_template
+    cfg = get_chat_template('llama2')
+    assert cfg is not None
+    assert cfg.model_name == 'llama2'
+
+
+def test_get_chat_template_unregistered_name():
+    """An unregistered name is rejected by the registry check, not by an
+    ImportError."""
+    from lmdeploy.cli.utils import get_chat_template
+    with pytest.raises(AssertionError):
+        get_chat_template('not-a-registered-template')
+
+
+def test_get_chat_template_none():
+    """Passing no chat template returns None."""
+    from lmdeploy.cli.utils import get_chat_template
+    assert get_chat_template(None) is None

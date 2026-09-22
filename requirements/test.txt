@@ -1,4 +1,5 @@
 allure-pytest
+anthropic>=1.0.0
 coverage
 jsonschema
 matplotlib

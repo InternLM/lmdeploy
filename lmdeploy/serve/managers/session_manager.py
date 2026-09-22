@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from lmdeploy.messages import GenerationConfig, Response
-from lmdeploy.serve.core.exceptions import SafeRunException
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError, SafeRunException
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -23,7 +23,6 @@ class Session:
         self.response: Response | None = None
         self.history: list[tuple[Any, str]] = []
         self.gen_config: GenerationConfig | None = None
-        self.step: int = 0
         # Set by api_server to AsyncEngine.epoch when a request binds a session;
         # generate() drops work if stop_all_session() bumped epoch after bind.
         self.epoch: int | None = None
@@ -31,24 +30,25 @@ class Session:
         self._active: asyncio.Event | None = None
         self._handle = None  # inference instance
         self._session_mgr: SessionManager = weakref.ref(session_mgr)
+        self._remove_on_request_exit = False
         self.update(**kwargs)
 
     def update(self, **kwargs):
         """Update the session."""
         self.prompt = kwargs.get('prompt', self.prompt)
+        self.response = kwargs.get('response', self.response)
         self.gen_config = kwargs.get('gen_config', self.gen_config)
-        self.step = kwargs.get('step', self.step)
 
     def __repr__(self) -> str:
         """Return a string representation of the Session object."""
         return (f'Session(session_id={self.session_id}, '
-                f'step={self.step}, history_len={len(self.history)}, '
+                f'history_len={len(self.history)}, '
                 f'has_response={self.response is not None}, '
                 f'has_gen_config={self.gen_config is not None})')
 
     def __str__(self) -> str:
         """Return a human-readable string representation of the Session."""
-        res = f'Session(id={self.session_id}, step={self.step})'
+        res = f'Session(id={self.session_id})'
         if self.history:
             res += '\nHistory:\n'
             for user, assistant in self.history:
@@ -66,17 +66,19 @@ class Session:
         self.response = None
         self.history = []
         self.gen_config = None
-        self.step = 0
         self.epoch = None
         self._active = None
         self._handle = None
         self._session_mgr = None
+        self._remove_on_request_exit = False
         logger.debug(f'Session {self.session_id} has been reset.')
 
     @asynccontextmanager
     async def request_handle(self):
         if self._handle is not None:
-            raise RuntimeError(f'Session {self.session_id} already has an inference instance.')
+            raise RequestError(
+                ErrorCode.REQUEST_CONFLICT,
+                f'Session {self.session_id} already has an active request.')
         logger.debug(f'[request_handle] session {self.session_id} acquiring an instance')
 
         hnd_pool = self._session_mgr().request_handle_pool
@@ -100,8 +102,12 @@ class Session:
                 hnd_pool.put(self._handle)
                 self._handle = None
             # MUST set the signal after releasing the instance to avoid race condition
-            # refer to async_end method
             self._active.set()
+            if self._remove_on_request_exit and self._session_mgr is not None:
+                self._remove_on_request_exit = False
+                session_mgr = self._session_mgr()
+                if session_mgr is not None:
+                    session_mgr.remove(self)
 
     async def async_abort(self):
         """Abort the session."""
@@ -110,17 +116,15 @@ class Session:
             await self._handle.async_cancel(self.session_id)
 
     async def async_close(self):
-        """End the session."""
+        """Close request bookkeeping for the session."""
         logger.info(f'[session] Ending session {self.session_id}')
-        if self._handle is None and self.step == 0:
-            return
         if self._handle is not None:
+            await self.async_abort()
             await self._active.wait()
-        async with self.request_handle() as handle:
-            try:
-                await handle.async_end(self.session_id)
-            except (Exception, asyncio.CancelledError, GeneratorExit) as e:
-                logger.exception(f'[async_close] exception caught: {e}')
+        session_mgr_ref = self._session_mgr
+        session_mgr = session_mgr_ref() if session_mgr_ref is not None else None
+        if session_mgr is not None:
+            session_mgr.remove(self)
         self.reset()
 
     def abort(self):
@@ -260,9 +264,23 @@ class SessionManager:
     def has(self, session_id):
         return session_id in self.sessions
 
-    def remove(self, session: Session):
-        self.sessions.pop(session.session_id, None)
-        user_session_id = self.session_id_map.pop(session.session_id, None)
+    def remove(self, session: Session | int | None):
+        """Remove a session and its user mapping.
+
+        This method is intentionally idempotent because cancellation cleanup can run from both the engine generator and
+        the API streaming wrapper.
+        """
+        if session is None:
+            return
+        if isinstance(session, int):
+            session_id = session
+        else:
+            session_id = session.session_id
+            current = self.sessions.get(session_id, None)
+            if current is not None and current is not session:
+                return
+        self.sessions.pop(session_id, None)
+        user_session_id = self.session_id_map.pop(session_id, None)
         if user_session_id is not None:
             self.user_session_id_map.pop(user_session_id, None)
 

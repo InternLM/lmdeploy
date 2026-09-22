@@ -1,0 +1,13 @@
+[run]
+branch = True
+# Measure the imported package once (site-packages when PYTHONSAFEPATH is set).
+source = lmdeploy
+parallel = True
+data_file = .coverage
+
+# Merge absolute site-packages paths with relative checkout paths during combine.
+[paths]
+source =
+    /opt/py3/lib/python3.12/site-packages/lmdeploy
+    */site-packages/lmdeploy
+    lmdeploy

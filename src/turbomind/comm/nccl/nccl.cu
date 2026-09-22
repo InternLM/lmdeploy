@@ -44,6 +44,8 @@ static inline ncclDataType_t to_nccl_dtype(DataType type)
             return ncclBfloat16;
         case kUint8:
             return ncclUint8;
+        case kInt64:
+            return ncclInt64;
         default:
             throw std::runtime_error("not supported");
     }
@@ -262,6 +264,46 @@ public:
         NCCLCHECK(ncclGroupEnd());
     }
 
+    void AllGatherV(const void*                sendbuff,
+                    void*                      recvbuff,
+                    const std::vector<size_t>& counts,
+                    DataType                   type,
+                    int                        group,
+                    cudaStream_t               stream) override
+    {
+        const size_t         elem_size = byte_size(type);
+        const ncclDataType_t nccl_type = to_nccl_dtype(type);
+        const int            n_ranks   = this->n_ranks(group);
+        const int            rank      = this->rank(group);
+        ncclComm_t           comm      = groups_.at(group);
+
+        TM_CHECK_EQ((int)counts.size(), n_ranks);
+
+        bool equal_counts = true;
+        for (auto i = 1; i < counts.size(); ++i) {
+            if (counts[i] != counts[0]) {
+                equal_counts = false;
+                break;
+            }
+        }
+        if (equal_counts) {
+            return AllGather(sendbuff, recvbuff, counts[0], type, group, stream);
+        }
+
+        NCCLCHECK(ncclGroupStart());
+        size_t offset = 0;
+        for (int i = 0; i < n_ranks; ++i) {
+            const size_t count = counts[i];
+            if (count) {
+                auto*       recv = static_cast<char*>(recvbuff) + elem_size * offset;
+                const void* send = i == rank ? sendbuff : recv;
+                NCCLCHECK(ncclBroadcast(send, recv, count, nccl_type, i, comm, stream));
+            }
+            offset += count;
+        }
+        NCCLCHECK(ncclGroupEnd());
+    }
+
     void ReduceScatter(
         const void* sendbuff, void* recvbuff, size_t recvcount, DataType type, int group, cudaStream_t stream) override
     {
@@ -271,11 +313,52 @@ public:
         NCCLCHECK(ncclGroupEnd());
     }
 
+    void ReduceScatterV(const void*                sendbuff,
+                        void*                      recvbuff,
+                        const std::vector<size_t>& counts,
+                        DataType                   type,
+                        int                        group,
+                        cudaStream_t               stream) override
+    {
+        const size_t         elem_size = byte_size(type);
+        const ncclDataType_t nccl_type = to_nccl_dtype(type);
+        const int            n_ranks   = this->n_ranks(group);
+        const int            rank      = this->rank(group);
+        ncclComm_t           comm      = groups_.at(group);
+
+        TM_CHECK_EQ((int)counts.size(), n_ranks);
+
+        bool equal_counts = true;
+        for (auto i = 1; i < counts.size(); ++i) {
+            if (counts[i] != counts[0]) {
+                equal_counts = false;
+                break;
+            }
+        }
+        if (equal_counts) {
+            return ReduceScatter(sendbuff, recvbuff, counts[0], type, group, stream);
+        }
+
+        NCCLCHECK(ncclGroupStart());
+        size_t offset = 0;
+        for (int i = 0; i < n_ranks; ++i) {
+            const size_t count = counts[i];
+            if (count) {
+                const auto* send = static_cast<const char*>(sendbuff) + elem_size * offset;
+                auto*       recv = i == rank ? recvbuff : const_cast<char*>(send);
+                NCCLCHECK(ncclReduce(send, recv, count, nccl_type, ncclSum, i, comm, stream));
+            }
+            offset += count;
+        }
+        NCCLCHECK(ncclGroupEnd());
+    }
+
     void AllreduceResidualBiasRMSnorm(void*        hidden,
                                       void*        residual,
                                       const void*  bias,
                                       const void*  weights,
                                       float        eps,
+                                      bool         zero_centered,
                                       int          dim,
                                       int          token_num,
                                       DataType     dtype,
@@ -293,6 +376,7 @@ public:
                                                     dim,
                                                     count,
                                                     eps,
+                                                    zero_centered,
                                                     stream));
         };
 
@@ -318,17 +402,17 @@ public:
                                         const void*  bias,
                                         const void*  weights,
                                         float        eps,
+                                        bool         zero_centered,
                                         int          dim,
                                         DataType     type,
                                         int          group0,
                                         int          group1,
                                         const int*   local_token_nums,
+                                        int          local_token_nums_count,
                                         cudaStream_t stream) override
     {
         const size_t         elem_size = byte_size(type);
         const ncclDataType_t nccl_type = to_nccl_dtype(type);
-
-        TM_CHECK(group0 == 0 || group1 == 0);
 
         ncclComm_t comm0 = groups_.at(group0);
         ncclComm_t comm1 = groups_.at(group1);
@@ -337,9 +421,7 @@ public:
         NCCLCHECK(ncclCommCount(comm0, &tp0));
         NCCLCHECK(ncclCommCount(comm1, &tp1));
 
-        const int inner_tp = std::min(tp0, tp1);
-
-        TM_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
+        const int inner_tp = global_n_ranks_ / local_token_nums_count;
 
         std::vector<std::tuple<int, int, int>> tasks;
         tasks.reserve(global_n_ranks_);
@@ -355,12 +437,25 @@ public:
             }
         }
 
+        const int rank0 = rank(group0);
+        const int rank1 = rank(group1);
+        TM_CHECK_EQ(rank0, global_rank_ % tp0);
+        TM_CHECK_EQ(rank1, global_rank_ % tp1);
+
+        const int rs_begin = global_rank_ - rank0;
+        const int rs_end   = rs_begin + tp0;
+
+        const int ag_begin = global_rank_ - rank1;
+        const int ag_end   = ag_begin + tp1;
+
+        // group0: reduce
         if (tp0 > 1) {
             NCCLCHECK(ncclGroupStart());
-            for (int i = 0; i < global_n_ranks_; ++i) {
+            for (int i = rs_begin; i < rs_end; ++i) {
                 if (auto& [offset, first, num] = tasks[i]; num > 0) {
-                    char* buff = (char*)hidden + elem_size * (offset + first) * dim;
-                    NCCLCHECK(ncclReduce(buff, buff, (size_t)num * dim, nccl_type, ncclSum, i % tp0, comm0, stream));
+                    char*     buff = (char*)hidden + elem_size * (offset + first) * dim;
+                    const int root = i - rs_begin;
+                    NCCLCHECK(ncclReduce(buff, buff, (size_t)num * dim, nccl_type, ncclSum, root, comm0, stream));
                 }
             }
             NCCLCHECK(ncclGroupEnd());
@@ -368,16 +463,26 @@ public:
 
         if (auto& [offset, first, num] = tasks[global_rank_]; num > 0) {
             char* buff = (char*)hidden + elem_size * (offset + first) * dim;
-            TM_SCOPE_CALL(invokeResidualBiasRMSNorm(
-                buff, (char*)residual + elem_size * first * dim, weights, bias, type, dim, num, eps, stream));
+            TM_SCOPE_CALL(invokeResidualBiasRMSNorm(buff,
+                                                    (char*)residual + elem_size * first * dim,
+                                                    weights,
+                                                    bias,
+                                                    type,
+                                                    dim,
+                                                    num,
+                                                    eps,
+                                                    zero_centered,
+                                                    stream));
         }
 
+        // group1: all-gather
         if (tp1 > 1) {
             NCCLCHECK(ncclGroupStart());
-            for (int i = 0; i < global_n_ranks_; ++i) {
+            for (int i = ag_begin; i < ag_end; ++i) {
                 if (auto& [offset, first, num] = tasks[i]; num > 0) {
-                    char* buff = (char*)hidden + elem_size * (offset + first) * dim;
-                    NCCLCHECK(ncclBroadcast(buff, buff, (size_t)num * dim, nccl_type, i % tp1, comm1, stream));
+                    char*     buff = (char*)hidden + elem_size * (offset + first) * dim;
+                    const int root = i - ag_begin;
+                    NCCLCHECK(ncclBroadcast(buff, buff, (size_t)num * dim, nccl_type, root, comm1, stream));
                 }
             }
             NCCLCHECK(ncclGroupEnd());
@@ -392,7 +497,7 @@ public:
                    int          group,
                    cudaStream_t stream) override
     {
-        NCCLCHECK(ncclBroadcast(recvbuff, recvbuff, count, to_nccl_dtype(type), root, groups_.at(group), stream));
+        NCCLCHECK(ncclBroadcast(sendbuff, recvbuff, count, to_nccl_dtype(type), root, groups_.at(group), stream));
     }
 
 private:

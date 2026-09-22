@@ -19,7 +19,8 @@ class _FakeSequence:
 
 class _FakeSession:
 
-    def __init__(self, seq):
+    def __init__(self, session_id, seq):
+        self.session_id = session_id
         self.sequences = {0: seq}
 
 
@@ -33,6 +34,15 @@ class _FakeScheduler:
         self.ended_sessions.append(session_id)
         self.sessions.pop(session_id)
 
+    def get_session(self, session_id):
+        return self.sessions.get(session_id)
+
+    def get_sessions(self):
+        return list(self.sessions.values())
+
+    def finish_kv_transfers_after_worker_drain(self):
+        pass
+
 
 class _FakeEngineLoop:
 
@@ -44,11 +54,15 @@ class _FakeEngineLoop:
     async def drain_for_sleep(self):
         assert self.engine.req_manager.is_request_blocked(RequestType.ADD_SESSION)
         assert self.engine.req_manager.is_request_blocked(RequestType.ADD_MESSAGE)
+        self.engine.events.append('drain')
         self.drained = True
 
     def resume_from_sleep(self):
         self.engine.events.append('resume')
         self.resumed = True
+
+    def reset_runtime_state(self):
+        self.engine.events.append('reset_engine_loop')
 
 
 class _FakeExecutor:
@@ -57,22 +71,16 @@ class _FakeExecutor:
         self.engine = engine
         self.sleep_calls = []
         self.wakeup_calls = []
-        self.warmup_calls = []
 
     async def sleep(self, level=1):
         assert self.engine.req_manager.is_request_blocked(RequestType.ADD_SESSION)
         assert self.engine.scheduler.sessions == {}
         self.sleep_calls.append(level)
+        self.engine.events.append('sleep')
 
     def wakeup(self, tags=None):
         self.wakeup_calls.append(tags)
         self.engine.events.append(('wakeup', tags))
-
-    def warmup(self):
-        assert self.engine.req_manager.is_request_blocked(RequestType.ADD_SESSION)
-        assert self.engine.req_manager.is_request_blocked(RequestType.ADD_MESSAGE)
-        self.warmup_calls.append(self.wakeup_calls[-1])
-        self.engine.events.append(('warmup', self.wakeup_calls[-1]))
 
 
 @pytest.fixture
@@ -103,7 +111,7 @@ def _build_sleeping_test_engine(event_loop):
     engine.req_manager = RequestManager()
     resp = Response(type=ResponseType.INTERNAL_ENGINE_ERROR, sender_id=0, event=asyncio.Event())
     seq = _FakeSequence(resp)
-    session = _FakeSession(seq)
+    session = _FakeSession(1, seq)
     engine.scheduler = _FakeScheduler(session)
     engine._sleeping_tags = set()
     engine.events = []
@@ -125,6 +133,7 @@ def test_engine_sleep_blocks_inputs_cancels_sessions_then_sleeps(event_loop):
     assert resp.event.is_set()
     assert engine.scheduler.ended_sessions == [1]
     assert engine.executor.sleep_calls == [1]
+    assert engine.events == ['drain', 'sleep', 'reset_engine_loop']
 
 
 def test_engine_wakeup_reenables_inputs_only_after_all_tags(event_loop):
@@ -137,7 +146,6 @@ def test_engine_wakeup_reenables_inputs_only_after_all_tags(event_loop):
     assert engine.req_manager.is_request_blocked(RequestType.ADD_SESSION)
     assert engine.req_manager.is_request_blocked(RequestType.ADD_MESSAGE)
     assert not engine._engine_loop.resumed
-    assert engine.executor.warmup_calls == []
     assert engine.events == [('wakeup', ['weights'])]
 
     engine.wakeup(['kv_cache'])
@@ -146,16 +154,14 @@ def test_engine_wakeup_reenables_inputs_only_after_all_tags(event_loop):
     assert not engine.req_manager.is_request_blocked(RequestType.ADD_MESSAGE)
     assert engine._engine_loop.resumed
     assert engine.executor.wakeup_calls == [['weights'], ['kv_cache']]
-    assert engine.executor.warmup_calls == [['kv_cache']]
     assert engine.events == [
         ('wakeup', ['weights']),
         ('wakeup', ['kv_cache']),
-        ('warmup', ['kv_cache']),
         'resume',
     ]
 
 
-def test_engine_wakeup_all_warms_before_resume(event_loop):
+def test_engine_wakeup_all_delegates_warmup_to_executor_wakeup(event_loop):
     engine, _ = _build_sleeping_test_engine(event_loop)
     engine.req_manager.block_request_types({RequestType.ADD_SESSION, RequestType.ADD_MESSAGE})
     engine._sleeping_tags = {'weights', 'kv_cache'}
@@ -166,8 +172,16 @@ def test_engine_wakeup_all_warms_before_resume(event_loop):
     assert not engine.req_manager.is_request_blocked(RequestType.ADD_MESSAGE)
     assert engine._engine_loop.resumed
     assert engine.executor.wakeup_calls == [None]
-    assert engine.executor.warmup_calls == [None]
-    assert engine.events == [('wakeup', None), ('warmup', None), 'resume']
+    assert engine.events == [('wakeup', None), 'resume']
+
+
+def test_complete_weights_update_keeps_kv_cache_sleeping(event_loop):
+    engine, _ = _build_sleeping_test_engine(event_loop)
+    engine._sleeping_tags = {'weights', 'kv_cache'}
+
+    engine.complete_weights_update()
+
+    assert engine._sleeping_tags == {'kv_cache'}
 
 
 def test_mp_executor_wakeup_waits_for_kv_cache():

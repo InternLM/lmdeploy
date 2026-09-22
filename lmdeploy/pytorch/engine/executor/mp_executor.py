@@ -18,7 +18,7 @@ from lmdeploy.pytorch.backends.selector import init_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.utils import get_logger, try_import_deeplink
 
-from .base import ExecutorBase
+from .base import ExecutorBase, _WorkerCachePlanSizes
 from .base_worker import WorkerWrapperBase
 from .dist_utils import find_available_port, setup_master_addr
 
@@ -364,6 +364,12 @@ class MPExecutor(ExecutorBase):
         """Set all cache config."""
         self.collective_rpc('set_model_config', args=(model_config, spec_model_config))
 
+    def _prepare_worker_cache_plans(self, cache_config: CacheConfig,
+                                    spec_cache_config: CacheConfig | None = None) -> list[_WorkerCachePlanSizes]:
+        """Prepare and size rank-local cache plans on every worker."""
+        worker_sizes = self.collective_rpc('build_cache_plans', args=(cache_config, spec_cache_config))
+        return [_WorkerCachePlanSizes(*sizes) for sizes in worker_sizes]
+
     def build_graph_runner(self):
         """Build graph runner."""
         self.collective_rpc('build_graph_runner')
@@ -371,6 +377,24 @@ class MPExecutor(ExecutorBase):
     def build_cache_engine(self):
         """Build cache engine."""
         self.collective_rpc('build_cache_engine')
+
+    @staticmethod
+    def _reduce_worker_status(results: list[tuple[bool, str]], op_name: str) -> tuple[bool, str]:
+        """Reduce status tuples returned by all model workers."""
+        successes, messages = zip(*results)
+        if all(successes):
+            return True, messages[0]
+        message = ' | '.join(f'rank{idx}: {message}' for idx, message in enumerate(messages))
+        return False, f'{op_name}: {message}'
+
+    def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness from all workers."""
+        return self.collective_rpc('get_checkpoint_engine_status')
+
+    def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        results = self.collective_rpc('update_weights_from_ipc', args=(request, reject_reason))
+        return self._reduce_worker_status(results, 'update_weights_from_ipc')
 
     def warmup(self):
         """Build cache engine."""

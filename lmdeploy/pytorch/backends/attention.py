@@ -8,6 +8,8 @@ import torch
 
 from lmdeploy.messages import QuantPolicy
 
+from .base import BuildSpec
+
 
 @dataclass
 class AttentionMetadata:
@@ -21,6 +23,107 @@ class AttentionMetadata:
     cu_seqlens_q: torch.Tensor = None
     cu_seqlens_k: torch.Tensor = None
     quant_policy: QuantPolicy = QuantPolicy.NONE
+
+
+@dataclass
+class V4AttentionMetadata:
+    """DeepSeek V4 attention metadata base class.
+
+    Built once per step from attn_metadata + step_ctx, then passed through all V4 sub-modules (Attention, Compressor,
+    Indexer). Backends should subclass this to add their own pre-computed fields and override ``from_step_context``.
+    """
+
+    is_decoding: bool
+    # [bsz, 1, topk] logical compressed KV indices; CUDA backend converts them to physical paged-cache indices.
+    indices_in_kvcache: torch.Tensor = None
+    topk_length: torch.Tensor = None              # [bsz] int32
+    extra_indices_in_kvcache: torch.Tensor = None  # [bsz, 1, extra_topk] ring-buffer positions
+    extra_topk_length: torch.Tensor = None        # [bsz] int32
+    # Sequence-length metadata (from attn_metadata, pre-extracted once)
+    block_offsets: torch.Tensor = None
+    cu_q_seqlens: torch.Tensor = None
+    kv_seqlens: torch.Tensor = None
+    q_seqlens: torch.Tensor = None
+    max_kv_seqlen: int = None
+    max_q_seqlen: int = None
+    block_size: int = 0
+    cu_seqlens_k: torch.Tensor = None
+    sum_kv_seqlen: int = None
+    start_pos: torch.Tensor = None                      # [bsz] long
+
+    @classmethod
+    def from_step_context(cls, attn_metadata, step_ctx, **kwargs) -> 'V4AttentionMetadata':
+        """Build V4AttentionMetadata from the scheduler's attn_metadata and
+        step_ctx.
+
+        Subclasses can accept additional keyword arguments for backend- specific pre-computation.
+        """
+        is_decoding = attn_metadata.is_decoding
+        cache_config = step_ctx.cache_config
+        max_kv_seqlen = (cache_config.block_size * cache_config.num_gpu_blocks
+                         if is_decoding else step_ctx.max_kv_seqlen)
+        kv_seqlens = attn_metadata.kv_seqlens
+        q_seqlens = attn_metadata.q_seqlens
+
+        return cls(
+            is_decoding=is_decoding,
+            block_offsets=attn_metadata.block_offsets,
+            cu_q_seqlens=attn_metadata.cu_seqlens_q,
+            kv_seqlens=kv_seqlens,
+            q_seqlens=q_seqlens,
+            max_kv_seqlen=max_kv_seqlen,
+            max_q_seqlen=step_ctx.max_q_seqlen,
+            block_size=cache_config.block_size,
+            sum_kv_seqlen=step_ctx.sum_kv_seqlen,
+            cu_seqlens_k=attn_metadata.cu_seqlens_k,
+            start_pos=(kv_seqlens.to(torch.long) - q_seqlens.to(torch.long)),
+        )
+
+    def build_indexer_metadata(self):
+        """Build backend-aware V4 indexer metadata for this step."""
+        from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
+
+        kv_seqlens = self.kv_seqlens
+        return V4IndexerMetadata(
+            block_offsets=self.block_offsets,
+            is_decoding=self.is_decoding,
+            cu_q_seqlens=self.cu_q_seqlens,
+            kv_seqlens=kv_seqlens,
+            q_seqlens=self.q_seqlens,
+            max_kv_seqlen=self.max_kv_seqlen,
+            max_q_seqlen=self.max_q_seqlen,
+            block_size=self.block_size,
+            num_index_r4=torch.div(kv_seqlens, 4, rounding_mode='floor').to(torch.int32),
+            num_index_r128=torch.div(kv_seqlens, 128, rounding_mode='floor').to(torch.int32),
+        )
+
+
+class V4AttentionImpl(ABC):
+    """DeepSeek-V4 attention implementation contract."""
+
+    @abstractmethod
+    def forward(
+        self,
+        query: torch.Tensor,
+        kv: torch.Tensor,
+        attn_sink: torch.Tensor,
+        attn_metadata: V4AttentionMetadata,
+        caches: dict,
+        slot: torch.Tensor,
+        index_out=None,
+    ) -> torch.Tensor:
+        """Run sparse DeepSeek-V4 attention."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class V4AttentionBuildSpec(BuildSpec[V4AttentionImpl]):
+    """Immutable requirements for constructing DeepSeek-V4 attention."""
+
+    head_dim: int
+    scale: float
+    window_size: int
+    compress_ratio: int
 
 
 T = TypeVar('T', bound=AttentionMetadata)
@@ -37,7 +140,7 @@ class AttentionImpl(ABC, Generic[T]):
         num_kv_heads: int = None,
         v_head_size: int = None,
         alibi: bool = None,
-        sliding_window: int = None,
+        sliding_window: int | tuple[int, int] | None = None,
         logit_softcapping: float = 0.0,
         causal: bool = True,
         use_flash_mla: bool = False,
@@ -106,25 +209,20 @@ class AttentionImpl(ABC, Generic[T]):
         raise NotImplementedError
 
 
-class AttentionBuilder(ABC, Generic[T]):
-    """Attention implementation builder."""
+@dataclass(frozen=True)
+class PagedAttentionBuildSpec(BuildSpec[AttentionImpl[AttentionMetadata]]):
+    """Immutable requirements for constructing paged attention."""
 
-    @staticmethod
-    @abstractmethod
-    def build(
-        num_heads: int,
-        head_size: int,
-        scale: float = None,
-        num_kv_heads: int = None,
-        v_head_size: int = None,
-        alibi: bool = False,
-        sliding_window: int = None,
-        logit_softcapping: float = 0.0,
-        causal: bool = True,
-        use_flash_mla: bool = False,
-        learnable_sink: bool = False,
-        block_sparse_size: int = 1,
-        **kwargs,
-    ) -> AttentionImpl[T]:
-        """build."""
-        raise NotImplementedError
+    num_heads: int
+    head_dim: int
+    scale: float | None
+    num_kv_heads: int
+    v_head_dim: int
+    alibi: bool
+    sliding_window: int | tuple[int, int] | None
+    logit_softcapping: float
+    causal: bool
+    use_flash_mla: bool
+    mla_index_topk: int | None
+    learnable_sink: bool
+    block_sparse_size: int

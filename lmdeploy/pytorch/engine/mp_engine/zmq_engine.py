@@ -13,6 +13,9 @@ from .base import MPEngine
 
 logger = get_logger('lmdeploy')
 
+_DEFAULT_PROCESS_SHUTDOWN_TIMEOUT = 10
+_KV_CONNECTOR_PROCESS_SHUTDOWN_TIMEOUT = 60
+
 if TYPE_CHECKING:
     from lmdeploy.pytorch.engine.engine import Engine
 
@@ -40,13 +43,29 @@ class ZMQMPEngine(MPEngine):
         self.shared_dict = None
         self.port = None
         self.proc = None
+        self._process_shutdown_timeout = self._get_process_shutdown_timeout(engine_config)
         self._start_mp_proc(model_path, engine_config, speculative_config=speculative_config,
                             trust_remote_code=trust_remote_code, **kwargs)
 
-        self.rpc_client = AsyncRPCClient(port=self.port)
+        self.rpc_client = AsyncRPCClient(
+            port=self.port,
+            server_alive_callback=self._is_proc_alive,
+            server_sentinel=self.proc.sentinel if self.proc is not None else None,
+            server_dead_callback=self._mark_backend_dead,
+        )
 
         super().__init__()
         atexit.register(self.close)
+
+    @staticmethod
+    def _get_process_shutdown_timeout(engine_config: PytorchEngineConfig | None) -> int:
+        """Allow registered external buffers to be released before killing the
+        engine process."""
+        if engine_config is not None:
+            transfer_config = engine_config.kv_transfer_config
+            if transfer_config is not None and transfer_config.is_kv_transfer_instance:
+                return _KV_CONNECTOR_PROCESS_SHUTDOWN_TIMEOUT
+        return _DEFAULT_PROCESS_SHUTDOWN_TIMEOUT
 
     def _start_mp_proc(
         self,
@@ -78,8 +97,10 @@ class ZMQMPEngine(MPEngine):
             self.proc.start()
             logger.debug('Receiving rpc server port from mp process.')
             with condition:
-                if 'rpc_server_port' not in self.shared_dict:
-                    condition.wait()
+                while 'rpc_server_port' not in self.shared_dict:
+                    if not self.proc.is_alive():
+                        raise RuntimeError('PyTorch ZMQ engine process exited before publishing RPC server port.')
+                    condition.wait(timeout=1)
             self.port = self.shared_dict['rpc_server_port']
 
     @staticmethod
@@ -161,8 +182,8 @@ class ZMQMPEngine(MPEngine):
             await server.run()
         except asyncio.CancelledError:
             logger.info('RPC Server stopping due to cancellation.')
-        except Exception as e:
-            logger.error(f'RPC Server stopped with exception: {e}')
+        except Exception:
+            logger.exception('RPC Server stopped with exception.')
         finally:
             server.stop()
             engine.close()
@@ -170,8 +191,8 @@ class ZMQMPEngine(MPEngine):
                 await engine.wait_tasks()
             except asyncio.CancelledError:
                 logger.info('Engine wait_tasks cancelled during shutdown.')
-            except Exception as e:
-                logger.debug(f'Engine wait_tasks failed during shutdown: {e}')
+            except Exception:
+                logger.exception('Engine wait_tasks failed during shutdown.')
 
     def _collective_rpc(self, func, *args, **kwargs):
         """Collective rpc call."""
@@ -183,7 +204,15 @@ class ZMQMPEngine(MPEngine):
 
     async def _collective_rpc_streaming_async(self, func: str, sess_event: asyncio.Event,  *args, **kwargs):
         """Collective rpc call."""
-        async for out in self.rpc_client.async_stream_call(func, sess_event, *args, **kwargs):
+        startup_notify_kwarg = 'notify_add_msg_func' if func == 'instance_async_stream_infer' else None
+        generator = self.rpc_client.async_stream_call(func,
+                                                      sess_event,
+                                                      *args,
+                                                      streaming_startup_notify_kwarg=startup_notify_kwarg,
+                                                      **kwargs)
+        # async_stream_call captured kwargs in its task; this frame no longer needs multimodal data.
+        kwargs.pop('multimodal', None)
+        async for out in generator:
             yield out
 
     async def get_health_status(self):
@@ -201,13 +230,28 @@ class ZMQMPEngine(MPEngine):
         logger.info('Closing mp engine.')
         self.rpc_client.stop()
         self.proc.terminate()
-        self.proc.join(10)
+        shutdown_timeout = getattr(self, '_process_shutdown_timeout', _DEFAULT_PROCESS_SHUTDOWN_TIMEOUT)
+        self.proc.join(shutdown_timeout)
         if not self.proc.is_alive():
             self.proc.close()
         else:
-            logger.warning('MP process did not terminate in time, force killing.')
+            logger.warning('MP process did not terminate within %d seconds, force killing.', shutdown_timeout)
             self.proc.kill()
+            self.proc.join()
+            self.proc.close()
         self.proc = None
+
+    def _is_proc_alive(self):
+        """Return whether MP process is alive."""
+        try:
+            return self.proc is not None and self.proc.is_alive()
+        except ValueError:
+            return False
+
+    def _mark_backend_dead(self):
+        """Wake local waiters when the MP backend process dies."""
+        for state in getattr(self, 'session_states', {}).values():
+            state.init_done.set()
 
     def start_loop(self) -> None:
         """Start mp engine loop."""

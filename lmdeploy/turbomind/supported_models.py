@@ -8,6 +8,9 @@ SUPPORTED_ARCHS = dict(
     # Qwen2 / Qwen2-MoE
     Qwen2ForCausalLM='qwen2',
     Qwen2MoeForCausalLM='qwen2-moe',
+    # Qwen2-vl / Qwen2.5-vl
+    Qwen2VLForConditionalGeneration='qwen2_vl',
+    Qwen2_5_VLForConditionalGeneration='qwen2_vl',
     # Qwen3
     Qwen3ForCausalLM='qwen3',
     Qwen3MoeForCausalLM='qwen3-moe',
@@ -15,6 +18,7 @@ SUPPORTED_ARCHS = dict(
     Qwen3_5ForConditionalGeneration='qwen3_5',
     Qwen3_5MoeForConditionalGeneration='qwen3_5-moe',
     InternS2PreviewForConditionalGeneration='qwen3_5-moe',
+    InternS2MobiusForConditionalGeneration='interns2_mobius',
     # InternVL family
     InternVLChatModel='internvl',
     InternVLForConditionalGeneration='internvl',
@@ -43,11 +47,10 @@ def is_supported(model_path: str, trust_remote_code: bool = False):
                     ii) and iii).
                 - ii) The model_id of a lmdeploy-quantized model hosted
                     inside a model repo on huggingface.co, such as
-                    "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "internlm/internlm-chat-7b",
-                    "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                    on huggingface.co, such as "internlm/internlm2-chat-7b",
+                    "Qwen/Qwen2.5-7B-Instruct"
                     and so on.
     Returns:
         support_by_turbomind (bool): Whether input model is supported by turbomind engine

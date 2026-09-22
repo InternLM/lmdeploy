@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import _turbomind as _tm
-
 if TYPE_CHECKING:
     from transformers import Glm4MoeLiteConfig
 
+from .. import _tm
 from ..builders import (
     DecoderLayerBuilder,
     DecoderLayerConfig,
@@ -101,21 +100,21 @@ class Glm4MoeLiteModel(TextModel):
     # FFN / MoE factories
     # ------------------------------------------------------------------
 
-    def ffn(self, pfx, inter_size, is_expert=False):
+    def ffn(self, pfx, inter_size, is_expert=False, *, tp):
         w1, w3, w2 = [self._linear(pfx + f'{x}_proj') for x in ('gate', 'up', 'down')]
 
         cfg = self._ffn_cfg.clone()
         cfg.inter_size = inter_size
         cfg.is_expert  = is_expert
 
-        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp)
+        m = FfnBuilder(cfg, self._ctx, tp=tp)
         m.add_ffn(w1, w2, w3)
         return m.build()
 
     def moe(self, pfx):
         cfg = self._moe_cfg.clone()
 
-        m = MoeBuilder(cfg, self._ctx)
+        m = MoeBuilder(cfg, self._ctx, ep=self._ep)
 
         m.add_gate('gate', self._linear(pfx + 'gate'))
 
@@ -123,15 +122,17 @@ class Glm4MoeLiteModel(TextModel):
         m.add_param('score_correction_bias', correction)
 
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for e in range(cfg.expert_num):
+        for e in m.range(cfg.expert_num):
             experts[e] = self.ffn(pfx + 'experts' + e,
-                                  self.cfg.moe_intermediate_size, is_expert=True)
+                                  self.cfg.moe_intermediate_size,
+                                  is_expert=True, tp=self._mlp_tp)
         m.experts = experts.build()
 
-        shared = self.ffn(pfx + 'shared_experts',
-                          self.cfg.intermediate_size * self.cfg.n_shared_experts)
+        m.shared = self.ffn(pfx + 'shared_experts',
+                            self.cfg.intermediate_size * self.cfg.n_shared_experts,
+                            tp=self._mlp_tp)
 
-        return m.build(), shared
+        return m.build()
 
     def layers(self, pfx):
         layers = ModuleListBuilder(ModuleListConfig(), self._ctx)
@@ -141,8 +142,9 @@ class Glm4MoeLiteModel(TextModel):
             d.attention = self.attn(p + 'self_attn')
             d.ffn_norm = self.norm(p + 'post_attention_layernorm')
             if self.cfg.mlp_layer_types[i] == 'sparse':
-                d.moe_ffn, d.feed_forward = self.moe(p + 'mlp')
+                d.moe_ffn = self.moe(p + 'mlp')
             else:
-                d.feed_forward = self.ffn(p + 'mlp', self.cfg.intermediate_size)
+                d.feed_forward = self.ffn(p + 'mlp', self.cfg.intermediate_size,
+                                          tp=self._dense_tp)
             layers[i] = d.build()
         return layers.build()

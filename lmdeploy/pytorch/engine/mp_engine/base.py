@@ -19,8 +19,10 @@ logger = get_logger('lmdeploy')
 
 @dataclass
 class SessionState:
-    is_exists: asyncio.Event = field(default_factory=asyncio.Event)
+    init_done: asyncio.Event = field(default_factory=asyncio.Event)
     cancelled: bool = False
+    cancel_task: asyncio.Task | None = None
+    cleanup_task: asyncio.Task | None = None
 
 
 class MPEngine(EngineBase):
@@ -39,7 +41,7 @@ class MPEngine(EngineBase):
         """Collective rpc call."""
         raise NotImplementedError('This method has not been implemented yet.')
 
-    async def _collective_rpc_streaming_async(self, func: str, sess_event: asyncio.Event, *args, **kwargs):
+    async def _collective_rpc_streaming_async(self, func: str, init_done: asyncio.Event, *args, **kwargs):
         """Collective rpc call."""
         raise NotImplementedError('This method has not been implemented yet.')
 
@@ -66,6 +68,30 @@ class MPEngine(EngineBase):
     def update_params(self, request: Any):
         """Update params."""
         return self._collective_rpc('update_params', request)
+
+    async def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness."""
+        return await self._collective_rpc_async('get_checkpoint_engine_status')
+
+    async def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        return await self._collective_rpc_async('update_weights_from_ipc', request, reject_reason)
+
+    def complete_weights_update(self):
+        """Record a successful external weights update."""
+        return self._collective_rpc('complete_weights_update')
+
+    async def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        return await self._collective_rpc_async('init_weights_update_group', request)
+
+    async def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        return await self._collective_rpc_async('update_weights_from_distributed', request)
+
+    async def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        return await self._collective_rpc_async('destroy_weights_update_group', request)
 
     async def get_schedule_metrics(self):
         """Get schedule metrics."""
@@ -109,11 +135,14 @@ class MPEngineInstance(EngineInstanceBase):
             self.engine.pending_cancel_sessions.discard(session_id)
             logger.warning(f'Session {session_id} not found when end session.')
             return ResponseType.SESSION_NOT_EXIST
-        await self.session_states[session_id].is_exists.wait()
-        ret = await self.engine._collective_rpc_async('instance_async_end', session_id)
-        self.session_states.pop(session_id)
-        self.engine.pending_cancel_sessions.discard(session_id)
-        return ret
+        state = self.session_states[session_id]
+        await state.init_done.wait()
+        try:
+            if state.cancel_task is not None:
+                await asyncio.shield(state.cancel_task)
+            return await self.engine._collective_rpc_async('instance_async_end', session_id)
+        finally:
+            self._cleanup_session(session_id, state)
 
     async def async_cancel(self, session_id: int):
         """Stop current streaming inference."""
@@ -122,25 +151,73 @@ class MPEngineInstance(EngineInstanceBase):
             return ResponseType.SESSION_NOT_EXIST
         state = self.session_states[session_id]
         self.engine.pending_cancel_sessions.add(session_id)
-        if not state.is_exists.is_set():
-            logger.warning(f'Session {session_id} not started yet, recording pending cancel.')
+        if not state.init_done.is_set():
             state.cancelled = True
+            if state.cancel_task is None or state.cancel_task.done():
+                state.cancel_task = asyncio.create_task(
+                    self._cancel_after_init(session_id, state),
+                    name=f'MPEngineInstance.cancel_after_init.{session_id}',
+                )
             return ResponseType.SUCCESS
         return await self.engine._collective_rpc_async('instance_async_cancel', session_id)
+
+    async def _cancel_after_init(self, session_id: int, state: SessionState):
+        """Forward a cancellation that raced with remote stream startup."""
+        await state.init_done.wait()
+        # A cancellation before async_stream_infer entered is handled locally;
+        # that path clears ``cancelled`` before setting this event. Once remote
+        # startup began, keep forwarding the cancel even if stream cleanup
+        # concurrently removed the parent-side state.
+        if not state.cancelled:
+            return
+        try:
+            await self.engine._collective_rpc_async('instance_async_cancel', session_id)
+        except Exception:
+            logger.exception(f'MPEngine session {session_id} deferred cancel failed.')
+
+    def _cleanup_session(self, session_id: int, state: SessionState):
+        """Remove this session state without deleting a newer reuse."""
+        if self.session_states.get(session_id) is state:
+            self.session_states.pop(session_id, None)
+            self.engine.pending_cancel_sessions.discard(session_id)
+
+    async def _cleanup_after_init(self, session_id: int, state: SessionState):
+        """Finish cleanup skipped by a stream cancelled during startup."""
+        try:
+            await state.init_done.wait()
+            if state.cancel_task is not None:
+                await asyncio.shield(state.cancel_task)
+        finally:
+            self._cleanup_session(session_id, state)
 
     async def async_stream_infer(self, session_id: int, *args, **kwargs):
         """Send stream inference request."""
         state = self.session_states[session_id]
         if state.cancelled or session_id in self.engine.pending_cancel_sessions:
-            state.is_exists.set()
-            logger.warning(f'Session {session_id} canceld, async_stream_infer')
+            state.cancelled = False
+            state.init_done.set()
+            self._cleanup_session(session_id, state)
             yield EngineOutput(ResponseType.CANCEL, [])
             return
         kwargs['session_id'] = session_id
         generator = self.engine._collective_rpc_streaming_async('instance_async_stream_infer',
-                                                                state.is_exists,
+                                                                state.init_done,
                                                                 *args,
                                                                 **kwargs)
+        # The RPC generator captured the request; release this wrapper's multimodal reference.
+        kwargs.pop('multimodal', None)
 
-        async for result in generator:
-            yield result
+        try:
+            async for result in generator:
+                yield result
+        except Exception:
+            logger.exception(f'MPEngine session {session_id} stream inference failed.')
+            raise
+        finally:
+            if state.init_done.is_set():
+                self._cleanup_session(session_id, state)
+            elif state.cleanup_task is None or state.cleanup_task.done():
+                state.cleanup_task = asyncio.create_task(
+                    self._cleanup_after_init(session_id, state),
+                    name=f'MPEngineInstance.cleanup_after_init.{session_id}',
+                )

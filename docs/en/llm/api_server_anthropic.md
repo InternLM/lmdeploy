@@ -29,7 +29,7 @@ curl http://{server_ip}:{server_port}/v1/messages \
   -H "content-type: application/json" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
-    "model": "internlm-chat-7b",
+    "model": "intern-s2-preview",
     "max_tokens": 128,
     "messages": [{"role": "user", "content": "Hello from Anthropic client"}]
   }'
@@ -42,7 +42,7 @@ curl http://{server_ip}:{server_port}/v1/messages \
   -H "content-type: application/json" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
-    "model": "internlm-chat-7b",
+    "model": "intern-s2-preview",
     "max_tokens": 128,
     "messages": [{"role": "user", "content": "Find lmdeploy docs"}],
     "tools": [{
@@ -78,7 +78,7 @@ curl http://{server_ip}:{server_port}/v1/messages/count_tokens \
   -H "content-type: application/json" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
-    "model": "internlm-chat-7b",
+    "model": "intern-s2-preview",
     "system": "You are a helpful assistant.",
     "messages": [{"role": "user", "content": "Count these tokens"}]
   }'

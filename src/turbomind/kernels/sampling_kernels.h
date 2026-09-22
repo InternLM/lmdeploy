@@ -29,6 +29,7 @@ struct SamplingParams {
     int*           indices;
     int*           kept;
     curandState_t* curandstate;
+    const int*     curandstate_indices;
     size_t         batch_size;
     int*           output_ids;
     int*           sequence_length;

@@ -14,6 +14,7 @@
 
 add_subdirectory(utils)
 add_subdirectory(core)
+add_subdirectory(memory)
 add_subdirectory(kernels)
 add_subdirectory(comm)
 add_subdirectory(generation)
@@ -32,6 +33,8 @@ target_link_libraries(turbomind PUBLIC
         device_comm
         host_comm
         core
+        memory
+        copy
         memory_utils
         nvtx_utils
         CUDA::cublasLt

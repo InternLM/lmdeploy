@@ -70,14 +70,6 @@ def smooth_quant(model: str,
                            f'not supported. The supported model types are '
                            f"{', '.join(LAYER_TYPE_MAP.keys())}.")
 
-    if model_type == 'QWenLMHeadModel':
-        try:
-            import flash_attn  # noqa: F401
-        except ImportError:
-            raise RuntimeError('When using Qwen, you need to `pip install flash-attn` first, '
-                               'otherwise calibration and quantification will not work '
-                               'properly.')
-
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     norm_type = NORM_TYPE_MAP[type(model).__name__]
     fc2fcs = FC_FCS_MAP[layer_type]

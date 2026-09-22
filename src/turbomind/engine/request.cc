@@ -37,6 +37,7 @@ std::ostream& operator<<(std::ostream& os, const GenerationConfig& c)
     os << ", repetition_penalty=" << c.repetition_penalty;
     os << ", random_seed=" << c.random_seed;
     os << ", output_logprobs=" << c.output_logprobs;
+    os << ", return_ppl=" << c.return_ppl;
     os << ", output_hidden_states=" << c.output_last_hidden_state;
     os << ", output_logits=" << c.output_logits;
     os << " }";

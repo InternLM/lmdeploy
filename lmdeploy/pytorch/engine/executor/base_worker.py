@@ -65,8 +65,13 @@ class WorkerWrapperBase:
 
             init_process_group(rank, self.world_size)
 
-        ccl_backend = get_backend(self.device_type).ccl_backend()
-        self.dist_ctx = DistContext.build(self.rank, self.dist_config, ccl_backend)
+        backend = get_backend(self.device_type)
+        self.dist_ctx = DistContext.build(
+            rank=self.rank,
+            dist_config=self.dist_config,
+            ccl_backend=backend.ccl_backend(),
+            communicator_builder=backend.build_communicator,
+        )
 
     def pack_output(self, output: dict):
         """Pack output."""
@@ -106,6 +111,11 @@ class WorkerWrapperBase:
         """Set all model config."""
         self.model_agent.set_model_config(model_config, spec_model_config)
 
+    def build_cache_plans(self, cache_config: CacheConfig,
+                          spec_cache_config: CacheConfig | None = None) -> tuple[int, int, int]:
+        """Build this worker's model-local cache plans."""
+        return self.model_agent.build_cache_plans(cache_config, spec_cache_config)
+
     def build_graph_runner(self):
         """Build graph runner."""
         self.model_agent.build_graph_runner()
@@ -117,6 +127,26 @@ class WorkerWrapperBase:
     def update_params(self, request: Any):
         """Update params."""
         self.model_agent.update_params(request)
+
+    def get_checkpoint_engine_status(self):
+        """Get local checkpoint-engine readiness."""
+        return self.model_agent.get_checkpoint_engine_status()
+
+    def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        return self.model_agent.update_weights_from_ipc(request, reject_reason)
+
+    def init_weights_update_group(self, request: Any):
+        """Init disaggregated weights-update process group."""
+        return self.model_agent.init_weights_update_group(request)
+
+    def update_weights_from_distributed(self, request: Any):
+        """Receive weights through the disaggregated process group."""
+        return self.model_agent.update_weights_from_distributed(request)
+
+    def destroy_weights_update_group(self, request: Any):
+        """Tear down a previously initialized weights-update process group."""
+        return self.model_agent.destroy_weights_update_group(request)
 
     def warmup(self):
         """warmup."""
@@ -168,6 +198,10 @@ class WorkerWrapperBase:
         ret = await self.model_agent.get_output_async()
         ret = self.pack_output(ret)
         return ret
+
+    def shutdown_kv_connector(self):
+        """Drain and close the worker-local KV connector."""
+        self.model_agent.shutdown_kv_connector()
 
     def release(self):
         """Stop engine loop."""

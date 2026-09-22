@@ -7,10 +7,9 @@ import torch
 from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from ..distributed import DistContext
 from ..engine.logits_process import SamplingInputs
-from ..model_inputs import ModelInputs
+from ..model_inputs import ModelInputs, SpecModelBuildContext
 from ..strategies.base.model_agent import ExtraInputs, ModelAgentStrategy
 from ..strategies.base.model_inputs import ModelInputsStrategy
-from .reject_sampler import RejectionSampler
 
 
 def _build_draft_dist_ctx(dist_ctx: DistContext, specdecode_config: SpecDecodeConfig) -> DistContext:
@@ -19,7 +18,16 @@ def _build_draft_dist_ctx(dist_ctx: DistContext, specdecode_config: SpecDecodeCo
         return None
 
     draft_dist_config = specdecode_config.dist_config
-    return DistContext.build(rank=dist_ctx.rank, dist_config=draft_dist_config)
+    if specdecode_config.method in ('qwen3_5_mtp', 'hy3_mtp') or draft_dist_config == dist_ctx.dist_config:
+        return dist_ctx
+
+    if dist_ctx.communicator_builder is None:
+        return DistContext.build(rank=dist_ctx.rank, dist_config=draft_dist_config)
+    return DistContext.build(
+        rank=dist_ctx.rank,
+        dist_config=draft_dist_config,
+        communicator_builder=dist_ctx.communicator_builder,
+    )
 
 
 class BaseSpecModelAgent:
@@ -44,10 +52,10 @@ class BaseSpecModelAgent:
         self.draft_dist_ctx = _build_draft_dist_ctx(dist_ctx, specdecode_config)
         self.device = device
         self.cache_engine = None
+        self.block_cache_plan = None
         self.inputs_strategy = inputs_strategy
         self.agent_strategy = agent_strategy
         self.misc_config = misc_config
-        self.rejection_sampler = RejectionSampler()
         self.proposer = None
         self.model_config = specdecode_config.model_config if specdecode_config is not None else None
         self.cache_config = specdecode_config.cache_config if specdecode_config is not None else None
@@ -55,6 +63,18 @@ class BaseSpecModelAgent:
 
     def is_enabled(self):
         return self._enabled
+
+    def build_model_context(self) -> SpecModelBuildContext:
+        """Build speculative metadata consumed during model construction."""
+        config = self.specdecode_config
+        if config is None:
+            return SpecModelBuildContext()
+        target_layer_ids = config.target_layer_ids or ()
+        mask_token_id = config.mask_token_id
+        return SpecModelBuildContext(
+            target_aux_hidden_state_layers=tuple(target_layer_ids),
+            speculative_mask_token_id=mask_token_id,
+        )
 
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""
@@ -76,6 +96,12 @@ class BaseSpecModelAgent:
         """Build cache engine."""
         pass
 
+    def build_cache_plan(self, cache_config: CacheConfig | None) -> int:
+        """Build this rank's draft cache plan and return logical-block
+        bytes."""
+        self.block_cache_plan = None
+        return 0
+
     async def async_model_forward(self,
                                 model_inputs: ModelInputs,
                                 extra_inputs: ExtraInputs,
@@ -96,6 +122,10 @@ class BaseSpecModelAgent:
         'reset graph runner'
         pass
 
+    def reset_runtime_state(self):
+        """Discard request-local runtime state after sleep cancels sessions."""
+        pass
+
     def update_main_model_outputs(self, output: dict[str, torch.Tensor],
                                   model_inputs: ModelInputs):
         """Update outputs of main model."""
@@ -105,10 +135,7 @@ class BaseSpecModelAgent:
 
         hidden_states = output['hidden_states']
 
-        # use original is_decoding if dp_meta is not None
         is_decoding = model_inputs.is_decoding
-        if model_inputs.dp_meta is not None:
-            is_decoding = model_inputs.dp_meta.is_decoding
 
         if not is_decoding:
             logits_indices = model_inputs.seq_length.cumsum(0) - 1

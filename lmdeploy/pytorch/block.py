@@ -24,7 +24,6 @@ class LogicalTokenBlocks:
             assert blocks.ndim == 1
             self._blocks = blocks
             self._num_real = len(blocks)
-        self.last_shared_node = None
 
     def reserve(self, size: int):
         """Reserve cache size."""
@@ -67,7 +66,6 @@ class LogicalTokenBlocks:
     def reset(self):
         """reset."""
         self.resize(0)
-        self.last_shared_node = None
 
     def clone(self):
         """Clone logical blocks."""
