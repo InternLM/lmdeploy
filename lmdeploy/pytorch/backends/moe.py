@@ -73,6 +73,8 @@ class FusedMoEBuildSpec(BuildSpec[FusedMoEImpl]):
     layer_idx: int
     output_dtype: torch.dtype
     num_max_dispatch_tokens_per_rank: int
+    fp32_acc: bool = False
+    output_scale: float = 1.0
 
 
 class FusedMoEW8A8Impl(ABC):

@@ -1030,7 +1030,9 @@ def fused_moe(hidden_states: torch.Tensor,
               expert_offset: int = 0,
               num_experts: int = None,
               renormalize: bool = False,
-              act_func: Callable = None) -> torch.Tensor:
+              act_func: Callable = None,
+              fp32_acc: bool = False,
+              output_scale: float = 1.0) -> torch.Tensor:
     """Fused moe."""
     M = hidden_states.size(0)
     E, N, _ = w1.shape
@@ -1138,5 +1140,8 @@ def fused_moe(hidden_states: torch.Tensor,
             reindex_c=True,
         )
 
-    ret = moe_reduce(intermediate_cache2, topk_weights)
+    ret = moe_reduce(intermediate_cache2,
+                     topk_weights,
+                     fp32_acc=fp32_acc,
+                     output_scale=output_scale)
     return ret
