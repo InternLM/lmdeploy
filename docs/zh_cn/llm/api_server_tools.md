@@ -65,7 +65,9 @@ print(response.choices[0].message.tool_calls)  # 一个或多个调用
 
 由于同一时间只能启用一种引导解码约束，强制工具调用约束会覆盖客户端提供的 `response_format`。工具调用之前产生的推理内容仍会通过 `reasoning_content` 返回。流式和非流式响应在工具调用生成完成时返回 `finish_reason="tool_calls"`。如果在工具调用完成前达到 token 上限，`finish_reason` 会保留为 `length`。
 
-设置 `tool_choice="auto"` 时，由模型自行决定是否调用工具。例如，即使提供了工具，问候语也可能得到普通文本回复，并返回 `finish_reason="stop"`。设置 `tool_choice="none"` 时，模型不调用工具。
+设置 `tool_choice="auto"` 时，由模型自行决定是否调用工具。例如，即使提供了工具，问候语也可能得到普通文本回复，并返回 `finish_reason="stop"`。
+
+设置 `tool_choice="none"` 时，默认响应解析器关闭工具调用解析，但请求中的 `tools` 仍会传给对话模板。模型可能继续生成工具调用格式的文本，这些文本不会被提取为结构化的 `tool_calls`。GPT-OSS 的 Harmony 解析器在此模式下会先移除 `tools`，再渲染对话模板。
 
 ## 多轮调用
 

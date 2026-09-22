@@ -65,7 +65,9 @@ This mode requires a non-empty `tools` list and a parser that supports required 
 
 The required-tool constraint takes precedence over a client-provided `response_format`, because only one guided-decoding constraint can be active. Reasoning produced before the call remains available as `reasoning_content`. Streamed and non-streamed responses report `finish_reason="tool_calls"` when tool generation completes. If the token limit is reached before a call is complete, `finish_reason` remains `length`.
 
-With `tool_choice="auto"`, the model decides whether to call a tool. For example, a greeting may produce a text reply with `finish_reason="stop"`, even when tools are supplied. With `tool_choice="none"`, the model responds without calling tools.
+With `tool_choice="auto"`, the model decides whether to call a tool. For example, a greeting may produce a text reply with `finish_reason="stop"`, even when tools are supplied.
+
+With `tool_choice="none"`, the default response parser disables tool-call extraction, but the supplied `tools` are still passed to the chat template. The model may still generate text in a tool-call format; this text is not extracted into structured `tool_calls`. GPT-OSS's Harmony parser removes `tools` before rendering the chat template in this mode.
 
 ## Multiple Round Invocation
 
