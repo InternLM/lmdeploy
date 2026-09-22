@@ -1,11 +1,8 @@
 # Tools Calling
 
-LMDeploy supports tools for InternLM2, InternLM2.5, llama3.1 and Qwen2.5 models. Please use `--tool-call-parser` to specify
-which parser to use when launching the api_server. Supported names are:
+LMDeploy provides tool calling through its OpenAI-compatible Chat Completions API for models in the InternLM, Qwen, Llama, DeepSeek, GLM, Kimi, and GPT-OSS families. Define the available functions and their parameter schemas in the request's `tools` field. LMDeploy parses the model's output into `tool_calls` containing function names and arguments; your application executes the functions and sends their results back as `tool` messages to continue the conversation.
 
-1. internlm
-2. qwen
-3. llama3
+When starting `lmdeploy serve api_server`, select a parser that matches the model's tool-call format with `--tool-call-parser`, for example, `interns2-preview` for Intern-S2-Preview or `qwen3coder` for Qwen3.5. Run `lmdeploy serve api_server --help` to see the available parser names. GPT-OSS uses an automatically selected Harmony response parser when `openai_harmony` is installed.
 
 ## Single Round Invocation
 
@@ -64,7 +61,11 @@ print(response.choices[0].finish_reason)       # tool_calls
 print(response.choices[0].message.tool_calls)  # one or more calls
 ```
 
-This mode requires a non-empty `tools` list and a compatible tool parser selected with `--tool-call-parser`; otherwise, the server returns HTTP 400. It is not currently supported by the `gpt-oss`, `internlm`, `intern-s1`, or `llama3` parsers. The required-tool constraint takes precedence over a client-provided `response_format`, because only one guided-decoding constraint can be active. Reasoning produced before the call remains available as `reasoning_content`. If the token limit is reached before a call is complete, `finish_reason` remains `length`.
+This mode requires a non-empty `tools` list and a parser that supports required tool calls. If either requirement is not met, the server returns HTTP 400.
+
+The required-tool constraint takes precedence over a client-provided `response_format`, because only one guided-decoding constraint can be active. Reasoning produced before the call remains available as `reasoning_content`. Streamed and non-streamed responses report `finish_reason="tool_calls"` when tool generation completes. If the token limit is reached before a call is complete, `finish_reason` remains `length`.
+
+With `tool_choice="auto"`, the model decides whether to call a tool. For example, a greeting may produce a text reply with `finish_reason="stop"`, even when tools are supplied. With `tool_choice="none"`, the model responds without calling tools.
 
 ## Multiple Round Invocation
 
