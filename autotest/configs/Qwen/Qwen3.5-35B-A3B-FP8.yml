@@ -1,6 +1,6 @@
 # HF model id: Qwen/Qwen3.5-35B-A3B-FP8
 
-h:
+a100:
 - model_type:
   - chat
   - vl
@@ -8,9 +8,6 @@ h:
     tp: 1
   backends:
   - name: turbomind
-    communicators:
-    - nccl
-  - name: pytorch
     communicators:
     - nccl
   test_coverage:
@@ -21,23 +18,6 @@ h:
   - longtext_evaluate
   - mllm_evaluate
   interface:
-    pytorch:
-    - suites:
-      - base
-      - logprob
-      - experts
-      - toolcall
-      - reasoning
-      extra:
-        logprobs-mode: raw_logprobs
-        enable-return-routed-experts: true
-        tool-call-parser: qwen3coder
-        reasoning-parser: default
-    - suites:
-      - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
-        enable-return-routed-experts: true
     turbomind:
     - suites:
       - base
@@ -52,13 +32,38 @@ h:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
+h:
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 1
+  backends:
+  - name: turbomind
+    communicators:
+    - nccl
+  test_coverage:
+  - benchmark
+  - evaluate
+  - func
+  - longtext_benchmark
+  - longtext_evaluate
+  - mllm_evaluate
+  interface:
+    turbomind:
+    - suites:
+      - base
+      - logprob
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: qwen3coder
+        reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
 - model_type:
   - chat
   - vl
@@ -79,10 +84,3 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
