@@ -154,8 +154,11 @@ def get_model_arch(model_path: str, trust_remote_code: bool = False):
     Args:
         model_path(str): the model path
     """
+    # use the config_from_pretrained helper so model_types registered out-of-tree
+    # (e.g. deepseek_v4) get auto-registered with transformers before loading.
+    from lmdeploy.pytorch.transformers import config_from_pretrained
     try:
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
+        cfg = config_from_pretrained(model_path, trust_remote_code=trust_remote_code)
     except Exception as e:  # noqa
         from transformers import PretrainedConfig
         cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)

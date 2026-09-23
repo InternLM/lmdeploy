@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -128,6 +129,18 @@ class CacheConfig:
     # reserved blocks for dummy inputs, init to 0 for unit test.
     num_reserved_gpu_blocks: int = 0
 
+    # Effective max session length (engine cap: min of the configured
+    # session_len and the GPU-block budget), set by the engine after
+    # _get_max_session_len. Backends that build position-indexed tables
+    # (e.g. the V4 precomputed RoPE cos/sin table in
+    # backends/dlinfer/ascend/v4_dsa.py) read this to size the table to
+    # exactly the max position the engine can produce + margin. Without it
+    # the table falls back to a hardcoded 8192 and is undersized relative to
+    # a larger configured session_len -> a long decode whose position
+    # exceeds the table OOBs the gather (aclnn IndexCheck 507011 aicore
+    # crash that takes down the whole serve).
+    session_len: int = None
+
     # For PD Disaggregation
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
@@ -192,8 +205,22 @@ class DistConfig:
         self.mlp_tp = self.mlp_tp or tp
         self.moe_tp = self.moe_tp or (1 if ep > 1 else self.mlp_tp)
 
-        # world_size
-        world_size = ep if ep > 1 else max(self.mlp_tp, self.moe_tp)
+        # world_size (total ranks). Two EP regimes:
+        #  - ep > tp: EP group spans all ranks (world_size = ep). The dp1
+        #    asymmetric path (ep16/tp8 via LMDEPLOY_ATTN_TP) uses this -- one
+        #    EP all_reduce covers every rank (fine for dp1: a single DP group
+        #    means spanning == per-group).
+        #  - ep <= tp: EP = TP, one EP group PER DP group (world_size = tp*dp),
+        #    matching vllm's --enable-expert-parallel (EP==TP, no explicit ep
+        #    size). Each DP group's EP all_reduce stays within that group, so
+        #    under dp>1 the idle DP group's dummy-token partials never enter
+        #    the active group's all_reduce -- the cross-group token mixing that
+        #    produced non-deterministic garbage under the old spanning-EP dp2
+        #    cannot occur.
+        if ep > 1:
+            world_size = ep if ep > tp else (tp * dp)
+        else:
+            world_size = max(self.mlp_tp, self.moe_tp)
         self.world_size = world_size
         assert (world_size >= dp and world_size % dp == 0), (f'world_size {world_size}, dp {dp}')
         assert (world_size >= ep and world_size % ep == 0), (f'world_size {world_size}, ep {ep}')
@@ -203,7 +230,19 @@ class DistConfig:
                 and world_size % self.moe_tp == 0), (f'world_size {world_size}, moe_tp {self.moe_tp}')
 
         # attn tp
-        self.attn_tp = self.attn_tp or self.world_size // dp
+        # LMDEPLOY_ATTN_TP override: V4's grouped o-proj shards groups (not
+        # heads), so attn TP must be <= o_groups. With dp=1, world_size//dp
+        # would give the full EP width (>o_groups) and break the o-proj; the
+        # env override forces a smaller attn TP while keeping mlp_tp/ep large
+        # (asymmetric attn_tp<mlp_tp -> DP_TP mlp mode).
+        # Guard on world_size>1: several call sites build a default DistConfig()
+        # for a single-device/local path (uni_executor, draft, etc.) where
+        # world_size==1 — the override must NOT inflate their attn_tp past 1.
+        _env_attn_tp = os.environ.get('LMDEPLOY_ATTN_TP')
+        if _env_attn_tp and world_size > 1:
+            self.attn_tp = self.attn_tp or int(_env_attn_tp)
+        else:
+            self.attn_tp = self.attn_tp or (self.world_size // dp)
         self.tp = self.attn_tp
         if self.mlp_tp > 1:
             assert (self.mlp_tp >= self.attn_tp

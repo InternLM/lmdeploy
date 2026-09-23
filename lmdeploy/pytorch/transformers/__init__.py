@@ -8,7 +8,10 @@ from lmdeploy.utils import get_logger
 
 @lru_cache
 def register_config(model_type: str):
-    if model_type == 'deepseek_v32':
+    if model_type == 'deepseek_v4':
+        from lmdeploy.pytorch.transformers.configuration_deepseek_v4 import DeepseekV4Config
+        AutoConfig.register(DeepseekV4Config.model_type, DeepseekV4Config)
+    elif model_type == 'deepseek_v32':
         from lmdeploy.pytorch.transformers.configuration_deepseek_v32 import DeepseekV32Config
         AutoConfig.register(DeepseekV32Config.model_type, DeepseekV32Config)
     else:

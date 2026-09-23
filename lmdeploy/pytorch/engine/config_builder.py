@@ -82,7 +82,14 @@ class ConfigBuilder:
             migration_backend=engine_config.migration_backend,
             role=engine_config.role,
             # reserve 1 blocks for dummy input and padding
-            num_reserved_gpu_blocks=1)
+            num_reserved_gpu_blocks=1,
+            # configured session len; the engine later overwrites this in
+            # process with the GPU-budget-min'd effective value (see
+            # engine._get_max_session_len). On ray workers the configured
+            # value is a safe ceiling (>= effective) so position-indexed
+            # tables (V4 RoPE cos/sin) are never undersized. See
+            # CacheConfig.session_len docstring.
+            session_len=engine_config.session_len)
         return cache_config
 
     @staticmethod
