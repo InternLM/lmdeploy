@@ -5,6 +5,20 @@ LMDeploy supports update model weights online for scenes such as RL training. He
 For checkpoint-engine Broadcast and Mooncake P2P updates, see
 [Updating PyTorch weights with checkpoint-engine](./checkpoint_engine.md).
 
+`POST /update_weights` rejects pickle payloads **by default**. Send
+`load_format="safetensors"` (recommended) or a structured dict of tensors.
+Unauthenticated pickle deserialization over HTTP is RCE on the default
+`api_server` bind, so it stays disabled unless you opt in.
+
+XTuner same-node CUDA IPC still uses `serialize_state_dict()` and
+`FlattenedTensorBucket` to send IPC handles, event handles, and
+`FlattenedTensorMetadata` through HTTP `/update_weights`. The tensors stay in
+same-node GPU memory; only the control messages travel over HTTP. That path
+(including metadata-only buffer reuse and the empty `finished=true` finalizer)
+is restored by setting `LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1` on the **server**
+process. Ray workers inherit it through `get_all_envs()`. Do not enable this on
+untrusted public endpoints.
+
 ## Step 1: Launch server
 
 For pytorch backend you have to add `--distributed-executor-backend ray`.
@@ -18,7 +32,7 @@ lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23333 --dis
 Before update model weights, the server should offloads weights and kv cache.
 
 ```python
-from lmdeploy.utils import serialize_state_dict
+from lmdeploy.utils import serialize_named_tensors_safetensors
 import requests
 
 BASE_URL = 'http://0.0.0.0:23333'
@@ -46,14 +60,20 @@ Split model weights into multi segments and update through `update_weights` endp
 segmented_state_dict: List[Dict[str, torch.Tensor]] = ...
 num_segment = len(segmented_state_dict)
 for seg_idx in range(num_segment):
-    serialized_data = serialize_state_dict(segmented_state_dict[seg_idx])
-    data = dict(serialized_named_tensors=serialized_data, finished=seg_idx == num_segment-1)
+    serialized_data = serialize_named_tensors_safetensors(segmented_state_dict[seg_idx])
+    data = dict(serialized_named_tensors=serialized_data, load_format='safetensors', finished=seg_idx == num_segment-1)
     response = requests.post(f"{BASE_URL}/update_weights", headers=headers, json=data)
     assert response.status_code == 200, f"response.status_code = {response.status_code}"
 
 ```
 
-**Note**: For pytorch backend, lmdeploy also supports flattened bucket tensors:
+PyTorch also supports receiving weights through
+`POST /update_weights_from_distributed` (NCCL) and
+`POST /update_weights_from_ipc` (checkpoint-engine). Those paths do not pickle
+HTTP bodies.
+
+**Note**: XTuner flattened-bucket CUDA IPC over HTTP `/update_weights` requires
+`LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1` on the server:
 
 ```python
 from lmdeploy.utils import serialize_state_dict, FlattenedTensorBucket, FlattenedTensorMetadata
