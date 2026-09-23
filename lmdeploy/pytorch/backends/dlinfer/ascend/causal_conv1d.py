@@ -1,9 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Ascend implementations for LMDeploy's causal-convolution BuildSpec."""
 
-from __future__ import annotations
-
-
 import torch
 
 from ...causal_conv1d import CausalConv1dImpl
