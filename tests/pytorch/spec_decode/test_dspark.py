@@ -105,6 +105,24 @@ def test_parse_preview_speculators_dspark_defaults_to_bonus_anchor():
     assert resolved.target_layer_ids == (7, 22, 38, 54, 69)
 
 
+@pytest.mark.parametrize('token_ids', [None, (1, 2)])
+def test_raw_speculators_build_config_without_generation_tokens(token_ids):
+    from lmdeploy.pytorch.configurations.default import DefaultModelConfigBuilder
+
+    # Standalone draft checkpoints need no generation BOS/EOS: the target
+    # owns stopping, but the common model-config builder still reads these.
+    cfg = _raw_config(target_hidden_size=None)
+    if token_ids is not None:
+        cfg.bos_token_id, cfg.eos_token_id = token_ids
+    prepare_dspark_hf_config(cfg)
+    model_config = DefaultModelConfigBuilder.build(cfg)
+
+    expected = (None, None) if token_ids is None else token_ids
+    assert (model_config.bos_token_id, model_config.eos_token_id) == expected
+    assert model_config.hidden_size == cfg.transformer_layer_config.hidden_size
+    assert cfg.sample_from_anchor is False
+
+
 def test_parse_bundled_deepseek_v4_dspark_uses_gamma_capacity():
     cfg = _bundled_config()
     prepare_dspark_hf_config(cfg)
@@ -300,7 +318,8 @@ def test_dspark_query_layouts():
     'pageable', 'v4', 'small_ring', 'small_window', 'compressed',
     'extra_state', 'unknown', 'missing_ring', 'mismatched_ring',
 ])
-def test_dspark_context_materialization_layout(cache_kind):
+@pytest.mark.parametrize('dp,ep', [(1, 1), (2, 1), (1, 2)])
+def test_dspark_context_materialization_layout(cache_kind, dp, ep):
     proposer = DSpark(SimpleNamespace(
         mask_token_id=99,
         target_layer_ids=(1, 5),
@@ -308,6 +327,7 @@ def test_dspark_context_materialization_layout(cache_kind):
         dspark_draft_query_len=5,
         dspark_sample_from_anchor=True,
         model_config=None,
+        dist_config=SimpleNamespace(dp=dp, ep=ep),
     ), device='cpu')
     inputs = ModelInputs(
         input_ids=torch.arange(18).reshape(1, 18),
@@ -356,6 +376,14 @@ def test_dspark_context_materialization_layout(cache_kind):
         return
     # Exercise actual warmup routing, including wrapped graph-runner models.
     proposer.model = SimpleNamespace(get_model=lambda: model)
+    if (dp > 1 or ep > 1) and cache_kind not in ('pageable', 'v4'):
+        def unexpected_materialization(*args):
+            raise AssertionError('Unsupported geometry must fail before warmup writes any cache.')
+
+        proposer._materialize_context = unexpected_materialization
+        with pytest.raises(ValueError, match='validated full-context cache geometry'):
+            proposer.prepare_warmup_forward(inputs, cache)
+        return
     proposer.prepare_warmup_forward(inputs, cache)
     full_context = cache_kind in ('pageable', 'v4')
     assert proposer._full_context_materialization == full_context
@@ -954,7 +982,7 @@ def test_dspark_delegates_nongreedy_sampling_to_dflash(monkeypatch):
     )
     output = asyncio.run(
         proposer.propose(
-            SimpleNamespace(is_chunk=False),
+            SimpleNamespace(is_chunk=False, dp_meta=None),
             extra_inputs,
             sampling,
             proposal_ctx=SimpleNamespace(cache_engine=cache_engine),

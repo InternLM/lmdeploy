@@ -78,6 +78,10 @@ def prepare_dspark_hf_config(config: Any) -> Any:
             _set(config, name, value)
         _set(config, 'architectures', ['Qwen3DSparkModel'])
         _set(config, 'model_type', _get(nested, 'model_type', 'qwen3'))
+        # Standalone raw drafts can omit generation tokens. They do not
+        # control stopping, but the shared model-config builder reads them.
+        for name in ('bos_token_id', 'eos_token_id'):
+            _set(config, name, _get(config, name, None))
 
         aux_ids = _get(config, 'aux_hidden_state_layer_ids', None)
         if aux_ids is not None:

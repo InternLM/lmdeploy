@@ -287,7 +287,10 @@ class DFlashDraftModel(nn.Module, CudaGraphMixin):
         if self.mask_token_id is None:
             raise ValueError('DFlash draft construction requires resolved speculative_mask_token_id metadata.')
         self.num_context_features = len(self.target_layer_ids)
-        target_hidden_size = int(getattr(config, 'target_hidden_size', config.hidden_size))
+        # Raw Speculators checkpoints can serialize an unset optional width
+        # as null instead of omitting the field. Both mean the draft width.
+        target_hidden_size = getattr(config, 'target_hidden_size', None)
+        target_hidden_size = int(config.hidden_size if target_hidden_size is None else target_hidden_size)
         fc_input_size = target_hidden_size * self.num_context_features
         quantization_config = getattr(config, 'quantization_config', None)
 

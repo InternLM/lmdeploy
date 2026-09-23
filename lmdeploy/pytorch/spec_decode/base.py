@@ -65,6 +65,20 @@ class BaseSpecModelAgent:
     def is_enabled(self):
         return self._enabled
 
+    def get_proposal_method(self):
+        """Return the proposal protocol, including on proposer-less followers.
+
+        Resolve the registered class rather than a rank-local instance so DP participants agree on the metadata schema.
+        Disabled spec returns None.
+        """
+        if self.method is None:
+            return None
+        from .proposers.base import SPEC_PROPOSERS
+        proposer_cls = SPEC_PROPOSERS.get(self.method)
+        if proposer_cls is None:
+            raise ValueError(f'{self.method} not found in {SPEC_PROPOSERS.module_dict.keys()}')
+        return proposer_cls.proposal_method
+
     def build_model_context(self) -> SpecModelBuildContext:
         """Build speculative metadata consumed during model construction."""
         config = self.specdecode_config

@@ -8,7 +8,7 @@ from lmdeploy.pytorch.backends.moe import FusedMoEV4FP4BuildSpec
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
-from .base import moe_reduce
+from .base import moe_gather_inputs, moe_reduce
 from .base import split_size as _split_size
 
 
@@ -197,6 +197,7 @@ class FusedMoEV4FP4(nn.Module):
         self.tp_rank = tp_rank
         self.tp_mode = tp_mode
         self.tp_group = dist_ctx.moe_tp_group.gpu_group
+        self.gather_group = dist_ctx.moe_tp_group.gpu_gather_group
         self.num_experts = num_experts
         self.hidden_dim = hidden_dim
         self.ffn_dim = ffn_dim
@@ -288,6 +289,12 @@ class FusedMoEV4FP4(nn.Module):
                                      self.down.scale)
 
     def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
+        if self.ep_size == 1:
+            # Attention DP ranks own different token rows. TP-sharded experts
+            # must gather those rows before the matching reduce-scatter; EP's
+            # backend already owns dispatch/combine and must not gather twice.
+            hidden_states, topk_weights, topk_ids = moe_gather_inputs(
+                hidden_states, topk_weights, topk_ids, group=self.gather_group)
         out = self.impl.forward(hidden_states,
                                 topk_weights,
                                 topk_ids,

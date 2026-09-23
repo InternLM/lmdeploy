@@ -9,6 +9,7 @@ from ...config import CacheConfig, ModelConfig
 from ...engine.cache_engine import CacheEngine
 from ...model_inputs import ModelInputs
 from ...strategies.ar_spec.model_agent import ARSpecExtraInputs
+from ..block_parallel import prepare_query
 from .base import (
     SPEC_PROPOSERS,
     BaseSpecProposer,
@@ -97,6 +98,11 @@ class DSpark(DFlash):
         elif named_caches:
             # A new stateful draft needs its own full-block safety proof.
             enabled = False
+        dist_config = getattr(self.specdecode_config, 'dist_config', None)
+        if dist_config is not None and (dist_config.dp > 1 or dist_config.ep > 1) and not enabled:
+            # Reject before the FIRST warmup materialization, not only when
+            # decode later attempts the accepted-prefix compaction fallback.
+            raise ValueError('DSpark DP/EP requires a validated full-context cache geometry.')
         self._full_context_materialization = enabled
 
     def prepare_warmup_forward(self, inputs: ModelInputs, cache_engine: CacheEngine) -> ModelInputs | None:
@@ -146,6 +152,8 @@ class DSpark(DFlash):
             return super()._prepare_context_materialization(
                 model_inputs, extra_inputs)
 
+        if model_inputs.dp_meta is not None:
+            raise ValueError('DSpark DP requires a validated full-context cache geometry.')
         target_hidden = self._flatten_target_hidden(extra_inputs)
         context_lengths = self._context_lengths(model_inputs, extra_inputs)
         query_start_positions = self._query_start_positions(
@@ -216,6 +224,8 @@ class DSpark(DFlash):
             model_inputs, context_lengths, extra_inputs.next_token_ids,
             query_start_positions=query_starts)
         self._materialize_context(context_inputs, target_hidden, cache_engine)
+        local_batch = model_inputs.seq_length.numel()
+        query_inputs = prepare_query(self, query_inputs, cache_engine)
         outputs = self._forward_query(query_inputs, cache_engine)
         batch_size = query_inputs.seq_length.numel()
         sampled = outputs.get('draft_token_ids')
@@ -233,4 +243,4 @@ class DSpark(DFlash):
         # prefills merge into an existing decode batch), so retaining the
         # graph-owned view lets another replay overwrite them.  Own the ids
         # before returning them to ARSpecExtraInputs.
-        return sampled.clone()
+        return sampled[:local_batch].clone()

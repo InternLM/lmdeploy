@@ -16,6 +16,7 @@ from lmdeploy.pytorch.config import (
     SpecDecodeConfig,
     normalize_cudagraph_capture_batch_sizes,
 )
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.transformers import config_from_pretrained
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
@@ -274,4 +275,13 @@ class ConfigBuilder:
                 hf_overrides=engine_config.hf_overrides,
                 dist_config=draft_dist_config,
             )
+        if specdecode_config is not None and speculative_config.method in ('dflash', 'dspark'):
+            if dist_config.dp > 1 or dist_config.ep > 1:
+                if engine_config.enable_microbatch:
+                    raise ValueError('DFlash-family DP/EP does not support microbatch overlap.')
+                if cache_config.kv_transfer_config is not None or cache_config.role != EngineRole.Hybrid:
+                    raise ValueError('DFlash-family DP/EP does not support KV transfer or PD.')
+                arch = specdecode_config.model_config.hf_config.architectures[0]
+                if arch not in ('DFlashDraftModel', 'Qwen3DSparkModel', 'DeepseekV4ForCausalLMDSpark'):
+                    raise ValueError(f'DFlash-family DP/EP draft architecture is not supported: {arch}')
         return specdecode_config

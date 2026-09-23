@@ -28,6 +28,8 @@ class DPMeta:
     dp_is_decoding: bool = False
     dp_batches: list[int] = None
     dp_draft_num_tokens: list[int] = None
+    # Immutable host plan for DFlash-family phases; never graph-mutated.
+    block_plan: Any = None
 
     @staticmethod
     def _gather_tp_sizes(tp: int, seqlen: int, num_tokens: list[int], dist_ctx: dist.DistContext, layer_type: str):

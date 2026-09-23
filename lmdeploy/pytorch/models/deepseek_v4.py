@@ -386,7 +386,8 @@ class Attention(nn.Module):
             device=device,
             is_tp=True,
             quant_config=quantization_config,
-            dp_disable_tp=True,
+            # Shard over attention TP even when attention DP is also enabled.
+            # The local head count, sink and output projection use that group.
         )
         self.wkv = build_colwise_linear(
             args.dim, self.head_dim,
