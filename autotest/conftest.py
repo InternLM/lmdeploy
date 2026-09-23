@@ -6,7 +6,20 @@ from utils.ascend_multinode_utils import bootstrap_ascend_session_env
 from utils.config_utils import get_config
 from utils.constant import DEFAULT_SERVER
 from utils.proxy_distributed_utils import ProxyDistributedManager
+from utils.pytest_layout_utils import all_layout_mark_names
 from utils.ray_distributed_utils import RayLMDeployManager
+
+
+def pytest_configure(config):
+    for name in sorted(all_layout_mark_names()):
+        config.addinivalue_line(
+            'markers',
+            f'{name}: autotest parallel layout ({name})',
+        )
+    config.addinivalue_line(
+        'markers',
+        'distributed: multi-node runner (ray or proxy), not single-machine layout',
+    )
 
 cli_prompt_case_file = 'autotest/chat_prompt_case.yml'
 common_prompt_case_file = 'autotest/prompt_case.yml'

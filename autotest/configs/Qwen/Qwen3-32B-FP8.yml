@@ -21,5 +21,3 @@ h:
     - kvint8
     pytorch:
     - kvint8
-  gen_config:
-    temperature: 0.6
