@@ -522,8 +522,8 @@ class FusedLogitsProcessor:
     def filter_logits(self, logits: torch.Tensor):
         """Apply sampling filters in vocabulary order without modifying logits.
 
-        Speculative verification needs the same target distribution as AR,
-        but its backend consumes logits rather than sampled token IDs.
+        Speculative verification needs the same target distribution as AR, but its backend consumes logits rather than
+        sampled token IDs.
         """
         inputs = self.sampling_inputs
         if inputs.max_top_k <= 0 and inputs.top_k is None and inputs.top_p is None and inputs.min_p is None:

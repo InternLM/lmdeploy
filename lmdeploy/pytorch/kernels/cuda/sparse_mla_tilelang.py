@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """TileLang sparse MLA decode attention for CUDA BF16 tensors.
 
-The kernel schedule in this file is adapted from SGLang's
-sparse_attention_fwd_kernel_v1 at commit 9e692c9216c3, distributed under the
-Apache License 2.0:
+The kernel schedule in this file is adapted from SGLang's sparse_attention_fwd_kernel_v1 at commit 9e692c9216c3,
+distributed under the Apache License 2.0:
 
 https://github.com/sgl-project/sglang/blob/9e692c9216c3/python/sglang/kernels/ops/attention/dsa/tilelang_kernel.py
 
@@ -45,27 +44,27 @@ def _sparse_mla_bf16_fwd_kernel(
     assert (
         dim == tilelang.math.next_power_of_2(dim) or dim % 64 == 0
     ), f"dim={dim} must be a power of 2 or a multiple of 64"
-    assert is_causal, "non-causal is not supported"
+    assert is_causal, 'non-causal is not supported'
     assert (
         topk % block_I == 0
-    ), "otherwise will load some index=0 thus causing wrong kv to be loaded"
+    ), 'otherwise will load some index=0 thus causing wrong kv to be loaded'
     if sm_scale is None:
         sm_scale = (1.0 / dim) ** 0.5 * 1.44269504  # log2(e)
     else:
         sm_scale = sm_scale * 1.44269504  # log2(e)
 
-    batch = T.symbolic("batch")
-    seq_len = T.symbolic("seq_len")
-    seq_len_kv = T.symbolic("seq_len_kv")
+    batch = T.symbolic('batch')
+    seq_len = T.symbolic('seq_len')
+    seq_len_kv = T.symbolic('seq_len_kv')
 
     head_kv = num_heads // kv_group
     q_shape = [batch, seq_len, num_heads, dim]
     kv_shape = [batch, seq_len_kv, kv_group, storage_dim]
     o_shape = [batch, seq_len, num_heads, dim]
     indices_shape = [batch, seq_len, kv_group, topk]
-    indices_dtype = "int32"
-    dtype = "bfloat16"
-    accum_dtype = "float"
+    indices_dtype = 'int32'
+    dtype = 'bfloat16'
+    accum_dtype = 'float'
 
     H = head_kv
     padded_H = max(tilelang.math.next_power_of_2(head_kv), 16)
@@ -76,7 +75,7 @@ def _sparse_mla_bf16_fwd_kernel(
     D = dim
 
     if head_kv > 64:
-        assert head_kv % 64 == 0, "head_kv should be a multiple of 64"
+        assert head_kv % 64 == 0, 'head_kv should be a multiple of 64'
         REPLICATE_H = head_kv // 64
     else:
         REPLICATE_H = 1
@@ -98,7 +97,7 @@ def _sparse_mla_bf16_fwd_kernel(
             Q_shared = T.alloc_shared([H_per_block, D], dtype)
             KV_shared = T.alloc_shared([BI, D], dtype)
             O_shared = T.alloc_shared([H_per_block, D], dtype)
-            mask = T.alloc_fragment([BI], "bool")
+            mask = T.alloc_fragment([BI], 'bool')
 
             acc_o = T.alloc_fragment([H_per_block, D], accum_dtype)
             acc_s = T.alloc_fragment([H_per_block, BI], accum_dtype)

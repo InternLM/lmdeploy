@@ -1,14 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Reusable Torch semantics for the DSA KPool indexer.
 
-KPool has two different kinds of runtime data.  Closed pools are pageable and
-belong in the named DSA index cache.  The unfinished per-request tail is
-sequence state and must be supplied by the caller; this module deliberately
-does not hide it in mutable module tensors.
+KPool has two different kinds of runtime data.  Closed pools are pageable and belong in the named DSA index cache.  The
+unfinished per-request tail is sequence state and must be supplied by the caller; this module deliberately does not hide
+it in mutable module tensors.
 
-The functions here are a device-agnostic correctness path.  CUDA backends can
-replace compression, FP8 scoring, and top-k with fused kernels while retaining
-these input/output contracts.
+The functions here are a device-agnostic correctness path.  CUDA backends can replace compression, FP8 scoring, and
+top-k with fused kernels while retaining these input/output contracts.
 """
 
 from __future__ import annotations
@@ -90,9 +88,8 @@ class KPoolDecodeUpdate:
 class KPoolIndexer(nn.Module):
     """Replicated KPool parameter layer shared by all attention-TP ranks.
 
-    The seven parameter names and dtypes match the GLM-5.3/SGLang checkpoint
-    contract.  Query/key rotary handling and cache ownership stay with the
-    model/backend because they depend on model geometry and request metadata.
+    The seven parameter names and dtypes match the GLM-5.3/SGLang checkpoint contract.  Query/key rotary handling and
+    cache ownership stay with the model/backend because they depend on model geometry and request metadata.
     """
 
     def __init__(
@@ -253,7 +250,8 @@ def kpool_normalized_hadamard(values: Tensor) -> Tensor:
 
 
 def kpool_rotate_query(query: Tensor) -> Tensor:
-    """Match the BF16-preserving query rotation used before FP8 quantization."""
+    """Match the BF16-preserving query rotation used before FP8
+    quantization."""
     return kpool_normalized_hadamard(query).to(query.dtype)
 
 
@@ -267,9 +265,8 @@ def kpool_partition_update(
 ) -> KPoolUpdate:
     """Assemble arbitrary-length input with a prior tail into closed pools.
 
-    This is the state-free equivalent of SGLang's extend/decode tail ring.  The
-    caller owns persistence of the returned tail and supplies it on the next
-    invocation.
+    This is the state-free equivalent of SGLang's extend/decode tail ring.  The caller owns persistence of the returned
+    tail and supplies it on the next invocation.
     """
     _validate_pool_geometry(pool_size)
     if history_length < 0:
@@ -328,10 +325,9 @@ def kpool_decode_update(
 ) -> KPoolDecodeUpdate:
     """Build a fixed-shape, graph-safe update for one-token decode.
 
-    State slot zero is LMDeploy's reserved dummy slot. Invalid CUDA Graph
-    padding rows therefore read and write slot zero without affecting a live
-    request. Every returned tensor has a shape determined only by the graph
-    capture bucket.
+    State slot zero is LMDeploy's reserved dummy slot. Invalid CUDA Graph padding rows therefore read and write slot
+    zero without affecting a live request. Every returned tensor has a shape determined only by the graph capture
+    bucket.
     """
     _validate_pool_geometry(pool_size)
     if keys.ndim != 2 or scores.shape != keys.shape:
@@ -420,9 +416,8 @@ def kpool_compress_online(closed_keys: Tensor, closed_scores: Tensor,
                           ape: Tensor) -> Tensor:
     """Use the online recurrence from SGLang's extend assembly kernel.
 
-    The explicit slot loop matches SGLang's compression kernel reduction
-    order.  A vectorized max/exp/sum is mathematically equivalent but can move
-    values across the FP8 quantization boundary after different FP32 rounds.
+    The explicit slot loop matches SGLang's compression kernel reduction order.  A vectorized max/exp/sum is
+    mathematically equivalent but can move values across the FP8 quantization boundary after different FP32 rounds.
     """
     _validate_compress_inputs(closed_keys, closed_scores, ape)
 
@@ -550,7 +545,8 @@ def kpool_score(
 
 
 def kpool_pooled_block_offsets(token_block_offsets: Tensor, pool_size: int) -> Tensor:
-    """Build the pooled page table by selecting every ``pool_size`` token page."""
+    """Build the pooled page table by selecting every ``pool_size`` token
+    page."""
     _validate_pool_geometry(pool_size)
     if token_block_offsets.ndim < 1:
         raise ValueError('token_block_offsets must have at least one dimension.')
@@ -655,9 +651,8 @@ def kpool_write_packed_cache_batched(
 ) -> None:
     """Write at most one closed pool per fixed-shape decode row.
 
-    Invalid rows target reserved cache block zero and keep its previous value.
-    This avoids dynamic boolean indexing and keeps CUDA Graph addresses and
-    launch geometry stable.
+    Invalid rows target reserved cache block zero and keep its previous value. This avoids dynamic boolean indexing and
+    keeps CUDA Graph addresses and launch geometry stable.
     """
     if pooled_key_fp8.ndim != 2:
         raise ValueError(
@@ -722,7 +717,8 @@ def kpool_read_packed_cache(
 
 
 def kpool_selected_token_counts(seq_lens: Tensor, topk: int, pool_size: int) -> Tensor:
-    """Return selected history plus always-selected ragged tail token counts."""
+    """Return selected history plus always-selected ragged tail token
+    counts."""
     _validate_pool_geometry(pool_size, topk)
     full_pool_tokens = torch.div(seq_lens, pool_size, rounding_mode='floor') * pool_size
     return full_pool_tokens.clamp(max=topk) + seq_lens - full_pool_tokens

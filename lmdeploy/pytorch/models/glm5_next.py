@@ -1923,10 +1923,9 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM):
 class Glm5NextMTPAttention(Glm5NextSparseAttention):
     """The predictor's KPool tail is reconstructed from pageable token data.
 
-    Draft forwards can revisit accepted positions after multiple proposals.
-    Keeping raw index keys/scores in its cache avoids private mutable request
-    state and reuses the normal cache allocation, sizing and sleep lifecycle.
-    Only the single MTP layer requests this additional cache.
+    Draft forwards can revisit accepted positions after multiple proposals. Keeping raw index keys/scores in its cache
+    avoids private mutable request state and reuses the normal cache allocation, sizing and sleep lifecycle. Only the
+    single MTP layer requests this additional cache.
     """
 
     _TOKEN_CACHE = 'glm5_mtp_kpool_tokens'
@@ -2003,7 +2002,8 @@ class Glm5NextMTPDecoderLayer(nn.Module):
 
 
 class Glm5NextMTPModel(GlmMoeDsaMTPModel):
-    """Reuse the shared GLM/DeepSeek predictor, proposer and CUDA Graph flow."""
+    """Reuse the shared GLM/DeepSeek predictor, proposer and CUDA Graph
+    flow."""
 
     uses_shared_input_embeddings = True
 

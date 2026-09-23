@@ -102,7 +102,8 @@ class Attention(nn.Module):
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
     ) -> torch.Tensor:
-        """Append latent KV and return the complete request-major prefill KV."""
+        """Append latent KV and return the complete request-major prefill
+        KV."""
         self._lazy_init(key.device)
 
         quant_policy = attn_metadata.quant_policy

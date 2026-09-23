@@ -31,10 +31,9 @@ def rms_scale(a: torch.Tensor, b: torch.Tensor, dim: int = -1, eps: float = 1e-6
 class FP32LayerNorm(nn.Module):
     """LayerNorm with FP32 parameters and accumulation.
 
-    Some model components keep LayerNorm weights in FP32 even when the model
-    activation dtype is BF16.  Keep that numerical contract in one reusable
-    module and cast only the returned activation back to its input dtype.
-    Used by GLM-5.3 vision patch merging and KPool key normalization.
+    Some model components keep LayerNorm weights in FP32 even when the model activation dtype is BF16.  Keep that
+    numerical contract in one reusable module and cast only the returned activation back to its input dtype. Used by
+    GLM-5.3 vision patch merging and KPool key normalization.
     """
 
     def __init__(self,

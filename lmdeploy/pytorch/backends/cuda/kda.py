@@ -1,9 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """CUDA KDA backend composed from FLA and shared LMDeploy operators.
 
-KDA is distinct from LMDeploy's gated-delta rule, but its CUDA implementation
-does not need copied GLM kernels. This adapter owns only LMDeploy cache/state
-semantics, reuses FLA convolution/prefill, and shares the TileLang recurrent
+KDA is distinct from LMDeploy's gated-delta rule, but its CUDA implementation does not need copied GLM kernels. This
+adapter owns only LMDeploy cache/state semantics, reuses FLA convolution/prefill, and shares the TileLang recurrent
 state-ring kernel with gated-delta rule for both AR and MTP decode.
 """
 
@@ -68,9 +67,8 @@ class CudaKdaImpl(KdaImpl):
                       recurrent_state, metadata, **kwargs):
         """Checkpoint every verified token at its accepted-history ring slot.
 
-        State is addressed by accepted history length, not the last proposed
-        length. The ring therefore also handles zero/partial acceptance and
-        request reordering without a scheduler-side rollback hook.
+        State is addressed by accepted history length, not the last proposed length. The ring therefore also handles
+        zero/partial acceptance and request reordering without a scheduler-side rollback hook.
         """
         if metadata.is_decoding:
             return self._forward_spec_decode(mixed_qkv, raw_gate, raw_beta,
@@ -117,10 +115,11 @@ class CudaKdaImpl(KdaImpl):
 
     def _forward_spec_decode(self, mixed_qkv, raw_gate, raw_beta, conv_state,
                              recurrent_state, metadata, **kwargs):
-        """Reuse causal-convolution token rings and one verification recurrence.
+        """Reuse causal-convolution token rings and one verification
+        recurrence.
 
-        The recurrence is parallel across state tiles, not across causally
-        dependent timesteps. Each timestep is saved for partial acceptance.
+        The recurrence is parallel across state tiles, not across causally dependent timesteps. Each timestep is saved
+        for partial acceptance.
         """
         ids = metadata.state_ids.long()
         batch = ids.numel()

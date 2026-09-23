@@ -258,8 +258,8 @@ def apply_rotary_pos_emb_fp32(query: Tensor,
                               unsqueeze_dim: int = 1) -> tuple[Tensor, Tensor]:
     """Apply NeoX-style RoPE with FP32 arithmetic and dtype-preserving output.
 
-    Used by GLM-5.3 vision attention to match its FP32 rotary arithmetic;
-    the text attention uses NoPE and does not call this helper.
+    Used by GLM-5.3 vision attention to match its FP32 rotary arithmetic; the text attention uses NoPE and does not call
+    this helper.
     """
     query_dtype = query.dtype
     key_dtype = key.dtype

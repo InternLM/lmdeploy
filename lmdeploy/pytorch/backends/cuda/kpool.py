@@ -43,7 +43,8 @@ def kpool_compress_quantize_cuda(
     mode: str,
     round_scale: bool,
 ) -> tuple[Tensor, Tensor]:
-    """Compress and quantize closed pools with LMDeploy's reusable semantics."""
+    """Compress and quantize closed pools with LMDeploy's reusable
+    semantics."""
     pooled = kpool_compress(slot_k, slot_score, ape, mode=mode)
     return kpool_quantize_fp8(
         pooled,
@@ -60,7 +61,8 @@ def kpool_select_groups_cuda(
     row_starts: Tensor | None = None,
     max_group_length: int | None = None,
 ) -> Tensor:
-    """Select pooled groups with LMDeploy's shared sparse-index Top-K kernel."""
+    """Select pooled groups with LMDeploy's shared sparse-index Top-K
+    kernel."""
     if not is_sparse_index_topk_supported(group_topk):
         raise ValueError(
             'The GLM-5.3 KPool selector only supports group_topk=512 or 2048, '
