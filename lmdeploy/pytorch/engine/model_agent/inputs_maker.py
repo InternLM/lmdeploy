@@ -122,36 +122,43 @@ class DPForwardInputsMaker:
                 return
             await asyncio.sleep(0)
 
-    async def _gather_has_inputs(self, has_inputs: bool = False):
-        """Broadcast has inputs."""
+    async def _gather_input_state(self, has_inputs: bool, is_sleeping: bool):
+        """Agree on real work and sleep before leaving the attention-TP phase.
+
+        Sleep RPCs reach TP workers independently. Even a sleeping rank must
+        enter this collective, or its peer can wait here while it enters the
+        world-wide DP metadata collective. A local sleep transition makes the
+        whole attention-TP group use dummy inputs until DP sleep rendezvous.
+        """
         attn_tp_group = self.dist_ctx.attn_tp_group
         attn_tp = self.dist_ctx.dist_config.attn_tp
         if attn_tp == 1:
-            return has_inputs
+            return has_inputs, is_sleeping
 
         group = attn_tp_group.cpu_group
-        has_inputs = torch.tensor((int(has_inputs), ))
-        handle = dist.all_reduce(has_inputs, op=dist.ReduceOp.SUM, group=group, async_op=True)
+        state = torch.tensor((int(has_inputs), int(is_sleeping)))
+        handle = dist.all_reduce(state, op=dist.ReduceOp.SUM, group=group, async_op=True)
         future = handle.get_future()
         while not future.done():
             await asyncio.sleep(0)
         future.wait()
-        return (has_inputs > 0).item()
+        return bool(state[0]), bool(state[1])
 
     async def _get_inputs(self):
-        if self._is_sleeping():
-            return None
-
         await self._wait_preprocessed_real_inputs()
 
-        # get local forward inputs
-        try:
-            forward_inputs = self._in_que.get_nowait()
-        except asyncio.QueueEmpty:
-            forward_inputs = None
+        # Do not consume stale queued data once this worker starts sleeping.
+        is_sleeping = self._is_sleeping()
+        forward_inputs = None
+        if not is_sleeping:
+            try:
+                forward_inputs = self._in_que.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
 
-        # async inputs around tp group
-        has_inputs = await self._gather_has_inputs(forward_inputs is not None)
+        has_inputs, any_sleeping = await self._gather_input_state(forward_inputs is not None, is_sleeping)
+        if any_sleeping:
+            return None
         if has_inputs and forward_inputs is None:
             forward_inputs = await self._in_que.get()
 
