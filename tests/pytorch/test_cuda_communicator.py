@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -8,8 +7,6 @@ import torch
 
 from lmdeploy.pytorch.backends import communicator as base_communicator_module
 from lmdeploy.pytorch.backends.cuda.comm import communicator as communicator_module
-from lmdeploy.pytorch.backends.dlinfer.op_backend import DlinferOpsBackend
-from lmdeploy.pytorch.nn import norm as norm_module
 
 
 def _run_dcp_query_gather(rank, rendezvous, enabled):
@@ -17,32 +14,41 @@ def _run_dcp_query_gather(rank, rendezvous, enabled):
 
     from torch import distributed as dist
 
-    from lmdeploy.pytorch.backends.cuda.attention.cp import gather_dcp_query
+    from lmdeploy.pytorch.backends.cuda.attention.cp import gather_dcp_query, init_dcp_query_gather
     from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
     from lmdeploy.pytorch.config import DistConfig
     from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 
     torch.cuda.set_device(rank)
-    communicator_module._envs.enable_symm_mem_dcp = enabled[rank]
     dist.init_process_group('nccl', init_method=rendezvous, rank=rank, world_size=2,
                             timeout=timedelta(seconds=60))
-    ctx = DistContext.build(rank, DistConfig(tp=2, dcp=2),
+    backend = 'auto' if enabled[rank] else 'nccl'
+    if enabled[0] != enabled[1]:
+        try:
+            with pytest.raises(ValueError, match='agree across ranks'):
+                DistContext.build(rank, DistConfig(tp=2, dcp=2, communication_backend=backend),
+                                  communicator_builder=CudaOpsBackend.build_communicator)
+        finally:
+            dist.destroy_process_group()
+        return
+    ctx = DistContext.build(rank, DistConfig(tp=2, dcp=2, communication_backend=backend),
                             communicator_builder=CudaOpsBackend.build_communicator)
     try:
         with get_dist_manager().context(ctx):
-            comm = ctx.dcp_group.communicator
-            comm.prepare_query_gather(32, 576)
+            init_dcp_query_gather(32, 576)
+            workspace = ctx.dcp_group.query_gather_workspace
             if all(enabled):
-                assert comm._query_gatherer._state is not None
+                assert workspace.is_available()
             else:
-                assert comm._query_gatherer._state is None
-            assert comm._all_reduce is None
+                assert workspace is None
+            init_dcp_query_gather(32, 576)
+            assert ctx.dcp_group.query_gather_workspace is workspace
             query = torch.empty(384, 32, 576, device='cuda', dtype=torch.bfloat16)
             # Ineligible inputs still return correct results through NCCL.
             for fallback in (query[:1], query[..., ::2], query.float(),
                              torch.empty(1024, 32, 576, device='cuda', dtype=query.dtype)):
                 fallback.fill_(rank)
-                output = comm.gather_query(fallback)
+                output = gather_dcp_query(fallback, dcp_world_size=2)
                 expected = torch.arange(2, device='cuda', dtype=fallback.dtype)
                 expected = expected.repeat_interleave(32)[None, :, None].expand_as(output)
                 torch.testing.assert_close(output, expected, rtol=0, atol=0)
@@ -66,14 +72,100 @@ def _run_dcp_query_gather(rank, rendezvous, enabled):
                 expected = (torch.arange(2, device='cuda', dtype=query.dtype) + step * 8)
                 expected = expected.repeat_interleave(32)[None, :, None].expand_as(output)
                 torch.testing.assert_close(output, expected, rtol=0, atol=0)
+            _check_lm_head_lifecycle(rank, all(enabled))
     finally:
         ctx.close()
         dist.destroy_process_group()
 
 
+def _run_auto_all_reduce(rank, rendezvous):
+    from datetime import timedelta
+
+    from torch import distributed as dist
+
+    from lmdeploy.pytorch.config import DistConfig
+
+    torch.cuda.set_device(rank)
+    dist.init_process_group('nccl', init_method=rendezvous, rank=rank, world_size=2,
+                            timeout=timedelta(seconds=60))
+    cpu_group = dist.new_group(backend='gloo')
+    communicator = communicator_module.build_cuda_communicator(
+        cpu_group, dist.group.WORLD, DistConfig(tp=2, communication_backend='auto'))
+    try:
+        provider = communicator._all_reduce_provider
+        assert provider is not None
+        provider.all_reduce_ = Mock(wraps=provider.all_reduce_)
+        for dtype in (torch.bfloat16, torch.float16, torch.float32):
+            tensor = torch.empty(7, 4096, device='cuda', dtype=dtype)
+            tensor.fill_(rank + 1)
+            communicator.all_reduce_(tensor)
+            provider.all_reduce_.assert_called_with(tensor)
+            torch.testing.assert_close(tensor, torch.full_like(tensor, 3), rtol=0, atol=0)
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                tensor.fill_(rank + 1)
+                communicator.all_reduce_(tensor)
+            for _ in range(3):
+                graph.replay()
+            torch.cuda.synchronize()
+            torch.testing.assert_close(tensor, torch.full_like(tensor, 3), rtol=0, atol=0)
+            graph.reset()
+        # Strided input retains the native NCCL error.
+        strided = torch.empty(7, 8192, device='cuda', dtype=torch.bfloat16)[:, ::2]
+        assert not provider.all_reduce_(strided)
+        with pytest.raises(ValueError, match='contiguous'):
+            communicator.all_reduce_(strided)
+    finally:
+        communicator.close()
+        dist.destroy_process_group()
+
+
+@pytest.mark.skipif(torch.cuda.device_count() < 2, reason='requires two CUDA GPUs')
+def test_auto_all_reduce_eager_and_graph(tmp_path):
+    from torch.distributed._symmetric_memory import DeviceType, _SymmetricMemory
+
+    if any(torch.cuda.get_device_capability(i) != (9, 0)
+           or not _SymmetricMemory.has_multicast_support(DeviceType.CUDA, i) for i in range(2)):
+        pytest.skip('requires SM90 with multicast support')
+    torch.multiprocessing.spawn(_run_auto_all_reduce,
+                                args=(f'file://{tmp_path}/auto_all_reduce',), nprocs=2, join=True)
+
+
+def _check_lm_head_lifecycle(rank, direct):
+    from lmdeploy.pytorch.nn import ParallelEmbedding, ParallelLMHead
+
+    head = ParallelLMHead(250, 128, dtype=torch.bfloat16, device='cuda')
+    if direct:
+        assert head._logits_gather_workspace.is_available()
+    head.weight.data.fill_(rank + 1)
+    hidden = torch.ones(2, 128, dtype=torch.bfloat16, device='cuda')
+    expected = torch.arange(1, 3, device='cuda', dtype=hidden.dtype).repeat_interleave(128)[:250] * 128
+    logits = head(hidden)
+    head(hidden * 2)
+    torch.testing.assert_close(logits, expected.expand_as(logits), atol=0, rtol=0)
+    if direct:
+        assert head._logits_gather_workspace.is_available()
+    # A coordinated dtype move retires the BF16 arena and uses native gathering.
+    head.to(dtype=torch.float16)
+    if direct:
+        assert not head._logits_gather_workspace.is_available()
+    logits = head(hidden)
+    torch.testing.assert_close(logits, expected.to(logits.dtype).expand_as(logits), atol=0, rtol=0)
+    # Tying BF16 weights must re-admit the arena before the next forward.
+    embedding = ParallelEmbedding(250, 128, None, dtype=torch.bfloat16, device='cuda', is_tp=True)
+    embedding.weight.data.fill_(rank + 1)
+    head.tie_weights(embedding)
+    if direct:
+        assert head._logits_gather_workspace.is_available()
+    logits = head(hidden)
+    torch.testing.assert_close(logits, expected.expand_as(logits), atol=0, rtol=0)
+    if direct:
+        head._logits_gather_workspace.close()
+
+
 @pytest.mark.skipif(torch.cuda.device_count() < 2, reason='requires two CUDA GPUs')
 @pytest.mark.parametrize('enabled', [(False, False), (True, True), (True, False)],
-                         ids=['nccl', 'symm_mem', 'mixed_flags'])
+                         ids=['nccl', 'auto', 'mixed_config'])
 def test_dcp_query_gather_graph_reuses_arena(tmp_path, enabled):
     if all(enabled):
         from torch.distributed._symmetric_memory import DeviceType, _SymmetricMemory
@@ -86,192 +178,182 @@ def test_dcp_query_gather_graph_reuses_arena(tmp_path, enabled):
                                 args=((tmp_path / 'rendezvous').as_uri(), enabled), nprocs=2)
 
 
-class _Collective:
-
-    def __init__(self, *, result=None, handled=False):
-        self._result = result
-        self._handled = handled
-
-    def is_available(self):
-        return True
-
-    def fused_all_reduce_residual_rms_norm(self, **kwargs):
-        return self._result
-
-    def all_reduce_(self, input):
-        return self._handled
-
-
-def _build_communicator(monkeypatch,
-                        *,
-                        backend,
-                        fused_result=None,
-                        handled=False):
-    collective = _Collective(result=fused_result, handled=handled)
-    use_flashinfer = backend == 'flashinfer'
-    monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', use_flashinfer)
-    monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_allreduce', not use_flashinfer)
-    flashinfer_cls = Mock(return_value=collective)
-    symm_mem_cls = Mock(return_value=collective)
-    monkeypatch.setattr(communicator_module, 'FlashInferAllReduce', flashinfer_cls)
-    monkeypatch.setattr(communicator_module, 'SymmetricMemoryAllReduce', symm_mem_cls)
-    communicator = communicator_module.CudaCommunicator(cpu_group='cpu', device_group='gpu',
-                                                         all_reduce_backend=backend)
-    enabled_cls, disabled_cls = ((flashinfer_cls, symm_mem_cls)
-                                 if use_flashinfer else (symm_mem_cls, flashinfer_cls))
-    enabled_cls.assert_called_once_with('cpu')
-    disabled_cls.assert_not_called()
-    return communicator, collective
+@pytest.fixture
+def comm_env(monkeypatch):
+    """Two ranks with available providers; no CUDA or distributed runtime."""
+    monkeypatch.setattr(torch.cuda, 'get_device_name', lambda *args: 'GPU')
+    monkeypatch.setattr(torch.cuda, 'current_device', lambda: 0)
+    monkeypatch.setattr(communicator_module.dist, 'get_world_size', lambda group: 2)
+    monkeypatch.setattr(communicator_module.dist, 'get_rank', lambda group: 0)
+    monkeypatch.setattr(communicator_module.dist, 'all_gather_object',
+                        lambda output, value, group: output.__setitem__(slice(None), [value, value]))
+    provider = Mock()
+    provider.is_available.return_value = True
+    monkeypatch.setattr(communicator_module, 'SymmetricMemoryAllReduce', Mock(return_value=provider))
+    return provider
 
 
-def _build_norm(monkeypatch, *, fused=False):
-    impl = Mock()
-    backend = Mock()
-    backend.build_op.return_value = impl
-    group = Mock()
-    group.supports_optimized_all_reduce.return_value = True
-    group.supports_fused_all_reduce_residual_rms_norm.return_value = fused
-    monkeypatch.setattr(norm_module, 'get_backend', lambda: backend)
-    monkeypatch.setattr(norm_module, 'get_dist_group', lambda layer_type: group)
-    norm = norm_module.RMSNorm(4, dtype=torch.float32, device='cpu', all_reduce_group='attn')
-    return norm, impl, group
+def test_gather_registration_and_native_fallback(monkeypatch):
+    from lmdeploy.pytorch.backends.cuda.attention.cp import gather_dcp_query, init_dcp_query_gather
+    from lmdeploy.pytorch.distributed import DistContext, DistGroup, get_dist_manager
+
+    module = base_communicator_module
+    monkeypatch.setattr(module.dist, 'get_world_size', lambda group: 2)
+
+    def gather(output, input, group):
+        output.copy_(torch.cat((input, input + 10), dim=0))
+
+    monkeypatch.setattr(module.dist, 'all_gather_into_tensor', gather)
+    communicator = module.DeviceCommunicator('group')
+    group = DistGroup(gpu_group='group', communicator=communicator)
+    context = DistContext(dcp_group=group)
+    with get_dist_manager().context(context):
+        init_dcp_query_gather(2, 4)
+    assert group.query_gather_workspace is None
+    logits = communicator.create_all_gather_workspace(6, device=torch.device('cpu'), dtype=torch.float32)
+    assert logits is None
+    query = torch.arange(48).view(3, 2, 8)[..., ::2]
+    with get_dist_manager().context(context):
+        torch.testing.assert_close(gather_dcp_query(query, dcp_world_size=2), torch.cat((query, query + 10), dim=1))
+    input = torch.ones(3, 3)
+    torch.testing.assert_close(communicator.all_gather(input, workspace=logits), torch.cat((input, input + 10), dim=-1))
 
 
-def test_cuda_communicator_dispatch(monkeypatch):
-    fused_result = object()
-    communicator, flashinfer = _build_communicator(
-        monkeypatch, backend='flashinfer', fused_result=fused_result)
-    nccl_all_reduce = Mock()
-    monkeypatch.setattr(communicator_module.dist, 'all_reduce', nccl_all_reduce)
+def test_gather_preparation_and_weight_transition(monkeypatch):
+    from lmdeploy.pytorch.backends.cuda.comm.symm_mem_allgather import SymmetricMemoryAllGather
 
-    assert communicator.supports_optimized_all_reduce()
-    assert communicator.supports_fused_all_reduce_residual_rms_norm()
-    assert communicator.try_fused_all_reduce_residual_rms_norm(
-        input=torch.ones(1), residual=torch.ones(1), weight=torch.ones(1), eps=1e-6) is fused_result
+    workspace = SymmetricMemoryAllGather('group', 0, 16, device='cpu', dtype=torch.bfloat16, capacity_bytes=1024)
+    prepare = Mock(return_value=False)
+    monkeypatch.setattr(workspace, '_prepare', prepare)
+    workspace.reset('cpu', torch.float16)
+    prepare.assert_not_called()
+    workspace.prepare()
+    workspace.prepare()
+    prepare.assert_called_once_with(torch.device('cpu'), torch.float16)
+    workspace.reset('cpu', torch.float16)
+    prepare.assert_called_once()
+    workspace.reset('cpu', torch.bfloat16)
+    assert prepare.call_count == 2
+    prepare.assert_called_with(torch.device('cpu'), torch.bfloat16)
+    assert not workspace.is_available()
+    workspace.close()
+    workspace.prepare()
+    assert prepare.call_count == 3
 
-    input = torch.ones(1)
+
+def test_cuda_gather_dispatch_and_workspace_ownership(monkeypatch, comm_env):
+    from lmdeploy.pytorch.backends.cuda.attention.cp import gather_dcp_query, init_dcp_query_gather
+    from lmdeploy.pytorch.backends.cuda.comm import symm_mem_allgather
+    from lmdeploy.pytorch.distributed import DistContext, DistGroup, get_dist_manager
+
+    # The group shares one query workspace; logits workspaces remain caller-owned.
+    factory = Mock(side_effect=lambda *args, **kwargs: Mock())
+    monkeypatch.setattr(symm_mem_allgather, 'SymmetricMemoryAllGather', factory)
+    communicator = communicator_module.CudaCommunicator('cpu', 'gpu', group_name='dcp')
+    group = DistGroup(gpu_group='gpu', communicator=communicator)
+    context = DistContext(dcp_group=group)
+    with get_dist_manager().context(context):
+        init_dcp_query_gather(2, 4)
+        init_dcp_query_gather(2, 4)
+    query_workspace = group.query_gather_workspace
+    logits_workspace = communicator.create_all_gather_workspace(6, device=torch.device('cpu'), dtype=torch.float32)
+    assert factory.call_count == 2
+    query_workspace.prepare.assert_called_once()
+    logits_workspace.prepare.assert_called_once()
+
+    query = torch.arange(24).view(3, 2, 4)
+    gathered_query = torch.cat((query, query + 10), dim=1)
+    query_workspace.all_gather.return_value = gathered_query.flatten(1)
+    with get_dist_manager().context(context):
+        torch.testing.assert_close(gather_dcp_query(query, dcp_world_size=2), gathered_query)
+    assert query_workspace.all_gather.call_args.kwargs == {'copy_output': False}
+
+    native = Mock(side_effect=lambda output, input, group: output.copy_(torch.cat((input, input + 10))))
+    monkeypatch.setattr(base_communicator_module.dist, 'all_gather_into_tensor', native)
+    input = torch.ones(3, 3)
+    logits_workspace.all_gather.return_value = torch.ones(3, 6)
+    torch.testing.assert_close(communicator.all_gather(input, workspace=logits_workspace), torch.ones(3, 6))
+    logits_workspace.all_gather.assert_called_once_with(input, copy_output=True)
+    native.assert_not_called()
+    logits_workspace.all_gather.return_value = None
+    torch.testing.assert_close(communicator.all_gather(input, workspace=logits_workspace),
+                               torch.cat((input, input + 10), dim=-1))
+    native.assert_called_once()
+
+    group.close()
+    group.close()
+    query_workspace.close.assert_called_once()
+    assert group.query_gather_workspace is None
+    logits_workspace.close.assert_not_called()
+
+
+@pytest.mark.parametrize('native', ['none', 'async', 'max', 'cpu', 'other_group', 'no_communicator'])
+def test_public_all_reduce_routes_only_synchronous_cuda_tp_sum(monkeypatch, native):
+    import lmdeploy.pytorch.distributed as distributed
+
+    communicator = Mock()
+    group = object()
+    context = distributed.DistContext(
+        attn_tp_group=distributed.DistGroup(gpu_group=group, communicator=communicator))
+    if native == 'no_communicator':
+        context.attn_tp_group.communicator = None
+    tensor = SimpleNamespace(is_cuda=native != 'cpu')
+    op = distributed.ReduceOp.MAX if native == 'max' else distributed.ReduceOp.SUM
+    async_op = native == 'async'
+    selected_group = object() if native == 'other_group' else group
+    native_reduce = Mock()
+    monkeypatch.setattr(distributed.dist, 'all_reduce', native_reduce)
+    with distributed.get_dist_manager().context(context):
+        result = distributed.all_reduce(tensor, op=op, group=selected_group, async_op=async_op)
+    if native == 'none':
+        communicator.all_reduce_.assert_called_once_with(tensor)
+        native_reduce.assert_not_called()
+    else:
+        native_reduce.assert_called_once_with(tensor, op, selected_group, async_op)
+        communicator.all_reduce_.assert_not_called()
+        assert result is native_reduce.return_value
+
+
+def test_all_reduce_workspace_failure_agrees_across_ranks(monkeypatch, comm_env):
+    def peer_failure(flags, ready, group):
+        flags[:] = [ready, not comm_env.prepare.called]
+
+    monkeypatch.setattr(communicator_module.dist, 'all_gather_object', peer_failure)
+    communicator = communicator_module.CudaCommunicator('cpu', 'gpu', group_name='tp')
+    comm_env.close.assert_called_once()
+    comm_env.prepare.assert_called_once()
+    assert communicator._all_reduce_provider is None
+    native = Mock()
+    monkeypatch.setattr(communicator_module.dist, 'all_reduce', native)
+    input = torch.ones(2, 4)
     communicator.all_reduce_(input)
-    nccl_all_reduce.assert_called_once_with(input, group='gpu')
+    native.assert_called_once_with(input, group='gpu')
 
-    flashinfer._handled = True
+
+@pytest.mark.parametrize('handled', [True, False])
+def test_auto_all_reduce_falls_back_for_unsupported_inputs(monkeypatch, comm_env, handled):
+    communicator = communicator_module.CudaCommunicator('cpu', 'gpu', group_name='tp')
+    comm_env.all_reduce_.return_value = handled
+    native = Mock()
+    monkeypatch.setattr(communicator_module.dist, 'all_reduce', native)
+    comm_env.prepare.assert_called_once()
+    input = torch.ones(7, 128, dtype=torch.bfloat16)
     communicator.all_reduce_(input)
-    nccl_all_reduce.assert_called_once()
-
-    communicator, symm_mem = _build_communicator(monkeypatch, backend='symm_mem', handled=True)
-    communicator.all_reduce_(input)
-    assert communicator.supports_optimized_all_reduce()
-    assert not communicator.supports_fused_all_reduce_residual_rms_norm()
-    nccl_all_reduce.assert_called_once()
+    comm_env.all_reduce_.assert_called_once_with(input)
+    if handled:
+        native.assert_not_called()
+    else:
+        native.assert_called_once_with(input, group='gpu')
 
 
-def test_cuda_communicator_rejects_multiple_backends(monkeypatch):
-    monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', True)
-    monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_allreduce', True)
-    with pytest.raises(ValueError, match='cannot be enabled together'):
-        config = SimpleNamespace(dp=1, ep=1, attn_tp=2, dcp=1, enable_microbatch=False)
-        communicator_module.build_cuda_communicator('cpu', 'gpu', config)
-
-
-def test_rms_norm_fuses_or_falls_back(monkeypatch):
-    norm, impl, group = _build_norm(monkeypatch, fused=True)
-    fused_output = (torch.full((1, 4), 2.0), torch.full((1, 4), 3.0))
-    group.try_fused_all_reduce_residual_rms_norm.return_value = fused_output
-    input = torch.ones((1, 4), dtype=torch.bfloat16)
-    residual = torch.ones_like(input)
-
-    assert norm(input, residual) is fused_output
-    group.try_fused_all_reduce_residual_rms_norm.assert_called_once_with(
-        input=input,
-        residual=residual,
-        weight=norm.weight,
-        eps=norm.eps,
-    )
-    group.all_reduce_.assert_not_called()
-    impl.forward.assert_not_called()
-
-    group.reset_mock()
-    impl.reset_mock()
-    group.try_fused_all_reduce_residual_rms_norm.return_value = None
-    impl.forward.return_value = object()
-    output = norm(input, residual)
-
-    assert output is impl.forward.return_value
-    group.try_fused_all_reduce_residual_rms_norm.assert_called_once()
-    group.all_reduce_.assert_called_once_with(input)
-    impl.forward.assert_called_once_with(input, norm.weight, residual)
-
-
-def test_flashinfer_allreduce_in_place_and_dtype_guards(monkeypatch):
-    from lmdeploy.pytorch.backends.cuda.comm import flashinfer_allreduce as flashinfer_module
-
-    FlashInferAllReduce = flashinfer_module.FlashInferAllReduce
-
-    flashinfer = FlashInferAllReduce.__new__(FlashInferAllReduce)
-    flashinfer.is_available = Mock(return_value=True)
-    assert flashinfer.supports(torch.float16)
-    assert flashinfer.supports(torch.bfloat16)
-    assert not flashinfer.supports(torch.float32)
-
-    flashinfer._max_size = 1024
-    flashinfer._one_shot_max_size = 1024
-    flashinfer._comm = SimpleNamespace(
-        AllReduceFusionPattern=SimpleNamespace(kAllReduce=0),
-        allreduce_fusion=Mock(
-            return_value=torch.full((2, 4), 2.0, dtype=torch.bfloat16)),
-    )
-    flashinfer._get_workspace = Mock(return_value='workspace')
-    flashinfer.supports = Mock(return_value=True)
-
-    input = torch.ones(1, 2, 4, dtype=torch.bfloat16)
-    assert flashinfer.all_reduce_(input)
-    torch.testing.assert_close(input, torch.full_like(input, 2.0))
-    call_kwargs = flashinfer._comm.allreduce_fusion.call_args.kwargs
-    assert call_kwargs['input'].shape == (2, 4)
-    assert call_kwargs['trigger_completion_at_end']
-    assert call_kwargs['use_oneshot']
-
-    fused_calls = flashinfer._comm.allreduce_fusion.call_count
-    bf16_input = torch.ones(2, 4, dtype=torch.bfloat16)
-    output = flashinfer.fused_all_reduce_residual_rms_norm(
-        input=bf16_input,
-        residual=torch.ones_like(bf16_input),
-        weight=torch.ones(4, dtype=torch.float32),
-        eps=1e-6,
-    )
-    assert output is None
-    assert flashinfer._comm.allreduce_fusion.call_count == fused_calls
-
-    unavailable = FlashInferAllReduce.__new__(FlashInferAllReduce)
-    unavailable._comm = None
-    unavailable._disabled = False
-    unavailable._max_size = 1024
-    monkeypatch.setitem(sys.modules, 'flashinfer.comm', None)
-    assert not unavailable.is_available()
-    assert unavailable._disabled
-
-    workspace_error = FlashInferAllReduce.__new__(FlashInferAllReduce)
-    workspace_error.group = 'cpu'
-    workspace_error._world_size = 2
-    workspace_error._max_size = 1024
-    workspace_error._one_shot_max_size = 1024
-    workspace_error._workspace = None
-    workspace_error._hidden_dim = None
-    workspace_error._dtype = None
-    workspace_error._disabled = False
-    create_workspace = Mock(side_effect=RuntimeError('unsupported topology'))
-    workspace_error._comm = SimpleNamespace(
-        AllReduceFusionPattern=SimpleNamespace(kAllReduce=0),
-        create_allreduce_fusion_workspace=create_workspace,
-        allreduce_fusion=Mock(),
-    )
-    monkeypatch.setattr(flashinfer_module.dist, 'get_rank', lambda group: 0)
-
-    input = torch.ones(2, 4, dtype=torch.bfloat16)
-    assert not workspace_error.all_reduce_(input)
-    assert workspace_error._disabled
-    assert not workspace_error.all_reduce_(input)
-    create_workspace.assert_called_once()
-    workspace_error._comm.allreduce_fusion.assert_not_called()
+@pytest.mark.parametrize('group_name,available', [('tp', True), ('tp', False), ('dcp', True)])
+def test_auto_initializes_all_reduce_by_availability(comm_env, group_name, available):
+    comm_env.is_available.return_value = available
+    communicator = communicator_module.CudaCommunicator('cpu', 'gpu', group_name=group_name)
+    assert communicator._all_reduce_provider is (comm_env if available and group_name == 'tp' else None)
+    assert communicator_module.SymmetricMemoryAllReduce.call_count == (group_name == 'tp')
+    assert comm_env.close.call_count == (group_name == 'tp' and not available)
+    assert comm_env.prepare.call_count == (group_name == 'tp' and available)
 
 
 def test_symm_mem_allreduce_selects_group_algorithm(monkeypatch):
@@ -291,7 +373,6 @@ def test_symm_mem_allreduce_selects_group_algorithm(monkeypatch):
     communicator = SymmetricMemoryAllReduce.__new__(SymmetricMemoryAllReduce)
     communicator.group = SimpleNamespace(group_name='group')
     communicator._buffer = torch.empty(8, dtype=torch.bfloat16)
-    communicator._enabled = True
     communicator._max_size = communicator._buffer.nbytes
     input = torch.ones(4, dtype=torch.bfloat16)
 
@@ -305,64 +386,61 @@ def test_symm_mem_allreduce_selects_group_algorithm(monkeypatch):
     two_shot.assert_called_once()
 
 
-def test_build_cuda_communicator_gates_unsupported_parallelism(monkeypatch):
-    monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', True)
-    monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_allreduce', False)
-    communicator_cls = Mock(return_value=object())
-    monkeypatch.setattr(communicator_module, 'CudaCommunicator', communicator_cls)
+def test_symm_mem_allreduce_peer_allocation_failure(monkeypatch):
+    import torch.distributed._symmetric_memory as symm_mem
 
-    for config in (
-            SimpleNamespace(dp=2, ep=1, attn_tp=8, dcp=1, enable_microbatch=False),
-            SimpleNamespace(dp=1, ep=2, attn_tp=8, dcp=1, enable_microbatch=False),
-            SimpleNamespace(dp=1, ep=1, attn_tp=8, dcp=1, enable_microbatch=True),
-    ):
-        assert communicator_module.build_cuda_communicator('cpu', 'device', config) is None
-    communicator_cls.assert_not_called()
+    from lmdeploy.pytorch.backends.cuda.comm import symm_mem_allreduce as module
 
-    config = SimpleNamespace(dp=1, ep=1, attn_tp=4, dcp=1, enable_microbatch=False)
-    communicator = communicator_module.build_cuda_communicator('cpu', 'device', config)
-    assert communicator is communicator_cls.return_value
-    communicator_cls.assert_called_once_with(cpu_group='cpu', device_group='device',
-                                             all_reduce_backend='flashinfer', symm_mem_query_gather=False)
+    monkeypatch.setattr(module.dist, 'get_world_size', lambda group: 2)
+    monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda: (9, 0))
+    monkeypatch.setattr(torch.cuda, 'current_device', lambda: 0)
+    monkeypatch.setattr(torch.ops, 'symm_mem', SimpleNamespace(two_shot_all_reduce_=Mock()))
+    monkeypatch.setattr(symm_mem, 'empty', Mock(return_value=object()))
+    rendezvous = Mock()
+    monkeypatch.setattr(symm_mem, 'rendezvous', rendezvous)
 
-    monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', False)
-    monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_allreduce', True)
-    config.attn_tp = 1
-    assert communicator_module.build_cuda_communicator('cpu', 'device', config) is None
-    config.attn_tp = 2
-    assert communicator_module.build_cuda_communicator('cpu', 'device', config) is communicator_cls.return_value
+    def peer_failure(flags, ready, group):
+        flags[:] = [ready, False]
 
-    # TP all-reduce flags must not allocate all-reduce resources on DCP groups.
-    config.dcp = 2
-    monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_dcp', True)
-    communicator_module.build_cuda_communicator('cpu', 'device', config, group_roles=('dcp', ))
-    communicator_cls.assert_called_with(cpu_group='cpu', device_group='device',
-                                        all_reduce_backend=None, symm_mem_query_gather=True)
+    monkeypatch.setattr(module.dist, 'all_gather_object', peer_failure)
+    provider = module.SymmetricMemoryAllReduce(SimpleNamespace(group_name='group'))
+    symm_mem.empty.assert_not_called()
+    provider.prepare()
+    assert not provider.is_available()
+    assert provider._buffer is None
+    rendezvous.assert_not_called()
 
 
-@pytest.mark.parametrize('shared_dcp_group', [False, True])
-def test_communicator_group_roles(shared_dcp_group):
+def test_communicator_rejects_rank_backend_mismatch(monkeypatch, comm_env):
+    from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
+    from lmdeploy.pytorch.config import DistConfig
+
+    monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda device: (9, 0))
+
+    def disagree(output, local, group):
+        output[:] = [local, ('auto', *local[1:])]
+
+    monkeypatch.setattr(communicator_module.dist, 'all_gather_object', disagree)
+    optimized = Mock()
+    monkeypatch.setattr(communicator_module, 'CudaCommunicator', optimized)
+    with pytest.raises(ValueError, match='agree across ranks'):
+        CudaOpsBackend.build_communicator('cpu', 'gpu', DistConfig(tp=2, communication_backend='nccl'))
+    optimized.assert_not_called()
+
+
+@pytest.mark.parametrize('shared_tp_group', [False, True])
+def test_communicator_group_names_and_tp_deduplication(shared_tp_group):
     from lmdeploy.pytorch.distributed import DistContext, DistGroup, _build_communicators
 
     tp_group = DistGroup(cpu_group='tp_cpu', gpu_group='tp_gpu')
-    dcp_group = tp_group if shared_dcp_group else DistGroup(cpu_group='dcp_cpu', gpu_group='dcp_gpu')
-    builder = Mock(side_effect=lambda **kwargs: object())
-    context = DistContext(attn_tp_group=tp_group, mlp_tp_group=tp_group, moe_tp_group=tp_group,
+    mlp_group = tp_group if shared_tp_group else DistGroup(cpu_group='mlp_cpu', gpu_group='mlp_gpu')
+    dcp_group = DistGroup(cpu_group='dcp_cpu', gpu_group='dcp_gpu')
+    builder = Mock(side_effect=lambda **kwargs: Mock())
+    context = DistContext(attn_tp_group=tp_group, mlp_tp_group=mlp_group, moe_tp_group=mlp_group,
                           dcp_group=dcp_group, communicator_builder=builder)
     _build_communicators(context)
 
-    roles = [call.kwargs['group_roles'] for call in builder.call_args_list]
-    assert roles == ([('tp', 'dcp')] if shared_dcp_group else [('tp', ), ('dcp', )])
-    assert (tp_group.communicator is dcp_group.communicator) == shared_dcp_group
-
-
-def test_dlinfer_communicator_rejects_cuda_options(monkeypatch):
-    monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', True)
-    monkeypatch.setattr(communicator_module._envs, 'enable_symm_mem_allreduce', False)
-    with pytest.raises(AssertionError, match='not supported by DLInfer'):
-        DlinferOpsBackend.build_communicator('cpu', 'device', SimpleNamespace())
-
-    monkeypatch.setattr(communicator_module._envs, 'enable_flashinfer_allreduce', False)
-    communicator = DlinferOpsBackend.build_communicator('cpu', 'device', SimpleNamespace())
-    assert isinstance(communicator, base_communicator_module.DeviceCommunicator)
-    assert communicator.device_group == 'device'
+    names = [call.kwargs['group_name'] for call in builder.call_args_list]
+    assert names == (['tp', 'dcp'] if shared_tp_group else ['tp', 'tp', 'dcp'])
+    assert (tp_group.communicator is mlp_group.communicator) == shared_tp_group
+    assert tp_group.communicator is not dcp_group.communicator

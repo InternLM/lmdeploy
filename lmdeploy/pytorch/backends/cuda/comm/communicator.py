@@ -1,118 +1,102 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import socket
+from typing import Literal
+
 import torch
 from torch import distributed as dist
 
-from lmdeploy.pytorch import envs as _envs
+from lmdeploy.utils import get_logger
 
 from ...communicator import DeviceCommunicator
-from .flashinfer_allreduce import FlashInferAllReduce
 from .symm_mem_allreduce import SymmetricMemoryAllReduce
+
+logger = get_logger('lmdeploy')
 
 
 class CudaCommunicator(DeviceCommunicator):
-    """Dispatch optional CUDA collectives with a process-group fallback."""
+    """Prepare group-owned providers and dispatch by operation and input
+    shape."""
 
     def __init__(self, cpu_group: dist.ProcessGroup, device_group: dist.ProcessGroup, *,
-                 all_reduce_backend: str | None = None, symm_mem_query_gather: bool = False):
+                 group_name: Literal['tp', 'dcp']):
         super().__init__(device_group=device_group)
-        self._all_reduce_backend = all_reduce_backend
-        self._all_reduce = None
-        if all_reduce_backend == 'flashinfer':
-            self._all_reduce = FlashInferAllReduce(cpu_group)
-        elif all_reduce_backend == 'symm_mem':
-            self._all_reduce = SymmetricMemoryAllReduce(cpu_group)
-        self._symm_mem_query_gather = symm_mem_query_gather
-        self._query_gatherer = None
-        self._query_shape = None
+        self._cpu_group = cpu_group
+        self._all_reduce_provider = SymmetricMemoryAllReduce(cpu_group) if group_name == 'tp' else None
+        if self._all_reduce_provider is not None:
+            self._check_all_reduce_provider()
+        if self._all_reduce_provider is not None:
+            self._all_reduce_provider.prepare()
+            self._check_all_reduce_provider()
+        if dist.get_rank(device_group) == 0:
+            logger.info('Communication backend: auto group=%s symmetric_all_reduce=%s device=%s',
+                        group_name, self._all_reduce_provider is not None, torch.cuda.get_device_name())
 
-    def supports_optimized_all_reduce(self) -> bool:
-        """Whether an optimized all-reduce implementation is available."""
-        return self._all_reduce is not None and self._all_reduce.is_available()
-
-    def supports_fused_all_reduce_residual_rms_norm(self) -> bool:
-        """Whether fused all-reduce, residual and RMSNorm is available."""
-        return self._all_reduce_backend == 'flashinfer' and self._all_reduce.is_available()
-
-    def try_fused_all_reduce_residual_rms_norm(self,
-                                               input: torch.Tensor,
-                                               residual: torch.Tensor,
-                                               weight: torch.Tensor,
-                                               eps: float):
-        """Run fused all-reduce, residual and RMSNorm when eligible."""
-        if self._all_reduce_backend != 'flashinfer':
-            return None
-        return self._all_reduce.fused_all_reduce_residual_rms_norm(
-            input=input,
-            residual=residual,
-            weight=weight,
-            eps=eps,
-        )
+    def _check_all_reduce_provider(self):
+        """Keep or retire symmetric all-reduce consistently on every rank."""
+        provider = self._all_reduce_provider
+        flags = [None] * dist.get_world_size(self._cpu_group)
+        dist.all_gather_object(flags, provider.is_available(), group=self._cpu_group)
+        if not all(flags):
+            provider.close()
+            self._all_reduce_provider = None
+            logger.info('Symmetric-memory all-reduce unavailable; using process-group fallback')
 
     def all_reduce_(self, input: torch.Tensor):
-        """Dispatch all-reduce through optimized CUDA backends."""
-        if self._all_reduce is not None and self._all_reduce.all_reduce_(input):
+        if self._all_reduce_provider is not None and self._all_reduce_provider.all_reduce_(input):
             return
         super().all_reduce_(input)
 
-    def close(self):
-        """Release communicator-owned workspaces."""
-        if self._all_reduce is not None:
-            self._all_reduce.close()
-        if self._query_gatherer is not None:
-            self._query_gatherer.release()
-            self._query_gatherer = None
+    def create_all_gather_workspace(self, gathered_width: int, device: torch.device, dtype: torch.dtype):
+        from .symm_mem_allgather import SymmetricMemoryAllGather
 
-    def prepare_query_gather(self, num_heads: int, head_size: int):
-        """Share one bounded query arena across attention layers and MTP."""
-        if self._query_gatherer is not None:
-            return
-        from .symm_mem_allgather import MultimemAllGatherer
+        workspace = SymmetricMemoryAllGather(
+            self.device_group, dist.get_rank(self.device_group), gathered_width,
+            device=device, dtype=dtype, capacity_bytes=64 * 1024 * 1024)
+        workspace.prepare()
+        return workspace
 
-        self._query_shape = (num_heads, head_size)
-        self._query_gatherer = MultimemAllGatherer(
-            self.device_group, dist.get_rank(self.device_group),
-            num_heads * head_size * dist.get_world_size(self.device_group),
-            torch.device('cuda', torch.cuda.current_device()), torch.bfloat16,
-            enabled=self._symm_mem_query_gather, capacity_bytes=64 * 1024 * 1024)
-
-    def gather_query(self, query: torch.Tensor) -> torch.Tensor:
-        """Gather query heads, borrowing the symmetric arena when eligible."""
-        if (self._query_gatherer is not None and query.dtype == torch.bfloat16
-                and tuple(query.shape[1:]) == self._query_shape and query.is_contiguous()):
-            # Same-stream attention finishes before the next gather's entry
-            # barrier permits any rank to overwrite the borrowed arena.
-            output = self._query_gatherer(query.flatten(1), safe=False)
+    def all_gather(self, input: torch.Tensor, *, workspace=None, copy_output: bool = True) -> torch.Tensor:
+        if workspace is not None:
+            output = workspace.all_gather(input, copy_output=copy_output)
             if output is not None:
-                return output.view(query.size(0), -1, query.size(2))
-        return super().gather_query(query)
+                return output
+        return super().all_gather(input)
 
-
-def should_try_symm_mem(dist_config) -> bool:
-    """Whether this configuration is a symmetric-memory candidate."""
-    return (_envs.enable_symm_mem_allreduce and dist_config.dp == 1
-            and dist_config.ep == 1 and dist_config.attn_tp > 1
-            and not dist_config.enable_microbatch)
+    def close(self):
+        if self._all_reduce_provider is not None:
+            self._all_reduce_provider.close()
+            self._all_reduce_provider = None
 
 
 def build_cuda_communicator(cpu_group: dist.ProcessGroup, device_group: dist.ProcessGroup,
-                            dist_config, *, group_roles: tuple[str, ...] = ('tp', )):
-    """Build the optional CUDA communicator for a TP or DCP group."""
+                            dist_config, *, group_name: Literal['tp', 'dcp'] = 'tp'):
+    """Agree on configuration and topology before optional collective setup."""
+    backend = dist_config.communication_backend
     compatible = dist_config.dp == 1 and dist_config.ep == 1 and not dist_config.enable_microbatch
     if not compatible:
         return None
-    all_reduce_backend = None
-    if 'tp' in group_roles:
-        if _envs.enable_flashinfer_allreduce and _envs.enable_symm_mem_allreduce:
-            raise ValueError('FlashInfer and symmetric-memory all-reduce cannot be enabled together.')
-        if _envs.enable_flashinfer_allreduce:
-            all_reduce_backend = 'flashinfer'
-        elif should_try_symm_mem(dist_config):
-            all_reduce_backend = 'symm_mem'
-    query_gather = 'dcp' in group_roles and dist_config.dcp > 1
-    if all_reduce_backend is None and not query_gather:
+
+    device = torch.cuda.current_device()
+    local = (backend, group_name, socket.gethostname(), device,
+             torch.cuda.get_device_name(device), torch.cuda.get_device_capability(device))
+    world_size = dist.get_world_size(device_group)
+    peers = [None] * world_size
+    dist.all_gather_object(peers, local, group=cpu_group)
+    if any(peer[:2] != local[:2] for peer in peers):
+        raise ValueError('communication_backend and group_name must agree across ranks')
+    if backend == 'nccl':
         return None
-    # DCP ranks prepare together even when disabled, so admission can agree
-    # on NCCL fallback if the opt-in flag differs between ranks.
+
+    same_node = all(peer[2] == local[2] for peer in peers)
+    same_device = all(peer[4:] == local[4:] for peer in peers)
+    peer_access = (same_node and same_device and len({peer[3] for peer in peers}) == world_size
+                   and all(peer[3] == device or torch.cuda.can_device_access_peer(device, peer[3]) for peer in peers))
+    flags = [None] * world_size
+    dist.all_gather_object(flags, peer_access, group=cpu_group)
+    if not all(flags):
+        if dist.get_rank(device_group) == 0:
+            logger.info('Communication policy: process-group fallback (peer topology unavailable)')
+        return None
+
     return CudaCommunicator(cpu_group=cpu_group, device_group=device_group,
-                            all_reduce_backend=all_reduce_backend,
-                            symm_mem_query_gather=query_gather and _envs.enable_symm_mem_dcp)
+                            group_name=group_name)

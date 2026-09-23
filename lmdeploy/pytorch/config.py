@@ -3,7 +3,7 @@ import enum
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import torch
 
@@ -224,6 +224,9 @@ class DistConfig:
     mlp_tp_mode: TPMode = TPMode.DEFAULT
     moe_tp_mode: TPMode = TPMode.DEFAULT
 
+    # communication
+    communication_backend: Literal['nccl', 'auto'] = 'nccl'
+
     def __post_init__(self):
         """Post init."""
         assert self.dp_rank < self.dp
@@ -297,6 +300,7 @@ class DistConfig:
             dp_rank=engine_config.dp_rank,
             enable_microbatch=engine_config.enable_microbatch,
             enable_eplb=engine_config.enable_eplb,
+            communication_backend=engine_config.communication_backend,
             tp=engine_config.tp,
             dcp=engine_config.dcp,
             attn_tp=engine_config.attn_tp_size,
