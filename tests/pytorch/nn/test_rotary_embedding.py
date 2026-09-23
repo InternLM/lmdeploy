@@ -1,3 +1,4 @@
+import pytest
 import torch
 from transformers import PretrainedConfig
 
@@ -226,3 +227,33 @@ def test_default_apply_rotary_complex_accepts_half_width_tables_with_empty_key()
 
     torch.testing.assert_close(q_embed, _complex_rope_reference(q_states, cos, sin))
     assert k_embed.shape == k_states.shape
+
+
+@pytest.mark.parametrize('device', [
+    'cpu', pytest.param('cuda', marks=pytest.mark.skipif(
+        not torch.cuda.is_available(), reason='requires CUDA')),
+])
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize('unsqueeze_dim', [0, 1])
+def test_fp32_rotary_matches_reference_and_preserves_input(dtype, unsqueeze_dim, device):
+    from lmdeploy.pytorch.nn.rotary_embedding import apply_rotary_pos_emb_fp32
+
+    generator = torch.Generator().manual_seed(123)
+    shape = (3, 5, 16) if unsqueeze_dim == 0 else (5, 3, 16)
+    query = torch.randn(shape, generator=generator).to(device=device, dtype=dtype)
+    key = torch.randn(shape, generator=generator).to(device=device, dtype=dtype)
+    # Exactly representable coefficients isolate intermediate rounding in BF16/FP16.
+    cos = torch.full((5, 16), 0.625, dtype=dtype, device=device)
+    sin = torch.full((5, 16), 0.375, dtype=dtype, device=device)
+    original = (query.clone(), key.clone())
+    outputs = apply_rotary_pos_emb_fp32(query, key, cos, sin, unsqueeze_dim)
+
+    for value, saved, actual in zip((query, key), original, outputs):
+        left, right = value.float().chunk(2, dim=-1)
+        expected = torch.cat((left * 0.625 - right * 0.375,
+                              right * 0.625 + left * 0.375), dim=-1).to(dtype)
+        assert actual.dtype == dtype
+        torch.testing.assert_close(actual, expected,
+                                   rtol=1e-6 if dtype == torch.float32 else 0,
+                                   atol=1e-7 if dtype == torch.float32 else 0)
+        torch.testing.assert_close(value, saved, rtol=0, atol=0)

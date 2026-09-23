@@ -222,10 +222,6 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
             **dict(kwargs, is_draft_model=False))
 
         tp = kwargs.get('tp', 1)
-        device_type = kwargs.get('device_type', 'auto')
-        if device_type == 'cuda' and tp > 1:
-            config.process_group_env_defaults.setdefault(
-                'NCCL_NVLS_ENABLE', '0')
         num_linear_layers = len(linear_layer_ids)
         num_full_layers = len(full_attention_layer_ids)
         num_heads = linear_config['num_heads']

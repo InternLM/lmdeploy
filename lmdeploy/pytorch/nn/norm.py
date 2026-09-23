@@ -34,6 +34,7 @@ class FP32LayerNorm(nn.Module):
     Some model components keep LayerNorm weights in FP32 even when the model
     activation dtype is BF16.  Keep that numerical contract in one reusable
     module and cast only the returned activation back to its input dtype.
+    Used by GLM-5.3 vision patch merging and KPool key normalization.
     """
 
     def __init__(self,

@@ -485,10 +485,6 @@ class ModelConfig:
     # Number of contiguous TP ranks that own the same logical KV-head shard.
     num_replicate_key_value_heads: int = 1
 
-    # Model-specific defaults that must be present before the distributed
-    # process group is initialized. Explicit process environment values win.
-    process_group_env_defaults: dict[str, str] = field(default_factory=dict)
-
     @property
     def use_mla_fp8_cache(self):
         """Whether MLA uses the DeepSeek-V3.2 FP8 cache layout."""
