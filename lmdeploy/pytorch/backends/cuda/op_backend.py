@@ -68,7 +68,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             return cast(ImplT, CudaKdaImpl())
         if isinstance(spec, ApplyRotaryEmbBuildSpec):
             from .apply_rotary_emb import TritonApplyRotaryEmbImpl
-            return cast(ImplT, TritonApplyRotaryEmbImpl())
+            return cast(ImplT, TritonApplyRotaryEmbImpl(enable_fp32_compute=spec.enable_fp32_compute))
         if isinstance(spec, RMSNormBuildSpec):
             from .norm import TritonRMSNormImpl
             return cast(ImplT, TritonRMSNormImpl(spec.hidden_size, spec.eps))

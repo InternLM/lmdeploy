@@ -12,7 +12,6 @@ from .rotary_embedding import (
     ApplyRotaryEmb,  # noqa: F401
     RopeType,  # noqa: F401
     YarnParameters,  # noqa: F401
-    apply_rotary_pos_emb_fp32,  # noqa: F401
     build_rotary_embedding,  # noqa: F401
     build_rotary_embedding_from_config,  # noqa: F401
     build_rotary_params,  # noqa: F401

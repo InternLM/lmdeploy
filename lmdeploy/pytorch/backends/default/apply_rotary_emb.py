@@ -48,6 +48,9 @@ def _prepare_cos_sin(query: Tensor, cos: Tensor, sin: Tensor, complex_mode: bool
 class DefaultApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
     """Apply rotary embedding implementation."""
 
+    def __init__(self, enable_fp32_compute: bool = False):
+        self.enable_fp32_compute = enable_fp32_compute
+
     def forward(self,
                 query: Tensor,
                 key: Tensor,
@@ -61,6 +64,10 @@ class DefaultApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
         else:
             rotate_fn = rotate_half
         cos, sin = _prepare_cos_sin(query, cos, sin, complex_mode)
+        original_query, original_key = query, key
+        if self.enable_fp32_compute:
+            query, key = query.float(), key.float()
+            cos, sin = cos.float(), sin.float()
         if inplace:
             q_embed = query
             k_embed = key
@@ -73,4 +80,8 @@ class DefaultApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
         else:
             q_embed = (query * cos) + (rotate_fn(query) * sin)
             k_embed = (key * cos) + (rotate_fn(key) * sin)
+        if self.enable_fp32_compute:
+            q_embed, k_embed = q_embed.to(original_query.dtype), k_embed.to(original_key.dtype)
+            if inplace:
+                q_embed, k_embed = original_query.copy_(q_embed), original_key.copy_(k_embed)
         return q_embed, k_embed

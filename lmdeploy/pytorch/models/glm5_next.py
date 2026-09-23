@@ -33,6 +33,7 @@ from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheRequest
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import (
+    ApplyRotaryEmb,
     FlashAttention,
     HcPrePost,
     Kda,
@@ -40,7 +41,6 @@ from lmdeploy.pytorch.nn import (
     LayerNorm,
     ParallelLMHead,
     RMSNorm,
-    apply_rotary_pos_emb_fp32,
 )
 from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMeta, GatedDeltaMetaBuilder, build_rmsnorm_gated
 from lmdeploy.pytorch.nn.kpool import (
@@ -140,6 +140,7 @@ class Glm5NextVisionAttention(Glm4vVisionAttention):
         # Reuse LMDeploy's QKV/row-parallel projections and rotary operator.
         # Vision weights stay in BF16 even when the language tower is block-FP8.
         super().__init__(config, dtype=dtype, device=device)
+        self.apply_rotary_pos_emb = ApplyRotaryEmb(enable_fp32_compute=True)
         self.q_norm = Glm5NextVisionRMSNorm(self.head_dim,
                                            eps=self.qk_norm_eps,
                                            quant_config=None,
@@ -165,7 +166,7 @@ class Glm5NextVisionAttention(Glm4vVisionAttention):
         query = self.q_norm(query)
         key = self.k_norm(key)
         cos, sin = rotary_pos_emb
-        query, key = apply_rotary_pos_emb_fp32(query, key, cos, sin)
+        query, key = self.apply_rotary_pos_emb(query, key, cos, sin, inplace=False)
         output = self.attention(
             query,
             key,

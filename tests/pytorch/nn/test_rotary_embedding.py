@@ -234,26 +234,62 @@ def test_default_apply_rotary_complex_accepts_half_width_tables_with_empty_key()
         not torch.cuda.is_available(), reason='requires CUDA')),
 ])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16, torch.float32])
-@pytest.mark.parametrize('unsqueeze_dim', [0, 1])
-def test_fp32_rotary_matches_reference_and_preserves_input(dtype, unsqueeze_dim, device):
-    from lmdeploy.pytorch.nn.rotary_embedding import apply_rotary_pos_emb_fp32
+@pytest.mark.parametrize('enable_fp32_compute', [False, True])
+@pytest.mark.parametrize('inplace', [False, True])
+@pytest.mark.parametrize('complex_mode', [False, True])
+def test_apply_rotary_compute_precision(monkeypatch, dtype, device, enable_fp32_compute, inplace, complex_mode):
+    from lmdeploy.pytorch.backends.default.op_backend import DefaultOpsBackend
+    from lmdeploy.pytorch.nn import rotary_embedding
+
+    if device == 'cpu':
+        monkeypatch.setattr(rotary_embedding, 'get_backend', lambda: DefaultOpsBackend)
+    module = rotary_embedding.ApplyRotaryEmb(enable_fp32_compute=enable_fp32_compute)
 
     generator = torch.Generator().manual_seed(123)
-    shape = (3, 5, 16) if unsqueeze_dim == 0 else (5, 3, 16)
-    query = torch.randn(shape, generator=generator).to(device=device, dtype=dtype)
-    key = torch.randn(shape, generator=generator).to(device=device, dtype=dtype)
-    # Exactly representable coefficients isolate intermediate rounding in BF16/FP16.
-    cos = torch.full((5, 16), 0.625, dtype=dtype, device=device)
-    sin = torch.full((5, 16), 0.375, dtype=dtype, device=device)
+    # Unequal head counts and strided Q/K exercise the fused CUDA kernel.
+    query = torch.randn(33, 3, 32, generator=generator).to(device=device, dtype=dtype)[..., ::2]
+    key = torch.randn(33, 2, 32, generator=generator).to(device=device, dtype=dtype)[..., ::2]
+    # FP32 tables also catch accidental downcasting before FP32 arithmetic.
+    cos_value = 0.625 + (2**-12 if enable_fp32_compute else 0)
+    sin_value = 0.375 + (2**-13 if enable_fp32_compute else 0)
+    table_dtype = torch.float32 if enable_fp32_compute else dtype
+    table_dim = 8 if complex_mode else 16
+    cos = torch.full((33, table_dim), cos_value, dtype=table_dtype, device=device)
+    sin = torch.full((33, table_dim), sin_value, dtype=table_dtype, device=device)
     original = (query.clone(), key.clone())
-    outputs = apply_rotary_pos_emb_fp32(query, key, cos, sin, unsqueeze_dim)
+    outputs = module(query, key, cos, sin, inplace=inplace, complex_mode=complex_mode)
 
     for value, saved, actual in zip((query, key), original, outputs):
-        left, right = value.float().chunk(2, dim=-1)
-        expected = torch.cat((left * 0.625 - right * 0.375,
-                              right * 0.625 + left * 0.375), dim=-1).to(dtype)
+        inputs = saved.float() if enable_fp32_compute else saved
+        if complex_mode:
+            rotated = _rotate_complex(inputs)
+        else:
+            left, right = inputs.chunk(2, dim=-1)
+            rotated = torch.cat((-right, left), dim=-1)
+        expected = (inputs * cos_value + rotated * sin_value).to(dtype)
         assert actual.dtype == dtype
         torch.testing.assert_close(actual, expected,
                                    rtol=1e-6 if dtype == torch.float32 else 0,
                                    atol=1e-7 if dtype == torch.float32 else 0)
-        torch.testing.assert_close(value, saved, rtol=0, atol=0)
+        if inplace:
+            assert actual is value
+        else:
+            torch.testing.assert_close(value, saved, rtol=0, atol=0)
+
+
+def test_dlinfer_rejects_fp32_rotary():
+    from lmdeploy.pytorch.backends.apply_rotary_emb import ApplyRotaryEmbBuildSpec
+    from lmdeploy.pytorch.backends.dlinfer.op_backend import DlinferOpsBackend
+
+    with pytest.raises(NotImplementedError, match='enable_fp32_compute=True'):
+        DlinferOpsBackend.build_op(ApplyRotaryEmbBuildSpec(enable_fp32_compute=True))
+
+
+def test_glm_vision_uses_common_fp32_rotary():
+    from lmdeploy.pytorch.models.glm5_next import Glm5NextVisionAttention
+    from lmdeploy.pytorch.nn import ApplyRotaryEmb
+
+    config = PretrainedConfig(hidden_size=128, num_heads=2, attention_bias=False)
+    module = Glm5NextVisionAttention(config, dtype=torch.bfloat16, device='cpu')
+    assert type(module.apply_rotary_pos_emb) is ApplyRotaryEmb
+    assert module.apply_rotary_pos_emb.impl.enable_fp32_compute
