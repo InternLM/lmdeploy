@@ -106,12 +106,18 @@ class CudaKdaImpl(KdaImpl):
         return output
 
     def _decode_recurrent(self, q, k, v, g, beta, A_log, dt_bias, initial_state,
-                          output_final_state=True, lower_bound=None, **kwargs):
+                          output_final_state=True, lower_bound=None, state_indices=None, cache_seqlens=None, **kwargs):
         """Keep AR and MTP on the same recurrence and gate arithmetic."""
-        gate = self.kda_gate(g, A_log, dt_bias, lower_bound=lower_bound)
-        return self.recurrent_func(q, k, v, g=gate, beta=beta.float().sigmoid(),
+        gate_args = {}
+        if lower_bound is not None:
+            gate_args = dict(a_log=A_log, dt_bias=dt_bias, lower_bound=lower_bound)
+        else:
+            g = self.kda_gate(g, A_log, dt_bias)
+            beta = beta.float().sigmoid()
+        return self.recurrent_func(q, k, v, g=g, beta=beta,
                                    initial_state=initial_state, output_final_state=output_final_state,
-                                   use_qk_l2norm_in_kernel=True, transpose_state_layout=True)
+                                   use_qk_l2norm_in_kernel=True, transpose_state_layout=True,
+                                   state_indices=state_indices, cache_seqlens=cache_seqlens, **gate_args)
 
     def _forward_spec_decode(self, mixed_qkv, raw_gate, raw_beta, conv_state,
                              recurrent_state, metadata, **kwargs):
@@ -143,13 +149,12 @@ class CudaKdaImpl(KdaImpl):
         heads, dim = kwargs['num_heads'], kwargs['head_dim']
         q, k, v = [x.reshape(batch, steps, heads, dim)
                    for x in mixed.split(heads * dim, dim=-1)]
-        gate = self.kda_gate(raw_gate.reshape(batch, steps, heads, dim).contiguous(),
-                             kwargs['a_log'], kwargs['dt_bias'], lower_bound=kwargs['lower_bound'])
-        beta = raw_beta.reshape(batch, steps, heads).float().sigmoid()
-        output, _ = self.recurrent_func(q, k, v, g=gate, beta=beta,
-                                        initial_state=recurrent_state, state_indices=signed_ids,
-                                        cache_seqlens=history, output_final_state=True,
-                                        use_qk_l2norm_in_kernel=True, transpose_state_layout=True)
+        output, _ = self._decode_recurrent(
+            q, k, v, g=raw_gate.reshape(batch, steps, heads, dim).contiguous(),
+            beta=raw_beta.reshape(batch, steps, heads).contiguous(),
+            A_log=kwargs['a_log'], dt_bias=kwargs['dt_bias'], lower_bound=kwargs['lower_bound'],
+            initial_state=recurrent_state, state_indices=signed_ids, cache_seqlens=history,
+            output_final_state=True)
         return output.reshape(1, batch * steps, heads, dim)
 
     def _conv(
