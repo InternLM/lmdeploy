@@ -34,7 +34,6 @@ from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheRequest
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import (
     FlashAttention,
-    FP32LayerNorm,
     HcPrePost,
     Kda,
     KPoolIndexer,
@@ -76,15 +75,6 @@ from .qwen3_vl import Qwen3VLInputProcessor
 from .utils.model import build_embedding, vlm_model
 
 Glm5NextVisionRMSNorm = RMSNorm
-
-
-class Glm5NextLayerNorm(FP32LayerNorm):
-    """GLM-5.3 FP32 LayerNorm using LMDeploy's reusable implementation."""
-
-
-# Backward-compatible name retained for the vision numerical contract tests
-# and downstream imports.  The provider is also shared by the KPool indexer.
-Glm5NextVisionLayerNorm = Glm5NextLayerNorm
 
 
 def _build_glm53_latent_norm(hidden_size: int, eps: float,
@@ -240,9 +230,8 @@ class Glm5NextVisionPatchMerger(nn.Module):
                               bias=False,
                               dtype=dtype,
                               device=device)
-        self.post_projection_norm = Glm5NextLayerNorm(dim,
-                                                      eps=1e-6,
-                                                      device=device)
+        self.post_projection_norm = nn.LayerNorm(
+            dim, eps=1e-6, dtype=torch.float32, device=device).requires_grad_(False)
         self.gate_up_proj = build_merged_colwise_linear(
             in_features=dim,
             all_out_features=[context_dim, context_dim],
@@ -265,7 +254,8 @@ class Glm5NextVisionPatchMerger(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.proj(hidden_states)
-        hidden_states = self.act1(self.post_projection_norm(hidden_states))
+        hidden_states = self.post_projection_norm(hidden_states.float()).to(hidden_states.dtype)
+        hidden_states = self.act1(hidden_states)
         hidden_states = self.gate_up_proj(hidden_states)
         hidden_states = _glm_swiglu_impl(hidden_states,
                                          self.swiglu_limit,
@@ -822,9 +812,6 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             index_kpool=config.index_kpool,
             dtype=dtype,
             device=device,
-            key_norm=Glm5NextLayerNorm(config.index_head_dim,
-                                       eps=1e-6,
-                                       device=device),
         )
 
     def _qkv_proj_unabsorbed(self, hidden_states: torch.Tensor,

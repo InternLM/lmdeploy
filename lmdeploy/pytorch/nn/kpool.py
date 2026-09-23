@@ -22,7 +22,6 @@ from lmdeploy.pytorch.consts import DSA_INDEX_SCALE_BYTES, DSA_INDEXER_K_CACHE_N
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheBinding, BlockCacheRequest, BlockCacheRequestContext
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
-from lmdeploy.pytorch.nn.norm import FP32LayerNorm
 
 KPOOL_PAGE_SIZE = 64
 KPOOL_FP8_MAX = 448.0
@@ -167,8 +166,8 @@ class KPoolIndexer(nn.Module):
         # The device-agnostic KPool owner keeps a Torch reference default.
         # Models that require a platform-exact provider can inject the same
         # parameter-shaped component without changing checkpoint names.
-        self.k_norm = (key_norm if key_norm is not None else FP32LayerNorm(
-            index_head_dim, norm_eps, device=device))
+        self.k_norm = (key_norm if key_norm is not None else nn.LayerNorm(
+            index_head_dim, eps=norm_eps, dtype=torch.float32, device=device).requires_grad_(False))
         self.index_kpool_compress_ape = nn.Parameter(
             torch.zeros(index_kpool, index_head_dim, dtype=torch.float32, device=device),
             requires_grad=False,
@@ -213,7 +212,9 @@ class KPoolIndexer(nn.Module):
 
     def project_key(self, hidden_states: Tensor) -> Tensor:
         """Project and normalize one shared index key per token."""
-        return self.k_norm(self.wk(hidden_states))
+        key = self.wk(hidden_states)
+        # Match vLLM's FP32 LayerNorm followed by a cast to the activation dtype.
+        return self.k_norm(key.float()).to(key.dtype)
 
     def project_compress_score(self, hidden_states: Tensor) -> Tensor:
         """Return per-slot, per-dimension compression gates."""
