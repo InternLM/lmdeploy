@@ -22,6 +22,7 @@ from lmdeploy.pytorch.backends.cuda.kpool import (
     kpool_score_contiguous_cuda,
     kpool_score_paged_cuda,
     kpool_select_groups_cuda,
+    kpool_select_prefill_cuda,
 )
 from lmdeploy.pytorch.configurations.glm5_next import is_glm5_kda_layer
 from lmdeploy.pytorch.consts import (
@@ -1089,7 +1090,13 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         indexer_k_cache: torch.Tensor,
         attn_metadata: Any,
     ) -> torch.Tensor:
-        """Retain the ragged eager implementation for chunked prefill."""
+        """Select request-local pooled history for chunked prefill."""
+        if query_fp8.is_cuda:
+            return kpool_select_prefill_cuda(
+                query_fp8, query_weight, indexer_k_cache,
+                attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
+                attn_metadata.block_offsets, attn_metadata.kv_flatten_size,
+                self.index_kpool, self.index_topk)
         q_seqlens = attn_metadata.q_seqlens.tolist()
         kv_seqlens = attn_metadata.kv_seqlens.tolist()
         logical_parts = []

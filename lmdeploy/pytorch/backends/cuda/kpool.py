@@ -9,18 +9,24 @@ import torch
 from torch import Tensor
 
 from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_indexed_key_cache
-from lmdeploy.pytorch.kernels.cuda.kpool import compress_kpool, partition_kpool
+from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
+from lmdeploy.pytorch.kernels.cuda.kpool import compress_kpool, kpool_prefill_metadata, partition_kpool
 from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
     is_sparse_index_topk_supported,
     sparse_index_topk,
 )
 from lmdeploy.pytorch.nn.kpool import (
     kpool_compress,
+    kpool_expand_selected_groups,
     kpool_packed_cache_views,
     kpool_quantize_fp8,
 )
 
 from .gated_delta_rule import _state_scatter
+
+# Fuse the existing integer index expansion instead of materializing its
+# [tokens, topk] masks and int64 temporaries separately during batched prefill.
+_expand_prefill_groups = torch.compile(kpool_expand_selected_groups, dynamic=True, fullgraph=True)
 
 
 def kpool_prefill_update_cuda(keys, scores, tail_keys, tail_scores, state_ids,
@@ -80,6 +86,41 @@ def kpool_compress_quantize_cuda(
     )
 
 
+def kpool_select_prefill_cuda(query_fp8, query_weight, packed_cache,
+                              q_seqlens, kv_seqlens, block_offsets, kv_flatten_size,
+                              pool_size, topk):
+    """Score and select all ragged prefill requests without host length
+    reads."""
+    _validate_query(query_fp8, query_weight)
+    rows = query_fp8.size(0)
+    if not rows:
+        return torch.empty((0, topk + pool_size - 1), device=query_fp8.device, dtype=torch.int32)
+    counts, starts, seq, lengths, query_starts, query_ends = kpool_prefill_metadata(
+        q_seqlens, kv_seqlens, rows, pool_size)
+    keys, scales = kpool_packed_cache_views(packed_cache, query_fp8.size(-1))
+    blocks = block_offsets[:, ::pool_size].contiguous()
+    # Sum(floor(kv / pool)) can be up to batch - 1 below floor(sum(kv) / pool).
+    # Give the shared flatten kernel enough pages to zero this padded tail.
+    tail_pages = (counts.numel() + keys.size(1) - 1) // keys.size(1)
+    if tail_pages > blocks.size(1):
+        blocks = torch.nn.functional.pad(blocks, (0, tail_pages - blocks.size(1)))
+    # Reuse the same-dtype flatten operator by copying both fields as bytes.
+    flat_keys, flat_scales = flatten_kv_cache(
+        keys.view(torch.uint8).unsqueeze(2), scales.view(torch.uint8).unsqueeze(2),
+        counts, blocks, start_loc=starts, out_size=max(1, kv_flatten_size // pool_size))
+    max_groups = block_offsets.size(1) * keys.size(1) // pool_size
+    logits = _get_deep_gemm().fp8_mqa_logits(
+        query_fp8.contiguous(),
+        (flat_keys[0].view(torch.float8_e4m3fn), flat_scales[0].view(torch.float32).flatten()),
+        query_weight.contiguous(), query_starts, query_ends,
+        clean_logits=False, max_seqlen_k=max_groups)
+    # Compressed logits are request-local. The selector masks the unwritten
+    # suffix using each query's causal length, including zero-length rows.
+    selected = kpool_select_groups_cuda(
+        logits, lengths, group_topk=topk // pool_size, max_group_length=max_groups)
+    return _expand_prefill_groups(selected, lengths, pool_size, topk, seq_lens=seq)
+
+
 def kpool_select_groups_cuda(
     logits: Tensor,
     group_lengths: Tensor,
@@ -132,7 +173,7 @@ def kpool_select_groups_cuda(
     q_seqlens = torch.ones(
         logits.size(0), dtype=torch.int32, device=logits.device)
     return sparse_index_topk(
-        score_window.contiguous(),
+        score_window,
         q_seqlens,
         lengths.clamp(max=max_group_length),
         group_topk,

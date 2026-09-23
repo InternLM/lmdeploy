@@ -6,6 +6,61 @@ import triton.language.extra.cuda.libdevice as libdevice
 
 
 @triton.jit
+def _prefill_offsets_kernel(Q, KV, Counts, Starts, QEnds,
+                            BATCH: tl.constexpr, POOL: tl.constexpr, BLOCK: tl.constexpr):
+    request = tl.arange(0, BLOCK)
+    q = tl.load(Q + request, request < BATCH, other=0).to(tl.int32)
+    groups = tl.load(KV + request, request < BATCH, other=0).to(tl.int32) // POOL
+    tl.store(Counts + request, groups, request < BATCH)
+    tl.store(Starts + request, tl.cumsum(groups) - groups, request < BATCH)
+    tl.store(QEnds + request, tl.cumsum(q), request < BATCH)
+
+
+@triton.jit
+def _prefill_query_metadata_kernel(KV, QEnds, Starts, Seq, Lengths, QueryStarts, QueryEnds,
+                                   ROWS: tl.constexpr, BATCH: tl.constexpr, POOL: tl.constexpr,
+                                   BLOCK: tl.constexpr):
+    row = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    low = tl.full((BLOCK,), 0, tl.int32)
+    high = tl.full((BLOCK,), BATCH, tl.int32)
+    # Upper-bound search skips empty requests without a host ragged loop.
+    while tl.sum((low < high).to(tl.int32), 0) > 0:
+        mid = (low + high) // 2
+        end = tl.load(QEnds + mid, mid < BATCH, other=2147483647)
+        active = low < high
+        right = row >= end
+        low = tl.where(active & right, mid + 1, low)
+        high = tl.where(active & ~right, mid, high)
+    request = tl.minimum(low, BATCH - 1)
+    seq = tl.load(KV + request).to(tl.int32) + row - tl.load(QEnds + request) + 1
+    start = tl.load(Starts + request)
+    tl.store(Seq + row, seq, row < ROWS)
+    tl.store(Lengths + row, seq // POOL, row < ROWS)
+    tl.store(QueryStarts + row, start, row < ROWS)
+    tl.store(QueryEnds + row, start + seq // POOL, row < ROWS)
+
+
+def kpool_prefill_metadata(q_seqlens, kv_seqlens, rows, pool_size):
+    """Build compressed-cache offsets and causal query bounds on device."""
+    batch = q_seqlens.numel()
+    counts = torch.empty(batch, device=q_seqlens.device, dtype=torch.int32)
+    starts = torch.empty_like(counts)
+    q_ends = torch.empty_like(counts)
+    seq = torch.empty(rows, device=q_seqlens.device, dtype=torch.int32)
+    lengths = torch.empty_like(seq)
+    query_starts = torch.empty_like(seq)
+    query_ends = torch.empty_like(seq)
+    _prefill_offsets_kernel[(1,)](
+        q_seqlens.contiguous(), kv_seqlens.contiguous(), counts, starts, q_ends,
+        batch, pool_size, triton.next_power_of_2(batch))
+    if rows:
+        _prefill_query_metadata_kernel[(triton.cdiv(rows, 128),)](
+            kv_seqlens.contiguous(), q_ends, starts, seq, lengths, query_starts, query_ends,
+            rows, batch, pool_size, 128)
+    return counts, starts, seq, lengths, query_starts, query_ends
+
+
+@triton.jit
 def _partition_kpool_kernel(
     Keys, Scores, TailKeys, TailScores, StateIds, QLens, KVLens,
     ClosedKeys, ClosedScores, GroupIds, RequestIds, Valid, NextKeys, NextScores,
