@@ -5,6 +5,7 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from multiprocessing.reduction import ForkingPickler
+import os
 from os import getenv
 from typing import Any
 
@@ -14,8 +15,15 @@ import torch
 import torch.distributed as dist
 from torch.profiler import record_function
 
+# V4_STEP_TIME diagnostic: running averages of the decode eager-build (host
+# dispatch, NPU-idle gap source) vs the sync'd forward/replay wall.
+_V4_STEP_CNT = {}
+# V4_OPCOUNT diagnostic: one-shot, set True after the single profiled step.
+_V4_OPCOUNT_DONE = [False]
+
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import (BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig,
+                                     TPMode)
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
@@ -171,9 +179,18 @@ def model_forward(
 ):
     """Perform model forward."""
     stream = stream or torch.cuda.current_stream()
+    import os as _os, time as _time
+    _step_time = _os.environ.get('V4_STEP_TIME', '0') == '1'
+    _is_dec = getattr(inputs, 'is_decoding', None)
+    if _step_time:
+        import torch.distributed as _d
+        _rk = (_d.get_rank() if (_d.is_available()
+                                 and _d.is_initialized()) else 0)
     with torch.cuda.stream(stream), step_ctx_manager(model.ctx_mgr):
         # forward
         ctx_mgr = model.ctx_mgr
+        if _step_time and _is_dec and (_rk == 0):
+            _B = _time.perf_counter()
         context = ctx_mgr.build_context(
             inputs=inputs,
             model_config=cache_engine.model_config,
@@ -201,7 +218,108 @@ def model_forward(
                 past_key_values=cache_engine.gpu_cache,
                 context=context,
             )
+            if _step_time and _is_dec and (_rk == 0):
+                _C = _time.perf_counter()
+            # V4_OPCOUNT: one-shot op counter over a single PREFILL forward
+            # (eager -- NOT a decode graph replay, which would show ~1 op). The
+            # captured decode graph replays the same op set, so eager prefill
+            # op counts attribute the ~912 cast / ~303 mul kernels baked into
+            # the decode burst. Uses a pure-Python TorchFunctionMode counter
+            # (torch_npu patches BOTH torch.profiler and torch.autograd.profiler
+            # into msprof, which lacks key_averages + hangs on export; this
+            # avoids the C++ profiler entirely). Fires on the first prefill
+            # (rank0); prints top-40 ops + cast/mul subset to worker .out.
+            _opc = _os.environ.get('V4_OPCOUNT', '0') == '1'
+            _opc_mode = None
+            if (_opc and _is_dec is False and (_rk == 0)
+                    and not _V4_OPCOUNT_DONE[0]):
+                from collections import Counter as _Counter
+                import torch.overrides as _ov
+
+                class _OpCounter(_ov.TorchFunctionMode):
+                    def __init__(self):
+                        super().__init__()
+                        self.counts = _Counter()
+
+                    def __torch_function__(self, func, types,
+                                           args=(), kwargs=None):
+                        self.counts[func.__name__] += 1
+                        return func(*args, **(kwargs or {}))
+
+                _opc_mode = _OpCounter()
+                _opc_mode.__enter__()
+            # V4_PRE_REPLAY_SYNC: stream-specific sync right before the decode
+            # graph replay. Mirrors vllm-ascend acl_graph.py:243-249: the per-step
+            # graph param update (_graph.update(actual_seq_lengths_kv), done after
+            # each replay in dlinfer's torch_npu_update path) is a CPU-side write
+            # whose record event for step i can overtake step i-1's still-running
+            # replay -- corrupting the KV-seqlen the next replay reads -> 507018.
+            # vllm-ascend inserts `torch.npu.current_stream().synchronize()` before
+            # replay() to enforce update(i-1) completes before replay(i). We use
+            # the STREAM sync (NOT device-wide torch.npu.synchronize(), which
+            # cross-syncs HCCL's stream and perturbs collective timing across
+            # ranks -- that caused the non-monotonic 47->0 regression observed
+            # with the device-wide variant). Prefill has no replay -> skip.
+            if _os.environ.get('V4_PRE_REPLAY_SYNC', '0') == '1' and _is_dec:
+                torch.npu.current_stream().synchronize()
             output = model(**input_dict)
+            if _opc_mode is not None:
+                _opc_mode.__exit__(None, None, None)
+                _V4_OPCOUNT_DONE[0] = True
+                try:
+                    _kas = _opc_mode.counts
+                    _tot = sum(_kas.values())
+                    _top = sorted(_kas.items(), key=lambda kv: kv[1],
+                                  reverse=True)
+                    print(f'[V4-OPC] prefill total_torch_ops={_tot}',
+                          flush=True)
+                    for _n, _c in _top[:40]:
+                        print(f'[V4-OPC] {_c:5d}  {_n}', flush=True)
+                    _sub = [(n, c) for n, c in _top
+                            if any(s in n for s in
+                                   ('to', 'mul', 'copy_', 'clone', 'type_',
+                                    'view', 'reshape', 'cat', 'expand',
+                                    'contiguous'))]
+                    print('[V4-OPC] --- cast/view/copy subset ---', flush=True)
+                    for _n, _c in _sub:
+                        print(f'[V4-OPC] {_c:5d}  {_n}', flush=True)
+                except Exception as _e:
+                    print(f'[V4-OPC] counter table failed: {_e!r}',
+                          flush=True)
+            if _step_time and _is_dec and (_rk == 0):
+                torch.npu.synchronize()
+                _D = _time.perf_counter()
+                # _V4_STEP_CNT: ROLLING 20-step window (not cumulative average --
+                # the cumulative avg masked regime changes, e.g. new-request
+                # warmup pulling the all-time avg up). build=host dispatch of
+                # build_context+prepare (NPU-idle gap source); fwd=NPU replay
+                # wall (launch+execute, sync'd).
+                _g = _V4_STEP_CNT
+                _g['n'] = _g.get('n', 0) + 1
+                if _g['n'] > 3:   # skip first 3 warmup steps
+                    _win = _g.setdefault('win', [])
+                    _win.append((_C - _B, _D - _C))
+                    if len(_win) > 20:
+                        _win.pop(0)
+                    if _g['n'] % 20 == 0:
+                        _nb = sum(x[0] for x in _win) / len(_win)
+                        _nf = sum(x[1] for x in _win) / len(_win)
+                        _xc = ''
+                        try:
+                            from lmdeploy.pytorch.backends.dlinfer\
+                                .ascend.v4_dsa import sas_xcache_stats, \
+                                qli_xcache_stats
+                            _h, _m = sas_xcache_stats()
+                            _qh, _qm = qli_xcache_stats()
+                            _xc = (f' sas_xc hit={_h} miss={_m}'
+                                   f' qli_xc hit={_qh} miss={_qm}')
+                        except Exception:
+                            pass
+                        print(f'[V4-STEP] step={_g["n"]} '
+                              f'build_host={1000*_nb:.1f}ms '
+                              f'fwd_npu={1000*_nf:.1f}ms '
+                              f'sum={1000*(_nb+_nf):.1f}ms{_xc}',
+                              flush=True)
             if not isinstance(output, dict):
                 output = dict(hidden_states=output)
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
@@ -219,6 +337,65 @@ def model_forward(
             # for draft model reuse
             output['position_ids'] = context.position_ids
             return output
+
+
+# ---------------------------------------------------------------------------
+# Ascend profiling (torch_npu.profiler == msprof for PyTorch).
+# Activated only on rank 0, only when V4_PROFILE=1, and only between two
+# sentinel files so profiling can be scoped to exactly the measured workload
+# (after graph warmup/capture, around the real requests) without disturbing
+# capture. Produces a Chrome-format trace.json via tensorboard_trace_handler.
+# ---------------------------------------------------------------------------
+_V4_PROF = None
+_V4_PROF_N = 0
+_V4_PROF_MAX = int(os.environ.get('V4_PROFILE_STEPS', '400'))
+_V4_PROF_START = os.environ.get('V4_PROFILE_START', '/tmp/v4_prof_start')
+_V4_PROF_STOP = os.environ.get('V4_PROFILE_STOP', '/tmp/v4_prof_stop')
+
+
+def _v4_prof_maybe_start():
+    """Start the NPU profiler on the first forward after the start sentinel
+    appears. No-op unless V4_PROFILE=1."""
+    global _V4_PROF, _V4_PROF_N
+    if _V4_PROF is not None:
+        return
+    if os.environ.get('V4_PROFILE') != '1':
+        return
+    if not os.path.exists(_V4_PROF_START):
+        return
+    import torch_npu.profiler as _P
+    out_dir = os.environ.get('V4_PROFILE_DIR', '/deeplink/swang/claude_kfj/profile_out')
+    os.makedirs(out_dir, exist_ok=True)
+    _V4_PROF = _P.profile(
+        activities=[_P.ProfilerActivity.CPU, _P.ProfilerActivity.NPU],
+        on_trace_ready=_P.tensorboard_trace_handler(out_dir),
+        record_shapes=False,
+        profile_memory=False,
+        with_stack=False,
+    )
+    _V4_PROF.start()
+    _V4_PROF_N = 0
+    logger.info(f'[V4-PROF] rank0 profiler started -> {out_dir}')
+
+
+def _v4_prof_maybe_step():
+    """Advance the profiler; stop + export when the stop sentinel appears or
+    the step cap is reached."""
+    global _V4_PROF, _V4_PROF_N
+    if _V4_PROF is None:
+        return
+    _V4_PROF_N += 1
+    done = os.path.exists(_V4_PROF_STOP) or _V4_PROF_N >= _V4_PROF_MAX
+    if done:
+        _V4_PROF.stop()
+        logger.info(f'[V4-PROF] profiler stopped after {_V4_PROF_N} forwards; '
+                    f'trace exported to {os.environ.get("V4_PROFILE_DIR", "/deeplink/swang/claude_kfj/profile_out")}')
+        _V4_PROF = None
+        for _p in (_V4_PROF_START, _V4_PROF_STOP):
+            try:
+                os.remove(_p)
+            except OSError:
+                pass
 
 
 def _try_to_cuda(val, non_blocking: bool = False):
@@ -398,19 +575,42 @@ class BaseModelAgent:
 
             num_tokens = max_batches
             dp = self.dist_config.dp
+            # With an asymmetric topology (attn_tp < mlp_tp, e.g. V4's grouped
+            # o-proj forces attn_tp<=o_groups while EP needs the full width),
+            # mlp/moe linears run in DP_TP mode and need dp_meta even when
+            # dp==1 — the gather group (pairs of ranks sharing an attn slot)
+            # still does an all_gather/reduce_scatter that requires tp_sizes.
+            # The start barrier stays dp>1-only (it syncs *across* DP groups,
+            # of which there is exactly one when dp==1).
+            need_dp_meta = (dp > 1
+                            or self.dist_config.mlp_tp_mode == TPMode.DP_TP
+                            or self.dist_config.moe_tp_mode == TPMode.DP_TP)
 
             if dp > 1:
                 # make sure warmup started together
                 group = self.dist_ctx.cpu_group
                 dist.barrier(group=group)
 
-            # warmup prefill
-            inputs = self.inputs_strategy.make_dummy(max_batches,
+            # warmup prefill. The dummy must mirror the RUNTIME per-rank batch,
+            # which internal DP splits across DP groups: at dp=2 a max_batches=30
+            # engine batch gives each rank max_batches//dp=15 seqs. Feeding the
+            # full max_batches to every rank (the old uniform
+            # make_dummy(max_batches) + build_dp_meta([n]*world_size)) makes the
+            # warmup forward see max_batches reqs per rank, but the V4 recurrent
+            # state pool is sized for the per-rank ceiling (max_batches//dp), so
+            # the warmup's state_bt (max_batches rows, values up to
+            # max_batches*m_cr) over-indexes the pool by 2x -> a silent OOB that
+            # corrupts adjacent GPU memory and later surfaces as a runtime
+            # aicore MTE fault in the Compressor kernel. Halve the warmup dummy
+            # to the per-rank ceiling so the warmup path matches runtime.
+            _warmup_prefill_batch = (max_batches // dp
+                                     if dp > 1 else max_batches)
+            inputs = self.inputs_strategy.make_dummy(_warmup_prefill_batch,
                                                      is_decoding=False,
                                                      device='cuda',
                                                      vocab_size=self.model_config.vocab_size,
                                                      meta=self.make_dummy_meta)
-            if dp > 1:
+            if need_dp_meta:
                 num_tokens = inputs.input_ids.numel()
                 inputs.build_dp_meta([num_tokens] * world_size)
             logger.debug('Warmup prefill start.')
@@ -424,19 +624,39 @@ class BaseModelAgent:
             if self.cache_config.role == EngineRole.Prefill:
                 # do not warmup decoding for prefill engine
                 capture_batch_sizes = []
+            # FULL-graph C1 step2b: mark the decode-graph-capture warmup steps
+            # so build_v4_dsa_inputs inflates the SAS op's seqused_kv to the
+            # session_len ceiling (vllm-ascend captures with
+            # SEQ_LEN_WITH_MAX_PA_WORKSPACE=6144 to max-size the aclnn op's
+            # internal temps; dlinfer captures at kv_len=1 -> OOB at 1st
+            # replay). build_context runs BEFORE graph_runner.capture flips
+            # AscendGraphRunner.capturing, so that flag can't gate the pre-step
+            # -- this env is the only signal available at pre-step time. Set
+            # only around the decode-capture loop (graph capture is
+            # decode-only); cleared before the draft-model warmup below.
+            os.environ['V4_GRAPH_CAPTURING'] = '1'
             for num_tokens in capture_batch_sizes:
                 inputs = self.inputs_strategy.make_dummy(num_tokens,
                                                          is_decoding=True,
                                                          device='cuda',
                                                          vocab_size=self.model_config.vocab_size,
                                                          meta=self.make_dummy_meta)
-                if dp > 1:
+                if need_dp_meta:
                     num_tokens = inputs.input_ids.numel()
                     inputs.build_dp_meta([num_tokens] * world_size)
+                    # The warmup decode is a globally-uniform decode step (all
+                    # DP ranks decode the same dummy is_decoding=True), so the
+                    # captured graph's support_cuda_graph gate -- which reads
+                    # dp_meta.dp_is_decoding via context.global_is_decoding() --
+                    # must see True here, else dp>1 graph capture is skipped.
+                    # _prepare_dp_v1 sets this for real steps; warmup bypasses
+                    # that path, so set it explicitly.
+                    inputs.dp_meta.dp_is_decoding = True
                 logger.debug(f'Warmup decoding num_tokens={num_tokens} start.')
                 self._forward_impl(inputs)
                 torch.cuda.synchronize()
                 logger.debug(f'Warmup decoding num_tokens={num_tokens} done.')
+            os.environ['V4_GRAPH_CAPTURING'] = '0'
 
             # warmup draft model
             self.spec_agent.warmup(max_batches, self.model_config)
@@ -591,6 +811,15 @@ class BaseModelAgent:
 
         # pad batch size for decoding
         all_num_tokens = gathered_meta.all_num_tokens
+        if os.environ.get('V4_DP_DEBUG'):
+            try:
+                _dp_rk = get_dist_manager().current_context().dist_config.dp_rank
+            except Exception:
+                _dp_rk = '?'
+            logger.info(f'[V4DPDBG] dp_rank={_dp_rk} is_decoding={is_decoding} '
+                        f'local_num_tokens={num_tokens} local_bs={batch_size} '
+                        f'is_dummy={is_dummy} all_num_tokens={all_num_tokens} '
+                        f'all_batch_sizes={all_batch_sizes}')
         if global_is_decoding:
             padding_batch_size = max(all_num_tokens)
             padding_batch_size = self.spec_agent.get_padding_batch_size(padding_batch_size)
@@ -1151,6 +1380,8 @@ class BaseModelAgent:
             self.spec_agent.build_cache_engine(self.cache_stream)
 
     def _forward_impl(self, inputs: ModelInputs):
+        if self.rank == 0:
+            _v4_prof_maybe_start()
         output = model_forward(
             self.patched_model,
             inputs,
@@ -1158,6 +1389,27 @@ class BaseModelAgent:
             state_cache_engine=self.state_cache_engine,
             stream=self.stream,
         )
+        # DEBUG (V4_SAS_SYNC=1): force a sync after every forward so an async
+        # aicore OOB surfaces at the END of the SAME step (not deferred to the
+        # next step's get_cpu_seqlens .cpu()). On crash, stop+export the msprof
+        # profiler so the trace.json captures the failing step's op sequence ->
+        # the last recorded op before the OOB is the culprit. Re-raise after.
+        if os.environ.get('V4_SAS_SYNC', '0') == '1':
+            try:
+                torch.npu.synchronize()
+            except Exception as _e:
+                if _V4_PROF is not None:
+                    try:
+                        _V4_PROF.stop()
+                        logger.error(f'[V4-SAS-SYNC] profiler stopped on crash; '
+                                     f'trace -> {os.environ.get("V4_PROFILE_DIR")}')
+                        _V4_PROF = None
+                    except Exception:
+                        pass
+                logger.error(f'[V4-SAS-SYNC] forward crashed synchronously: {_e}')
+                raise
+        if self.rank == 0:
+            _v4_prof_maybe_step()
         return output
 
     async def async_forward(self, inputs: ModelInputs):

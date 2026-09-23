@@ -20,6 +20,13 @@ from ..op_backend import DlinferOpsBackend
 
 logger = get_logger('lmdeploy')
 
+# V4 FULL-graph: cached x_active_mask = ones(num_reqs) per captured batch size.
+# On the graph path every request is active, so the mask is invariant per
+# num_reqs -> reuse the address-stable tensor (no per-step torch.ones eager
+# aclnn op between replays). Per-rank (not a cross-rank collective), so caching
+# by local num_reqs is sound regardless of cross-DP imbalance.
+_XACTIVE_MASK_CACHE: dict[int, torch.Tensor] = {}
+
 
 class SocVersion:
     Ascend310P: str = 'Ascend310P'
@@ -120,6 +127,11 @@ class AscendOpsBackend(DlinferOpsBackend):
     total_slots = None
     max_batches = None
     dist_meta: DistMeta = None
+    # DeepSeek V4: per-layer heterogeneous 6-tuple DSA caches (allocated once)
+    v4_caches = None
+    # one-shot guard for the V4_BUILD_OPCOUNT build-phase op counter
+    _V4_BUILD_OPC_DONE = [False]
+    _v4_build_n = 0
 
     @staticmethod
     def get_name() -> str:
@@ -185,7 +197,23 @@ class AscendOpsBackend(DlinferOpsBackend):
             """
             if is_decoding:
                 q_seqlens_cpu = None
-                kv_seqlens_cpu = step_context.kv_seqlens.cpu()
+                # V4 FULL-graph: skip the device->CPU .cpu() host sync (the
+                # per-step 507018 race surface -- the sync catches an
+                # async-corrupted prior replay). V4's custom
+                # sparse_attn_sharedkv reads kv length from the DEVICE
+                # seqused_kv tensor (via dsa_inputs), not this CPU copy; and
+                # for decode get_list_seqlens returns (None,None) (no tolist)
+                # and get_kv_start_indices computes from device
+                # step_context.kv_seqlens directly. So passing the DEVICE
+                # kv_seqlens (-> attn_metadata.kv_seqlens) is safe for V4 and
+                # also makes the model-forward in-graph gate fire on
+                # forward_eager mixed-decode steps (no EZ1001). Non-V4 keeps
+                # the CPU copy (standard attention reads it).
+                if getattr(getattr(step_context.model_config, 'hf_config',
+                                   None), 'model_type', None) == 'deepseek_v4':
+                    kv_seqlens_cpu = step_context.kv_seqlens   # device, no sync
+                else:
+                    kv_seqlens_cpu = step_context.kv_seqlens.cpu()
             elif is_prefill_no_cache:
                 q_seqlens_cpu = step_context.q_seqlens.cpu()
                 kv_seqlens_cpu = q_seqlens_cpu
@@ -275,7 +303,7 @@ class AscendOpsBackend(DlinferOpsBackend):
 
         def get_tokens_info(dp_size, tp_size, ep_size, ep_group):
             if ep_size <= 1:
-                return 0, 0, 0
+                return 0, 0, 0, False
             # get padded_tokens_current_rank
             is_graph = cls.enable_graph and step_context.is_decoding
             if is_graph:
@@ -287,7 +315,19 @@ class AscendOpsBackend(DlinferOpsBackend):
                 actual_tokens_current_rank = step_context.q_seqlens.sum().item()
                 padded_tokens_current_rank = actual_tokens_current_rank
             # get max_tokens_across_dp
-            if dp_size > 1:
+            # FULL-graph: on the replay path (support_cuda_graph ==
+            # global_is_decoding) the probe confirms num_reqs is uniform across
+            # DP ranks (both padded to the same capture size), so the cross-DP
+            # max == the local padded count. Skip the HCCL all_gather +
+            # `.item()` -- the last eager aclnn compute op + host sync between
+            # replays (mirrors vllm-ascend FULL graph, which bakes the count and
+            # does no per-step gather). The stream-drain role of `.item()` is
+            # covered by torch.npu.current_stream().synchronize() before replay
+            # (ascend_cudagraph.forward). Still run the gather on eager/mixed
+            # steps (global_is_decoding=False) where one DP group may be
+            # prefilling with a different count and a host sync is safe.
+            _uniform_decode = is_graph and step_context.global_is_decoding()
+            if dp_size > 1 and not _uniform_decode:
                 runtime_tokens_tensor = torch.tensor([padded_tokens_current_rank],
                                                      dtype=step_context.q_seqlens.dtype,
                                                      device=torch.npu.current_device())
@@ -299,7 +339,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                 max_tokens_across_dp = torch.max(runtime_tokens_buffer).item()
             else:
                 max_tokens_across_dp = padded_tokens_current_rank
-            return actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp
+            return actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp, is_graph
 
         @lru_cache
         def init_mc2_token_capacity(tp_size):
@@ -328,14 +368,24 @@ class AscendOpsBackend(DlinferOpsBackend):
                 raise ValueError(f'Unsupported soc_version: {SocVersion.soc_version()}')
 
         def get_pad_info(actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp, tp_size,
-                         moe_comm_type):
+                         moe_comm_type, is_graph=False):
             x_active_mask = None
             if moe_comm_type == DlinferMoECommType.MC2:
                 padded_size = math.ceil(max_tokens_across_dp / tp_size) * tp_size
                 pad_size = padded_size - padded_tokens_current_rank
-                x_active_mask = torch.ones(actual_tokens_current_rank,
-                                           dtype=torch.bool,
-                                           device=torch.npu.current_device())
+                if is_graph:
+                    key = actual_tokens_current_rank
+                    cached = _XACTIVE_MASK_CACHE.get(key)
+                    if cached is None:
+                        cached = torch.ones(actual_tokens_current_rank,
+                                            dtype=torch.bool,
+                                            device=torch.npu.current_device())
+                        _XACTIVE_MASK_CACHE[key] = cached
+                    x_active_mask = cached
+                else:
+                    x_active_mask = torch.ones(actual_tokens_current_rank,
+                                               dtype=torch.bool,
+                                               device=torch.npu.current_device())
             elif moe_comm_type == DlinferMoECommType.ALLTOALL:
                 pad_size = tp_size - padded_tokens_current_rank
             elif moe_comm_type == DlinferMoECommType.ALLGATHER:
@@ -409,13 +459,17 @@ class AscendOpsBackend(DlinferOpsBackend):
         )
         step_context.attn_metadata = attn_metadata
 
+        # ---- DeepSeek V4: build per-layer 6-tuple DSA caches + metadata ----
+        cls._maybe_build_v4_dsa(step_context)
+
         cls.dist_meta = get_dist_meta()
-        actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp = get_tokens_info(
+        actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp, is_graph = get_tokens_info(
             cls.dist_meta.dp_size, cls.dist_meta.tp_size, cls.dist_meta.ep_size, cls.dist_meta.ep_group)
         moe_comm_type = select_moe_comm_type(max_tokens_across_dp, cls.dist_meta.dp_size, cls.dist_meta.tp_size,
                                              cls.dist_meta.ep_size)
         pad_size, x_active_mask = get_pad_info(actual_tokens_current_rank, padded_tokens_current_rank,
-                                               max_tokens_across_dp, cls.dist_meta.tp_size, moe_comm_type)
+                                               max_tokens_across_dp, cls.dist_meta.tp_size, moe_comm_type,
+                                               is_graph=is_graph)
         moe_group_name = get_moe_group_name(cls.dist_meta.ep_group)
 
         moe_metadata = DlinferMoeMetadata(
@@ -434,6 +488,102 @@ class AscendOpsBackend(DlinferOpsBackend):
         )
         step_context.moe_metadata = moe_metadata
         return step_context
+
+    @classmethod
+    def _maybe_build_v4_dsa(cls, step_context):
+        """DeepSeek V4 6-tuple DSA cache allocation + per-layer metadata.
+
+        For V4 the engine-paged k_cache is reused as swa_kv; the remaining 5
+        DSA caches (compress_kv / state / indexer_state / indexer_k /
+        indexer_scale) are allocated here once (persisted on the class) with
+        the per-layer heterogeneous shapes the dlinfer ops require, and the
+        per-layer DSA metadata (block tables, slot mappings, compressor /
+        lightning-indexer metadata) is built from the step context.  The
+        resulting per-layer input dicts are stashed on
+        ``step_context.v4_dsa_inputs`` and consumed by
+        ``DeepseekV4Model.forward``.
+        """
+        model_config = step_context.model_config
+        hf_config = getattr(model_config, 'hf_config', None)
+        if getattr(hf_config, 'model_type', None) != 'deepseek_v4':
+            return
+        from .v4_dsa import allocate_v4_caches, build_v4_dsa_inputs, \
+            reset_active_request
+        # allocate the persistent per-layer extra caches once
+        if cls.v4_caches is None:
+            block_num = step_context.kv_caches[0][0].shape[0]
+            device = step_context.kv_caches[0][0].device
+            cache_cfg = step_context.cache_config
+            # Size the recurrent state pool for the FULL engine max_batches
+            # (not a DP-halved per-rank ceiling). An earlier optimization
+            # assumed internal DP always splits the running batch evenly
+            # (ceil(max_batches/dp) per rank) and sized the pool -- plus the
+            # graph capture set (ascend_cudagraph.get_capture_batch_sizes) --
+            # for that per-rank ceiling. That assumption is FALSE: the DP
+            # scheduler can route more than ceil(max_batches/dp) requests to
+            # one group (e.g. with max_batches=2/dp=2 the engine admits 2
+            # concurrent decodes, and both can land on the same group while
+            # the other runs a dummy). The per-rank ceiling (1) then can't
+            # host the 2nd slot -> _V4StateAlloc.assign writes row r=1 of a
+            # [1, ...] cpu table -> IndexError -> whole-serve ENGINE_STOP
+            # crash. Sizing for the full max_batches makes the pool robust to
+            # any DP routing, and matches the (likewise full-sized) capture
+            # set so capture-warmup state_bt ranges stay <= pool. HBM cost is
+            # the state pool only (compress_kv/indexer_k/indexer_scale share
+            # the main paged block table, unchanged); it is acceptable on the
+            # 16-card A3 box (~61 GB free/chip).
+            _per_rank = cache_cfg.max_batches
+            cls.v4_caches = allocate_v4_caches(
+                block_num, hf_config, device, model_config.dtype,
+                max_num_seqs=_per_rank,
+                max_prefill_token_num=cache_cfg.max_prefill_token_num,
+                session_len=getattr(cache_cfg, 'session_len', 65536))
+        # a fresh prefill (no history) starts a new request -> reset state
+        if not step_context.is_decoding:
+            q_seqlens = step_context.q_seqlens
+            kv_seqlens = step_context.kv_seqlens
+            if q_seqlens.numel() and bool((q_seqlens == kv_seqlens).all()):
+                reset_active_request()
+        # V4_BUILD_OPCOUNT: one-shot pure-Python TorchFunctionMode op-count
+        # over a single DECODE build_v4_dsa_inputs call (the build_host ~5ms
+        # eager phase, NOT the captured forward). Attributes the remaining
+        # build_host to torch ops (arange/copy_/to/empty/...) after the SAS
+        # call-once cache eliminated the SAS op. Fires once at decode step 50
+        # (steady state: graph warmup done, SAS cache warm -> 0 SAS ops), so the
+        # count reflects the REAL per-step eager build cost, not first-step
+        # cache-population. rank0; mirrors the V4_OPCOUNT forward counter.
+        _build_opc = __import__('os').environ.get('V4_BUILD_OPCOUNT', '0') == '1'
+        _is_dec = getattr(step_context, 'is_decoding', False)
+        _bo_mode = None
+        if _build_opc and _is_dec:
+            cls._v4_build_n = cls._v4_build_n + 1
+            if cls._v4_build_n == 50 and not cls._V4_BUILD_OPC_DONE[0]:
+                from collections import Counter as _Ctr
+                import torch.overrides as _ov
+
+                class _Boc(_ov.TorchFunctionMode):
+                    def __init__(self):
+                        super().__init__()
+                        self.counts = _Ctr()
+
+                    def __torch_function__(self, func, types,
+                                           args=(), kwargs=None):
+                        self.counts[func.__name__] += 1
+                        return func(*args, **(kwargs or {}))
+                _bo_mode = _Boc()
+                _bo_mode.__enter__()
+        step_context.v4_dsa_inputs = build_v4_dsa_inputs(
+            step_context, cls.v4_caches, model_config)
+        if _bo_mode is not None:
+            _bo_mode.__exit__(None, None, None)
+            cls._V4_BUILD_OPC_DONE[0] = True
+            _tot = sum(_bo_mode.counts.values())
+            _top = sorted(_bo_mode.counts.items(), key=lambda kv: kv[1],
+                          reverse=True)
+            print(f'[V4-BOC] build_v4_dsa_inputs total_torch_ops={_tot}',
+                  flush=True)
+            for _n, _c in _top[:30]:
+                print(f'[V4-BOC] {_c:5d}  {_n}', flush=True)
 
     @staticmethod
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,

@@ -142,6 +142,24 @@ class ModelInputsDelta:
     is_decoding: bool = True
     # sliding window
     num_ignored_history: torch.Tensor | None = None
+    # CPU-side per-request kv lengths (list[int]). Born fresh each decode
+    # step in inputs_maker (from scheduler seq.num_all_ids+max_q_seqlen, no
+    # device sync) and threaded through reindex -> StepContext so the V4
+    # paged-state allocator (build_v4_dsa_inputs) can read per-req kv lengths
+    # without a device `.tolist()` host sync that raced the captured graph
+    # replay (507035). Mirrors vllm-ascend's scheduler-side _seq_lens_cpu.
+    kv_seqlens_cpu: list[int] | None = None
+    # CPU-side per-request sequence ids (list[int], from the scheduler's
+    # SchedulerSequence.seq_id, in SLOT order). Threaded alongside
+    # kv_seqlens_cpu so _V4StateAlloc can key its per-request block state by
+    # STABLE request identity instead of the SLOT INDEX -- the slot index is
+    # NOT stable: reindex() compacts the batch when a request finishes
+    # (survivors renumber to lower slots), which made the slot-keyed turnover
+    # check (`kv > prev + max_pt`) misfire and free + FULL-HISTORY re-alloc a
+    # surviving long-decode request -> "state pool exhausted" spike (the 0903
+    # batch8 x 32k crash). Keying by seq_id makes blocks follow the request
+    # across any renumber; a request's kv only grows, so no turnover spike.
+    seq_ids: list[int] | None = None
     # Compact SSM prefix-cache checkpoint save pairs for decode forwards.
     state_prefix_cache_save_src_offsets: Sequence[int] | None = None
     state_prefix_cache_save_offsets: Sequence[int] | None = None
@@ -216,6 +234,16 @@ class ModelInputs:
     is_chunk_multimodal: bool = False
     # mrope, shape(3, sum_seqlens)
     mrope_pos_ids: torch.Tensor | None = None
+    # CPU-side per-request kv lengths (list[int]). Fresh each decode step
+    # from the scheduler (see ModelInputsDelta.kv_seqlens_cpu). Threaded to
+    # StepContext so V4's paged-state allocator avoids a device `.tolist()`
+    # host sync that raced graph replay (507035). NOT advanced by step();
+    # it is recomputed fresh by the next delta -> reindex, so step() drops
+    # it (None) to prevent a stale value leaking into a forward.
+    kv_seqlens_cpu: list[int] | None = None
+    # Per-request seq_ids in slot order (see ModelInputsDelta.seq_ids).
+    # Recomputed fresh by the next delta -> reindex, so step() drops it.
+    seq_ids: list[int] | None = None
 
     def step(self, input_ids: torch.Tensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
@@ -241,6 +269,8 @@ class ModelInputs:
             state_prefix_cache_save_src_offsets=None,
             state_prefix_cache_save_offsets=None,
             mrope_pos_ids=mrope_pos_ids,
+            kv_seqlens_cpu=None,  # stale after advance; recomputed by next delta
+            seq_ids=None,  # stale after advance; recomputed by next delta
         )
 
     @torch.inference_mode()
@@ -300,6 +330,19 @@ class StepContext:
     is_decoding: bool
     sum_kv_seqlen: int
     max_kv_seqlen: int | None = None
+    # CPU-side max query seqlen (from ModelInputs.max_q_seqlen, a scheduler int).
+    # Lets V4 build_v4_dsa_inputs read seq_len/total_q without `.item()` host
+    # syncs on the NPU q_seqlens tensor (q_seqlens is uniform = max_q_seqlen
+    # per seq, so max(q)=max_q_seqlen and sum(q)=num_reqs*max_q_seqlen).
+    max_q_seqlen: int | None = None
+    # CPU-side per-request kv lengths (list[int], from ModelInputs, scheduler
+    # side -- no device sync). Lets the V4 paged-state allocator read per-req
+    # kv without a `.tolist()` host sync that raced graph replay (507035).
+    kv_seqlens_cpu: list[int] | None = None
+    # Per-request seq_ids in slot order (see ModelInputsDelta.seq_ids). Lets
+    # _V4StateAlloc key block state by stable request identity, surviving
+    # reindex() slot compaction.
+    seq_ids: list[int] | None = None
     local_adapter_ids: torch.LongTensor | None = None
     input_embeddings: torch.Tensor | None = None
     input_embedding_indexing: torch.Tensor | None = None
@@ -380,6 +423,9 @@ class StepContext:
             is_decoding=inputs.is_decoding,
             sum_kv_seqlen=inputs.sum_kv_seqlen,
             max_kv_seqlen=inputs.max_kv_seqlen,
+            max_q_seqlen=getattr(inputs, 'max_q_seqlen', None),
+            kv_seqlens_cpu=getattr(inputs, 'kv_seqlens_cpu', None),
+            seq_ids=getattr(inputs, 'seq_ids', None),
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,

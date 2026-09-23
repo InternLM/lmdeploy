@@ -24,6 +24,19 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
     if mrope_pos_ids is not None:
         index = inputs.seq_length.cumsum(0) - 1
         mrope_pos_ids = mrope_pos_ids[:, index] + 1
+
+    # V4 paged allocators: carry per-request identity + CPU kv lengths into
+    # the first decode step. The next delta re-supplies fresh values, but the
+    # transition forward consumes THESE inputs directly; without them the V4
+    # worker falls to slot-keyed allocation (seq_ids=None fallback), whose
+    # entries are only freed when the slot disappears -> orphaned pool blocks
+    # (one per prefill->decode transition). inputs.kv_seqlens_cpu already
+    # covers this prefill forward's tokens; the next forward adds one token
+    # per seq (== max_q_seqlen).
+    seq_ids = getattr(inputs, 'seq_ids', None)
+    kv_seqlens_cpu = getattr(inputs, 'kv_seqlens_cpu', None)
+    if kv_seqlens_cpu is not None:
+        kv_seqlens_cpu = [kv + max_q_seqlen for kv in kv_seqlens_cpu]
     return ModelInputs(
         input_ids=input_ids,
         seq_length=torch.full_like(inputs.seq_length, max_q_seqlen),
@@ -38,6 +51,8 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
         model_metas=model_metas,
         state_offsets=state_offsets,
         mrope_pos_ids=mrope_pos_ids,
+        kv_seqlens_cpu=kv_seqlens_cpu,
+        seq_ids=seq_ids,
     )
 
 
@@ -88,6 +103,17 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         assert other.mrope_pos_ids is not None
         mrope_pos_ids = torch.cat([inputs.mrope_pos_ids, other.mrope_pos_ids], dim=1)
 
+    # V4 paged allocators: carry per-request identity + CPU kv lengths across
+    # the merge. Both sides are decode-step inputs; if either side lacks them
+    # (e.g. dummy/step()-advanced inputs) drop to None -> the worker's legacy
+    # fallback, which is safe but loses seq_id keying for this step only.
+    seq_ids = None
+    if inputs.seq_ids is not None and other.seq_ids is not None:
+        seq_ids = inputs.seq_ids + other.seq_ids
+    kv_seqlens_cpu = None
+    if inputs.kv_seqlens_cpu is not None and other.kv_seqlens_cpu is not None:
+        kv_seqlens_cpu = inputs.kv_seqlens_cpu + other.kv_seqlens_cpu
+
     return ModelInputs(
         input_ids=input_ids,
         seq_length=seq_length,
@@ -102,6 +128,8 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         model_metas=model_metas,
         state_offsets=state_offsets,
         mrope_pos_ids=mrope_pos_ids,
+        kv_seqlens_cpu=kv_seqlens_cpu,
+        seq_ids=seq_ids,
     )
 
 
@@ -132,6 +160,8 @@ def index_select_model_inputs(inputs: ModelInputs,
                               max_kv_seqlen: int | None = None,
                               sum_kv_seqlen: int | None = None,
                               num_ignored_history: torch.Tensor | None = None,
+                              kv_seqlens_cpu: list[int] | None = None,
+                              seq_ids: list[int] | None = None,
                               state_prefix_cache_save_src_offsets: Sequence[int] | None = None,
                               state_prefix_cache_save_offsets: Sequence[int] | None = None):
     """Index select model inputs by indices."""
@@ -201,4 +231,6 @@ def index_select_model_inputs(inputs: ModelInputs,
         target_hidden_states=target_hidden_states,
         target_position_ids=target_position_ids,
         mrope_pos_ids=mrope_pos_ids,
+        kv_seqlens_cpu=kv_seqlens_cpu,
+        seq_ids=seq_ids,
     )

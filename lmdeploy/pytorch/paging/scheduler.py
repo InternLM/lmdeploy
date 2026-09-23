@@ -44,6 +44,8 @@ from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import chain as iter_chain
+import os
 
 from torch.profiler import record_function
 
@@ -353,6 +355,167 @@ class Scheduler:
         """Whether a waiting request would need a non-final prefill chunk."""
         return any(self._prefill_kv_token_limit(seq) is not None for seq in self.waiting)
 
+    # ---- DSA (DeepSeek V4 compress_kv/indexer_k) admission gate ----
+    # These caches are paged by 128-token blocks over FULL history (append-
+    # only, never evicted; sized by V4_DSA_KV_POOL_BLOCKS on the worker).
+    # Unlike the main paged KV they are invisible to block_manager, so the
+    # scheduler could admit requests whose eventual full-history demand
+    # exceeds the pool -> the worker's _V4StateAlloc raises mid-decode and
+    # kills the engine (GPQA 32-concurrency: 132/198 ENGINE_STOP_ERROR).
+    # The gate reserves each admitted/running request's POTENTIAL full-
+    # history blocks up front and holds excess requests in waiting
+    # (backpressure) until running ones finish -- mirroring vLLM v1's
+    # KV-aware admission. Active only when V4_DSA_KV_POOL_BLOCKS is set
+    # (i.e. a V4-DSA deployment); auto-sized pools always fit the
+    # max_batches worst case and skip the gate entirely.
+    _V4_DSA_MLA_BS = 128
+
+    def _v4_dsa_pool_budget(self):
+        """Usable dsa_kv block budget (env override only; 0 = gate off).
+
+        The env value counts USABLE blocks (worker-side `_dsa_kv_pool_size`
+        allocates env+1 pool blocks so the id-0 null sentinel never eats
+        into the budget); keep both sides in sync."""
+        budget = int(os.environ.get('V4_DSA_KV_POOL_BLOCKS', '0'))
+        if budget <= 0:
+            return 0
+        return budget
+
+    def _v4_dsa_seq_blocks(self, seq: SchedulerSequence):
+        """Potential full-history dsa_kv blocks of one request.
+
+        Upper bound of what the worker's assign() can ever need for this
+        seq: its full token count plus its remaining decode budget
+        (max_new_tokens - num_new_tokens), capped by session_len. Over-
+        estimates are safe (only reduce effective concurrency); the only
+        under-estimate hazard is a request whose sampling_param grows
+        after admission, which lmdeploy does not do.
+
+        Must use num_valid_ids (history + current tokens), NOT
+        num_token_ids: the AR strategy's update_token_ids DECODE mode
+        keeps num_token_ids == 1 (only the latest token -- older tokens
+        roll into _num_history_ids), so a num_token_ids-based potential
+        SHRINKS by 1 every decode step while the seq's actual dsa_kv
+        extent keeps growing (full history, never evicted). Late in a
+        12k decode the gate would reserve ~3 blocks for a seq holding
+        ~96 -> progressive over-admission until the pool exhausts (the
+        0908 GPQA b32 run: waiting 12->0, running 21->32, then 2047+1
+        blocks -> "state pool exhausted" ENGINE_STOP). num_valid_ids +
+        remaining is invariant across decode steps (valid +1, remaining
+        -1), so each admitted seq keeps its full reservation for life
+        and excess requests stay in waiting (backpressure)."""
+        session_len = getattr(self.cache_config, 'session_len', None)
+        if not session_len:
+            session_len = self.scheduler_config.max_session_len
+        remaining = seq.sampling_param.max_new_tokens - seq.num_new_tokens
+        remaining = max(0, remaining)
+        potential = min(session_len, seq.num_valid_ids + remaining)
+        return (potential + self._V4_DSA_MLA_BS - 1) // self._V4_DSA_MLA_BS
+
+    def _v4_dsa_reserved_blocks(self, exclude_seq_id=None):
+        """Sum of potential dsa_kv blocks over live (ready+running) seqs."""
+        reserved = 0
+        for seq in iter_chain(self.ready, self.running):
+            if exclude_seq_id is not None and seq.seq_id == exclude_seq_id:
+                continue
+            reserved += self._v4_dsa_seq_blocks(seq)
+        return reserved
+
+    def _check_v4_dsa_budget_gate(self, seq: SchedulerSequence, reserved: int):
+        """Return True if seq can be admitted without exceeding the pool.
+
+        ``reserved`` is the running baseline plus blocks reserved by
+        requests admitted earlier in this scheduling turn."""
+        budget = self._v4_dsa_pool_budget()
+        if budget <= 0:
+            return True
+        need = self._v4_dsa_seq_blocks(seq)
+        if reserved + need <= budget:
+            return True
+        logger.debug(f'V4 dsa_kv budget gate: defer seq_id={seq.seq_id} '
+                     f'need={need} reserved={reserved} budget={budget}')
+        return False
+
+    # ---- DSA (DeepSeek V4 compressor state / indexer_state) admission gate
+    # ----
+    # The c4/c128 compressor state pools (V4_STATE_POOL_BLOCKS_C4/_C128) are
+    # also invisible to block_manager. With V4_STATE_WINDOW>0 the worker's
+    # _V4StateAlloc.assign() reclaims: DECODE keeps the last W blocks per req
+    # (constant), but PREFILL keeps ceil(max_pt/bs) + W + 2 -- a 12k session's
+    # prefill chunks each hold a chunk-sized live extent (the 0908 GPQA b32
+    # crash: a 12.4k-token session's last c128 chunk jumped +1496 blocks with
+    # 526 free -> "state pool exhausted" RuntimeError killed the engine at
+    # extend time). This gate bounds the CONCURRENT live demand: every running
+    # seq reserves its decode keep (W+1) and every in-flight prefill reserves
+    # its full keep+1 (the chunk extent). When either pool cannot cover the
+    # reservation the seq stays in waiting (backpressure) instead of being
+    # admitted and killing the engine -- same model as the dsa_kv gate above.
+    # Active only when V4_STATE_POOL_BLOCKS_C4/_C128 are set (fixed budgets);
+    # auto-sized pools derive from max_batches worst case and skip the gate.
+    _V4_STATE_C4_BS = 2
+    _V4_STATE_C128_BS = 8
+
+    def _v4_state_pool_budget(self, c4: bool):
+        """Usable state-pool block budget for c4 (True) or c128 (False).
+
+        0 = gate off (env not set -> auto sizing). The env value counts
+        USABLE blocks (worker-side _state_pool_size passes it through
+        unchanged; pool ids 1..size-1 valid, 0 = null sentinel)."""
+        env = ('V4_STATE_POOL_BLOCKS_C4' if c4
+               else 'V4_STATE_POOL_BLOCKS_C128')
+        return int(os.environ.get(env, '0'))
+
+    def _v4_state_seq_blocks(self, seq: SchedulerSequence):
+        """Peak live state blocks one request can demand, per pool kind.
+
+        Returns (c4_blocks, c128_blocks). Mirrors the worker's
+        _reclaim_keep: a DECODING seq (num_new_tokens > 0: it has already
+        produced output) keeps the W-window live; a seq still awaiting its
+        prefill keeps the chunk-extent keep ceil(max_pt/bs) + W + 2 (+1
+        margin for the block the current chunk writes next). c4's indexer
+        state is a second same-scheme pool (same demand). With W=0 (reclaim
+        off) the worst case is the full session extent. Over-estimates only
+        reduce effective concurrency; the under-estimate hazard (a seq whose
+        kv shrinks) does not occur -- kv is monotonic."""
+        session_len = (getattr(self.cache_config, 'session_len', None)
+                       or self.scheduler_config.max_session_len)
+        max_pt = min(self.cache_config.max_prefill_token_num, session_len)
+        win = int(os.environ.get('V4_STATE_WINDOW', '0'))
+        need = []
+        for bs in (self._V4_STATE_C4_BS, self._V4_STATE_C128_BS):
+            if win > 0 and seq.num_new_tokens > 0:
+                blocks = win + 1
+            elif win > 0:
+                blocks = -(-max_pt // bs) + win + 2 + 1
+            else:
+                blocks = -(-session_len // bs)
+            need.append(blocks)
+        return tuple(need)
+
+    def _v4_state_reserved_blocks(self):
+        """Sum of state reservations over live (ready+running) seqs."""
+        c4_r = c128_r = 0
+        for seq in iter_chain(self.ready, self.running):
+            need4, need128 = self._v4_state_seq_blocks(seq)
+            c4_r += need4
+            c128_r += need128
+        return c4_r, c128_r
+
+    def _check_v4_state_budget_gate(self, seq: SchedulerSequence,
+                                    c4_reserved: int, c128_reserved: int):
+        """True if seq fits BOTH state pools (c4+indexer, c128)."""
+        c4_need, c128_need = self._v4_state_seq_blocks(seq)
+        budget4 = self._v4_state_pool_budget(True)
+        budget128 = self._v4_state_pool_budget(False)
+        if (budget4 > 0 and c4_reserved + c4_need > budget4) or \
+                (budget128 > 0 and c128_reserved + c128_need > budget128):
+            logger.debug(f'V4 state budget gate: defer seq_id={seq.seq_id} '
+                         f'c4_need={c4_need} c4_res={c4_reserved} '
+                         f'budget4={budget4} c128_need={c128_need} '
+                         f'c128_res={c128_reserved} budget128={budget128}')
+            return False
+        return True
+
     def _prepare_prefill_allocation(self, seq: SchedulerSequence, prealloc_size: int):
         """Apply chunk KV limit and return the effective prealloc size."""
         kv_token_limit = self._prefill_kv_token_limit(seq)
@@ -622,8 +785,21 @@ class Scheduler:
 
         waiting = _reorder_waiting()
         skipped_waiting: SeqList = []
+        # DSA (V4 compress_kv/indexer_k) budget: baseline reservation of
+        # everything already live, grown by each request admitted below.
+        # Requests that would overflow the pool stay in waiting (backpressure)
+        # instead of being admitted and killing the engine at decode time.
+        dsa_kv_reserved = self._v4_dsa_reserved_blocks()
+        # DSA state-pool budget baseline (c4+indexer / c128 pools).
+        c4_reserved, c128_reserved = self._v4_state_reserved_blocks()
         while len(waiting) > 0 and len(running) < max_batches:
             seq = waiting.pop(0)
+            if not self._check_v4_dsa_budget_gate(seq, dsa_kv_reserved):
+                skipped_waiting.append(seq)
+                continue
+            if not self._check_v4_state_budget_gate(seq, c4_reserved, c128_reserved):
+                skipped_waiting.append(seq)
+                continue
             gate_check = self._check_prefill_admission_gates(seq,
                                                              token_count=token_count,
                                                              has_admitted=len(running) > 0,
@@ -719,6 +895,10 @@ class Scheduler:
             if self.block_trie.enable:
                 self._finish_prefix_cache_schedule(seq)
             _to_running(seq, prefill_token_count)
+            dsa_kv_reserved += self._v4_dsa_seq_blocks(seq)
+            _c4n, _c128n = self._v4_state_seq_blocks(seq)
+            c4_reserved += _c4n
+            c128_reserved += _c128n
 
             seq.record_event(EventType.SCHEDULED)
 

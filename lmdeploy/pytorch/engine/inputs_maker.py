@@ -516,6 +516,21 @@ class InputsMakerAsync:
         max_kv_seqlen = kv_seqlens.max().item()
         sum_kv_seqlen = kv_seqlens.sum().item()
 
+        # V4: FULL (pre-offset) CPU kv lengths to the backend. StepContext.new
+        # subtracts num_ignored_history from its device kv_seqlens, so on
+        # sliding-window models the device tensor is the window-OFFSET length.
+        # The V4 paged pools (state_bt / dsa_kv_bt) and the compressor
+        # start_pos are ABSOLUTE-position-indexed -- under swa eviction
+        # (sliding_window=128) the offset value shrinks at the evict boundary
+        # (e.g. 2304 -> 152), which (a) trips _V4StateAlloc's monotonicity
+        # check -> mid-request free+realloc, and (b) poisons full_kv_lens ->
+        # start_pos -> the compressor writes/reads the wrong absolute region
+        # -> gibberish from prefill chunk 2 on (the pt>max_prefill_token_num
+        # needle failure). The decode delta path already threads the FULL
+        # list (create_model_inputs_delta); this makes the batched prefill
+        # path match. (Monotonic across chunks: q grows 2304 -> 2328 -> ...)
+        kv_seqlens_cpu_full = kv_seqlens.tolist()
+
         # block offsets
         block_offsets = self.scheduler.get_block_tables(messages)
         block_offsets = _tensorlize_block_offsets(block_offsets, dtype=self.torch_int_dtype)
@@ -539,10 +554,15 @@ class InputsMakerAsync:
             max_kv_seqlen=max_kv_seqlen,
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
+            kv_seqlens_cpu=kv_seqlens_cpu_full,
         )
 
         # adapters
         self._set_adapter_ids(model_inputs, messages)
+
+        # per-request seq_ids in slot order (V4 state allocator keys by
+        # request identity, surviving reindex slot compaction).
+        model_inputs.seq_ids = [msg.seq_id for msg in messages]
 
         # vision inputs
         vision_model_inputs = self._create_vision_model_inputs(messages, model_inputs)
@@ -609,6 +629,12 @@ class InputsMakerAsync:
         max_kv_seqlen = kv_seqlens.item()
         sum_kv_seqlen = max_kv_seqlen
 
+        # V4: FULL (pre-offset) CPU kv length -- same contract as
+        # create_model_inputs above (absolute-position-indexed paged pools;
+        # the offset device tensor shrinks at the swa-evict boundary).
+        # Monotonic across chunks (chunk_size accumulates toward the full
+        # prompt), so _V4StateAlloc never sees a shrink mid-request.
+
         model_inputs = ModelInputs(
             input_ids=input_ids,
             seq_length=q_seqlens,
@@ -621,6 +647,20 @@ class InputsMakerAsync:
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
             is_chunk=True,
+            kv_seqlens_cpu=kv_seqlens.tolist(),
+            # V4: carry seq_ids on EVERY prefill chunk (non-last chunks take
+            # this long-context path; the last chunk goes through
+            # create_model_inputs which sets seq_ids at L565). Without this,
+            # step_context.seq_ids is None on chunk 1 but [id] on chunk 2,
+            # which flips _V4StateAlloc's keying scheme mid-request
+            # (slot-keyed -> seq_id-keyed): chunk 2 then re-allocates FRESH
+            # dsa_kv physical blocks instead of retaining chunk-1's, orphaning
+            # chunk-1's compress_kv (holding the long-prompt KV) -> the
+            # indexer/sparse-attn cannot retrieve it -> needle retrieval fails
+            # at any chunked prompt (pt > max_prefill_token_num). Setting it
+            # here makes all chunks seq_id-keyed so chunk 2 retains chunk-1's
+            # blocks. (0904 root cause for the chunked-prefill corruption.)
+            seq_ids=[seq.seq_id],
         )
 
         # adapters
@@ -702,6 +742,9 @@ class InputsMakerAsync:
         kv_seqlens = [seq.num_all_ids + max_q_seqlen for seq in valid_seqs]
         sum_kv_seqlen = sum(kv_seqlens)
         max_kv_seqlen = max(kv_seqlens)
+        # per-request seq_ids in slot order (V4 state allocator keys by
+        # request identity, surviving reindex slot compaction).
+        seq_ids = [seq.seq_id for seq in valid_seqs]
 
         output = ModelInputsDelta(
             indices=None,
@@ -711,6 +754,8 @@ class InputsMakerAsync:
             max_kv_seqlen=max_kv_seqlen,
             sum_kv_seqlen=sum_kv_seqlen,
             num_ignored_history=num_ignored_history,
+            kv_seqlens_cpu=kv_seqlens,
+            seq_ids=seq_ids,
         )
         decode_state_interval = self.cache_config.prefix_cache_decode_state_interval
         if (self.cache_config.enable_prefix_caching and self.config.is_ssm and decode_state_interval > 0
@@ -755,6 +800,7 @@ class InputsMakerAsync:
         else:
             sum_kv_seqlen = sum(kv_seqlens)
             max_kv_seqlen = max(kv_seqlens)
+        seq_ids = [seq.seq_id for seq in valid_seqs]
 
         output = ModelInputsDelta(
             indices=None,
@@ -764,6 +810,8 @@ class InputsMakerAsync:
             max_kv_seqlen=max_kv_seqlen,
             sum_kv_seqlen=sum_kv_seqlen,
             num_ignored_history=None,
+            kv_seqlens_cpu=kv_seqlens,
+            seq_ids=seq_ids,
         )
 
         return output, valid_seqs, invalid_seqs

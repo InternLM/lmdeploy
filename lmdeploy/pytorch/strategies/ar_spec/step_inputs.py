@@ -94,6 +94,7 @@ def _reindex_model_inputs_arspec(
         state_prefix_cache_save_src_offsets=state_prefix_cache_save_src_offsets,
         state_prefix_cache_save_offsets=state_prefix_cache_save_offsets,
         mrope_pos_ids=mrope_pos_ids,
+        kv_seqlens_cpu=delta.kv_seqlens_cpu,
     )
 
 
