@@ -115,31 +115,6 @@ asyncio.run(main())
 
 You can invoke other OpenAI interfaces using similar methods. For more detailed information, please refer to the [OpenAI API guide](https://platform.openai.com/docs/guides/text-generation)
 
-### Integrate with lmdeploy `APIClient`
-
-Below are some examples demonstrating how to visit the service through `APIClient`
-
-If you want to use the `/v1/chat/completions` endpoint, you can try the following code:
-
-```python
-from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient('http://{server_ip}:{server_port}')
-model_name = api_client.available_models[0]
-messages = [{"role": "user", "content": "Say this is a test!"}]
-for item in api_client.chat_completions_v1(model=model_name, messages=messages):
-    print(item)
-```
-
-For the `/v1/completions` endpoint, you can try:
-
-```python
-from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient('http://{server_ip}:{server_port}')
-model_name = api_client.available_models[0]
-for item in api_client.completions_v1(model=model_name, prompt='hi'):
-    print(item)
-```
-
 ### Tools
 
 May refer to [api_server_tools](./api_server_tools.md).

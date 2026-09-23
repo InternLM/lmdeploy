@@ -22,8 +22,6 @@ h:
   quantization:
     pytorch:
     - kvint8
-  gen_config:
-    temperature: 0.6
 - model_type: chat
   engine_config:
     tp: 8
@@ -50,8 +48,6 @@ h:
     - kvint8
     pytorch:
     - kvint8
-  gen_config:
-    temperature: 0.6
 - model_type: chat
   engine_config:
     tp: 8
@@ -73,8 +69,6 @@ h:
   quantization:
     turbomind:
     - kvint8
-  gen_config:
-    temperature: 0.6
 ascend:
 - model_type: chat
   engine_config:
@@ -90,5 +84,3 @@ ascend:
   - evaluate
   - func
   - prefix_cache
-  gen_config:
-    temperature: 0.6

@@ -1,6 +1,7 @@
 import pytest
 import requests
-from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_BASE_MODEL_LIST
+from utils.config_utils import get_restful_base_model_list
+from utils.constant import BACKEND_LIST, BASE_URL
 from utils.restful_return_check import (
     assert_completions_batch_return,
     assert_completions_stream_return,
@@ -17,7 +18,7 @@ def openai_client_and_model():
 
 
 @pytest.mark.parametrize('backend', BACKEND_LIST)
-@pytest.mark.parametrize('model_case', RESTFUL_BASE_MODEL_LIST)
+@pytest.mark.parametrize('model_case', get_restful_base_model_list())
 class TestRestfulOpenAICompletions:
 
     def test_return(self, backend, model_case, openai_client_and_model):

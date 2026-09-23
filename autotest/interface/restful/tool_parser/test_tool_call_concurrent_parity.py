@@ -4,7 +4,8 @@ import asyncio
 
 import aiohttp
 import pytest
-from utils.constant import BACKEND_LIST, TOOL_REASONING_MODEL_LIST
+from utils.config_utils import get_tool_reasoning_model_list
+from utils.constant import BACKEND_LIST
 from utils.tool_reasoning_definitions import (
     CONCURRENT_WEATHER_TOOL,
     DEFAULT_TOOL_CALL_CONCURRENCY,
@@ -27,7 +28,7 @@ _CLASS_MARKS_STRESS = [
     pytest.mark.stress,
     pytest.mark.flaky(reruns=1),
     pytest.mark.parametrize('backend', BACKEND_LIST),
-    pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
+    pytest.mark.parametrize('model_case', get_tool_reasoning_model_list()),
 ]
 
 
