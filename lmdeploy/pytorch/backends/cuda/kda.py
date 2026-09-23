@@ -141,7 +141,7 @@ class CudaKdaImpl(KdaImpl):
                                         cache_seqlens=history)
         mixed = mixed.transpose(1, 2)
         heads, dim = kwargs['num_heads'], kwargs['head_dim']
-        q, k, v = [x.reshape(batch, steps, heads, dim).contiguous()
+        q, k, v = [x.reshape(batch, steps, heads, dim)
                    for x in mixed.split(heads * dim, dim=-1)]
         gate = self.kda_gate(raw_gate.reshape(batch, steps, heads, dim).contiguous(),
                              kwargs['a_log'], kwargs['dt_bias'], lower_bound=kwargs['lower_bound'])
@@ -221,9 +221,9 @@ class CudaKdaImpl(KdaImpl):
         mixed_qkv = self._conv(mixed_qkv, conv_weight, conv_bias,
                                conv_state, metadata)
         q, k, v = mixed_qkv.split(num_heads * head_dim, dim=-1)
-        q = q.unflatten(-1, (num_heads, head_dim)).contiguous()
-        k = k.unflatten(-1, (num_heads, head_dim)).contiguous()
-        v = v.unflatten(-1, (num_heads, head_dim)).contiguous()
+        q = q.unflatten(-1, (num_heads, head_dim))
+        k = k.unflatten(-1, (num_heads, head_dim))
+        v = v.unflatten(-1, (num_heads, head_dim))
         raw_gate = raw_gate.unflatten(
             -1, (num_heads, head_dim)).contiguous()
         raw_beta = raw_beta.contiguous()
@@ -232,7 +232,7 @@ class CudaKdaImpl(KdaImpl):
         if metadata.is_decoding:
             def decode_view(x: torch.Tensor) -> torch.Tensor:
                 return x.squeeze(0).unflatten(
-                    0, (batch_size, 1)).contiguous()
+                    0, (batch_size, 1))
 
             output, final_state = self.fused_recurrent_kda(
                 q=decode_view(q),
@@ -253,9 +253,9 @@ class CudaKdaImpl(KdaImpl):
             output = output.flatten(0, 1).unsqueeze(0)
         else:
             output, final_state = self.chunk_kda(
-                q=q,
-                k=k,
-                v=v,
+                q=q.contiguous(),
+                k=k.contiguous(),
+                v=v.contiguous(),
                 g=raw_gate,
                 beta=raw_beta,
                 A_log=a_log,

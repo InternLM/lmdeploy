@@ -663,7 +663,8 @@ def fused_recurrent_gated_delta_rule(
             'cache_seqlens must be on the same device as q'
 
     assert initial_state is not None, 'initial_state is required'
-    o = torch.empty_like(v)
+    # Strided inputs may be dense transposes, but Out uses a contiguous Tensor.
+    o = torch.empty_like(v, memory_format=torch.contiguous_format)
     final_state = initial_state
     state_dtype = q.dtype
     if final_state is not None:
