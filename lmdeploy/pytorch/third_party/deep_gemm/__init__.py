@@ -78,23 +78,20 @@ except Exception:
 try:
     from deep_gemm import m_grouped_fp8_gemm_nt_masked
 except Exception:
-    try:
-        from deep_gemm import fp8_m_grouped_gemm_nt_masked as m_grouped_fp8_gemm_nt_masked
-    except Exception:
-        from deep_gemm import m_grouped_gemm_fp8_fp8_bf16_nt_masked
+    from deep_gemm import m_grouped_gemm_fp8_fp8_bf16_nt_masked
 
-        def m_grouped_fp8_gemm_nt_masked(a,
-                                         b,
-                                         d,
-                                         masked_m,
-                                         expected_m,
-                                         recipe=None,
-                                         compiled_dims='nk',
-                                         disable_ue8m0_cast=False):
-            assert recipe is None
-            assert compiled_dims == 'nk'
-            assert disable_ue8m0_cast is False
-            return m_grouped_gemm_fp8_fp8_bf16_nt_masked(a, b, d, masked_m, expected_m)
+    def m_grouped_fp8_gemm_nt_masked(a,
+                                     b,
+                                     d,
+                                     masked_m,
+                                     expected_m,
+                                     recipe=None,
+                                     compiled_dims='nk',
+                                     disable_ue8m0_cast=False):
+        assert recipe is None
+        assert compiled_dims == 'nk'
+        assert disable_ue8m0_cast is False
+        return m_grouped_gemm_fp8_fp8_bf16_nt_masked(a, b, d, masked_m, expected_m)
 
 
 try:
