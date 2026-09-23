@@ -195,7 +195,7 @@ LMDeployは、[TurboMind](./docs/en/inference/turbomind.md)および[PyTorch](./
 クリーンなconda環境（Python 3.10 - 3.13）でlmdeployをインストールすることをお勧めします。
 
 ```shell
-conda create -n lmdeploy python=3.10 -y
+conda create -n lmdeploy python=3.12 -y
 conda activate lmdeploy
 pip install lmdeploy
 ```
