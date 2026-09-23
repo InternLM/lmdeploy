@@ -28,7 +28,7 @@ class HcPrePost(nn.Module):
         norm_eps: float,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         from lmdeploy.pytorch.nn.norm import rms_scale
-        shape, dtype = x.size(), x.dtype
+        hidden_states, dtype = x, x.dtype
         x = x.flatten(2).float()
         if self.avoid_gemv and x.size(0) == 1 and x.size(1) == 1:
             # Single-token decode otherwise selects GEMV, whose reduction
@@ -37,7 +37,7 @@ class HcPrePost(nn.Module):
         else:
             mixes = F.linear(x, hc_fn)
         mixes = rms_scale(mixes, x, eps=norm_eps)
-        return self.impl.pre(x.view(shape), mixes, hc_scale, hc_base, dtype)
+        return self.impl.pre(hidden_states, mixes, hc_scale, hc_base, dtype)
 
     def pre_reduce(self, x: torch.Tensor, pre: torch.Tensor, out_dtype: torch.dtype) -> torch.Tensor:
         return self.impl.pre_reduce(x, pre, out_dtype)

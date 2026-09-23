@@ -40,7 +40,9 @@ class TestHcPrePost:
         assert out.dtype == torch.bfloat16
         torch.testing.assert_close(out.float(), ref.float(), atol=1e-2, rtol=1e-2)
 
-    def test_pre(self):
+    @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float16, torch.float32])
+    @pytest.mark.parametrize('expanded', [False, True])
+    def test_pre(self, dtype, expanded):
         from lmdeploy.pytorch.kernels.cuda.dsv4.hc_split_sinkhorn import hc_split_sinkhorn
         from lmdeploy.pytorch.nn import HcPrePost, rms_scale
         hc_mult = 4
@@ -52,7 +54,9 @@ class TestHcPrePost:
         mix_hc = (2 + hc_mult) * hc_mult
         hc_dim = hc_mult * dim
 
-        x = torch.randn(*lead_shape, hc_mult, dim, device='cuda', dtype=torch.bfloat16)
+        x = torch.randn(*lead_shape, 1 if expanded else hc_mult, dim, device='cuda', dtype=dtype)
+        if expanded:
+            x = x.expand(*lead_shape, hc_mult, dim)
         hc_fn = torch.randn(mix_hc, hc_dim, device='cuda', dtype=torch.float32)
         hc_scale = torch.randn(3, device='cuda', dtype=torch.float32)
         hc_base = torch.randn(mix_hc, device='cuda', dtype=torch.float32)
@@ -65,10 +69,12 @@ class TestHcPrePost:
         pre_ref, post_ref, comb_ref = hc_split_sinkhorn(
             mixes, hc_scale, hc_base, hc_mult, sinkhorn_iters, sinkhorn_eps)
         out_ref = _reference_pre_reduce(x_flat.view_as(x), pre_ref, x.dtype)
+        fp32_out = op.pre_reduce(x_flat.view_as(x), pre_ref, x.dtype)
 
         assert out.shape == (*lead_shape, dim)
         assert post.shape == (*lead_shape, hc_mult)
         assert comb.shape == (*lead_shape, hc_mult, hc_mult)
+        torch.testing.assert_close(out, fp32_out, atol=0, rtol=0)
         torch.testing.assert_close(out.float(), out_ref.float(), atol=1e-2, rtol=1e-2)
         torch.testing.assert_close(post, post_ref, atol=1e-6, rtol=1e-6)
         torch.testing.assert_close(comb, comb_ref, atol=1e-6, rtol=1e-6)
