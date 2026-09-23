@@ -38,11 +38,13 @@ h:
     pytorch:
       suites:
       - toolcall
+      - hard_schema
       extra:
         tool-call-parser: llama3
     turbomind:
       suites:
       - toolcall
+      - hard_schema
       extra:
         tool-call-parser: llama3
   quantization:

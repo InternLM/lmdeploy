@@ -2,6 +2,7 @@ import pytest
 from openai import BadRequestError
 from utils.constant import CAPPED_MAX_COMPLETION_TOKENS
 from utils.tool_reasoning_definitions import (
+    MESSAGES_HELLO,
     SEARCH_TOOL,
     WEATHER_TOOL,
     assert_arguments_parseable,
@@ -215,48 +216,46 @@ class TestToolCallChoice(_ToolCallTestBase):
 
     # -- required ------------------------------------------------------------
     def test_tool_choice_required(self, backend, model_case):
-        """tool_choice='required': model MUST return at least one tool call.
-
-        Only skip when the *server* rejects the request (HTTP error).
-        """
+        """tool_choice='required' + Hello/search: must tool-call, not greet."""
         client, model_name = self._get_client()
 
         try:
             response = client.chat.completions.create(
                 model=model_name,
-                messages=MESSAGES_ASKING_FOR_WEATHER,
+                messages=MESSAGES_HELLO,
                 temperature=0,
                 max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
-                tools=[WEATHER_TOOL, SEARCH_TOOL],
+                tools=[SEARCH_TOOL],
                 tool_choice='required',
                 logprobs=False,
             )
         except BadRequestError as e:
             pytest.skip(f'tool_choice="required" rejected by server (HTTP 400): {e}')
 
-        # Validation MUST fail loudly — never skip on assertion errors
         choice = response.choices[0]
         assert choice.message.role == 'assistant'
+        assert choice.finish_reason == 'tool_calls', (
+            f'tool_choice="required" finish_reason={choice.finish_reason!r} '
+            f'content={choice.message.content!r}')
         assert choice.message.tool_calls is not None, ('tool_choice="required" but got no tool_calls')
         assert len(choice.message.tool_calls) >= 1
         for tc in choice.message.tool_calls:
             assert_tool_call_fields(tc)
-            assert_arguments_parseable(tc.function.arguments)
+            assert tc.function.name == 'web_search'
+            parsed = assert_arguments_parseable(tc.function.arguments)
+            assert parsed.get('query'), parsed
 
     def test_tool_choice_required_streaming(self, backend, model_case):
-        """tool_choice='required' + streaming: must return tool call chunks.
-
-        Only skip if the server rejects the request, not on parse errors.
-        """
+        """tool_choice='required' + Hello/search streaming: must tool-call."""
         client, model_name = self._get_client()
 
         try:
             stream = client.chat.completions.create(
                 model=model_name,
-                messages=MESSAGES_ASKING_FOR_WEATHER,
+                messages=MESSAGES_HELLO,
                 temperature=0,
                 max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
-                tools=[WEATHER_TOOL, SEARCH_TOOL],
+                tools=[SEARCH_TOOL],
                 tool_choice='required',
                 logprobs=False,
                 stream=True,
@@ -266,8 +265,8 @@ class TestToolCallChoice(_ToolCallTestBase):
         r = collect_stream_tool_call(stream)
         validate_stream_tool_call_result(
             r,
-            expected_function_name=None,
-            **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
+            expected_function_name='web_search',
+            **self._parser_validation_kwargs([SEARCH_TOOL]),
         )
 
     # -- specific function ---------------------------------------------------
