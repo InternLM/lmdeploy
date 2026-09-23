@@ -2,7 +2,8 @@
 
 import pytest
 import requests
-from utils.constant import BACKEND_LIST, BASE_URL, CAPPED_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
+from utils.config_utils import get_restful_chat_model_list
+from utils.constant import BACKEND_LIST, BASE_URL, CAPPED_MAX_COMPLETION_TOKENS
 from utils.restful_return_check import (
     assert_responses_batch_return,
     assert_responses_error,
@@ -35,7 +36,7 @@ def _responses_json(model_name: str, **extra) -> dict:
 @pytest.mark.order(8)
 @pytest.mark.flaky(reruns=2)
 @pytest.mark.parametrize('backend', BACKEND_LIST)
-@pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
+@pytest.mark.parametrize('model_case', get_restful_chat_model_list())
 class TestRestfulOpenAIResponses:
 
     @pytest.mark.pr_test

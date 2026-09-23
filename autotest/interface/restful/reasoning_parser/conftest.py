@@ -1,7 +1,8 @@
 import json
 
 import pytest
-from utils.constant import BACKEND_LIST, THINKING_MAX_COMPLETION_TOKENS, TOOL_REASONING_MODEL_LIST
+from utils.config_utils import get_tool_reasoning_model_list
+from utils.constant import BACKEND_LIST, THINKING_MAX_COMPLETION_TOKENS
 
 from utils.tool_reasoning_definitions import (  # isort: skip
     THINK_END_TOKEN,
@@ -30,7 +31,7 @@ _CLASS_MARKS = [
     pytest.mark.qwenqwq_parser,
     pytest.mark.flaky(reruns=2),
     pytest.mark.parametrize('backend', BACKEND_LIST),
-    pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
+    pytest.mark.parametrize('model_case', get_tool_reasoning_model_list()),
 ]
 
 _CLASS_MARKS_STREAM = _CLASS_MARKS + [

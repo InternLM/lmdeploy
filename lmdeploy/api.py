@@ -105,12 +105,12 @@ def serve(model_path: str,
                               'This function has been deprecated and removed.')
 
 
-@deprecated('This function is no longer available. Please use "from lmdeploy.serve import APIClient" instead.')
+@deprecated('This function is no longer available. Please use "from openai import OpenAI" instead.')
 def client(api_server_url: str = 'http://0.0.0.0:23333', api_key: str | None = None, **kwargs):
     """This function is deprecated and no longer available.
 
     .. deprecated::
-        This function has been removed. Please use ``from lmdeploy.serve import APIClient`` instead.
+        This function has been removed. Please use ``from openai import OpenAI`` instead.
 
     Args:
         api_server_url: communicating address ``http://<ip>:<port>`` of
@@ -120,7 +120,7 @@ def client(api_server_url: str = 'http://0.0.0.0:23333', api_key: str | None = N
 
     Raises:
         NotImplementedError: This function has been deprecated and removed.
-            Use ``from lmdeploy.serve import APIClient`` instead.
+            Use ``from openai import OpenAI`` instead.
     """
     raise NotImplementedError("The 'client' function is no longer available. This function has been deprecated. "
-                              ' Please use "from lmdeploy.serve import APIClient" instead.')
+                              ' Please use "from openai import OpenAI" instead.')

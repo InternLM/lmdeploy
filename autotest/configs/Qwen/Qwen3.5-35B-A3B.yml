@@ -35,6 +35,12 @@ a100:
       extra:
         logprobs-mode: raw_logprobs
         enable-return-routed-experts: true
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
+    - suites:
+      - sleep
     turbomind:
     - suites:
       - base
@@ -50,11 +56,11 @@ a100:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
   gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
     chat-template-kwargs:
       enable_thinking: true
   quantization:
@@ -78,6 +84,14 @@ a100:
     - nccl
   test_coverage:
   - func
+  interface:
+    pytorch:
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
+    - suites:
+      - sleep
 h:
 - model_type:
   - chat
@@ -119,6 +133,12 @@ h:
       extra:
         logprobs-mode: raw_logprobs
         enable-return-routed-experts: true
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
+    - suites:
+      - sleep
     turbomind:
     - suites:
       - base
@@ -134,18 +154,15 @@ h:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
   quantization:
     turbomind:
     - awq
     pytorch:
     - fp8
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
 - model_type:
   - chat
   - vl
@@ -153,7 +170,6 @@ h:
     tp: 2
     extra:
       prefix-cache-state-budget: 256
-      prefix-cache-decode-state-interval: 1024
       max-prefill-token-num: 64
   backends:
   - name: pytorch
@@ -161,16 +177,6 @@ h:
     - nccl
   test_coverage:
   - prefix_cache
-  quantization:
-    pytorch:
-    - fp8
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
 - model_type:
   - chat
   - vl
@@ -191,16 +197,17 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
+  interface:
+    pytorch:
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
+    - suites:
+      - sleep
   quantization:
     pytorch:
     - fp8
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
 ascend:
 - model_type:
   - chat
@@ -219,13 +226,6 @@ ascend:
   - func
   - longtext_benchmark
   - mllm_evaluate
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
 - model_type:
   - chat
   - vl
@@ -247,10 +247,3 @@ ascend:
   - func
   - longtext_benchmark
   - mllm_evaluate
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true

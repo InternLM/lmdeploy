@@ -678,6 +678,52 @@ def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path
     worker.shutdown()
 
 
+def test_async_load_writes_target_and_mtp_cache_rows(tmp_path, monkeypatch):
+    path = write_store_config(tmp_path)
+    store = FakeStore()
+    worker = MooncakeStoreWorker(
+        make_cache_config(path, num_gpu_blocks=4, role='kv_consumer'),
+        global_rank=1,
+        tp_rank=0,
+        tp_size=1,
+        store_factory=lambda: store,
+    )
+    # This test exercises the receiver without depending on the optional
+    # lookup RPC endpoint. Registration order is the payload contract: target
+    # rows are followed by MTP rows in the same multi-buffer value.
+    monkeypatch.setattr(worker, '_start_lookup_server', lambda: None)
+    worker.register_kv_caches({
+        'target.k': FakeTensor(0x1000, size=400),
+        'target.v': FakeTensor(0x2000, size=800),
+        'mtp.k': FakeTensor(0x3000, size=600),
+        'mtp.v': FakeTensor(0x4000, size=1000),
+    })
+    block_hashes = build_prefix_block_hashes(range(128), 64)
+    request = MooncakeStoreLoadRequest(
+        request_id=27,
+        block_ids=(3, 1),
+        block_hashes=block_hashes,
+    )
+
+    worker.start_load_kv(MooncakeStoreConnectorMetadata(load_requests=(request, )))
+    assert worker.kv_recv_thread is not None
+    worker.kv_recv_thread.request_queue.join()
+
+    assert worker.get_finished() == KVConnectorOutput(finished_receiving={27})
+    assert store.get_calls == [(
+        [
+            build_store_key(worker.key_metadata, 0, block_hash)
+            for block_hash in block_hashes
+        ],
+        [
+            [0x1000 + 3 * 100, 0x2000 + 3 * 200, 0x3000 + 3 * 150, 0x4000 + 3 * 250],
+            [0x1000 + 1 * 100, 0x2000 + 1 * 200, 0x3000 + 1 * 150, 0x4000 + 1 * 250],
+        ],
+        [[100, 200, 150, 250], [100, 200, 150, 250]],
+    )]
+    worker.shutdown()
+
+
 def test_async_save_waits_for_forward_and_writes_only_owned_missing_blocks(
     tmp_path,
     monkeypatch,

@@ -22,8 +22,6 @@ a100:
     - w8a8
     turbomind:
     - awq
-  gen_config:
-    temperature: 0.6
   deps:
     transformers: 4.57.6
 '3090':

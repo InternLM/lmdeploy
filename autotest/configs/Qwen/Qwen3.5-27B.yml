@@ -75,13 +75,6 @@ h:
   quantization:
     turbomind:
     - awq
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
 - model_type:
   - chat
   - vl
@@ -89,7 +82,6 @@ h:
     tp: 2
     extra:
       prefix-cache-state-budget: 256
-      prefix-cache-decode-state-interval: 1024
       max-prefill-token-num: 64
   backends:
   - name: pytorch
@@ -97,10 +89,3 @@ h:
     - nccl
   test_coverage:
   - prefix_cache
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true

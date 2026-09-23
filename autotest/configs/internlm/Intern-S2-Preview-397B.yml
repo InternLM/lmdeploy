@@ -39,10 +39,6 @@ h:
       extra:
         logprobs-mode: raw_logprobs
   gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
     chat-template-kwargs:
       enable_thinking: true
 - model_type:
@@ -83,10 +79,6 @@ h:
       extra:
         logprobs-mode: raw_logprobs
   gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
     chat-template-kwargs:
       enable_thinking: true
 - model_type:
@@ -99,7 +91,6 @@ h:
     extra:
       max-batch-size: 256
       cache-max-entry-count: 0.7
-      prefix-cache-decode-state-interval: 1024
       prefix-cache-state-budget: 256
       max-prefill-token-num: 64
   backends:
@@ -108,10 +99,3 @@ h:
     - nccl
   test_coverage:
   - prefix_cache
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true

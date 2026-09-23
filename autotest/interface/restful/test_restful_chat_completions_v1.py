@@ -1,8 +1,8 @@
 import pytest
 import requests
 from openai import BadRequestError
-from utils.config_utils import get_model_path_from_config
-from utils.constant import BACKEND_LIST, BASE_URL, CAPPED_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
+from utils.config_utils import get_model_path_from_config, get_restful_chat_model_list
+from utils.constant import BACKEND_LIST, BASE_URL, CAPPED_MAX_COMPLETION_TOKENS
 from utils.restful_return_check import (
     CONTEXT_LENGTH_ERROR,
     assert_chat_completions_batch_return,
@@ -28,7 +28,7 @@ def openai_client_and_model():
 @pytest.mark.order(8)
 @pytest.mark.flaky(reruns=2)
 @pytest.mark.parametrize('backend', BACKEND_LIST)
-@pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
+@pytest.mark.parametrize('model_case', get_restful_chat_model_list())
 class TestRestfulOpenAI:
 
     @pytest.mark.pr_test

@@ -343,7 +343,6 @@ def assert_prefix_cache_hit(http_url: str, image_url: str | None = None):
     assert first_cached == 0, msg
     # block_size=64; AR reuses complete blocks; SSM hits last published checkpoint
     assert prompt_tokens - 64 <= second_cached <= prompt_tokens, msg
-    assert first_text, msg
     assert expect in first_text.lower(), msg
     assert first_text == second_text, msg
     assert first_choice.finish_reason == second_choice.finish_reason, msg

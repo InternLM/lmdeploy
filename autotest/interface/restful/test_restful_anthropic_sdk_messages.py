@@ -12,7 +12,8 @@ from utils.anthropic_messages import (
     USER_ACKNOWLEDGE,
     get_async_anthropic_client_and_model,
 )
-from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
+from utils.config_utils import get_restful_chat_model_list
+from utils.constant import BACKEND_LIST
 
 
 def _text_from_message(msg) -> str:
@@ -92,7 +93,7 @@ async def _sdk_stream_events_and_final() -> tuple[list, object | None]:
 @pytest.mark.anthropic
 @pytest.mark.flaky(reruns=2)
 @pytest.mark.parametrize('backend', BACKEND_LIST)
-@pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
+@pytest.mark.parametrize('model_case', get_restful_chat_model_list())
 class TestRestfulAnthropicSdkMessages:
     """SDK smoke: simple / system / streaming Messages API."""
 

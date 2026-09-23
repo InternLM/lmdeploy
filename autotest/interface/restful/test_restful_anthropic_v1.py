@@ -23,8 +23,8 @@ from utils.anthropic_messages import (
     build_anthropic_messages_inline_system_history,
     build_anthropic_messages_merged_system_prompt,
 )
-from utils.config_utils import get_config
-from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_MODEL_LIST
+from utils.config_utils import get_config, get_restful_chat_model_list
+from utils.constant import BACKEND_LIST, BASE_URL
 from utils.restful_return_check import (
     build_session_sized_user_content,
     deployed_model_name,
@@ -178,7 +178,7 @@ def _assert_tool_parser_required_message(resp: requests.Response) -> None:
 @pytest.mark.anthropic
 @pytest.mark.flaky(reruns=2)
 @pytest.mark.parametrize('backend', BACKEND_LIST)
-@pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
+@pytest.mark.parametrize('model_case', get_restful_chat_model_list())
 class TestRestfulAnthropicV1:
 
     def test_list_models(self, backend, model_case):

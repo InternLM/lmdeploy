@@ -93,10 +93,6 @@ h:
     pytorch:
     - fp8
   gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
     chat-template-kwargs:
       enable_thinking: true
 - model_type:
@@ -106,7 +102,6 @@ h:
     tp: 2
     extra:
       max-batch-size: 256
-      prefix-cache-decode-state-interval: 1024
       prefix-cache-state-budget: 256
       max-prefill-token-num: 64
   backends:
@@ -119,10 +114,24 @@ h:
     pytorch:
     - fp8
   gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 2
+    extra:
+      max-batch-size: 256
+      prefix-cache-decode-state-interval: 1024
+      prefix-cache-state-budget: 256
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - prefix_cache_evaluate
+  gen_config:
     chat-template-kwargs:
       enable_thinking: true
 - model_type:
@@ -147,9 +156,5 @@ h:
   - longtext_evaluate
   - mllm_evaluate
   gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
     chat-template-kwargs:
       enable_thinking: true

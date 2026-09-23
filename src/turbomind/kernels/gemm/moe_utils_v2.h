@@ -73,6 +73,10 @@ void invokeMoeDispatchScales(Ref<Tensor>   out_,  //
                              const int*    num_valid_tokens,
                              cudaStream_t  st);
 
+// dst is write-only. dst_scales ([tokens] gate logits) scales the shared-base
+// term only and is inert without shared_src (TM_CHECK'd). shared_src /
+// shared_begin / shared_end describe the rank-owned rows of the dense shared
+// expert output; nullptr/0/0 means "no shared expert".
 void invokeMoeCombine(Ref<Tensor>   out_,
                       const Tensor& src,
                       const Tensor& bias,
@@ -82,7 +86,9 @@ void invokeMoeCombine(Ref<Tensor>   out_,
                       const float*  dst_scales,
                       int           experts_per_token,
                       float         bscale,
-                      float         dst_scale,
+                      const Tensor& shared_src,
+                      int           shared_begin,
+                      int           shared_end,
                       cudaStream_t  st);
 
 void invokeMoeSoftmaxMaskTopKGroups(

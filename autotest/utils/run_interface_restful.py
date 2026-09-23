@@ -10,14 +10,12 @@ import time
 from pathlib import Path
 
 import allure
-from utils.config_utils import get_case_str_by_config, get_workerid
-from utils.constant import (
-    DEFAULT_PORT,
-    PROXY_PORT,
-    RESTFUL_BASE_MODEL_LIST,
-    RESTFUL_MODEL_LIST,
-    TOOL_REASONING_MODEL_LIST,
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_restful_protocol_model_candidates,
+    get_workerid,
 )
+from utils.constant import DEFAULT_PORT, PROXY_PORT
 from utils.proxy_distributed_utils import ApiServerPerTest, is_port_open
 from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import start_openai_service, terminate_restful_api
@@ -71,7 +69,7 @@ def _protocol_model_candidates() -> list[str]:
     """Model ids used as pytest params in interface protocol suites."""
     seen: set[str] = set()
     out: list[str] = []
-    for name in (*RESTFUL_MODEL_LIST, *RESTFUL_BASE_MODEL_LIST, *TOOL_REASONING_MODEL_LIST):
+    for name in get_restful_protocol_model_candidates():
         if name not in seen:
             seen.add(name)
             out.append(name)
@@ -232,6 +230,14 @@ def _run_interface_suites(
                 '(Anthropic / Responses API not available via proxy)',
                 flush=True,
             )
+        engine_suites = [c for c in ('sleep_wakeup', 'abort_request') if c in case_info]
+        if engine_suites:
+            case_info = [c for c in case_info if c not in ('sleep_wakeup', 'abort_request')]
+            print(
+                f'proxy: skipping {", ".join(engine_suites)} '
+                '(sleep/abort mutate engine state on api_server workers)',
+                flush=True,
+            )
 
     env = _scrub_outer_xdist_env(os.environ.copy())
     env['LMDEPLOY_PORT'] = str(port)
@@ -303,25 +309,38 @@ def _run_interface_suites(
             'autotest/interface/restful/reasoning_parser/',
             f'reasoning and not not_{backend}',
         ),
+        (
+            'sleep_wakeup',
+            'autotest/interface/restful/test_restful_sleep_wakeup.py',
+            f'not not_{backend}',
+        ),
+        (
+            'abort_request',
+            'autotest/interface/restful/test_restful_abort_request.py',
+            f'not not_{backend}',
+        ),
     ]
     for case_name, rel_path, marker in suite_map:
         if case_name not in case_info:
             continue
         log_path = os.path.join(log_dir, f'log_interface_{case_name}_{case_str}_{port}_{timestamp}.log')
-        suite_workers = n_workers
+        suite_n = n_workers
         suite_reruns = 5
         suite_ignore = None
         if case_name == 'toolcall':
             suite_ignore = _HARD_SCHEMA_IGNORE
         elif case_name == 'hard_schema':
-            suite_workers = _hard_schema_workers(n_workers)
+            suite_n = _hard_schema_workers(n_workers)
             suite_reruns = HARD_SCHEMA_SUITE_RERUNS
+        elif case_name in ('sleep_wakeup', 'abort_request'):
+            # sleep/abort mutate the shared engine; do not fan out HTTP workers.
+            suite_n = 1
         rc = _pytest_cmd(
             rel_path,
             k_expr=k_expr,
             m_expr=marker,
             env=env,
-            n_workers=suite_workers,
+            n_workers=suite_n,
             log_path=log_path,
             reruns=suite_reruns,
             ignore=suite_ignore,

@@ -27,7 +27,5 @@ h:
         tool-call-parser: deepseek-v4
         reasoning-parser: deepseek-v4
   gen_config:
-    temperature: 1.0
-    top-p: 1.0
     chat-template-kwargs:
       enable_thinking: true

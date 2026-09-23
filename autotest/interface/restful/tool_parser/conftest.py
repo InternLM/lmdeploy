@@ -2,8 +2,8 @@ import os
 from functools import cache
 
 import pytest
-from utils.config_utils import model_enables_return_routed_experts
-from utils.constant import BACKEND_LIST, CAPPED_MAX_COMPLETION_TOKENS, TOOL_REASONING_MODEL_LIST
+from utils.config_utils import get_tool_reasoning_model_list, model_enables_return_routed_experts
+from utils.constant import BACKEND_LIST, CAPPED_MAX_COMPLETION_TOKENS
 from utils.tool_call_json_schema_utils import (
     HARD_SCHEMA_SKIP_NO_PARSER,
     HARD_SCHEMA_SKIP_NO_SUITE,
@@ -39,7 +39,7 @@ _CLASS_MARKS = [
     pytest.mark.tool_call,
     pytest.mark.flaky(reruns=2),
     pytest.mark.parametrize('backend', BACKEND_LIST),
-    pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
+    pytest.mark.parametrize('model_case', get_tool_reasoning_model_list()),
 ]
 
 _CLASS_MARKS_MM = [
@@ -48,14 +48,14 @@ _CLASS_MARKS_MM = [
     pytest.mark.mm_tool_call,
     pytest.mark.flaky(reruns=2),
     pytest.mark.parametrize('backend', BACKEND_LIST),
-    pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
+    pytest.mark.parametrize('model_case', get_tool_reasoning_model_list()),
 ]
 
 _CLASS_MARKS_HARD_SCHEMA = [
     pytest.mark.order(8),
     pytest.mark.hard_schema,
     pytest.mark.parametrize('backend', BACKEND_LIST),
-    pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
+    pytest.mark.parametrize('model_case', get_tool_reasoning_model_list()),
 ]
 
 def _apply_marks(cls):

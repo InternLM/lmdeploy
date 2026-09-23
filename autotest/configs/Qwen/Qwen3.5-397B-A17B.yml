@@ -37,13 +37,6 @@ h:
   quantization:
     pytorch:
     - fp8
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
 - model_type:
   - chat
   - vl
@@ -68,13 +61,24 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 2
+    dp: 4
+    ep: 8
+    extra:
+      max-batch-size: 256
+      cache-max-entry-count: 0.7
+      prefix-cache-state-budget: 256
+      max-prefill-token-num: 64
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - prefix_cache
 - model_type:
   - chat
   - vl
@@ -87,23 +91,12 @@ h:
       cache-max-entry-count: 0.7
       prefix-cache-decode-state-interval: 1024
       prefix-cache-state-budget: 256
-      max-prefill-token-num: 64
   backends:
   - name: pytorch
     communicators:
     - nccl
   test_coverage:
-  - prefix_cache
-  quantization:
-    pytorch:
-    - fp8
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
+  - prefix_cache_evaluate
 - model_type:
   - chat
   - vl
@@ -124,13 +117,6 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
 ascend:
 - model_type:
   - chat
@@ -149,13 +135,6 @@ ascend:
   test_coverage:
   - evaluate
   - func
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true
 - model_type:
   - chat
   - vl
@@ -174,10 +153,3 @@ ascend:
   test_coverage:
   - func
   - evaluate
-  gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
-    chat-template-kwargs:
-      enable_thinking: true

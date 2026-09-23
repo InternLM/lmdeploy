@@ -12,6 +12,7 @@
 #include "src/turbomind/kernels/gemm/tuner/sampler.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
@@ -41,6 +42,63 @@ std::vector<int> ArgSort(size_t size, const Cmp& cmp)
 }
 
 }  // namespace
+
+Workspace::Workspace(cudaStream_t stream):
+    barriers_size{kBarriersSize}, partials_size{kPartialsSize}, tensormaps_size{kTensormapsSize}
+{
+    TM_CUDA_CHECK(cudaMallocAsync(&barriers, barriers_size, stream));
+    TM_CUDA_CHECK(cudaMallocAsync(&partials, partials_size, stream));
+    TM_CUDA_CHECK(cudaMallocAsync(&tensormaps, tensormaps_size, stream));
+    TM_CUDA_CHECK(cudaMemsetAsync(barriers, 0, barriers_size, stream));
+    TM_CUDA_CHECK(cudaMallocAsync(&flags, sizeof(int), stream));
+    // The stream is not retained: publish allocation/initialization readiness
+    // for first use on any stream.
+    TM_CUDA_CHECK(cudaStreamSynchronize(stream));
+}
+
+Workspace::~Workspace()
+{
+    // Plain cudaFree: stream-ordered (cudaMallocAsync) memory gets no implicit
+    // synchronization. Only safe once all work using this workspace has
+    // completed — owners on a live stream should Release() first instead.
+    cudaFree(barriers);
+    cudaFree(partials);
+    cudaFree(tensormaps);
+    cudaFree(flags);
+    barriers        = nullptr;
+    barriers_size   = 0;
+    partials        = nullptr;
+    partials_size   = 0;
+    tensormaps      = nullptr;
+    tensormaps_size = 0;
+    flags           = nullptr;
+}
+
+void Workspace::Release(cudaStream_t stream)
+{
+    cudaFreeAsync(barriers, stream);
+    cudaFreeAsync(partials, stream);
+    cudaFreeAsync(tensormaps, stream);
+    cudaFreeAsync(flags, stream);
+    barriers        = nullptr;
+    barriers_size   = 0;
+    partials        = nullptr;
+    partials_size   = 0;
+    tensormaps      = nullptr;
+    tensormaps_size = 0;
+    flags           = nullptr;
+}
+
+Workspace::Workspace(Workspace&& other) noexcept:
+    barriers{std::exchange(other.barriers, nullptr)},
+    barriers_size{std::exchange(other.barriers_size, 0)},
+    partials{std::exchange(other.partials, nullptr)},
+    partials_size{std::exchange(other.partials_size, 0)},
+    tensormaps{std::exchange(other.tensormaps, nullptr)},
+    tensormaps_size{std::exchange(other.tensormaps_size, 0)},
+    flags{std::exchange(other.flags, nullptr)}
+{
+}
 
 struct Gemm::Impl {
 
@@ -93,7 +151,7 @@ struct Gemm::Impl {
 
     int Launch(const LaunchSpec& spec, const Arguments& args, cudaStream_t stream)
     {
-        auto workspace = args.workspace;
+        auto& workspace = *args.workspace;
         return spec.kernel->Launch(args.operation,
                                    args.alpha,
                                    args.A,
@@ -327,13 +385,15 @@ std::vector<DataType> Gemm::DataTypes(const DataFormat& weight_format) const
 
 std::optional<ExecPlan> Gemm::GetExecPlan(const Arguments& args)
 {
+    TM_CHECK(args.workspace);
+
     Context context{*impl_->props_};
     if (!context.Init(args.operation, args.Adesc, args.Udesc, args.Bdesc, args.Vdesc, args.Cdesc, args.Ddesc)) {
         return std::nullopt;
     }
 
     LaunchSpec launch =
-        impl_->Dispatch(context, args.operation.dispatch, args.workspace.barriers_size, args.workspace.partials_size);
+        impl_->Dispatch(context, args.operation.dispatch, args.workspace->barriers_size, args.workspace->partials_size);
     if (!launch.kernel) {
         return std::nullopt;
     }
@@ -344,6 +404,8 @@ std::optional<ExecPlan> Gemm::GetExecPlan(const Arguments& args)
 
 std::optional<ExecPlan> Gemm::Tune(const Arguments& args)
 {
+    TM_CHECK(args.workspace);
+
     Context context{*impl_->props_};
     if (!context.Init(args.operation, args.Adesc, args.Udesc, args.Bdesc, args.Vdesc, args.Cdesc, args.Ddesc)) {
         return std::nullopt;
@@ -359,7 +421,7 @@ std::optional<ExecPlan> Gemm::Tune(const Arguments& args)
     const auto launch = [&](LaunchSpec spec, cudaStream_t stream) { return impl_->Launch(spec, args, stream); };
 
     std::optional<LaunchSpec> selected =
-        impl_->Measure(context, args.workspace.barriers_size, args.workspace.partials_size, launch, args.stream);
+        impl_->Measure(context, args.workspace->barriers_size, args.workspace->partials_size, launch, args.stream);
     if (!selected) {
         return std::nullopt;
     }
@@ -369,6 +431,8 @@ std::optional<ExecPlan> Gemm::Tune(const Arguments& args)
 
 int Gemm::Run(const ExecPlan& plan, const Arguments& args)
 {
+    TM_CHECK(args.workspace);
+
     if (!plan.launch_.kernel) {
         TM_LOG_FATAL("No feasible kernel found for the problem: {}", to_string(plan.desc_));
         return -1;

@@ -51,10 +51,24 @@ h:
       extra:
         logprobs-mode: raw_logprobs
   gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 1
+    extra:
+      max-batch-size: 256
+      prefix-cache-state-budget: 256
+      max-prefill-token-num: 64
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - prefix_cache
+  gen_config:
     chat-template-kwargs:
       enable_thinking: true
 - model_type:
@@ -66,18 +80,13 @@ h:
       max-batch-size: 256
       prefix-cache-decode-state-interval: 1024
       prefix-cache-state-budget: 256
-      max-prefill-token-num: 64
   backends:
   - name: pytorch
     communicators:
     - nccl
   test_coverage:
-  - prefix_cache
+  - prefix_cache_evaluate
   gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
     chat-template-kwargs:
       enable_thinking: true
 - model_type:
@@ -101,9 +110,5 @@ h:
   - longtext_evaluate
   - mllm_evaluate
   gen_config:
-    temperature: 1.0
-    top-k: 20
-    repetition-penalty: 1.0
-    top-p: 0.95
     chat-template-kwargs:
       enable_thinking: true
