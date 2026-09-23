@@ -227,8 +227,15 @@ class RayExecutor(ExecutorBase):
         device_ctx = DeviceContext(device_type)
         with get_device_manager().context(device_ctx):
             logger.info('Init ray cluster.')
-            attn_tp = dist_config.attn_tp
-            self.ray_ctx = RayContext(attn_tp, dp=dist_config.dp, device_type=device_type)
+            # The placement group + worker count must follow world_size (the
+            # true rank count), NOT attn_tp. With an asymmetric topology
+            # (attn_tp < mlp_tp/world_size, e.g. V4's grouped o-proj needs
+            # attn_tp<=o_groups while EP needs the full width), using attn_tp
+            # here would spawn too few ranks and hang init_process_group
+            # (which waits for world_size ranks). mp_executor already uses
+            # world_size; mirror it.
+            num_workers = dist_config.world_size
+            self.ray_ctx = RayContext(num_workers, dp=dist_config.dp, device_type=device_type)
             placement_group = self.ray_ctx.get_placement_group()
             self.placement_group = placement_group
 
@@ -264,7 +271,7 @@ class RayExecutor(ExecutorBase):
             self.remote_outs: asyncio.Queue = None
 
             logger.info('Init distributed environment by device.')
-            self.rank_offset = dist_config.dp_rank * attn_tp
+            self.rank_offset = dist_config.dp_rank * dist_config.attn_tp
             self._init_distributed_environment_by_device(device_type)
 
             logger.info('Init distributed process group.')
@@ -608,12 +615,15 @@ class RayExecutor(ExecutorBase):
                     raise ValueError(
                         f'External bundle index {bundle_id} does not have required resource: {device_str}. '
                         f'Available resources in this bundle: {dict(bundle)}')
-        attn_tp = self.dist_config.attn_tp
-        if len(bundle_indices) < attn_tp:
-            raise ValueError(f'Not enough bundle indices for attention tensor parallelism. '
-                             f'Required: {attn_tp}, Provided: {len(bundle_indices)} '
+        # Number of workers follows world_size (the true rank count), not
+        # attn_tp — see the note in __init__. Truncating to attn_tp would
+        # under-provision ranks for an asymmetric (attn_tp<world_size) run.
+        num_workers = self.dist_config.world_size
+        if len(bundle_indices) < num_workers:
+            raise ValueError(f'Not enough bundle indices for the requested world_size. '
+                             f'Required: {num_workers}, Provided: {len(bundle_indices)} '
                              f'(bundle_indices: {bundle_indices}).')
-        bundle_indices = bundle_indices[:attn_tp]
+        bundle_indices = bundle_indices[:num_workers]
 
         workers = list()
         for _, bundle_id in enumerate(bundle_indices):

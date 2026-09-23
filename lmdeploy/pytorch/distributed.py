@@ -210,7 +210,15 @@ class DistContext:
         dp_rank = context.dp_rank
         world_size = dist_config.world_size
         ep_rank = context.rank % ep
-        ep_group_id = dp_rank // ep
+        # ep_group_id by GLOBAL rank, not dp_rank. The EP groups are formed by
+        # chunking world_size into ep-sized slices (ranks [0:ep], [ep:2ep],
+        # ...). A rank belongs to slice (rank // ep). The old `dp_rank // ep`
+        # only worked when ep == world_size (one spanning slice, id 0 for all);
+        # for per-DP-group EP (ep < world_size, ep==tp) it mis-assigned every
+        # rank to slice 0, putting ranks of one DP group into the other
+        # group's process group (non-members -> broken/all_reduce hang). Use
+        # rank // ep so each rank lands in its own DP group's EP slice.
+        ep_group_id = context.rank // ep
         ranks = range(world_size)
         ep_gpu_groups = []
         for start in range(0, world_size, ep):

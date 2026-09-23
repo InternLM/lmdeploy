@@ -369,6 +369,28 @@ class AsyncEngine:
         await self.session_mgr.async_abort_all()
         logger.info('stopped all sessions')
 
+    async def stop_session(self, session_id: int):
+        """Stop a single running session (e.g. on client disconnect).
+
+        Unlike ``stop_all_session`` this does NOT bump the engine epoch, so
+        other in-flight sessions keep running -- only the one whose client
+        disconnected is aborted. The abort routes through the request handle
+        to the engine ``_on_stop_session`` -> ``scheduler.stop_session`` ->
+        the V4 state-pool blocks held by that session are returned to the
+        shared free-list. Without this method, a client disconnect raised
+        ``AttributeError: 'AsyncEngine' object has no attribute
+        'stop_session'`` (only ``stop_all_session`` existed), so the session
+        was never aborted and its V4 state blocks LEAKED in the shared pool
+        -- under max_batch>1 a few disconnects exhausted the pool and every
+        later request hung (the batch=8 state-budget regression).
+        """
+        session = self.session_mgr.get(session_id, create_if_not_exists=False)
+        if session is None:
+            logger.debug(f'stop_session: session {session_id} not found (already ended)')
+            return
+        logger.debug(f'stop_session: aborting session {session_id}')
+        await session.async_abort()
+
     async def sleep(self, level: int = 1):
         """Sleep the model.
 

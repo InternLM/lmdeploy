@@ -191,6 +191,12 @@ class Engine(EngineBase):
         self.dist_config = dist_config
         self.misc_config = self.executor.misc_config
         self.max_session_len = self._get_max_session_len()
+        # Expose the effective session len (engine cap = min of the configured
+        # session_len and the GPU-block budget) on cache_config so backends
+        # that build position-indexed tables can size them to the real cap.
+        # See CacheConfig.session_len docstring -- without this, v4_dsa sizes
+        # the RoPE table to a hardcoded 8192 and long-decode positions OOB it.
+        self.cache_config.session_len = self.max_session_len
         self.engine_config.num_cpu_blocks = self.cache_config.num_cpu_blocks
         self.engine_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
 
@@ -437,10 +443,19 @@ class Engine(EngineBase):
             if self.engine_config.role == EngineRole.Prefill:
                 sampling_param.max_new_tokens = 1
             elif max_new_tokens + num_all_tokens > max_session_len:
+                # Cap generation so prompt+decode never exceeds the effective
+                # session len -- absolute positions stay < session_len, which
+                # is what position-indexed backend tables (V4 RoPE cos/sin) are
+                # sized to. Without this cap a long decode's position OOBs the
+                # gather -> aclnn IndexCheck 507011 aicore crash (whole-serve
+                # down). max(0, ...) keeps a request whose prompt alone already
+                # fills the session from going negative (it generates nothing
+                # and is reported cleanly instead of crashing downstream).
+                remain = max(0, max_session_len - num_all_tokens)
                 logger.warning(
                     f'session[{msg.session_id}]: num tokens is larger than max session len {max_session_len}. '
-                    f'Update max_new_tokens={max_session_len - num_all_tokens}.')
-                sampling_param.max_new_tokens = max_session_len - num_all_tokens
+                    f'Update max_new_tokens={remain}.')
+                sampling_param.max_new_tokens = remain
 
         scheduler = self.scheduler
         for req in reqs:

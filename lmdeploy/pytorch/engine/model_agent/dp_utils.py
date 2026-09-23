@@ -106,8 +106,24 @@ class GatheredDPForwardMeta:
 
     @property
     def global_is_decoding(self):
-        """Whether all DP ranks are decoding."""
-        return self.is_decoding.all().item()
+        """Whether the step is a decode step across all DP ranks.
+
+        A rank is doing a real prefill only when it has real (non-dummy,
+        non-sleeping) prefill inputs: is_decoding=False AND is_dummy=False
+        AND is_sleeping=False. Per the DP contract (agent._prepare_dp_v1),
+        if ANY rank is prefilling the whole step is a prefill step -- the
+        EP/TP collectives need all ranks in lockstep, so a prefill on one DP
+        group forces prefill semantics on all. Idle ranks (is_dummy=True or
+        is_sleeping=True) are NOT prefilling: under DP with a single active
+        request the idle DP group carries dummy/sleeping inputs but the step
+        is still a decode. So global_is_decoding is True unless some rank is
+        doing a real prefill. (The original `is_decoding.all()` was False
+        whenever an idle DP group existed, breaking graph-mode
+        padding_batch_size under dp>1.)
+        """
+        is_dec = self.is_decoding.bool()
+        not_prefill = is_dec | self.is_dummy.bool() | self.is_sleeping.bool()
+        return bool(not_prefill.all().item())
 
     @property
     def is_all_dummy(self):

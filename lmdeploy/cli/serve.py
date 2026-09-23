@@ -294,7 +294,18 @@ class SubCliServe:
 
         from lmdeploy.messages import VisionConfig
         vision_config = VisionConfig(args.vision_max_batch_size)
-        if args.dp == 1 or backend == 'turbomind':
+        # DP routing:
+        # - dp==1 / turbomind: single engine (run_api_server).
+        # - dp>1 with ep>1 (EP spans DP-group boundaries, e.g. V4 tp8/dp2/ep16
+        #   where world_size=ep=16 > attn_tp=8): the EP all_reduce is a
+        #   world_size-wide collective, so independent per-DP-rank engines
+        #   (launch_server) would deadlock waiting for ranks they don't drive.
+        #   Run it as ONE engine (internal DP): a single driver spawns all
+        #   world_size ranks via ray and steps them in lockstep, splitting
+        #   batches across DP groups via DPMeta.
+        # - dp>1 without EP (each DP group self-contained on its node):
+        #   independent engines (launch_server), load-balanced across DP ranks.
+        if args.dp == 1 or backend == 'turbomind' or args.ep > 1:
             from lmdeploy.serve.openai.api_server import serve as run_api_server
 
             run_api_server(

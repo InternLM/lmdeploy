@@ -768,13 +768,26 @@ class DeepseekV2MLP(nn.Module):
         if is_shared_expert:
             dist_config = get_dist_manager().current_config()
             dp = dist_config.dp
+            ep = getattr(dist_config, 'ep', 1)
             if dp == 1:
                 # split weight, do all reduce in moe
                 is_tp = True
                 all_reduce = False
+            elif ep > 1:
+                # DP + EP (DeepSeek V4): the EP group spans every DP group,
+                # so the shared expert -- a dense MLP -- must be TP-sharded by
+                # mlp_tp and reduced over its mlp_tp group, NOT folded into
+                # the world-size-wide EP all_reduce. Folding a replicated full
+                # shared expert into that reduce sums it |EP|-times, blowing up
+                # the output; sharding it |mlp_tp|-ways and reducing over the
+                # mlp_tp group (the ranks holding complementary shards) yields
+                # the shared contribution exactly once, matching vllm.
+                is_tp = True
+                all_reduce = False
             else:
-                # do not split weight on dp
-                # TODO: support dp+tp?
+                # DP without EP (DeepSeek V2): each DP group is independent
+                # and self-contained on its node, so the shared expert is
+                # replicated full on every rank (no cross-DP reduce).
                 is_tp = False
                 all_reduce = False
         else:
