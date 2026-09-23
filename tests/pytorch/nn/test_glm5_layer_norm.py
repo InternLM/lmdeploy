@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from lmdeploy.pytorch.models import glm5_next
+from lmdeploy.pytorch.nn import LayerNorm
 from lmdeploy.pytorch.nn.kpool import KPOOL_INDEXER_PARAMETER_NAMES, KPoolIndexer
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -16,8 +17,8 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
         not torch.cuda.is_available(), reason='requires CUDA')),
 ])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16, torch.float32])
-@pytest.mark.parametrize('owner', ['kpool', 'vision_merger'])
-def test_layer_norm_call_sites_preserve_fp32_contract(monkeypatch, dtype, device, owner):
+@pytest.mark.parametrize(('owner', 'hidden_size'), [('kpool', 128), ('vision_merger', 128), ('vision_merger', 4096)])
+def test_layer_norm_call_sites_preserve_fp32_contract(monkeypatch, dtype, device, owner, hidden_size):
     if owner == 'kpool':
         module = KPoolIndexer(128, 2, 128, 8, 4, 4, dtype=dtype, device=device)
         assert set(dict(module.named_parameters())) == set(KPOOL_INDEXER_PARAMETER_NAMES)
@@ -26,7 +27,7 @@ def test_layer_norm_call_sites_preserve_fp32_contract(monkeypatch, dtype, device
         forward = module.project_key
     else:
         module = glm5_next.Glm5NextVisionPatchMerger(
-            SimpleNamespace(out_hidden_size=128, intermediate_size=128, swiglu_limit=10.0),
+            SimpleNamespace(out_hidden_size=hidden_size, intermediate_size=128, swiglu_limit=10.0),
             dtype=dtype, device=device)
         # Isolate the real merger's norm -> output cast -> GELU call sequence.
         module.proj = nn.Identity()
@@ -36,19 +37,20 @@ def test_layer_norm_call_sites_preserve_fp32_contract(monkeypatch, dtype, device
         norm = module.post_projection_norm
         forward = module
 
-    assert type(norm) is nn.LayerNorm
-    assert norm.eps == 1e-6
+    assert type(norm) is (nn.LayerNorm if owner == 'kpool' else LayerNorm)
+    assert (norm.eps if owner == 'kpool' else norm.impl.eps) == 1e-6
+    assert set(norm.state_dict()) == {'weight', 'bias'}
     assert norm.weight.dtype == norm.bias.dtype == torch.float32
     assert not norm.weight.requires_grad and not norm.bias.requires_grad
     torch.testing.assert_close(norm.weight, torch.ones_like(norm.weight))
     torch.testing.assert_close(norm.bias, torch.zeros_like(norm.bias))
     generator = torch.Generator().manual_seed(123)
     # Non-BF16-representable weights catch accidental parameter downcasting.
-    load_weight(norm.weight, torch.randn(128, generator=generator))
-    load_weight(norm.bias, torch.randn(128, generator=generator))
+    load_weight(norm.weight, torch.randn(hidden_size, generator=generator))
+    load_weight(norm.bias, torch.randn(hidden_size, generator=generator))
     for tokens in (1, 129, 8192):
-        inputs = torch.randn(tokens, 128, generator=generator).to(device=device, dtype=dtype)
-        expected = F.layer_norm(inputs.float(), (128,), norm.weight, norm.bias, norm.eps).to(dtype)
+        inputs = torch.randn(tokens, hidden_size, generator=generator).to(device=device, dtype=dtype)
+        expected = F.layer_norm(inputs.float(), (hidden_size,), norm.weight, norm.bias, 1e-6).to(dtype)
         if owner == 'vision_merger':
             expected = F.gelu(expected)
         actual = forward(inputs)

@@ -37,6 +37,7 @@ from lmdeploy.pytorch.nn import (
     HcPrePost,
     Kda,
     KPoolIndexer,
+    LayerNorm,
     ParallelLMHead,
     RMSNorm,
     apply_rotary_pos_emb_fp32,
@@ -230,8 +231,8 @@ class Glm5NextVisionPatchMerger(nn.Module):
                               bias=False,
                               dtype=dtype,
                               device=device)
-        self.post_projection_norm = nn.LayerNorm(
-            dim, eps=1e-6, dtype=torch.float32, device=device).requires_grad_(False)
+        self.post_projection_norm = LayerNorm(dim, eps=1e-6, dtype=torch.float32, device=device)
+        nn.init.zeros_(self.post_projection_norm.bias)
         self.gate_up_proj = build_merged_colwise_linear(
             in_features=dim,
             all_out_features=[context_dim, context_dim],
