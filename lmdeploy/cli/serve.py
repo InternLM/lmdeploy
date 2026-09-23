@@ -144,6 +144,7 @@ class SubCliServe:
         ArgumentHelper.migration_backend(pt_group)
         ArgumentHelper.cudagraph_capture_batch_sizes(pt_group)
         ArgumentHelper.piecewise_cudagraph_max_tokens(pt_group)
+        ArgumentHelper.communication_backend(pt_group)
         # multi-node serving args
         node_rank_act = ArgumentHelper.node_rank(pt_group)
         num_nodes_act = ArgumentHelper.num_nodes(pt_group)
@@ -285,6 +286,7 @@ class SubCliServe:
                 enable_return_routed_experts=args.enable_return_routed_experts,
                 distributed_executor_backend=args.distributed_executor_backend,
                 kv_transfer_config=kv_transfer_config,
+                communication_backend=args.communication_backend,
             )
         else:
             from lmdeploy.messages import TurbomindEngineConfig

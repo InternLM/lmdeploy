@@ -27,6 +27,18 @@ def gather_dcp_prefix_kv(local_kv: torch.Tensor, chunk: DCPPrefixChunk,
     return context
 
 
+def init_dcp_query_gather(num_heads: int, head_size: int):
+    """Initialize one query workspace shared by attention layers in this DCP
+    group."""
+    from lmdeploy.pytorch.distributed import get_dist_manager
+
+    group = get_dist_manager().current_context().dcp_group
+    if group.communicator is not None and group.query_gather_workspace is None:
+        width = num_heads * head_size * torch.distributed.get_world_size(group.gpu_group)
+        group.query_gather_workspace = group.communicator.create_all_gather_workspace(
+            width, device=torch.device('cuda'), dtype=torch.bfloat16)
+
+
 def gather_dcp_query(query: torch.Tensor, *, dcp_world_size: int) -> torch.Tensor:
     """Gather [tokens, local_heads, dim] queries along the head axis.
 
@@ -36,8 +48,9 @@ def gather_dcp_query(query: torch.Tensor, *, dcp_world_size: int) -> torch.Tenso
         return query
     from lmdeploy.pytorch.distributed import get_dist_manager
 
-    communicator = get_dist_manager().current_context().dcp_group.communicator
-    return communicator.gather_query(query)
+    group = get_dist_manager().current_context().dcp_group
+    output = group.communicator.all_gather(query.flatten(1), workspace=group.query_gather_workspace, copy_output=False)
+    return output.view(query.size(0), -1, query.size(2))
 
 
 def merge_dcp_attention(local_output: torch.Tensor,
@@ -89,10 +102,7 @@ class DCPAttentionImpl(TritonAttentionImpl):
         if use_fa3:
             from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
             self._fa3_prefill = flash_attn_varlen_func
-        from lmdeploy.pytorch.distributed import get_dist_manager
-        communicator = get_dist_manager().current_context().dcp_group.communicator
-        if communicator is not None:
-            communicator.prepare_query_gather(self.num_heads, self.head_size)
+        init_dcp_query_gather(self.num_heads, self.head_size)
 
     def get_step_metadata_provider(self):
         """Use common DCP lengths without a separate kernel scheduler."""

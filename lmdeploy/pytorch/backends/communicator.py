@@ -1,64 +1,49 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Literal
+
 import torch
 from torch import distributed as dist
 
 
 class DeviceCommunicator:
-    """Device-neutral collective operations for one process group."""
+    """Device-neutral collective operations for one process group.
+
+    Workspace creation returns a prepared, caller-owned workspace when available. Collective methods execute with native
+    fallback when an optimized implementation cannot handle the input.
+    """
 
     def __init__(self, device_group: dist.ProcessGroup):
         self.device_group = device_group
-
-    def supports_optimized_all_reduce(self) -> bool:
-        """Whether an optimized all-reduce implementation is available."""
-        return False
-
-    def supports_fused_all_reduce_residual_rms_norm(self) -> bool:
-        """Whether fused all-reduce, residual and RMSNorm is available."""
-        return False
-
-    def try_fused_all_reduce_residual_rms_norm(self,
-                                               input: torch.Tensor,
-                                               residual: torch.Tensor,
-                                               weight: torch.Tensor,
-                                               eps: float):
-        """Run fused all-reduce, residual and RMSNorm when eligible."""
-        return None
 
     def all_reduce_(self, input: torch.Tensor):
         """All-reduce ``input`` in place."""
         dist.all_reduce(input, group=self.device_group)
 
-    def prepare_query_gather(self, num_heads: int, head_size: int):
-        """Prepare an optional head-axis query gather before graph capture."""
-        pass
+    def all_gather(self, input: torch.Tensor, *, workspace=None, copy_output: bool = True) -> torch.Tensor:
+        """Gather 2D inputs along the last dimension on every group rank.
 
-    def gather_query(self, query: torch.Tensor) -> torch.Tensor:
-        """Gather query heads across ranks.
-
-        Consume the result on the same stream before the next query gather; CUDA implementations may borrow an arena.
+        With copy_output=False, optimized output may borrow the workspace until its next use. Consume it on the same
+        stream. Native gathering always returns an owned output for multi-rank groups.
         """
         world_size = dist.get_world_size(self.device_group)
         if world_size == 1:
-            return query
-        if not query.is_contiguous():
-            transposed = query.transpose(0, 1).contiguous()
-            gathered = transposed.new_empty(world_size * transposed.size(0), *transposed.shape[1:])
-            dist.all_gather_into_tensor(gathered, transposed, group=self.device_group)
-            return gathered.transpose(0, 1).contiguous()
+            return input
+        input = input.contiguous()
+        gathered = input.new_empty(world_size * input.size(0), input.size(1))
+        dist.all_gather_into_tensor(gathered, input, group=self.device_group)
+        return gathered.view(world_size, *input.shape).transpose(0, 1).reshape(input.size(0), -1)
 
-        # Contiguous token-major inputs need only the final head-axis packing.
-        gathered = query.new_empty(world_size * query.size(0), *query.shape[1:])
-        dist.all_gather_into_tensor(gathered, query, group=self.device_group)
-        gathered = gathered.view(world_size, *query.shape)
-        return gathered.transpose(0, 1).reshape(query.size(0), -1, query.size(2)).contiguous()
+    def create_all_gather_workspace(self, gathered_width: int, device: torch.device, dtype: torch.dtype):
+        """Create and prepare an optional workspace and return it to its
+        owner."""
+        return None
 
     def close(self):
-        """Release communicator-owned resources."""
-        pass
+        """Release group-owned resources; gather workspaces belong to
+        callers."""
 
 
 def build_communicator(cpu_group: dist.ProcessGroup, device_group: dist.ProcessGroup,
-                       dist_config, *, group_roles: tuple[str, ...] = ('tp', )):
+                       dist_config, *, group_name: Literal['tp', 'dcp'] = 'tp'):
     """Build the default process-group communicator."""
     return DeviceCommunicator(device_group=device_group)

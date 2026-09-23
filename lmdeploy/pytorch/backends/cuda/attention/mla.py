@@ -255,11 +255,9 @@ class FlashMLAImpl(TritonAttentionImpl):
         self.use_fa3 = use_fa3
 
         if self.dcp_world_size > 1:
-            from lmdeploy.pytorch.distributed import get_dist_manager
+            from .cp import init_dcp_query_gather
 
-            communicator = get_dist_manager().current_context().dcp_group.communicator
-            if communicator is not None:
-                communicator.prepare_query_gather(num_heads, head_size)
+            init_dcp_query_gather(num_heads, head_size)
 
     def get_step_metadata_provider(self):
         """Describe metadata required by this selected implementation."""

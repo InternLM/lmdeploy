@@ -193,7 +193,7 @@ def test_get_min_num_gpu_blocks_rejects_worker_count_mismatch():
 def test_runtime_size_reserves_dcp_peak_phase(monkeypatch, draft_tokens, topk, score_mb, dtype):
     monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', score_mb)
     executor = object.__new__(ExecutorBase)
-    executor.model_config = SimpleNamespace(mla_index_topk=topk, head_dim=576, v_head_dim=0,
+    executor.model_config = SimpleNamespace(use_flash_mla=True, mla_index_topk=topk, head_dim=576, v_head_dim=0,
                                             num_attention_heads=64, dtype=dtype)
     executor.specdecode_config = SimpleNamespace(num_speculative_tokens=draft_tokens) if draft_tokens else None
     executor.dist_config = SimpleNamespace(attn_tp=8)

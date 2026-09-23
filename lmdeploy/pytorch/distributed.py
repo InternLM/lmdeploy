@@ -26,38 +26,16 @@ class DistGroup:
     gpu_groups: list[dist.ProcessGroup] = None
     gpu_gather_group: dist.ProcessGroup = None
     communicator: 'DeviceCommunicator' = None
-
-    def supports_optimized_all_reduce(self) -> bool:
-        """Whether this group has an optimized all-reduce implementation."""
-        return self.communicator is not None and self.communicator.supports_optimized_all_reduce()
-
-    def supports_fused_all_reduce_residual_rms_norm(self) -> bool:
-        """Whether this group can fuse all-reduce, residual and RMSNorm."""
-        return (self.communicator is not None
-                and self.communicator.supports_fused_all_reduce_residual_rms_norm())
-
-    def try_fused_all_reduce_residual_rms_norm(self,
-                                               input: torch.Tensor,
-                                               residual: torch.Tensor,
-                                               weight: torch.Tensor,
-                                               eps: float):
-        """Run fused all-reduce, residual and RMSNorm, or return ``None``."""
-        if self.communicator is None:
-            return None
-        return self.communicator.try_fused_all_reduce_residual_rms_norm(
-            input=input, residual=residual, weight=weight, eps=eps)
-
-    def all_reduce_(self, tensor: torch.Tensor):
-        """All-reduce a tensor in place on this group."""
-        if self.communicator is not None:
-            return self.communicator.all_reduce_(tensor)
-        return dist.all_reduce(tensor, group=self.gpu_group)
+    query_gather_workspace: object = None
 
     def close(self):
         """Close groups."""
         if self.communicator is not None:
             self.communicator.close()
             self.communicator = None
+        if self.query_gather_workspace is not None:
+            self.query_gather_workspace.close()
+            self.query_gather_workspace = None
         if not dist.is_initialized():
             return
         if self.cpu_groups is not None:
@@ -241,19 +219,16 @@ def _build_communicators(context: 'DistContext'):
     """Attach one communicator to each rank-local, unique TP/DCP group."""
     build_communicator = context.communicator_builder
     tp_groups = (context.attn_tp_group, context.mlp_tp_group, context.moe_tp_group)
-    groups = (*tp_groups, context.dcp_group)
-    for group in {id(group): group for group in groups}.values():
+    groups = [('tp', group) for group in {id(group): group for group in tp_groups}.values()]
+    groups.append(('dcp', context.dcp_group))
+    for group_name, group in groups:
         if group.gpu_group is None:
             continue
-        # Aliased groups share one communicator with both operation roles.
-        roles = ('tp', ) if any(group is tp_group for tp_group in tp_groups) else ()
-        if group is context.dcp_group:
-            roles += ('dcp', )
         group.communicator = build_communicator(
             cpu_group=group.cpu_group,
             device_group=group.gpu_group,
             dist_config=context.dist_config,
-            group_roles=roles,
+            group_name=group_name,
         )
 
 
@@ -491,6 +466,17 @@ def all_reduce(tensor, op=ReduceOp.SUM, group='tp', async_op=False):
     """All reduce."""
     if isinstance(group, str):
         group = get_group(group, 'gpu')
+
+    # Optimize synchronous CUDA SUM on explicit TP groups; keep other calls native.
+    if tensor.is_cuda and op == ReduceOp.SUM and not async_op and group is not None:
+        context = get_dist_manager().current_context()
+        # Resolve the raw ProcessGroup to its communicator.
+        for tp_group in (context.attn_tp_group, context.mlp_tp_group, context.moe_tp_group):
+            if tp_group is not None and tp_group.gpu_group is group:
+                if tp_group.communicator is not None:
+                    return tp_group.communicator.all_reduce_(tensor)
+                break
+
     return dist.all_reduce(tensor, op, group, async_op)
 
 

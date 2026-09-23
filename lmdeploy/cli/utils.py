@@ -865,6 +865,14 @@ class ArgumentHelper:
                                    help='Whether to trust remote code from model repositories.')
 
     @staticmethod
+    def communication_backend(parser):
+        """Select native or automatic PyTorch communication."""
+        return parser.add_argument(
+            '--communication-backend', choices=['nccl', 'auto'], default='nccl',
+            help='PyTorch communication backend. nccl uses native process-group collectives; '
+            'auto opts into eligible optimizations. Default: nccl.')
+
+    @staticmethod
     def kv_transfer_config(parser):
         """Add external KV-cache connector configuration."""
         return parser.add_argument(

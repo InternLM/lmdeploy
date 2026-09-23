@@ -451,13 +451,13 @@ def all_gather_inner(
     hidden_states: torch.Tensor,
     tp_hidden_dim: int,
     skip_entry_sync: bool = False,
-    safe: bool = True,
+    copy_output: bool = True,
     *,
     _validated: bool = False,
 ) -> torch.Tensor:
     """Gather ``[T, H/TP]`` shards into ``[T, H]`` along the hidden dim.
 
-    ``tp_hidden_dim`` is the gathered width ``H``. Returns a clone when ``safe``,
+    ``tp_hidden_dim`` is the gathered width ``H``. Returns a clone when ``copy_output``,
     else a view into the symmetric buffer (valid until the next collective).
     ``_validated`` is reserved for the admitted provider,
     whose admission check already enforces the immutable dtype/layout/width
@@ -528,7 +528,7 @@ def all_gather_inner(
         # publish the whole grid before the output view is returned.
         barrier_inner(state, slot=1, release=True)
     output = state.comm_buff[:total_tokens, :tp_hidden_dim]
-    return output.clone() if safe else output
+    return output.clone() if copy_output else output
 
 
 def barrier_inner(state: MultimemAllGatherState, *, slot: int,
