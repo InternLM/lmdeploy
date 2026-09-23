@@ -32,7 +32,15 @@ def fused_moe_w8a8(
     topk: int,
     renormalize: bool,
     moe_metadata: DlinferMoeMetadata,
+    use_fused_op: bool = False,
 ):
     """Dlinfer dynamic W8A8 MoE using the Ascend public-op fallback."""
     return ext_ops.fused_moe_w8a8(hidden_states, gate_up_weights, gate_up_scales, down_weights, down_scales,
-                                  topk_weights, topk_ids, topk, renormalize, moe_metadata)
+                                  topk_weights, topk_ids, topk, renormalize, moe_metadata, use_fused_op)
+
+
+def prepare_fused_w8a8_weights(gate_up_weights: Tensor, down_weights: Tensor, gate_up_scales: Tensor,
+                               down_scales: Tensor):
+    """Prepare weights for the optional Ascend dispatch_ffn_combine path."""
+    from dlinfer.vendor.ascend.moe import prepare_fused_w8a8_weights as _prepare
+    return _prepare(gate_up_weights, down_weights, gate_up_scales, down_scales)
