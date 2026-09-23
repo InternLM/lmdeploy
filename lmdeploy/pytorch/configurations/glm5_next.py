@@ -239,7 +239,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         # DeepSeek-V3.2 token indexer selected by mla_index_topk.  Keeping this
         # unset also preserves the BF16 latent MLA cache policy.
         config.mla_index_topk = None
-        config.k_head_dim = text_config.kv_lora_rank + 64
+        config.k_head_dim = text_config.kv_lora_rank
         # Reuse Qwen3.5's token ring for convolution; recurrent/KPool states
         # keep a complete checkpoint after each verified token.
         ring_shape = (num_spec_tokens + 1,) if num_spec_tokens else ()

@@ -742,7 +742,6 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
     """GLM MLA without RoPE and with a pageable KPool-4 indexer."""
 
     use_sparse_mla = False
-    mla_head_padding = 64
 
     def __init__(self,
                  config: Any,
@@ -1246,10 +1245,6 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         (unabsorbed_query, key_states, value_states,
          q_lora) = self._qkv_proj_unabsorbed(
              hidden_states, num_heads=num_heads)
-        # The latent cache retains FlashMLA's 576-wide DeepSeek layout. GLM
-        # has no RoPE tail, so its final 64 dimensions are exact zeros.
-        key_states = F.pad(key_states, (0, self.mla_head_padding))
-
         if not attn_metadata.is_decoding:
             use_sparse = int(attn_metadata.max_kv_seqlen) > self.index_topk
             logical_indices = self._kpool_indices(
@@ -1301,8 +1296,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             topk_indices_buffer=topk_indices_buffer,
             skip_topk=skip_topk,
         )
-        # GLM has no RoPE tail, so the absorbed query contains exactly 512
-        # values; the cache retains its 576-wide FlashMLA storage alignment.
+        # NoPE queries and latent cache both contain exactly 512 values.
         query_states = self._absorbed_query(unabsorbed_query, num_heads)
         attn_output = self.decode_attn_fwd.forward(
             query_states,
