@@ -30,7 +30,9 @@ def _iface_id(run_config):
     layout = '-'.join(
         f'{k}{v}' for k, v in sorted(run_config['parallel_config'].items())
     )
-    return f"{run_config['backend']}-{run_config['model']}-{layout}"
+    spec = (run_config.get('extra_params') or {}).get('speculative-algorithm')
+    suffix = f'-{spec}' if spec else ''
+    return f"{run_config['backend']}-{run_config['model']}-{layout}{suffix}"
 
 
 def _iface_layout_marks(layout: dict[str, int]):

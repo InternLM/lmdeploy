@@ -39,6 +39,12 @@ h:
       extra:
         logprobs-mode: raw_logprobs
         enable-return-routed-experts: true
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
+    - suites:
+      - sleep
     turbomind:
     - suites:
       - base
@@ -53,6 +59,10 @@ h:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
+    - suites:
+      - abort
+      extra:
+        enable-abort-handling: true
   quantization:
     turbomind:
     - awq
