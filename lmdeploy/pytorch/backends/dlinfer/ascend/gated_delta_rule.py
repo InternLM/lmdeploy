@@ -1,13 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Ascend implementations for LMDeploy's gated-delta BuildSpecs."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import torch
 import torch.nn.functional as F
-
 
 from ...gated_delta_rule import (
     GatedDeltaMeta,
@@ -30,9 +27,9 @@ class AscendGatedDeltaMeta(GatedDeltaMeta):
         self.max_q_seq_len = attn_metadata.max_q_seqlen
         self.is_multi_token_decoding = attn_metadata.is_multi_token_decoding
         self.has_initial_state = attn_metadata.has_initial_state
-        self.spec_conv_offsets = getattr(attn_metadata, "spec_conv_offsets", None)
-        self.spec_state_offsets = getattr(attn_metadata, "spec_state_offsets", None)
-        self.cache_seqlens = getattr(attn_metadata, "cache_seqlens", None)
+        self.spec_conv_offsets = getattr(attn_metadata, 'spec_conv_offsets', None)
+        self.spec_state_offsets = getattr(attn_metadata, 'spec_state_offsets', None)
+        self.cache_seqlens = getattr(attn_metadata, 'cache_seqlens', None)
         self.state_ids = state_ids.clamp(0)
         self.conv_state_indices = self.state_ids.to(torch.int32)
 
@@ -238,11 +235,11 @@ class AscendGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             beta=beta,
             initial_state=initial_state,
             inplace_final_state=True,
-            cu_seqlens=kwargs.get("cu_seqlens"),
-            cache_seqlens_rb=kwargs.get("cache_seqlens_rb", cache_seqlens),
-            state_ids_rb=kwargs.get("state_ids_rb", state_indices),
+            cu_seqlens=kwargs.get('cu_seqlens'),
+            cache_seqlens_rb=kwargs.get('cache_seqlens_rb', cache_seqlens),
+            state_ids_rb=kwargs.get('state_ids_rb', state_indices),
             num_state=kwargs.get(
-                "num_state",
+                'num_state',
                 initial_state.size(1) if initial_state is not None and initial_state.dim() == 5 else 1,
             ),
             use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
