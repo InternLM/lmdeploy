@@ -1170,15 +1170,13 @@ class TestDPForwardInputsMaker:
         maker._in_que = asyncio.Queue()
         maker._ready_event = TestDPForwardInputsMaker._make_ready_event()
 
-        async def _gather_has_inputs(has_inputs=False):
-            return has_inputs
+        maker.dist_ctx = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=1), attn_tp_group=None)
 
         def _make_dummy_forward_inputs():
             if dummy_forward_inputs is not None:
                 return dummy_forward_inputs
             raise AssertionError('pending real input must not be replaced with a dummy')
 
-        maker._gather_has_inputs = _gather_has_inputs
         maker._make_dummy_forward_inputs = _make_dummy_forward_inputs
         return maker
 
@@ -1242,6 +1240,52 @@ class TestDPForwardInputsMaker:
             assert maker._in_que.qsize() == 1
 
         asyncio.run(_run())
+
+    @pytest.mark.parametrize('sleeping', [(True, False), (False, True), (True, True), (False, False)])
+    def test_sleep_transition_keeps_attention_tp_collective_order(self, monkeypatch, sleeping):
+        from lmdeploy.pytorch.engine.model_agent import inputs_maker as module
+
+        async def _run():
+            pending = []
+            calls = []
+            group = object()
+
+            def all_reduce(value, op, group, async_op):
+                assert group is makers[0].dist_ctx.attn_tp_group.cpu_group
+                assert op == module.dist.ReduceOp.SUM and async_op
+                future = asyncio.get_running_loop().create_future()
+                calls.append(value.tolist())
+                pending.append((value, future))
+                if len(pending) == 2:
+                    total = sum(x for x, _ in pending)
+                    for output, ready in pending:
+                        output.copy_(total)
+                        ready.set_result(None)
+                    pending.clear()
+                return SimpleNamespace(get_future=lambda: SimpleNamespace(done=future.done, wait=future.result))
+
+            monkeypatch.setattr(module.dist, 'all_reduce', all_reduce)
+            dummy = {'inputs': 'sleep_dummy'}
+            makers = [self._make_maker(is_sleeping=state, dummy_forward_inputs=dummy) for state in sleeping]
+            real = {'inputs': 'real'}
+            for maker in makers:
+                maker.dist_ctx = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=2),
+                                                 attn_tp_group=SimpleNamespace(cpu_group=group))
+            # Rank 1 already has ready data while rank 0 is still waiting for
+            # its forward RPC. A sleeping peer must neither skip TP agreement
+            # nor force the awake rank to wait for stale local input.
+            makers[1]._in_que.put_nowait(real)
+            tasks = [asyncio.create_task(m.get()) for m in makers]
+            if not any(sleeping):
+                while len(calls) < 2:
+                    await asyncio.sleep(0)
+                makers[0]._in_que.put_nowait(real)
+            result = await asyncio.wait_for(asyncio.gather(*tasks), timeout=1.0)
+            assert len(calls) == 2
+            assert result == ([dummy, dummy] if any(sleeping) else [real, real])
+            assert makers[1]._in_que.qsize() == int(sleeping[1])
+
+        asyncio.run(asyncio.wait_for(_run(), timeout=2.0))
 
     def test_get_attaches_dummy_inputs_to_connector_only_step(self):
         async def _run():
