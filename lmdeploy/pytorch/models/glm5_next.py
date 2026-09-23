@@ -18,6 +18,7 @@ from lmdeploy.pytorch.backends.cuda.attention.tilelang_sparse_mla import (
 )
 from lmdeploy.pytorch.backends.cuda.kpool import (
     kpool_compress_quantize_cuda,
+    kpool_prefill_update_cuda,
     kpool_score_contiguous_cuda,
     kpool_score_paged_cuda,
     kpool_select_groups_cuda,
@@ -917,6 +918,17 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                 tail_score_state.index_copy_(0, update.safe_state_ids,
                                             update.next_tail_scores)
                 save_ring(history_lengths + step + 1)
+            return indexer_k_cache
+
+        if key.is_cuda:
+            prefill_ids = state_ids if ring_states is None else torch.where(valid_requests, state_ids, -1)
+            kpool_prefill_update_cuda(
+                key, score, tail_k_state, tail_score_state, prefill_ids,
+                attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
+                indexer_k_cache, attn_metadata.block_offsets,
+                self.indexer.index_kpool_compress_ape, self.index_kpool,
+                self.indexer.scale_fmt is not None)
+            save_ring(attn_metadata.kv_seqlens)
             return indexer_k_cache
 
         q_seqlens = attn_metadata.q_seqlens.tolist()

@@ -8,11 +8,38 @@ import functools
 import torch
 from torch import Tensor
 
+from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_indexed_key_cache
+from lmdeploy.pytorch.kernels.cuda.kpool import compress_kpool, partition_kpool
 from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
     is_sparse_index_topk_supported,
     sparse_index_topk,
 )
-from lmdeploy.pytorch.nn.kpool import kpool_compress, kpool_quantize_fp8
+from lmdeploy.pytorch.nn.kpool import (
+    kpool_compress,
+    kpool_packed_cache_views,
+    kpool_quantize_fp8,
+)
+
+from .gated_delta_rule import _state_scatter
+
+
+def kpool_prefill_update_cuda(keys, scores, tail_keys, tail_scores, state_ids,
+                              q_seqlens, kv_seqlens, packed_cache, block_offsets,
+                              ape, pool_size, round_scale):
+    """Batch ragged pool assembly without a host read or cache-arena copy."""
+    closed_keys, closed_scores, group_ids, requests, valid, next_keys, next_scores = partition_kpool(
+        keys, scores, tail_keys, tail_scores, state_ids, q_seqlens, kv_seqlens, pool_size)
+    if closed_keys.size(0):
+        compress = (compress_kpool if torch.cuda.get_device_capability(keys.device)[0] >= 9
+                    else kpool_compress_quantize_cuda)
+        values, scales = compress(
+            closed_keys, closed_scores, ape, mode='extend', round_scale=round_scale)
+        cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
+        fill_indexed_key_cache(values, scales, group_ids, valid, block_offsets,
+                               cache_keys, cache_scales, page_step=pool_size, request_ids=requests)
+    slots = torch.zeros_like(state_ids)
+    _state_scatter(tail_keys.unsqueeze(1), state_ids, slots, next_keys)
+    _state_scatter(tail_scores.unsqueeze(1), state_ids, slots, next_scores)
 
 
 @functools.lru_cache
