@@ -47,12 +47,12 @@ class CudaCommunicator(DeviceCommunicator):
         super().all_reduce_(input)
 
     def create_all_gather_workspace(self, gathered_width: int, device: torch.device, dtype: torch.dtype,
-                                    *, dim: int = -1):
+                                    *, dim: int = -1, reuse_sync: bool = True):
         from .symm_mem_allgather import SymmetricMemoryAllGather
 
         workspace = SymmetricMemoryAllGather(
             self.device_group, dist.get_rank(self.device_group), gathered_width,
-            device=device, dtype=dtype, capacity_bytes=64 * 1024 * 1024, dim=dim)
+            device=device, dtype=dtype, capacity_bytes=64 * 1024 * 1024, dim=dim, reuse_sync=reuse_sync)
         workspace.prepare()
         return workspace
 

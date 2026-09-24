@@ -19,7 +19,8 @@ class SymmetricMemoryAllGather:
 
     Construct on every group rank after process-group setup. Only preparation performs allocation and consensus; forward
     never initializes or rebuilds. Re-prepare after coordinated, quiescent device/dtype changes. Runtime rows must match
-    across ranks, as required by NCCL all-gather too.
+    across ranks, as required by NCCL all-gather too. With reuse_sync=False, callers must order all ranks' consumers
+    through a subsequent same-group collective before reusing the arena.
     """
 
     # Keep the conservative single-token NCCL policy internal to the provider.
@@ -28,7 +29,7 @@ class SymmetricMemoryAllGather:
 
     def __init__(self, group: dist.ProcessGroup, rank: int, gathered_width: int,
                  *, device: torch.device, dtype: torch.dtype, capacity_bytes: int,
-                 dim: int = -1):
+                 dim: int = -1, reuse_sync: bool = True):
         self.device = torch.device(device)
         self.dtype = dtype
         self._prepared = False
@@ -37,6 +38,7 @@ class SymmetricMemoryAllGather:
         self._gathered_width = gathered_width
         self._dim = dim
         self._capacity_bytes = capacity_bytes
+        self._reuse_sync = reuse_sync
         self._state = None
         self._kernels = None
         self._graph_ready_shapes = set()
@@ -110,7 +112,8 @@ class SymmetricMemoryAllGather:
                  and capability_ok)
         if not self._agree(valid, device):
             return self._disabled('unsupported group size, dtype, width, capacity or device')
-        if not self._same_config((width, dtype.itemsize, self._dim, self._capacity_bytes), device):
+        if not self._same_config((width, dtype.itemsize, self._dim,
+                                  self._capacity_bytes, int(self._reuse_sync)), device):
             return self._disabled('inconsistent group arena configuration')
 
         kernels = None
@@ -192,7 +195,7 @@ class SymmetricMemoryAllGather:
             return None
         output = self._kernels.all_gather_inner(
             state, input.view(torch.bfloat16), tp_hidden_dim=state.hidden_dim, dim=dim,
-            copy_output=copy_output, _validated=True)
+            skip_entry_sync=not self._reuse_sync, copy_output=copy_output, _validated=True)
         self._graph_ready_shapes.add(rows)
         return output.view(self.dtype)
 
