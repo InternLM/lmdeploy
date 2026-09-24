@@ -13,9 +13,7 @@ import torch.nn.functional as F
 from torch import distributed as dist
 from torch import nn
 
-from lmdeploy.pytorch.backends.cuda.attention.tilelang_sparse_mla import (
-    TilelangSparseMLADecode,
-)
+from lmdeploy.pytorch.backends.cuda.attention.sparse_mla import FlashMLASparseImpl
 from lmdeploy.pytorch.backends.cuda.kpool import (
     kpool_compress_quantize_cuda,
     kpool_prefill_update_cuda,
@@ -797,9 +795,15 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             v_head_dim=self.v_head_dim,
             causal=True,
         )
-        self.decode_attn_fwd = TilelangSparseMLADecode(
-            index_topk=self.index_topk,
-            index_kpool=getattr(config, 'index_kpool', 1),
+        dense_mla_impl = self.attn_fwd.impl
+        self.decode_attn_fwd = FlashMLASparseImpl(
+            mla_index_topk=self.index_topk,
+            num_heads=dense_mla_impl.num_heads,
+            head_size=dense_mla_impl.head_size,
+            scale=dense_mla_impl.scale,
+            num_kv_heads=dense_mla_impl.num_kv_heads,
+            v_head_size=dense_mla_impl.v_head_size,
+            use_fa3=getattr(dense_mla_impl, 'use_fa3', False),
         )
 
     def _build_indexer(self, config: Any, layer_idx: int, dtype: torch.dtype,
@@ -1267,18 +1271,18 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
 
             query_states = self._absorbed_query(
                 unabsorbed_query, num_heads)
-            attn_output = self.decode_attn_fwd.forward_prefill(
+            attn_output = self.decode_attn_fwd.forward(
                 query_states,
                 key_states,
+                key_states[..., :nope_size],
                 past_key_value[0],
+                past_key_value[0][..., :nope_size],
                 attn_metadata,
-                scale=self.softmax_scale,
-                cache_writer=self.attn_fwd,
-                logical_indices=logical_indices,
                 k_scales_zeros=(None if len(past_key_value) == 2 else
                                 past_key_value[2]),
                 v_scales_zeros=(None if len(past_key_value) == 2 else
                                 past_key_value[3]),
+                nsa_indices=logical_indices,
             )
             attn_bmm_out = attn_output.new_empty(
                 q_len, num_heads, self.v_head_dim)
@@ -1304,13 +1308,11 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             past_key_value[0],
             past_key_value[0][..., :nope_size],
             attn_metadata,
-            scale=self.softmax_scale,
-            cache_writer=self.attn_fwd,
             k_scales_zeros=(None if len(past_key_value) == 2 else
                             past_key_value[2]),
             v_scales_zeros=(None if len(past_key_value) == 2 else
                             past_key_value[3]),
-            logical_indices=logical_indices,
+            nsa_indices=logical_indices,
         )
         attn_bmm_out = attn_output.new_empty(q_len, num_heads, self.v_head_dim)
         self.vc(attn_output, attn_bmm_out)
