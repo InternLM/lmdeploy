@@ -93,14 +93,20 @@ def _run_dcp_query_gather(rank, rendezvous, enabled):
 
 
 def _check_dcp_candidate_gather(rank, group, direct):
+    from lmdeploy.pytorch.backends.cuda.attention.cp import get_dcp_manager
     from lmdeploy.pytorch.backends.cuda.nsa import TritonNSAIndexFP8Impl
     from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import pack_dcp_topk_candidates, sparse_dcp_global_topk
 
     k = 512
-    impl = TritonNSAIndexFP8Impl(k, softmax_scale=1.0, block_size=128, fill=-1)
+    # Candidate merging consumes existing scores and does not require DeepGEMM.
+    impl = object.__new__(TritonNSAIndexFP8Impl)
+    impl.topk, impl.fill = k, -1
+    impl.dcp_world_size, impl.dcp_rank = 2, rank
+    impl.dcp_manager = get_dcp_manager()
+    impl.dcp_manager.prepare_candidate_gather(k)
     workspace = impl.dcp_manager._candidate_workspace
     assert (workspace is not None and workspace.is_available()) == direct
-    TritonNSAIndexFP8Impl(k, softmax_scale=1.0, block_size=128, fill=-1)
+    get_dcp_manager().prepare_candidate_gather(k)
     assert impl.dcp_manager._candidate_workspace is workspace
     native = base_communicator_module.DeviceCommunicator(group.gpu_group)
     # IDs are bitcast, not converted to FP32; include large IDs and NaN encodings.
