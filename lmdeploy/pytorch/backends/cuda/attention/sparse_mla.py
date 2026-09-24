@@ -6,7 +6,6 @@ import torch
 
 from lmdeploy.utils import get_logger
 
-from .cp import gather_dcp_query, merge_dcp_attention
 from .default import TritonAttentionMetadata
 from .mla import FlashMLAAttentionMetaBuilder, FlashMLAImpl
 
@@ -326,14 +325,11 @@ class FlashMLASparseImpl(FlashMLAImpl):
             dcp_world_rank = self.dcp_world_size, self.dcp_rank
             local_indices, local_counts = filter_and_compact_dcp_indices(
                 nsa_indices, dcp_world_rank=dcp_world_rank)
-            query = gather_dcp_query(query, dcp_world_size=self.dcp_world_size)
+            query = self.dcp_manager.gather_query(query)
             local_output, local_lse = self._decoding_sparse(
                 query, k_cache, local_indices, attn_metadata,
                 return_lse=True, topk_length=local_counts)
-            return merge_dcp_attention(local_output,
-                                       local_lse,
-                                       valid_counts=local_counts,
-                                       dcp_world_rank=dcp_world_rank)
+            return self.dcp_manager.combine(local_output, local_lse, valid_counts=local_counts)
         return self._decoding_sparse(query, k_cache, nsa_indices, attn_metadata)
 
     def _forward_prefill(self,

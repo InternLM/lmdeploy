@@ -14,7 +14,7 @@ def _run_dcp_query_gather(rank, rendezvous, enabled):
 
     from torch import distributed as dist
 
-    from lmdeploy.pytorch.backends.cuda.attention.cp import gather_dcp_query, init_dcp_query_gather
+    from lmdeploy.pytorch.backends.cuda.attention.cp import get_dcp_manager
     from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
     from lmdeploy.pytorch.config import DistConfig
     from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
@@ -35,26 +35,35 @@ def _run_dcp_query_gather(rank, rendezvous, enabled):
                             communicator_builder=CudaOpsBackend.build_communicator)
     try:
         with get_dist_manager().context(ctx):
-            init_dcp_query_gather(32, 576)
-            workspace = ctx.dcp_group.query_gather_workspace
+            manager = get_dcp_manager()
+            manager.prepare_query_gather(32, 576)
+            workspace = manager._query_workspace
             if all(enabled):
                 assert workspace.is_available()
             else:
                 assert workspace is None
-            init_dcp_query_gather(32, 576)
-            assert ctx.dcp_group.query_gather_workspace is workspace
+            manager = get_dcp_manager()
+            manager.prepare_query_gather(32, 576)
+            assert manager._query_workspace is workspace
             query = torch.empty(384, 32, 576, device='cuda', dtype=torch.bfloat16)
             # Ineligible inputs still return correct results through NCCL.
             for fallback in (query[:1], query[..., ::2], query.float(),
                              torch.empty(1024, 32, 576, device='cuda', dtype=query.dtype)):
                 fallback.fill_(rank)
-                output = gather_dcp_query(fallback, dcp_world_size=2)
+                output = manager.gather_query(fallback)
                 expected = torch.arange(2, device='cuda', dtype=fallback.dtype)
                 expected = expected.repeat_interleave(32)[None, :, None].expand_as(output)
                 torch.testing.assert_close(output, expected, rtol=0, atol=0)
             rows = (2, 16, 96, 384)
+
+            def merge(query):
+                lse = torch.zeros(query.shape[:2], device='cuda')
+                counts = torch.ones(query.size(0), device='cuda', dtype=torch.int32)
+                return manager.combine(query, lse, counts)
+
+            query.fill_(rank)
             for count in rows:
-                gather_dcp_query(query[:count], dcp_world_size=2)
+                torch.testing.assert_close(merge(manager.gather_query(query[:count])), query[:count], rtol=0, atol=0)
             torch.cuda.synchronize()
             dist.barrier()
             graph = torch.cuda.CUDAGraph()
@@ -62,8 +71,12 @@ def _run_dcp_query_gather(rank, rendezvous, enabled):
             with torch.cuda.graph(graph):
                 for step in range(16):
                     query.fill_(rank + step * 8)
-                    gathered = gather_dcp_query(query[:rows[step % len(rows)]], dcp_world_size=2)
+                    gathered = manager.gather_query(query[:rows[step % len(rows)]])
+                    # A slow reader must finish before any rank reuses the arena.
+                    if rank == step % 2:
+                        torch.cuda._sleep(20000)
                     outputs.append(gathered.clone())
+                    merge(gathered)
             for _ in range(3):
                 graph.replay()
             torch.cuda.synchronize()
@@ -73,9 +86,50 @@ def _run_dcp_query_gather(rank, rendezvous, enabled):
                 expected = expected.repeat_interleave(32)[None, :, None].expand_as(output)
                 torch.testing.assert_close(output, expected, rtol=0, atol=0)
             _check_lm_head_lifecycle(rank, all(enabled))
+            _check_dcp_candidate_gather(rank, ctx.dcp_group)
     finally:
         ctx.close()
         dist.destroy_process_group()
+
+
+def _check_dcp_candidate_gather(rank, group):
+    from lmdeploy.pytorch.backends.cuda.nsa import TritonNSAIndexFP8Impl
+    from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import pack_dcp_topk_candidates, sparse_dcp_global_topk
+
+    k = 512
+    impl = TritonNSAIndexFP8Impl(k, softmax_scale=1.0, block_size=128, fill=-1)
+    scores = torch.randn(16, k * 2, device='cuda')
+    indices = torch.arange(k, device='cuda', dtype=torch.int32).expand(16, -1).clone()
+
+    def reference():
+        packed = pack_dcp_topk_candidates(scores, indices, dcp_world_rank=(2, rank))
+        gathered = packed.new_empty(32, k, 2)
+        torch.distributed.all_gather_into_tensor(gathered, packed, group=group.gpu_group)
+        gathered = gathered.view(2, 16, k, 2)
+        return sparse_dcp_global_topk(gathered, k=k)
+
+    impl._merge_dcp_topk(scores, indices)
+    graph = torch.cuda.CUDAGraph()
+    outputs = []
+    with torch.cuda.graph(graph):
+        for step in range(4):
+            if rank == step % 2:
+                torch.cuda._sleep(20000)
+            outputs.append(impl._merge_dcp_topk(scores, indices))
+    for case in range(3):
+        scores.normal_()
+        if case == 1:
+            scores.zero_()
+        if case == 2:
+            indices[:, k // 2:] = -1
+            indices[0] = -1
+        expected = reference()
+        torch.testing.assert_close(impl._merge_dcp_topk(scores, indices), expected, rtol=0, atol=0)
+        graph.replay()
+        torch.cuda.synchronize()
+        for output in outputs:
+            torch.testing.assert_close(output, expected, rtol=0, atol=0)
+    graph.reset()
 
 
 def _run_auto_all_reduce(rank, rendezvous):
@@ -194,7 +248,7 @@ def comm_env(monkeypatch):
 
 
 def test_gather_registration_and_native_fallback(monkeypatch):
-    from lmdeploy.pytorch.backends.cuda.attention.cp import gather_dcp_query, init_dcp_query_gather
+    from lmdeploy.pytorch.backends.cuda.attention.cp import get_dcp_manager
     from lmdeploy.pytorch.distributed import DistContext, DistGroup, get_dist_manager
 
     module = base_communicator_module
@@ -208,13 +262,14 @@ def test_gather_registration_and_native_fallback(monkeypatch):
     group = DistGroup(gpu_group='group', communicator=communicator)
     context = DistContext(dcp_group=group)
     with get_dist_manager().context(context):
-        init_dcp_query_gather(2, 4)
-    assert group.query_gather_workspace is None
+        manager = get_dcp_manager()
+        manager.prepare_query_gather(2, 4)
+    assert manager._query_workspace is None
     logits = communicator.create_all_gather_workspace(6, device=torch.device('cpu'), dtype=torch.float32)
     assert logits is None
     query = torch.arange(48).view(3, 2, 8)[..., ::2]
     with get_dist_manager().context(context):
-        torch.testing.assert_close(gather_dcp_query(query, dcp_world_size=2), torch.cat((query, query + 10), dim=1))
+        torch.testing.assert_close(manager.gather_query(query), torch.cat((query, query + 10), dim=1))
     input = torch.ones(3, 3)
     torch.testing.assert_close(communicator.all_gather(input, workspace=logits), torch.cat((input, input + 10), dim=-1))
 
@@ -242,20 +297,22 @@ def test_gather_preparation_and_weight_transition(monkeypatch):
 
 
 def test_cuda_gather_dispatch_and_workspace_ownership(monkeypatch, comm_env):
-    from lmdeploy.pytorch.backends.cuda.attention.cp import gather_dcp_query, init_dcp_query_gather
+    from lmdeploy.pytorch.backends.cuda.attention.cp import get_dcp_manager
     from lmdeploy.pytorch.backends.cuda.comm import symm_mem_allgather
     from lmdeploy.pytorch.distributed import DistContext, DistGroup, get_dist_manager
 
-    # The group shares one query workspace; logits workspaces remain caller-owned.
+    # The context shares a DCP manager; logits workspaces remain caller-owned.
     factory = Mock(side_effect=lambda *args, **kwargs: Mock())
     monkeypatch.setattr(symm_mem_allgather, 'SymmetricMemoryAllGather', factory)
     communicator = communicator_module.CudaCommunicator('cpu', 'gpu', group_name='dcp')
     group = DistGroup(gpu_group='gpu', communicator=communicator)
     context = DistContext(dcp_group=group)
     with get_dist_manager().context(context):
-        init_dcp_query_gather(2, 4)
-        init_dcp_query_gather(2, 4)
-    query_workspace = group.query_gather_workspace
+        manager = get_dcp_manager()
+        manager.prepare_query_gather(2, 4)
+        manager = get_dcp_manager()
+        manager.prepare_query_gather(2, 4)
+    query_workspace = manager._query_workspace
     logits_workspace = communicator.create_all_gather_workspace(6, device=torch.device('cpu'), dtype=torch.float32)
     assert factory.call_count == 2
     query_workspace.prepare.assert_called_once()
@@ -265,7 +322,7 @@ def test_cuda_gather_dispatch_and_workspace_ownership(monkeypatch, comm_env):
     gathered_query = torch.cat((query, query + 10), dim=1)
     query_workspace.all_gather.return_value = gathered_query.flatten(1)
     with get_dist_manager().context(context):
-        torch.testing.assert_close(gather_dcp_query(query, dcp_world_size=2), gathered_query)
+        torch.testing.assert_close(manager.gather_query(query), gathered_query)
     assert query_workspace.all_gather.call_args.kwargs == {'copy_output': False}
 
     native = Mock(side_effect=lambda output, input, group: output.copy_(torch.cat((input, input + 10))))
@@ -280,10 +337,16 @@ def test_cuda_gather_dispatch_and_workspace_ownership(monkeypatch, comm_env):
                                torch.cat((input, input + 10), dim=-1))
     native.assert_called_once()
 
-    group.close()
-    group.close()
+    assert context.dcp_manager is manager
+    monkeypatch.setattr(torch.distributed, 'is_initialized', lambda: True)
+    group_close = Mock(wraps=group.close)
+    monkeypatch.setattr(group, 'close', group_close)
+    query_workspace.close.side_effect = lambda: group_close.assert_not_called()
+    context.close()
+    context.close()
     query_workspace.close.assert_called_once()
-    assert group.query_gather_workspace is None
+    assert context.dcp_manager is None
+    assert manager._query_workspace is None
     logits_workspace.close.assert_not_called()
 
 

@@ -365,6 +365,8 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
                 raise RuntimeError('DCP requires the TileLang sparse index top-k kernel.')
             if _get_deep_gemm() is None:
                 raise RuntimeError('DCP DSA scoring requires a compatible DeepGEMM installation.')
+            from .attention.cp import get_dcp_manager
+            self.dcp_manager = get_dcp_manager()
         self._step_meta_group: int | None = None
         self._piecewise_forward: Callable[..., Tensor] | None = None
         self._piecewise_forward_fused: Callable[..., Tensor] | None = None
@@ -476,26 +478,16 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
         if self.dcp_world_size == 1:
             return local_indices
 
-        from lmdeploy.pytorch.distributed import all_gather_into_tensor
         from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import (
             pack_dcp_topk_candidates,
             sparse_dcp_global_topk,
         )
 
-        num_rows = scores.size(0)
         packed = pack_dcp_topk_candidates(
             scores,
             local_indices,
             dcp_world_rank=(self.dcp_world_size, self.dcp_rank))
-        gathered = torch.empty(
-            self.dcp_world_size * num_rows,
-            self.topk,
-            2,
-            dtype=packed.dtype,
-            device=scores.device,
-        )
-        all_gather_into_tensor(gathered, packed, group='dcp')
-        gathered = gathered.view(self.dcp_world_size, num_rows, self.topk, 2)
+        gathered = self.dcp_manager.gather_candidates(packed)
         return sparse_dcp_global_topk(gathered, k=self.topk, fill=self.fill)
 
     def _score_and_select_prefill(

@@ -14,7 +14,7 @@ from lmdeploy.pytorch.backends.cp_utils import (
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import CudaAttentionMetaBuilder
-from .cp import gather_dcp_prefix_kv, gather_dcp_query, merge_dcp_attention
+from .cp import gather_dcp_prefix_kv, get_dcp_manager
 from .default import TritonAttentionImpl, TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
@@ -255,9 +255,8 @@ class FlashMLAImpl(TritonAttentionImpl):
         self.use_fa3 = use_fa3
 
         if self.dcp_world_size > 1:
-            from .cp import init_dcp_query_gather
-
-            init_dcp_query_gather(num_heads, head_size)
+            self.dcp_manager = get_dcp_manager()
+            self.dcp_manager.prepare_query_gather(num_heads, head_size)
 
     def get_step_metadata_provider(self):
         """Describe metadata required by this selected implementation."""
@@ -710,7 +709,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         if self.dcp_world_size == 1:
             return self._decoding_paged(query, k_cache, attn_metadata)
 
-        query = gather_dcp_query(query, dcp_world_size=self.dcp_world_size)
+        query = self.dcp_manager.gather_query(query)
         query_len = query.size(0) // attn_metadata.q_seqlens.numel()
         if query_len > 1:
             # Consecutive global queries do not advance each interleaved
@@ -725,11 +724,10 @@ class FlashMLAImpl(TritonAttentionImpl):
             )
         local_output, local_lse = self._decoding_paged(
             query, k_cache, attn_metadata, causal=False, return_lse=True)
-        return merge_dcp_attention(
+        return self.dcp_manager.combine(
             local_output,
             local_lse,
-            valid_counts=attn_metadata.dcp_local_kv_seqlens,
-            dcp_world_rank=(self.dcp_world_size, self.dcp_rank))
+            valid_counts=attn_metadata.dcp_local_kv_seqlens)
 
     def _forward_prefill(
         self,

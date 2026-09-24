@@ -9,7 +9,7 @@ from lmdeploy.pytorch.backends.attention import PagedAttentionBuildSpec
 from lmdeploy.pytorch.backends.cuda import attention as attention_module
 from lmdeploy.pytorch.backends.cuda.attention import mla as mla_module
 from lmdeploy.pytorch.backends.cuda.attention import sparse_mla as sparse_mla_module
-from lmdeploy.pytorch.backends.cuda.attention.cp import gather_dcp_query
+from lmdeploy.pytorch.backends.cuda.attention.cp import DCPManager
 from lmdeploy.pytorch.backends.cuda.attention.sparse_mla import (
     FlashMLAIndexMapper,
     FlashMLASparseImpl,
@@ -160,14 +160,14 @@ def test_dcp_query_all_gather_preserves_contiguous_head_order(monkeypatch, devic
         if not strided:
             assert input_tensor.data_ptr() == rank0_query.data_ptr()
         for rank in range(dcp_size):
-            source = queries[rank].transpose(0, 1) if strided else queries[rank]
+            source = queries[rank].flatten(1)
             output[rank * source.size(0):(rank + 1) * source.size(0)].copy_(source)
 
     monkeypatch.setattr(torch.distributed, 'all_gather_into_tensor', fake_all_gather)
     monkeypatch.setattr(torch.distributed, 'get_world_size', lambda group: dcp_size)
-    monkeypatch.setattr(distributed.get_dist_manager().current_context().dcp_group,
-                        'communicator', DeviceCommunicator('dcp'))
-    gathered = gather_dcp_query(rank0_query, dcp_world_size=dcp_size)
+    group = distributed.DistGroup(gpu_group='dcp', communicator=DeviceCommunicator('dcp'))
+    manager = DCPManager(group)
+    gathered = manager.gather_query(rank0_query)
 
     expected = torch.cat(list(queries), dim=1)
     assert torch.equal(gathered, expected)
@@ -179,7 +179,7 @@ def test_dcp_query_all_gather_preserves_contiguous_head_order(monkeypatch, devic
         torch.cuda.synchronize()
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph):
-            graph_output = gather_dcp_query(rank0_query, dcp_world_size=dcp_size)
+            graph_output = manager.gather_query(rank0_query)
         queries.add_(1)
         graph.replay()
         torch.cuda.synchronize()
@@ -498,6 +498,8 @@ def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse,
                                                         mla_index_topk=512 if sparse else None),
                            kv_quant_policy=0)
     monkeypatch.setattr(distributed, 'get_dcp_world_rank', lambda: (dcp_size, 0))
+    # This prefill test simulates ranks without creating process groups.
+    monkeypatch.setattr(mla_module, 'get_dcp_manager', Mock())
     # One virtual block per chunk, with an empty second request in every chunk.
     monkeypatch.setattr(cp_utils, 'get_dcp_prefill_workspace_size',
                         lambda **kwargs: 2 * 64 * (1 + 2 * dcp_size) * 576 * 2)
