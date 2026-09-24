@@ -93,7 +93,8 @@ public:
               const std::string& cache_prompt,
               int                cache_prompt_boundary_skip,
               const std::string& cache_generation,
-              const int&         is_warm_up);
+              const int&         is_warm_up,
+              int                transfer_chunk_size = 0);
 
     ~Scheduler();
 
@@ -128,6 +129,15 @@ public:
     // Commit step: per-request planning (PlanResume/PlanContinue), admission with
     // scratch allocation + eviction, memory replay, publication, MarkProduced.
     void Schedule(std::vector<Sequence*> requests, Resource& resource);
+
+    struct LocalCache {
+        int resume_end;
+        int prefix_end;  // contiguous whole blocks, before any planned copies
+    };
+    LocalCache ProbeResume(const Sequence& s) const;
+    // Build the allocation/protection lists for one upcoming scheduling attempt.
+    void PrepareRestore(Sequence& s, int start, int end, int preserve_end);
+    void CompleteRestore(Sequence& s, bool success);
 
     // Index generated blocks into the trie; adopt the frontier into the last
     // partial block. Called on normal finish.
@@ -183,6 +193,7 @@ private:
 
     // Per-request planning for sequences active in the last iteration.
     void PlanContinue(Sequence& s);
+    void PlanStoreCheckpoint(Sequence& s);
 
     // Clear producer marks and mark produced blocks valid for [t0, end). Returns
     // the indexed blocks that became cross-request reusable this pass.
@@ -217,6 +228,7 @@ private:
     int              cache_prompt_boundary_skip_{1};
     CacheMode        generation_cache_mode_{CacheMode::kAuto};
     const int&       is_warm_up_;
+    int              transfer_chunk_size_{};
     ObjectAllocator& alloc_;     // owned by Engine; also used outside the scheduler
     CacheRegistry    registry_;  // owned: registration is closed before construction
     CacheBlockPool   cache_;

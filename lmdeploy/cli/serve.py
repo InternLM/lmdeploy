@@ -176,6 +176,7 @@ class SubCliServe:
         ArgumentHelper.communicator(tb_group)
         ArgumentHelper.moe_a2a_backend(tb_group)
         ArgumentHelper.dist_init_addr(tb_group)
+        ArgumentHelper.lmcache_addr(tb_group)
 
         # vlm args
         vision_group = parser.add_argument_group('Vision model arguments')
@@ -312,7 +313,8 @@ class SubCliServe:
                                                    moe_a2a_backend=args.moe_a2a_backend,
                                                    language_model_only=args.language_model_only,
                                                    enable_metrics=not args.disable_metrics,
-                                                   hf_overrides=args.hf_overrides)
+                                                   hf_overrides=args.hf_overrides,
+                                                   lmcache_addr=args.lmcache_addr)
         chat_template_config = get_chat_template(args.chat_template, args.model_path)
         speculative_config = get_speculative_config(args)
 
