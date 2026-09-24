@@ -32,17 +32,12 @@ class VideoMediaIO(MediaIO[tuple[npt.NDArray, dict[str, Any]]]):
         self,
         image_io: ImageMediaIO,
         num_frames: int = 32,
-        max_frames: int | None = None,
         **kwargs,
     ) -> None:
         super().__init__()
 
         self.image_io = image_io
-        # ``num_frames`` is LMDeploy's existing request knob; GLM/SGLang call
-        # the equivalent upper bound ``max_frames``.  Accept both at this media
-        # boundary so model defaults and per-request overrides share one loader.
-        self.num_frames = int(max_frames if max_frames is not None else
-                              num_frames)
+        self.num_frames = num_frames
 
         # for potential custom arguments from --media-io-kwargs
         self.kwargs = kwargs

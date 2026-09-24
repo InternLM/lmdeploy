@@ -53,7 +53,6 @@ class GLM5NextVisionModel(VisionModel):
         'video': {
             'fps': 2.0,
             'num_frames': 2048,
-            'sampling_strategy': 'glm',
         },
     }
 
