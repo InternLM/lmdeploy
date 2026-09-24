@@ -755,9 +755,12 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         self._load_buffers = dict()
 
     def _hc_head(self, x: torch.Tensor):
+        from lmdeploy.pytorch.kernels.cuda import linear_bf16xfp32
         shape, dtype = x.size(), x.dtype
-        x = x.flatten(2).float()
-        mixes = rms_scale(F.linear(x, self.hc_head_fn), x, eps=self.config.rms_norm_eps)
+        x = x.flatten(2)
+        # `out_dtype` keeps `mixes` fp32 now that `x` is no longer upcast.
+        mixes = rms_scale(
+            linear_bf16xfp32(x, self.hc_head_fn), x, eps=self.config.rms_norm_eps, out_dtype=torch.float32)
         pre = torch.sigmoid(mixes * self.hc_head_scale + self.hc_head_base) + self.config.hc_eps
         y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2)
         return y.to(dtype)

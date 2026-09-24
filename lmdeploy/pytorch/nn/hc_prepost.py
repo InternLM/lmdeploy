@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 from lmdeploy.pytorch.backends import get_backend
@@ -26,11 +25,7 @@ class HcPrePost(nn.Module):
         hc_base: torch.Tensor,
         norm_eps: float,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        from lmdeploy.pytorch.nn.norm import rms_scale
-        shape, dtype = x.size(), x.dtype
-        x = x.flatten(2).float()
-        mixes = rms_scale(F.linear(x, hc_fn), x, eps=norm_eps)
-        return self.impl.pre(x.view(shape), mixes, hc_scale, hc_base, dtype)
+        return self.impl.pre(x, hc_fn, hc_scale, hc_base, norm_eps, x.dtype)
 
     def pre_reduce(self, x: torch.Tensor, pre: torch.Tensor, out_dtype: torch.dtype) -> torch.Tensor:
         return self.impl.pre_reduce(x, pre, out_dtype)
