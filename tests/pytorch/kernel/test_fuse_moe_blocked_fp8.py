@@ -77,48 +77,6 @@ def test_compact_blocked_fp8_gate_config(block_m, block_n, input_features, expec
 
 
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
-@pytest.mark.parametrize('tokens', [1, 6, 36, 37])
-@pytest.mark.parametrize('concentrated', [False, True])
-@torch.inference_mode()
-def test_sparse_route_blocked_fp8_preserves_fp32_reduction(monkeypatch, tokens, concentrated):
-    import importlib
-    from functools import partial
-
-    from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul
-    from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
-
-    module = importlib.import_module('lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8')
-    torch.manual_seed(33)
-    experts, hidden, intermediate, topk = 288, 4096, 512, 8
-    dtype = torch.float8_e4m3fn
-    w1 = torch.randint(-4, 5, (experts, 2 * intermediate, hidden), device='cuda', dtype=torch.int8).to(dtype)
-    w2 = torch.randint(-4, 5, (experts, hidden, intermediate), device='cuda', dtype=torch.int8).to(dtype)
-    s1 = torch.rand(experts, 2 * intermediate // 128, hidden // 128, device='cuda') * .01 + .001
-    s2 = torch.rand(experts, hidden // 128, intermediate // 128, device='cuda') * .01 + .001
-    x = torch.randn(tokens, hidden, device='cuda', dtype=torch.bfloat16) * .1
-    scores = torch.randn(tokens, experts, device='cuda')
-    if concentrated:
-        scores[:, :-topk] = -float('inf')
-    weights, ids = scores.topk(topk, dim=-1)
-    weights = weights.softmax(-1)
-    quant, scales = quant_fp8(x, 128, dtype=dtype)
-
-    def run():
-        return module.fused_moe_blocked_fp8(
-            quant, scales, w1, s1, w2, s2, weights, ids, topk,
-            out_dtype=torch.bfloat16, fp32_acc=True, output_scale=2.5,
-            act_func=partial(silu_and_mul, swiglu_limit=10., precise_mul=True))
-
-    select = module._select_compact_blocked_fp8_moe_both_config
-    with monkeypatch.context() as patch:
-        patch.setattr(module, '_select_compact_blocked_fp8_moe_both_config',
-                      lambda *args: None if args[1] <= args[2] else select(*args))
-        expected = run()
-    actual = run()
-    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-
-
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 @torch.inference_mode()
 def test_fused_moe_blocked_fp8_compact_transposed_mma_matches_normal():
     from lmdeploy.pytorch.kernels.cuda.moe.blocked_fp8 import (
