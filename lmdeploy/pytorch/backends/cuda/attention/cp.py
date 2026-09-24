@@ -46,8 +46,10 @@ class DCPManager:
         """Prepare one query arena shared across attention layers."""
         if self._query_workspace is None:
             width = num_heads * head_size * self.world_size
+            # combine() orders all ranks after attention consumes these queries,
+            # so the next query gather does not need another entry barrier.
             self._query_workspace = self.communicator.create_all_gather_workspace(
-                width, device=torch.device('cuda'), dtype=torch.bfloat16)
+                width, device=torch.device('cuda'), dtype=torch.bfloat16, reuse_sync=False)
 
     def prepare_candidate_gather(self, topk: int):
         """Prepare one candidate arena shared across indexer layers."""
