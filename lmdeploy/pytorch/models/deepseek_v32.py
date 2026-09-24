@@ -12,6 +12,7 @@ from lmdeploy.pytorch.model_inputs import StepContextManager
 from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
     Attention,
+    ParallelEmbedding,
     ParallelLMHead,
     RMSNorm,
     RopeType,
@@ -554,11 +555,21 @@ class DeepseekV32Model(DeepseekV2Model):
         self.config = config
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
+        if config.tie_word_embeddings:
+            # Match the head's TP shard and FP32 storage, but emit the model dtype.
+            # Keep checkpoint padding rows unchanged, as nn.Embedding loading does.
+            self.embed_tokens = ParallelEmbedding(config.vocab_size,
+                                                   config.hidden_size,
+                                                   padding_idx=None,
+                                                   dtype=dtype,
+                                                   device=device,
+                                                   is_tp=True)
+        else:
+            self.embed_tokens = nn.Embedding(config.vocab_size,
+                                             config.hidden_size,
+                                             self.padding_idx,
+                                             dtype=dtype,
+                                             device=device)
         if get_dist_manager().current_context().dist_config.enable_eplb:
             ep_size_, _ = get_ep_world_rank()
             EPLBManager.init_global_eplb_metadata(ep_size_, config.n_routed_experts, config.num_hidden_layers)

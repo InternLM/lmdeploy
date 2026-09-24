@@ -1,5 +1,6 @@
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -193,15 +194,21 @@ def test_parallel_lm_head():
     torch.testing.assert_close(out, expected)
 
 
+@pytest.mark.parametrize('model_name', ['deepseek', 'glm'])
 @pytest.mark.parametrize('enabled', [False, True])
 @pytest.mark.parametrize('tied', [False, True])
-def test_fp32_lm_head(enabled, tied):
-    # Exercise the direct constructor used by GLM, without model/GPU setup.
+def test_fp32_lm_head(model_name, enabled, tied):
+    from lmdeploy.pytorch.models.deepseek_v32 import DeepseekV32ForCausalLM
+    from lmdeploy.pytorch.models.glm_moe_dsa import GlmMoeDsaForCausalLM
+
+    model_cls = DeepseekV32ForCausalLM if model_name == 'deepseek' else GlmMoeDsaForCausalLM
+    # Zero decoder layers exercise real embedding/head construction on CPU.
+    config = SimpleNamespace(vocab_size=128, hidden_size=64, pad_token_id=0, num_hidden_layers=0,
+                             rms_norm_eps=1e-6, qk_rope_head_dim=8, max_position_embeddings=128,
+                             rope_theta=10000., index_topk=8, tie_word_embeddings=tied)
     with build_model_context(BuildModelContext(fp32_lm_head=enabled, tie_word_embeddings=tied)):
-        emb = ParallelEmbedding(128, 64, None, dtype=torch.bfloat16, device='cpu')
-        head = ParallelLMHead(128, 64, dtype=torch.bfloat16, device='cpu', is_tp=False)
-        if tied:
-            head.tie_weights(emb)
+        model = model_cls(config, None, dtype=torch.bfloat16, device='cpu')
+    emb, head = model.get_input_embeddings(), model.lm_head
     dtype = torch.float32 if enabled else torch.bfloat16
     assert head.weight.dtype == dtype
     assert emb.weight.dtype == (dtype if tied else torch.bfloat16)
@@ -216,4 +223,4 @@ def test_fp32_lm_head(enabled, tied):
     if enabled:
         assert not torch.equal(logits, torch.nn.functional.linear(hidden, weight).float())
     if tied:
-        assert emb(torch.tensor([0, 1])).dtype == torch.bfloat16
+        torch.testing.assert_close(emb(torch.tensor([0, 1])), weight[:2], rtol=0, atol=0)
