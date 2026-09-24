@@ -453,11 +453,12 @@ def all_gather_inner(
     skip_entry_sync: bool = False,
     copy_output: bool = True,
     *,
+    dim: int = -1,
     _validated: bool = False,
 ) -> torch.Tensor:
-    """Gather ``[T, H/TP]`` shards into ``[T, H]`` along the hidden dim.
+    """Gather 2D BF16 words along dimension 0 or -1 without arithmetic.
 
-    ``tp_hidden_dim`` is the gathered width ``H``. Returns a clone when ``copy_output``,
+    ``tp_hidden_dim`` is the output row width. Returns a clone when ``copy_output``,
     else a view into the symmetric buffer (valid until the next collective).
     ``_validated`` is reserved for the admitted provider,
     whose admission check already enforces the immutable dtype/layout/width
@@ -471,10 +472,9 @@ def all_gather_inner(
             f"hidden_states.data_ptr()={hex(hidden_states.data_ptr())} must be "
             f"16-byte aligned for 128-bit multimem.st"
         )
-        assert (
-            tp_hidden_dim % world_size == 0
-        ), f"tp_hidden_dim={tp_hidden_dim} must be divisible by world_size={world_size}"
-    local_hidden = tp_hidden_dim // world_size
+        assert dim in (0, -1)
+        assert dim == 0 or tp_hidden_dim % world_size == 0
+    local_hidden = tp_hidden_dim if dim == 0 else tp_hidden_dim // world_size
     total_tokens, in_hidden = hidden_states.shape
     if not _validated:
         assert local_hidden % _NUMEL_PER_THREAD == 0, (
@@ -489,14 +489,20 @@ def all_gather_inner(
             in_hidden == local_hidden
         ), f"input hidden ({in_hidden}) != this rank's shard ({local_hidden})"
         assert (
-            total_tokens <= state.max_token_num
+            total_tokens * (world_size if dim == 0 else 1) <= state.max_token_num
         ), f"total_tokens={total_tokens} exceeds max_token_num={state.max_token_num}"
 
+    logical_rows = total_tokens
+    if dim == 0:
+        # Copy each rank's entire payload as one contiguous shard. Preserve the
+        # logical row count for launch tuning, without a rank/token transpose.
+        local_hidden *= total_tokens
+        total_tokens = 1
     hidden_offset = local_hidden * state.rank_in_group
     symm_mem_hdl = state.symm_mem_hdl
     num_blocks, block_size, num_warps, numel_per_thread = _launch_config(
         total_tokens * local_hidden,
-        total_tokens=total_tokens,
+        total_tokens=logical_rows,
         world_size=world_size,
     )
     split_barrier = _use_single_barrier(num_blocks, world_size)
@@ -527,7 +533,10 @@ def all_gather_inner(
         # The completion barrier can therefore be a single CTA and still
         # publish the whole grid before the output view is returned.
         barrier_inner(state, slot=1, release=True)
-    output = state.comm_buff[:total_tokens, :tp_hidden_dim]
+    if dim == 0:
+        output = state.comm_buff.view(-1)[:world_size * local_hidden].view(world_size * logical_rows, tp_hidden_dim)
+    else:
+        output = state.comm_buff[:total_tokens, :tp_hidden_dim]
     return output.clone() if copy_output else output
 
 

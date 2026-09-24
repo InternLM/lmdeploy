@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Symmetric-memory workspace for last-dimension all-gather.
+"""Symmetric-memory workspace for 2D all-gather.
 
 The optional Triton kernels are imported only during collective preparation. Their SGLang source reference is in
 kernels/cuda/symm_mem_allgather.py.
@@ -27,13 +27,15 @@ class SymmetricMemoryAllGather:
     _WORLD_SIZES = {2, 4, 8}
 
     def __init__(self, group: dist.ProcessGroup, rank: int, gathered_width: int,
-                 *, device: torch.device, dtype: torch.dtype, capacity_bytes: int):
+                 *, device: torch.device, dtype: torch.dtype, capacity_bytes: int,
+                 dim: int = -1):
         self.device = torch.device(device)
         self.dtype = dtype
         self._prepared = False
         self.group = group
         self._rank = rank
         self._gathered_width = gathered_width
+        self._dim = dim
         self._capacity_bytes = capacity_bytes
         self._state = None
         self._kernels = None
@@ -89,22 +91,26 @@ class SymmetricMemoryAllGather:
             return False
         # Even disabled ranks participate: mixed flags/dtypes must not leave
         # peers entering an optional rendezvous on their own.
-        if not self._agree(dtype == torch.bfloat16, device):
+        supported = dtype == torch.bfloat16 or (self._dim == 0 and dtype == torch.float32)
+        if not self._agree(supported, device):
             return False
         world_size = dist.get_world_size(self.group)
-        width = self._gathered_width
+        # The copy kernel addresses BF16 words, but never converts payloads.
+        width = self._gathered_width * dtype.itemsize // torch.bfloat16.itemsize
+        alignment = 8 if self._dim == 0 else world_size * 8
         try:
             capability_ok = torch.cuda.get_device_capability(device) >= (9, 0)
         except (RuntimeError, AssertionError):
             capability_ok = False
         valid = (world_size in self._WORLD_SIZES
                  and self._rank == dist.get_rank(self.group)
-                 and width > 0 and width % (world_size * 8) == 0
+                 and self._dim in (0, -1)
+                 and width > 0 and width % alignment == 0
                  and self._capacity_bytes >= width * torch.bfloat16.itemsize
                  and capability_ok)
         if not self._agree(valid, device):
             return self._disabled('unsupported group size, dtype, width, capacity or device')
-        if not self._same_config((width, self._capacity_bytes), device):
+        if not self._same_config((width, dtype.itemsize, self._dim, self._capacity_bytes), device):
             return self._disabled('inconsistent group arena configuration')
 
         kernels = None
@@ -161,7 +167,8 @@ class SymmetricMemoryAllGather:
             self._prepared = False
             self.prepare()
 
-    def all_gather(self, input: torch.Tensor, *, copy_output: bool = True) -> torch.Tensor | None:
+    def all_gather(self, input: torch.Tensor, *, dim: int = -1,
+                   copy_output: bool = True) -> torch.Tensor | None:
         """Return gathered shards, or None when the input is unsupported.
 
         With copy_output=False, the output borrows the workspace until its next use.
@@ -169,21 +176,25 @@ class SymmetricMemoryAllGather:
         state = self._state
         if state is None:
             return None
-        if not (input.dim() == 2 and input.dtype == torch.bfloat16 and input.is_contiguous()
-                and input.shape[-1] * state.world_size == state.hidden_dim):
+        width = self._gathered_width if dim == 0 else self._gathered_width // state.world_size
+        if not (dim == self._dim and input.dim() == 2 and input.dtype == self.dtype
+                and input.is_contiguous() and input.shape[-1] == width):
             # Shape/dtype/layout contracts must match across ranks, as for NCCL.
             return None
         if input.device != state.device or input.data_ptr() % 16 != 0:
             raise RuntimeError('multimem all-gather device or alignment changed after group-wide admission')
         rows = input.shape[0]
-        if not self._MIN_TOKENS <= rows <= state.max_token_num:
+        min_rows = 1 if dim == 0 else self._MIN_TOKENS
+        max_rows = state.max_token_num // state.world_size if dim == 0 else state.max_token_num
+        if not min_rows <= rows <= max_rows:
             return None
         if rows not in self._graph_ready_shapes and torch.cuda.is_current_stream_capturing():
             return None
         output = self._kernels.all_gather_inner(
-            state, input, tp_hidden_dim=self._gathered_width, copy_output=copy_output, _validated=True)
+            state, input.view(torch.bfloat16), tp_hidden_dim=state.hidden_dim, dim=dim,
+            copy_output=copy_output, _validated=True)
         self._graph_ready_shapes.add(rows)
-        return output
+        return output.view(self.dtype)
 
     def close(self) -> None:
         """Release only after all consumers/graphs have been retired."""

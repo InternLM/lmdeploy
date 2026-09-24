@@ -19,23 +19,28 @@ class DeviceCommunicator:
         """All-reduce ``input`` in place."""
         dist.all_reduce(input, group=self.device_group)
 
-    def all_gather(self, input: torch.Tensor, *, workspace=None, copy_output: bool = True) -> torch.Tensor:
-        """Gather 2D inputs along the last dimension on every group rank.
+    def all_gather(self, input: torch.Tensor, *, dim: int = -1,
+                   workspace=None, copy_output: bool = True) -> torch.Tensor:
+        """Gather 2D inputs along dimension 0 or -1 on every group rank.
 
         With copy_output=False, optimized output may borrow the workspace until its next use. Consume it on the same
         stream. Native gathering always returns an owned output for multi-rank groups.
         """
+        if input.dim() != 2 or dim not in (0, -1):
+            raise ValueError('all_gather requires a 2D input and dim=0 or dim=-1')
         world_size = dist.get_world_size(self.device_group)
         if world_size == 1:
             return input
         input = input.contiguous()
         gathered = input.new_empty(world_size * input.size(0), input.size(1))
         dist.all_gather_into_tensor(gathered, input, group=self.device_group)
+        if dim == 0:
+            return gathered
         return gathered.view(world_size, *input.shape).transpose(0, 1).reshape(input.size(0), -1)
 
-    def create_all_gather_workspace(self, gathered_width: int, device: torch.device, dtype: torch.dtype):
-        """Create and prepare an optional workspace and return it to its
-        owner."""
+    def create_all_gather_workspace(self, gathered_width: int, device: torch.device, dtype: torch.dtype,
+                                    *, dim: int = -1):
+        """Create a caller-owned workspace."""
         return None
 
     def close(self):

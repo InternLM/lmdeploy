@@ -367,6 +367,7 @@ class TritonNSAIndexFP8Impl(NSAIndexFP8Impl):
                 raise RuntimeError('DCP DSA scoring requires a compatible DeepGEMM installation.')
             from .attention.cp import get_dcp_manager
             self.dcp_manager = get_dcp_manager()
+            self.dcp_manager.prepare_candidate_gather(topk)
         self._step_meta_group: int | None = None
         self._piecewise_forward: Callable[..., Tensor] | None = None
         self._piecewise_forward_fused: Callable[..., Tensor] | None = None

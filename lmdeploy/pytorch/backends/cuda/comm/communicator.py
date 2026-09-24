@@ -46,21 +46,23 @@ class CudaCommunicator(DeviceCommunicator):
             return
         super().all_reduce_(input)
 
-    def create_all_gather_workspace(self, gathered_width: int, device: torch.device, dtype: torch.dtype):
+    def create_all_gather_workspace(self, gathered_width: int, device: torch.device, dtype: torch.dtype,
+                                    *, dim: int = -1):
         from .symm_mem_allgather import SymmetricMemoryAllGather
 
         workspace = SymmetricMemoryAllGather(
             self.device_group, dist.get_rank(self.device_group), gathered_width,
-            device=device, dtype=dtype, capacity_bytes=64 * 1024 * 1024)
+            device=device, dtype=dtype, capacity_bytes=64 * 1024 * 1024, dim=dim)
         workspace.prepare()
         return workspace
 
-    def all_gather(self, input: torch.Tensor, *, workspace=None, copy_output: bool = True) -> torch.Tensor:
+    def all_gather(self, input: torch.Tensor, *, dim: int = -1,
+                   workspace=None, copy_output: bool = True) -> torch.Tensor:
         if workspace is not None:
-            output = workspace.all_gather(input, copy_output=copy_output)
+            output = workspace.all_gather(input, dim=dim, copy_output=copy_output)
             if output is not None:
                 return output
-        return super().all_gather(input)
+        return super().all_gather(input, dim=dim)
 
     def close(self):
         if self._all_reduce_provider is not None:
