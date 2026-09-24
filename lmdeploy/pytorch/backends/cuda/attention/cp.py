@@ -40,16 +40,23 @@ class DCPManager:
         self.world_size = torch.distributed.get_world_size(self.group)
         self.rank = group.rank
         self._query_workspace = None
+        self._lse_workspace = None
         self._candidate_workspace = None
 
-    def prepare_query_gather(self, num_heads: int, head_size: int):
-        """Prepare one query arena shared across attention layers."""
+    def prepare_attention(self, num_heads: int, head_size: int):
+        """Prepare query and LSE arenas shared across attention layers."""
         if self._query_workspace is None:
             width = num_heads * head_size * self.world_size
             # combine() orders all ranks after attention consumes these queries,
             # so the next query gather does not need another entry barrier.
             self._query_workspace = self.communicator.create_all_gather_workspace(
                 width, device=torch.device('cuda'), dtype=torch.bfloat16, reuse_sync=False)
+        if self._lse_workspace is None:
+            # Output reduce-scatter orders LSE readers before the next reuse.
+            # LSE is small; larger inputs fall back to NCCL beyond this budget.
+            self._lse_workspace = self.communicator.create_all_gather_workspace(
+                num_heads * self.world_size, device=torch.device('cuda'), dtype=torch.float32,
+                dim=0, reuse_sync=False, capacity_bytes=1024 * 1024)
 
     def prepare_candidate_gather(self, topk: int):
         """Prepare one candidate arena shared across indexer layers."""
@@ -86,13 +93,12 @@ class DCPManager:
         """
         if self.world_size == 1:
             return local_output
-        from lmdeploy.pytorch.distributed import all_gather_into_tensor, reduce_scatter_tensor
+        from lmdeploy.pytorch.distributed import reduce_scatter_tensor
         from lmdeploy.pytorch.kernels.cuda.dcp import correct_dcp_attention_output, sanitize_dcp_lse
 
         local_lse = sanitize_dcp_lse(local_lse, valid_counts)
-        gathered_lse = local_lse.new_empty(
-            self.world_size * local_lse.size(0), local_lse.size(1))
-        all_gather_into_tensor(gathered_lse, local_lse, group=self.group)
+        gathered_lse = self.communicator.all_gather(
+            local_lse, dim=0, workspace=self._lse_workspace, copy_output=False)
         gathered_lse = gathered_lse.view(self.world_size, *local_lse.shape)
         contribution = correct_dcp_attention_output(
             local_output, gathered_lse, dcp_rank=self.rank)
@@ -113,6 +119,9 @@ class DCPManager:
         if self._query_workspace is not None:
             self._query_workspace.close()
             self._query_workspace = None
+        if self._lse_workspace is not None:
+            self._lse_workspace.close()
+            self._lse_workspace = None
         if self._candidate_workspace is not None:
             self._candidate_workspace.close()
             self._candidate_workspace = None
@@ -142,7 +151,7 @@ class DCPAttentionImpl(TritonAttentionImpl):
             from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
             self._fa3_prefill = flash_attn_varlen_func
         self.dcp_manager = get_dcp_manager()
-        self.dcp_manager.prepare_query_gather(self.num_heads, self.head_size)
+        self.dcp_manager.prepare_attention(self.num_heads, self.head_size)
 
     def get_step_metadata_provider(self):
         """Use common DCP lengths without a separate kernel scheduler."""

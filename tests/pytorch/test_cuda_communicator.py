@@ -36,14 +36,14 @@ def _run_dcp_query_gather(rank, rendezvous, enabled):
     try:
         with get_dist_manager().context(ctx):
             manager = get_dcp_manager()
-            manager.prepare_query_gather(32, 576)
+            manager.prepare_attention(32, 576)
             workspace = manager._query_workspace
             if all(enabled):
                 assert workspace.is_available()
             else:
                 assert workspace is None
             manager = get_dcp_manager()
-            manager.prepare_query_gather(32, 576)
+            manager.prepare_attention(32, 576)
             assert manager._query_workspace is workspace
             query = torch.empty(384, 32, 576, device='cuda', dtype=torch.bfloat16)
             # Ineligible inputs still return correct results through NCCL.
@@ -85,11 +85,49 @@ def _run_dcp_query_gather(rank, rendezvous, enabled):
                 expected = (torch.arange(2, device='cuda', dtype=query.dtype) + step * 8)
                 expected = expected.repeat_interleave(32)[None, :, None].expand_as(output)
                 torch.testing.assert_close(output, expected, rtol=0, atol=0)
+            _check_dcp_merge(rank, ctx.dcp_group, manager, all(enabled))
             _check_lm_head_lifecycle(rank, all(enabled))
             _check_dcp_candidate_gather(rank, ctx.dcp_group, all(enabled))
     finally:
         ctx.close()
         dist.destroy_process_group()
+
+
+def _check_dcp_merge(rank, group, manager, direct):
+    from lmdeploy.pytorch.backends.cuda.attention.cp import DCPManager
+    from lmdeploy.pytorch.distributed import DistGroup
+
+    native = DCPManager(DistGroup(rank=rank, gpu_group=group.gpu_group,
+                                 communicator=base_communicator_module.DeviceCommunicator(group.gpu_group)))
+    workspace = manager._lse_workspace
+    assert (workspace is not None and workspace.is_available()) == direct
+    for rows in (1, 16, 96):
+        output = torch.randn(rows, 64, 128, device='cuda', dtype=torch.bfloat16)
+        lse = torch.randn(rows, 68, device='cuda')[:, :64]
+        counts = torch.ones(rows, device='cuda', dtype=torch.int32)
+        counts[-1] = rank
+        lse[0, 0] = float('inf')
+        expected = native.combine(output, lse, counts)
+        for _ in range(3):
+            actual = manager.combine(output, lse, counts)
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        graph = torch.cuda.CUDAGraph()
+        outputs = []
+        with torch.cuda.graph(graph):
+            for step in range(4):
+                if rank == step % 2:
+                    torch.cuda._sleep(20000)
+                outputs.append(manager.combine(output, lse, counts))
+        for _ in range(3):
+            output.normal_()
+            lse.normal_()
+            lse[0, 0] = float('nan')
+            expected = native.combine(output, lse, counts)
+            graph.replay()
+            torch.cuda.synchronize()
+            for actual in outputs:
+                torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        graph.reset()
 
 
 def _check_dcp_candidate_gather(rank, group, direct):
@@ -289,7 +327,7 @@ def test_gather_registration_and_native_fallback(monkeypatch):
     context = DistContext(dcp_group=group)
     with get_dist_manager().context(context):
         manager = get_dcp_manager()
-        manager.prepare_query_gather(2, 4)
+        manager.prepare_attention(2, 4)
     assert manager._query_workspace is None
     logits = communicator.create_all_gather_workspace(6, device=torch.device('cpu'), dtype=torch.float32)
     assert logits is None
@@ -336,12 +374,14 @@ def test_cuda_gather_dispatch_and_workspace_ownership(monkeypatch, comm_env):
     context = DistContext(dcp_group=group)
     with get_dist_manager().context(context):
         manager = get_dcp_manager()
-        manager.prepare_query_gather(2, 4)
+        manager.prepare_attention(2, 4)
         manager = get_dcp_manager()
-        manager.prepare_query_gather(2, 4)
+        manager.prepare_attention(2, 4)
     query_workspace = manager._query_workspace
     logits_workspace = communicator.create_all_gather_workspace(6, device=torch.device('cpu'), dtype=torch.float32)
-    assert factory.call_count == 2
+    assert factory.call_count == 3
+    lse_workspace = manager._lse_workspace
+    lse_workspace.prepare.assert_called_once()
     query_workspace.prepare.assert_called_once()
     logits_workspace.prepare.assert_called_once()
 
@@ -373,13 +413,15 @@ def test_cuda_gather_dispatch_and_workspace_ownership(monkeypatch, comm_env):
     group_close = Mock(wraps=group.close)
     monkeypatch.setattr(group, 'close', group_close)
     query_workspace.close.side_effect = lambda: group_close.assert_not_called()
+    lse_workspace.close.side_effect = lambda: group_close.assert_not_called()
     candidate_workspace.close.side_effect = lambda: group_close.assert_not_called()
     context.close()
     context.close()
     query_workspace.close.assert_called_once()
+    lse_workspace.close.assert_called_once()
     candidate_workspace.close.assert_called_once()
     assert context.dcp_manager is None
-    assert manager._query_workspace is manager._candidate_workspace is None
+    assert manager._query_workspace is manager._lse_workspace is manager._candidate_workspace is None
     logits_workspace.close.assert_not_called()
 
 

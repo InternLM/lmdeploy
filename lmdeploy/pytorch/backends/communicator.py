@@ -39,7 +39,7 @@ class DeviceCommunicator:
         return gathered.view(world_size, *input.shape).transpose(0, 1).reshape(input.size(0), -1)
 
     def create_all_gather_workspace(self, gathered_width: int, device: torch.device, dtype: torch.dtype,
-                                    *, dim: int = -1, reuse_sync: bool = True):
+                                    *, dim: int = -1, reuse_sync: bool = True, capacity_bytes: int = 64 * 1024 * 1024):
         """Create a caller-owned workspace.
 
         Disable reuse_sync only when a subsequent same-group collective orders all consumers before the next gather.

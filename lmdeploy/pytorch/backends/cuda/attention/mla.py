@@ -256,7 +256,7 @@ class FlashMLAImpl(TritonAttentionImpl):
 
         if self.dcp_world_size > 1:
             self.dcp_manager = get_dcp_manager()
-            self.dcp_manager.prepare_query_gather(num_heads, head_size)
+            self.dcp_manager.prepare_attention(num_heads, head_size)
 
     def get_step_metadata_provider(self):
         """Describe metadata required by this selected implementation."""
