@@ -504,7 +504,6 @@ class Glm5NextMoE(DeepseekV2MoE):
     # Keep only the model-specific clamp; dispatch, quantization and grouped
     # GEMMs are owned by LMDeploy's generic blocked-FP8 MoE implementation.
     fused_moe_act_func = staticmethod(_GLM53_COMPACT_FP8_MOE_ACT)
-    fused_moe_fp32_acc = True
     # Match the GLM-5.3 contract: routing returns normalized, unscaled weights;
     # the 2.5 routed scale is applied once to the FP32 expert reduction before
     # its BF16 store.

@@ -117,9 +117,9 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
 
 def _build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
     """Build a DLINFER fused MoE implementation."""
-    if spec.fp32_acc or spec.output_scale != 1.0:
+    if spec.output_scale != 1.0:
         raise NotImplementedError(
-            'DLINFER fused MoE does not support fp32_acc or output_scale.')
+            'DLINFER fused MoE does not support output_scale.')
     return DlinferFusedMoEImpl(
         top_k=spec.top_k,
         num_experts=spec.num_experts,

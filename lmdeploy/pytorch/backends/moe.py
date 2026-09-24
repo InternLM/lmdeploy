@@ -73,7 +73,6 @@ class FusedMoEBuildSpec(BuildSpec[FusedMoEImpl]):
     layer_idx: int
     output_dtype: torch.dtype
     num_max_dispatch_tokens_per_rank: int
-    fp32_acc: bool = False
     output_scale: float = 1.0
 
 
@@ -258,7 +257,6 @@ class FusedMoEBlockedF8BuildSpec(BuildSpec[FusedMoEBlockedF8Impl]):
     layer_idx: int
     custom_gateup_act: bool
     scale_fmt: str | None
-    fp32_acc: bool = False
     output_scale: float = 1.0
 
 

@@ -915,7 +915,7 @@ def fused_moe_w4a16(
             num_bits=num_bits,
             group_size=group_size,
         )
-        return moe_reduce(expert_output, topk_weights, fp32_acc=True)
+        return moe_reduce(expert_output, topk_weights)
 
     # PyTorch promotes int32 cumsums to int64.  Normalize only paths that use
     # the shared sorter so all routing metadata keeps a homogeneous dtype.
@@ -1012,4 +1012,4 @@ def fused_moe_w4a16(
     )
     if valid_routes is not None:
         expert_output.masked_fill_(~valid_routes[..., None], 0)
-    return moe_reduce(expert_output, topk_weights, fp32_acc=True)
+    return moe_reduce(expert_output, topk_weights)

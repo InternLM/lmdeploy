@@ -942,7 +942,6 @@ def _moe_reduce_kernel(
     stride_wk: tl.constexpr,
     stride_om,
     stride_on: tl.constexpr,
-    fp32_acc: tl.constexpr,
     K: tl.constexpr,
     N: tl.constexpr,
     BLOCK_K: tl.constexpr,
@@ -967,11 +966,8 @@ def _moe_reduce_kernel(
     h = tl.load(h_ptrs, mask=mask_h, other=0.0)
     w = tl.load(weights_ptrs, mask=mask_k, other=0.0)
 
-    if fp32_acc:
-        h = h.to(tl.float32)
-        w = w.to(tl.float32)
-    else:
-        w = w.to(h.dtype)
+    h = h.to(tl.float32)
+    w = w.to(tl.float32)
 
     wh = h * w[:, None]
     o = wh.sum(axis=0)
@@ -980,8 +976,7 @@ def _moe_reduce_kernel(
     tl.store(o_ptrs, o, mask=mask_n)
 
 
-def moe_reduce(hidden_states: torch.Tensor, topk_weights: torch.Tensor, fp32_acc: bool = False,
-               *, output_scale: float = 1.0) -> torch.Tensor:
+def moe_reduce(hidden_states: torch.Tensor, topk_weights: torch.Tensor, *, output_scale: float = 1.0) -> torch.Tensor:
     """Weight and reduce experts, optionally scaling before the output cast."""
     assert hidden_states.dim() == 3
     assert topk_weights.dim() == 2
@@ -1007,7 +1002,6 @@ def moe_reduce(hidden_states: torch.Tensor, topk_weights: torch.Tensor, fp32_acc
         topk_weights.stride(1),
         out.stride(0),
         out.stride(1),
-        fp32_acc,
         K,
         N,
         BLOCK_K,
@@ -1031,7 +1025,6 @@ def fused_moe(hidden_states: torch.Tensor,
               num_experts: int = None,
               renormalize: bool = False,
               act_func: Callable = None,
-              fp32_acc: bool = False,
               output_scale: float = 1.0) -> torch.Tensor:
     """Fused moe."""
     M = hidden_states.size(0)
@@ -1142,6 +1135,5 @@ def fused_moe(hidden_states: torch.Tensor,
 
     ret = moe_reduce(intermediate_cache2,
                      topk_weights,
-                     fp32_acc=fp32_acc,
                      output_scale=output_scale)
     return ret
