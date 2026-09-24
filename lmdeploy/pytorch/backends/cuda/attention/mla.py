@@ -14,7 +14,7 @@ from lmdeploy.pytorch.backends.cp_utils import (
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import CudaAttentionMetaBuilder
-from .cp import gather_dcp_prefix_kv, get_dcp_manager
+from .cp import get_dcp_manager
 from .default import TritonAttentionImpl, TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
@@ -257,6 +257,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         if self.dcp_world_size > 1:
             self.dcp_manager = get_dcp_manager()
             self.dcp_manager.prepare_attention(num_heads, head_size)
+            self.dcp_manager.prepare_prefix_gather(head_size)
 
     def get_step_metadata_provider(self):
         """Describe metadata required by this selected implementation."""
@@ -540,7 +541,7 @@ class FlashMLAImpl(TritonAttentionImpl):
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
         )
-        context_k = gather_dcp_prefix_kv(local_k, chunk)
+        context_k = self.dcp_manager.gather_prefix(local_k, chunk)
         return context_k, chunk.cu_seqlens
 
     def _prefill_dcp_context(

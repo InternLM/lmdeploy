@@ -88,6 +88,7 @@ def _run_dcp_query_gather(rank, rendezvous, enabled):
             _check_dcp_merge(rank, ctx.dcp_group, manager, all(enabled))
             _check_lm_head_lifecycle(rank, all(enabled))
             _check_dcp_candidate_gather(rank, ctx.dcp_group, all(enabled))
+            _check_dcp_prefix_gather(rank, ctx.dcp_group, all(enabled))
     finally:
         ctx.close()
         dist.destroy_process_group()
@@ -128,6 +129,46 @@ def _check_dcp_merge(rank, group, manager, direct):
             for actual in outputs:
                 torch.testing.assert_close(actual, expected, rtol=0, atol=0)
         graph.reset()
+
+
+def _check_dcp_prefix_gather(rank, group, direct):
+    from lmdeploy.pytorch.backends.cp_utils import build_dcp_prefix_chunks
+    from lmdeploy.pytorch.backends.cuda.attention.cp import DCPManager, get_dcp_manager
+
+    manager = get_dcp_manager()
+    native = DCPManager(SimpleNamespace(gpu_group=group.gpu_group, rank=rank,
+                                        communicator=base_communicator_module.DeviceCommunicator(group.gpu_group)))
+    manager.prepare_prefix_gather(576, 256, 384, 576)
+    assert len(manager._prefix_workspaces) == 3
+    assert all((ws is not None and ws.is_available()) == direct for ws in manager._prefix_workspaces.values())
+    lengths = torch.tensor([0, 1, 3, 127, 256, 259], device='cuda', dtype=torch.int32)
+    chunk, = build_dcp_prefix_chunks(prefix_lens=lengths, prefix_limit=259, block_size=64,
+                                     kv_width=576, dcp_world_rank=(2, rank))
+    for heads, dim, dtype in ((1, 576, torch.bfloat16), (2, 128, torch.bfloat16),
+                              (2, 192, torch.bfloat16), (1, 576, torch.float16)):
+        local = torch.randn(chunk.local_capacity, heads, dim, device='cuda', dtype=dtype)
+        expected = native.gather_prefix(local, chunk, zero_padding=True)
+        actual = manager.gather_prefix(local, chunk, zero_padding=True)
+        torch.testing.assert_close(actual.view(torch.int16), expected.view(torch.int16), rtol=0, atol=0)
+        graph = torch.cuda.CUDAGraph()
+        outputs = []
+        with torch.cuda.graph(graph):
+            for step in range(4):
+                if rank == step % 2:
+                    torch.cuda._sleep(20000)
+                outputs.append(manager.gather_prefix(local, chunk, zero_padding=True))
+        for _ in range(3):
+            local.normal_()
+            expected = native.gather_prefix(local, chunk, zero_padding=True)
+            graph.replay()
+            torch.cuda.synchronize()
+            for actual in outputs:
+                torch.testing.assert_close(actual.view(torch.int16), expected.view(torch.int16), rtol=0, atol=0)
+        graph.reset()
+    # A strided payload with an unregistered width retains native behavior.
+    local = local[..., ::2]
+    torch.testing.assert_close(manager.gather_prefix(local, chunk, zero_padding=True),
+                               native.gather_prefix(local, chunk, zero_padding=True), rtol=0, atol=0)
 
 
 def _check_dcp_candidate_gather(rank, group, direct):
@@ -408,6 +449,9 @@ def test_cuda_gather_dispatch_and_workspace_ownership(monkeypatch, comm_env):
     candidate_workspace = manager._candidate_workspace
     manager.prepare_candidate_gather(512)
     assert manager._candidate_workspace is candidate_workspace
+    manager.prepare_prefix_gather(576, 128, 576)
+    prefix_workspaces = list(manager._prefix_workspaces.values())
+    assert len(prefix_workspaces) == 2
     assert context.dcp_manager is manager
     monkeypatch.setattr(torch.distributed, 'is_initialized', lambda: True)
     group_close = Mock(wraps=group.close)
@@ -415,11 +459,16 @@ def test_cuda_gather_dispatch_and_workspace_ownership(monkeypatch, comm_env):
     query_workspace.close.side_effect = lambda: group_close.assert_not_called()
     lse_workspace.close.side_effect = lambda: group_close.assert_not_called()
     candidate_workspace.close.side_effect = lambda: group_close.assert_not_called()
+    for workspace in prefix_workspaces:
+        workspace.close.side_effect = lambda: group_close.assert_not_called()
     context.close()
     context.close()
     query_workspace.close.assert_called_once()
     lse_workspace.close.assert_called_once()
     candidate_workspace.close.assert_called_once()
+    for workspace in prefix_workspaces:
+        workspace.close.assert_called_once()
+    assert not manager._prefix_workspaces
     assert context.dcp_manager is None
     assert manager._query_workspace is manager._lse_workspace is manager._candidate_workspace is None
     logits_workspace.close.assert_not_called()

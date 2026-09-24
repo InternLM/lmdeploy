@@ -8,25 +8,6 @@ from lmdeploy.pytorch.backends.cp_utils import DCPPrefixChunk, get_dcp_local_cau
 from .default import TritonAttentionImpl, TritonAttentionMetaBuilder, TritonAttentionMetadata
 
 
-def gather_dcp_prefix_kv(local_kv: torch.Tensor, chunk: DCPPrefixChunk,
-                         *, zero_padding: bool = False) -> torch.Tensor:
-    """Gather a flattened prefix chunk and restore global token order.
-
-    Each rank supplies [chunk.local_capacity, ...] with valid tokens packed by request. The result has
-    [requests * chunk.size, ...] capacity and valid tokens packed according to chunk.cu_seqlens.
-    Set zero_padding for consumers such as FA3 that may load masked V lanes: 0 * NaN can contaminate valid outputs.
-    """
-    from lmdeploy.pytorch.distributed import all_gather_into_tensor
-    from lmdeploy.pytorch.kernels.cuda.dcp import reorder_dcp_prefill_kv
-
-    gathered = local_kv.new_empty(chunk.kv_seqlens.numel() * chunk.size, *local_kv.shape[1:])
-    all_gather_into_tensor(gathered, local_kv, group='dcp')
-    context = torch.zeros_like(gathered) if zero_padding else torch.empty_like(gathered)
-    reorder_dcp_prefill_kv(gathered, context, chunk_kv_seqlens=chunk.kv_seqlens,
-                           kv_start_loc=chunk.cu_seqlens[:-1], local_lens=chunk.local_kv_seqlens)
-    return context
-
-
 class DCPManager:
     """Own shared DCP gathers and the output combine that orders query reuse.
 
@@ -42,6 +23,7 @@ class DCPManager:
         self._query_workspace = None
         self._lse_workspace = None
         self._candidate_workspace = None
+        self._prefix_workspaces = {}
 
     def prepare_attention(self, num_heads: int, head_size: int):
         """Prepare query and LSE arenas shared across attention layers."""
@@ -63,6 +45,31 @@ class DCPManager:
         if self._candidate_workspace is None:
             self._candidate_workspace = self.communicator.create_all_gather_workspace(
                 topk * 2, device=torch.device('cuda'), dtype=torch.float32, dim=0)
+
+    def prepare_prefix_gather(self, *kv_widths: int):
+        """Share prefix arenas across layers and equal-width K/V payloads."""
+        for width in kv_widths:
+            if width not in self._prefix_workspaces:
+                self._prefix_workspaces[width] = self.communicator.create_all_gather_workspace(
+                    width, device=torch.device('cuda'), dtype=torch.bfloat16, dim=0)
+
+    def gather_prefix(self, local_kv: torch.Tensor, chunk: DCPPrefixChunk,
+                      *, zero_padding: bool = False) -> torch.Tensor:
+        """Gather cached KV and restore sequence order into an owned output.
+
+        The entry barrier protects the previous reorder before arena reuse. Zero padding for consumers such as FA3
+        that may load masked V lanes: 0 * NaN can contaminate valid outputs.
+        """
+        from lmdeploy.pytorch.kernels.cuda.dcp import reorder_dcp_prefill_kv
+
+        flat_kv = local_kv.flatten(1)
+        gathered = self.communicator.all_gather(
+            flat_kv, dim=0, workspace=self._prefix_workspaces.get(flat_kv.size(1)), copy_output=False)
+        gathered = gathered.view(-1, *local_kv.shape[1:])
+        context = torch.zeros_like(gathered) if zero_padding else torch.empty_like(gathered)
+        reorder_dcp_prefill_kv(gathered, context, chunk_kv_seqlens=chunk.kv_seqlens,
+                               kv_start_loc=chunk.cu_seqlens[:-1], local_lens=chunk.local_kv_seqlens)
+        return context
 
     def gather_query(self, query: torch.Tensor) -> torch.Tensor:
         """Gather query heads; consume and combine on the same stream before
@@ -125,6 +132,10 @@ class DCPManager:
         if self._candidate_workspace is not None:
             self._candidate_workspace.close()
             self._candidate_workspace = None
+        for workspace in self._prefix_workspaces.values():
+            if workspace is not None:
+                workspace.close()
+        self._prefix_workspaces.clear()
 
 
 def get_dcp_manager() -> DCPManager:
@@ -152,6 +163,8 @@ class DCPAttentionImpl(TritonAttentionImpl):
             self._fa3_prefill = flash_attn_varlen_func
         self.dcp_manager = get_dcp_manager()
         self.dcp_manager.prepare_attention(self.num_heads, self.head_size)
+        self.dcp_manager.prepare_prefix_gather(self.num_kv_heads * self.head_size,
+                                               self.num_kv_heads * self.v_head_size)
 
     def get_step_metadata_provider(self):
         """Use common DCP lengths without a separate kernel scheduler."""
@@ -202,8 +215,8 @@ class DCPAttentionImpl(TritonAttentionImpl):
             start_loc=chunk.local_cu_seqlens[:-1], out_size=chunk.local_capacity,
             out_dtype=dtype, flatten_kv_layout='shd', quant_policy=metadata.quant_policy,
             k_scales_zeros=k_scales_zeros, v_scales_zeros=v_scales_zeros)
-        return (gather_dcp_prefix_kv(local_k, chunk, zero_padding=True),
-                gather_dcp_prefix_kv(local_v, chunk, zero_padding=True))
+        return (self.dcp_manager.gather_prefix(local_k, chunk, zero_padding=True),
+                self.dcp_manager.gather_prefix(local_v, chunk, zero_padding=True))
 
     def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor,
                 k_cache: torch.Tensor, v_cache: torch.Tensor, attn_metadata: TritonAttentionMetadata,

@@ -499,7 +499,11 @@ def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse,
                            kv_quant_policy=0)
     monkeypatch.setattr(distributed, 'get_dcp_world_rank', lambda: (dcp_size, 0))
     # This prefill test simulates ranks without creating process groups.
-    monkeypatch.setattr(mla_module, 'get_dcp_manager', Mock())
+    manager = object.__new__(DCPManager)
+    manager._prefix_workspaces = {}
+    manager.prepare_attention = Mock()
+    manager.prepare_prefix_gather = Mock()
+    monkeypatch.setattr(mla_module, 'get_dcp_manager', lambda: manager)
     # One virtual block per chunk, with an empty second request in every chunk.
     monkeypatch.setattr(cp_utils, 'get_dcp_prefill_workspace_size',
                         lambda **kwargs: 2 * 64 * (1 + 2 * dcp_size) * 576 * 2)
@@ -537,9 +541,10 @@ def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse,
         reference_keys[:prefix_length, :, :512] = latent.flatten(-2).to(torch.bfloat16)
     gather_calls = 0
 
-    def gather(output, local, group='tp'):
+    def gather(local, **kwargs):
         nonlocal gather_calls
-        assert group == 'dcp'
+        local = local.view(-1, 1, 576)
+        output = local.new_empty(dcp_size * local.size(0), 1, 576)
         chunk = metadata.dcp_prefix_chunks[gather_calls]
         prefix = reference_keys[chunk.start:min(chunk.start + chunk.size, prefix_length)]
         torch.testing.assert_close(local[:prefix[::dcp_size].size(0)], prefix[::dcp_size], atol=0, rtol=0)
@@ -549,8 +554,9 @@ def test_dcp_cached_prefill_matches_reference_across_chunks(monkeypatch, sparse,
             remote.zero_()
             remote[:prefix[rank::dcp_size].size(0)].copy_(prefix[rank::dcp_size])
         gather_calls += 1
+        return output.flatten(1)
 
-    monkeypatch.setattr(distributed, 'all_gather_into_tensor', gather)
+    manager.communicator = SimpleNamespace(all_gather=gather)
     indices = None
     if use_sparse:
         # Non-contiguous selections span cached chunks and current tokens.
@@ -636,9 +642,7 @@ def test_dcp_attention_correction_kernel_matches_torch(dtype):
 @pytest.mark.parametrize('dcp_size', [2, 4])
 @pytest.mark.parametrize('gather_prefix', [False, True], ids=['kernel', 'gather'])
 def test_reorder_dcp_prefill_kv_handles_uneven_requests(monkeypatch, dcp_size, gather_prefix):
-    from lmdeploy.pytorch import distributed
     from lmdeploy.pytorch.backends import cp_utils
-    from lmdeploy.pytorch.backends.cuda.attention.cp import gather_dcp_prefix_kv
     from lmdeploy.pytorch.kernels.cuda.dcp import reorder_dcp_prefill_kv
 
     device = 'cuda'
@@ -664,13 +668,14 @@ def test_reorder_dcp_prefill_kv_handles_uneven_requests(monkeypatch, dcp_size, g
         expected[:valid_values.numel(), 0] = valid_values
         gathered = gathered.flatten(0, 1)
         if gather_prefix:
-            def all_gather(destination, local, *, group):
-                assert group == 'dcp'
+            def all_gather(local, **kwargs):
                 assert local.size(0) == local_capacity
-                destination.copy_(gathered)
+                return gathered
 
-            monkeypatch.setattr(distributed, 'all_gather_into_tensor', all_gather)
-            output = gather_dcp_prefix_kv(gathered[:local_capacity], chunk, zero_padding=True)
+            manager = object.__new__(DCPManager)
+            manager.communicator = SimpleNamespace(all_gather=all_gather)
+            manager._prefix_workspaces = {}
+            output = manager.gather_prefix(gathered[:local_capacity], chunk, zero_padding=True)
         else:
             reorder_dcp_prefill_kv(gathered,
                                    output,
