@@ -164,8 +164,8 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
             # a global pool and is not a valid per-request workspace size.
             session_cap = getattr(step_ctx.cache_config, 'max_session_len', None)
             if session_cap is None:
-                session_cap = getattr(attn_metadata, 'graph_max_kv_seqlen', None)
-            meta.max_kv_seqlen = session_cap or step_ctx.max_kv_seqlen
+                session_cap = attn_metadata.block_offsets.size(1) * step_ctx.cache_config.block_size
+            meta.max_kv_seqlen = session_cap
 
         if window_size > 0 and slot is not None:
             if meta.is_rectangular_decode and meta.causal:

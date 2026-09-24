@@ -717,8 +717,8 @@ def test_v4_window_pack_skips_padded_state_slot():
 
 @pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
                     reason='V4 FP8 cache kernels require SM90+')
-def test_fill_compressed_kv_skips_padded_state_slot():
-    """Static graph qlens must not make a padded request write block zero."""
+def test_fill_compressed_kv_padding_only_writes_reserved_block_zero():
+    """Discarded paged-KV writes may touch reserved block zero, not live KV."""
     from lmdeploy.pytorch.kernels.cuda.v4_compressor import (
         fill_compressed_kv,
     )
@@ -727,7 +727,7 @@ def test_fill_compressed_kv_skips_padded_state_slot():
     compressed_kv = torch.randn(
         6, 512, dtype=torch.bfloat16, device=device)
     cache = torch.zeros(
-        1, 64, 584, dtype=torch.float8_e4m3fn, device=device)
+        2, 64, 584, dtype=torch.float8_e4m3fn, device=device)
     before = cache.view(torch.uint8).clone()
     fill_compressed_kv(
         compressed_kv,
@@ -739,10 +739,10 @@ def test_fill_compressed_kv_skips_padded_state_slot():
         block_size=256,
         max_seqlen_q=6,
         fp8_cache=cache,
-        state_ids=torch.tensor([-1], dtype=torch.long, device=device),
     )
     torch.cuda.synchronize()
-    torch.testing.assert_close(cache.view(torch.uint8), before)
+    torch.testing.assert_close(cache[1:].view(torch.uint8), before[1:])
+    assert not torch.equal(cache[0].view(torch.uint8), before[0])
 
 
 class TestScoreAndFillStateDecode:

@@ -157,6 +157,9 @@ class StateCacheEngine:
         start_positions = start_positions.to(dtype=torch.long)
         q_seqlens = q_seqlens.to(dtype=torch.long)
         max_q_seqlen = int(max_q_seqlen)
+        # Fixed-shape reads may use slot zero for padding; masked restoration
+        # below never writes these rows. Avoid CUDA nonzero/boolean selection.
+        safe_state_offsets = state_offsets.clamp_min(0)
         offsets = torch.arange(max_q_seqlen, device=q_seqlens.device)
         positions = start_positions.unsqueeze(1) + offsets.unsqueeze(0)
         snapshots = {}
@@ -190,7 +193,7 @@ class StateCacheEngine:
                     f'{max_q_seqlen}, capacity {capacity}.')
 
             # Layer-scoped V4 state views use [layers, slots, rows, ...].
-            before = cache[:, state_offsets[:, None], rows].clone()
+            before = cache[:, safe_state_offsets[:, None], rows].clone()
             snapshots[name] = (rows, before)
         if not snapshots:
             return None
@@ -219,9 +222,17 @@ class StateCacheEngine:
             mask = rejected
             if rows.size(1) == 2 * max_q:
                 mask = torch.cat([mask, mask], dim=1)
-            current = cache[:, state_offsets[:, None], rows]
-            mask = mask.unsqueeze(0)
+            if cache.is_cuda:
+                from lmdeploy.pytorch.kernels.cuda.copy_cache import restore_state_rows
+                restore_state_rows(cache, before, state_offsets, rows, mask)
+                continue
+            # CPU/reference path may compact; CUDA uses fixed-shape masked IO.
+            active = state_offsets >= 0
+            slots = state_offsets[active]
+            active_rows = rows[active]
+            current = cache[:, slots[:, None], active_rows]
+            mask = mask[active].unsqueeze(0)
             while mask.dim() < current.dim():
                 mask = mask.unsqueeze(-1)
-            restored = torch.where(mask, before, current)
-            cache[:, state_offsets[:, None], rows] = restored
+            restored = torch.where(mask, before[:, active], current)
+            cache[:, slots[:, None], active_rows] = restored

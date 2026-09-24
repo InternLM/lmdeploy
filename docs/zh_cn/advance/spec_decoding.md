@@ -181,7 +181,9 @@ lmdeploy serve api_server deepseek-ai/DeepSeek-V4-Flash-0731 \
 
 DSpark V1 支持 CUDA Graph 执行，该模式是默认且推荐的高性能路径。
 仅在调试时使用 `eager_mode=True` 或传入 `--eager-mode` 作为回退方案。
-DSpark V1 需要 `dp=1` 和 `ep=1`。固定窗口版本暂不支持前缀缓存、草稿
+DSpark V1 的 `Qwen3DSparkModel` 和 `DeepseekV4ForCausalLMDSpark` 草稿架构支持
+DP/EP；DFlash 的 `DFlashDraftModel` 同样支持。DP/EP 需要关闭 microbatch overlap
+和 KV transfer，且不支持 PD 分离。固定窗口版本暂不支持前缀缓存、草稿
 KV-cache 量化、引导解码以及基于置信度的动态验证。使用合适的
 `--logprobs-mode`（例如 `raw_logprobs`）启动服务后，OpenAI 兼容的 Chat
 接口可以返回输出 log probabilities。目标模型的单 token 解码与固定窗口验证在

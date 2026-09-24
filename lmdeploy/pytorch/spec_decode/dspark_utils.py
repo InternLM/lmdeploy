@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
+from ..config import DSparkConfig
 from .dflash_utils import (
     validate_dflash_cache_config,
     validate_dflash_dist_config,
@@ -109,23 +109,6 @@ def prepare_dspark_hf_config(config: Any) -> Any:
     return config
 
 
-@dataclass(frozen=True)
-class DSparkResolvedConfig:
-    target_layer_ids: tuple[int, ...]
-    mask_token_id: int
-    sample_from_anchor: bool
-    draft_query_len: int
-    verify_block_len: int
-    checkpoint_block_capacity: int
-    draft_vocab_size: int
-    markov_rank: int
-    markov_head_type: str
-    bundled_draft: bool
-    enable_confidence_head: bool
-    confidence_head_with_markov: bool
-    dynamic_verify_policy: str = 'fixed'
-
-
 def _validate_layer_ids(layer_ids: Any, target_num_layers: int) -> tuple[int, ...]:
     if not isinstance(layer_ids, (list, tuple)) or not layer_ids:
         raise ValueError('DSpark requires a non-empty target-layer id list.')
@@ -141,7 +124,7 @@ def _validate_layer_ids(layer_ids: Any, target_num_layers: int) -> tuple[int, ..
 
 
 def parse_dspark_config(draft_hf_config: Any, num_speculative_tokens: int,
-                        target_num_layers: int) -> DSparkResolvedConfig:
+                        target_num_layers: int) -> DSparkConfig:
     """Parse external Speculators/dense and bundled DeepSeek-V4 DSpark."""
     if (isinstance(num_speculative_tokens, bool)
             or not isinstance(num_speculative_tokens, int)
@@ -230,7 +213,7 @@ def parse_dspark_config(draft_hf_config: Any, num_speculative_tokens: int,
                                        bundled))
     confidence_head_with_markov = bool(
         _get(draft_hf_config, 'confidence_head_with_markov', True))
-    return DSparkResolvedConfig(
+    return DSparkConfig(
         target_layer_ids=target_layer_ids,
         mask_token_id=mask_token_id,
         sample_from_anchor=sample_from_anchor,
@@ -249,7 +232,7 @@ def parse_dspark_config(draft_hf_config: Any, num_speculative_tokens: int,
 def validate_dspark_target_config(
     draft_hf_config: Any,
     target_hf_config: Any,
-    resolved: DSparkResolvedConfig,
+    resolved: DSparkConfig,
 ) -> None:
     """Validate the external/bundled draft's declared target contract."""
     target_num_layers = _get(target_hf_config, 'num_hidden_layers', None)
@@ -296,7 +279,7 @@ def validate_dspark_target_config(
 
 
 def validate_dspark_dist_config(dist_config: Any):
-    """DSpark V1 shares DFlash's CUDA DP1/EP1 envelope."""
+    """DSpark V1 shares DFlash's CUDA distributed execution constraints."""
     try:
         return validate_dflash_dist_config(dist_config)
     except ValueError as exc:

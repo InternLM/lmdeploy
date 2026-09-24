@@ -53,7 +53,8 @@ class DSpark(DFlash):
 
     @property
     def draft_query_len(self) -> int:
-        query_len = self.specdecode_config.dspark_draft_query_len
+        config = self.specdecode_config.dspark
+        query_len = None if config is None else config.draft_query_len
         if query_len is None:
             raise RuntimeError('DSpark draft query length was not resolved during config parsing.')
         return int(query_len)

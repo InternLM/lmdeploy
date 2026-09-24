@@ -701,6 +701,23 @@ class MiscConfig:
         return misc_config
 
 
+@dataclass(frozen=True)
+class DSparkConfig:
+    target_layer_ids: tuple[int, ...]
+    mask_token_id: int
+    sample_from_anchor: bool
+    draft_query_len: int
+    verify_block_len: int
+    checkpoint_block_capacity: int
+    draft_vocab_size: int
+    markov_rank: int
+    markov_head_type: str
+    bundled_draft: bool
+    enable_confidence_head: bool
+    confidence_head_with_markov: bool
+    dynamic_verify_policy: str = 'fixed'
+
+
 @dataclass
 class SpecDecodeConfig:
     model: str
@@ -711,17 +728,7 @@ class SpecDecodeConfig:
     dist_config: DistConfig = field(default_factory=DistConfig)
     target_layer_ids: tuple[int, ...] | None = None
     mask_token_id: int | None = None
-    dspark_sample_from_anchor: bool | None = None
-    dspark_draft_query_len: int | None = None
-    dspark_verify_block_len: int | None = None
-    dspark_checkpoint_block_capacity: int | None = None
-    draft_vocab_size: int | None = None
-    markov_rank: int | None = None
-    markov_head_type: str | None = None
-    dspark_bundled_draft: bool = False
-    enable_confidence_head: bool = False
-    confidence_head_with_markov: bool = False
-    dynamic_verify_policy: str | None = None
+    dspark: DSparkConfig | None = None
 
     @classmethod
     def from_config(
@@ -862,27 +869,7 @@ class SpecDecodeConfig:
             num_speculative_tokens=num_speculative_tokens,
             target_layer_ids=target_layer_ids,
             mask_token_id=mask_token_id,
-            dspark_sample_from_anchor=(None if dspark_config is None else
-                                      dspark_config.sample_from_anchor),
-            dspark_draft_query_len=(None if dspark_config is None else
-                                    dspark_config.draft_query_len),
-            dspark_verify_block_len=(None if dspark_config is None else
-                                     dspark_config.verify_block_len),
-            dspark_checkpoint_block_capacity=(None if dspark_config is None else
-                                               dspark_config.checkpoint_block_capacity),
-            draft_vocab_size=(None if dspark_config is None else
-                               dspark_config.draft_vocab_size),
-            markov_rank=(None if dspark_config is None else dspark_config.markov_rank),
-            markov_head_type=(None if dspark_config is None else
-                              dspark_config.markov_head_type),
-            dspark_bundled_draft=(False if dspark_config is None else
-                                  dspark_config.bundled_draft),
-            enable_confidence_head=(False if dspark_config is None else
-                                    dspark_config.enable_confidence_head),
-            confidence_head_with_markov=(False if dspark_config is None else
-                                         dspark_config.confidence_head_with_markov),
-            dynamic_verify_policy=(None if dspark_config is None else
-                                   dspark_config.dynamic_verify_policy),
+            dspark=dspark_config,
         )
         return obj
 

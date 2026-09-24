@@ -419,7 +419,6 @@ def test_rectangular_executor_matches_position_loop_with_one_flashmla_call(
         rectangular_decode=rectangular,
         max_q_seqlen=query_len,
         q_seqlens=q_seqlens,
-        is_cuda_graph=False,
     )
 
     generator = torch.Generator(device='cuda').manual_seed(123)

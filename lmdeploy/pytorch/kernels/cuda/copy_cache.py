@@ -65,3 +65,45 @@ def copy_cache_blocks(cache: torch.Tensor,
         BLOCK_BYTES=block_bytes,
         num_warps=num_warps,
     )
+
+
+@triton.jit
+def _restore_state_rows_kernel(cache, before, slots, rows, rejected,
+                               stride_layer, stride_slot, stride_row,
+                               BATCH: tl.constexpr, WIDTH: tl.constexpr,
+                               ROW_BYTES: tl.constexpr, BLOCK: tl.constexpr):
+    tiles: tl.constexpr = tl.cdiv(ROW_BYTES, BLOCK)
+    row_id = tl.program_id(0) // tiles
+    layer = row_id // (BATCH * WIDTH)
+    batch = row_id // WIDTH % BATCH
+    column = row_id % WIDTH
+    slot = tl.load(slots + batch).to(tl.int64)
+    restore = tl.load(rejected + batch * WIDTH + column)
+    if slot >= 0 and restore:
+        row = tl.load(rows + batch * WIDTH + column).to(tl.int64)
+        offsets = (tl.program_id(0) % tiles) * BLOCK + tl.arange(0, BLOCK)
+        mask = offsets < ROW_BYTES
+        value = tl.load(before + row_id.to(tl.int64) * ROW_BYTES + offsets, mask=mask)
+        dst = layer.to(tl.int64) * stride_layer + slot * stride_slot + row * stride_row
+        tl.store(cache + dst + offsets, value, mask=mask)
+
+
+def restore_state_rows(cache: torch.Tensor, before: torch.Tensor,
+                       slots: torch.Tensor, rows: torch.Tensor,
+                       rejected: torch.Tensor) -> None:
+    """Restore rejected V4 rows, ignoring padded slots without host selection.
+
+    Cache layout is [layers, slots, rows, ...], with contiguous row payloads.
+    Snapshots are contiguous [layers, batch, width, ...]. Byte copies also
+    support FP8 without conversion or loss of bit patterns.
+    """
+    batch, width = rows.shape
+    if not batch or not width or not cache.numel():
+        return
+    cache_bytes = cache.view(torch.uint8)
+    before_bytes = before.contiguous().view(torch.uint8)
+    row_bytes = before_bytes.numel() // (cache.size(0) * batch * width)
+    block = min(1024, triton.next_power_of_2(row_bytes))
+    _restore_state_rows_kernel[(triton.cdiv(row_bytes, block) * cache.size(0) * batch * width,)](
+        cache_bytes, before_bytes, slots.contiguous(), rows.contiguous(), rejected.contiguous(),
+        *cache_bytes.stride()[:3], batch, width, row_bytes, block)

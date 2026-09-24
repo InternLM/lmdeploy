@@ -35,7 +35,6 @@ class CudaGraphMeta:
     num_blocks: int
     is_decoding: int
     device: torch.device
-    max_kv_seqlen: int | None = None
     input_buffers: BuffType = None
     output_buffers: BuffType = None
     vocab_size: int = 1
@@ -217,9 +216,6 @@ class CudaGraphMixin:
         attn_metadata.kv_seqlens = input_buffers['kv_seqlens']
         attn_metadata.cu_seqlens_q = input_buffers['cu_seqlens_q']
         attn_metadata.cu_seqlens_k = input_buffers['cu_seqlens_k']
-        attn_metadata.is_cuda_graph = True
-        attn_metadata.graph_max_kv_seqlen = graph_meta.max_kv_seqlen
-        attn_metadata.graph_sum_kv_seqlen = graph_meta.max_batchs * graph_meta.max_kv_seqlen
 
         if graph_meta.step_meta_plan is not None:
             step_ctx = get_step_ctx_manager().current_context()

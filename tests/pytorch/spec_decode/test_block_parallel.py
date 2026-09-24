@@ -388,7 +388,7 @@ def test_low_capacity_block_query_warmup(monkeypatch, method, explicit):
                         num_cpu_blocks=0, num_gpu_blocks=public.num_gpu_blocks)
     executor.dist_config = DistConfig(dp=2, tp=2)
     executor.specdecode_config = SimpleNamespace(
-        method=method, num_speculative_tokens=3, dspark_draft_query_len=3,
+        method=method, num_speculative_tokens=3, dspark=SimpleNamespace(draft_query_len=3),
         cache_config=draft, mask_token_id=9)
     executor._sync_spec_cache_block_size()
     mib = 1024 * 1024
@@ -483,7 +483,7 @@ def test_block_producer_consumer_participation_and_output_ownership(monkeypatch,
         cls = DFlash if method == 'dflash' else DSpark
         proposer = cls.__new__(cls)
         proposer.num_speculative_tokens = 2
-        proposer.specdecode_config = SimpleNamespace(mask_token_id=9, dspark_draft_query_len=width)
+        proposer.specdecode_config = SimpleNamespace(mask_token_id=9, dspark=SimpleNamespace(draft_query_len=width))
         proposer._full_context_materialization = True
         proposer.guided_helper = SimpleNamespace(get_processors=lambda *args: None)
         proposer.model = SimpleNamespace(backend_config=SimpleNamespace(eager_mode=True),

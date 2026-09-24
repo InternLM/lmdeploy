@@ -228,8 +228,7 @@ class Compressor(nn.Module):
         # ---- Phase G: Resolve and write the compressor-owned block cache ----
         block_caches = self.compressor_impl.resolve_block_caches(caches.block_caches)
         self.compressor_impl.write_compressed_kv(
-            compressed_kv, block_caches, v4_compressor_meta,
-            state_ids=state_ids)
+            compressed_kv, block_caches, v4_compressor_meta)
         return block_caches
 
     def rotate_activation(self, x: torch.Tensor) -> torch.Tensor:

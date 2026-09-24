@@ -1688,8 +1688,8 @@ class BaseModelAgent:
         method = self.spec_agent.method
         bundled_dspark = (
             method == 'dspark'
-            and bool(getattr(self.spec_agent.specdecode_config,
-                             'dspark_bundled_draft', False)))
+            and self.spec_agent.specdecode_config.dspark is not None
+            and self.spec_agent.specdecode_config.dspark.bundled_draft)
         if method != 'qwen3_5_mtp' and not bundled_dspark:
             return weights, []
         main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]

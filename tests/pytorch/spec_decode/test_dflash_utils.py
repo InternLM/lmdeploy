@@ -526,7 +526,7 @@ def test_dflash_specdecode_builder_preserves_tp(monkeypatch):
         captured.update(kwargs)
         return SimpleNamespace(dist_config=kwargs['dist_config'])
 
-    monkeypatch.setattr('lmdeploy.pytorch.engine.config_builder.SpecDecodeConfig.from_config', _fake_from_config)
+    monkeypatch.setattr('lmdeploy.pytorch.spec_decode.config.SpecDecodeConfig.from_config', _fake_from_config)
 
     cache_config = CacheConfig(
         max_batches=1,

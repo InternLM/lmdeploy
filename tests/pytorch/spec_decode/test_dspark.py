@@ -205,11 +205,11 @@ def test_specdecode_config_stores_resolved_dspark_fields(monkeypatch):
 
     assert cfg.target_layer_ids == (1, 19, 38, 57, 74)
     assert cfg.mask_token_id == 99
-    assert cfg.dspark_sample_from_anchor is True
-    assert cfg.dspark_draft_query_len == 7
-    assert cfg.dspark_verify_block_len == 8
-    assert cfg.markov_rank == 4
-    assert cfg.dynamic_verify_policy == 'fixed'
+    assert cfg.dspark.sample_from_anchor is True
+    assert cfg.dspark.draft_query_len == 7
+    assert cfg.dspark.verify_block_len == 8
+    assert cfg.dspark.markov_rank == 4
+    assert cfg.dspark.dynamic_verify_policy == 'fixed'
     assert draft.hf_config.dspark_sample_from_anchor is True
     assert draft.hf_config.dspark_draft_query_len == 7
     assert draft.hf_config.dspark_num_speculative_tokens == 7
@@ -300,8 +300,7 @@ def test_dspark_query_layouts():
             mask_token_id=99,
             target_layer_ids=(1, 5),
             num_speculative_tokens=3,
-            dspark_draft_query_len=query_len,
-            dspark_sample_from_anchor=sample_from_anchor,
+            dspark=SimpleNamespace(draft_query_len=query_len, sample_from_anchor=sample_from_anchor),
             model_config=None,
         ), device='cpu')
         query = proposer._build_query_inputs(inputs, torch.tensor([2, 2]),
@@ -324,8 +323,7 @@ def test_dspark_context_materialization_layout(cache_kind, dp, ep):
         mask_token_id=99,
         target_layer_ids=(1, 5),
         num_speculative_tokens=5,
-        dspark_draft_query_len=5,
-        dspark_sample_from_anchor=True,
+        dspark=SimpleNamespace(draft_query_len=5, sample_from_anchor=True),
         model_config=None,
         dist_config=SimpleNamespace(dp=dp, ep=ep),
     ), device='cpu')
@@ -429,8 +427,7 @@ def test_dspark_query_does_not_commit_v4_window_rows(query_len):
         mask_token_id=99,
         target_layer_ids=(1, 5),
         num_speculative_tokens=5,
-        dspark_draft_query_len=query_len,
-        dspark_sample_from_anchor=query_len == 5,
+        dspark=SimpleNamespace(draft_query_len=query_len, sample_from_anchor=query_len == 5),
         model_config=None,
     ), device='cpu')
     window, capacity, width = 128, 134, 6
@@ -593,7 +590,7 @@ def test_v4_rectangular_spec_block_is_marked_for_packed_decode():
 
     assert meta.is_decoding is False
     assert meta.is_rectangular_decode is True
-    assert meta.max_kv_seqlen == 20
+    assert meta.max_kv_seqlen == 4 * 64  # Fixed table capacity when session bound is absent.
     assert meta.causal is True
 
 
@@ -611,9 +608,6 @@ def test_v4_rectangular_cudagraph_builds_packed_decode_metadata(monkeypatch):
                                  device=device),
         kv_seqlens=torch.full((4, ), 5, dtype=torch.int32, device=device),
         q_seqlens=torch.full((4, ), 5, dtype=torch.int32, device=device),
-        is_cuda_graph=True,
-        graph_max_kv_seqlen=512,
-        graph_sum_kv_seqlen=2048,
     )
     step = SimpleNamespace(
         cache_config=SimpleNamespace(block_size=64, num_gpu_blocks=8,
@@ -867,8 +861,7 @@ def test_dspark_sequential_sampling_feeds_each_token_to_next_step():
         mask_token_id=99,
         target_layer_ids=(1, 5),
         num_speculative_tokens=3,
-        dspark_draft_query_len=3,
-        dspark_sample_from_anchor=True,
+        dspark=SimpleNamespace(draft_query_len=3, sample_from_anchor=True),
         model_config=None,
     ), device='cpu')
     inputs = ModelInputs(
@@ -961,8 +954,7 @@ def test_dspark_delegates_nongreedy_sampling_to_dflash(monkeypatch):
         mask_token_id=99,
         target_layer_ids=(1,),
         num_speculative_tokens=3,
-        dspark_draft_query_len=3,
-        dspark_sample_from_anchor=True,
+        dspark=SimpleNamespace(draft_query_len=3, sample_from_anchor=True),
         model_config=None,
     ), device='cpu')
     sampling = SamplingInputs(max_top_k=8, min_top_p=0.9, max_num_logprobs=5)

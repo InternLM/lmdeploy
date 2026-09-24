@@ -55,13 +55,14 @@ class ARSpecStrategyFactory(StrategyFactoryBase):
         if self.specdecode_config.method == 'dflash':
             query_len = self.specdecode_config.num_speculative_tokens + 1
         elif self.specdecode_config.method == 'dspark':
-            query_len = self.specdecode_config.dspark_draft_query_len
+            dspark = self.specdecode_config.dspark
+            query_len = None if dspark is None else dspark.draft_query_len
             if query_len is None:
                 raise ValueError('DSpark requires a resolved draft query length for KV allocation.')
         return ARSpecEngineStrategy(cache_config=cache_config,
                                     scheduler_config=scheduler_config,
                                     num_spec_tokens=self.specdecode_config.num_speculative_tokens,
-                                    draft_query_len=query_len)
+                                    draft_kv_lookahead=query_len)
 
     def build_sequence_strategy(self) -> SequenceStrategy:
         from .sequence import ARSpecSequenceStrategy

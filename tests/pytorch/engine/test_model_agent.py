@@ -369,7 +369,7 @@ class _PatchedWeightModel:
 class _BundledDSparkAgent:
 
     method = 'dspark'
-    specdecode_config = SimpleNamespace(dspark_bundled_draft=True)
+    specdecode_config = SimpleNamespace(dspark=SimpleNamespace(bundled_draft=True))
 
     def __init__(self, model):
         self.model = model

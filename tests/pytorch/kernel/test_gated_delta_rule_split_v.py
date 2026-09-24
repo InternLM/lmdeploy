@@ -40,9 +40,9 @@ def test_split_v_exact_snapshots_and_graph_rollback(monkeypatch, batch, padded):
     v = packed[:, :, 4096:].view(batch, 8, 32, 128)
     g = -torch.rand(batch, 8, 32, device='cuda')
     beta = torch.rand_like(g).bfloat16()
-    states = batch + 2
-    initial = torch.randn(states, 8, 32, 128, 128, device='cuda') * .01
-    backing = torch.empty(states, 3, 8, 32, 128, 128, device='cuda')
+    num_slots = batch + 2  # NUM_STATE is the circular depth (axis 1), not slots.
+    initial = torch.randn(num_slots, 8, 32, 128, 128, device='cuda') * .01
+    backing = torch.empty(num_slots, 3, 8, 32, 128, 128, device='cuda')
     state = backing[:, 1]
     state.copy_(initial)
     ref_state = initial.clone()
@@ -50,7 +50,7 @@ def test_split_v_exact_snapshots_and_graph_rollback(monkeypatch, batch, padded):
     if padded:
         ids[0] = -1
         if batch > 1:
-            ids[-1] = states
+            ids[-1] = num_slots
     lengths = torch.arange(batch, device='cuda', dtype=torch.int32) * 7
 
     def run(cache):
@@ -62,6 +62,7 @@ def test_split_v_exact_snapshots_and_graph_rollback(monkeypatch, batch, padded):
     with monkeypatch.context() as ctx:
         ctx.setattr(mod, '_use_split_v_spec_decode', lambda *a: False)
         reference = run(ref_state)
+    assert mod._use_split_v_spec_decode(q, state.dtype, state.shape[1], True, lengths)
     actual = run(state)
     torch.testing.assert_close(actual, reference, atol=0, rtol=0)
     torch.testing.assert_close(state, ref_state, atol=0, rtol=0)
@@ -83,3 +84,24 @@ def test_split_v_exact_snapshots_and_graph_rollback(monkeypatch, batch, padded):
         torch.testing.assert_close(output, reference, atol=0, rtol=0)
         torch.testing.assert_close(state, ref_state, atol=0, rtol=0)
         lengths.add_(accepted + 1)
+
+
+def test_split_v_dispatch_uses_ring_depth_not_allocated_slots(monkeypatch):
+    mod = importlib.import_module('lmdeploy.pytorch.kernels.cuda.gated_delta_rule')
+    monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda *a: (9, 0))
+    launch = {}
+
+    def factory(*args, **kwargs):
+        launch.update(kwargs)
+        return lambda *args, **kwargs: None
+
+    monkeypatch.setattr(mod, 'fused_recurrent_gated_delta_rule_fwd', factory)
+    q = torch.empty(3, 8, 32, 128, dtype=torch.bfloat16, device='meta')
+    state = torch.empty(5, 8, 32, 128, 128, dtype=torch.float32, device='meta')
+    mod.fused_recurrent_gated_delta_rule(
+        q, q, q, initial_state=state, output_final_state=True,
+        state_indices=torch.empty(3, dtype=torch.int64, device='meta'),
+        cache_seqlens=torch.empty(3, dtype=torch.int32, device='meta'),
+        transpose_state_layout=True)
+    assert launch['NUM_STATE'] == 8
+    assert launch['v_tile_size'] == 32

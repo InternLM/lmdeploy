@@ -1180,7 +1180,6 @@ def _fast_pow2(x):
 def _fill_compressed_kv_kernel(
     ckv_ptr,
     kv_cache_ptr,
-    state_ids_ptr,
     cu_q_seqlens_ptr,
     kv_seqlens_ptr,
     block_offsets_ptr,
@@ -1213,20 +1212,13 @@ def _fill_compressed_kv_kernel(
     is_decoding: tl.constexpr,
     has_fp8: tl.constexpr,
     has_fp8_simple: tl.constexpr,
-    has_state_ids: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
 ):
     group_id = tl.program_id(0)
     batch_id = tl.program_id(1)
 
-    # Graph padding uses static non-zero q/kv lengths, but state_id=-1 marks
-    # those requests inactive. Without this guard their compressor CTAs all
-    # write through padded block-table row zero and corrupt a live cache row.
-    if has_state_ids:
-        state_id = tl.load(state_ids_ptr + batch_id)
-        if state_id < 0:
-            return
-
+    # Padded block-table rows point to reserved block 0. Discarded writes
+    # there cannot alias live KV; this paged-cache API needs no state slots.
     seq_start = tl.load(cu_q_seqlens_ptr + batch_id)
     seq_end = tl.load(cu_q_seqlens_ptr + batch_id + 1)
     seqlen = seq_end - seq_start
@@ -1430,7 +1422,6 @@ def fill_compressed_kv(
     max_seqlen_q: int,
     fp8_cache: torch.Tensor | None = None,
     kv_scale_cache: torch.Tensor | None = None,
-    state_ids: torch.Tensor | None = None,
     ):
     """Write compressed KV entries from compressed_kv into paged caches.
 
@@ -1478,14 +1469,9 @@ def fill_compressed_kv(
         fp8_cache: optional [num_blocks, entries_per_block, packed_dim] FP8 cache.
         kv_scale_cache: optional [num_blocks, entries_per_block, 1] FP32 scale cache.
             Required when kv_cache is provided.
-        state_ids: optional [B] state-cache slots. Negative graph-padding
-            entries suppress the corresponding paged-cache write.
     """
     B = kv_seqlens.size(0)
     head_dim = compressed_kv.size(-1)
-    if state_ids is not None and state_ids.numel() != B:
-        raise ValueError('state_ids must have one entry per compressed-KV '
-                         f'sequence, got {state_ids.numel()} for {B}.')
 
     is_decoding = compressed_kv.size(0) == B
 
@@ -1499,10 +1485,9 @@ def fill_compressed_kv(
 
     targets = _prepare_compressed_kv_write_targets(
         compressed_kv, kv_cache, fp8_cache, kv_scale_cache)
-    state_ids_ptr = kv_seqlens if state_ids is None else state_ids
 
     _fill_compressed_kv_kernel[grid](
-        compressed_kv, targets.kv_cache, state_ids_ptr, cu_q_seqlens,
+        compressed_kv, targets.kv_cache, cu_q_seqlens,
         kv_seqlens, block_offsets,
         *compressed_kv.stride(),
         *targets.kv_cache.stride(),
@@ -1521,7 +1506,6 @@ def fill_compressed_kv(
         is_decoding=is_decoding,
         has_fp8=targets.has_fp8,
         has_fp8_simple=targets.has_fp8_simple,
-        has_state_ids=state_ids is not None,
         GROUP_SIZE=GROUP_SIZE,
         num_warps=4,
     )

@@ -33,13 +33,13 @@ def test_block_query_kv_lookahead_and_mtp_unchanged(method, query_len, prefill_i
     from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
 
     spec = SpecDecodeConfig(model='draft', method=method, num_speculative_tokens=3,
-                            dspark_draft_query_len=query_len if method == 'dspark' else None)
+                            dspark=SimpleNamespace(draft_query_len=query_len) if method == 'dspark' else None)
     factory = ARSpecStrategyFactory(SimpleNamespace(bos_token_id=0), spec)
     strategy = factory.build_engine_strategy(
         SimpleNamespace(block_size=64), SimpleNamespace(prefill_interval=prefill_interval))
     expected_prefill = query_len if query_len is not None else 3
     expected_required = 4 + query_len if query_len is not None else 7
-    expected_prealloc = max(prefill_interval * 4, expected_required) if query_len else prefill_interval * 4
+    expected_prealloc = max(prefill_interval * 4, expected_required)
     assert strategy.get_prealloc_size(False) == expected_prefill
     assert strategy.get_num_required_tokens() == expected_required
     assert strategy.get_prealloc_size(True) == expected_prealloc

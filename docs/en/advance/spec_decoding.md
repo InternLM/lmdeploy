@@ -186,7 +186,10 @@ lmdeploy serve api_server deepseek-ai/DeepSeek-V4-Flash-0731 \
 
 DSpark V1 supports CUDA Graph execution, which is the default and recommended
 performance path. Set `eager_mode=True` or pass `--eager-mode` only as a
-debugging fallback. DSpark V1 requires `dp=1` and `ep=1`. Prefix caching, draft
+debugging fallback. DSpark V1 supports DP/EP with the `Qwen3DSparkModel` and
+`DeepseekV4ForCausalLMDSpark` draft architectures; DFlash supports it with
+`DFlashDraftModel`. DP/EP requires microbatch overlap and KV transfer to be
+disabled, and does not support PD disaggregation. Prefix caching, draft
 KV-cache quantization, guided decoding, and confidence-based dynamic
 verification are not supported in this fixed-window version. The
 OpenAI-compatible chat endpoint can return output log probabilities when the
