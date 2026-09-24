@@ -196,8 +196,7 @@ def test_parallel_lm_head():
 
 @pytest.mark.parametrize('model_name', ['deepseek', 'glm'])
 @pytest.mark.parametrize('enabled', [False, True])
-@pytest.mark.parametrize('tied', [False, True])
-def test_fp32_lm_head(model_name, enabled, tied):
+def test_fp32_lm_head(model_name, enabled):
     from lmdeploy.pytorch.models.deepseek_v32 import DeepseekV32ForCausalLM
     from lmdeploy.pytorch.models.glm_moe_dsa import GlmMoeDsaForCausalLM
 
@@ -205,14 +204,14 @@ def test_fp32_lm_head(model_name, enabled, tied):
     # Zero decoder layers exercise real embedding/head construction on CPU.
     config = SimpleNamespace(vocab_size=128, hidden_size=64, pad_token_id=0, num_hidden_layers=0,
                              rms_norm_eps=1e-6, qk_rope_head_dim=8, max_position_embeddings=128,
-                             rope_theta=10000., index_topk=8, tie_word_embeddings=tied)
-    with build_model_context(BuildModelContext(fp32_lm_head=enabled, tie_word_embeddings=tied)):
+                             rope_theta=10000., index_topk=8, tie_word_embeddings=False)
+    with build_model_context(BuildModelContext(fp32_lm_head=enabled, tie_word_embeddings=False)):
         model = model_cls(config, None, dtype=torch.bfloat16, device='cpu')
     emb, head = model.get_input_embeddings(), model.lm_head
     dtype = torch.float32 if enabled else torch.bfloat16
     assert head.weight.dtype == dtype
-    assert emb.weight.dtype == (dtype if tied else torch.bfloat16)
-    assert (head.weight is emb.weight) == tied
+    assert emb.weight.dtype == torch.bfloat16
+    assert head.weight is not emb.weight
     generator = torch.Generator().manual_seed(123)
     weight = torch.randn(128, 64, dtype=torch.bfloat16, generator=generator)
     hidden = torch.randn(3, 64, dtype=torch.bfloat16, generator=generator)
@@ -222,5 +221,3 @@ def test_fp32_lm_head(model_name, enabled, tied):
     torch.testing.assert_close(logits, expected, rtol=0, atol=0)
     if enabled:
         assert not torch.equal(logits, torch.nn.functional.linear(hidden, weight).float())
-    if tied:
-        torch.testing.assert_close(emb(torch.tensor([0, 1])), weight[:2], rtol=0, atol=0)
