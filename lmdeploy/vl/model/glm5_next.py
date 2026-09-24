@@ -47,14 +47,6 @@ class GLM5NextVisionModel(VisionModel):
     """Prepare GLM-5.3 images/videos for the native PyTorch vision tower."""
 
     _arch = ['Glm5NextForConditionalGeneration']
-    # Match GLM/SGLang's video contract before the HF processor: sample at
-    # 2 FPS, cap at 2048 source frames, and complete temporal pairs.
-    default_media_io_kwargs = {
-        'video': {
-            'fps': 2.0,
-            'num_frames': 2048,
-        },
-    }
 
     @classmethod
     def match(cls, config):

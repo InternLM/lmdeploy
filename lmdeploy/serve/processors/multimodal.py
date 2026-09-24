@@ -55,33 +55,6 @@ class MultimodalProcessor:
         self.allowed_media_domains = allowed_media_domains
 
     @staticmethod
-    def merge_media_io_kwargs(
-        defaults: dict[str, Any] | None,
-        overrides: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        """Merge model media defaults with request-level modality overrides."""
-        merged: dict[str, Any] = {}
-        for key, value in (defaults or {}).items():
-            merged[key] = dict(value) if isinstance(value, dict) else value
-        for key, value in (overrides or {}).items():
-            if isinstance(value, dict) and isinstance(merged.get(key), dict):
-                merged[key] = {**merged[key], **value}
-            else:
-                merged[key] = dict(value) if isinstance(value, dict) else value
-        return merged
-
-    def resolve_media_io_kwargs(
-        self,
-        overrides: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        """Resolve model-specific media defaults without mutating requests."""
-        model = getattr(self.vl_encoder, 'model', None)
-        defaults = getattr(model, 'default_media_io_kwargs', None)
-        if callable(defaults):
-            defaults = defaults()
-        return self.merge_media_io_kwargs(defaults, overrides)
-
-    @staticmethod
     def merge_message_content(msg: dict) -> dict:
         """Merge multimodal content blocks and ensure content field exists.
 
@@ -442,7 +415,6 @@ class MultimodalProcessor:
         """Process multimodal prompt and return processed data for inference
         engines."""
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
-        media_io_kwargs = self.resolve_media_io_kwargs(media_io_kwargs)
         messages = await self.async_parse_multimodal_item(messages,
                                                           media_io_kwargs,
                                                           allowed_media_domains=self.allowed_media_domains)
