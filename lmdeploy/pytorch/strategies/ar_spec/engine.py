@@ -7,15 +7,19 @@ from ..base.engine import EngineStrategy
 class ARSpecEngineStrategy(EngineStrategy):
     """AR Engine Strategy."""
 
-    def __init__(self, scheduler_config: SchedulerConfig, cache_config: CacheConfig, num_spec_tokens: int) -> None:
+    def __init__(self, scheduler_config: SchedulerConfig, cache_config: CacheConfig, num_spec_tokens: int,
+                 draft_kv_lookahead: int | None = None) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.num_spec_tokens = num_spec_tokens
+        self.draft_kv_lookahead = num_spec_tokens if draft_kv_lookahead is None else draft_kv_lookahead
 
     def get_prealloc_size(self, is_decoding: bool):
         """Get prealloc_size."""
-        return self.scheduler_config.prefill_interval * (1 +
-                                                         self.num_spec_tokens) if is_decoding else self.num_spec_tokens
+        if not is_decoding:
+            return self.draft_kv_lookahead
+        prealloc = self.scheduler_config.prefill_interval * (1 + self.num_spec_tokens)
+        return max(prealloc, self.get_num_required_tokens())
 
     def get_num_loops(self, is_decoding: bool) -> int:
         """Get num_loops."""
@@ -27,4 +31,6 @@ class ARSpecEngineStrategy(EngineStrategy):
 
     def get_num_required_tokens(self) -> int:
         """Get num_required_tokens."""
-        return 2 * self.num_spec_tokens + 1
+        # One verifier step plus the draft's writes beyond its committed KV.
+        # Shifted AR/MTP needs N; a block draft needs its full query width Q.
+        return self.num_spec_tokens + 1 + self.draft_kv_lookahead

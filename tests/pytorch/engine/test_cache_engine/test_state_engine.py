@@ -228,3 +228,173 @@ def test_state_cache_engine_copy_slots_rejects_duplicate_destinations():
 
     with pytest.raises(ValueError, match='duplicate'):
         cache_engine.copy_slots([0, 1], [2, 2])
+
+
+def _make_v4_transaction_engine(num_layers=2, num_slots=3):
+    engine = object.__new__(StateCacheEngine)
+    engine._named_state_caches = {
+        'v4_window_kv_fp8': torch.arange(
+            num_layers * num_slots * 134).reshape(
+                num_layers, num_slots, 134, 1).float(),
+        'v4_compress_state_r4': torch.arange(
+            num_layers * num_slots * 16).reshape(
+                num_layers, num_slots, 16, 1).float(),
+        'v4_compress_state_r4_idx': torch.arange(
+            num_layers * num_slots * 16).reshape(
+                num_layers, num_slots, 16, 1).float() + 1000,
+        'v4_compress_state_r128': torch.arange(
+            num_layers * num_slots * 256).reshape(
+                num_layers, num_slots, 256, 1).float(),
+    }
+    return engine
+
+
+def test_v4_speculative_state_transaction_restores_only_rejected_rows():
+    engine = _make_v4_transaction_engine()
+    state_offsets = torch.tensor([1, 2])
+    before = {
+        name: cache.clone()
+        for name, cache in engine.named_state_caches.items()
+    }
+    transaction = engine.begin_v4_speculative_transaction(
+        state_offsets,
+        start_positions=torch.tensor([6, 126]),
+        q_seqlens=torch.tensor([6, 6]),
+        max_q_seqlen=6,
+    )
+
+    for name, cache in engine.named_state_caches.items():
+        rows, _ = transaction['snapshots'][name]
+        for slot_index, slot in enumerate(state_offsets):
+            cache[:, slot, rows[slot_index]] = -1
+
+    engine.finish_v4_speculative_transaction(
+        transaction, num_rejected_tokens=torch.tensor([4, 1]))
+
+    accepted = (2, 5)
+    for name, cache in engine.named_state_caches.items():
+        rows, snapshot = transaction['snapshots'][name]
+        width = transaction['max_q_seqlen']
+        for slot_index, slot in enumerate(state_offsets):
+            accepted_mask = torch.arange(width) < accepted[slot_index]
+            if rows.size(1) == 2 * width:
+                accepted_mask = torch.cat([accepted_mask, accepted_mask])
+            actual = cache[:, slot, rows[slot_index]]
+            expected = torch.where(
+                accepted_mask.view(1, -1, 1),
+                torch.full_like(snapshot[:, slot_index], -1),
+                snapshot[:, slot_index])
+            torch.testing.assert_close(actual, expected)
+        torch.testing.assert_close(cache[:, 0], before[name][:, 0])
+
+    assert transaction['snapshots']['v4_window_kv_fp8'][1].size(2) == 6
+    assert transaction['snapshots']['v4_compress_state_r4'][1].size(2) == 12
+
+
+def test_v4_speculative_state_transaction_rejects_ring_aliasing():
+    engine = object.__new__(StateCacheEngine)
+    engine._named_state_caches = {
+        'v4_compress_state_r4': torch.zeros(1, 1, 16, 1),
+    }
+
+    with pytest.raises(RuntimeError, match='query length 9, capacity 8'):
+        engine.begin_v4_speculative_transaction(
+            state_offsets=torch.tensor([0]),
+            start_positions=torch.tensor([0]),
+            q_seqlens=torch.tensor([9]),
+            max_q_seqlen=9,
+        )
+
+
+@pytest.mark.parametrize('accepted', range(7))
+def test_v4_speculative_state_transaction_all_accept_lengths(accepted):
+    """Every accepted prefix commits and every rejected suffix rolls back."""
+    engine = _make_v4_transaction_engine(num_layers=1, num_slots=2)
+    transaction = engine.begin_v4_speculative_transaction(
+        state_offsets=torch.tensor([1]),
+        start_positions=torch.tensor([127]),
+        q_seqlens=torch.tensor([6]),
+        max_q_seqlen=6,
+    )
+
+    for name, cache in engine.named_state_caches.items():
+        rows, _ = transaction['snapshots'][name]
+        cache[:, torch.tensor([[1]]), rows] = -1
+
+    engine.finish_v4_speculative_transaction(
+        transaction, num_rejected_tokens=torch.tensor([6 - accepted]))
+
+    for name, cache in engine.named_state_caches.items():
+        rows, before = transaction['snapshots'][name]
+        actual = cache[:, torch.tensor([[1]]), rows]
+        accepted_mask = torch.arange(6) < accepted
+        if rows.size(1) == 12:
+            accepted_mask = torch.cat([accepted_mask, accepted_mask])
+        expected = torch.where(
+            accepted_mask.view(1, 1, -1, 1),
+            torch.full_like(before, -1), before)
+        torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize('inactive', [False, True])
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+def test_v4_transaction_ignores_padding_and_keeps_rejection_row_mapping(inactive, device):
+    if device == 'cuda' and not torch.cuda.is_available():
+        pytest.skip('CUDA required')
+    engine = _make_v4_transaction_engine()
+    engine._named_state_caches = {name: cache.to(device) for name, cache in engine.named_state_caches.items()}
+    slots = torch.tensor([-1, -1, -1] if inactive else [1, -1, 2], device=device)
+    starts = torch.tensor([6, 126, 127], device=device)
+    lengths = torch.tensor([6, 3, 4], device=device)
+    rejected = torch.tensor([4, 3, 1], device=device)
+    before = {name: cache.clone() for name, cache in engine.named_state_caches.items()}
+    transaction = engine.begin_v4_speculative_transaction(slots, starts, lengths, 6)
+    # Advance even the final slot: padding must not roll back this unrelated
+    # change, nor overwrite the accepted prefix of the live row using slot 2.
+    for cache in engine.named_state_caches.values():
+        cache.add_(100)
+    engine.finish_v4_speculative_transaction(transaction, rejected)
+    for name, cache in engine.named_state_caches.items():
+        expected = before[name] + 100
+        for row, slot in enumerate(slots.tolist()):
+            if slot < 0:
+                continue
+            positions = starts[row] + torch.arange(lengths[row] - rejected[row], lengths[row], device=device)
+            if name == 'v4_window_kv_fp8':
+                rows = positions % cache.size(2)
+            else:
+                capacity = cache.size(2) // 2
+                rows = (positions + (4 if '_r4' in name else 0)) % capacity
+                rows = torch.cat([rows, rows + capacity])
+            expected[:, slot, rows] = before[name][:, slot, rows]
+        torch.testing.assert_close(cache, expected)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+@pytest.mark.parametrize('dtype', [torch.float32, torch.float8_e4m3fn])
+@pytest.mark.parametrize('inactive', [False, True])
+def test_v4_masked_restore_byte_exact_and_graph_safe(dtype, inactive, device='cuda'):
+    from lmdeploy.pytorch.kernels.cuda.copy_cache import restore_state_rows
+
+    # Use byte payloads so FP8 comparison never converts or canonicalizes NaNs.
+    cache = torch.arange(2 * 3 * 8 * 12, dtype=torch.int32).to(torch.uint8).reshape(2, 3, 8, 12)
+    cache = cache.view(dtype).to(device)
+    slots = torch.tensor([-1, -1, -1] if inactive else [1, -1, 2], device=device)
+    rows = torch.tensor([[6, 7, 0, 1], [7, 0, 1, 2], [7, 0, 1, 2]], device=device)
+    rejected = torch.tensor([[False, False, True, True], [True] * 4, [False, True, True, True]], device=device)
+    before = cache.view(torch.uint8)[:, slots.clamp_min(0)[:, None], rows].clone().view(dtype)
+    cache.view(torch.uint8).fill_(233)
+    expected = cache.view(torch.uint8).cpu().clone()
+    for batch, slot in enumerate(slots.cpu().tolist()):
+        for col in range(4):
+            if slot >= 0 and rejected[batch, col]:
+                expected[:, slot, rows[batch, col]] = before.view(torch.uint8)[:, batch, col].cpu()
+    restore_state_rows(cache, before, slots, rows, rejected)
+    torch.testing.assert_close(cache.view(torch.uint8).cpu(), expected)
+    if device == 'cuda':
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            restore_state_rows(cache, before, slots, rows, rejected)
+        cache.view(torch.uint8).fill_(233)
+        graph.replay()
+        torch.testing.assert_close(cache.view(torch.uint8).cpu(), expected)

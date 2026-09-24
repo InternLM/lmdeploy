@@ -1,10 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import importlib.util
+from dataclasses import dataclass
 
 import torch
 
 from lmdeploy.pytorch.config import ModelConfig, StateCacheSpec
-from lmdeploy.pytorch.consts import V4_PACKED_TOKEN_DIM
+from lmdeploy.pytorch.consts import (
+    V4_FLASHMLA_RING_STORAGE_ALIGNMENT,
+    V4_PACKED_TOKEN_DIM,
+)
 from lmdeploy.utils import get_logger
 
 from .builder import AutoModelConfigBuilder
@@ -19,6 +23,38 @@ V4_SUPPORTED_LAYER_TYPES = (
     'compressed_sparse_attention',
     'heavily_compressed_attention',
 )
+
+
+@dataclass(frozen=True)
+class V4RingGeometry:
+    """Logical visibility and physical storage for the V4 local KV ring."""
+
+    logical_window_size: int
+    ring_capacity: int
+    ring_storage_capacity: int
+
+
+def get_v4_ring_geometry(hf_config, spec_method: str | None = None,
+                         num_spec_tokens: int = 0) -> V4RingGeometry:
+    """Resolve a speculation-safe ring without changing SWA semantics."""
+    logical_window_size = int(hf_config.sliding_window)
+    # Every AR-spec target verifies ``num_spec_tokens + 1`` causal rows in one
+    # step. The rectangular V4 executor writes the speculative rows before it
+    # reads all position-specific windows, so all methods need W+N physical
+    # ring positions; this is not DSpark-specific.
+    spec_extra = int(num_spec_tokens) if spec_method is not None else 0
+    if logical_window_size < 1:
+        raise ValueError(f'DeepSeek-V4 sliding_window must be positive, got {logical_window_size}.')
+    if spec_extra < 0:
+        raise ValueError(f'DeepSeek-V4 speculative token count must be non-negative, got {spec_extra}.')
+    ring_capacity = logical_window_size + spec_extra
+    # FlashMLA accepts W+N logical positions, but its split value/scale FP8
+    # layout requires each state-slot extent to keep the scale region aligned.
+    alignment = V4_FLASHMLA_RING_STORAGE_ALIGNMENT
+    ring_storage_capacity = ((ring_capacity + alignment - 1) // alignment *
+                             alignment)
+    return V4RingGeometry(logical_window_size, ring_capacity,
+                          ring_storage_capacity)
 
 def get_v4_compress_ratios(hf_config) -> list[int]:
     """Translate the native Transformers layer schema to compression ratios."""
@@ -115,8 +151,27 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
         """Build model config with configuration-owned V4 state caches."""
         bos_token_id = getattr(hf_config, 'bos_token_id', None)
         head_dim = getattr(hf_config, 'head_dim', 512)
-        num_layers = hf_config.num_hidden_layers
-        all_layers, ratio4_layers, ratio128_layers = _get_v4_cache_layers(hf_config)
+        spec_method = kwargs.get('spec_method')
+        num_spec_tokens = kwargs.get('num_spec_tokens', 0)
+        ring_geometry = get_v4_ring_geometry(hf_config, spec_method,
+                                             num_spec_tokens)
+        # Model constructors receive the HF config, whereas cache allocation
+        # consumes ModelConfig. Record the same immutable geometry in both.
+        hf_config.v4_ring_storage_capacity = \
+            ring_geometry.ring_storage_capacity
+        is_dspark_draft = bool(kwargs.get('is_draft_model', False)
+                               and spec_method == 'dspark')
+        if is_dspark_draft:
+            target_layer_ids = getattr(hf_config, 'dspark_target_layer_ids', None)
+            if not target_layer_ids:
+                raise ValueError('Bundled DeepSeek-V4 DSpark requires dspark_target_layer_ids.')
+            num_layers = len(target_layer_ids)
+            all_layers = list(range(num_layers))
+            ratio4_layers = []
+            ratio128_layers = []
+        else:
+            num_layers = hf_config.num_hidden_layers
+            all_layers, ratio4_layers, ratio128_layers = _get_v4_cache_layers(hf_config)
 
         config = ModelConfig(
             hidden_size=hf_config.hidden_size,
@@ -130,12 +185,14 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
             vocab_size=hf_config.vocab_size,
             model_paradigm='ar',
             use_standard_kv_cache=False,
+            v4_ring_storage_capacity=ring_geometry.ring_storage_capacity,
         )
 
         # ---- state cache specs ----
         state_specs = []
         state_specs.append(
-            StateCacheSpec('v4_window_kv_fp8', (hf_config.sliding_window, V4_PACKED_TOKEN_DIM), torch.float8_e4m3fn,
+            StateCacheSpec('v4_window_kv_fp8', (ring_geometry.ring_storage_capacity, V4_PACKED_TOKEN_DIM),
+                           torch.float8_e4m3fn,
                            layer_ids=all_layers))
         if ratio4_layers:
             # overlap compressor scratch for Attention (kv_state + score_state)

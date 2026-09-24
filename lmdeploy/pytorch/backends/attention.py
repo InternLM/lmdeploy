@@ -50,6 +50,13 @@ class V4AttentionMetadata:
     cu_seqlens_k: torch.Tensor = None
     sum_kv_seqlen: int = None
     start_pos: torch.Tensor = None                      # [bsz] long
+    causal: bool = True
+    # Multi-row speculative blocks enter through the decode scheduler. Causal
+    # target verification may use a packed rectangular-decode executor, while
+    # non-causal draft blocks retain sparse prefill. Keep this distinction
+    # after ``is_decoding`` is rewritten so graph metadata can use the fixed
+    # rectangular token capacity without reading a CUDA scalar.
+    is_rectangular_decode: bool = False
 
     @classmethod
     def from_step_context(cls, attn_metadata, step_ctx, **kwargs) -> 'V4AttentionMetadata':
@@ -77,6 +84,7 @@ class V4AttentionMetadata:
             sum_kv_seqlen=step_ctx.sum_kv_seqlen,
             cu_seqlens_k=attn_metadata.cu_seqlens_k,
             start_pos=(kv_seqlens.to(torch.long) - q_seqlens.to(torch.long)),
+            causal=kwargs.get('causal', True),
         )
 
     def build_indexer_metadata(self):
@@ -101,6 +109,16 @@ class V4AttentionMetadata:
 class V4AttentionImpl(ABC):
     """DeepSeek-V4 attention implementation contract."""
 
+    def build_cache_write_metadata(self, attn_metadata, position_ids: torch.Tensor,
+                                   state_ids: torch.Tensor, num_tokens: int):
+        """Return KV-only write metadata, or None when unsupported."""
+        return None
+
+    def write_cache(self, kv: torch.Tensor, window_state: torch.Tensor, metadata) -> None:
+        """Materialize KV without evaluating attention (when metadata is
+        supported)."""
+        raise NotImplementedError
+
     @abstractmethod
     def forward(
         self,
@@ -123,6 +141,7 @@ class V4AttentionBuildSpec(BuildSpec[V4AttentionImpl]):
     head_dim: int
     scale: float
     window_size: int
+    ring_storage_capacity: int
     compress_ratio: int
 
 

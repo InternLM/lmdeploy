@@ -13,13 +13,9 @@ from lmdeploy.pytorch.config import (
     MiscConfig,
     ModelConfig,
     SchedulerConfig,
-    SpecDecodeConfig,
     normalize_cudagraph_capture_batch_sizes,
 )
-from lmdeploy.pytorch.transformers import config_from_pretrained
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
-
-_EAGLE3_DEEPSEEK_ARCH = 'Eagle3DeepseekV2ForCausalLM'
 
 
 class ConfigBuilder:
@@ -78,6 +74,7 @@ class ConfigBuilder:
             kernel_block_size=engine_config.kernel_block_size,
             num_cpu_blocks=engine_config.num_cpu_blocks,
             num_gpu_blocks=engine_config.num_gpu_blocks,
+            max_session_len=engine_config.session_len,
             cache_max_entry_count=engine_config.cache_max_entry_count,
             max_prefill_token_num=engine_config.max_prefill_token_num,
             cudagraph_capture_batch_sizes=engine_config.cudagraph_capture_batch_sizes,
@@ -214,53 +211,8 @@ class ConfigBuilder:
                                 engine_config: PytorchEngineConfig,
                                 cache_config: CacheConfig,
                                 dist_config: DistConfig,
-                                trust_remote_code: bool = False,
-                                ):
-        """Build spec decode config."""
-        def _build_draft_dist_ctx(dist_config, draft_arch):
-            # TODO support tp > 1, ep > 1 for other methods
-            if speculative_config.method in ('deepseek_mtp', 'qwen3_5_mtp', 'hy3_mtp'):
-                draft_dist_config = dist_config
-            elif speculative_config.method == 'dflash':
-                from lmdeploy.pytorch.spec_decode.dflash_utils import (
-                    validate_dflash_dist_config,
-                    validate_dflash_runtime_config,
-                )
-                validate_dflash_dist_config(dist_config)
-                validate_dflash_runtime_config(cache_config=cache_config, backend_config=engine_config)
-                draft_dist_config = copy.deepcopy(dist_config)
-            elif speculative_config.method == 'eagle3' and draft_arch == _EAGLE3_DEEPSEEK_ARCH:
-                draft_dist_config = dist_config
-            else:
-                draft_dist_config = DistConfig()
-            return draft_dist_config
-
-        specdecode_config = None
-        if speculative_config is not None:
-            draft_model = speculative_config.model
-            if draft_model and not os.path.exists(speculative_config.model):
-                draft_model = get_model(draft_model, engine_config.download_dir, engine_config.revision)
-            draft_arch = None
-            if speculative_config.method == 'eagle3' and draft_model is not None:
-                draft_hf_config = config_from_pretrained(
-                    draft_model, trust_remote_code=trust_remote_code)
-                draft_architectures = getattr(draft_hf_config, 'architectures', None) or []
-                if draft_architectures:
-                    draft_arch = draft_architectures[0]
-            draft_dist_config = _build_draft_dist_ctx(dist_config, draft_arch)
-            draft_model_format = (
-                None if draft_arch == _EAGLE3_DEEPSEEK_ARCH else engine_config.model_format)
-
-            specdecode_config = SpecDecodeConfig.from_config(
-                method=speculative_config.method,
-                num_speculative_tokens=speculative_config.num_speculative_tokens,
-                model=draft_model,
-                target_model=target_model,
-                target_cache_cfg=cache_config,
-                dtype=engine_config.dtype,
-                trust_remote_code=trust_remote_code,
-                model_format=draft_model_format,
-                hf_overrides=engine_config.hf_overrides,
-                dist_config=draft_dist_config,
-            )
-        return specdecode_config
+                                trust_remote_code: bool = False):
+        """Delegate speculative model policy to its owning module."""
+        from lmdeploy.pytorch.spec_decode.config import build_specdecode_config
+        return build_specdecode_config(target_model, speculative_config, engine_config,
+                                       cache_config, dist_config, trust_remote_code)

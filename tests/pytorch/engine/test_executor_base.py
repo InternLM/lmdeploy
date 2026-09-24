@@ -188,20 +188,24 @@ def test_sync_spec_cache_block_size_updates_kernel_block_size():
     executor = object.__new__(ExecutorBase)
     executor.cache_config = CacheConfig(max_batches=1,
                                         block_size=32,
+                                        num_reserved_gpu_blocks=1,
                                         kernel_block_size=16,
                                         num_cpu_blocks=0,
-                                        num_gpu_blocks=0)
+                                        num_gpu_blocks=128)
     spec_cache_config = CacheConfig(max_batches=1,
                                     block_size=64,
                                     kernel_block_size=64,
                                     num_cpu_blocks=0,
-                                    num_gpu_blocks=0)
+                                    num_gpu_blocks=128)
     executor.specdecode_config = SimpleNamespace(cache_config=spec_cache_config)
 
     executor._sync_spec_cache_block_size()
 
     assert spec_cache_config.block_size == 32
     assert spec_cache_config.kernel_block_size == 16
+    assert executor.cache_config.num_reserved_gpu_blocks == 1
+    assert spec_cache_config.num_reserved_gpu_blocks == 0
+    assert executor.cache_config.num_gpu_blocks == spec_cache_config.num_gpu_blocks == 128
 
 
 def test_adjust_block_size_uses_deepseek_v4_hook_and_syncs_model_config():

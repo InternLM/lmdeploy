@@ -217,7 +217,8 @@ def causal_conv1d_fn(
 }, )
 def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, width: int, has_bias: bool,
                              activation: str | None, dtype, conv_stride: tuple[int, int, int], is_circular_buffer: bool,
-                             has_state_indices: bool, num_warps: int):
+                             has_state_indices: bool, num_warps: int, x_stride: tuple[int, int, int],
+                             out_stride: tuple[int, int, int]):
     """TileLang kernel for causal convolution forward pass.
 
     Each thread processes one output position for all channels sequentially.
@@ -233,13 +234,13 @@ def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, widt
 
     @T.prim_func
     def causal_conv1d_update_main(
-        X: T.Tensor((batch, hidden_size, seqlen), dtype=dtype),
+        X: T.StridedTensor((batch, hidden_size, seqlen), dtype=dtype, strides=x_stride),
         Conv_State: T.StridedTensor((conv_batch, hidden_size, state_len),
                                     dtype=dtype,
                                     strides=(conv_batch_stride, conv_stride[1], conv_stride[2])),
         W: T.Tensor((hidden_size, width), dtype=dtype),
         Bias: T.Tensor((hidden_size, ), dtype=dtype) = None,
-        Out: T.Tensor((batch, hidden_size, seqlen), dtype=dtype) = None,
+        Out: T.StridedTensor((batch, hidden_size, seqlen), dtype=dtype, strides=out_stride) = None,
         Cache_seqlens: T.Tensor((batch, ), dtype=T.int32) = None,
         Conv_state_indices: T.Tensor((batch, ), dtype=T.int32) = None,
     ):
@@ -320,7 +321,6 @@ def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, widt
     return causal_conv1d_update_main
 
 
-# TODO: support complex layout
 def causal_conv1d_update(x,
                          conv_state,
                          weight,
@@ -355,7 +355,9 @@ def causal_conv1d_update(x,
         assert cache_seqlens.device == x.device
         assert cache_seqlens.numel() == batch
 
-    out = x.new_empty(x.shape)
+    # Preserve dense BTH-backed views of logical BHT inputs. This avoids both
+    # decode layout copies and gives coalesced channel IO for speculative tokens.
+    out = torch.empty_like(x)
 
     num_warps = 2
     kernel = causal_conv1d_update_fwd(hidden_size=hidden_size,
@@ -368,7 +370,9 @@ def causal_conv1d_update(x,
                                       conv_stride=conv_state.stride(),
                                       is_circular_buffer=cache_seqlens is not None,
                                       has_state_indices=conv_state_indices is not None,
-                                      num_warps=num_warps)
+                                      num_warps=num_warps,
+                                      x_stride=x.stride(),
+                                      out_stride=out.stride())
 
     kernel(x, conv_state, weight, bias, out, cache_seqlens, conv_state_indices)
 
