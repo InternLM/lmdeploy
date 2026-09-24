@@ -7,6 +7,7 @@ from torch import nn
 
 from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.distributed import (
+    all_reduce,
     gather_by_tp_sizes,
     get_dist_group,
     get_dist_manager,
@@ -207,7 +208,7 @@ class LinearBase(nn.Module):
             if self.tp_mode == TPMode.DP_TP:
                 out = reduce_scatter_by_tp_sizes(out, self.tp_rank, tp_sizes, group=self.tp_group)
             else:
-                dist.all_reduce(out, group=self.tp_group)
+                all_reduce(out, group=self.tp_group)
         return out
 
     def _forward_dp_tp(self, x):

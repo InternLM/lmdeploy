@@ -216,6 +216,33 @@ class ExecutorBase:
             return 0
         return _envs.dsa_indexer_max_logits_mb * (1 << 20)
 
+    def _get_dcp_workspace_size(self, num_prefill_tokens: int) -> int:
+        """Get the backend's DCP workspace estimate for KV-cache sizing."""
+        if self.cache_config.dcp <= 1:
+            return 0
+
+        from lmdeploy.pytorch.backends.cp_utils import get_dcp_kv_width, get_dcp_workspace_size
+
+        config = self.cache_config
+        model = self.model_config
+        num_decode_tokens = config.max_batches
+        if self.specdecode_config is not None:
+            # Verification includes draft tokens plus one target token.
+            num_decode_tokens *= self.specdecode_config.num_speculative_tokens + 1
+        return get_dcp_workspace_size(
+            num_prefill_tokens=num_prefill_tokens,
+            num_decode_tokens=num_decode_tokens,
+            batch_size=config.max_batches,
+            num_heads=model.num_attention_heads // self.dist_config.attn_tp,
+            head_dim=model.head_dim,
+            dtype=model.dtype,
+            block_size=config.block_size,
+            dcp_size=config.dcp,
+            topk=model.mla_index_topk,
+            score_workspace_bytes=self._get_dsa_score_workspace_size(),
+            kv_width=get_dcp_kv_width(model),
+        )
+
     def _get_runtime_size(self, free_mems: list[int], cache_block_sizes: list[_WorkerCachePlanSizes],
                           vocab_size: int) -> tuple[int, int]:
         """Find best prefill num."""
@@ -230,7 +257,8 @@ class ExecutorBase:
             # logits/vocab size. They are not pageable KV cache, so reserve
             # them before applying the KV cache memory ratio.
             runtime_cache_size = int((max_prefill_token_num + max_batches * 2) * vocab_size * 2)
-            runtime_cache_size += dsa_score_workspace
+            # The DCP phase estimate already includes indexer scores.
+            runtime_cache_size += max(dsa_score_workspace, self._get_dcp_workspace_size(max_prefill_token_num))
             available_mems = [int((free_mem - runtime_cache_size) * cache_max_entry_count) for free_mem in free_mems]
             # Keep at least a small number of KV blocks after runtime reserve.
             # If not possible, reduce the prefill token budget and try again.
@@ -425,6 +453,15 @@ class ExecutorBase:
         self.set_cache_config(self.cache_config, spec_cache_config)
         self.set_model_config(self.model_config, spec_model_config)
 
+    def _log_kv_cache_capacity(self) -> None:
+        """Log usable token capacity across DCP shards, excluding reserved
+        blocks."""
+        config = self.cache_config
+        num_gpu_blocks = config.num_gpu_blocks - config.num_reserved_gpu_blocks
+        num_tokens = num_gpu_blocks * config.block_size * config.dcp
+        logger.info(f'GPU KV cache capacity: {num_tokens:,} tokens '
+                    f'({num_gpu_blocks:,} usable blocks/rank, DCP={config.dcp}).')
+
     def init(self):
         """init."""
         logger.info('Building Model.')
@@ -443,6 +480,7 @@ class ExecutorBase:
         if self.misc_config.memdecode_config is not None:
             logger.info('Building MemDecode memory KV/state cache engines.')
         self.build_cache_engine()
+        self._log_kv_cache_capacity()
         logger.info('Warming up model.')
         self.warmup()
 

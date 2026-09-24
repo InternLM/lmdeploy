@@ -458,6 +458,8 @@ class PytorchEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         tp: Tensor Parallelism. default 1.
+        dcp: Decode context parallelism size. It reuses ranks inside
+            each attention tensor-parallel group. Default 1.
         dp: Data Parallelism. default 1.
         dp_rank: rank of dp.
         ep: Expert Parallelism. default 1.
@@ -538,12 +540,15 @@ class PytorchEngineConfig:
         dllm_denoising_steps: Dllm denoising steps.
         dllm_confidence_threshold: dllm unmasking threshold for
             dynamic unmasking.
+        communication_backend: ``nccl`` (default) uses native process-group collectives.
+            ``auto`` opts into eligible communication optimizations.
         kv_transfer_config: External KV-cache connector configuration. This is
             supported only by the PyTorch engine. ``None`` disables external
             KV-cache transfer.
     """
     dtype: str = 'auto'
     tp: int = 1
+    dcp: int = 1
     dp: int = 1
     dp_rank: int = 0
     ep: int = 1
@@ -596,6 +601,7 @@ class PytorchEngineConfig:
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
     kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
     piecewise_cudagraph_max_tokens: int | None = None
+    communication_backend: Literal['nccl', 'auto'] = 'nccl'
 
     def __post_init__(self):
         """Check input validation."""
@@ -603,6 +609,11 @@ class PytorchEngineConfig:
             self.kernel_block_size = self.block_size
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'invalid tp'
+        assert self.dcp >= 1, 'invalid dcp'
+        assert self.tp % self.dcp == 0, 'tp must be divisible by dcp'
+        if self.dcp > 1:
+            assert self.device_type == 'cuda', 'DCP requires CUDA'
+            assert self.kv_transfer_config is None, 'DCP does not support KV-cache connectors'
         assert self.dp >= 1, 'invalid dp'
         assert self.ep >= 1, 'invalid ep'
         assert 0 < self.cache_max_entry_count < 1, \
@@ -643,7 +654,8 @@ class PytorchEngineConfig:
             self.kv_transfer_config = KVTransferConfig(**self.kv_transfer_config)
         elif self.kv_transfer_config is not None and not isinstance(self.kv_transfer_config, KVTransferConfig):
             raise TypeError('kv_transfer_config must be a KVTransferConfig, dict, or None')
-
+        if self.communication_backend not in ('nccl', 'auto'):
+            raise ValueError('communication_backend must be nccl or auto')
 
 class ResponseType(enum.Enum):
     """Response type."""

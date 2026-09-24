@@ -179,6 +179,17 @@ class ArgumentHelper:
                                    help='GPU number used in tensor parallelism. Should be 2^n')
 
     @staticmethod
+    def dcp(parser):
+        """Add argument dcp to parser."""
+
+        return parser.add_argument(
+            '--dcp',
+            type=int,
+            default=1,
+            help='Decode context parallelism size for the PyTorch backend. '
+            'It reuses ranks inside each tensor-parallel group, and tp must be a multiple of dcp')
+
+    @staticmethod
     def dp(parser):
         """Add argument dp to parser."""
 
@@ -874,6 +885,14 @@ class ArgumentHelper:
                                    action='store_true',
                                    default=False,
                                    help='Whether to trust remote code from model repositories.')
+
+    @staticmethod
+    def communication_backend(parser):
+        """Select native or automatic PyTorch communication."""
+        return parser.add_argument(
+            '--communication-backend', choices=['nccl', 'auto'], default='nccl',
+            help='PyTorch communication backend. nccl uses native process-group collectives; '
+            'auto opts into eligible optimizations. Default: nccl.')
 
     @staticmethod
     def kv_transfer_config(parser):

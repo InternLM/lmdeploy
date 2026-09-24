@@ -478,13 +478,14 @@ def test_spec_model_agent_method_when_enabled():
     assert agent.method == specdecode_config.method
 
 
-def test_qwen35_mtp_reuses_main_dist_context(monkeypatch):
+@pytest.mark.parametrize('backend', ['auto', 'nccl'])
+def test_qwen35_mtp_reuses_main_dist_context(monkeypatch, backend):
     """Qwen3.5 MTP mirrors the target topology, so it should share groups."""
     from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
     from lmdeploy.pytorch.distributed import DistContext
     from lmdeploy.pytorch.spec_decode import base as base_mod
 
-    dist_config = DistConfig(dp=2, ep=2)
+    dist_config = DistConfig(dp=2, ep=2, communication_backend=backend)
     dist_ctx = DistContext(rank=1, dp_rank=1, dist_config=dist_config, ep_gpu_group=object())
     specdecode_config = SpecDecodeConfig(model='draft-model',
                                          method='qwen3_5_mtp',
@@ -497,16 +498,18 @@ def test_qwen35_mtp_reuses_main_dist_context(monkeypatch):
     monkeypatch.setattr(base_mod.DistContext, 'build', staticmethod(fail_build))
 
     assert base_mod._build_draft_dist_ctx(dist_ctx, specdecode_config) is dist_ctx
+    assert specdecode_config.dist_config.communication_backend == backend
 
 
-def test_non_qwen35_mtp_builds_draft_dist_context(monkeypatch):
+@pytest.mark.parametrize('backend', ['auto', 'nccl'])
+def test_non_qwen35_mtp_builds_draft_dist_context(monkeypatch, backend):
     """Other speculative methods keep their separate draft distribution
     path."""
     from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
     from lmdeploy.pytorch.distributed import DistContext
     from lmdeploy.pytorch.spec_decode import base as base_mod
 
-    main_dist_config = DistConfig(dp=2, ep=2)
+    main_dist_config = DistConfig(dp=2, ep=2, communication_backend=backend)
     draft_dist_config = DistConfig()
     dist_ctx = DistContext(rank=1, dp_rank=1, dist_config=main_dist_config)
     specdecode_config = SpecDecodeConfig(model='draft-model',
@@ -524,6 +527,7 @@ def test_non_qwen35_mtp_builds_draft_dist_context(monkeypatch):
 
     assert base_mod._build_draft_dist_ctx(dist_ctx, specdecode_config) is draft_dist_ctx
     assert build_calls == [(dist_ctx.rank, draft_dist_config)]
+    assert draft_dist_config.communication_backend == backend
 
 
 def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():

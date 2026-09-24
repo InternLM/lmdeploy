@@ -104,9 +104,9 @@ def _needs_symm_mem_device_setup(dist_config: DistConfig) -> bool:
     memory rendezvous identifies allocations by the process-local device ordinal, so TP actors on one host must instead
     inherit the full visibility and select their assigned GPU.
     """
-    from lmdeploy.pytorch.backends.cuda.comm.communicator import should_try_symm_mem
-    return (should_try_symm_mem(dist_config)
-            or (_envs.enable_symm_mem_lmhead and dist_config.attn_tp > 1))
+    if dist_config.dp != 1 or dist_config.ep != 1 or dist_config.enable_microbatch:
+        return False
+    return dist_config.communication_backend == 'auto' and (dist_config.attn_tp > 1 or dist_config.dcp > 1)
 
 
 class RemoteLogger:

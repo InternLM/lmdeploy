@@ -3,7 +3,7 @@ import enum
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import torch
 
@@ -156,10 +156,11 @@ class CacheConfig:
     """Config of key value cache."""
 
     max_batches: int
-    block_size: int
+    block_size: int  # Physical tokens per rank; logical block size is block_size * dcp.
     num_cpu_blocks: int
     num_gpu_blocks: int
     kernel_block_size: int = -1
+    dcp: int = 1
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 8192
@@ -182,6 +183,7 @@ class CacheConfig:
 
     def __post_init__(self):
         """Post init."""
+        assert self.dcp >= 1, 'invalid dcp'
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
         if self.window_size > 1 and self.enable_prefix_caching:
@@ -213,6 +215,7 @@ class DistConfig:
 
     # tp
     tp: int = 1  # default tp, equal to attn_tp
+    dcp: int = 1  # decode context parallelism inside attention tp
     attn_tp: int = None  # tp for attention
     mlp_tp: int = None  # tp for mlp
     moe_tp: int = None  # tp for moe
@@ -221,10 +224,16 @@ class DistConfig:
     mlp_tp_mode: TPMode = TPMode.DEFAULT
     moe_tp_mode: TPMode = TPMode.DEFAULT
 
+    # communication
+    communication_backend: Literal['nccl', 'auto'] = 'nccl'
+
     def __post_init__(self):
         """Post init."""
         assert self.dp_rank < self.dp
         assert self.dp >= 1
+        assert self.dcp >= 1
+        if self.dcp > 1:
+            assert self.dp == 1 and self.ep == 1, 'DCP currently requires dp=1 and ep=1'
 
         dp = self.dp
         tp = self.tp
@@ -253,6 +262,8 @@ class DistConfig:
         # attn tp
         self.attn_tp = self.attn_tp or self.world_size // dp
         self.tp = self.attn_tp
+        assert self.attn_tp % self.dcp == 0, (
+            f'attn_tp {self.attn_tp} must be divisible by dcp {self.dcp}')
         if self.mlp_tp > 1:
             assert (self.mlp_tp >= self.attn_tp
                     and self.mlp_tp % self.attn_tp == 0), (f'mlp_tp {self.mlp_tp}, attn_tp {self.attn_tp}')
@@ -289,7 +300,9 @@ class DistConfig:
             dp_rank=engine_config.dp_rank,
             enable_microbatch=engine_config.enable_microbatch,
             enable_eplb=engine_config.enable_eplb,
+            communication_backend=engine_config.communication_backend,
             tp=engine_config.tp,
+            dcp=engine_config.dcp,
             attn_tp=engine_config.attn_tp_size,
             mlp_tp=engine_config.mlp_tp_size,
             moe_tp=engine_config.moe_tp_size,
@@ -610,6 +623,17 @@ class ModelConfig:
             assert tp % model_config.num_key_value_heads == 0
         model_config.dist_config = dist_config
 
+        if dist_config.dcp > 1:
+            if not model_config.use_flash_mla:
+                replicas = model_config.num_replicate_key_value_heads
+                assert replicas % dist_config.dcp == 0, (
+                    'GQA DCP groups must share replicated KV heads: '
+                    f'KV replication factor {replicas} must be divisible by dcp {dist_config.dcp}')
+            assert model_config.sliding_window < 0, 'DCP does not support sliding-window attention'
+            if model_config.mla_index_topk is not None:
+                from lmdeploy.pytorch import envs
+                assert envs.sparse_mla_backend != 'tilelang', 'DCP does not support TileLang attention'
+
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config, dtype, device_type=device_type)
 
@@ -771,6 +795,7 @@ class SpecDecodeConfig:
         no_caches = ['medusa']
         if method not in no_caches:
             cache_config = CacheConfig(max_batches=target_cache_cfg.max_batches,
+                                       dcp=dist_config.dcp,
                                        block_size=target_cache_cfg.block_size,
                                        kernel_block_size=target_cache_cfg.kernel_block_size,
                                        num_cpu_blocks=target_cache_cfg.num_cpu_blocks,

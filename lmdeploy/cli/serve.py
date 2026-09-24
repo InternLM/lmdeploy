@@ -138,12 +138,14 @@ class SubCliServe:
         disable_metrics = ArgumentHelper.disable_metrics(pt_group)
         dp = ArgumentHelper.dp(pt_group)
         ep_act = ArgumentHelper.ep(pt_group)
+        ArgumentHelper.dcp(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
         ArgumentHelper.enable_eplb(pt_group)
         ArgumentHelper.role(pt_group)
         ArgumentHelper.migration_backend(pt_group)
         ArgumentHelper.cudagraph_capture_batch_sizes(pt_group)
         ArgumentHelper.piecewise_cudagraph_max_tokens(pt_group)
+        ArgumentHelper.communication_backend(pt_group)
         # multi-node serving args
         node_rank_act = ArgumentHelper.node_rank(pt_group)
         num_nodes_act = ArgumentHelper.num_nodes(pt_group)
@@ -250,6 +252,7 @@ class SubCliServe:
             backend_config = PytorchEngineConfig(
                 dtype=args.dtype,
                 tp=args.tp,
+                dcp=args.dcp,
                 dp=args.dp,
                 ep=args.ep,
                 max_batch_size=max_batch_size,
@@ -285,6 +288,7 @@ class SubCliServe:
                 enable_return_routed_experts=args.enable_return_routed_experts,
                 distributed_executor_backend=args.distributed_executor_backend,
                 kv_transfer_config=kv_transfer_config,
+                communication_backend=args.communication_backend,
             )
         else:
             from lmdeploy.messages import TurbomindEngineConfig
