@@ -25,3 +25,5 @@ class ApplyRotaryEmbImpl(ABC):
 @dataclass(frozen=True)
 class ApplyRotaryEmbBuildSpec(BuildSpec[ApplyRotaryEmbImpl]):
     """Request construction of an apply-RoPE operator."""
+
+    enable_fp32_compute: bool = False

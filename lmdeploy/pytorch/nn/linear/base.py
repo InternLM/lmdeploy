@@ -111,6 +111,10 @@ class LinearForwardDPTP:
 class LinearBase(nn.Module):
     """Base class for linear layers."""
 
+    # Optional accumulation dtype for the unfused TP/LoRA reduction. Keep
+    # backend-fused communication and DP_TP unchanged by default.
+    tp_reduce_dtype = None
+
     def __init__(
         self,
         dtype: torch.dtype | None = None,
@@ -198,7 +202,7 @@ class LinearBase(nn.Module):
         raise NotImplementedError('This method should be implemented in subclasses.')
 
     def _forward_lora(self, x, tp_sizes: list[int] = None):
-        """Forward with LoRA."""
+        """Local projection and optional LoRA, followed by TP reduction."""
         out = self._forward_default(x, False, tp_sizes)
 
         for lora_adapter in self.lora_adapters.values():
@@ -207,7 +211,11 @@ class LinearBase(nn.Module):
             if self.tp_mode == TPMode.DP_TP:
                 out = reduce_scatter_by_tp_sizes(out, self.tp_rank, tp_sizes, group=self.tp_group)
             else:
+                output_dtype = out.dtype
+                if self.tp_reduce_dtype is not None:
+                    out = out.to(self.tp_reduce_dtype)
                 dist.all_reduce(out, group=self.tp_group)
+                out = out.to(output_dtype)
         return out
 
     def _forward_dp_tp(self, x):
@@ -232,7 +240,7 @@ class LinearBase(nn.Module):
         if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
             return self._forward_dp_tp(x)
 
-        if len(self.lora_adapters) == 0:
+        if len(self.lora_adapters) == 0 and not (self.all_reduce and self.tp_reduce_dtype is not None):
             return self._forward_default(x, self.all_reduce, None)
         else:
             return self._forward_lora(x)

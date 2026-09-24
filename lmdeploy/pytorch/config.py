@@ -460,6 +460,12 @@ class ModelConfig:
     state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
     use_standard_kv_cache: bool = True
 
+    # A model can reject generic prefix-cache reuse when its auxiliary state
+    # cannot be restored at scheduler block boundaries.  ``None`` keeps the
+    # default supported behavior; a non-empty reason is surfaced before model
+    # weights are built.
+    prefix_caching_unsupported_reason: str | None = None
+
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
 

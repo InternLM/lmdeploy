@@ -217,13 +217,15 @@ def causal_conv1d_fn(
 }, )
 def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, width: int, has_bias: bool,
                              activation: str | None, dtype, conv_stride: tuple[int, int, int], is_circular_buffer: bool,
-                             has_state_indices: bool, num_warps: int):
+                             has_state_indices: bool, num_warps: int, weight_dtype=None, bias_dtype=None):
     """TileLang kernel for causal convolution forward pass.
 
     Each thread processes one output position for all channels sequentially.
     """
     num_threads = num_warps * 32
     silu_activation = activation in ['silu', 'swish']
+    weight_dtype = dtype if weight_dtype is None else weight_dtype
+    bias_dtype = dtype if bias_dtype is None else bias_dtype
 
     advance_len = seqlen
     batch = T.dynamic('batch')
@@ -237,8 +239,8 @@ def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, widt
         Conv_State: T.StridedTensor((conv_batch, hidden_size, state_len),
                                     dtype=dtype,
                                     strides=(conv_batch_stride, conv_stride[1], conv_stride[2])),
-        W: T.Tensor((hidden_size, width), dtype=dtype),
-        Bias: T.Tensor((hidden_size, ), dtype=dtype) = None,
+        W: T.Tensor((hidden_size, width), dtype=weight_dtype),
+        Bias: T.Tensor((hidden_size, ), dtype=bias_dtype) = None,
         Out: T.Tensor((batch, hidden_size, seqlen), dtype=dtype) = None,
         Cache_seqlens: T.Tensor((batch, ), dtype=T.int32) = None,
         Conv_state_indices: T.Tensor((batch, ), dtype=T.int32) = None,
@@ -368,7 +370,9 @@ def causal_conv1d_update(x,
                                       conv_stride=conv_state.stride(),
                                       is_circular_buffer=cache_seqlens is not None,
                                       has_state_indices=conv_state_indices is not None,
-                                      num_warps=num_warps)
+                                      num_warps=num_warps,
+                                      weight_dtype=weight.dtype,
+                                      bias_dtype=bias.dtype if bias is not None else x.dtype)
 
     kernel(x, conv_state, weight, bias, out, cache_seqlens, conv_state_indices)
 

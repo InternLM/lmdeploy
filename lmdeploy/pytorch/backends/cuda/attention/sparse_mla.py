@@ -140,6 +140,12 @@ class FlashMLASparseImpl(FlashMLAImpl):
         if pad_heads:
             query = torch.nn.functional.pad(query, (0, 0, 0, pad_heads))
 
+        # Sparse FlashMLA consumes pairs of 64-entry index tiles. Invalid
+        # entries preserve the selected keys when top-k is not tile-aligned.
+        pad_indices = -indices.size(-1) % 128
+        if pad_indices:
+            indices = torch.nn.functional.pad(indices, (0, pad_indices), value=-1)
+
         attn_output = flash_mla_sparse_fwd(query, indexed_kv, indices, sm_scale=self.scale)[0]
         return attn_output[:, :num_q_heads]
 

@@ -942,11 +942,11 @@ def _moe_reduce_kernel(
     stride_wk: tl.constexpr,
     stride_om,
     stride_on: tl.constexpr,
-    fp32_acc: tl.constexpr,
     K: tl.constexpr,
     N: tl.constexpr,
     BLOCK_K: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    output_scale: tl.constexpr,
 ):
     pid = tl.program_id(0)
     num_n_split = tl.cdiv(N, BLOCK_N)
@@ -966,19 +966,18 @@ def _moe_reduce_kernel(
     h = tl.load(h_ptrs, mask=mask_h, other=0.0)
     w = tl.load(weights_ptrs, mask=mask_k, other=0.0)
 
-    if fp32_acc:
-        h = h.to(tl.float32)
-        w = w.to(tl.float32)
-    else:
-        w = w.to(h.dtype)
+    h = h.to(tl.float32)
+    w = w.to(tl.float32)
 
     wh = h * w[:, None]
     o = wh.sum(axis=0)
+    if output_scale != 1.0:
+        o *= output_scale
     tl.store(o_ptrs, o, mask=mask_n)
 
 
-def moe_reduce(hidden_states: torch.Tensor, topk_weights: torch.Tensor, fp32_acc: bool = False) -> torch.Tensor:
-    """Moe reduce."""
+def moe_reduce(hidden_states: torch.Tensor, topk_weights: torch.Tensor, *, output_scale: float = 1.0) -> torch.Tensor:
+    """Weight and reduce experts, optionally scaling before the output cast."""
     assert hidden_states.dim() == 3
     assert topk_weights.dim() == 2
     assert hidden_states.size(0) == topk_weights.size(0)
@@ -1003,11 +1002,11 @@ def moe_reduce(hidden_states: torch.Tensor, topk_weights: torch.Tensor, fp32_acc
         topk_weights.stride(1),
         out.stride(0),
         out.stride(1),
-        fp32_acc,
         K,
         N,
         BLOCK_K,
         BLOCK_N,
+        output_scale,
         num_warps=num_warps,
     )
 
@@ -1025,7 +1024,8 @@ def fused_moe(hidden_states: torch.Tensor,
               expert_offset: int = 0,
               num_experts: int = None,
               renormalize: bool = False,
-              act_func: Callable = None) -> torch.Tensor:
+              act_func: Callable = None,
+              output_scale: float = 1.0) -> torch.Tensor:
     """Fused moe."""
     M = hidden_states.size(0)
     E, N, _ = w1.shape
@@ -1133,5 +1133,7 @@ def fused_moe(hidden_states: torch.Tensor,
             reindex_c=True,
         )
 
-    ret = moe_reduce(intermediate_cache2, topk_weights)
+    ret = moe_reduce(intermediate_cache2,
+                     topk_weights,
+                     output_scale=output_scale)
     return ret

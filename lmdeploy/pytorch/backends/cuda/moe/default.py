@@ -22,10 +22,15 @@ logger = get_logger('lmdeploy')
 class TritonFusedMoEImpl(FusedMoEImpl):
     """Triton fused moe implementation."""
 
-    def __init__(self, top_k: int, num_experts: int, renormalize: bool = False):
+    def __init__(self,
+                 top_k: int,
+                 num_experts: int,
+                 renormalize: bool = False,
+                 output_scale: float = 1.0):
         self.num_experts = num_experts
         self.top_k = top_k
         self.renormalize = renormalize
+        self.output_scale = output_scale
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
         gate_up_weights = gate_up_weights.transpose(1, 2).contiguous().transpose(1, 2)
@@ -67,7 +72,8 @@ class TritonFusedMoEImpl(FusedMoEImpl):
                          expert_offset=expert_offset,
                          num_experts=num_experts,
                          renormalize=self.renormalize,
-                         act_func=act_func)
+                         act_func=act_func,
+                         output_scale=self.output_scale)
 
 
 # modify from dlblas: https://github.com/DeepLink-org/DLBlas
@@ -375,11 +381,14 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         num_experts: int,
         hidden_dim: int,
         renormalize: bool = False,
+        output_scale: float = 1.0,
         layer_idx: int = 0,
         out_dtype: torch.dtype = torch.bfloat16,
         num_max_dispatch_tokens_per_rank: int = 128,
     ):
-        super().__init__(top_k, num_experts, renormalize)
+        super().__init__(top_k, num_experts, renormalize, output_scale)
+        if output_scale != 1.0:
+            raise NotImplementedError('DeepEP MoE does not support output_scale.')
         self.num_experts = num_experts
         self.ep_size = ep_size
         self.ep_group = ep_group
@@ -540,6 +549,7 @@ def _build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
             num_experts=spec.num_experts,
             hidden_dim=spec.hidden_dim,
             renormalize=spec.renormalize,
+            output_scale=spec.output_scale,
             layer_idx=spec.layer_idx,
             out_dtype=spec.output_dtype,
             num_max_dispatch_tokens_per_rank=spec.num_max_dispatch_tokens_per_rank,
@@ -548,4 +558,5 @@ def _build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
         top_k=spec.top_k,
         num_experts=spec.num_experts,
         renormalize=spec.renormalize,
+        output_scale=spec.output_scale,
     )

@@ -633,6 +633,11 @@ def _select_compact_blocked_fp8_moe_both_config(num_tokens: int, num_routes: int
     avg_routes = triton.cdiv(num_routes, num_experts)
     if local_experts != num_experts or local_experts < 256:
         return None
+    if (avg_routes == 1 and local_experts == 288
+            and gate_out_features == 1024 and input_features == 4096):
+        # Sparse routing at this width benefits from skipping inactive
+        # experts while retaining the small-M reduction schedule.
+        return dict(block_m=16, block_n=128, num_warps=4, num_stages=3)
     n_tiles = gate_out_features // 128
     k_blocks = input_features // 128
     if n_tiles >= 8:
@@ -690,7 +695,9 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
                           expert_offset: int = 0,
                           num_experts: int = None,
                           renormalize: bool = False,
-                          act_func: Callable = None) -> torch.Tensor:
+                          act_func: Callable = None,
+                          *,
+                          output_scale: float = 1.0) -> torch.Tensor:
     """Fused moe."""
     device = input.device
     M = input.size(0)
@@ -816,5 +823,6 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
             **down_moe_cfg,
         )
 
-    ret = moe_reduce(intermediate_cache2, topk_weights)
+    ret = moe_reduce(intermediate_cache2, topk_weights,
+                     output_scale=output_scale)
     return ret

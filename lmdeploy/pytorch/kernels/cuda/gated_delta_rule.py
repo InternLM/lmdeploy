@@ -223,13 +223,16 @@ def load_value_tile(Value: T.Buffer, v_local: T.Buffer, b_id, seq_id, hv_id, v_o
 
 @T.macro
 def update_recurrent_state(h_local: T.Buffer, k_local: T.Buffer, v_local: T.Buffer, g_exp, beta, k_per_thr: int,
-                           v_per_warp: int) -> None:
+                           v_per_warp: int, channelwise_g: bool = False) -> None:
     """Apply one gated delta-rule token update to a warp-local state tile."""
     for i in T.Unroll(v_per_warp):
         hk = T.alloc_var(T.float32)
         hk = 0
         for j in T.Unroll(k_per_thr):
-            h_local[j, i] = h_local[j, i] * g_exp
+            if channelwise_g:
+                h_local[j, i] = h_local[j, i] * g_exp[j]
+            else:
+                h_local[j, i] = h_local[j, i] * g_exp
             hk += h_local[j, i] * k_local[j]
         hk = T.warp_reduce_sum(hk)
         v_delta = (v_local[i] - hk) * beta
@@ -275,7 +278,11 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                                          use_state_indices: bool = False,
                                          is_circular_buffer: bool = False,
                                          transpose_state_layout: bool = False,
-                                         num_warps: int = 1):
+                                         num_warps: int = 1,
+                                         channelwise_g: bool = False,
+                                         fuse_kda_gate: bool = False,
+                                         kda_lower_bound: float = -5.0,
+                                         has_dt_bias: bool = False):
     """Build the layout-specific recurrent GDR TileLang kernel.
 
     Common compile-time metadata is computed once here. The only structural branch is the returned T.prim_func body,
@@ -310,7 +317,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
     num_waves = T.ceildiv(target_v_per_cta, v_per_warp * num_warps)
     v_per_cta = v_per_warp * num_warps * num_waves
     use_coalesced_circular_write = is_circular_buffer and num_waves == 1
-    use_shared_token_inputs = SEQLEN <= 8
+    use_shared_token_inputs = SEQLEN <= 8 and not channelwise_g
     write_circular_state = output_final_state and is_circular_buffer
     write_direct_circular_state = write_circular_state and not use_coalesced_circular_write
     write_coalesced_circular_state = write_circular_state and use_coalesced_circular_write
@@ -319,6 +326,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
 
     B = T.dynamic('B')
     N = B if not use_state_indices else T.dynamic('N')
+    g_shape = [B, SEQLEN, HV, K] if channelwise_g else [B, SEQLEN, HV]
 
     if g_dtype is None:
         g_dtype = dtype
@@ -456,13 +464,17 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
         Key: T.StridedTensor([B, SEQLEN, H, K], dtype=dtype, strides=k_stride),
         Value: T.StridedTensor([B, SEQLEN, HV, V], dtype=dtype, strides=v_stride),
         Out: T.Tensor([B, SEQLEN, HV, V], dtype=dtype),
-        G: T.Tensor([B, SEQLEN, HV], dtype=g_dtype),
+        G: T.Tensor(g_shape, dtype=g_dtype),
         Beta: T.Tensor([B, SEQLEN, HV], dtype=beta_dtype),
         State: T.StridedTensor([N, NUM_STATE, HV, V, K], dtype=state_dtype, strides=state_stride),
         StateIndices: T.Tensor([B], dtype=torch.int64) = None,
         CacheSeqlens: T.Tensor([B], dtype=torch.int32) = None,
+        ALog: T.Tensor([HV], dtype=torch.float32) = None,
+        DtBias: T.Tensor([HV, K], dtype=torch.float32) = None,
     ):
         with T.Kernel(T.ceildiv(V, v_per_cta), B * HV, threads=num_threads) as (v_start, bhv_idx):
+            if fuse_kda_gate:
+                T.import_source('extern "C" __device__ float __nv_expf(float);\n')
             tidx = T.get_thread_binding(0)
             b_id = bhv_idx // HV
             hv_id = bhv_idx % HV
@@ -488,13 +500,30 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                 q_smem = T.alloc_shared([SEQLEN, K], T.float32)
                 k_smem = T.alloc_shared([SEQLEN, K], T.float32)
                 g_exp_smem = T.alloc_shared([SEQLEN], T.float32)
+            if use_shared_token_inputs or fuse_kda_gate:
                 beta_smem = T.alloc_shared([SEQLEN], T.float32)
+
+            if fuse_kda_gate:
+                kda_decay_smem = T.alloc_shared([SEQLEN, K], T.float32)
 
             if state_id >= 0 and state_id < N:
                 if use_shared_token_inputs:
                     precompute_shared_token_inputs(Query, Key, G, Beta, q_smem, k_smem, g_exp_smem, beta_smem, b_id,
                                                    h_id, hv_id, warp_id, k_off, K, SEQLEN, k_per_thr, scale,
                                                    use_qk_l2norm_in_kernel, use_g, use_beta)
+                elif fuse_kda_gate:
+                    # Preserve PyTorch sigmoid rounding; reuse gates across state waves.
+                    for s in T.Parallel(SEQLEN):
+                        beta_smem[s] = T.ieee_frcp(1.0 + T.call_extern(
+                            'float32', '__nv_expf', -T.cast(Beta[b_id, s, hv_id], T.float32)))
+                    for s, c in T.Parallel(SEQLEN, K):
+                        gate_value = T.alloc_var(T.float32)
+                        gate_value = T.cast(G[b_id, s, hv_id, c], T.float32)
+                        if has_dt_bias:
+                            gate_value += DtBias[hv_id, c]
+                        gate_value = kda_lower_bound / (1.0 + T.exp(-T.exp(ALog[hv_id]) * gate_value))
+                        kda_decay_smem[s, c] = T.exp(gate_value)
+                    T.sync_threads()
 
                 for wave_id in range(num_waves):
                     v_warp_off = wave_id * num_warps * v_per_warp + warp_id * v_per_warp
@@ -521,8 +550,11 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                         if use_shared_token_inputs:
                             g_exp = g_exp_smem[seq_id]
                             beta = beta_smem[seq_id]
+                        elif fuse_kda_gate:
+                            g_exp = 1.0
+                            beta = beta_smem[seq_id]
                         else:
-                            if use_g:
+                            if use_g and not channelwise_g:
                                 if lane_id == 0:
                                     g = T.cast(G[b_id, seq_id, hv_id], T.float32)
                                     g_exp = T.exp(g)
@@ -542,7 +574,17 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
 
                         v_local = T.alloc_local([v_per_warp], dtype)
                         load_value_tile(Value, v_local, b_id, seq_id, hv_id, v_off, V, v_per_warp, data_vw)
-                        update_recurrent_state(h_local, k_local, v_local, g_exp, beta, k_per_thr, v_per_warp)
+                        if channelwise_g:
+                            g_local = T.alloc_local([k_per_thr], T.float32)
+                            for j in T.Unroll(k_per_thr):
+                                if fuse_kda_gate:
+                                    g_local[j] = kda_decay_smem[seq_id, k_off + j]
+                                else:
+                                    g_local[j] = T.exp(T.cast(G[b_id, seq_id, hv_id, k_off + j], T.float32))
+                            update_recurrent_state(h_local, k_local, v_local, g_local, beta, k_per_thr,
+                                                   v_per_warp, channelwise_g=True)
+                        else:
+                            update_recurrent_state(h_local, k_local, v_local, g_exp, beta, k_per_thr, v_per_warp)
 
                         if write_circular_state:
                             store_transposed_state_tile(State, h_local, state_id, state_update_id, hv_id, k_off, v_off,
@@ -585,6 +627,9 @@ def fused_recurrent_gated_delta_rule(
     state_indices: torch.Tensor | None = None,
     cache_seqlens: torch.Tensor | None = None,
     transpose_state_layout: bool = False,
+    a_log: torch.Tensor | None = None,
+    dt_bias: torch.Tensor | None = None,
+    lower_bound: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Fused recurrent gated delta rule.
 
@@ -592,7 +637,8 @@ def fused_recurrent_gated_delta_rule(
         q: [B, T, H, K]
         k: [B, T, H, K]
         v: [B, T, HV, V]
-        g: [B, T, HV], optional
+        g: [B, T, HV], optional. The transposed-state path also supports
+            channelwise log decay [B, T, HV, K] for KDA.
         beta: [B, T, HV], optional
         scale: float, optional
         initial_state: Tensor, optional. Recurrent state with shape
@@ -610,6 +656,10 @@ def fused_recurrent_gated_delta_rule(
             batch element
         transpose_state_layout: whether recurrent state is stored as [V, K]
             instead of [K, V]
+        a_log: Optional FP32 KDA parameter [HV]. When provided, g and beta
+            are raw logits and the bounded gate and beta sigmoid are fused.
+        dt_bias: Optional FP32 KDA gate bias [HV * K] or [HV, K].
+        lower_bound: Negative lower bound required for fused KDA gating.
     Returns:
         o: [B, T, HV, V]
         final_state: Recurrent state if ``output_final_state`` is True,
@@ -624,6 +674,20 @@ def fused_recurrent_gated_delta_rule(
         scale = 1 / (q.shape[-1]**0.5)
     g_dtype = torch.float32
     beta_dtype = torch.float32
+    channelwise_g = g is not None and g.ndim == 4
+    fuse_kda_gate = a_log is not None
+    if fuse_kda_gate:
+        if not channelwise_g or not transpose_state_layout or beta is None or lower_bound is None or lower_bound >= 0:
+            raise ValueError('Fused KDA gating requires channelwise raw g/beta, transposed state and a negative bound.')
+        assert a_log.dtype == torch.float32 and a_log.numel() == HV and a_log.is_contiguous()
+        if dt_bias is not None:
+            assert dt_bias.dtype == torch.float32 and dt_bias.numel() == HV * K and dt_bias.is_contiguous()
+            dt_bias = dt_bias.view(HV, K)
+    elif dt_bias is not None or lower_bound is not None:
+        raise ValueError('dt_bias and lower_bound require a_log for fused KDA gating.')
+    if channelwise_g:
+        assert transpose_state_layout, 'Channelwise decay requires transposed state layout'
+        assert g.shape == (*q.shape[:2], HV, K)
     if g is not None:
         assert g.is_contiguous()
         g_dtype = g.dtype
@@ -646,7 +710,8 @@ def fused_recurrent_gated_delta_rule(
             'cache_seqlens must be on the same device as q'
 
     assert initial_state is not None, 'initial_state is required'
-    o = torch.empty_like(v)
+    # Strided inputs may be dense transposes, but Out uses a contiguous Tensor.
+    o = torch.empty_like(v, memory_format=torch.contiguous_format)
     final_state = initial_state
     state_dtype = q.dtype
     if final_state is not None:
@@ -693,9 +758,16 @@ def fused_recurrent_gated_delta_rule(
         is_circular_buffer=cache_seqlens is not None,
         transpose_state_layout=transpose_state_layout,
         num_warps=num_warps,
+        channelwise_g=channelwise_g,
+        fuse_kda_gate=fuse_kda_gate,
+        kda_lower_bound=lower_bound if fuse_kda_gate else -5.0,
+        has_dt_bias=dt_bias is not None,
     )
 
-    kernel(q, k, v, o, g, beta, final_state, state_indices, cache_seqlens)
+    if transpose_state_layout:
+        kernel(q, k, v, o, g, beta, final_state, state_indices, cache_seqlens, a_log, dt_bias)
+    else:
+        kernel(q, k, v, o, g, beta, final_state, state_indices, cache_seqlens)
 
     if not output_final_state:
         final_state = None
