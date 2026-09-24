@@ -451,8 +451,8 @@ class Glm5NextNoauxTCRouter(nn.Module):
         self.scoring_func = config.scoring_func
         self.renormalize = bool(config.norm_topk_prob and self.top_k > 1)
         # Keep the generic router output normalized.  GLM's model-level 2.5
-        # factor is owned by ``fused_moe_output_scale`` below so it is applied
-        # once, after the FP32 routed-expert reduction.
+        # factor is owned by ``fused_moe_output_scale`` below. EP1 applies it
+        # after reduction; DeepEP folds it into FP32 combine weights.
         self.routed_scaling_factor = 1.0
         self.router_n_groups = getattr(config, 'router_n_groups', -1)
         contract = (
@@ -503,8 +503,8 @@ class Glm5NextMoE(DeepseekV2MoE):
     # GEMMs are owned by LMDeploy's generic blocked-FP8 MoE implementation.
     fused_moe_act_func = staticmethod(_GLM53_COMPACT_FP8_MOE_ACT)
     # Match the GLM-5.3 contract: routing returns normalized, unscaled weights;
-    # the 2.5 routed scale is applied once to the FP32 expert reduction before
-    # its BF16 store.
+    # EP1 scales the FP32 expert reduction before its BF16 store. DeepEP
+    # scales FP32 combine weights; shared experts remain unscaled.
     router_routed_scaling_factor = 1.0
     fused_moe_output_scale = 2.5
     shared_expert_cls = Glm5NextMLP
@@ -512,6 +512,15 @@ class Glm5NextMoE(DeepseekV2MoE):
     def __init__(self, config: Any, layer_idx: int, *args, **kwargs):
         kwargs.setdefault('prefix', f'model.layers.{layer_idx}.mlp')
         super().__init__(config, layer_idx, *args, **kwargs)
+        dist_config = get_dist_manager().current_config()
+        if dist_config.ep > 1:
+            # DeepEP already combines routed experts. Reduce only the TP
+            # shared projection, otherwise the outer TP sum multiplies the
+            # complete routed contribution by the attention TP size.
+            self._all_reduce = False
+            if dist_config.dp == 1 and self.shared_experts is not None:
+                down_proj = self.shared_experts.down_proj
+                down_proj.all_reduce = down_proj.tp > 1
         # Keep the shared+routed local sum and the generic expert kernels.
         # Promote only the final TP collective: BF16 collective reduction
         # order depends on message size (AR versus multi-token verification).

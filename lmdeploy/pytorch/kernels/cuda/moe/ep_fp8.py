@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from dlblas: https://github.com/DeepLink-org/DLBlas
+from collections.abc import Callable
+
 import torch
 import triton
 import triton.language as tl
@@ -152,18 +154,23 @@ def fused_moe_v3_fp8(
     w13_weight_fp8: tuple[torch.Tensor, torch.Tensor],
     w2_weight_fp8: tuple[torch.Tensor, torch.Tensor],
     num_recv_tokens_per_expert: list[int] | None,
+    act_func: Callable | None = None,
+    scale_fmt: str | None = None,
+    fp32_acc: bool = False,
 ):
     hidden_states_fp8, hidden_states_scale = hidden_states_fp8
     if num_recv_tokens_per_expert is None:
-        return hidden_states_fp8.to(torch.bfloat16)
+        return torch.zeros_like(hidden_states_fp8, dtype=torch.bfloat16)
     all_tokens = sum(num_recv_tokens_per_expert)
     if all_tokens <= 0:
-        return hidden_states_fp8.to(torch.bfloat16)
+        return torch.zeros_like(hidden_states_fp8, dtype=torch.bfloat16)
     from lmdeploy.pytorch.third_party.deep_gemm import get_mn_major_tma_aligned_tensor
     m, k = hidden_states_fp8.size()
     n = w13_weight_fp8[0].size(1)
     block_size = k // hidden_states_scale.size(1)
-    gather_out = torch.empty_like(hidden_states_fp8, device=hidden_states_fp8.device, dtype=torch.bfloat16)
+    # ep_gather already accumulates in its output dtype. Reuse that contract
+    # instead of introducing a second reduction kernel for FP32 accumulation.
+    gather_out = torch.empty_like(hidden_states_fp8, dtype=torch.float32 if fp32_acc else torch.bfloat16)
     input_tensor = torch.empty((all_tokens, k), device=hidden_states_fp8.device, dtype=hidden_states_fp8.dtype)
     input_tensor_scale = torch.empty((all_tokens, k // block_size),
                                     device=hidden_states_fp8.device,
@@ -183,12 +190,16 @@ def fused_moe_v3_fp8(
     input_tensor_scale = get_mn_major_tma_aligned_tensor(input_tensor_scale)
     _deepgemm_grouped_fp8_nt_contiguous((input_tensor, input_tensor_scale), w13_weight_fp8, gateup_output, m_indices)
 
-    down_input = torch.empty((all_tokens, n // 2), device=gateup_output.device, dtype=torch.bfloat16)
-    silu_and_mul(gateup_output.view(-1, n), down_input)
+    if act_func is None:
+        down_input = silu_and_mul(gateup_output.view(-1, n))
+    else:
+        down_input = act_func(gateup_output.view(-1, n))
     del gateup_output
-    down_input_fp8, down_input_scale = per_token_group_quant_fp8(down_input, block_size)
+    down_input_fp8, down_input_scale = per_token_group_quant_fp8(down_input, block_size, scale_fmt=scale_fmt)
     down_input_scale = get_mn_major_tma_aligned_tensor(down_input_scale)
     down_output = torch.empty((all_tokens, k), device=gather_out.device, dtype=torch.bfloat16)
     _deepgemm_grouped_fp8_nt_contiguous((down_input_fp8, down_input_scale), w2_weight_fp8, down_output, m_indices)
     ep_gather(down_output, topk_idx, topk_weights, output_index, gather_out)
-    return gather_out
+    # DeepEP transports BF16 partial sums. Local expert reduction can be FP32,
+    # but this is not an all-FP32 cross-rank reduction contract.
+    return gather_out.to(torch.bfloat16)

@@ -144,6 +144,8 @@ class LinearWeightsBlockedF8(LinearWeights):
 class FusedMoEBlockedF8(FusedMoEBase):
     """Fused moe blocked f8."""
 
+    output_scale = 1.0
+
     def __init__(self,
                  hidden_dim: int,
                  ffn_dim: int,
@@ -232,6 +234,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
         self.dtype = dtype
         self.device = device
         self.act_func = act_func
+        self.output_scale = output_scale
 
     @staticmethod
     def _update_args(hidden_dim: int, ffn_dim: int, align: int):
@@ -254,6 +257,9 @@ class FusedMoEBlockedF8(FusedMoEBase):
             state = state.to_dict()
 
         moe_type = state['moe_type']
+        if moe_type in (MoeType.DSAsyncPrefill, MoeType.DSAsyncDecode) and self.output_scale != 1.0:
+            # Async callers already normalized before splitting microbatches.
+            state['topk_weights'] = state['topk_weights'].float() * self.output_scale
         if moe_type == MoeType.DSAsyncPrefill:
             fusedmoe = self.fusedmoe_build(low_latency_mode=False)
             state['fusedmoe'] = fusedmoe
@@ -336,7 +342,8 @@ class FusedMoEBlockedF8(FusedMoEBase):
                 state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
                                                                                  self.gate_up.weight_scale_inv,
                                                                                  self.down.weight,
-                                                                                 self.down.weight_scale_inv)
+                                                                                 self.down.weight_scale_inv,
+                                                                                 act_func=self.act_func)
             gemm_state = {
                 'fusedmoe': state['fusedmoe'],
                 'hidden_states': state['recv_hidden_states'],
@@ -347,7 +354,8 @@ class FusedMoEBlockedF8(FusedMoEBase):
             state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
                                                                              self.gate_up.weight_scale_inv,
                                                                              self.down.weight,
-                                                                             self.down.weight_scale_inv)
+                                                                             self.down.weight_scale_inv,
+                                                                             act_func=self.act_func)
             gemm_state = {
                 'fusedmoe': state['fusedmoe'],
                 'hidden_states': state['recv_hidden_states'],
