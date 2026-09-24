@@ -14,6 +14,7 @@ from .config import DistConfig, TPMode
 
 if TYPE_CHECKING:
     from .backends.communicator import DeviceCommunicator
+    from .backends.cuda.attention.cp import DCPManager
 
 
 @dataclass
@@ -26,16 +27,12 @@ class DistGroup:
     gpu_groups: list[dist.ProcessGroup] = None
     gpu_gather_group: dist.ProcessGroup = None
     communicator: 'DeviceCommunicator' = None
-    query_gather_workspace: object = None
 
     def close(self):
         """Close groups."""
         if self.communicator is not None:
             self.communicator.close()
             self.communicator = None
-        if self.query_gather_workspace is not None:
-            self.query_gather_workspace.close()
-            self.query_gather_workspace = None
         if not dist.is_initialized():
             return
         if self.cpu_groups is not None:
@@ -243,6 +240,7 @@ class DistContext:
     mlp_tp_group: DistGroup = None
     moe_tp_group: DistGroup = None
     dcp_group: DistGroup = None
+    dcp_manager: 'DCPManager' = None
 
     cpu_group: dist.ProcessGroup = None
     ep_gpu_group: dist.ProcessGroup = None
@@ -324,7 +322,10 @@ class DistContext:
         return context
 
     def close(self):
-        """Close groups."""
+        """Close DCP resources before their process groups."""
+        if self.dcp_manager is not None:
+            self.dcp_manager.close()
+            self.dcp_manager = None
         if not dist.is_initialized():
             return
         if self.dcp_group is not None:

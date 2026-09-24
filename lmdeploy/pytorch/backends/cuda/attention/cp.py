@@ -27,66 +27,91 @@ def gather_dcp_prefix_kv(local_kv: torch.Tensor, chunk: DCPPrefixChunk,
     return context
 
 
-def init_dcp_query_gather(num_heads: int, head_size: int):
-    """Initialize one query workspace shared by attention layers in this DCP
-    group."""
+class DCPManager:
+    """Own shared DCP gathers and the output combine that orders query reuse.
+
+    Layers in one distributed context share this manager. Prepare workspaces during model construction, before CUDA
+    graph capture, and close only after all consumers and graphs have retired.
+    """
+
+    def __init__(self, group):
+        self.group = group.gpu_group
+        self.communicator = group.communicator
+        self.world_size = torch.distributed.get_world_size(self.group)
+        self.rank = group.rank
+        self._query_workspace = None
+
+    def prepare_query_gather(self, num_heads: int, head_size: int):
+        """Prepare one query arena shared across attention layers."""
+        if self._query_workspace is None:
+            width = num_heads * head_size * self.world_size
+            self._query_workspace = self.communicator.create_all_gather_workspace(
+                width, device=torch.device('cuda'), dtype=torch.bfloat16)
+
+    def gather_query(self, query: torch.Tensor) -> torch.Tensor:
+        """Gather query heads; consume and combine on the same stream before
+        reuse."""
+        if self.world_size == 1:
+            return query
+        output = self.communicator.all_gather(
+            query.flatten(1), workspace=self._query_workspace, copy_output=False)
+        return output.view(query.size(0), -1, query.size(2))
+
+    def gather_candidates(self, packed: torch.Tensor) -> torch.Tensor:
+        """Gather [rows, topk, score/ID] payloads in rank-major order."""
+        from lmdeploy.pytorch.distributed import all_gather_into_tensor
+
+        output = packed.new_empty(self.world_size * packed.size(0), *packed.shape[1:])
+        all_gather_into_tensor(output, packed, group=self.group)
+        return output.view(self.world_size, *packed.shape)
+
+    def combine(self, local_output: torch.Tensor, local_lse: torch.Tensor,
+                valid_counts: torch.Tensor) -> torch.Tensor:
+        """Merge shard outputs and scatter heads, ordering the next query
+        gather.
+
+        Inputs are [tokens, gathered_heads, value_dim] outputs and natural-log [tokens, gathered_heads] LSE. Empty rows
+        contribute zero. LSE and correction arithmetic use FP32; reduce-scatter uses the input output dtype.
+        """
+        if self.world_size == 1:
+            return local_output
+        from lmdeploy.pytorch.distributed import all_gather_into_tensor, reduce_scatter_tensor
+        from lmdeploy.pytorch.kernels.cuda.dcp import correct_dcp_attention_output, sanitize_dcp_lse
+
+        local_lse = sanitize_dcp_lse(local_lse, valid_counts)
+        gathered_lse = local_lse.new_empty(
+            self.world_size * local_lse.size(0), local_lse.size(1))
+        all_gather_into_tensor(gathered_lse, local_lse, group=self.group)
+        gathered_lse = gathered_lse.view(self.world_size, *local_lse.shape)
+        contribution = correct_dcp_attention_output(
+            local_output, gathered_lse, dcp_rank=self.rank)
+
+        num_heads = contribution.size(0)
+        # The correction kernel writes [heads, tokens, dim] directly so the
+        # head-sharded reduce-scatter needs no separate transpose/copy.
+        assert num_heads % self.world_size == 0
+        local_heads = num_heads // self.world_size
+        scattered_output = contribution.new_empty(local_heads,
+                                                  contribution.size(1),
+                                                  contribution.size(2))
+        reduce_scatter_tensor(scattered_output, contribution, group=self.group)
+        return scattered_output.transpose(0, 1)
+
+    def close(self):
+        """Release shared arenas before their process group is destroyed."""
+        if self._query_workspace is not None:
+            self._query_workspace.close()
+            self._query_workspace = None
+
+
+def get_dcp_manager() -> DCPManager:
+    """Get the context-owned manager during layer initialization."""
     from lmdeploy.pytorch.distributed import get_dist_manager
 
-    group = get_dist_manager().current_context().dcp_group
-    if group.communicator is not None and group.query_gather_workspace is None:
-        width = num_heads * head_size * torch.distributed.get_world_size(group.gpu_group)
-        group.query_gather_workspace = group.communicator.create_all_gather_workspace(
-            width, device=torch.device('cuda'), dtype=torch.bfloat16)
-
-
-def gather_dcp_query(query: torch.Tensor, *, dcp_world_size: int) -> torch.Tensor:
-    """Gather [tokens, local_heads, dim] queries along the head axis.
-
-    Consume the result on the same stream before the next query gather; the optimized path borrows a shared arena.
-    """
-    if dcp_world_size == 1:
-        return query
-    from lmdeploy.pytorch.distributed import get_dist_manager
-
-    group = get_dist_manager().current_context().dcp_group
-    output = group.communicator.all_gather(query.flatten(1), workspace=group.query_gather_workspace, copy_output=False)
-    return output.view(query.size(0), -1, query.size(2))
-
-
-def merge_dcp_attention(local_output: torch.Tensor,
-                        local_lse: torch.Tensor,
-                        valid_counts: torch.Tensor,
-                        *,
-                        dcp_world_rank: tuple[int, int]) -> torch.Tensor:
-    """Merge normalized CUDA shard outputs and scatter heads back to each rank.
-
-    Inputs are [tokens, gathered_heads, value_dim] outputs and natural-log [tokens, gathered_heads] LSE. Empty rows
-    contribute zero. LSE and correction arithmetic use FP32; reduce-scatter uses the input output dtype.
-    """
-    dcp_world_size, dcp_rank = dcp_world_rank
-    if dcp_world_size == 1:
-        return local_output
-    from lmdeploy.pytorch.distributed import all_gather_into_tensor, reduce_scatter_tensor
-    from lmdeploy.pytorch.kernels.cuda.dcp import correct_dcp_attention_output, sanitize_dcp_lse
-
-    local_lse = sanitize_dcp_lse(local_lse, valid_counts)
-    gathered_lse = local_lse.new_empty(
-        dcp_world_size * local_lse.size(0), local_lse.size(1))
-    all_gather_into_tensor(gathered_lse, local_lse, group='dcp')
-    gathered_lse = gathered_lse.view(dcp_world_size, *local_lse.shape)
-    contribution = correct_dcp_attention_output(
-        local_output, gathered_lse, dcp_rank=dcp_rank)
-
-    num_heads = contribution.size(0)
-    # The correction kernel writes [heads, tokens, dim] directly so the
-    # head-sharded reduce-scatter needs no separate transpose/copy.
-    assert num_heads % dcp_world_size == 0
-    local_heads = num_heads // dcp_world_size
-    scattered_output = contribution.new_empty(local_heads,
-                                              contribution.size(1),
-                                              contribution.size(2))
-    reduce_scatter_tensor(scattered_output, contribution, group='dcp')
-    return scattered_output.transpose(0, 1)
+    context = get_dist_manager().current_context()
+    if context.dcp_manager is None:
+        context.dcp_manager = DCPManager(context.dcp_group)
+    return context.dcp_manager
 
 
 class DCPAttentionImpl(TritonAttentionImpl):
@@ -102,7 +127,8 @@ class DCPAttentionImpl(TritonAttentionImpl):
         if use_fa3:
             from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
             self._fa3_prefill = flash_attn_varlen_func
-        init_dcp_query_gather(self.num_heads, self.head_size)
+        self.dcp_manager = get_dcp_manager()
+        self.dcp_manager.prepare_query_gather(self.num_heads, self.head_size)
 
     def get_step_metadata_provider(self):
         """Use common DCP lengths without a separate kernel scheduler."""
@@ -115,7 +141,7 @@ class DCPAttentionImpl(TritonAttentionImpl):
                 metadata: TritonAttentionMetadata, k_scales_zeros: torch.Tensor = None,
                 v_scales_zeros: torch.Tensor = None) -> torch.Tensor:
         """Evaluate interleaved shards and restore rank-local query heads."""
-        query = gather_dcp_query(query, dcp_world_size=self.dcp_world_size)
+        query = self.dcp_manager.gather_query(query)
         query_len = query.size(0) // metadata.q_seqlens.numel()
         local_lens = metadata.dcp_local_kv_seqlens
         blocks = metadata.block_offsets
@@ -129,8 +155,7 @@ class DCPAttentionImpl(TritonAttentionImpl):
             page_table=blocks, max_seqlen_q=1, softmax_scale=self.scale,
             softcap=self.logit_softcapping, return_lse=True, quant_policy=metadata.quant_policy,
             k_scales_zeros=k_scales_zeros, v_scales_zeros=v_scales_zeros)
-        return merge_dcp_attention(output, lse, valid_counts=local_lens,
-                                   dcp_world_rank=(self.dcp_world_size, self.dcp_rank))
+        return self.dcp_manager.combine(output, lse, valid_counts=local_lens)
 
     def _prefill_attention(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, *,
                            cu_q: torch.Tensor, cu_k: torch.Tensor, max_q: int, max_k: int,
