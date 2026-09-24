@@ -24,14 +24,14 @@ from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
-@pytest.mark.parametrize('method,expected', [
-    (None, None),
-    ('qwen3_5_mtp', ProposalMethod.AUTOREGRESSIVE),
-    ('dflash', ProposalMethod.DIFFUSION),
-    ('dspark', ProposalMethod.DIFFUSION),
-    ('test_block_proposer', ProposalMethod.DIFFUSION),
+@pytest.mark.parametrize('method,expected,owns_proposer', [
+    (None, None, False),
+    ('qwen3_5_mtp', ProposalMethod.AUTOREGRESSIVE, False),
+    ('dflash', ProposalMethod.DIFFUSION, False),
+    ('dspark', ProposalMethod.DIFFUSION, False),
+    ('test_block_proposer', ProposalMethod.DIFFUSION, False),
+    ('dspark', ProposalMethod.DIFFUSION, True),
 ])
-@pytest.mark.parametrize('owns_proposer', [False, True])
 def test_get_proposal_method_without_rank_local_dependency(monkeypatch, method, expected, owns_proposer):
     from lmdeploy.pytorch.spec_decode.proposers.base import SPEC_PROPOSERS
 

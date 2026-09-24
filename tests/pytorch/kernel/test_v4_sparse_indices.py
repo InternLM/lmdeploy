@@ -365,6 +365,8 @@ def test_rectangular_compressed_indices_use_request_page_table():
     (8, 2),
     (8, 6),
 ])
+@pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+                    reason='V4 FP8 cache kernels require SM90+')
 def test_rectangular_executor_matches_position_loop_with_one_flashmla_call(
         monkeypatch, batch_size, query_len):
     """The single-call path preserves the qlen-one attention reference."""
@@ -526,6 +528,8 @@ def test_rectangular_executor_matches_position_loop_with_one_flashmla_call(
     (3, 128),
     (32, 4),
 ])
+@pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+                    reason='V4 FP8 cache kernels require SM90+')
 def test_rectangular_executor_compressed_paths_match_position_loop(
         monkeypatch, batch_size, compress_ratio):
     """Cover r4 indexer, r128 fallback, ragged/padded, and P<B paths."""

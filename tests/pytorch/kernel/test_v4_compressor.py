@@ -693,6 +693,8 @@ def test_score_kv_mixed_window_cuda_graph_replay():
                                atol=1e-2, rtol=1e-2)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+                    reason='V4 FP8 cache kernels require SM90+')
 def test_v4_window_pack_skips_padded_state_slot():
     """A graph-padded -1 slot must not be redirected to live slot zero."""
     from lmdeploy.pytorch.kernels.cuda.v4_pack_window import (
@@ -713,6 +715,8 @@ def test_v4_window_pack_skips_padded_state_slot():
     torch.testing.assert_close(cache.view(torch.uint8), before)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
+                    reason='V4 FP8 cache kernels require SM90+')
 def test_fill_compressed_kv_skips_padded_state_slot():
     """Static graph qlens must not make a padded request write block zero."""
     from lmdeploy.pytorch.kernels.cuda.v4_compressor import (

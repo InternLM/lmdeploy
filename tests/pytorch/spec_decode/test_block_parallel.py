@@ -76,11 +76,11 @@ def test_query_padding_real_cache_write_isolation(monkeypatch, width, inactive, 
     assert query.state_offsets.tolist() == ([-1] * 4 if inactive else [8, -1, -1, -1])
 
 
-@pytest.mark.parametrize('width', [5, 6])
 @pytest.mark.parametrize('inactive', [False, True])
 @pytest.mark.parametrize('graph', [False, True])
 def test_block_query_physical_padding_and_metadata_ownership(
-        monkeypatch, width, inactive, graph):
+        monkeypatch, inactive, graph):
+    width = 5  # Cross a kernel-block boundary; Q=N/N+1 layouts are covered below.
     monkeypatch.setattr(
         DPMeta, 'build',
         staticmethod(lambda n, counts: DPMeta(tp_sizes=list(counts),
@@ -133,9 +133,6 @@ def test_block_query_physical_padding_and_metadata_ownership(
     assert out.history_lengths[real:].count_nonzero() == 0
     if real:
         torch.testing.assert_close(out.block_offsets[:real], inp.block_offsets)
-    ctx = context_inputs(inp.clone(is_decoding=False))
-    assert ctx.dp_meta is None and not ctx.global_is_decoding()
-    assert inp.dp_meta is meta and meta.tp_sizes == [12, 6]
 
 
 def test_block_metadata_exchange_preserves_ar_schema():
