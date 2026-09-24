@@ -40,6 +40,7 @@ class DCPManager:
         self.world_size = torch.distributed.get_world_size(self.group)
         self.rank = group.rank
         self._query_workspace = None
+        self._candidate_workspace = None
 
     def prepare_query_gather(self, num_heads: int, head_size: int):
         """Prepare one query arena shared across attention layers."""
@@ -47,6 +48,12 @@ class DCPManager:
             width = num_heads * head_size * self.world_size
             self._query_workspace = self.communicator.create_all_gather_workspace(
                 width, device=torch.device('cuda'), dtype=torch.bfloat16)
+
+    def prepare_candidate_gather(self, topk: int):
+        """Prepare one candidate arena shared across indexer layers."""
+        if self._candidate_workspace is None:
+            self._candidate_workspace = self.communicator.create_all_gather_workspace(
+                topk * 2, device=torch.device('cuda'), dtype=torch.float32, dim=0)
 
     def gather_query(self, query: torch.Tensor) -> torch.Tensor:
         """Gather query heads; consume and combine on the same stream before
@@ -58,11 +65,13 @@ class DCPManager:
         return output.view(query.size(0), -1, query.size(2))
 
     def gather_candidates(self, packed: torch.Tensor) -> torch.Tensor:
-        """Gather [rows, topk, score/ID] payloads in rank-major order."""
-        from lmdeploy.pytorch.distributed import all_gather_into_tensor
+        """Gather [rows, topk, score/ID] payloads without changing their bits.
 
-        output = packed.new_empty(self.world_size * packed.size(0), *packed.shape[1:])
-        all_gather_into_tensor(output, packed, group=self.group)
+        The entry barrier protects the previous top-k consumer before arena reuse. Consume the borrowed output on the
+        same stream before the next candidate gather.
+        """
+        output = self.communicator.all_gather(
+            packed.flatten(1), dim=0, workspace=self._candidate_workspace, copy_output=False)
         return output.view(self.world_size, *packed.shape)
 
     def combine(self, local_output: torch.Tensor, local_lse: torch.Tensor,
@@ -102,6 +111,9 @@ class DCPManager:
         if self._query_workspace is not None:
             self._query_workspace.close()
             self._query_workspace = None
+        if self._candidate_workspace is not None:
+            self._candidate_workspace.close()
+            self._candidate_workspace = None
 
 
 def get_dcp_manager() -> DCPManager:

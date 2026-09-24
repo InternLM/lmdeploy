@@ -86,26 +86,43 @@ def _run_dcp_query_gather(rank, rendezvous, enabled):
                 expected = expected.repeat_interleave(32)[None, :, None].expand_as(output)
                 torch.testing.assert_close(output, expected, rtol=0, atol=0)
             _check_lm_head_lifecycle(rank, all(enabled))
-            _check_dcp_candidate_gather(rank, ctx.dcp_group)
+            _check_dcp_candidate_gather(rank, ctx.dcp_group, all(enabled))
     finally:
         ctx.close()
         dist.destroy_process_group()
 
 
-def _check_dcp_candidate_gather(rank, group):
+def _check_dcp_candidate_gather(rank, group, direct):
     from lmdeploy.pytorch.backends.cuda.nsa import TritonNSAIndexFP8Impl
     from lmdeploy.pytorch.kernels.cuda.sparse_index_dcp_topk import pack_dcp_topk_candidates, sparse_dcp_global_topk
 
     k = 512
     impl = TritonNSAIndexFP8Impl(k, softmax_scale=1.0, block_size=128, fill=-1)
+    workspace = impl.dcp_manager._candidate_workspace
+    assert (workspace is not None and workspace.is_available()) == direct
+    TritonNSAIndexFP8Impl(k, softmax_scale=1.0, block_size=128, fill=-1)
+    assert impl.dcp_manager._candidate_workspace is workspace
+    native = base_communicator_module.DeviceCommunicator(group.gpu_group)
+    # IDs are bitcast, not converted to FP32; include large IDs and NaN encodings.
+    bits = (torch.arange(16 * k * 2, device='cuda', dtype=torch.int32) * 1234567 + rank).view(16, k * 2)
+    payload = bits.view(torch.float32)
+    for value in (payload, payload[:1], payload[:, ::2], payload.double()):
+        actual = group.communicator.all_gather(value, dim=0, workspace=workspace)
+        expected = native.all_gather(value, dim=0)
+        torch.testing.assert_close(actual.view(torch.int32), expected.view(torch.int32), rtol=0, atol=0)
+    if direct:
+        # Capacity rejection must use NCCL consistently, including a captured
+        # shape that was not warmed before capture.
+        oversized = payload[:1].expand(workspace._state.max_token_num // 2 + 1, -1).contiguous()
+        torch.testing.assert_close(
+            group.communicator.all_gather(oversized, dim=0, workspace=workspace).view(torch.int32),
+            native.all_gather(oversized, dim=0).view(torch.int32), rtol=0, atol=0)
     scores = torch.randn(16, k * 2, device='cuda')
     indices = torch.arange(k, device='cuda', dtype=torch.int32).expand(16, -1).clone()
 
     def reference():
         packed = pack_dcp_topk_candidates(scores, indices, dcp_world_rank=(2, rank))
-        gathered = packed.new_empty(32, k, 2)
-        torch.distributed.all_gather_into_tensor(gathered, packed, group=group.gpu_group)
-        gathered = gathered.view(2, 16, k, 2)
+        gathered = native.all_gather(packed.flatten(1), dim=0).view(2, 16, k, 2)
         return sparse_dcp_global_topk(gathered, k=k)
 
     impl._merge_dcp_topk(scores, indices)
@@ -116,6 +133,7 @@ def _check_dcp_candidate_gather(rank, group):
             if rank == step % 2:
                 torch.cuda._sleep(20000)
             outputs.append(impl._merge_dcp_topk(scores, indices))
+        unwarmed = group.communicator.all_gather(payload[:3], dim=0, workspace=workspace)
     for case in range(3):
         scores.normal_()
         if case == 1:
@@ -129,6 +147,8 @@ def _check_dcp_candidate_gather(rank, group):
         torch.cuda.synchronize()
         for output in outputs:
             torch.testing.assert_close(output, expected, rtol=0, atol=0)
+        torch.testing.assert_close(unwarmed.view(torch.int32),
+                                   native.all_gather(payload[:3], dim=0).view(torch.int32), rtol=0, atol=0)
     graph.reset()
 
 
@@ -272,6 +292,7 @@ def test_gather_registration_and_native_fallback(monkeypatch):
         torch.testing.assert_close(manager.gather_query(query), torch.cat((query, query + 10), dim=1))
     input = torch.ones(3, 3)
     torch.testing.assert_close(communicator.all_gather(input, workspace=logits), torch.cat((input, input + 10), dim=-1))
+    torch.testing.assert_close(communicator.all_gather(input, dim=0), torch.cat((input, input + 10), dim=0))
 
 
 def test_gather_preparation_and_weight_transition(monkeypatch):
@@ -323,30 +344,36 @@ def test_cuda_gather_dispatch_and_workspace_ownership(monkeypatch, comm_env):
     query_workspace.all_gather.return_value = gathered_query.flatten(1)
     with get_dist_manager().context(context):
         torch.testing.assert_close(manager.gather_query(query), gathered_query)
-    assert query_workspace.all_gather.call_args.kwargs == {'copy_output': False}
+    assert query_workspace.all_gather.call_args.kwargs == {'dim': -1, 'copy_output': False}
 
     native = Mock(side_effect=lambda output, input, group: output.copy_(torch.cat((input, input + 10))))
     monkeypatch.setattr(base_communicator_module.dist, 'all_gather_into_tensor', native)
     input = torch.ones(3, 3)
     logits_workspace.all_gather.return_value = torch.ones(3, 6)
     torch.testing.assert_close(communicator.all_gather(input, workspace=logits_workspace), torch.ones(3, 6))
-    logits_workspace.all_gather.assert_called_once_with(input, copy_output=True)
+    logits_workspace.all_gather.assert_called_once_with(input, dim=-1, copy_output=True)
     native.assert_not_called()
     logits_workspace.all_gather.return_value = None
     torch.testing.assert_close(communicator.all_gather(input, workspace=logits_workspace),
                                torch.cat((input, input + 10), dim=-1))
     native.assert_called_once()
 
+    manager.prepare_candidate_gather(512)
+    candidate_workspace = manager._candidate_workspace
+    manager.prepare_candidate_gather(512)
+    assert manager._candidate_workspace is candidate_workspace
     assert context.dcp_manager is manager
     monkeypatch.setattr(torch.distributed, 'is_initialized', lambda: True)
     group_close = Mock(wraps=group.close)
     monkeypatch.setattr(group, 'close', group_close)
     query_workspace.close.side_effect = lambda: group_close.assert_not_called()
+    candidate_workspace.close.side_effect = lambda: group_close.assert_not_called()
     context.close()
     context.close()
     query_workspace.close.assert_called_once()
+    candidate_workspace.close.assert_called_once()
     assert context.dcp_manager is None
-    assert manager._query_workspace is None
+    assert manager._query_workspace is manager._candidate_workspace is None
     logits_workspace.close.assert_not_called()
 
 
