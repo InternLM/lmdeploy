@@ -290,6 +290,11 @@ MODULE_MAP.update({
     'InternLM3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm3.InternLM3ForCausalLM',
 })
 
+# conceptlm v22 vq (intern ncp)
+MODULE_MAP.update({
+    'ConceptLMV22VQForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.intern_ncp.ConceptLMV22VQForCausalLM',
+})
+
 # internlm2 reward model
 MODULE_MAP.update({
     'InternLM2ForRewardModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2_reward.InternLM2ForRewardModel',
